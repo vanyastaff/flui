@@ -1,0 +1,24 @@
+[package]
+name = "flui_rendering"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Rendering layer for Flui framework"
+repository.workspace = true
+
+[dependencies]
+flui_types = { path = "../flui_types" }
+flui_foundation = { path = "../flui_foundation" }
+flui_core = { path = "../flui_core" }
+parking_lot.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+egui.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]

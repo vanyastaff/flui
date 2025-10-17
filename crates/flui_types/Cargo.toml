@@ -1,0 +1,22 @@
+[package]
+name = "flui_types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core types for Flui framework - geometry, layout, styling"
+repository.workspace = true
+
+[dependencies]
+# No dependencies on other flui crates - this is the base!
+serde = { workspace = true, optional = true }
+
+num-traits = { version = "0.2", optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]
+math = ["dep:num-traits"]

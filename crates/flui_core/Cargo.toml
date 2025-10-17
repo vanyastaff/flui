@@ -1,0 +1,22 @@
+[package]
+name = "flui_core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core traits and types for Flui framework"
+repository.workspace = true
+
+[dependencies]
+flui_types = { path = "../flui_types" }
+flui_foundation = { path = "../flui_foundation" }
+parking_lot.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]

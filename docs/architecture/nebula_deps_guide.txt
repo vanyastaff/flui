@@ -1,0 +1,374 @@
+# Nebula Framework - Dependencies Guide
+
+## 🎯 Категории Зависимостей
+
+### 1. ⚡ КРИТИЧЕСКИЕ (Обязательные)
+
+```toml
+# Основа фреймворка
+egui = "0.29"              # Immediate mode GUI
+eframe = "0.29"            # Platform integration
+tokio = { version = "1", features = ["full"] } # Async runtime
+serde = { version = "1", features = ["derive"] } # Serialization
+parking_lot = "0.12"       # Быстрые Mutex/RwLock
+once_cell = "1.20"         # Lazy static
+```
+
+**Почему критические:**
+- `egui/eframe` - основа рендеринга
+- `tokio` - для async операций (загрузка изображений, анимации)
+- `serde` - сериализация состояния
+- `parking_lot` - быстрее std::sync в 2-3 раза
+- `once_cell` - для глобальных синглтонов (IMAGE_CACHE, SCHEDULER)
+
+---
+
+### 2. 🎨 РЕНДЕРИНГ & ГРАФИКА
+
+```toml
+# Обработка изображений
+image = { version = "0.25", features = ["png", "jpeg", "gif", "webp"] }
+resvg = "0.44"             # SVG rendering
+usvg = "0.44"              # SVG parsing
+
+# Математика для графики
+glam = { version = "0.29", features = ["serde"] } # Vector math (Vec2, Vec3)
+euclid = "0.22"            # 2D/3D geometry
+ordered-float = "4.3"      # Ord/Hash для f32/f64
+
+# Дополнительно egui
+egui_extras = { version = "0.29", features = ["image", "svg"] }
+```
+
+**Зачем нужны:**
+- `image` - загрузка PNG/JPEG/etc для CachedNetworkImage
+- `resvg/usvg` - рендеринг SVG иконок
+- `glam` - быстрая векторная математика (Vec2::new, Transform)
+- `euclid` - для Rect, Size, Point
+
+---
+
+### 3. 💾 КЕШИРОВАНИЕ & ПАМЯТЬ
+
+```toml
+lru = "0.12"               # LRU cache для ImageCache
+dashmap = "6.1"            # Concurrent HashMap (для ElementTree)
+arc-swap = "1.7"           # Atomic Arc swapping
+slotmap = "1.0"            # Arena allocator для Elements
+```
+
+**Применение:**
+```rust
+// LRU cache для изображений
+static IMAGE_CACHE: Lazy<Mutex<LruCache<String, Image>>> = ...;
+
+// Concurrent map для быстрого доступа к elements
+static ELEMENT_MAP: DashMap<ElementId, *mut Element> = ...;
+
+// SlotMap для управления элементами без утечек
+struct ElementTree {
+    elements: SlotMap<ElementKey, Element>,
+}
+```
+
+---
+
+### 4. 🔄 ASYNC & CONCURRENCY
+
+```toml
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"        # Async traits
+futures = "0.3"            # Futures utilities
+flume = "0.11"             # Быстрые MPSC channels
+```
+
+**Использование:**
+```rust
+// Async image loading
+impl CachedNetworkImage {
+    async fn load_image(&self, url: &str) -> Result<Image> {
+        let bytes = reqwest::get(url).await?.bytes().await?;
+        image::load_from_memory(&bytes)
+    }
+}
+
+// Channels для event loop
+let (tx, rx) = flume::unbounded::<WidgetEvent>();
+```
+
+---
+
+### 5. 📊 КОЛЛЕКЦИИ & СТРУКТУРЫ ДАННЫХ
+
+```toml
+indexmap = "2.5"           # Ordered HashMap (для preserving order)
+smallvec = "1.13"          # Stack-allocated vectors
+tinyvec = "1.8"            # Tiny vectors (< 8 elements)
+```
+
+**Оптимизация:**
+```rust
+// Вместо Vec для маленьких коллекций
+struct Row {
+    children: SmallVec<[Widget; 4]>,  // Обычно 1-4 детей
+}
+
+// Ordered map для сохранения порядка keys
+struct GlobalKeyRegistry {
+    keys: IndexMap<GlobalKeyId, Element>,  // Порядок важен!
+}
+```
+
+---
+
+### 6. 🐛 ERROR HANDLING & LOGGING
+
+```toml
+thiserror = "1.0"          # Error derive macro
+anyhow = "1.0"             # Flexible errors
+tracing = "0.1"            # Structured logging
+tracing-subscriber = "0.3" # Logging backend
+```
+
+**Пример:**
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum NebulaError {
+    #[error("Widget not found: {0}")]
+    WidgetNotFound(String),
+    
+    #[error("Image load failed: {0}")]
+    ImageLoadError(#[from] image::ImageError),
+}
+
+// Использование
+tracing::info!("Building widget tree");
+tracing::debug!(count = 42, "Rebuilt {} elements", count);
+```
+
+---
+
+### 7. 🌐 NETWORKING (для загрузки)
+
+```toml
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+url = "2.5"                # URL parsing
+```
+
+**Для CachedNetworkImage:**
+```rust
+let bytes = reqwest::get(url).await?.bytes().await?;
+let image = image::load_from_memory(&bytes)?;
+```
+
+---
+
+### 8. 🎭 MACROS & CODEGEN
+
+```toml
+paste = "1.0"              # Token pasting
+quote = "1.0"              # Quasi-quoting
+syn = "2.0"                # Rust parser
+darling = "0.20"           # Derive attributes
+```
+
+**Для создания макросов:**
+```rust
+// #[derive(Widget)] macro
+#[proc_macro_derive(Widget, attributes(widget))]
+pub fn derive_widget(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    // ...
+}
+```
+
+---
+
+### 9. ⏱️ TIME & SCHEDULING
+
+```toml
+chrono = "0.4"             # Date/time
+```
+
+**Для AnimationController:**
+```rust
+let start = Instant::now();
+let elapsed = start.elapsed();
+let duration = Duration::from_millis(300);
+```
+
+---
+
+### 10. 🔢 RANDOM & UTILITIES
+
+```toml
+rand = "0.8"               # Random numbers
+fastrand = "2.1"           # Fast random
+ahash = "0.8"              # Fast hashing
+itertools = "0.13"         # Iterator extensions
+rayon = "1.10"             # Parallelism
+```
+
+**Применение:**
+```rust
+// Fast random для UniqueKey
+let id = fastrand::u64(..);
+
+// AHash для HashMap (быстрее default hasher)
+use ahash::AHashMap;
+type FastMap<K, V> = AHashMap<K, V>;
+
+// Rayon для параллельной обработки
+children.par_iter_mut().for_each(|child| {
+    child.layout(constraints);
+});
+```
+
+---
+
+## 📦 Минимальный набор для начала
+
+Если хотите начать с минимума:
+
+```toml
+[dependencies]
+egui = "0.29"
+eframe = "0.29"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+serde = { version = "1", features = ["derive"] }
+parking_lot = "0.12"
+once_cell = "1.20"
+thiserror = "1.0"
+tracing = "0.1"
+```
+
+Этого достаточно для proof-of-concept!
+
+---
+
+## 🚀 Рекомендуемый полный набор
+
+Для production-ready фреймворка:
+
+```toml
+[dependencies]
+# Core
+egui = "0.29"
+eframe = "0.29"
+egui_extras = { version = "0.29", features = ["image", "svg"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Data structures
+parking_lot = "0.12"
+once_cell = "1.20"
+dashmap = "6.1"
+lru = "0.12"
+indexmap = "2.5"
+smallvec = "1.13"
+slotmap = "1.0"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+
+# Images
+image = { version = "0.25", features = ["png", "jpeg", "webp"] }
+reqwest = { version = "0.12", features = ["rustls-tls"] }
+
+# Math
+glam = { version = "0.29", features = ["serde"] }
+ordered-float = "4.3"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Utilities
+itertools = "0.13"
+ahash = "0.8"
+```
+
+---
+
+## 🎯 Optional Features
+
+### Profiling
+```toml
+puffin = "0.19"            # Profiler
+puffin_egui = "0.29"       # Profiler UI
+```
+
+### Advanced Rendering
+```toml
+wgpu = "22.1"              # GPU compute (для custom shaders)
+```
+
+### Database Persistence
+```toml
+rusqlite = { version = "0.32", features = ["bundled"] }
+```
+
+---
+
+## ⚠️ Что НЕ нужно
+
+**Избегайте:**
+- `druid` - свой UI фреймворк (конфликт с egui)
+- `gtk`/`qt` bindings - не нужны с egui
+- `winit` напрямую - уже включено в eframe
+- `wgpu` напрямую - только если нужны custom shaders
+
+---
+
+## 🔧 Build Dependencies
+
+Обычно не нужны, но если хотите codegen:
+
+```toml
+[build-dependencies]
+# Если нужен build.rs для генерации кода
+```
+
+---
+
+## 📊 Размер Impact
+
+| Dependency | Binary Size | Compile Time | Priority |
+|------------|-------------|--------------|----------|
+| egui | ~2MB | ~30s | ⭐⭐⭐⭐⭐ |
+| tokio | ~500KB | ~45s | ⭐⭐⭐⭐⭐ |
+| image | ~800KB | ~20s | ⭐⭐⭐⭐ |
+| serde | ~100KB | ~15s | ⭐⭐⭐⭐⭐ |
+| parking_lot | ~50KB | ~5s | ⭐⭐⭐⭐ |
+| glam | ~30KB | ~3s | ⭐⭐⭐ |
+
+---
+
+## 🎓 Рекомендации
+
+1. **Начните с минимального набора** (7 crates)
+2. **Добавляйте постепенно** по мере необходимости
+3. **Используйте workspace dependencies** для consistency
+4. **Включайте только нужные features** (уменьшает размер)
+5. **Профилируйте compile times** с `cargo build --timings`
+
+---
+
+## 🔗 Полезные ссылки
+
+- [egui docs](https://docs.rs/egui)
+- [tokio tutorial](https://tokio.rs/tokio/tutorial)
+- [Rust Performance Book](https://nnethercote.github.io/perf-book/)
+- [crates.io](https://crates.io)
+
+**Готово! Можно начинать разработку! 🚀**
