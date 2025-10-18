@@ -20,11 +20,18 @@
 //! ```
 
 #![warn(missing_docs)]
-
-pub mod widget;
-pub mod element;
 pub mod build_context;
 pub mod constraints;
+pub mod element;
+pub mod inherited_widget;
+pub mod parent_data;
+pub mod render_object;
+pub mod render_object_widget;
+pub mod widget;
+
+
+
+
 
 // Re-export types from flui_types
 pub use flui_types::{
@@ -35,7 +42,14 @@ pub use flui_types::{
 // Re-exports
 pub use build_context::BuildContext;
 pub use constraints::BoxConstraints;
-pub use element::{ComponentElement, Element, ElementId, StatefulElement};
+pub use element::{ComponentElement, Element, ElementId, RenderObjectElement, StatefulElement};
+pub use inherited_widget::{InheritedElement, InheritedWidget};
+pub use parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData};
+pub use render_object::RenderObject;
+pub use render_object_widget::{
+    LeafRenderObjectWidget, MultiChildRenderObjectWidget, RenderObjectWidget,
+    SingleChildRenderObjectWidget,
+};
 pub use widget::{IntoWidget, State, StatefulWidget, StatelessWidget, Widget};
 
 /// Prelude module for convenient imports
@@ -45,6 +59,10 @@ pub mod prelude {
     pub use crate::element::{Element, ElementId};
     pub use crate::widget::{IntoWidget, StatelessWidget, Widget};
 }
+
+
+
+
 
 
 

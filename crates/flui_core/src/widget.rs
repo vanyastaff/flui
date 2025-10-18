@@ -6,6 +6,8 @@
 use std::any::Any;
 use std::fmt;
 
+use downcast_rs::{impl_downcast, Downcast, DowncastSync};
+use dyn_clone::DynClone;
 use flui_foundation::Key;
 
 use crate::{BuildContext, ComponentElement, Element};
@@ -36,7 +38,7 @@ use crate::{BuildContext, ComponentElement, Element};
 ///     }
 /// }
 /// ```
-pub trait Widget: Any + fmt::Debug + Send + Sync {
+pub trait Widget: DynClone + Downcast + fmt::Debug + Send + Sync {
     /// Create the Element that manages this widget's lifecycle
     ///
     /// This is called when the widget is first inserted into the tree.
@@ -56,9 +58,6 @@ pub trait Widget: Any + fmt::Debug + Send + Sync {
         std::any::type_name::<Self>()
     }
 
-    /// Convert to Any for downcasting
-    fn as_any(&self) -> &dyn Any;
-
     /// Check if this widget can be updated with another widget
     ///
     /// By default, widgets can update if they have the same type and key.
@@ -76,6 +75,12 @@ pub trait Widget: Any + fmt::Debug + Send + Sync {
         }
     }
 }
+
+// Enable cloning for boxed Widget trait objects
+dyn_clone::clone_trait_object!(Widget);
+
+// Enable downcasting for Widget trait objects
+impl_downcast!(Widget);
 
 /// Helper trait for converting types into Widget trait objects
 pub trait IntoWidget {
@@ -130,10 +135,6 @@ impl<T: StatelessWidget> Widget for T {
 
     fn key(&self) -> Option<&dyn Key> {
         StatelessWidget::key(self)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -191,13 +192,15 @@ pub trait StatefulWidget: fmt::Debug + Clone + Send + Sync + 'static {
 /// Similar to Flutter's State. Holds mutable state and builds widget tree.
 /// The state object persists across rebuilds, while the widget is recreated.
 ///
+/// The trait provides downcasting capabilities via the `downcast-rs` crate.
+///
 /// # Lifecycle
 ///
 /// 1. **init_state()** - Called once when state is created
 /// 2. **build()** - Called to build the widget tree
 /// 3. **did_update_widget()** - Called when widget configuration changes
 /// 4. **dispose()** - Called when state is removed from tree
-pub trait State: Any + fmt::Debug + Send + Sync {
+pub trait State: DowncastSync + fmt::Debug {
     /// Build the widget tree
     ///
     /// Called whenever the state needs to rebuild. Should return the root widget
@@ -227,6 +230,9 @@ pub trait State: Any + fmt::Debug + Send + Sync {
         // TODO: Implement when we have build context stored in state
     }
 }
+
+// Enable downcasting for State trait objects
+impl_downcast!(sync State);
 
 #[cfg(test)]
 mod tests {
@@ -260,11 +266,14 @@ mod tests {
     }
 
     #[test]
-    fn test_widget_as_any() {
+    fn test_widget_downcast() {
         let widget = TestWidget { value: 42 };
-        let any: &dyn Any = widget.as_any();
+        let boxed: Box<dyn Widget> = Box::new(widget);
 
-        assert!(any.downcast_ref::<TestWidget>().is_some());
+        // Test downcast_ref
+        assert!(boxed.is::<TestWidget>());
+        let downcasted = boxed.downcast_ref::<TestWidget>().unwrap();
+        assert_eq!(downcasted.value, 42);
     }
 
     #[test]
@@ -326,6 +335,98 @@ mod tests {
 
         let child = state.build(&context);
         // Should create a widget
-        assert!(child.as_any().is::<TestWidget>());
+        assert!(child.is::<TestWidget>());
+    }
+
+    #[test]
+    fn test_widget_clone_box() {
+        let widget = TestWidget { value: 42 };
+        let boxed: Box<dyn Widget> = Box::new(widget);
+
+        // Clone the boxed trait object using dyn-clone
+        let cloned = dyn_clone::clone_box(&*boxed);
+
+        // Both should be TestWidget with same value
+        assert!(cloned.is::<TestWidget>());
+        let cloned_test = cloned.downcast_ref::<TestWidget>().unwrap();
+        assert_eq!(cloned_test.value, 42);
+    }
+
+    #[test]
+    fn test_widget_vec_clone() {
+        let widgets: Vec<Box<dyn Widget>> = vec![
+            Box::new(TestWidget { value: 1 }),
+            Box::new(TestWidget { value: 2 }),
+            Box::new(TestWidget { value: 3 }),
+        ];
+
+        // Clone the entire vector of trait objects
+        let cloned: Vec<Box<dyn Widget>> = widgets.iter().map(|w| dyn_clone::clone_box(&**w)).collect();
+
+        assert_eq!(cloned.len(), 3);
+        for (i, widget) in cloned.iter().enumerate() {
+            let test_widget = widget.downcast_ref::<TestWidget>().unwrap();
+            assert_eq!(test_widget.value, (i + 1) as i32);
+        }
+    }
+
+    #[test]
+    fn test_widget_downcast_mut() {
+        let widget = TestWidget { value: 10 };
+        let mut boxed: Box<dyn Widget> = Box::new(widget);
+
+        // Test downcast_mut
+        if let Some(downcasted) = boxed.downcast_mut::<TestWidget>() {
+            downcasted.value = 20;
+        }
+
+        let result = boxed.downcast_ref::<TestWidget>().unwrap();
+        assert_eq!(result.value, 20);
+    }
+
+    #[test]
+    fn test_widget_downcast_owned() {
+        let widget = TestWidget { value: 100 };
+        let boxed: Box<dyn Widget> = Box::new(widget);
+
+        // Test downcast (owned)
+        let downcasted: Box<TestWidget> = boxed.downcast::<TestWidget>().ok().unwrap();
+        assert_eq!(downcasted.value, 100);
+    }
+
+    #[test]
+    fn test_state_downcast() {
+        let state = CounterState { count: 42 };
+        let boxed: Box<dyn State> = Box::new(state);
+
+        // Test is() check
+        assert!(boxed.is::<CounterState>());
+
+        // Test downcast_ref
+        let downcasted = boxed.downcast_ref::<CounterState>().unwrap();
+        assert_eq!(downcasted.count, 42);
+    }
+
+    #[test]
+    fn test_state_downcast_mut() {
+        let state = CounterState { count: 10 };
+        let mut boxed: Box<dyn State> = Box::new(state);
+
+        // Test downcast_mut
+        let downcasted = boxed.downcast_mut::<CounterState>().unwrap();
+        downcasted.count = 20;
+
+        let result = boxed.downcast_ref::<CounterState>().unwrap();
+        assert_eq!(result.count, 20);
+    }
+
+    #[test]
+    fn test_state_downcast_owned() {
+        let state = CounterState { count: 100 };
+        let boxed: Box<dyn State> = Box::new(state);
+
+        // Consume and downcast
+        let owned: Box<CounterState> = boxed.downcast().ok().unwrap();
+        assert_eq!(owned.count, 100);
     }
 }
