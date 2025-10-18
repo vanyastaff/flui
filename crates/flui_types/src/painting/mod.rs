@@ -1,0 +1,20 @@
+//! Painting types for Flui.
+//!
+//! This module contains low-level painting primitives used for rendering,
+//! including blend modes, image handling, clipping, canvas primitives, and shaders.
+
+pub mod blend_mode;
+pub mod canvas;
+pub mod clipping;
+pub mod image;
+pub mod shader;
+
+// Re-exports for convenience
+pub use blend_mode::BlendMode;
+pub use canvas::{
+    BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, StrokeCap, StrokeJoin,
+    TileMode, VertexMode,
+};
+pub use clipping::{AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape};
+pub use image::{BoxFit, ColorFilter, FittedSizes, ImageConfiguration, ImageRepeat};
+pub use shader::{ImageShader, MaskFilter, Shader};
