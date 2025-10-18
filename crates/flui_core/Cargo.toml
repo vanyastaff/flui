@@ -13,6 +13,9 @@ flui_foundation = { path = "../flui_foundation" }
 parking_lot.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
+dyn-clone.workspace = true
+downcast-rs.workspace = true
+egui.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

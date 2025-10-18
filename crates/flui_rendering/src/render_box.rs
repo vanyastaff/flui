@@ -2,8 +2,6 @@
 //!
 //! Most common render object type. Uses BoxConstraints for layout.
 
-use std::any::Any;
-
 use crate::{BoxConstraints, Offset, RenderObject, Size};
 
 /// RenderBox - base implementation for box protocol
@@ -94,14 +92,6 @@ impl RenderObject for RenderBox {
 
     fn mark_needs_paint(&mut self) {
         self.needs_paint_flag = true;
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 
@@ -221,14 +211,6 @@ impl RenderObject for RenderProxyBox {
 
     fn mark_needs_paint(&mut self) {
         self.base.mark_needs_paint();
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 
     fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
