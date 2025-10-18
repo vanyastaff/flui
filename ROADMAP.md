@@ -1,275 +1,1080 @@
-# Flui Framework - Development Roadmap
+# Flui Framework - Development Roadmap (Updated)
 
 > Flutter-inspired declarative UI framework built on egui 0.33
-> Project renamed from Nebula to **Flui**
+> **Focus: Low-Level & Middle-Level Infrastructure**
 
 ## 📋 Table of Contents
 
-- [Project Vision](#project-vision)
-- [Technology Stack](#technology-stack)
-- [Development Phases](#development-phases)
-- [Milestones](#milestones)
+- [Project Status](#project-status)
+- [Architecture Overview](#architecture-overview)
+- [Completed Work](#completed-work)
+- [Low-Level Roadmap](#low-level-roadmap)
+- [Middle-Level Roadmap](#middle-level-roadmap)
 - [Dependencies](#dependencies)
+- [Success Metrics](#success-metrics)
 
 ---
 
-## 🎯 Project Vision
+## 🎯 Project Status
 
-**Flui** is a declarative UI framework for Rust that brings Flutter's elegant architecture to the Rust ecosystem, built on top of egui's proven immediate-mode rendering.
+**Current Phase:** Core Infrastructure Complete ✅
+**Next Focus:** Widget Implementations & Layout Algorithms
 
-### Core Principles
+### What's Done
+- ✅ Complete type system (flui_types - 524 tests)
+- ✅ Foundation utilities (keys, change notifications, listenable)
+- ✅ Full Widget/Element/RenderObject architecture (flui_core - 49 tests)
+- ✅ RenderObject trait with downcast-rs integration
+- ✅ RenderObjectElement with lifecycle management
+- ✅ Basic rendering infrastructure (RenderBox, RenderProxyBox)
 
-1. **Declarative API** - Flutter-like widget composition
-2. **Three-Tree Architecture** - Widget → Element → RenderObject
-3. **Type Safety** - Leverage Rust's type system
-4. **Performance** - Zero-cost abstractions, efficient updates
-5. **Developer Experience** - Clear errors, great docs, hot reload
+### What's Next
+- 🎯 **IMMEDIATE:** Concrete widget implementations (Container, Row, Column)
+- 🎯 **IMMEDIATE:** Layout algorithms (RenderFlex, RenderStack, RenderPadding)
+- ⏳ Painting system (decorations, borders, gradients)
+- ⏳ Platform integration (FluiApp, event loop)
 
 ---
 
-## 🛠 Technology Stack
+## 🏗 Architecture Overview
 
-### Core Dependencies (egui 0.33)
+### Three-Tree Architecture
 
-```toml
-egui = "0.33"              # Latest version
-eframe = "0.33"            # Platform integration
-egui_extras = "0.33"       # Additional features
+```
+Widget Tree (Immutable)
+    ↓ create_element()
+Element Tree (Mutable State)
+    ↓ attach_render_object()
+RenderObject Tree (Layout & Paint)
 ```
 
-### Essential Crates
+### Crate Structure
 
-```toml
-# Async runtime
-tokio = { version = "1.40", features = ["full"] }
-async-trait = "0.1"
-
-# Synchronization
-parking_lot = "0.12"       # Fast Mutex/RwLock
-once_cell = "1.20"         # Lazy statics
-dashmap = "6.1"            # Concurrent HashMap
-
-# Collections
-indexmap = "2.5"           # Ordered HashMap
-smallvec = "1.13"          # Stack vectors
-slotmap = "1.0"            # Arena allocator
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# Error handling
-thiserror = "1.0"
-anyhow = "1.0"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = "0.3"
-
-# Math
-glam = { version = "0.29", features = ["serde"] }
-ordered-float = "4.3"
-
-# Images
-image = { version = "0.25", features = ["png", "jpeg", "webp"] }
-resvg = "0.44"             # SVG rendering
-
-# Caching
-lru = "0.12"
-
-# Networking
-reqwest = { version = "0.12", features = ["rustls-tls"] }
-
-# Utilities
-itertools = "0.13"
-ahash = "0.8"
-```
-
----
-
-## 📅 Development Phases
-
-## Phase 0: Project Setup (Week 1) ✅
-
-**Goal:** Initialize project structure and dependencies
-
-### Tasks
-- [x] Create workspace structure
-- [x] Set up Cargo.toml with egui 0.33
-- [x] Configure crate organization
-- [x] Set up basic CI/CD
-- [x] Create initial documentation
-
-### Deliverables
 ```
 flui/
-├── Cargo.toml (workspace)
-├── crates/
-│   ├── flui_core/
-│   ├── flui_foundation/
-│   ├── flui_widgets/
-│   ├── flui_rendering/
-│   ├── flui_painting/
-│   ├── flui_animation/
-│   ├── flui_gestures/
-│   ├── flui_scheduler/
-│   ├── flui_provider/
-│   └── flui_platform/
-├── flui/ (main re-export crate)
-├── examples/
-└── docs/
+├── flui_types/          ✅ COMPLETE (524 тести) - Geometry, Layout, Styling, Typography...
+├── flui_foundation/     ✅ COMPLETE - Keys, ChangeNotifier, Listenable, Platform
+├── flui_core/           ✅ COMPLETE (49 тестів) - Widget/Element/RenderObject система
+│   ├── Widget система   ✅ DynClone + Downcast
+│   ├── Element система  ✅ DowncastSync + RenderObjectElement
+│   ├── RenderObject     ✅ DowncastSync (перенесено з flui_rendering)
+│   └── ParentData       ✅ DowncastSync
+├── flui_rendering/      ✅ BASIC (15 тестів) - RenderBox, RenderProxyBox
+│   ├── RenderBox        ✅ Базова box protocol реалізація
+│   ├── RenderProxyBox   ✅ Passes layout to child
+│   ├── RenderFlex       🎯 NEXT - Row/Column layout algorithm
+│   ├── RenderStack      ⏳ TODO - Positioned layout
+│   └── RenderPadding    ⏳ TODO - Padding layout
+├── flui_widgets/        🎯 NEXT - Widget implementations
+├── flui_painting/       ⏳ TODO - Decorations, borders, gradients
+├── flui_animation/      ⏳ TODO - AnimationController, Tweens
+├── flui_gestures/       ⏳ TODO - GestureDetector, recognizers
+└── flui_scheduler/      ⏳ TODO - Frame scheduling, Ticker
 ```
 
 ---
 
-## Phase 1: Foundation Layer (Weeks 2-3)
+## ✅ Completed Work
 
-**Goal:** Implement core types and utilities
+### 1. flui_types (100%)
 
-### 1.1 Core Types (`flui_foundation`)
+**Geometry Module:**
+- `Point`, `Size`, `Offset`, `Rect` - all with full operations
+- Comprehensive conversion implementations
+- 40+ unit tests
 
-**Priority: CRITICAL**
+**Layout Module:**
+- `Axis`, `AxisDirection`, `Orientation`, `VerticalDirection`
+- `Alignment` with 9 standard constants (topLeft, center, etc.)
+- `MainAxisAlignment` (Start, End, Center, SpaceBetween, SpaceAround, SpaceEvenly)
+- `CrossAxisAlignment` (Start, End, Center, Stretch, Baseline)
+- `MainAxisSize` (Min/Max)
 
+**Key Files:**
+- [geometry/point.rs](crates/flui_types/src/geometry/point.rs)
+- [geometry/size.rs](crates/flui_types/src/geometry/size.rs)
+- [geometry/offset.rs](crates/flui_types/src/geometry/offset.rs)
+- [geometry/rect.rs](crates/flui_types/src/geometry/rect.rs)
+- [layout/alignment.rs](crates/flui_types/src/layout/alignment.rs)
+- [layout/axis.rs](crates/flui_types/src/layout/axis.rs)
+
+---
+
+### 2. flui_foundation (85%)
+
+**Key System (COMPLETE):**
 ```rust
-// Key system
 pub trait Key: Any + Debug + Send + Sync
-pub struct ValueKey<T>
-pub struct UniqueKey
-pub struct GlobalKey<T>
-
-// Change notification
-pub trait Listenable
-pub struct ChangeNotifier
-pub struct ValueNotifier<T>
-pub struct ObserverList<T>
-
-// Diagnostics
-pub trait Diagnosticable
-pub struct DiagnosticPropertiesBuilder
-
-// Platform
-pub enum TargetPlatform
-pub enum Brightness
+pub struct UniqueKey           // Unique per instance (atomic counter)
+pub struct ValueKey<T>         // Based on value hash
+pub struct StringKey           // String-based key
+pub struct IntKey              // Integer-based key
+pub enum WidgetKey             // Optional key wrapper
 ```
 
-**Files:**
-- `crates/flui_foundation/src/key.rs`
-- `crates/flui_foundation/src/change_notifier.rs`
-- `crates/flui_foundation/src/observer_list.rs`
-- `crates/flui_foundation/src/diagnostics.rs`
-- `crates/flui_foundation/src/platform.rs`
+**Change Notification (COMPLETE):**
+```rust
+pub trait Listenable
+pub struct ChangeNotifier      // Observable pattern with listeners
+pub struct ValueNotifier<T>    // Holds value, notifies on changes
+pub struct MergedListenable    // Combine multiple listenables
+```
 
-**Tests:**
-- Key equality and hashing
-- ChangeNotifier listener management
-- ObserverList concurrent access
-- GlobalKey state access
+**Platform Types (PARTIAL):**
+```rust
+pub enum TargetPlatform        // Windows, Linux, MacOS, Web, Android, iOS
+pub enum PlatformBrightness    // Light, Dark
+```
 
-**Estimated Time:** 4-5 days
+**Key Files:**
+- [key.rs](crates/flui_foundation/src/key.rs) - 328 lines
+- [change_notifier.rs](crates/flui_foundation/src/change_notifier.rs) - 323 lines
+- [platform.rs](crates/flui_foundation/src/platform.rs)
+
+**Missing:**
+- Full diagnostics system
+- ObserverList (alternative to Arc<Mutex<Vec<_>>>)
 
 ---
 
-### 1.2 Core Traits (`flui_core`)
+### 3. flui_core (100%) ✅
 
-**Priority: CRITICAL**
-
+**Widget System (COMPLETE with downcast-rs):**
 ```rust
-// Widget trait
-pub trait Widget: Any + Debug + Send + Sync {
+pub trait Widget: DynClone + Downcast + Debug + Send + Sync {
     fn create_element(&self) -> Box<dyn Element>;
     fn key(&self) -> Option<&dyn Key>;
+    fn can_update(&self, other: &dyn Widget) -> bool;
 }
 
-// Element trait
-pub trait Element: Any + Debug {
-    fn mount(&mut self, parent: Option<ElementId>, slot: usize);
-    fn unmount(&mut self);
-    fn update(&mut self, new_widget: Box<dyn Widget>);
-    fn rebuild(&mut self);
-    fn mark_needs_build(&mut self);
-}
-
-// RenderObject trait
-pub trait RenderObject: Any + Debug {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size;
-    fn paint(&self, painter: &egui::Painter, offset: Offset);
-    fn hit_test(&self, position: Offset) -> bool;
-}
-
-// BuildContext
-pub struct BuildContext {
-    element_id: ElementId,
-    tree: Arc<RwLock<ElementTree>>,
-}
-```
-
-**Files:**
-- `crates/flui_core/src/widget.rs`
-- `crates/flui_core/src/element.rs`
-- `crates/flui_core/src/render_object.rs`
-- `crates/flui_core/src/build_context.rs`
-- `crates/flui_core/src/box_constraints.rs`
-
-**Tests:**
-- Widget creation and element mounting
-- Element lifecycle (mount/update/unmount)
-- RenderObject layout with various constraints
-- BuildContext ancestor lookup
-
-**Estimated Time:** 5-6 days
-
----
-
-## Phase 2: Widget Framework (Weeks 4-5)
-
-**Goal:** Implement framework widgets (Stateless, Stateful, Inherited)
-
-### 2.1 Framework Widgets (`flui_widgets/framework`)
-
-**Priority: CRITICAL**
-
-```rust
-// StatelessWidget
-pub trait StatelessWidget: Widget {
+pub trait StatelessWidget: Debug + Clone + Send + Sync + 'static {
     fn build(&self, context: &BuildContext) -> Box<dyn Widget>;
 }
 
-// StatefulWidget
-pub trait StatefulWidget: Widget {
+pub trait StatefulWidget: Debug + Clone + Send + Sync + 'static {
     type State: State;
     fn create_state(&self) -> Self::State;
 }
 
-pub trait State: Any {
+pub trait State: DowncastSync + Debug {
     fn build(&mut self, context: &BuildContext) -> Box<dyn Widget>;
     fn init_state(&mut self) {}
-    fn did_update_widget(&mut self, old_widget: &Self::Widget) {}
+    fn did_update_widget(&mut self, old_widget: &dyn Any) {}
     fn dispose(&mut self) {}
-    fn set_state<F>(&mut self, callback: F);
 }
 
-// InheritedWidget
+pub trait InheritedWidget: Debug + Clone + Send + Sync + 'static {
+    type Data;
+    fn data(&self) -> &Self::Data;
+    fn child(&self) -> &dyn Widget;
+    fn update_should_notify(&self, old: &Self) -> bool;
+}
+
+pub trait RenderObjectWidget: Widget {
+    fn create_render_object(&self) -> Box<dyn RenderObject>;
+    fn update_render_object(&self, render_object: &mut dyn RenderObject);
+}
+```
+
+**Element System (COMPLETE with downcast-rs):**
+```rust
+pub struct ElementId(u64);     // Unique identifier (atomic counter)
+
+pub trait Element: DowncastSync + Debug {
+    fn mount(&mut self, parent: Option<ElementId>, slot: usize);
+    fn unmount(&mut self);
+    fn update(&mut self, new_widget: Box<dyn Any>);
+    fn rebuild(&mut self);
+    fn mark_dirty(&mut self);
+    fn id(&self) -> ElementId;
+    fn parent(&self) -> Option<ElementId>;
+    fn key(&self) -> Option<&dyn Key>;
+}
+
+pub struct ComponentElement<W: StatelessWidget>  // ✅
+pub struct StatefulElement                        // ✅
+pub struct InheritedElement<W: InheritedWidget>  // ✅
+pub struct RenderObjectElement<W: RenderObjectWidget> // ✅ NEW!
+```
+
+**RenderObject System (COMPLETE):**
+```rust
+pub trait RenderObject: DowncastSync + Debug {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size;
+    fn paint(&self, painter: &egui::Painter, offset: Offset);
+    fn size(&self) -> Size;
+    fn needs_layout(&self) -> bool;
+    fn mark_needs_layout(&mut self);
+    fn needs_paint(&self) -> bool;
+    fn mark_needs_paint(&mut self);
+    fn hit_test(&self, position: Offset) -> bool;
+    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject));
+}
+```
+
+**ParentData System (COMPLETE):**
+```rust
+pub trait ParentData: DowncastSync + Debug {}
+
+pub struct ContainerParentData<ChildId>    // ✅
+pub struct BoxParentData                   // ✅
+pub struct ContainerBoxParentData<ChildId> // ✅
+```
+
+**Key Files:**
+- [widget.rs](crates/flui_core/src/widget.rs) - Widget, StatelessWidget, StatefulWidget, State
+- [element.rs](crates/flui_core/src/element.rs) - Element trait, ComponentElement, StatefulElement, RenderObjectElement
+- [render_object.rs](crates/flui_core/src/render_object.rs) - RenderObject trait (moved from flui_rendering)
+- [render_object_widget.rs](crates/flui_core/src/render_object_widget.rs) - RenderObjectWidget traits
+- [inherited_widget.rs](crates/flui_core/src/inherited_widget.rs) - InheritedWidget, InheritedElement
+- [parent_data.rs](crates/flui_core/src/parent_data.rs) - ParentData система
+- [constraints.rs](crates/flui_core/src/constraints.rs) - BoxConstraints
+- [build_context.rs](crates/flui_core/src/build_context.rs) - BuildContext
+
+**Test Coverage:** 49 tests ✅
+
+---
+
+### 4. flui_rendering (30%) - Basic Infrastructure
+
+**RenderObject Trait (MOVED TO flui_core):**
+```rust
+// RenderObject trait теперь находится в flui_core
+// flui_rendering re-export его для удобства
+pub use flui_core::RenderObject;
+```
+
+**RenderBox (COMPLETE):**
+```rust
+pub struct RenderBox {
+    size: Size,
+    constraints: Option<BoxConstraints>,
+    needs_layout: bool,
+    needs_paint: bool,
+}
+
+impl RenderObject for RenderBox { /* ... */ }
+```
+
+**RenderProxyBox (COMPLETE):**
+```rust
+pub struct RenderProxyBox {
+    base: RenderBox,
+    child: Option<Box<dyn RenderObject>>,
+}
+
+impl RenderObject for RenderProxyBox {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        // Passes constraints to child
+    }
+
+    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
+        // Visits single child
+    }
+}
+```
+
+**Key Files:**
+- [render_object.rs](crates/flui_rendering/src/render_object.rs) - Re-export from flui_core
+- [render_box.rs](crates/flui_rendering/src/render_box.rs) - Basic implementations
+
+**Test Coverage:** 99 tests ✅ (+84 новых!)
+
+**Implemented RenderObjects:**
+- ✅ **RenderFlex** (550 строк, 15 тестів) - Row/Column layout algorithm
+- ✅ **RenderPadding** (280 строк, 8 тестів) - Padding layout
+- ✅ **RenderStack** (330 строк, 13 тестів) - Positioned layout with StackFit
+- ✅ **RenderConstrainedBox** (180 строк, 10 тестів) - SizedBox/ConstrainedBox
+- ✅ **RenderDecoratedBox** (320 строк, 10 тестів) - BoxDecoration painting (2025-01-18)
+- ✅ **RenderAspectRatio** (390 строк, 17 тестів) - Aspect ratio support (2025-01-18)
+
+**Missing (Priority MEDIUM):**
+- ⏳ **RenderLimitedBox** - Ограничивает размер при unbounded constraints
+- ⏳ **RenderIndexedStack** - Stack с visible index
+- ⏳ **RenderWrap** - Wrap layout
+- ⏳ Layer tree for compositing
+- ⏳ Paint caching
+
+---
+
+## 🔧 Low-Level Roadmap
+
+### Phase 1: Painting System (Week 1-2)
+
+**Priority: HIGH**
+
+Create the painting infrastructure for drawing decorations, borders, and backgrounds.
+
+#### 1.1 EdgeInsets & Spacing
+
+```rust
+// crates/flui_painting/src/edge_insets.rs
+pub struct EdgeInsets {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl EdgeInsets {
+    pub const ZERO: Self;
+    pub fn all(value: f32) -> Self;
+    pub fn symmetric(horizontal: f32, vertical: f32) -> Self;
+    pub fn only(left: f32, top: f32, right: f32, bottom: f32) -> Self;
+    pub fn horizontal(&self) -> f32;
+    pub fn vertical(&self) -> f32;
+    pub fn inflate_rect(&self, rect: Rect) -> Rect;
+    pub fn deflate_rect(&self, rect: Rect) -> Rect;
+}
+```
+
+**Files to create:**
+- `crates/flui_painting/src/edge_insets.rs`
+- `crates/flui_painting/src/edge_insets_geometry.rs`
+
+**Tests:**
+- EdgeInsets calculations
+- Rect inflation/deflation
+- Directional insets resolution
+
+**Time:** 2 days
+
+---
+
+#### 1.2 Borders & Border Radius
+
+```rust
+// crates/flui_painting/src/borders.rs
+pub struct BorderSide {
+    pub color: egui::Color32,
+    pub width: f32,
+    pub style: BorderStyle,
+}
+
+pub enum BorderStyle {
+    None,
+    Solid,
+    // Future: Dashed, Dotted
+}
+
+pub struct Border {
+    pub top: BorderSide,
+    pub right: BorderSide,
+    pub bottom: BorderSide,
+    pub left: BorderSide,
+}
+
+impl Border {
+    pub fn all(side: BorderSide) -> Self;
+    pub fn symmetric(vertical: BorderSide, horizontal: BorderSide) -> Self;
+    pub fn paint(&self, painter: &egui::Painter, rect: Rect);
+}
+
+// crates/flui_painting/src/border_radius.rs
+pub struct BorderRadius {
+    pub top_left: Radius,
+    pub top_right: Radius,
+    pub bottom_right: Radius,
+    pub bottom_left: Radius,
+}
+
+impl BorderRadius {
+    pub fn all(radius: Radius) -> Self;
+    pub fn circular(radius: f32) -> Self;
+    pub fn to_rrect(&self, rect: Rect) -> egui::Rounding;
+}
+
+pub struct Radius {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Radius {
+    pub fn circular(radius: f32) -> Self;
+    pub fn elliptical(x: f32, y: f32) -> Self;
+}
+```
+
+**Files to create:**
+- `crates/flui_painting/src/borders.rs`
+- `crates/flui_painting/src/border_radius.rs`
+
+**Tests:**
+- Border painting on egui canvas
+- BorderRadius conversions
+- Border side combinations
+
+**Time:** 3 days
+
+---
+
+#### 1.3 Box Decoration
+
+```rust
+// crates/flui_painting/src/decoration.rs
+pub trait Decoration: Debug {
+    fn paint(&self, painter: &egui::Painter, rect: Rect);
+}
+
+pub struct BoxDecoration {
+    pub color: Option<egui::Color32>,
+    pub border: Option<Border>,
+    pub border_radius: Option<BorderRadius>,
+    pub box_shadow: Vec<BoxShadow>,
+    // Future: gradient, image
+}
+
+impl BoxDecoration {
+    pub fn new() -> Self;
+    pub fn with_color(mut self, color: egui::Color32) -> Self;
+    pub fn with_border(mut self, border: Border) -> Self;
+    pub fn with_border_radius(mut self, radius: BorderRadius) -> Self;
+}
+
+pub struct BoxShadow {
+    pub color: egui::Color32,
+    pub offset: Offset,
+    pub blur_radius: f32,
+    pub spread_radius: f32,
+}
+```
+
+**Files to create:**
+- `crates/flui_painting/src/decoration.rs`
+- `crates/flui_painting/src/box_decoration.rs`
+- `crates/flui_painting/src/box_shadow.rs`
+
+**Tests:**
+- BoxDecoration painting
+- Shadow rendering
+- Combined decoration effects
+
+**Time:** 3 days
+
+---
+
+#### 1.4 Text Styles (Basic)
+
+```rust
+// crates/flui_painting/src/text_style.rs
+pub struct TextStyle {
+    pub color: Option<egui::Color32>,
+    pub font_size: Option<f32>,
+    pub font_family: Option<String>,
+    pub font_weight: Option<FontWeight>,
+    // Future: letter_spacing, word_spacing, height, decoration
+}
+
+pub enum FontWeight {
+    Thin,       // 100
+    ExtraLight, // 200
+    Light,      // 300
+    Normal,     // 400
+    Medium,     // 500
+    SemiBold,   // 600
+    Bold,       // 700
+    ExtraBold,  // 800
+    Black,      // 900
+}
+```
+
+**Files to create:**
+- `crates/flui_painting/src/text_style.rs`
+
+**Tests:**
+- TextStyle merging
+- Font weight conversions
+- egui integration
+
+**Time:** 2 days
+
+**Total Phase 1 Time:** ~10 days
+
+---
+
+### Phase 2: Layout System (Week 3-4)
+
+**Priority: CRITICAL**
+
+Implement the core layout algorithms that power the framework.
+
+#### 2.1 RenderFlex (Row/Column)
+
+```rust
+// crates/flui_rendering/src/flex.rs
+pub struct RenderFlex {
+    base: RenderBox,
+    direction: Axis,
+    main_axis_alignment: MainAxisAlignment,
+    cross_axis_alignment: CrossAxisAlignment,
+    main_axis_size: MainAxisSize,
+    children: Vec<RenderFlexChild>,
+}
+
+struct RenderFlexChild {
+    child: Box<dyn RenderObject>,
+    flex: Option<i32>,  // None for non-flexible children
+}
+
+impl RenderFlex {
+    pub fn new(direction: Axis) -> Self;
+    pub fn add_child(&mut self, child: Box<dyn RenderObject>, flex: Option<i32>);
+
+    // Layout algorithm (Flutter-compatible)
+    fn perform_layout(&mut self, constraints: BoxConstraints) -> Size;
+}
+
+impl RenderObject for RenderFlex {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        // 1. Measure inflexible children
+        // 2. Distribute remaining space to flexible children
+        // 3. Position children along main axis
+        // 4. Align children on cross axis
+        // 5. Determine final size
+    }
+}
+```
+
+**Algorithm Steps:**
+1. Layout non-flexible children with loose constraints
+2. Calculate remaining space
+3. Distribute space to flexible children based on flex factor
+4. Position children along main axis (respect alignment)
+5. Align children on cross axis (respect cross alignment)
+
+**Files to create:**
+- `crates/flui_rendering/src/flex.rs` - Core algorithm (~400 lines)
+- `crates/flui_rendering/src/flex_parent_data.rs` - Parent data
+
+**Tests:**
+- Flex layout with various alignments
+- Flexible/Expanded children
+- Overflow handling
+- Nested flex layouts
+
+**Time:** 5 days
+
+---
+
+#### 2.2 RenderStack (Positioned)
+
+```rust
+// crates/flui_rendering/src/stack.rs
+pub struct RenderStack {
+    base: RenderBox,
+    alignment: Alignment,
+    fit: StackFit,
+    children: Vec<StackChild>,
+}
+
+struct StackChild {
+    child: Box<dyn RenderObject>,
+    positioned_data: Option<PositionedData>,
+}
+
+pub struct PositionedData {
+    pub left: Option<f32>,
+    pub top: Option<f32>,
+    pub right: Option<f32>,
+    pub bottom: Option<f32>,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+}
+
+pub enum StackFit {
+    Loose,      // Children size themselves
+    Expand,     // Children expand to stack size
+    PassThrough, // Stack sizes to constraints
+}
+
+impl RenderObject for RenderStack {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        // 1. Layout non-positioned children
+        // 2. Determine stack size
+        // 3. Layout positioned children with calculated constraints
+        // 4. Position all children
+    }
+}
+```
+
+**Files to create:**
+- `crates/flui_rendering/src/stack.rs`
+- `crates/flui_rendering/src/positioned.rs`
+
+**Tests:**
+- Stack with non-positioned children
+- Positioned children (left, top, right, bottom)
+- Combined width/height with positioning
+- Stack alignment
+
+**Time:** 3 days
+
+---
+
+#### 2.3 RenderPadding
+
+```rust
+// crates/flui_rendering/src/padding.rs
+pub struct RenderPadding {
+    base: RenderProxyBox,
+    padding: EdgeInsets,
+}
+
+impl RenderObject for RenderPadding {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        let inner_constraints = constraints.deflate(self.padding);
+        let child_size = self.child.layout(inner_constraints);
+        Size::new(
+            child_size.width + self.padding.horizontal(),
+            child_size.height + self.padding.vertical(),
+        )
+    }
+
+    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+        let child_offset = offset + Offset::new(self.padding.left, self.padding.top);
+        self.child.paint(painter, child_offset);
+    }
+}
+```
+
+**Files to create:**
+- `crates/flui_rendering/src/padding.rs`
+
+**Tests:**
+- Padding layout calculations
+- Child positioning
+- Constraint propagation
+
+**Time:** 2 days
+
+**Total Phase 2 Time:** ~10 days
+
+---
+
+### Phase 3: Element Tree Management (Week 5)
+
+**Priority: CRITICAL**
+
+Implement the element tree that manages widget lifecycle and rebuilds.
+
+#### 3.1 ElementTree
+
+```rust
+// crates/flui_core/src/element_tree.rs
+pub struct ElementTree {
+    root: Option<ElementId>,
+    elements: HashMap<ElementId, Box<dyn Element>>,
+    dirty_elements: Vec<ElementId>,
+    next_frame_callbacks: Vec<Box<dyn FnOnce()>>,
+}
+
+impl ElementTree {
+    pub fn new() -> Self;
+
+    pub fn mount_root(&mut self, widget: Box<dyn Widget>) -> ElementId;
+    pub fn unmount_root(&mut self);
+
+    pub fn mark_dirty(&mut self, id: ElementId);
+    pub fn rebuild_dirty(&mut self);
+
+    pub fn schedule_frame_callback(&mut self, callback: impl FnOnce() + 'static);
+}
+```
+
+**Files to create:**
+- `crates/flui_core/src/element_tree.rs`
+- `crates/flui_core/src/build_owner.rs` - Manages build process
+
+**Tests:**
+- Element tree construction
+- Dirty marking and rebuilds
+- Element lifecycle (mount/update/unmount)
+
+**Time:** 4 days
+
+---
+
+#### 3.2 StatefulElement Implementation
+
+```rust
+// Complete the StatefulElement implementation
+pub struct StatefulElement {
+    id: ElementId,
+    widget: Box<dyn StatefulWidget>,
+    state: Box<dyn State>,  // Add this!
+    child: Option<ElementId>,
+    dirty: bool,
+}
+
+impl StatefulElement {
+    pub fn set_state<F: FnOnce(&mut dyn State)>(&mut self, callback: F) {
+        callback(&mut *self.state);
+        self.mark_dirty();
+    }
+}
+```
+
+**Files to update:**
+- [element.rs](crates/flui_core/src/element.rs)
+
+**Tests:**
+- StatefulWidget state preservation
+- setState triggering rebuilds
+- State lifecycle callbacks
+
+**Time:** 2 days
+
+---
+
+#### 3.3 InheritedWidget
+
+```rust
+// crates/flui_core/src/inherited_widget.rs
 pub trait InheritedWidget: Widget {
     fn update_should_notify(&self, old: &Self) -> bool;
     fn data(&self) -> &dyn Any;
 }
+
+pub struct InheritedElement {
+    id: ElementId,
+    widget: Box<dyn InheritedWidget>,
+    child: Option<ElementId>,
+    dependents: HashSet<ElementId>,  // Elements that depend on this
+}
+
+impl InheritedElement {
+    pub fn notify_dependents(&mut self, tree: &mut ElementTree) {
+        for dependent_id in &self.dependents {
+            tree.mark_dirty(*dependent_id);
+        }
+    }
+}
+
+// BuildContext extension
+impl BuildContext {
+    pub fn depend_on_inherited<T: InheritedWidget>(&self) -> Option<&T>;
+}
 ```
 
-**Files:**
-- `crates/flui_widgets/src/framework/stateless.rs`
-- `crates/flui_widgets/src/framework/stateful.rs`
-- `crates/flui_widgets/src/framework/inherited.rs`
-- `crates/flui_widgets/src/framework/element.rs`
+**Files to create:**
+- `crates/flui_core/src/inherited_widget.rs`
 
 **Tests:**
-- StatelessWidget rebuild optimization
-- StatefulWidget state preservation
-- InheritedWidget dependency tracking
-- Lifecycle callbacks (init_state, dispose)
+- InheritedWidget data access
+- Dependent tracking
+- Rebuild notifications
 
-**Example:**
+**Time:** 3 days
+
+**Total Phase 3 Time:** ~9 days
+
+---
+
+### Phase 4: Basic Widgets (Week 6-7)
+
+**Priority: HIGH**
+
+Implement the essential widget set.
+
+#### 4.1 Container Widget
+
 ```rust
+// crates/flui_widgets/src/basic/container.rs
+#[derive(Debug, Clone)]
+pub struct Container {
+    key: Option<WidgetKey>,
+    width: Option<f32>,
+    height: Option<f32>,
+    padding: Option<EdgeInsets>,
+    margin: Option<EdgeInsets>,
+    color: Option<egui::Color32>,
+    decoration: Option<BoxDecoration>,
+    alignment: Option<Alignment>,
+    child: Option<Box<dyn Widget>>,
+}
+
+impl Container {
+    pub fn new() -> Self;
+    pub fn with_child(mut self, child: Box<dyn Widget>) -> Self;
+    pub fn with_color(mut self, color: egui::Color32) -> Self;
+    pub fn with_padding(mut self, padding: EdgeInsets) -> Self;
+    pub fn with_size(mut self, width: f32, height: f32) -> Self;
+}
+
+impl StatelessWidget for Container {
+    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+        let mut child = self.child.clone();
+
+        // Wrap with alignment
+        if let Some(alignment) = self.alignment {
+            child = Some(Box::new(Align::new(alignment, child.unwrap())));
+        }
+
+        // Wrap with padding
+        if let Some(padding) = self.padding {
+            child = Some(Box::new(Padding::new(padding, child.unwrap())));
+        }
+
+        // Wrap with decoration
+        if self.color.is_some() || self.decoration.is_some() {
+            child = Some(Box::new(DecoratedBox::new(/* ... */, child.unwrap())));
+        }
+
+        // Wrap with size constraints
+        if self.width.is_some() || self.height.is_some() {
+            child = Some(Box::new(SizedBox::new(self.width, self.height, child)));
+        }
+
+        // Wrap with margin
+        if let Some(margin) = self.margin {
+            child = Some(Box::new(Padding::new(margin, child.unwrap())));
+        }
+
+        child.unwrap()
+    }
+}
+```
+
+**Files to create:**
+- `crates/flui_widgets/src/basic/container.rs`
+- `crates/flui_widgets/src/basic/sized_box.rs`
+- `crates/flui_widgets/src/basic/padding.rs`
+- `crates/flui_widgets/src/basic/center.rs`
+- `crates/flui_widgets/src/basic/align.rs`
+- `crates/flui_widgets/src/basic/decorated_box.rs`
+
+**Time:** 5 days
+
+---
+
+#### 4.2 Flex Widgets (Row, Column, Expanded)
+
+```rust
+// crates/flui_widgets/src/layout/column.rs
+#[derive(Debug, Clone)]
+pub struct Column {
+    key: Option<WidgetKey>,
+    main_axis_alignment: MainAxisAlignment,
+    cross_axis_alignment: CrossAxisAlignment,
+    main_axis_size: MainAxisSize,
+    children: Vec<Box<dyn Widget>>,
+}
+
+impl Column {
+    pub fn new() -> Self;
+    pub fn with_children(mut self, children: Vec<Box<dyn Widget>>) -> Self;
+}
+
+impl StatelessWidget for Column {
+    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+        // Create RenderFlex with vertical axis
+        Box::new(Flex::new(Axis::Vertical)
+            .with_main_alignment(self.main_axis_alignment)
+            .with_cross_alignment(self.cross_axis_alignment)
+            .with_children(self.children.clone()))
+    }
+}
+
+// Row is the same but with Axis::Horizontal
+
+// crates/flui_widgets/src/layout/expanded.rs
+#[derive(Debug, Clone)]
+pub struct Expanded {
+    flex: i32,
+    child: Box<dyn Widget>,
+}
+
+impl Expanded {
+    pub fn new(child: Box<dyn Widget>) -> Self {
+        Self { flex: 1, child }
+    }
+
+    pub fn with_flex(mut self, flex: i32) -> Self {
+        self.flex = flex;
+        self
+    }
+}
+```
+
+**Files to create:**
+- `crates/flui_widgets/src/layout/column.rs`
+- `crates/flui_widgets/src/layout/row.rs`
+- `crates/flui_widgets/src/layout/expanded.rs`
+- `crates/flui_widgets/src/layout/flexible.rs`
+- `crates/flui_widgets/src/layout/spacer.rs`
+
+**Time:** 4 days
+
+---
+
+#### 4.3 Text Widget (Basic)
+
+```rust
+// crates/flui_widgets/src/text/text.rs
+#[derive(Debug, Clone)]
+pub struct Text {
+    text: String,
+    style: Option<TextStyle>,
+    text_align: Option<egui::Align>,
+}
+
+impl Text {
+    pub fn new(text: impl Into<String>) -> Self;
+    pub fn with_style(mut self, style: TextStyle) -> Self;
+}
+
+// RenderText uses egui::Label for now
+pub struct RenderText {
+    base: RenderBox,
+    text: String,
+    style: Option<TextStyle>,
+}
+
+impl RenderObject for RenderText {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        // Measure text with egui
+        // Return size that fits constraints
+    }
+
+    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+        // Paint text using egui::Painter
+    }
+}
+```
+
+**Files to create:**
+- `crates/flui_widgets/src/text/text.rs`
+- `crates/flui_rendering/src/paragraph.rs`
+
+**Tests:**
+- Text layout and sizing
+- Text styling
+- Text alignment
+
+**Time:** 3 days
+
+**Total Phase 4 Time:** ~12 days
+
+---
+
+## 🚀 Middle-Level Roadmap
+
+### Phase 5: Platform Integration (Week 8)
+
+**Priority: CRITICAL**
+
+Connect everything to egui and create the application entry point.
+
+#### 5.1 FluiApp
+
+```rust
+// crates/flui_platform/src/app.rs
+pub struct FluiApp {
+    pub title: String,
+    pub home: Box<dyn Widget>,
+}
+
+impl FluiApp {
+    pub fn new(title: impl Into<String>, home: Box<dyn Widget>) -> Self;
+
+    pub fn run(self) -> Result<(), eframe::Error> {
+        let native_options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_title(&self.title)
+                .with_inner_size([800.0, 600.0]),
+            ..Default::default()
+        };
+
+        eframe::run_native(
+            &self.title,
+            native_options,
+            Box::new(|_cc| Ok(Box::new(FluiAppState::new(self)))),
+        )
+    }
+}
+
+struct FluiAppState {
+    app: FluiApp,
+    element_tree: ElementTree,
+    root_id: Option<ElementId>,
+}
+
+impl eframe::App for FluiAppState {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Request repaint for next frame
+        ctx.request_repaint();
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // 1. BUILD PHASE
+            if self.root_id.is_none() {
+                self.root_id = Some(self.element_tree.mount_root(self.app.home.clone()));
+            }
+            self.element_tree.rebuild_dirty();
+
+            // 2. LAYOUT PHASE
+            let available_size = ui.available_size();
+            let constraints = BoxConstraints::tight(Size::new(
+                available_size.x,
+                available_size.y,
+            ));
+
+            if let Some(root_id) = self.root_id {
+                let root_element = self.element_tree.get_element(root_id);
+                let root_render = root_element.get_render_object();
+                root_render.layout(constraints);
+
+                // 3. PAINT PHASE
+                root_render.paint(ui.painter(), Offset::ZERO);
+            }
+        });
+    }
+}
+```
+
+**Files to create:**
+- `crates/flui_platform/src/app.rs`
+- `crates/flui_platform/src/window.rs`
+
+**Tests:**
+- App creation and running
+- Frame loop execution
+- Widget tree rendering
+
+**Time:** 5 days
+
+---
+
+#### 5.2 Basic Examples
+
+Create examples to validate the framework works end-to-end.
+
+```rust
+// examples/hello_world.rs
+use flui::prelude::*;
+
+fn main() {
+    FluiApp::new(
+        "Hello World",
+        Container::new()
+            .with_color(egui::Color32::WHITE)
+            .with_child(
+                Center::new(
+                    Text::new("Hello, Flui!")
+                        .with_style(TextStyle {
+                            font_size: Some(32.0),
+                            color: Some(egui::Color32::BLACK),
+                            ..Default::default()
+                        })
+                )
+            )
+    )
+    .run()
+    .unwrap();
+}
+
+// examples/counter.rs - StatefulWidget example
 struct Counter;
+
 impl StatefulWidget for Counter {
     type State = CounterState;
     fn create_state(&self) -> Self::State {
@@ -282,324 +1087,173 @@ struct CounterState {
 }
 
 impl State for CounterState {
-    type Widget = Counter;
-
     fn build(&mut self, ctx: &BuildContext) -> Box<dyn Widget> {
         Column::new()
-            .children(vec![
+            .with_children(vec![
                 Text::new(format!("Count: {}", self.count)).into_widget(),
-                Button::new("Increment")
-                    .on_pressed(|| self.set_state(|s| s.count += 1))
-                    .into_widget(),
+                // TODO: Button widget (Phase 6)
             ])
+            .into_widget()
+    }
+}
+
+// examples/layout_demo.rs
+// Demonstrate Row, Column, Expanded, Container, etc.
+```
+
+**Examples to create:**
+- `examples/hello_world.rs` - Minimal app
+- `examples/counter.rs` - StatefulWidget
+- `examples/layout_demo.rs` - Layout showcase
+- `examples/styling_demo.rs` - Decorations and borders
+
+**Time:** 3 days
+
+**Total Phase 5 Time:** ~8 days
+
+---
+
+### Phase 6: Event Handling (Week 9-10)
+
+**Priority: HIGH**
+
+Add basic interactivity.
+
+#### 6.1 GestureDetector (Basic)
+
+```rust
+// crates/flui_gestures/src/detector.rs
+#[derive(Debug, Clone)]
+pub struct GestureDetector {
+    child: Box<dyn Widget>,
+    on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+pub struct RenderGestureDetector {
+    base: RenderProxyBox,
+    on_tap: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl RenderObject for RenderGestureDetector {
+    fn hit_test(&self, position: Offset) -> bool {
+        // Check if position is within bounds
+        let size = self.size();
+        position.dx >= 0.0 && position.dx <= size.width &&
+        position.dy >= 0.0 && position.dy <= size.height
+    }
+
+    fn handle_event(&self, event: &PointerEvent) {
+        if let PointerEvent::Up = event {
+            if let Some(on_tap) = &self.on_tap {
+                on_tap();
+            }
+        }
+    }
+}
+```
+
+**Files to create:**
+- `crates/flui_gestures/src/detector.rs`
+- `crates/flui_gestures/src/events.rs`
+- `crates/flui_gestures/src/hit_test.rs`
+
+**Time:** 4 days
+
+---
+
+#### 6.2 Basic Button Widget
+
+```rust
+// crates/flui_widgets/src/material/button.rs
+#[derive(Debug, Clone)]
+pub struct Button {
+    child: Box<dyn Widget>,
+    on_pressed: Option<Arc<dyn Fn() + Send + Sync>>,
+    color: Option<egui::Color32>,
+}
+
+impl StatelessWidget for Button {
+    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+        GestureDetector::new()
+            .with_child(
+                Container::new()
+                    .with_color(self.color.unwrap_or(egui::Color32::BLUE))
+                    .with_padding(EdgeInsets::symmetric(16.0, 8.0))
+                    .with_decoration(BoxDecoration {
+                        border_radius: Some(BorderRadius::circular(4.0)),
+                        ..Default::default()
+                    })
+                    .with_child(self.child.clone())
+            )
+            .with_on_tap(self.on_pressed.clone())
             .into_widget()
     }
 }
 ```
 
-**Estimated Time:** 6-7 days
+**Files to create:**
+- `crates/flui_widgets/src/material/button.rs`
+
+**Time:** 2 days
+
+**Total Phase 6 Time:** ~6 days
 
 ---
 
-### 2.2 Basic Widgets (`flui_widgets/basic`)
+### Phase 7: Animation System (Week 11-12)
 
-**Priority: HIGH**
+**Priority: MEDIUM**
+
+Basic animation support.
+
+#### 7.1 Ticker & FrameScheduler
 
 ```rust
-// Container
-pub struct Container {
-    width: Option<f32>,
-    height: Option<f32>,
-    padding: Option<EdgeInsets>,
-    margin: Option<EdgeInsets>,
-    color: Option<Color>,
-    decoration: Option<BoxDecoration>,
-    child: Option<Box<dyn Widget>>,
+// crates/flui_scheduler/src/ticker.rs
+pub struct Ticker {
+    on_tick: Box<dyn FnMut(Duration)>,
+    is_active: bool,
+    start_time: Option<Instant>,
 }
 
-// SizedBox
-pub struct SizedBox {
-    width: Option<f32>,
-    height: Option<f32>,
-    child: Option<Box<dyn Widget>>,
+impl Ticker {
+    pub fn new(on_tick: impl FnMut(Duration) + 'static) -> Self;
+    pub fn start(&mut self);
+    pub fn stop(&mut self);
+    pub fn tick(&mut self, elapsed: Duration);
 }
 
-// Padding
-pub struct Padding {
-    padding: EdgeInsets,
-    child: Box<dyn Widget>,
+// crates/flui_scheduler/src/scheduler.rs
+pub struct FrameScheduler {
+    tickers: Vec<Ticker>,
+    frame_callbacks: Vec<Box<dyn FnOnce()>>,
 }
 
-// Center, Align
-pub struct Center { child: Box<dyn Widget> }
-pub struct Align {
-    alignment: Alignment,
-    child: Box<dyn Widget>,
+impl FrameScheduler {
+    pub fn schedule_frame(&mut self, callback: impl FnOnce() + 'static);
+    pub fn create_ticker(&mut self, on_tick: impl FnMut(Duration) + 'static) -> TickerId;
+    pub fn tick_frame(&mut self, elapsed: Duration);
 }
 ```
 
-**Files:**
-- `crates/flui_widgets/src/basic/container.rs`
-- `crates/flui_widgets/src/basic/sized_box.rs`
-- `crates/flui_widgets/src/basic/padding.rs`
-- `crates/flui_widgets/src/basic/center.rs`
-- `crates/flui_widgets/src/basic/align.rs`
+**Files to create:**
+- `crates/flui_scheduler/src/ticker.rs`
+- `crates/flui_scheduler/src/scheduler.rs`
 
-**Tests:**
-- Container sizing and decoration
-- Padding layout calculation
-- Center/Align positioning
-- Nested containers
-
-**Estimated Time:** 4-5 days
+**Time:** 3 days
 
 ---
 
-## Phase 3: Layout & Rendering (Weeks 6-7)
-
-**Goal:** Implement layout algorithms and rendering
-
-### 3.1 Flex Layout (`flui_widgets/layout`)
-
-**Priority: CRITICAL**
+#### 7.2 AnimationController
 
 ```rust
-// Row & Column
-pub struct Column {
-    main_axis_alignment: MainAxisAlignment,
-    cross_axis_alignment: CrossAxisAlignment,
-    main_axis_size: MainAxisSize,
-    children: Vec<Box<dyn Widget>>,
-}
-
-pub struct Row { /* same as Column */ }
-
-// Expanded & Flexible
-pub struct Expanded {
-    flex: i32,
-    child: Box<dyn Widget>,
-}
-
-pub struct Flexible {
-    flex: i32,
-    fit: FlexFit,
-    child: Box<dyn Widget>,
-}
-
-// RenderFlex - implements Flutter's flex algorithm
-pub struct RenderFlex {
-    direction: Axis,
-    children: Vec<Box<dyn RenderObject>>,
-}
-```
-
-**Files:**
-- `crates/flui_widgets/src/layout/flex.rs`
-- `crates/flui_widgets/src/layout/row.rs`
-- `crates/flui_widgets/src/layout/column.rs`
-- `crates/flui_rendering/src/flex.rs`
-
-**Tests:**
-- Flex layout with various alignments
-- Expanded widgets space distribution
-- Flexible fit modes (tight/loose)
-- Nested flex layouts
-
-**Estimated Time:** 5-6 days
-
----
-
-### 3.2 Stack & Positioned (`flui_widgets/layout`)
-
-**Priority: HIGH**
-
-```rust
-pub struct Stack {
-    alignment: AlignmentDirectional,
-    fit: StackFit,
-    children: Vec<Box<dyn Widget>>,
-}
-
-pub struct Positioned {
-    left: Option<f32>,
-    top: Option<f32>,
-    right: Option<f32>,
-    bottom: Option<f32>,
-    width: Option<f32>,
-    height: Option<f32>,
-    child: Box<dyn Widget>,
-}
-```
-
-**Files:**
-- `crates/flui_widgets/src/layout/stack.rs`
-- `crates/flui_rendering/src/stack.rs`
-
-**Tests:**
-- Stack with absolute positioning
-- Positioned widget constraints
-- Overlapping children z-order
-
-**Estimated Time:** 3-4 days
-
----
-
-### 3.3 Painting (`flui_painting`)
-
-**Priority: HIGH**
-
-```rust
-// Decoration
-pub struct BoxDecoration {
-    color: Option<Color>,
-    border: Option<Border>,
-    border_radius: Option<BorderRadius>,
-    box_shadow: Vec<BoxShadow>,
-    gradient: Option<Gradient>,
-}
-
-// Edge insets
-pub struct EdgeInsets {
-    left: f32,
-    top: f32,
-    right: f32,
-    bottom: f32,
-}
-
-// Alignment
-pub struct Alignment {
-    x: f32,  // -1.0 to 1.0
-    y: f32,  // -1.0 to 1.0
-}
-```
-
-**Files:**
-- `crates/flui_painting/src/decoration.rs`
-- `crates/flui_painting/src/edge_insets.rs`
-- `crates/flui_painting/src/alignment.rs`
-- `crates/flui_painting/src/borders.rs`
-- `crates/flui_painting/src/text_style.rs`
-
-**Tests:**
-- BoxDecoration painting
-- Border radius rendering
-- Gradient backgrounds
-- Shadow effects
-
-**Estimated Time:** 4-5 days
-
----
-
-## Phase 4: Text & Input (Weeks 8-9)
-
-**Goal:** Text rendering and input widgets
-
-### 4.1 Text Widget (`flui_widgets/text`)
-
-**Priority: HIGH**
-
-```rust
-pub struct Text {
-    text: String,
-    style: Option<TextStyle>,
-    max_lines: Option<usize>,
-    overflow: TextOverflow,
-    text_align: TextAlign,
-}
-
-pub struct RichText {
-    text: TextSpan,
-}
-
-pub struct TextSpan {
-    text: String,
-    style: Option<TextStyle>,
-    children: Vec<TextSpan>,
-}
-```
-
-**Files:**
-- `crates/flui_widgets/src/text/text.rs`
-- `crates/flui_widgets/src/text/rich_text.rs`
-- `crates/flui_rendering/src/paragraph.rs`
-
-**Tests:**
-- Text layout and wrapping
-- Multi-line text
-- Rich text with spans
-- Text overflow modes
-
-**Estimated Time:** 4-5 days
-
----
-
-### 4.2 Input Widgets (`flui_widgets/input`)
-
-**Priority: HIGH**
-
-```rust
-// TextField
-pub struct TextField {
-    controller: Option<Arc<Mutex<TextEditingController>>>,
-    decoration: InputDecoration,
-    max_lines: Option<usize>,
-    obscure_text: bool,
-    on_changed: Option<ValueChanged<String>>,
-    on_submitted: Option<ValueChanged<String>>,
-}
-
-// TextEditingController
-pub struct TextEditingController {
-    base: BaseController,
-    value: TextEditingValue,
-}
-
-// Button
-pub struct Button {
-    child: Box<dyn Widget>,
-    on_pressed: Option<VoidCallback>,
-    style: ButtonStyle,
-}
-
-// Checkbox
-pub struct Checkbox {
-    value: bool,
-    on_changed: Option<ValueChanged<bool>>,
-}
-```
-
-**Files:**
-- `crates/flui_widgets/src/input/text_field.rs`
-- `crates/flui_widgets/src/input/text_editing_controller.rs`
-- `crates/flui_widgets/src/input/button.rs`
-- `crates/flui_widgets/src/input/checkbox.rs`
-
-**Tests:**
-- TextField input and editing
-- TextEditingController listener notification
-- Button press handling
-- Checkbox state toggling
-
-**Estimated Time:** 5-6 days
-
----
-
-## Phase 5: Animation System (Weeks 10-11)
-
-**Goal:** Implement animation framework
-
-### 5.1 AnimationController (`flui_animation`)
-
-**Priority: HIGH**
-
-```rust
+// crates/flui_animation/src/controller.rs
 pub struct AnimationController {
-    value: f64,
+    value: f64,                    // 0.0 to 1.0
     duration: Duration,
     status: AnimationStatus,
     ticker: Option<Ticker>,
-    value_listeners: ObserverList<VoidCallback>,
-    status_listeners: ObserverList<StatusListener>,
+    listeners: Vec<Box<dyn Fn(f64)>>,
 }
 
 pub enum AnimationStatus {
@@ -610,35 +1264,26 @@ pub enum AnimationStatus {
 }
 
 impl AnimationController {
+    pub fn new(duration: Duration) -> Self;
     pub fn forward(&mut self);
     pub fn reverse(&mut self);
     pub fn reset(&mut self);
-    pub fn add_listener(&mut self, listener: VoidCallback);
-    pub fn add_status_listener(&mut self, listener: StatusListener);
+    pub fn add_listener(&mut self, listener: impl Fn(f64) + 'static);
 }
 ```
 
-**Files:**
+**Files to create:**
 - `crates/flui_animation/src/controller.rs`
 - `crates/flui_animation/src/status.rs`
-- `crates/flui_scheduler/src/ticker.rs`
 
-**Tests:**
-- AnimationController forward/reverse
-- Listener notification
-- Status changes
-- Ticker integration
-
-**Estimated Time:** 4-5 days
+**Time:** 3 days
 
 ---
 
-### 5.2 Tweens & Curves (`flui_animation`)
-
-**Priority: MEDIUM**
+#### 7.3 Tweens & Curves
 
 ```rust
-// Tween
+// crates/flui_animation/src/tween.rs
 pub trait Animatable<T> {
     fn lerp(&self, t: f64) -> T;
 }
@@ -648,639 +1293,209 @@ pub struct Tween<T> {
     end: T,
 }
 
-// Curves
+impl<T: Lerp> Animatable<T> for Tween<T> {
+    fn lerp(&self, t: f64) -> T {
+        T::lerp(&self.begin, &self.end, t)
+    }
+}
+
+// crates/flui_animation/src/curves.rs
 pub trait Curve {
     fn transform(&self, t: f64) -> f64;
 }
 
+pub struct Linear;
 pub struct EaseIn;
 pub struct EaseOut;
 pub struct EaseInOut;
-
-// Animated widgets
-pub struct AnimatedBuilder;
-pub struct FadeTransition;
-pub struct SlideTransition;
 ```
 
-**Files:**
+**Files to create:**
 - `crates/flui_animation/src/tween.rs`
 - `crates/flui_animation/src/curves.rs`
-- `crates/flui_animation/src/transitions.rs`
 
-**Tests:**
-- Tween interpolation
-- Curve easing functions
-- Animated widget rebuilds
+**Time:** 2 days
 
-**Estimated Time:** 4-5 days
+**Total Phase 7 Time:** ~8 days
 
 ---
 
-## Phase 6: Gestures (Week 12)
+## 📦 Dependencies
 
-**Goal:** Touch/mouse input handling
+### Core Dependencies
 
-### 6.1 GestureDetector (`flui_gestures`)
-
-**Priority: MEDIUM**
-
-```rust
-pub struct GestureDetector {
-    child: Box<dyn Widget>,
-    on_tap: Option<VoidCallback>,
-    on_double_tap: Option<VoidCallback>,
-    on_long_press: Option<VoidCallback>,
-    on_pan_start: Option<Box<dyn Fn(DragStartDetails)>>,
-    on_pan_update: Option<Box<dyn Fn(DragUpdateDetails)>>,
-    on_pan_end: Option<Box<dyn Fn(DragEndDetails)>>,
-}
-
-pub struct DragStartDetails {
-    pub global_position: Offset,
-    pub local_position: Offset,
-}
-```
-
-**Files:**
-- `crates/flui_gestures/src/detector.rs`
-- `crates/flui_gestures/src/recognizer.rs`
-- `crates/flui_gestures/src/events.rs`
-
-**Tests:**
-- Tap detection
-- Drag gesture tracking
-- Gesture disambiguation
-
-**Estimated Time:** 5-6 days
-
----
-
-## Phase 7: Scrolling & Lists (Weeks 13-14)
-
-**Goal:** Scrollable widgets with viewport culling
-
-### 7.1 ScrollController (`flui_widgets/scrolling`)
-
-**Priority: HIGH**
-
-```rust
-pub struct ScrollController {
-    base: BaseController,
-    initial_scroll_offset: f64,
-    position: Option<Arc<Mutex<ScrollPosition>>>,
-}
-
-impl ScrollController {
-    pub fn offset(&self) -> f64;
-    pub fn jump_to(&mut self, offset: f64);
-    pub fn animate_to(&mut self, offset: f64, duration: Duration, curve: Box<dyn Curve>);
-}
-```
-
-**Files:**
-- `crates/flui_widgets/src/scrolling/scroll_controller.rs`
-- `crates/flui_widgets/src/scrolling/scroll_position.rs`
-
-**Estimated Time:** 3-4 days
-
----
-
-### 7.2 ListView with Viewport Culling (`flui_widgets/scrolling`)
-
-**Priority: HIGH**
-
-```rust
-pub struct ListView {
-    controller: Option<Arc<Mutex<ScrollController>>>,
-    children: Vec<Box<dyn Widget>>,
-}
-
-impl ListView {
-    pub fn builder() -> ListViewBuilder;
-}
-
-pub struct ListViewBuilder {
-    item_count: usize,
-    item_builder: Arc<dyn Fn(&BuildContext, usize) -> Box<dyn Widget>>,
-}
-
-// Only builds visible items!
-pub struct RenderSliverList {
-    delegate: Box<dyn SliverChildDelegate>,
-    visible_range: Option<(usize, usize)>,
-    children: HashMap<usize, Box<dyn RenderObject>>,
-}
-```
-
-**Files:**
-- `crates/flui_widgets/src/scrolling/list_view.rs`
-- `crates/flui_widgets/src/scrolling/sliver_list.rs`
-- `crates/flui_rendering/src/sliver_list.rs`
-
-**Tests:**
-- ListView scrolling
-- Viewport culling (only build visible)
-- Builder pattern for lazy loading
-- Performance with 10,000+ items
-
-**Estimated Time:** 6-7 days
-
----
-
-## Phase 8: State Management (Week 15)
-
-**Goal:** Provider system for state management
-
-### 8.1 Provider (`flui_provider`)
-
-**Priority: HIGH**
-
-```rust
-// Provider
-pub struct Provider<T: Clone + Send + Sync + 'static> {
-    data: T,
-    child: Box<dyn Widget>,
-}
-
-// ChangeNotifierProvider
-pub struct ChangeNotifierProvider<T: ChangeNotifier> {
-    notifier: Arc<Mutex<T>>,
-    child: Box<dyn Widget>,
-}
-
-// Consumer
-pub struct Consumer<T> {
-    builder: Arc<dyn Fn(&BuildContext, &T) -> Box<dyn Widget>>,
-}
-
-// Selector (optimization)
-pub struct Selector<T, R> {
-    selector: Arc<dyn Fn(&T) -> R>,
-    builder: Arc<dyn Fn(&BuildContext, R) -> Box<dyn Widget>>,
-}
-
-// BuildContext extensions
-pub trait ProviderExt {
-    fn read<T>(&self) -> Option<T>;
-    fn watch<T>(&self) -> Option<T>;
-}
-```
-
-**Files:**
-- `crates/flui_provider/src/provider.rs`
-- `crates/flui_provider/src/change_notifier_provider.rs`
-- `crates/flui_provider/src/consumer.rs`
-- `crates/flui_provider/src/selector.rs`
-
-**Tests:**
-- Provider data injection
-- Consumer rebuilds
-- Selector optimization (only rebuild when selected data changes)
-- Multi-level provider nesting
-
-**Example:**
-```rust
-ChangeNotifierProvider::create(
-    || TodoModel::new(),
-    Consumer::new(|ctx, model: &TodoModel| {
-        ListView::builder()
-            .item_count(model.todos.len())
-            .item_builder(|ctx, index| {
-                TodoItem::new(model.todos[index].clone()).into_widget()
-            })
-            .into_widget()
-    }),
-)
-```
-
-**Estimated Time:** 5-6 days
-
----
-
-## Phase 9: Platform Integration (Week 16)
-
-**Goal:** Connect to egui and window management
-
-### 9.1 FluiApp (`flui_platform`)
-
-**Priority: CRITICAL**
-
-```rust
-pub struct FluiApp {
-    pub title: String,
-    pub theme: Theme,
-    pub home: Box<dyn Widget>,
-    pub debug_show_checked_mode_banner: bool,
-}
-
-impl FluiApp {
-    pub fn new(home: impl IntoWidget) -> Self;
-    pub fn run(self) -> Result<(), eframe::Error>;
-}
-
-// Internal app state
-struct FluiAppState {
-    app: FluiApp,
-    element_tree: ElementTree,
-    frame_count: u64,
-}
-
-impl eframe::App for FluiAppState {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        // 1. Build phase
-        self.element_tree.rebuild_dirty();
-
-        // 2. Layout phase
-        let constraints = BoxConstraints::tight(/* ... */);
-        root_render.layout(constraints);
-
-        // 3. Paint phase
-        root_render.paint(ui.painter(), Offset::ZERO);
-    }
-}
-```
-
-**Files:**
-- `crates/flui_platform/src/app.rs`
-- `crates/flui_platform/src/window.rs`
-
-**Tests:**
-- App creation and running
-- Frame rendering loop
-- Window resize handling
-
-**Estimated Time:** 4-5 days
-
----
-
-## Phase 10: Performance Optimization (Weeks 17-18)
-
-**Goal:** Optimize for production use
-
-### 10.1 Performance Features
-
-**Priority: HIGH**
-
-```rust
-// RepaintBoundary - cache rendering
-pub struct RepaintBoundary {
-    child: Box<dyn Widget>,
-}
-
-// Memo - cache widget if input unchanged
-pub struct Memo<T: PartialEq> {
-    data: T,
-    builder: Arc<dyn Fn(&T) -> Box<dyn Widget>>,
-}
-
-// PerformanceOverlay - show FPS
-pub struct PerformanceOverlay {
-    child: Box<dyn Widget>,
-}
-
-// Image caching
-pub struct ImageCache {
-    cache: Arc<Mutex<LruCache<String, DynamicImage>>>,
-}
-```
-
-**Files:**
-- `crates/flui_rendering/src/repaint_boundary.rs`
-- `crates/flui_widgets/src/memo.rs`
-- `crates/flui_platform/src/performance_overlay.rs`
-- `crates/flui_painting/src/image_cache.rs`
-
-**Optimizations:**
-- Layout caching
-- Paint caching (RepaintBoundary)
-- Widget memoization
-- Viewport culling
-- Image caching
-- Intrinsic size caching
-
-**Benchmarks:**
-- 10,000 item list scrolling @ 60fps
-- Complex nested layouts
-- Animation smoothness
-- Memory usage
-
-**Estimated Time:** 7-8 days
-
----
-
-## Phase 11: Documentation & Examples (Week 19)
-
-**Goal:** Comprehensive documentation
-
-### 11.1 API Documentation
-
-**Priority: HIGH**
-
-- [ ] Document all public APIs with rustdoc
-- [ ] Add code examples to major types
-- [ ] Create architecture guide
-- [ ] Write migration guide from Flutter
-- [ ] Performance best practices
-
-### 11.2 Examples
-
-**Priority: HIGH**
-
-```rust
-// examples/counter.rs - Basic state management
-// examples/animation_demo.rs - Animation showcase
-// examples/layout_demo.rs - Layout examples
-// examples/todo_app.rs - Complete app with Provider
-// examples/performance_test.rs - 10k items list
-// examples/custom_widgets.rs - Custom widget creation
-```
-
-**Estimated Time:** 6-7 days
-
----
-
-## Phase 12: Testing & Stability (Week 20)
-
-**Goal:** Comprehensive test coverage
-
-### 12.1 Testing Strategy
-
-**Priority: CRITICAL**
-
-- [ ] Unit tests for all crates (target: 80% coverage)
-- [ ] Integration tests for widget tree
-- [ ] Performance benchmarks
-- [ ] Memory leak tests
-- [ ] Fuzzing for crash resistance
-
-**Test Structure:**
-```
-tests/
-├── unit/
-│   ├── foundation_tests.rs
-│   ├── core_tests.rs
-│   └── widgets_tests.rs
-├── integration/
-│   ├── widget_tree_tests.rs
-│   ├── animation_tests.rs
-│   └── provider_tests.rs
-└── benches/
-    ├── layout_bench.rs
-    └── rebuild_bench.rs
-```
-
-**Estimated Time:** 7-8 days
-
----
-
-## 🎯 Milestones
-
-### Milestone 1: Foundation Complete (Week 3)
-- ✅ flui_foundation crate
-- ✅ flui_core crate
-- ✅ Basic types (Key, ChangeNotifier, Widget, Element)
-- ✅ Compiles and runs "Hello World"
-
-### Milestone 2: Framework Complete (Week 5)
-- ✅ StatelessWidget / StatefulWidget
-- ✅ Basic widgets (Container, Padding, Center)
-- ✅ Simple counter example works
-
-### Milestone 3: Layout Complete (Week 7)
-- ✅ Flex layout (Row, Column)
-- ✅ Stack layout
-- ✅ Complex nested layouts work
-
-### Milestone 4: Input Complete (Week 9)
-- ✅ Text widget
-- ✅ TextField
-- ✅ Button
-- ✅ Interactive form example
-
-### Milestone 5: Animation Complete (Week 11)
-- ✅ AnimationController
-- ✅ Tweens and Curves
-- ✅ Animated widgets
-- ✅ Smooth animations demo
-
-### Milestone 6: Scrolling Complete (Week 14)
-- ✅ ScrollController
-- ✅ ListView with viewport culling
-- ✅ 10,000 item list @ 60fps
-
-### Milestone 7: State Management Complete (Week 15)
-- ✅ Provider system
-- ✅ Consumer and Selector
-- ✅ Complex app with multiple providers
-
-### Milestone 8: Platform Integration Complete (Week 16)
-- ✅ FluiApp
-- ✅ Window management
-- ✅ Full app lifecycle
-
-### Milestone 9: Performance Optimized (Week 18)
-- ✅ RepaintBoundary
-- ✅ Memoization
-- ✅ Image caching
-- ✅ Benchmarks showing 60fps
-
-### Milestone 10: Production Ready (Week 20)
-- ✅ Complete documentation
-- ✅ 80%+ test coverage
-- ✅ Example apps
-- ✅ Ready for 0.1.0 release
-
----
-
-## 📦 Dependencies by Phase
-
-### Phase 1-2 (Foundation)
 ```toml
+[dependencies]
+# Rendering
 egui = "0.33"
 eframe = "0.33"
-parking_lot = "0.12"
-once_cell = "1.20"
-serde = { version = "1", features = ["derive"] }
+
+# Concurrency
+parking_lot = "0.12"        # Fast Mutex/RwLock
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+
+# Error handling
 thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
 tracing = "0.1"
+tracing-subscriber = "0.3"
 ```
 
-### Phase 3-4 (Layout & Text)
+### Optional Dependencies (Future)
+
 ```toml
-# Add:
-glam = { version = "0.29", features = ["serde"] }
-ordered-float = "4.3"
+# Math (for advanced transforms)
+glam = { version = "0.29", features = ["serde"], optional = true }
+
+# Async (for futures)
+tokio = { version = "1.40", features = ["sync", "time"], optional = true }
+
+# Collections (for optimizations)
 smallvec = "1.13"
-```
-
-### Phase 5-6 (Animation & Gestures)
-```toml
-# Add:
-tokio = { version = "1", features = ["time", "sync"] }
-```
-
-### Phase 7 (Scrolling)
-```toml
-# Add:
 indexmap = "2.5"
-slotmap = "1.0"
 ```
-
-### Phase 8 (Provider)
-```toml
-# Add:
-dashmap = "6.1"
-arc-swap = "1.7"
-```
-
-### Phase 10 (Optimization)
-```toml
-# Add:
-lru = "0.12"
-image = { version = "0.25", features = ["png", "jpeg"] }
-reqwest = { version = "0.12", features = ["rustls-tls"] }
-ahash = "0.8"
-```
-
----
-
-## 🎓 Best Practices
-
-### Code Quality
-- Use `clippy` with strict lints
-- Format with `rustfmt`
-- Document all public APIs
-- Write tests before implementation (TDD where possible)
-
-### Performance
-- Profile with `puffin` + `puffin_egui`
-- Benchmark critical paths with `criterion`
-- Use `cargo flamegraph` for hotspot analysis
-- Target 60fps for all interactions
-
-### Memory
-- Use `parking_lot` instead of `std::sync`
-- Use `SmallVec` for small collections
-- Use `Arc` sparingly (prefer value cloning for small types)
-- Profile with `valgrind` / `heaptrack`
-
-### Architecture
-- Keep crates decoupled
-- Use traits for abstractions
-- Minimize `unsafe` code
-- Document unsafe invariants
 
 ---
 
 ## 📊 Success Metrics
 
-### Performance Targets
-- **FPS:** 60fps sustained with complex UIs
-- **Build Time:** Full rebuild < 60s (debug), < 120s (release)
-- **Memory:** < 100MB for typical app
-- **Startup:** < 100ms to first frame
+### Low-Level Goals
 
-### Quality Targets
-- **Test Coverage:** > 80%
-- **Documentation:** 100% of public APIs
-- **Examples:** 10+ working examples
-- **Zero Warnings:** `cargo clippy` clean
+- [ ] All 4 foundation crates at 100% completeness
+- [ ] RenderFlex passes Flutter layout conformance tests
+- [ ] RenderStack supports all positioning combinations
+- [ ] Painting system renders borders, shadows, decorations correctly
+- [ ] Element tree handles 1000+ elements efficiently
 
----
+### Middle-Level Goals
 
-## 🚀 Post-1.0 Features (Future)
+- [ ] FluiApp runs and displays widgets
+- [ ] Counter example works (StatefulWidget + setState)
+- [ ] Layout demo shows complex nested layouts
+- [ ] Button responds to clicks
+- [ ] Basic animations run smoothly at 60fps
 
-### Advanced Rendering
-- Custom shaders (wgpu integration)
-- 3D transforms
-- Advanced effects (blur, shadows)
+### Code Quality
 
-### Hot Reload
-- Hot reload for development
-- State preservation across reloads
-
-### Platform Specific
-- Native menu bars
-- System tray integration
-- Native file dialogs
-
-### Advanced Widgets
-- DataTable
-- Charts
-- Calendar
-- Rich text editor
-
-### Accessibility
-- Screen reader support
-- Keyboard navigation
-- High contrast themes
-
-### Internationalization
-- i18n support
-- RTL languages
-- Font fallback
+- [ ] 80%+ test coverage for core crates
+- [ ] All public APIs documented with rustdoc
+- [ ] Zero clippy warnings
+- [ ] CI passes on all platforms (Windows, Linux, macOS)
 
 ---
 
-## 📝 Notes
+## 📝 Timeline Summary
 
-### Why egui 0.33?
-- Latest stable version
-- Excellent performance
-- Active development
-- Great community
+| Phase | Focus | Duration | Status |
+|-------|-------|----------|--------|
+| 0 | Project Setup | ✅ Complete | ✅ |
+| 1 | Foundation Types | ✅ Complete | ✅ |
+| 2 | Core Traits | ✅ Complete | ✅ |
+| **1** | **Painting System** | **10 days** | ⏳ Next |
+| **2** | **Layout System** | **10 days** | ⏳ |
+| **3** | **Element Tree** | **9 days** | ⏳ |
+| **4** | **Basic Widgets** | **12 days** | ⏳ |
+| **5** | **Platform Integration** | **8 days** | ⏳ |
+| **6** | **Event Handling** | **6 days** | ⏳ |
+| **7** | **Animation System** | **8 days** | ⏳ |
 
-### Why Three-Tree Architecture?
-- Proven by Flutter (millions of apps)
-- Separates concerns cleanly
-- Enables powerful optimizations
-- Familiar to Flutter developers
-
-### Why Rust?
-- Memory safety
-- Zero-cost abstractions
-- Great tooling
-- Growing ecosystem
+**Total Time for Low/Mid-Level:** ~9 weeks
 
 ---
 
-## 🤝 Contributing
+## 🎯 Next Actions (Prioritized)
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+### Immediate Priority (Week 1-2): Layout System
 
-### Areas Needing Help
-- [ ] Widget implementations
-- [ ] Documentation
-- [ ] Examples
-- [ ] Testing
-- [ ] Performance optimization
+**Goal:** Enable Row/Column layout - the foundation of Flutter layouts
+
+1. **RenderFlex Implementation** (5 days)
+   - Create `crates/flui_rendering/src/flex.rs`
+   - Implement layout algorithm (measure inflexible → distribute flex space → position)
+   - Add FlexParentData for flex factors
+   - Test with various alignments (Start, End, Center, SpaceBetween, etc.)
+   - File: ~400 lines, 15+ tests
+
+2. **Row/Column Widgets** (2 days)
+   - Create `crates/flui_widgets/src/layout/row.rs`
+   - Create `crates/flui_widgets/src/layout/column.rs`
+   - Create `crates/flui_widgets/src/layout/expanded.rs`
+   - Simple wrappers around RenderFlex
+   - File: ~150 lines each, 10+ tests
+
+3. **RenderPadding** (1 day)
+   - Create `crates/flui_rendering/src/padding.rs`
+   - Simple constraint deflation/inflation
+   - File: ~100 lines, 5+ tests
+
+### Secondary Priority (Week 3): Basic Widgets
+
+4. **Container Widget** (3 days)
+   - Needs EdgeInsets from flui_types (already done!)
+   - Simple composition of SizedBox + Padding + DecoratedBox
+   - File: ~200 lines, 8+ tests
+
+5. **SizedBox & Center** (1 day)
+   - Fixed size constraints
+   - Alignment wrapper
+   - File: ~100 lines each, 5+ tests
+
+### Tertiary Priority (Week 4): Painting
+
+6. **Basic BoxDecoration** (2 days)
+   - Color filling
+   - Border rendering
+   - No shadows/gradients yet
+   - File: ~150 lines, 8+ tests
 
 ---
 
-## 📚 Resources
+## 📚 References
 
-### Documentation
-- [egui docs](https://docs.rs/egui/0.33/)
-- [Flutter architecture](https://docs.flutter.dev/resources/architectural-overview)
-- [Rust async book](https://rust-lang.github.io/async-book/)
-
-### Inspiration
-- [Flutter framework](https://github.com/flutter/flutter)
-- [egui](https://github.com/emilk/egui)
-- [Iced](https://github.com/iced-rs/iced)
-- [Druid](https://github.com/linebender/druid)
+- [Flutter Architecture](https://docs.flutter.dev/resources/architectural-overview)
+- [egui Documentation](https://docs.rs/egui/0.33/)
+- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
 
 ---
 
-## 📞 Contact
-
-- **Project:** Flui Framework
-- **License:** MIT OR Apache-2.0
-- **Status:** In Development (Phase 0)
-
----
-
-**Last Updated:** 2025-01-17
+**Last Updated:** 2025-01-18 (RenderDecoratedBox + RenderAspectRatio Complete!)
 **Version:** 0.1.0-alpha
-**Next Review:** Week 5 (after Milestone 2)
+**Phase:** Layout System Implementation 🚧 **IN PROGRESS**
+**Next Phase:** Additional Layout RenderObjects (RenderLimitedBox, RenderIndexedStack, RenderWrap)
+**Next Review:** After completing 10+ RenderObjects
+
+---
+
+## 🎊 Major Milestones Achieved!
+
+### ✅ Core Infrastructure (100% Complete)
+**flui_core** - Full three-tree architecture:
+- ✅ Widget → Element → RenderObject pipeline fully implemented
+- ✅ All traits use modern Rust patterns (DynClone, DowncastSync)
+- ✅ RenderObjectElement manages render object lifecycle
+- ✅ InheritedWidget for efficient data propagation
+- ✅ ParentData system for layout information
+- ✅ 49 comprehensive tests covering all core functionality
+
+### 🚧 Layout System (60% Complete)
+**flui_rendering** - Essential RenderObjects:
+- ✅ RenderFlex - Row/Column layout with flexible children (15 tests)
+- ✅ RenderPadding - Padding layout with EdgeInsets (8 tests)
+- ✅ RenderStack - Positioned layout with StackFit (13 tests)
+- ✅ RenderConstrainedBox - Additional constraints (10 tests)
+- ✅ RenderDecoratedBox - BoxDecoration painting (10 tests) **NEW!**
+- ✅ RenderAspectRatio - Aspect ratio support (17 tests) **NEW!**
+- ✅ BoxDecorationPainter - Stateful painter for decorations (6 tests) **NEW!**
+
+### 📊 Today's Progress (2025-01-18)
+- **+2 RenderObjects** (RenderDecoratedBox, RenderAspectRatio)
+- **+17 tests** (было 82, стало 99 в flui_rendering)
+- **+890 строк кода**
+
+**Total test count:** 701 tests (525 flui_types + 49 flui_core + 99 flui_rendering + 27 flui_animation + 1 flui_foundation)
+
+Ready for more RenderObjects! 🚀

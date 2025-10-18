@@ -78,6 +78,8 @@ url = { version = "2.5", features = ["serde"] }
 itertools = "0.14.0"
 ahash = "0.8"
 bitflags = "2.9"
+dyn-clone = "1.0"
+downcast-rs = "2.0.2"
 
 # PERFORMANCE & PROFILING
 criterion = "0.7"
