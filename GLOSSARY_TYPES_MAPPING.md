@@ -473,7 +473,7 @@
 - ✅ RenderProxyBox (passes layout to child)
 - ⏳ RenderShiftedBox (планується)
 
-**Specialized render objects (🚧 В ПРОЦЕСІ - 10/42 реалізовано):**
+**Specialized render objects (🚧 В ПРОЦЕСІ - 11/42 реалізовано):**
 
 **Layout render objects:**
 - ✅ **RenderFlex** (550 строк, 15 тестів) - Row/Column layout з flexible children, MainAxisAlignment, CrossAxisAlignment
@@ -493,7 +493,8 @@
 - ⏳ RenderListBody
 
 **Visual effects render objects:**
-- ⏳ RenderOpacity, RenderAnimatedOpacity
+- ✅ **RenderOpacity** (280 строк, 15 тестів) - Прозрачність child (opacity 0.0-1.0), optimization для повністю прозорих (2025-01-18)
+- ⏳ RenderAnimatedOpacity
 - ⏳ RenderTransform, RenderRotatedBox
 - ⏳ RenderClipRect, RenderClipRRect, RenderClipOval, RenderClipPath
 - ⏳ RenderPhysicalModel, RenderPhysicalShape
