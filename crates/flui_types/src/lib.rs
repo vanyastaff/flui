@@ -1,7 +1,7 @@
 //! Core types for Flui framework
 //!
 //! This crate provides fundamental types used throughout Flui:
-//! - **Geometry**: Point, Rect, Size, Offset, RRect
+//! - **Geometry**: Point, Rect, Size, Offset, RRect, Matrix4
 //! - **Layout**: Axis, EdgeInsets, Alignment, MainAxisAlignment, CrossAxisAlignment, MainAxisSize
 //! - **Styling**: Color, HSLColor, HSVColor, Border, Shadow, Gradient, Decoration
 //! - **Typography**: TextStyle, TextAlign, TextDecoration, TextSpan, and more
@@ -30,7 +30,7 @@ pub mod styling;
 pub mod typography;
 
 // Re-exports for convenience
-pub use geometry::{Offset, Point, Rect, Size};
+pub use geometry::{Matrix4, Offset, Point, Rect, RRect, Size};
 pub use layout::{
     Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
     MainAxisSize, Orientation, VerticalDirection,
@@ -44,7 +44,7 @@ pub use typography::{
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::geometry::{Offset, Point, Rect, Size};
+    pub use crate::geometry::{Matrix4, Offset, Point, Rect, RRect, Size};
     pub use crate::layout::{
         Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
         MainAxisSize, Orientation, VerticalDirection,
