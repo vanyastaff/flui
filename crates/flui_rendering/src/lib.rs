@@ -38,10 +38,12 @@ pub mod render_fractionally_sized_box;
 pub mod render_indexed_stack;
 pub mod render_limited_box;
 pub mod render_object;
+pub mod render_opacity;
 pub mod render_padding;
 pub mod render_positioned_box;
 pub mod render_stack;
 pub mod stack_parent_data;
+
 
 
 
@@ -68,6 +70,7 @@ pub use render_fractionally_sized_box::RenderFractionallySizedBox;
 pub use render_indexed_stack::RenderIndexedStack;
 pub use render_limited_box::RenderLimitedBox;
 pub use render_object::RenderObject;
+pub use render_opacity::RenderOpacity;
 pub use render_padding::RenderPadding;
 pub use render_positioned_box::RenderPositionedBox;
 pub use render_stack::{RenderStack, StackFit};
@@ -90,6 +93,7 @@ pub mod prelude {
     pub use crate::render_indexed_stack::RenderIndexedStack;
     pub use crate::render_limited_box::RenderLimitedBox;
     pub use crate::render_object::RenderObject;
+    pub use crate::render_opacity::RenderOpacity;
     pub use crate::render_padding::RenderPadding;
     pub use crate::render_positioned_box::RenderPositionedBox;
     pub use crate::render_stack::{RenderStack, StackFit};
@@ -97,6 +101,7 @@ pub mod prelude {
     pub use flui_core::BoxConstraints;
     pub use flui_types::{Offset, Point, Rect, Size};
 }
+
 
 
 

@@ -15,17 +15,17 @@ Flui - это Flutter-inspired декларативный UI фреймворк 
 | **flui_types** | ✅ Завершено | ~14200 | 525 | Базовые типы (geometry, layout, styling, typography, painting, animation, physics, gestures, constraints, semantics, platform) |
 | **flui_foundation** | ✅ Реализован | ~800 | 1 | Key, ChangeNotifier, Diagnostics |
 | **flui_core** | ✅ Реализован | ~900 | 49 | Widget, Element, RenderObject traits |
-| **flui_rendering** | 🚧 В разработке | ~5150 | 156 | RenderBox, RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox |
+| **flui_rendering** | 🚧 В разработке | ~5430 | 171 | RenderBox, RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity |
 | **flui_animation** | ✅ Реализован | ~500 | 27 | AnimationController, Ticker, AnimatedBuilder |
 | **flui** | ✅ Реализован | ~50 | 0 | Main re-export crate |
 | **ИТОГО** | | **~19600** | **701** | |
 
 ### Качество
 
-- ✅ **758 тестов** проходит успешно
+- ✅ **773 теста** проходит успешно
   - flui_types: 525 тестов
   - flui_core: 49 тестов
-  - flui_rendering: 156 тестов (+74 сегодня)
+  - flui_rendering: 171 тест (+89 сегодня)
   - flui_animation: 27 тестов
   - flui_foundation: 1 тест
 - ✅ **0 clippy warnings** во всех крейтах
@@ -391,7 +391,8 @@ flui (main crate, re-exports)
 8. ✅ **RenderIndexedStack** (~430 строк, 13 тестов) - Stack с visible index, показывает только один child (2025-01-18)
 9. ✅ **RenderPositionedBox** (~410 строк, 16 тестов) - Align/Center widget, выравнивает child с width_factor/height_factor (2025-01-18)
 10. ✅ **RenderFractionallySizedBox** (~400 строк, 15 тестов) - Процентный размер child от parent (widthFactor/heightFactor) (2025-01-18)
-11. ⏳ **RenderWrap** - Wrap layout (более сложный) - **СЛЕДУЮЩАЯ ЗАДАЧА**
+11. ✅ **RenderOpacity** (~280 строк, 15 тестов) - Прозрачность child (opacity 0.0-1.0), optimization для полностью прозрачных (2025-01-18)
+12. ⏳ **RenderTransform** - 2D трансформации (Translate, Rotate, Scale, Matrix) - **СЛЕДУЮЩАЯ ЗАДАЧА**
 
 **flui_widgets - после завершения основных RenderObjects:**
 1. **Basic widgets** (Container, SizedBox, Padding, Center, Align)
@@ -510,7 +511,7 @@ cargo doc --no-deps --open
 **Фаза:** **flui_types ПОЛНОСТЬЮ ГОТОВ!** ✅ | **flui_rendering активно развивается** 🚧
 **Прогресс:**
 - 100% базовых типов (14277 строк, 525 тестов)
-- flui_rendering: 9 RenderObjects готовы (RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox)
-- **Сегодня (2025-01-18):** +6 RenderObjects (RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox), +74 тестов, +2510 строк
-- **Итого:** 758 тестов, ~21600 строк кода
-**Следующая фаза:** Продолжение flui_rendering (RenderFractionallySizedBox, RenderOpacity, RenderTransform), затем flui_widgets
+- flui_rendering: 11 RenderObjects готовы (RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity)
+- **Сегодня (2025-01-18):** +7 RenderObjects (RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity), +89 тестов, +2790 строк
+- **Итого:** 773 теста, ~21880 строк кода
+**Следующая фаза:** Продолжение flui_rendering (RenderTransform, RenderClipRRect), затем flui_widgets
