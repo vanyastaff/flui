@@ -473,7 +473,7 @@
 - ✅ RenderProxyBox (passes layout to child)
 - ⏳ RenderShiftedBox (планується)
 
-**Specialized render objects (🚧 В ПРОЦЕСІ - 8/42 реалізовано):**
+**Specialized render objects (🚧 В ПРОЦЕСІ - 9/42 реалізовано):**
 
 **Layout render objects:**
 - ✅ **RenderFlex** (550 строк, 15 тестів) - Row/Column layout з flexible children, MainAxisAlignment, CrossAxisAlignment
@@ -484,8 +484,8 @@
 - ✅ **RenderAspectRatio** (390 строк, 17 тестів) - Підтримка aspect ratio (width/height), tight constraints handling (2025-01-18)
 - ✅ **RenderLimitedBox** (380 строк, 13 тестів) - Обмежує розмір при unbounded constraints (2025-01-18)
 - ✅ **RenderIndexedStack** (430 строк, 13 тестів) - Stack з visible index, показує тільки один child (2025-01-18)
+- ✅ **RenderPositionedBox** (410 строк, 16 тестів) - Align/Center widget з width_factor/height_factor (2025-01-18)
 - ⏳ RenderWrap - wrap layout
-- ⏳ RenderPositionedBox
 - ⏳ RenderFractionallySizedBox
 - ⏳ RenderIntrinsicWidth, RenderIntrinsicHeight
 - ⏳ RenderFlow
