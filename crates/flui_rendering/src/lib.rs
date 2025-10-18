@@ -42,7 +42,9 @@ pub mod render_opacity;
 pub mod render_padding;
 pub mod render_positioned_box;
 pub mod render_stack;
+pub mod render_transform;
 pub mod stack_parent_data;
+
 
 
 
@@ -74,11 +76,12 @@ pub use render_opacity::RenderOpacity;
 pub use render_padding::RenderPadding;
 pub use render_positioned_box::RenderPositionedBox;
 pub use render_stack::{RenderStack, StackFit};
+pub use render_transform::RenderTransform;
 pub use stack_parent_data::StackParentData;
 
 // Re-export types from dependencies
 pub use flui_core::BoxConstraints;
-pub use flui_types::{Offset, Point, Rect, Size};
+pub use flui_types::{Matrix4, Offset, Point, Rect, Size};
 
 /// Prelude module for convenient imports
 pub mod prelude {
@@ -97,10 +100,12 @@ pub mod prelude {
     pub use crate::render_padding::RenderPadding;
     pub use crate::render_positioned_box::RenderPositionedBox;
     pub use crate::render_stack::{RenderStack, StackFit};
+    pub use crate::render_transform::RenderTransform;
     pub use crate::stack_parent_data::StackParentData;
     pub use flui_core::BoxConstraints;
-    pub use flui_types::{Offset, Point, Rect, Size};
+    pub use flui_types::{Matrix4, Offset, Point, Rect, Size};
 }
+
 
 
 
