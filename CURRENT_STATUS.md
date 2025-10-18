@@ -12,20 +12,20 @@ Flui - это Flutter-inspired декларативный UI фреймворк 
 
 | Крейт | Статус | Строк кода | Тестов | Описание |
 |-------|--------|-----------|--------|----------|
-| **flui_types** | ✅ Завершено | ~14200 | 525 | Базовые типы (geometry, layout, styling, typography, painting, animation, physics, gestures, constraints, semantics, platform) |
+| **flui_types** | ✅ Завершено | ~14700 | 539 | Базовые типы (geometry+Matrix4, layout, styling, typography, painting, animation, physics, gestures, constraints, semantics, platform) |
 | **flui_foundation** | ✅ Реализован | ~800 | 1 | Key, ChangeNotifier, Diagnostics |
 | **flui_core** | ✅ Реализован | ~900 | 49 | Widget, Element, RenderObject traits |
-| **flui_rendering** | 🚧 В разработке | ~5430 | 171 | RenderBox, RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity |
+| **flui_rendering** | 🚧 В разработке | ~6240 | 185 | RenderBox, RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity, RenderTransform |
 | **flui_animation** | ✅ Реализован | ~500 | 27 | AnimationController, Ticker, AnimatedBuilder |
 | **flui** | ✅ Реализован | ~50 | 0 | Main re-export crate |
-| **ИТОГО** | | **~19600** | **701** | |
+| **ИТОГО** | | **~23190** | **801** | |
 
 ### Качество
 
-- ✅ **773 теста** проходит успешно
-  - flui_types: 525 тестов
+- ✅ **801 тест** проходит успешно
+  - flui_types: 539 тестов (+14 Matrix4)
   - flui_core: 49 тестов
-  - flui_rendering: 171 тест (+89 сегодня)
+  - flui_rendering: 185 тестов (+103 сегодня)
   - flui_animation: 27 тестов
   - flui_foundation: 1 тест
 - ✅ **0 clippy warnings** во всех крейтах
@@ -392,7 +392,8 @@ flui (main crate, re-exports)
 9. ✅ **RenderPositionedBox** (~410 строк, 16 тестов) - Align/Center widget, выравнивает child с width_factor/height_factor (2025-01-18)
 10. ✅ **RenderFractionallySizedBox** (~400 строк, 15 тестов) - Процентный размер child от parent (widthFactor/heightFactor) (2025-01-18)
 11. ✅ **RenderOpacity** (~280 строк, 15 тестов) - Прозрачность child (opacity 0.0-1.0), optimization для полностью прозрачных (2025-01-18)
-12. ⏳ **RenderTransform** - 2D трансформации (Translate, Rotate, Scale, Matrix) - **СЛЕДУЮЩАЯ ЗАДАЧА**
+12. ✅ **RenderTransform** (~400 строк, 14 тестов) - 2D/3D трансформации (Matrix4: translation, rotation, scaling), transform_hit_tests (2025-01-18)
+13. ⏳ **RenderClipRRect** - Клиппинг с закругленными углами (BorderRadius) - **СЛЕДУЮЩАЯ ЗАДАЧА**
 
 **flui_widgets - после завершения основных RenderObjects:**
 1. **Basic widgets** (Container, SizedBox, Padding, Center, Align)
@@ -510,8 +511,10 @@ cargo doc --no-deps --open
 **Последнее обновление:** 18 января 2025
 **Фаза:** **flui_types ПОЛНОСТЬЮ ГОТОВ!** ✅ | **flui_rendering активно развивается** 🚧
 **Прогресс:**
-- 100% базовых типов (14277 строк, 525 тестов)
-- flui_rendering: 11 RenderObjects готовы (RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity)
-- **Сегодня (2025-01-18):** +7 RenderObjects (RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity), +89 тестов, +2790 строк
-- **Итого:** 773 теста, ~21880 строк кода
-**Следующая фаза:** Продолжение flui_rendering (RenderTransform, RenderClipRRect), затем flui_widgets
+- 100% базовых типов + Matrix4 (14700 строк, 539 тестов)
+- flui_rendering: 12 RenderObjects готовы (RenderFlex, RenderPadding, RenderStack, RenderConstrainedBox, RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity, RenderTransform)
+- **Сегодня (2025-01-18):** +8 RenderObjects + Matrix4, +117 тестов, +3653 строк
+  - Matrix4 (4x4 transformation matrix, ~450 строк, 14 тестов)
+  - RenderDecoratedBox, RenderAspectRatio, RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox, RenderOpacity, RenderTransform
+- **Итого:** 801 тест, ~23190 строк кода
+**Следующая фаза:** Продолжение flui_rendering (RenderClipRRect, RenderClipRect), затем flui_widgets
