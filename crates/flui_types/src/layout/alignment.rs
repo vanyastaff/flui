@@ -515,3 +515,144 @@ mod tests {
         assert_eq!(default, Alignment::CENTER);
     }
 }
+
+/// Directional alignment that adapts to text direction (LTR vs RTL).
+///
+/// Instead of using absolute x coordinate, uses `start` which maps to:
+/// - left in LTR (Left-To-Right) layouts
+/// - right in RTL (Right-To-Left) layouts
+///
+/// Similar to Flutter's `AlignmentDirectional`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct AlignmentDirectional {
+    /// Start alignment: -1.0 = start edge, 0.0 = center, 1.0 = end edge
+    pub start: f32,
+    /// Vertical alignment: -1.0 = top, 0.0 = center, 1.0 = bottom
+    pub y: f32,
+}
+
+impl AlignmentDirectional {
+    /// Create a new directional alignment.
+    pub const fn new(start: f32, y: f32) -> Self {
+        Self { start, y }
+    }
+
+    /// Top start alignment (-1, -1).
+    pub const TOP_START: Self = Self::new(-1.0, -1.0);
+
+    /// Top center alignment (0, -1).
+    pub const TOP_CENTER: Self = Self::new(0.0, -1.0);
+
+    /// Top end alignment (1, -1).
+    pub const TOP_END: Self = Self::new(1.0, -1.0);
+
+    /// Center start alignment (-1, 0).
+    pub const CENTER_START: Self = Self::new(-1.0, 0.0);
+
+    /// Center alignment (0, 0).
+    pub const CENTER: Self = Self::new(0.0, 0.0);
+
+    /// Center end alignment (1, 0).
+    pub const CENTER_END: Self = Self::new(1.0, 0.0);
+
+    /// Bottom start alignment (-1, 1).
+    pub const BOTTOM_START: Self = Self::new(-1.0, 1.0);
+
+    /// Bottom center alignment (0, 1).
+    pub const BOTTOM_CENTER: Self = Self::new(0.0, 1.0);
+
+    /// Bottom end alignment (1, 1).
+    pub const BOTTOM_END: Self = Self::new(1.0, 1.0);
+
+    /// Resolve to absolute Alignment based on text direction.
+    ///
+    /// # Arguments
+    ///
+    /// * `is_ltr` - true for left-to-right, false for right-to-left
+    pub fn resolve(&self, is_ltr: bool) -> Alignment {
+        if is_ltr {
+            Alignment::new(self.start, self.y)
+        } else {
+            Alignment::new(-self.start, self.y)
+        }
+    }
+
+    /// Linear interpolation between two directional alignments.
+    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Self::new(a.start + (b.start - a.start) * t, a.y + (b.y - a.y) * t)
+    }
+}
+
+impl Default for AlignmentDirectional {
+    fn default() -> Self {
+        Self::CENTER
+    }
+}
+
+impl Add for AlignmentDirectional {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.start + rhs.start, self.y + rhs.y)
+    }
+}
+
+impl Neg for AlignmentDirectional {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self::new(-self.start, -self.y)
+    }
+}
+
+/// Base class for Alignment and AlignmentDirectional.
+///
+/// This enum allows working with both absolute and directional alignments uniformly.
+/// Similar to Flutter's `AlignmentGeometry`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum AlignmentGeometry {
+    /// Absolute alignment (x, y).
+    Absolute(Alignment),
+    /// Directional alignment (start, y).
+    Directional(AlignmentDirectional),
+}
+
+impl AlignmentGeometry {
+    /// Resolve to absolute Alignment based on text direction.
+    ///
+    /// # Arguments
+    ///
+    /// * `is_ltr` - true for left-to-right, false for right-to-left
+    pub fn resolve(&self, is_ltr: bool) -> Alignment {
+        match self {
+            AlignmentGeometry::Absolute(alignment) => *alignment,
+            AlignmentGeometry::Directional(alignment) => alignment.resolve(is_ltr),
+        }
+    }
+
+    /// Calculate offset for a child within a parent, respecting text direction.
+    pub fn calculate_offset(&self, child_size: Size, parent_size: Size, is_ltr: bool) -> Offset {
+        self.resolve(is_ltr).calculate_offset(child_size, parent_size)
+    }
+}
+
+impl From<Alignment> for AlignmentGeometry {
+    fn from(alignment: Alignment) -> Self {
+        AlignmentGeometry::Absolute(alignment)
+    }
+}
+
+impl From<AlignmentDirectional> for AlignmentGeometry {
+    fn from(alignment: AlignmentDirectional) -> Self {
+        AlignmentGeometry::Directional(alignment)
+    }
+}
+
+impl Default for AlignmentGeometry {
+    fn default() -> Self {
+        AlignmentGeometry::Absolute(Alignment::CENTER)
+    }
+}

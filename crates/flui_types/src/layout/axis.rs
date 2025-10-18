@@ -312,6 +312,27 @@ impl AxisDirection {
             (Axis::Vertical, true) => AxisDirection::BottomToTop,
         }
     }
+
+    /// Get the perpendicular direction
+    ///
+    /// Flips to the cross axis while maintaining direction sign.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::AxisDirection;
+    ///
+    /// assert_eq!(AxisDirection::TopToBottom.flip(), AxisDirection::LeftToRight);
+    /// assert_eq!(AxisDirection::BottomToTop.flip(), AxisDirection::RightToLeft);
+    /// ```
+    pub const fn flip(self) -> Self {
+        match self {
+            AxisDirection::LeftToRight => AxisDirection::TopToBottom,
+            AxisDirection::RightToLeft => AxisDirection::BottomToTop,
+            AxisDirection::TopToBottom => AxisDirection::LeftToRight,
+            AxisDirection::BottomToTop => AxisDirection::RightToLeft,
+        }
+    }
 }
 
 
