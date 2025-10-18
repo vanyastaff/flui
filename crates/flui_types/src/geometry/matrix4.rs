@@ -24,6 +24,7 @@
 //! let combined = translate * rotate * scale;
 //! ```
 
+use std::fmt;
 use std::ops::{Mul, MulAssign};
 
 /// 4x4 transformation matrix stored in column-major order.
@@ -163,9 +164,22 @@ impl Matrix4 {
     }
 
     /// Returns whether this is an identity matrix.
+    ///
+    /// Uses epsilon comparison for floating-point tolerance.
     #[inline]
     pub fn is_identity(&self) -> bool {
-        *self == Self::identity()
+        self.is_identity_with_epsilon(1e-5)
+    }
+
+    /// Returns whether this is an identity matrix with custom epsilon.
+    pub fn is_identity_with_epsilon(&self, epsilon: f32) -> bool {
+        let identity = Self::identity();
+        for i in 0..16 {
+            if (self.m[i] - identity.m[i]).abs() > epsilon {
+                return false;
+            }
+        }
+        true
     }
 
     /// Returns the translation component (tx, ty, tz).
@@ -227,6 +241,102 @@ impl Matrix4 {
     pub fn to_col_major_array(&self) -> [f32; 16] {
         self.m
     }
+
+    /// Attempts to invert this matrix.
+    ///
+    /// Returns `None` if the matrix is singular (determinant is zero).
+    /// Uses Gauss-Jordan elimination for general 4x4 matrices.
+    ///
+    /// For simple transformations (translation, rotation, uniform scaling),
+    /// consider using specialized inverse methods if available.
+    pub fn try_inverse(&self) -> Option<Self> {
+        let mut result = *self;
+        let mut inv = Self::identity();
+
+        // Gauss-Jordan elimination with partial pivoting
+        for i in 0..4 {
+            // Find pivot
+            let mut max_row = i;
+            let mut max_val = result.m[i * 4 + i].abs();
+
+            for k in (i + 1)..4 {
+                let val = result.m[i * 4 + k].abs();
+                if val > max_val {
+                    max_val = val;
+                    max_row = k;
+                }
+            }
+
+            // Check for singular matrix
+            if max_val < f32::EPSILON {
+                return None;
+            }
+
+            // Swap rows if needed
+            if max_row != i {
+                for j in 0..4 {
+                    result.m.swap(j * 4 + i, j * 4 + max_row);
+                    inv.m.swap(j * 4 + i, j * 4 + max_row);
+                }
+            }
+
+            // Scale pivot row
+            let pivot = result.m[i * 4 + i];
+            for j in 0..4 {
+                result.m[j * 4 + i] /= pivot;
+                inv.m[j * 4 + i] /= pivot;
+            }
+
+            // Eliminate column
+            for k in 0..4 {
+                if k != i {
+                    let factor = result.m[i * 4 + k];
+                    for j in 0..4 {
+                        result.m[j * 4 + k] -= factor * result.m[j * 4 + i];
+                        inv.m[j * 4 + k] -= factor * inv.m[j * 4 + i];
+                    }
+                }
+            }
+        }
+
+        Some(inv)
+    }
+
+    /// Inverts this matrix in place.
+    ///
+    /// Returns `true` if successful, `false` if the matrix is singular.
+    pub fn invert(&mut self) -> bool {
+        if let Some(inv) = self.try_inverse() {
+            *self = inv;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns the determinant of this matrix.
+    pub fn determinant(&self) -> f32 {
+        // Cofactor expansion along first row
+        let m = &self.m;
+
+        let a0 = m[0] * (m[5] * (m[10] * m[15] - m[11] * m[14]) -
+                         m[9] * (m[6] * m[15] - m[7] * m[14]) +
+                         m[13] * (m[6] * m[11] - m[7] * m[10]));
+
+        let a1 = m[4] * (m[1] * (m[10] * m[15] - m[11] * m[14]) -
+                         m[9] * (m[2] * m[15] - m[3] * m[14]) +
+                         m[13] * (m[2] * m[11] - m[3] * m[10]));
+
+        let a2 = m[8] * (m[1] * (m[6] * m[15] - m[7] * m[14]) -
+                         m[5] * (m[2] * m[15] - m[3] * m[14]) +
+                         m[13] * (m[2] * m[7] - m[3] * m[6]));
+
+        let a3 = m[12] * (m[1] * (m[6] * m[11] - m[7] * m[10]) -
+                          m[5] * (m[2] * m[11] - m[3] * m[10]) +
+                          m[9] * (m[2] * m[7] - m[3] * m[6]));
+
+        a0 - a1 + a2 - a3
+    }
 }
 
 impl Default for Matrix4 {
@@ -264,6 +374,23 @@ impl Mul for Matrix4 {
 impl MulAssign for Matrix4 {
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
+    }
+}
+
+impl fmt::Display for Matrix4 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Matrix4 [")?;
+        for row in 0..4 {
+            write!(f, "  [")?;
+            for col in 0..4 {
+                if col > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{:8.3}", self.m[col * 4 + row])?;
+            }
+            writeln!(f, " ]")?;
+        }
+        write!(f, "]")
     }
 }
 
@@ -449,5 +576,101 @@ mod tests {
         // Expected: (0,0) -> translate -> (10, 20) -> scale -> (20, 40) -> rotate 90° -> (-40, 20)
         assert!((x - (-40.0)).abs() < 0.01);
         assert!((y - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_matrix4_inverse_identity() {
+        let m = Matrix4::identity();
+        let inv = m.try_inverse().unwrap();
+        assert!(inv.is_identity());
+    }
+
+    #[test]
+    fn test_matrix4_inverse_translation() {
+        let m = Matrix4::translation(10.0, 20.0, 0.0);
+        let inv = m.try_inverse().unwrap();
+
+        // Inverse of translation(10, 20) should be translation(-10, -20)
+        let (tx, ty, _) = inv.translation_component();
+        assert!((tx - (-10.0)).abs() < 0.001);
+        assert!((ty - (-20.0)).abs() < 0.001);
+
+        // Verify: m * inv = identity
+        let product = m * inv;
+        assert!(product.is_identity());
+    }
+
+    #[test]
+    fn test_matrix4_inverse_scaling() {
+        let m = Matrix4::scaling(2.0, 4.0, 1.0);
+        let inv = m.try_inverse().unwrap();
+
+        // Inverse of scaling(2, 4, 1) should be scaling(0.5, 0.25, 1)
+        assert!((inv.m[0] - 0.5).abs() < 0.001);
+        assert!((inv.m[5] - 0.25).abs() < 0.001);
+        assert!((inv.m[10] - 1.0).abs() < 0.001);
+
+        // Verify: m * inv = identity
+        let product = m * inv;
+        assert!(product.is_identity());
+    }
+
+    #[test]
+    fn test_matrix4_inverse_rotation() {
+        let angle = std::f32::consts::PI / 4.0; // 45 degrees
+        let m = Matrix4::rotation_z(angle);
+        let inv = m.try_inverse().unwrap();
+
+        // Verify: m * inv = identity
+        let product = m * inv;
+        assert!(product.is_identity());
+
+        // Inverse rotation should rotate back
+        let (x, y) = m.transform_point(1.0, 0.0);
+        let (x2, y2) = inv.transform_point(x, y);
+        assert!((x2 - 1.0).abs() < 0.001);
+        assert!((y2 - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_matrix4_invert_in_place() {
+        let mut m = Matrix4::translation(5.0, 10.0, 0.0);
+        let original = m;
+
+        assert!(m.invert());
+
+        // Verify: m is now inverted
+        let product = original * m;
+        assert!(product.is_identity());
+    }
+
+    #[test]
+    fn test_matrix4_determinant_identity() {
+        let m = Matrix4::identity();
+        assert!((m.determinant() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_matrix4_determinant_translation() {
+        let m = Matrix4::translation(10.0, 20.0, 0.0);
+        // Translation matrices have determinant = 1
+        assert!((m.determinant() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_matrix4_determinant_scaling() {
+        let m = Matrix4::scaling(2.0, 3.0, 4.0);
+        // Determinant of scaling matrix = product of scale factors
+        assert!((m.determinant() - 24.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_matrix4_display() {
+        let m = Matrix4::translation(1.0, 2.0, 3.0);
+        let display = format!("{}", m);
+        assert!(display.contains("Matrix4"));
+        assert!(display.contains("1.000"));
+        assert!(display.contains("2.000"));
+        assert!(display.contains("3.000"));
     }
 }
