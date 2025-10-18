@@ -173,10 +173,14 @@ impl RenderObject for RenderTransform {
         if let Some(child) = &self.child {
             if self.transform_hit_tests {
                 // Transform the hit test position by inverse of transformation
-                // For simple translation, just subtract the translation component
-                let (tx, ty, _tz) = self.transform.translation_component();
-                let local_position = position - Offset::new(tx, ty);
-                child.hit_test(local_position)
+                if let Some(inverse) = self.transform.try_inverse() {
+                    let (local_x, local_y) = inverse.transform_point(position.dx, position.dy);
+                    let local_position = Offset::new(local_x, local_y);
+                    child.hit_test(local_position)
+                } else {
+                    // Singular matrix (non-invertible) - can't hit test
+                    false
+                }
             } else {
                 // Don't transform hit tests
                 child.hit_test(position)
