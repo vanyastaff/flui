@@ -44,6 +44,30 @@ use crate::{Element, ElementId, Size, Widget};
 use crate::tree::ElementTree;
 use crate::widget::InheritedWidget;
 
+/// Iterator over ancestor elements
+pub struct Ancestors<'a> {
+    tree: parking_lot::RwLockReadGuard<'a, ElementTree>,
+    current: Option<ElementId>,
+}
+
+impl<'a> Iterator for Ancestors<'a> {
+    type Item = ElementId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current_id = self.current?;
+
+        // Get parent before returning current
+        if let Some(element) = self.tree.get(current_id) {
+            let parent_id = element.parent();
+            self.current = parent_id;
+            Some(current_id)
+        } else {
+            self.current = None;
+            None
+        }
+    }
+}
+
 /// Build context provides access to the element tree and framework services
 ///
 /// Rust-idiomatic name for Flutter's BuildContext. Passed to build() methods.
@@ -682,6 +706,30 @@ impl Context {
     /// # Returns
     ///
     /// Debug string describing this context
+    /// Iterate over ancestor elements (Rust idiomatic!)
+    ///
+    /// Returns an iterator that yields ElementIds from the immediate parent
+    /// up to the root.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Count ancestors
+    /// let depth = context.ancestors().count();
+    ///
+    /// // Find first Container ancestor
+    /// let container = context.ancestors()
+    ///     .find(|&id| /* check if Container */);
+    ///
+    /// // Collect all ancestors
+    /// let all: Vec<_> = context.ancestors().collect();
+    /// ```
+    pub fn ancestors(&self) -> Ancestors<'_> {
+        let tree = self.tree.read();
+        let current = self.parent();
+        Ancestors { tree, current }
+    }
+
     pub fn debug_info(&self) -> String {
         let tree = self.tree();
 
