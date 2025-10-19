@@ -3,7 +3,7 @@
 use std::any::TypeId;
 use crate::{Element, ElementId};
 use crate::widget::InheritedWidget;
-use super::core::Context;
+use super::Context;
 
 impl Context {
     /// Access an InheritedWidget's data and establish dependency

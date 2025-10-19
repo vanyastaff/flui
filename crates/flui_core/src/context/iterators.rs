@@ -1,24 +1,17 @@
 //! Iterator patterns for traversing the element tree
-//!
-//! Rust-idiomatic iterators for walking ancestors, descendants, etc.
-
 
 use crate::ElementId;
 use crate::tree::ElementTree;
 
 /// Iterator over ancestor elements
 ///
-/// Iterates from the immediate parent up to the root.
+/// Iterates from parent to root.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// // Count ancestors
 /// let depth = context.ancestors().count();
-///
-/// // Find first matching ancestor
-/// let container = context.ancestors()
-///     .find(|&id| /* check condition */);
+/// let container = context.ancestors().find(|&id| /* check */);
 /// ```
 pub struct Ancestors<'a> {
     pub(super) tree: parking_lot::RwLockReadGuard<'a, ElementTree>,
