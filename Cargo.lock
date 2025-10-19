@@ -1101,6 +1101,8 @@ dependencies = [
  "flui_foundation",
  "flui_rendering",
  "flui_types",
+ "once_cell",
+ "parking_lot",
 ]
 
 [[package]]

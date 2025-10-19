@@ -115,7 +115,13 @@ impl FluiApp {
                     .with_button(PointerButton::Primary);
                 let event = PointerEvent::Down(event_data);
                 tracing::info!("🖱️ Pointer Down at {:?}", position);
-                self.pipeline.dispatch_pointer_event(event);
+
+                let result = self.pipeline.dispatch_pointer_event(event.clone());
+
+                // Dispatch to gesture handlers if hit
+                if result.is_hit() {
+                    flui_widgets::gestures::dispatch_gesture_event(&event);
+                }
             }
 
             // Check for pointer up events (button release)
@@ -124,7 +130,13 @@ impl FluiApp {
                     .with_button(PointerButton::Primary);
                 let event = PointerEvent::Up(event_data);
                 tracing::info!("🖱️ Pointer Up at {:?}", position);
-                self.pipeline.dispatch_pointer_event(event);
+
+                let result = self.pipeline.dispatch_pointer_event(event.clone());
+
+                // Dispatch to gesture handlers if hit
+                if result.is_hit() {
+                    flui_widgets::gestures::dispatch_gesture_event(&event);
+                }
             }
 
             // Check for pointer move events (only if pointer is over widget)

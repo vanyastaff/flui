@@ -4,4 +4,4 @@
 
 mod gesture_detector;
 
-pub use gesture_detector::GestureDetector;
+pub use gesture_detector::{clear_gesture_handlers, dispatch_gesture_event, GestureDetector};

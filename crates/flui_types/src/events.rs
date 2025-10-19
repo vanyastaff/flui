@@ -130,23 +130,59 @@ impl PointerEvent {
     }
 }
 
+/// Type for pointer event handlers
+pub type PointerEventHandler = std::sync::Arc<dyn Fn(&PointerEvent) + Send + Sync>;
+
 /// Hit test result entry
 ///
 /// Represents a widget that was hit during hit testing
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HitTestEntry {
     /// Position where the hit occurred in local coordinates
     pub local_position: Offset,
     /// Bounds of the widget that was hit
     pub bounds: Size,
+    /// Optional event handler (for RenderPointerListener)
+    pub handler: Option<PointerEventHandler>,
+}
+
+impl std::fmt::Debug for HitTestEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HitTestEntry")
+            .field("local_position", &self.local_position)
+            .field("bounds", &self.bounds)
+            .field("has_handler", &self.handler.is_some())
+            .finish()
+    }
 }
 
 impl HitTestEntry {
-    /// Create a new hit test entry
+    /// Create a new hit test entry without handler
     pub fn new(local_position: Offset, bounds: Size) -> Self {
         Self {
             local_position,
             bounds,
+            handler: None,
+        }
+    }
+
+    /// Create a new hit test entry with handler
+    pub fn with_handler(
+        local_position: Offset,
+        bounds: Size,
+        handler: PointerEventHandler,
+    ) -> Self {
+        Self {
+            local_position,
+            bounds,
+            handler: Some(handler),
+        }
+    }
+
+    /// Dispatch event to handler if present
+    pub fn dispatch(&self, event: &PointerEvent) {
+        if let Some(handler) = &self.handler {
+            handler(event);
         }
     }
 }
@@ -184,9 +220,23 @@ impl HitTestResult {
         self.entries.is_empty()
     }
 
+    /// Check if any widget was hit (opposite of is_empty)
+    pub fn is_hit(&self) -> bool {
+        !self.entries.is_empty()
+    }
+
     /// Get the top-most (front) entry
     pub fn front(&self) -> Option<&HitTestEntry> {
         self.entries.first()
+    }
+
+    /// Dispatch event to all hit entries
+    ///
+    /// Calls handler on each entry that has one, in order from front to back
+    pub fn dispatch(&self, event: &PointerEvent) {
+        for entry in &self.entries {
+            entry.dispatch(event);
+        }
     }
 }
 

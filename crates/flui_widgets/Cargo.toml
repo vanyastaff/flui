@@ -17,5 +17,7 @@ flui_foundation = { path = "../flui_foundation", version = "0.1.0" }
 bon = { workspace = true }
 dyn-clone = { workspace = true }
 egui = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
 
 [dev-dependencies]

@@ -42,6 +42,7 @@ pub mod render_indexed_stack;
 pub mod render_limited_box;
 pub mod render_mouse_region;
 pub mod render_object;
+pub mod render_offstage;
 pub mod render_opacity;
 pub mod render_padding;
 pub mod render_pointer_listener;
@@ -49,6 +50,7 @@ pub mod render_positioned_box;
 pub mod render_stack;
 pub mod render_transform;
 pub mod stack_parent_data;
+
 
 
 
@@ -86,6 +88,7 @@ pub use render_indexed_stack::RenderIndexedStack;
 pub use render_limited_box::RenderLimitedBox;
 pub use render_mouse_region::{MouseRegionCallbacks, RenderMouseRegion};
 pub use render_object::RenderObject;
+pub use render_offstage::RenderOffstage;
 pub use render_opacity::RenderOpacity;
 pub use render_padding::RenderPadding;
 pub use render_pointer_listener::RenderPointerListener;
@@ -115,6 +118,7 @@ pub mod prelude {
     pub use crate::render_limited_box::RenderLimitedBox;
     pub use crate::render_mouse_region::{MouseRegionCallbacks, RenderMouseRegion};
     pub use crate::render_object::RenderObject;
+    pub use crate::render_offstage::RenderOffstage;
     pub use crate::render_opacity::RenderOpacity;
     pub use crate::render_padding::RenderPadding;
     pub use crate::render_pointer_listener::RenderPointerListener;
@@ -125,6 +129,7 @@ pub mod prelude {
     pub use flui_core::BoxConstraints;
     pub use flui_types::{Matrix4, Offset, Point, Rect, Size};
 }
+
 
 
 

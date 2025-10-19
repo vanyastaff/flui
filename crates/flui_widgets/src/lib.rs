@@ -69,7 +69,7 @@ pub mod interaction;
 // Re-exports for convenient top-level access
 pub use basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox};
 pub use layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
-pub use visual_effects::{ClipRRect, Opacity, Transform};
+pub use visual_effects::{ClipRRect, Offstage, Opacity, Transform};
 pub use gestures::GestureDetector;
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
@@ -89,7 +89,7 @@ pub mod prelude {
     // Re-export all widgets
     pub use crate::basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox, Text};
     pub use crate::layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
-    pub use crate::visual_effects::{ClipRRect, Opacity, Transform};
+    pub use crate::visual_effects::{ClipRRect, Offstage, Opacity, Transform};
     pub use crate::gestures::GestureDetector;
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
