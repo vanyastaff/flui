@@ -52,6 +52,8 @@ impl TargetPlatform {
     /// assert!(TargetPlatform::iOS.is_mobile());
     /// assert!(!TargetPlatform::Windows.is_mobile());
     /// ```
+    #[inline]
+    #[must_use]
     pub const fn is_mobile(&self) -> bool {
         matches!(self, Self::Android | Self::iOS | Self::Fuchsia)
     }
@@ -67,13 +69,84 @@ impl TargetPlatform {
     /// assert!(TargetPlatform::MacOS.is_desktop());
     /// assert!(!TargetPlatform::Android.is_desktop());
     /// ```
+    #[inline]
+    #[must_use]
     pub const fn is_desktop(&self) -> bool {
         matches!(self, Self::MacOS | Self::Linux | Self::Windows)
     }
 
     /// Returns true if this is the web platform
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::platform::TargetPlatform;
+    ///
+    /// assert!(TargetPlatform::Web.is_web());
+    /// assert!(!TargetPlatform::Android.is_web());
+    /// ```
+    #[inline]
+    #[must_use]
     pub const fn is_web(&self) -> bool {
         matches!(self, Self::Web)
+    }
+
+    /// Returns true if this is an Apple platform (iOS or macOS)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::platform::TargetPlatform;
+    ///
+    /// assert!(TargetPlatform::iOS.is_apple());
+    /// assert!(TargetPlatform::MacOS.is_apple());
+    /// assert!(!TargetPlatform::Android.is_apple());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_apple(&self) -> bool {
+        matches!(self, Self::iOS | Self::MacOS)
+    }
+
+    /// Returns true if touch input is primary for this platform
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::platform::TargetPlatform;
+    ///
+    /// assert!(TargetPlatform::Android.is_touch_primary());
+    /// assert!(TargetPlatform::iOS.is_touch_primary());
+    /// assert!(!TargetPlatform::Windows.is_touch_primary());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn is_touch_primary(&self) -> bool {
+        self.is_mobile() || matches!(self, Self::Web)
+    }
+
+    /// Returns a string representation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::platform::TargetPlatform;
+    ///
+    /// assert_eq!(TargetPlatform::Android.as_str(), "android");
+    /// assert_eq!(TargetPlatform::iOS.as_str(), "ios");
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Android => "android",
+            Self::iOS => "ios",
+            Self::MacOS => "macos",
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+            Self::Fuchsia => "fuchsia",
+            Self::Web => "web",
+        }
     }
 }
 

@@ -32,33 +32,61 @@ pub enum AnimationStatus {
 
 impl AnimationStatus {
     /// Returns true if the animation is running (forward or reverse).
+    #[inline]
+    #[must_use]
     pub const fn is_running(&self) -> bool {
         matches!(self, AnimationStatus::Forward | AnimationStatus::Reverse)
     }
 
     /// Returns true if the animation is stopped (dismissed or completed).
+    #[inline]
+    #[must_use]
     pub const fn is_stopped(&self) -> bool {
         matches!(self, AnimationStatus::Dismissed | AnimationStatus::Completed)
     }
 
     /// Returns true if the animation is at the beginning (dismissed).
+    #[inline]
+    #[must_use]
     pub const fn is_dismissed(&self) -> bool {
         matches!(self, AnimationStatus::Dismissed)
     }
 
     /// Returns true if the animation is at the end (completed).
+    #[inline]
+    #[must_use]
     pub const fn is_completed(&self) -> bool {
         matches!(self, AnimationStatus::Completed)
     }
 
     /// Returns true if the animation is running forward.
+    #[inline]
+    #[must_use]
     pub const fn is_forward(&self) -> bool {
         matches!(self, AnimationStatus::Forward)
     }
 
     /// Returns true if the animation is running in reverse.
+    #[inline]
+    #[must_use]
     pub const fn is_reverse(&self) -> bool {
         matches!(self, AnimationStatus::Reverse)
+    }
+
+    /// Returns the opposite direction status.
+    ///
+    /// - Forward → Reverse
+    /// - Reverse → Forward
+    /// - Dismissed/Completed → unchanged
+    #[inline]
+    #[must_use]
+    pub const fn flip(&self) -> Self {
+        match self {
+            AnimationStatus::Forward => AnimationStatus::Reverse,
+            AnimationStatus::Reverse => AnimationStatus::Forward,
+            AnimationStatus::Dismissed => AnimationStatus::Dismissed,
+            AnimationStatus::Completed => AnimationStatus::Completed,
+        }
     }
 }
 
@@ -91,11 +119,15 @@ pub enum AnimationBehavior {
 
 impl AnimationBehavior {
     /// Returns true if the animation should preserve its state.
+    #[inline]
+    #[must_use]
     pub const fn should_preserve(&self) -> bool {
         matches!(self, AnimationBehavior::Preserve)
     }
 
     /// Returns true if the animation should run normally.
+    #[inline]
+    #[must_use]
     pub const fn is_normal(&self) -> bool {
         matches!(self, AnimationBehavior::Normal)
     }

@@ -167,6 +167,8 @@ impl EdgeInsets {
     /// let insets = EdgeInsets::symmetric(5.0, 10.0);
     /// assert_eq!(insets.horizontal_total(), 10.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn horizontal_total(&self) -> f32 {
         self.left + self.right
     }
@@ -181,6 +183,8 @@ impl EdgeInsets {
     /// let insets = EdgeInsets::symmetric(5.0, 10.0);
     /// assert_eq!(insets.vertical_total(), 20.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn vertical_total(&self) -> f32 {
         self.top + self.bottom
     }
@@ -237,6 +241,8 @@ impl EdgeInsets {
     /// assert!(EdgeInsets::ZERO.is_zero());
     /// assert!(!EdgeInsets::all(1.0).is_zero());
     /// ```
+    #[inline]
+    #[must_use]
     pub fn is_zero(&self) -> bool {
         self.left == 0.0 && self.top == 0.0 && self.right == 0.0 && self.bottom == 0.0
     }
@@ -251,6 +257,8 @@ impl EdgeInsets {
     /// assert!(EdgeInsets::all(5.0).is_non_negative());
     /// assert!(!EdgeInsets::new(-1.0, 0.0, 0.0, 0.0).is_non_negative());
     /// ```
+    #[inline]
+    #[must_use]
     pub fn is_non_negative(&self) -> bool {
         self.left >= 0.0 && self.top >= 0.0 && self.right >= 0.0 && self.bottom >= 0.0
     }
@@ -266,6 +274,8 @@ impl EdgeInsets {
     /// let clamped = insets.clamp_non_negative();
     /// assert_eq!(clamped, EdgeInsets::new(0.0, 2.0, 0.0, 4.0));
     /// ```
+    #[inline]
+    #[must_use]
     pub fn clamp_non_negative(&self) -> Self {
         Self {
             left: self.left.max(0.0),

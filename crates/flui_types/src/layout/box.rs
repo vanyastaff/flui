@@ -60,18 +60,52 @@ pub enum BoxFit {
 
 impl BoxFit {
     /// Returns true if this fit mode may clip content.
+    #[inline]
+    #[must_use]
     pub const fn may_clip(&self) -> bool {
         matches!(self, BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight | BoxFit::None)
     }
 
     /// Returns true if this fit mode always maintains aspect ratio.
+    #[inline]
+    #[must_use]
     pub const fn maintains_aspect_ratio(&self) -> bool {
         !matches!(self, BoxFit::Fill)
     }
 
     /// Returns true if this fit mode may scale content.
+    #[inline]
+    #[must_use]
     pub const fn may_scale(&self) -> bool {
         !matches!(self, BoxFit::None)
+    }
+
+    /// Returns true if this fit mode may scale up content.
+    #[inline]
+    #[must_use]
+    pub const fn may_scale_up(&self) -> bool {
+        !matches!(self, BoxFit::None | BoxFit::ScaleDown)
+    }
+
+    /// Returns true if this fit mode may scale down content.
+    #[inline]
+    #[must_use]
+    pub const fn may_scale_down(&self) -> bool {
+        matches!(self, BoxFit::Contain | BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight | BoxFit::ScaleDown | BoxFit::Fill)
+    }
+
+    /// Returns true if this fit mode fills the entire target area.
+    #[inline]
+    #[must_use]
+    pub const fn fills_target(&self) -> bool {
+        matches!(self, BoxFit::Fill | BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight)
+    }
+
+    /// Returns true if this fit mode leaves empty space.
+    #[inline]
+    #[must_use]
+    pub const fn may_leave_space(&self) -> bool {
+        matches!(self, BoxFit::Contain | BoxFit::None | BoxFit::ScaleDown | BoxFit::FitWidth | BoxFit::FitHeight)
     }
 }
 
@@ -107,13 +141,26 @@ pub enum BoxShape {
 
 impl BoxShape {
     /// Returns true if this shape is circular.
+    #[inline]
+    #[must_use]
     pub const fn is_circle(&self) -> bool {
         matches!(self, BoxShape::Circle)
     }
 
     /// Returns true if this shape is rectangular.
+    #[inline]
+    #[must_use]
     pub const fn is_rectangle(&self) -> bool {
         matches!(self, BoxShape::Rectangle)
+    }
+
+    /// Returns true if this shape requires clipping.
+    ///
+    /// Circle shapes always need clipping, rectangles may need it for rounded corners.
+    #[inline]
+    #[must_use]
+    pub const fn requires_clipping(&self) -> bool {
+        matches!(self, BoxShape::Circle)
     }
 }
 

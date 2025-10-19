@@ -9,6 +9,19 @@ use super::{Simulation, Tolerance};
 /// Similar to Flutter's `FrictionSimulation`. Models an object slowing
 /// down due to friction, using exponential decay.
 ///
+/// # Physics Model
+/// - Position: `p(t) = p₀ + v₀ * (1 - e^(-k*t)) / k`
+/// - Velocity: `v(t) = v₀ * e^(-k*t)`
+/// - Where k is the drag coefficient
+///
+/// # Memory Safety
+/// - Stack-allocated `Copy` type with no heap allocations
+/// - All calculations use safe floating-point math
+///
+/// # Type Safety
+/// - `#[must_use]` on all pure methods
+/// - Validation methods prevent invalid states
+///
 /// # Examples
 ///
 /// ```
@@ -58,6 +71,8 @@ impl FrictionSimulation {
     ///
     /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn new(drag: f32, position: f32, velocity: f32) -> Self {
         Self {
             drag,
@@ -68,9 +83,69 @@ impl FrictionSimulation {
     }
 
     /// Creates a new friction simulation with a custom tolerance
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::{FrictionSimulation, Tolerance};
+    ///
+    /// let tolerance = Tolerance::new(0.01, 0.1, 0.01);
+    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0)
+    ///     .with_tolerance(tolerance);
+    /// ```
+    #[inline]
+    #[must_use]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.tolerance = tolerance;
         self
+    }
+
+    /// Returns the drag coefficient
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::FrictionSimulation;
+    ///
+    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
+    /// assert_eq!(sim.drag(), 0.1);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn drag(&self) -> f32 {
+        self.drag
+    }
+
+    /// Returns the starting position
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::FrictionSimulation;
+    ///
+    /// let sim = FrictionSimulation::new(0.1, 10.0, 100.0);
+    /// assert_eq!(sim.start_position(), 10.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn start_position(&self) -> f32 {
+        self.position_at_zero
+    }
+
+    /// Returns the initial velocity
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::FrictionSimulation;
+    ///
+    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
+    /// assert_eq!(sim.initial_velocity(), 100.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn initial_velocity(&self) -> f32 {
+        self.velocity_at_zero
     }
 
     /// Returns the final position where the object will stop
@@ -84,25 +159,124 @@ impl FrictionSimulation {
     /// let final_pos = sim.final_position();
     /// assert!(final_pos > 0.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn final_position(&self) -> f32 {
         self.position_at_zero + self.velocity_at_zero / self.drag
+    }
+
+    /// Checks if the simulation parameters are valid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::FrictionSimulation;
+    ///
+    /// let valid = FrictionSimulation::new(0.1, 0.0, 100.0);
+    /// assert!(valid.is_valid());
+    ///
+    /// let invalid = FrictionSimulation::new(-0.1, 0.0, 100.0);
+    /// assert!(!invalid.is_valid());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.drag > 0.0
+            && self.drag.is_finite()
+            && self.position_at_zero.is_finite()
+            && self.velocity_at_zero.is_finite()
+            && self.tolerance.is_valid()
+    }
+
+    /// Returns the time required to decelerate to a specific velocity
+    ///
+    /// Returns None if the target velocity cannot be reached or if parameters are invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::FrictionSimulation;
+    ///
+    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
+    /// let time = sim.time_to_velocity(50.0);
+    /// assert!(time.is_some());
+    /// ```
+    #[must_use]
+    pub fn time_to_velocity(&self, target_velocity: f32) -> Option<f32> {
+        if self.drag <= 0.0 || target_velocity.abs() > self.velocity_at_zero.abs() {
+            return None;
+        }
+
+        if target_velocity == 0.0 {
+            return Some(f32::INFINITY);
+        }
+
+        // v(t) = v₀ * e^(-k*t)
+        // t = -ln(v/v₀) / k
+        let ratio = target_velocity / self.velocity_at_zero;
+        if ratio <= 0.0 || ratio > 1.0 {
+            return None;
+        }
+
+        Some(-ratio.ln() / self.drag)
+    }
+
+    /// Returns the distance traveled during deceleration from current velocity to target velocity
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::FrictionSimulation;
+    ///
+    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
+    /// let distance = sim.distance_to_velocity(50.0);
+    /// assert!(distance > 0.0);
+    /// ```
+    #[must_use]
+    pub fn distance_to_velocity(&self, target_velocity: f32) -> f32 {
+        if let Some(time) = self.time_to_velocity(target_velocity) {
+            self.position(time) - self.position_at_zero
+        } else {
+            self.final_position() - self.position_at_zero
+        }
+    }
+
+    /// Calculates the deceleration rate at a given time
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::FrictionSimulation;
+    ///
+    /// let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
+    /// let decel = sim.deceleration(1.0);
+    /// assert!(decel < 0.0); // Negative acceleration (deceleration)
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn deceleration(&self, time: f32) -> f32 {
+        -self.drag * self.velocity(time)
     }
 }
 
 impl Simulation for FrictionSimulation {
+    #[inline]
     fn position(&self, time: f32) -> f32 {
         self.position_at_zero
             + self.velocity_at_zero * (1.0 - (-self.drag * time).exp()) / self.drag
     }
 
+    #[inline]
     fn velocity(&self, time: f32) -> f32 {
         self.velocity_at_zero * (-self.drag * time).exp()
     }
 
+    #[inline]
     fn is_done(&self, time: f32) -> bool {
         self.velocity(time).abs() < self.tolerance.velocity
     }
 
+    #[inline]
     fn tolerance(&self) -> Tolerance {
         self.tolerance
     }
@@ -156,6 +330,8 @@ impl BoundedFrictionSimulation {
     ///
     /// let sim = BoundedFrictionSimulation::new(0.1, 0.0, 100.0, 50.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn new(drag: f32, position: f32, velocity: f32, boundary: f32) -> Self {
         Self {
             friction: FrictionSimulation::new(drag, position, velocity),
@@ -165,13 +341,121 @@ impl BoundedFrictionSimulation {
     }
 
     /// Creates a new bounded friction simulation with a custom tolerance
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::{BoundedFrictionSimulation, Tolerance};
+    ///
+    /// let tolerance = Tolerance::new(0.01, 0.1, 0.01);
+    /// let sim = BoundedFrictionSimulation::new(0.1, 0.0, 100.0, 50.0)
+    ///     .with_tolerance(tolerance);
+    /// ```
+    #[inline]
+    #[must_use]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.friction = self.friction.with_tolerance(tolerance);
         self
     }
+
+    /// Returns the boundary position
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::BoundedFrictionSimulation;
+    ///
+    /// let sim = BoundedFrictionSimulation::new(0.1, 0.0, 100.0, 50.0);
+    /// assert_eq!(sim.boundary(), 50.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn boundary(&self) -> f32 {
+        self.boundary
+    }
+
+    /// Returns the underlying friction simulation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::BoundedFrictionSimulation;
+    ///
+    /// let sim = BoundedFrictionSimulation::new(0.1, 0.0, 100.0, 50.0);
+    /// let friction = sim.inner();
+    /// assert_eq!(friction.drag(), 0.1);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn inner(&self) -> &FrictionSimulation {
+        &self.friction
+    }
+
+    /// Checks if the boundary will be hit
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::BoundedFrictionSimulation;
+    ///
+    /// let sim = BoundedFrictionSimulation::new(0.05, 0.0, 100.0, 50.0);
+    /// assert!(sim.will_hit_boundary());
+    ///
+    /// let sim2 = BoundedFrictionSimulation::new(0.5, 0.0, 10.0, 100.0);
+    /// assert!(!sim2.will_hit_boundary());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn will_hit_boundary(&self) -> bool {
+        let final_pos = self.friction.final_position();
+        if self.positive_direction {
+            final_pos >= self.boundary
+        } else {
+            final_pos <= self.boundary
+        }
+    }
+
+    /// Checks if currently at the boundary
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::{BoundedFrictionSimulation, Simulation};
+    ///
+    /// let sim = BoundedFrictionSimulation::new(0.05, 0.0, 100.0, 50.0);
+    /// assert!(!sim.is_at_boundary(0.0));
+    /// assert!(sim.is_at_boundary(10.0)); // After enough time
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_at_boundary(&self, time: f32) -> bool {
+        let pos = self.friction.position(time);
+        if self.positive_direction {
+            pos >= self.boundary
+        } else {
+            pos <= self.boundary
+        }
+    }
+
+    /// Checks if the simulation parameters are valid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::BoundedFrictionSimulation;
+    ///
+    /// let valid = BoundedFrictionSimulation::new(0.1, 0.0, 100.0, 50.0);
+    /// assert!(valid.is_valid());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.friction.is_valid() && self.boundary.is_finite()
+    }
 }
 
 impl Simulation for BoundedFrictionSimulation {
+    #[inline]
     fn position(&self, time: f32) -> f32 {
         let pos = self.friction.position(time);
         if self.positive_direction {
@@ -181,32 +465,21 @@ impl Simulation for BoundedFrictionSimulation {
         }
     }
 
+    #[inline]
     fn velocity(&self, time: f32) -> f32 {
-        let pos = self.friction.position(time);
-        let at_boundary = if self.positive_direction {
-            pos >= self.boundary
-        } else {
-            pos <= self.boundary
-        };
-
-        if at_boundary {
+        if self.is_at_boundary(time) {
             0.0
         } else {
             self.friction.velocity(time)
         }
     }
 
+    #[inline]
     fn is_done(&self, time: f32) -> bool {
-        let pos = self.friction.position(time);
-        let at_boundary = if self.positive_direction {
-            pos >= self.boundary
-        } else {
-            pos <= self.boundary
-        };
-
-        at_boundary || self.friction.is_done(time)
+        self.is_at_boundary(time) || self.friction.is_done(time)
     }
 
+    #[inline]
     fn tolerance(&self) -> Tolerance {
         self.friction.tolerance()
     }

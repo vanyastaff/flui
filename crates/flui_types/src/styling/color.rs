@@ -126,21 +126,29 @@ impl Color {
     // ===== Component accessors =====
 
     /// Gets the red component (0-255).
+    #[inline]
+    #[must_use]
     pub const fn red(&self) -> u8 {
         self.r
     }
 
     /// Gets the green component (0-255).
+    #[inline]
+    #[must_use]
     pub const fn green(&self) -> u8 {
         self.g
     }
 
     /// Gets the blue component (0-255).
+    #[inline]
+    #[must_use]
     pub const fn blue(&self) -> u8 {
         self.b
     }
 
     /// Gets the alpha component (0-255).
+    #[inline]
+    #[must_use]
     pub const fn alpha(&self) -> u8 {
         self.a
     }
@@ -148,7 +156,9 @@ impl Color {
     /// Gets the opacity as a float (0.0-1.0).
     ///
     /// This is alpha / 255.0
-    pub fn opacity(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn opacity(&self) -> f32 {
         self.a as f32 / 255.0
     }
 
@@ -249,6 +259,8 @@ impl Color {
     }
 
     /// Converts to a 32-bit ARGB value (0xAARRGGBB).
+    #[inline]
+    #[must_use]
     pub const fn to_argb(&self) -> u32 {
         ((self.a as u32) << 24)
             | ((self.r as u32) << 16)
@@ -257,6 +269,7 @@ impl Color {
     }
 
     /// Converts to a hex string (format: "#AARRGGBB" or "#RRGGBB" if fully opaque).
+    #[must_use]
     pub fn to_hex(&self) -> String {
         if self.is_opaque() {
             format!("#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
@@ -266,13 +279,130 @@ impl Color {
     }
 
     /// Converts to RGBA f32 tuple (0.0-1.0 range).
-    pub fn to_rgba_f32(&self) -> (f32, f32, f32, f32) {
+    #[inline]
+    #[must_use]
+    pub const fn to_rgba_f32(&self) -> (f32, f32, f32, f32) {
         (
             self.r as f32 / 255.0,
             self.g as f32 / 255.0,
             self.b as f32 / 255.0,
             self.a as f32 / 255.0,
         )
+    }
+
+    // ===== Helper methods for rendering =====
+
+    /// Alpha blend this color over a background color.
+    ///
+    /// Uses standard alpha compositing: `src over dst`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Color;
+    ///
+    /// let red = Color::rgba(255, 0, 0, 128);  // Semi-transparent red
+    /// let white = Color::WHITE;
+    /// let result = red.blend_over(white);
+    /// ```
+    #[must_use]
+    pub fn blend_over(&self, background: Color) -> Color {
+        if self.a == 255 {
+            return *self;
+        }
+        if self.a == 0 {
+            return background;
+        }
+
+        let alpha_src = self.a as f32 / 255.0;
+        let alpha_dst = background.a as f32 / 255.0;
+        let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
+
+        if alpha_out == 0.0 {
+            return Color::TRANSPARENT;
+        }
+
+        let r = ((self.r as f32 * alpha_src + background.r as f32 * alpha_dst * (1.0 - alpha_src))
+            / alpha_out) as u8;
+        let g = ((self.g as f32 * alpha_src + background.g as f32 * alpha_dst * (1.0 - alpha_src))
+            / alpha_out) as u8;
+        let b = ((self.b as f32 * alpha_src + background.b as f32 * alpha_dst * (1.0 - alpha_src))
+            / alpha_out) as u8;
+        let a = (alpha_out * 255.0) as u8;
+
+        Color::rgba(r, g, b, a)
+    }
+
+    /// Multiply color by another (component-wise).
+    #[inline]
+    #[must_use]
+    pub const fn multiply(&self, other: Color) -> Color {
+        Color::rgba(
+            ((self.r as u16 * other.r as u16) / 255) as u8,
+            ((self.g as u16 * other.g as u16) / 255) as u8,
+            ((self.b as u16 * other.b as u16) / 255) as u8,
+            ((self.a as u16 * other.a as u16) / 255) as u8,
+        )
+    }
+
+    /// Darken color by a factor (0.0 = black, 1.0 = unchanged).
+    #[inline]
+    #[must_use]
+    pub fn darken(&self, factor: f32) -> Color {
+        let factor = factor.clamp(0.0, 1.0);
+        Color::rgba(
+            (self.r as f32 * factor) as u8,
+            (self.g as f32 * factor) as u8,
+            (self.b as f32 * factor) as u8,
+            self.a,
+        )
+    }
+
+    /// Lighten color by a factor (0.0 = unchanged, 1.0 = white).
+    #[inline]
+    #[must_use]
+    pub fn lighten(&self, factor: f32) -> Color {
+        let factor = factor.clamp(0.0, 1.0);
+        Color::rgba(
+            (self.r as f32 + (255.0 - self.r as f32) * factor) as u8,
+            (self.g as f32 + (255.0 - self.g as f32) * factor) as u8,
+            (self.b as f32 + (255.0 - self.b as f32) * factor) as u8,
+            self.a,
+        )
+    }
+
+    /// Get luminance (perceived brightness) using Rec. 709 formula.
+    ///
+    /// Returns value in 0.0-1.0 range.
+    #[inline]
+    #[must_use]
+    pub const fn luminance(&self) -> f32 {
+        (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
+    }
+
+    /// Check if color is "dark" (luminance < 0.5).
+    #[inline]
+    #[must_use]
+    pub const fn is_dark(&self) -> bool {
+        self.luminance() < 0.5
+    }
+
+    /// Check if color is "light" (luminance >= 0.5).
+    #[inline]
+    #[must_use]
+    pub const fn is_light(&self) -> bool {
+        self.luminance() >= 0.5
+    }
+
+    /// Get a contrasting color (black or white) for text on this background.
+    #[inline]
+    #[must_use]
+    pub const fn contrasting_text_color(&self) -> Color {
+        if self.is_dark() {
+            Color::WHITE
+        } else {
+            Color::BLACK
+        }
     }
 
     // ===== Common color constants =====

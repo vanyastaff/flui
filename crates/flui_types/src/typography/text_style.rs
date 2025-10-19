@@ -34,6 +34,8 @@ impl FontWeight {
     pub const BOLD: Self = Self::W700;
 
     /// Returns the numeric value of the font weight.
+    #[inline]
+    #[must_use]
     pub const fn value(&self) -> u16 {
         match self {
             Self::W100 => 100,
@@ -46,6 +48,13 @@ impl FontWeight {
             Self::W800 => 800,
             Self::W900 => 900,
         }
+    }
+
+    /// Returns true if this weight is bold or heavier (>= 600)
+    #[inline]
+    #[must_use]
+    pub const fn is_bold(&self) -> bool {
+        self.value() >= 600
     }
 }
 

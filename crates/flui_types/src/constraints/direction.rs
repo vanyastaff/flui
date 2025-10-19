@@ -26,20 +26,39 @@ pub enum GrowthDirection {
 
 impl GrowthDirection {
     /// Returns whether this growth direction is forward
+    #[inline]
+    #[must_use]
     pub const fn is_forward(self) -> bool {
         matches!(self, GrowthDirection::Forward)
     }
 
     /// Returns whether this growth direction is reverse
+    #[inline]
+    #[must_use]
     pub const fn is_reverse(self) -> bool {
         matches!(self, GrowthDirection::Reverse)
     }
 
     /// Returns the opposite direction
+    #[inline]
+    #[must_use]
     pub const fn flip(self) -> Self {
         match self {
             GrowthDirection::Forward => GrowthDirection::Reverse,
             GrowthDirection::Reverse => GrowthDirection::Forward,
+        }
+    }
+
+    /// Apply growth direction to a value
+    ///
+    /// Returns the value as-is for Forward, negated for Reverse.
+    /// Useful for converting logical offsets to physical offsets.
+    #[inline]
+    #[must_use]
+    pub const fn apply_to(self, value: f32) -> f32 {
+        match self {
+            GrowthDirection::Forward => value,
+            GrowthDirection::Reverse => -value,
         }
     }
 }
@@ -71,26 +90,69 @@ pub enum ScrollDirection {
 
 impl ScrollDirection {
     /// Returns whether the scroll is idle
+    #[inline]
+    #[must_use]
     pub const fn is_idle(self) -> bool {
         matches!(self, ScrollDirection::Idle)
     }
 
     /// Returns whether the scroll is forward
+    #[inline]
+    #[must_use]
     pub const fn is_forward(self) -> bool {
         matches!(self, ScrollDirection::Forward)
     }
 
     /// Returns whether the scroll is reverse
+    #[inline]
+    #[must_use]
     pub const fn is_reverse(self) -> bool {
         matches!(self, ScrollDirection::Reverse)
     }
 
     /// Returns the opposite direction, or Idle if already idle
+    #[inline]
+    #[must_use]
     pub const fn flip(self) -> Self {
         match self {
             ScrollDirection::Idle => ScrollDirection::Idle,
             ScrollDirection::Forward => ScrollDirection::Reverse,
             ScrollDirection::Reverse => ScrollDirection::Forward,
+        }
+    }
+
+    /// Returns whether the scroll is actively moving (not idle)
+    #[inline]
+    #[must_use]
+    pub const fn is_scrolling(self) -> bool {
+        !matches!(self, ScrollDirection::Idle)
+    }
+
+    /// Convert scroll delta to direction
+    ///
+    /// Returns Forward for positive delta, Reverse for negative, Idle for zero.
+    #[inline]
+    #[must_use]
+    pub fn from_delta(delta: f32) -> Self {
+        if delta > 0.0 {
+            ScrollDirection::Forward
+        } else if delta < 0.0 {
+            ScrollDirection::Reverse
+        } else {
+            ScrollDirection::Idle
+        }
+    }
+
+    /// Apply scroll direction to a velocity value
+    ///
+    /// Returns the velocity as-is for Forward, negated for Reverse, 0 for Idle.
+    #[inline]
+    #[must_use]
+    pub const fn apply_to_velocity(self, velocity: f32) -> f32 {
+        match self {
+            ScrollDirection::Idle => 0.0,
+            ScrollDirection::Forward => velocity,
+            ScrollDirection::Reverse => -velocity,
         }
     }
 }

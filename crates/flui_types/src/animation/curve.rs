@@ -70,6 +70,8 @@ pub struct Curve2DSample {
 
 impl Curve2DSample {
     /// Creates a new 2D curve sample.
+    #[inline]
+    #[must_use]
     pub const fn new(value: f32, derivative: f32) -> Self {
         Self { value, derivative }
     }
@@ -87,6 +89,7 @@ impl Curve2DSample {
 pub struct Linear;
 
 impl Curve for Linear {
+    #[inline]
     fn transform(&self, t: f32) -> f32 {
         t.clamp(0.0, 1.0)
     }
@@ -104,12 +107,15 @@ pub struct SawTooth {
 
 impl SawTooth {
     /// Creates a new sawtooth curve with the given count.
+    #[inline]
+    #[must_use]
     pub const fn new(count: u32) -> Self {
         Self { count }
     }
 }
 
 impl Curve for SawTooth {
+    #[inline]
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         (t * self.count as f32).fract()
@@ -133,6 +139,8 @@ pub struct Interval<C: Curve = Linear> {
 
 impl<C: Curve> Interval<C> {
     /// Creates a new interval curve.
+    #[inline]
+    #[must_use]
     pub fn new(begin: f32, end: f32, curve: C) -> Self {
         assert!((0.0..=1.0).contains(&begin), "begin must be in range [0.0, 1.0]");
         assert!((0.0..=1.0).contains(&end), "end must be in range [0.0, 1.0]");
@@ -143,6 +151,8 @@ impl<C: Curve> Interval<C> {
 
 impl Interval<Linear> {
     /// Creates a new interval curve with a linear curve.
+    #[inline]
+    #[must_use]
     pub fn linear(begin: f32, end: f32) -> Self {
         Self::new(begin, end, Linear)
     }
@@ -177,6 +187,8 @@ pub struct Threshold {
 
 impl Threshold {
     /// Creates a new threshold curve.
+    #[inline]
+    #[must_use]
     pub fn new(threshold: f32) -> Self {
         assert!((0.0..=1.0).contains(&threshold), "threshold must be in range [0.0, 1.0]");
         Self { threshold }
@@ -184,6 +196,7 @@ impl Threshold {
 }
 
 impl Curve for Threshold {
+    #[inline]
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
         if t < self.threshold { 0.0 } else { 1.0 }
@@ -379,12 +392,16 @@ pub struct CatmullRomCurve {
 
 impl CatmullRomCurve {
     /// Creates a new Catmull-Rom curve.
+    #[inline]
+    #[must_use]
     pub fn new(points: Vec<(f32, f32)>, tension: f32) -> Self {
         assert!(points.len() >= 2, "Must have at least 2 points");
         Self { points, tension }
     }
 
     /// Creates a Catmull-Rom curve with default tension (0.0).
+    #[inline]
+    #[must_use]
     pub fn with_points(points: Vec<(f32, f32)>) -> Self {
         Self::new(points, 0.0)
     }
@@ -440,6 +457,8 @@ pub struct CatmullRomSpline {
 
 impl CatmullRomSpline {
     /// Creates a new Catmull-Rom spline.
+    #[inline]
+    #[must_use]
     pub fn new(points: Vec<Curve2DSample>) -> Self {
         assert!(points.len() >= 2, "Must have at least 2 points");
         Self { points }
@@ -512,12 +531,15 @@ pub struct FlippedCurve<C: Curve> {
 
 impl<C: Curve> FlippedCurve<C> {
     /// Creates a new flipped curve.
+    #[inline]
+    #[must_use]
     pub const fn new(curve: C) -> Self {
         Self { curve }
     }
 }
 
 impl<C: Curve> Curve for FlippedCurve<C> {
+    #[inline]
     fn transform(&self, t: f32) -> f32 {
         1.0 - self.curve.transform(t)
     }
@@ -537,12 +559,15 @@ pub struct ReverseCurve<C: Curve> {
 
 impl<C: Curve> ReverseCurve<C> {
     /// Creates a new reversed curve.
+    #[inline]
+    #[must_use]
     pub const fn new(curve: C) -> Self {
         Self { curve }
     }
 }
 
 impl<C: Curve> Curve for ReverseCurve<C> {
+    #[inline]
     fn transform(&self, t: f32) -> f32 {
         self.curve.transform(1.0 - t)
     }

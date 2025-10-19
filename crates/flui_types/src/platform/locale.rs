@@ -75,16 +75,22 @@ impl Locale {
     }
 
     /// Returns the language code
+    #[inline]
+    #[must_use]
     pub fn language(&self) -> &str {
         &self.language
     }
 
     /// Returns the country code, if set
+    #[inline]
+    #[must_use]
     pub fn country(&self) -> Option<&str> {
         self.country.as_deref()
     }
 
     /// Returns the script code, if set
+    #[inline]
+    #[must_use]
     pub fn script(&self) -> Option<&str> {
         self.script.as_deref()
     }
@@ -102,12 +108,50 @@ impl Locale {
     /// let locale = Locale::new("fr", None::<String>);
     /// assert_eq!(locale.to_language_tag(), "fr");
     /// ```
+    #[must_use]
     pub fn to_language_tag(&self) -> String {
         if let Some(country) = &self.country {
             format!("{}_{}", self.language, country)
         } else {
             self.language.clone()
         }
+    }
+
+    /// Returns whether this locale is left-to-right
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::platform::Locale;
+    ///
+    /// assert!(Locale::en_us().is_ltr());
+    /// assert!(!Locale::new("ar", Some("SA")).is_ltr());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_ltr(&self) -> bool {
+        !self.is_rtl()
+    }
+
+    /// Returns whether this locale is right-to-left
+    ///
+    /// Common RTL languages: Arabic (ar), Hebrew (he), Persian (fa), Urdu (ur)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::platform::Locale;
+    ///
+    /// assert!(Locale::new("ar", Some("SA")).is_rtl());
+    /// assert!(Locale::new("he", Some("IL")).is_rtl());
+    /// assert!(!Locale::en_us().is_rtl());
+    /// ```
+    #[must_use]
+    pub fn is_rtl(&self) -> bool {
+        matches!(
+            self.language.as_str(),
+            "ar" | "he" | "fa" | "ur" | "yi" | "ji"
+        )
     }
 }
 

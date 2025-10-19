@@ -188,6 +188,146 @@ impl Rect {
     pub fn bottom(&self) -> f32 {
         self.max.y
     }
+
+    // ===== Helper methods for rendering =====
+
+    /// Get all four corners as points (clockwise from top-left).
+    ///
+    /// Order: [top_left, top_right, bottom_right, bottom_left]
+    #[inline]
+    #[must_use]
+    pub const fn corners(&self) -> [Point; 4] {
+        [
+            self.min,                                           // top_left
+            Point::new(self.max.x, self.min.y),               // top_right
+            self.max,                                          // bottom_right
+            Point::new(self.min.x, self.max.y),               // bottom_left
+        ]
+    }
+
+    /// Get the top-left corner.
+    #[inline]
+    #[must_use]
+    pub const fn top_left(&self) -> Point {
+        self.min
+    }
+
+    /// Get the top-right corner.
+    #[inline]
+    #[must_use]
+    pub const fn top_right(&self) -> Point {
+        Point::new(self.max.x, self.min.y)
+    }
+
+    /// Get the bottom_left corner.
+    #[inline]
+    #[must_use]
+    pub const fn bottom_left(&self) -> Point {
+        Point::new(self.min.x, self.max.y)
+    }
+
+    /// Get the bottom-right corner.
+    #[inline]
+    #[must_use]
+    pub const fn bottom_right(&self) -> Point {
+        self.max
+    }
+
+    /// Translate rect by an offset.
+    #[inline]
+    #[must_use]
+    pub const fn translate(&self, dx: f32, dy: f32) -> Rect {
+        Rect {
+            min: Point::new(self.min.x + dx, self.min.y + dy),
+            max: Point::new(self.max.x + dx, self.max.y + dy),
+        }
+    }
+
+    /// Scale rect from origin (0, 0).
+    #[inline]
+    #[must_use]
+    pub const fn scale(&self, scale_x: f32, scale_y: f32) -> Rect {
+        Rect {
+            min: Point::new(self.min.x * scale_x, self.min.y * scale_y),
+            max: Point::new(self.max.x * scale_x, self.max.y * scale_y),
+        }
+    }
+
+    /// Round all coordinates to nearest integer.
+    #[inline]
+    #[must_use]
+    pub fn round(&self) -> Rect {
+        Rect {
+            min: self.min.round(),
+            max: self.max.round(),
+        }
+    }
+
+    /// Floor all coordinates.
+    #[inline]
+    #[must_use]
+    pub fn floor(&self) -> Rect {
+        Rect {
+            min: self.min.floor(),
+            max: self.max.floor(),
+        }
+    }
+
+    /// Ceil all coordinates.
+    #[inline]
+    #[must_use]
+    pub fn ceil(&self) -> Rect {
+        Rect {
+            min: self.min.ceil(),
+            max: self.max.ceil(),
+        }
+    }
+
+    /// Round outward (floor min, ceil max) - useful for pixel-perfect rendering.
+    #[inline]
+    #[must_use]
+    pub fn round_out(&self) -> Rect {
+        Rect {
+            min: self.min.floor(),
+            max: self.max.ceil(),
+        }
+    }
+
+    /// Round inward (ceil min, floor max) - useful for clipping.
+    #[inline]
+    #[must_use]
+    pub fn round_in(&self) -> Rect {
+        Rect {
+            min: self.min.ceil(),
+            max: self.max.floor(),
+        }
+    }
+
+    /// Clamp a point to be inside this rectangle.
+    #[inline]
+    #[must_use]
+    pub fn clamp_point(&self, point: Point) -> Point {
+        point.clamp(self.min, self.max)
+    }
+
+    /// Check if rect fully contains another rect.
+    #[inline]
+    #[must_use]
+    pub fn contains_rect(&self, other: &Rect) -> bool {
+        self.min.x <= other.min.x
+            && self.max.x >= other.max.x
+            && self.min.y <= other.min.y
+            && self.max.y >= other.max.y
+    }
+
+    /// Linear interpolation between two rects.
+    #[must_use]
+    pub fn lerp(a: &Rect, b: &Rect, t: f32) -> Rect {
+        Rect {
+            min: Point::lerp(a.min, b.min, t),
+            max: Point::lerp(a.max, b.max, t),
+        }
+    }
 }
 
 impl Default for Rect {

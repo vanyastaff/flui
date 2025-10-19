@@ -168,6 +168,8 @@ pub enum BlendMode {
 
 impl BlendMode {
     /// Returns true if this blend mode is a Porter-Duff mode.
+    #[inline]
+    #[must_use]
     pub const fn is_porter_duff(&self) -> bool {
         matches!(
             self,
@@ -189,8 +191,50 @@ impl BlendMode {
     }
 
     /// Returns true if this blend mode requires the destination image.
+    #[inline]
+    #[must_use]
     pub const fn requires_destination(&self) -> bool {
         !matches!(self, BlendMode::Clear | BlendMode::Src)
+    }
+
+    /// Returns true if this is an advanced (non-Porter-Duff) blend mode.
+    #[inline]
+    #[must_use]
+    pub const fn is_advanced(&self) -> bool {
+        !self.is_porter_duff()
+    }
+
+    /// Returns true if this blend mode can lighten colors.
+    #[inline]
+    #[must_use]
+    pub const fn can_lighten(&self) -> bool {
+        matches!(
+            self,
+            BlendMode::Screen
+                | BlendMode::Lighten
+                | BlendMode::ColorDodge
+                | BlendMode::Plus
+        )
+    }
+
+    /// Returns true if this blend mode can darken colors.
+    #[inline]
+    #[must_use]
+    pub const fn can_darken(&self) -> bool {
+        matches!(
+            self,
+            BlendMode::Darken
+                | BlendMode::ColorBurn
+                | BlendMode::Multiply
+                | BlendMode::Modulate
+        )
+    }
+
+    /// Returns true if this blend mode is compositional (affects alpha).
+    #[inline]
+    #[must_use]
+    pub const fn is_compositional(&self) -> bool {
+        self.is_porter_duff()
     }
 }
 

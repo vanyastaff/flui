@@ -21,11 +21,14 @@ impl TextDecoration {
     pub const LINE_THROUGH: Self = Self { flags: 1 << 2 };
 
     /// Creates a new text decoration from flags.
+    #[inline]
+    #[must_use]
     pub const fn new(flags: u8) -> Self {
         Self { flags }
     }
 
     /// Combines multiple decorations.
+    #[must_use]
     pub const fn combine(decorations: &[Self]) -> Self {
         let mut flags = 0;
         let mut i = 0;
@@ -37,21 +40,29 @@ impl TextDecoration {
     }
 
     /// Returns true if this decoration contains underline.
+    #[inline]
+    #[must_use]
     pub const fn has_underline(&self) -> bool {
         self.flags & Self::UNDERLINE.flags != 0
     }
 
     /// Returns true if this decoration contains overline.
+    #[inline]
+    #[must_use]
     pub const fn has_overline(&self) -> bool {
         self.flags & Self::OVERLINE.flags != 0
     }
 
     /// Returns true if this decoration contains line-through.
+    #[inline]
+    #[must_use]
     pub const fn has_line_through(&self) -> bool {
         self.flags & Self::LINE_THROUGH.flags != 0
     }
 
     /// Returns true if this decoration is empty.
+    #[inline]
+    #[must_use]
     pub const fn is_none(&self) -> bool {
         self.flags == 0
     }
@@ -191,6 +202,8 @@ impl Default for TextDecorationConfig {
 
 impl TextDecorationConfig {
     /// Creates a new text decoration configuration.
+    #[inline]
+    #[must_use]
     pub fn new(decoration: TextDecoration) -> Self {
         Self {
             decoration,
@@ -199,18 +212,24 @@ impl TextDecorationConfig {
     }
 
     /// Sets the decoration style.
+    #[inline]
+    #[must_use]
     pub fn with_style(mut self, style: TextDecorationStyle) -> Self {
         self.style = style;
         self
     }
 
     /// Sets the decoration color.
+    #[inline]
+    #[must_use]
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = Some(color);
         self
     }
 
     /// Sets the decoration thickness.
+    #[inline]
+    #[must_use]
     pub fn with_thickness(mut self, thickness: f64) -> Self {
         self.thickness = Some(thickness);
         self

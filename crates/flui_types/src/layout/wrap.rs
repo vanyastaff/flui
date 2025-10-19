@@ -39,6 +39,29 @@ pub enum WrapAlignment {
     SpaceEvenly,
 }
 
+impl WrapAlignment {
+    /// Returns true if this alignment uses spacing.
+    #[inline]
+    #[must_use]
+    pub const fn uses_spacing(&self) -> bool {
+        matches!(self, WrapAlignment::SpaceBetween | WrapAlignment::SpaceAround | WrapAlignment::SpaceEvenly)
+    }
+
+    /// Returns true if this alignment is edge-aligned.
+    #[inline]
+    #[must_use]
+    pub const fn is_edge_aligned(&self) -> bool {
+        matches!(self, WrapAlignment::Start | WrapAlignment::End)
+    }
+
+    /// Returns true if this alignment centers content.
+    #[inline]
+    #[must_use]
+    pub const fn is_centered(&self) -> bool {
+        matches!(self, WrapAlignment::Center)
+    }
+}
+
 /// How the runs themselves should be placed in the cross axis.
 ///
 /// Similar to Flutter's `WrapCrossAlignment`.
@@ -63,6 +86,22 @@ pub enum WrapCrossAlignment {
 
     /// Place runs in the center of the cross axis.
     Center,
+}
+
+impl WrapCrossAlignment {
+    /// Returns true if this alignment is edge-aligned.
+    #[inline]
+    #[must_use]
+    pub const fn is_edge_aligned(&self) -> bool {
+        matches!(self, WrapCrossAlignment::Start | WrapCrossAlignment::End)
+    }
+
+    /// Returns true if this alignment centers content.
+    #[inline]
+    #[must_use]
+    pub const fn is_centered(&self) -> bool {
+        matches!(self, WrapCrossAlignment::Center)
+    }
 }
 
 #[cfg(test)]

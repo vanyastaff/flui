@@ -32,13 +32,65 @@ impl SemanticsTag {
     /// let tag = SemanticsTag::new("custom_tag");
     /// assert_eq!(tag.name(), "custom_tag");
     /// ```
+    #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self { name: name.into() }
     }
 
     /// Returns the name of this tag
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::semantics::SemanticsTag;
+    ///
+    /// let tag = SemanticsTag::new("button");
+    /// assert_eq!(tag.name(), "button");
+    /// ```
+    #[inline]
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns the length of the tag name
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::semantics::SemanticsTag;
+    ///
+    /// let tag = SemanticsTag::new("button");
+    /// assert_eq!(tag.len(), 6);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.name.len()
+    }
+
+    /// Returns true if the tag name is empty
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.name.is_empty()
+    }
+
+    /// Returns true if this tag matches the given name
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::semantics::SemanticsTag;
+    ///
+    /// let tag = SemanticsTag::new("button");
+    /// assert!(tag.matches("button"));
+    /// assert!(!tag.matches("link"));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn matches(&self, name: &str) -> bool {
+        self.name == name
     }
 }
 

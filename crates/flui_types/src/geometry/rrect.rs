@@ -53,6 +53,8 @@ impl RRect {
     /// * `top_right` - Top-right corner radius
     /// * `bottom_right` - Bottom-right corner radius
     /// * `bottom_left` - Bottom-left corner radius
+    #[inline]
+    #[must_use]
     pub const fn new(
         rect: Rect,
         top_left: Radius,
@@ -77,6 +79,8 @@ impl RRect {
     ///
     /// * `rect` - The base rectangle
     /// * `radius` - The corner radius
+    #[inline]
+    #[must_use]
     pub const fn from_rect_and_radius(rect: Rect, radius: Radius) -> Self {
         Self::new(
             rect,
@@ -93,6 +97,8 @@ impl RRect {
     ///
     /// * `rect` - The base rectangle
     /// * `radius` - The circular corner radius
+    #[inline]
+    #[must_use]
     pub const fn from_rect_circular(rect: Rect, radius: f32) -> Self {
         Self::from_rect_and_radius(rect, Radius::circular(radius))
     }
@@ -104,6 +110,8 @@ impl RRect {
     /// * `rect` - The base rectangle
     /// * `radius_x` - The x-axis radius for all corners
     /// * `radius_y` - The y-axis radius for all corners
+    #[inline]
+    #[must_use]
     pub const fn from_rect_elliptical(rect: Rect, radius_x: f32, radius_y: f32) -> Self {
         Self::from_rect_and_radius(rect, Radius::elliptical(radius_x, radius_y))
     }
@@ -117,6 +125,8 @@ impl RRect {
     /// * `top_right` - Top-right corner radius
     /// * `bottom_right` - Bottom-right corner radius
     /// * `bottom_left` - Bottom-left corner radius
+    #[inline]
+    #[must_use]
     pub const fn from_rect_and_corners(
         rect: Rect,
         top_left: Radius,
@@ -136,6 +146,8 @@ impl RRect {
     /// * `width` - Width
     /// * `height` - Height
     /// * `radius` - Circular corner radius
+    #[inline]
+    #[must_use]
     pub fn from_xywh_circular(
         x: f32,
         y: f32,
@@ -147,11 +159,15 @@ impl RRect {
     }
 
     /// Creates a rectangle with no rounding (all radii are zero)
+    #[inline]
+    #[must_use]
     pub const fn from_rect(rect: Rect) -> Self {
         Self::from_rect_and_radius(rect, Radius::ZERO)
     }
 
     /// Returns true if all corner radii are zero (no rounding)
+    #[inline]
+    #[must_use]
     pub fn is_rect(&self) -> bool {
         self.top_left == Radius::ZERO
             && self.top_right == Radius::ZERO
@@ -160,6 +176,8 @@ impl RRect {
     }
 
     /// Returns true if all corners have circular radii (x == y for each corner)
+    #[inline]
+    #[must_use]
     pub fn is_circular(&self) -> bool {
         self.top_left.is_circular()
             && self.top_right.is_circular()
@@ -168,6 +186,8 @@ impl RRect {
     }
 
     /// Returns true if all corners have the same radius
+    #[inline]
+    #[must_use]
     pub fn is_uniform(&self) -> bool {
         self.top_left == self.top_right
             && self.top_right == self.bottom_right
@@ -176,47 +196,56 @@ impl RRect {
 
     /// Returns the left edge
     #[inline]
+    #[must_use]
     pub fn left(&self) -> f32 {
         self.rect.left()
     }
 
     /// Returns the top edge
     #[inline]
+    #[must_use]
     pub fn top(&self) -> f32 {
         self.rect.top()
     }
 
     /// Returns the right edge
     #[inline]
+    #[must_use]
     pub fn right(&self) -> f32 {
         self.rect.right()
     }
 
     /// Returns the bottom edge
     #[inline]
+    #[must_use]
     pub fn bottom(&self) -> f32 {
         self.rect.bottom()
     }
 
     /// Returns the width of the rounded rectangle
     #[inline]
+    #[must_use]
     pub fn width(&self) -> f32 {
         self.rect.width()
     }
 
     /// Returns the height of the rounded rectangle
     #[inline]
+    #[must_use]
     pub fn height(&self) -> f32 {
         self.rect.height()
     }
 
     /// Returns the size of the rounded rectangle
     #[inline]
+    #[must_use]
     pub fn size(&self) -> Size {
         self.rect.size()
     }
 
     /// Returns the center point of the rounded rectangle
+    #[inline]
+    #[must_use]
     pub fn center(&self) -> Point {
         self.rect.center()
     }
@@ -224,6 +253,7 @@ impl RRect {
     /// Checks if a point is inside the rounded rectangle
     ///
     /// This performs proper geometric testing including the rounded corners.
+    #[must_use]
     pub fn contains(&self, point: Point) -> bool {
         // First check if point is in the base rectangle
         if !self.rect.contains(point) {
@@ -290,6 +320,8 @@ impl RRect {
     }
 
     /// Returns a new RRect with all corner radii scaled by the given factor
+    #[inline]
+    #[must_use]
     pub fn scale_radii(&self, factor: f32) -> Self {
         Self::new(
             self.rect,
@@ -303,6 +335,8 @@ impl RRect {
     /// Returns a new RRect expanded by the given delta
     ///
     /// The rectangle is expanded and the corner radii remain the same.
+    #[inline]
+    #[must_use]
     pub fn expand(&self, delta: f32) -> Self {
         Self::new(
             self.rect.expand(delta),
@@ -316,6 +350,8 @@ impl RRect {
     /// Returns a new RRect shrunk by the given delta
     ///
     /// The rectangle is shrunk and the corner radii remain the same.
+    #[inline]
+    #[must_use]
     pub fn shrink(&self, delta: f32) -> Self {
         self.expand(-delta)
     }
@@ -327,6 +363,7 @@ impl RRect {
     /// * `a` - Start RRect
     /// * `b` - End RRect
     /// * `t` - Interpolation factor (0.0 = a, 1.0 = b)
+    #[must_use]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         // Manually lerp the rect since Rect doesn't have lerp method
         let min = Point::lerp(a.rect.min, b.rect.min, t);
@@ -339,6 +376,111 @@ impl RRect {
             Radius::lerp(a.top_right, b.top_right, t),
             Radius::lerp(a.bottom_right, b.bottom_right, t),
             Radius::lerp(a.bottom_left, b.bottom_left, t),
+        )
+    }
+
+    // ===== Helper methods for rendering =====
+
+    /// Returns the maximum corner radius in either dimension.
+    ///
+    /// Useful for determining buffer sizes for rendering.
+    #[inline]
+    #[must_use]
+    pub fn max_radius(&self) -> f32 {
+        let max_x = self.top_left.x
+            .max(self.top_right.x)
+            .max(self.bottom_right.x)
+            .max(self.bottom_left.x);
+        let max_y = self.top_left.y
+            .max(self.top_right.y)
+            .max(self.bottom_right.y)
+            .max(self.bottom_left.y);
+        max_x.max(max_y)
+    }
+
+    /// Returns true if any corner has a radius.
+    #[inline]
+    #[must_use]
+    pub fn has_rounding(&self) -> bool {
+        !self.is_rect()
+    }
+
+    /// Returns the four corner centers for rendering elliptical arcs.
+    ///
+    /// Returns (top-left, top-right, bottom-right, bottom-left) centers.
+    #[inline]
+    #[must_use]
+    pub fn corner_centers(&self) -> [Point; 4] {
+        [
+            Point::new(self.left() + self.top_left.x, self.top() + self.top_left.y),
+            Point::new(self.right() - self.top_right.x, self.top() + self.top_right.y),
+            Point::new(self.right() - self.bottom_right.x, self.bottom() - self.bottom_right.y),
+            Point::new(self.left() + self.bottom_left.x, self.bottom() - self.bottom_left.y),
+        ]
+    }
+
+    /// Returns the bounding rectangle that encompasses all corners.
+    #[inline]
+    #[must_use]
+    pub const fn bounding_rect(&self) -> Rect {
+        self.rect
+    }
+
+    /// Returns a new RRect with radii clamped to the rectangle size.
+    ///
+    /// Ensures corner radii don't exceed half the width or height.
+    #[must_use]
+    pub fn clamp_radii(&self) -> Self {
+        let max_x = self.width() / 2.0;
+        let max_y = self.height() / 2.0;
+
+        Self::new(
+            self.rect,
+            Radius::elliptical(self.top_left.x.min(max_x), self.top_left.y.min(max_y)),
+            Radius::elliptical(self.top_right.x.min(max_x), self.top_right.y.min(max_y)),
+            Radius::elliptical(self.bottom_right.x.min(max_x), self.bottom_right.y.min(max_y)),
+            Radius::elliptical(self.bottom_left.x.min(max_x), self.bottom_left.y.min(max_y)),
+        )
+    }
+
+    /// Returns the area of the rounded rectangle (approximate).
+    ///
+    /// This is the rectangle area minus the corner cutouts.
+    #[inline]
+    #[must_use]
+    pub fn area(&self) -> f32 {
+        if self.is_rect() {
+            return self.width() * self.height();
+        }
+
+        // Rectangle area minus the corner cutouts
+        let rect_area = self.width() * self.height();
+        let corner_area = |r: Radius| {
+            // Area of square minus quarter circle
+            r.x * r.y * (1.0 - std::f32::consts::FRAC_PI_4)
+        };
+
+        rect_area - corner_area(self.top_left) - corner_area(self.top_right)
+            - corner_area(self.bottom_right) - corner_area(self.bottom_left)
+    }
+
+    /// Returns true if this RRect is empty (zero or negative size).
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rect.is_empty()
+    }
+
+    /// Translate (move) the rounded rectangle by an offset.
+    #[inline]
+    #[must_use]
+    pub fn translate(&self, offset: crate::geometry::Offset) -> Self {
+        Self::new(
+            self.rect.translate(offset.dx, offset.dy),
+            self.top_left,
+            self.top_right,
+            self.bottom_right,
+            self.bottom_left,
         )
     }
 }

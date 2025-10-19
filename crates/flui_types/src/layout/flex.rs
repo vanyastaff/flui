@@ -35,13 +35,27 @@ pub enum FlexFit {
 
 impl FlexFit {
     /// Returns true if this is a tight fit.
+    #[inline]
+    #[must_use]
     pub const fn is_tight(&self) -> bool {
         matches!(self, FlexFit::Tight)
     }
 
     /// Returns true if this is a loose fit.
+    #[inline]
+    #[must_use]
     pub const fn is_loose(&self) -> bool {
         matches!(self, FlexFit::Loose)
+    }
+
+    /// Returns the opposite fit.
+    #[inline]
+    #[must_use]
+    pub const fn flip(&self) -> Self {
+        match self {
+            FlexFit::Tight => FlexFit::Loose,
+            FlexFit::Loose => FlexFit::Tight,
+        }
     }
 }
 

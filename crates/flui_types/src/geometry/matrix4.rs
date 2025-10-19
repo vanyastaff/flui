@@ -3,13 +3,25 @@
 //! Matrix4 represents a 4x4 matrix stored in column-major order (like OpenGL/egui).
 //! Used for affine transformations: translation, rotation, scaling, skewing, perspective.
 //!
+//! # Design Philosophy
+//!
+//! This implementation prioritizes:
+//! - **Memory Safety**: No unsafe code, bounds-checked access
+//! - **Type Safety**: Strong typing with `#[must_use]` annotations
+//! - **Zero Allocations**: All operations use stack-allocated arrays
+//! - **Idiomatic Rust**: Implements standard traits (`From`, `Into`, `Index`, etc.)
+//! - **Performance**: Inline functions, const methods, zero-copy conversions
+//! - **Mathematical Correctness**: Extensively tested with edge cases
+//!
 //! # Examples
+//!
+//! ## Basic Transformations
 //!
 //! ```
 //! use flui_types::Matrix4;
 //!
-//! // Identity matrix
-//! let identity = Matrix4::identity();
+//! // Identity matrix (const-evaluable)
+//! const IDENTITY: Matrix4 = Matrix4::identity();
 //!
 //! // Translation
 //! let translate = Matrix4::translation(10.0, 20.0, 0.0);
@@ -22,10 +34,68 @@
 //!
 //! // Combine transformations (right-to-left application)
 //! let combined = translate * rotate * scale;
+//!
+//! // Transform a point
+//! let (x, y) = combined.transform_point(1.0, 0.0);
+//! ```
+//!
+//! ## Advanced Operations
+//!
+//! ```
+//! use flui_types::Matrix4;
+//!
+//! let m = Matrix4::rotation_z(0.5);
+//!
+//! // Matrix inverse
+//! if let Some(inv) = m.try_inverse() {
+//!     let product = m * inv;
+//!     assert!(product.is_identity());
+//! }
+//!
+//! // Transpose (for rotation matrices: transpose = inverse)
+//! let transposed = m.transpose();
+//!
+//! // Determinant
+//! let det = m.determinant();
+//! ```
+//!
+//! ## Type-Safe Access
+//!
+//! ```
+//! use flui_types::Matrix4;
+//!
+//! let mut m = Matrix4::identity();
+//!
+//! // Index access (linear, column-major)
+//! assert_eq!(m[0], 1.0);
+//!
+//! // Row/column access
+//! let value = m.get(0, 0);
+//! *m.get_mut(0, 3) = 10.0; // Set translation
+//!
+//! // Zero-copy conversions
+//! let array: [f32; 16] = m.into();
+//! let m2 = Matrix4::from(array);
+//! ```
+//!
+//! ## Approximate Equality
+//!
+//! ```
+//! use flui_types::Matrix4;
+//!
+//! let m1 = Matrix4::translation(1.0, 2.0, 0.0);
+//! let m2 = Matrix4::translation(1.0000001, 2.0, 0.0);
+//!
+//! // Exact equality (bitwise)
+//! assert_ne!(m1, m2);
+//!
+//! // Approximate equality (with epsilon)
+//! assert!(m1.approx_eq(&m2));
+//! assert!(m1.approx_eq_eps(&m2, 0.001));
 //! ```
 
 use std::fmt;
-use std::ops::{Mul, MulAssign};
+use std::ops::{Index, IndexMut, Mul, MulAssign};
 
 /// 4x4 transformation matrix stored in column-major order.
 ///
@@ -45,7 +115,12 @@ use std::ops::{Mul, MulAssign};
 /// [ 0    0    0   1  ]
 /// ```
 /// where sx/sy = scale, shx/shy = shear, tx/ty = translation
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// # Memory Layout
+/// - Size: 64 bytes (16 × f32)
+/// - Alignment: Natural alignment for f32
+/// - Zero-copy conversions available via `From`/`Into` traits
+#[derive(Debug, Clone, Copy)]
 pub struct Matrix4 {
     /// Matrix elements in column-major order (16 floats)
     pub m: [f32; 16],
@@ -83,13 +158,16 @@ impl Matrix4 {
     /// [ 0  0  0  1 ]
     /// ```
     #[inline]
-    pub fn identity() -> Self {
-        Self::new(
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
-        )
+    #[must_use]
+    pub const fn identity() -> Self {
+        Self {
+            m: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
     }
 
     /// Creates a translation matrix.
@@ -238,8 +316,82 @@ impl Matrix4 {
 
     /// Converts to column-major array (egui format).
     #[inline]
-    pub fn to_col_major_array(&self) -> [f32; 16] {
+    #[must_use]
+    pub const fn to_col_major_array(&self) -> [f32; 16] {
         self.m
+    }
+
+    /// Returns the transpose of this matrix (rows ↔ columns).
+    ///
+    /// For orthogonal matrices (rotations), transpose equals inverse.
+    #[must_use]
+    pub fn transpose(&self) -> Self {
+        let m = &self.m;
+        Self::new(
+            m[0], m[4], m[8],  m[12],
+            m[1], m[5], m[9],  m[13],
+            m[2], m[6], m[10], m[14],
+            m[3], m[7], m[11], m[15],
+        )
+    }
+
+    /// Transposes this matrix in place (zero-allocation).
+    ///
+    /// This method swaps elements in place without creating a temporary matrix.
+    pub fn transpose_in_place(&mut self) {
+        // Swap off-diagonal elements (column-major indexing)
+        for row in 0..4 {
+            for col in (row + 1)..4 {
+                let idx1 = col * 4 + row;
+                let idx2 = row * 4 + col;
+                self.m.swap(idx1, idx2);
+            }
+        }
+    }
+
+    /// Converts to row-major 2D array `[[f32; 4]; 4]`.
+    ///
+    /// Useful for interoperability with row-major libraries.
+    #[must_use]
+    pub fn to_row_major_2d(&self) -> [[f32; 4]; 4] {
+        [
+            [self.m[0], self.m[4], self.m[8],  self.m[12]],
+            [self.m[1], self.m[5], self.m[9],  self.m[13]],
+            [self.m[2], self.m[6], self.m[10], self.m[14]],
+            [self.m[3], self.m[7], self.m[11], self.m[15]],
+        ]
+    }
+
+    /// Converts to column-major 2D array `[[f32; 4]; 4]`.
+    #[must_use]
+    pub fn to_col_major_2d(&self) -> [[f32; 4]; 4] {
+        [
+            [self.m[0], self.m[1], self.m[2],  self.m[3]],
+            [self.m[4], self.m[5], self.m[6],  self.m[7]],
+            [self.m[8], self.m[9], self.m[10], self.m[11]],
+            [self.m[12], self.m[13], self.m[14], self.m[15]],
+        ]
+    }
+
+    /// Returns a reference to element at (row, col).
+    ///
+    /// # Panics
+    /// Panics if row or col >= 4.
+    #[inline]
+    #[must_use]
+    pub fn get(&self, row: usize, col: usize) -> f32 {
+        assert!(row < 4 && col < 4, "Matrix index out of bounds");
+        self.m[col * 4 + row]
+    }
+
+    /// Returns a mutable reference to element at (row, col).
+    ///
+    /// # Panics
+    /// Panics if row or col >= 4.
+    #[inline]
+    pub fn get_mut(&mut self, row: usize, col: usize) -> &mut f32 {
+        assert!(row < 4 && col < 4, "Matrix index out of bounds");
+        &mut self.m[col * 4 + row]
     }
 
     /// Attempts to invert this matrix.
@@ -345,6 +497,49 @@ impl Default for Matrix4 {
     }
 }
 
+/// Exact equality comparison (bitwise).
+///
+/// For floating-point tolerance comparison, use `approx_eq` or `approx_eq_eps`.
+impl PartialEq for Matrix4 {
+    fn eq(&self, other: &Self) -> bool {
+        self.m == other.m
+    }
+}
+
+impl Eq for Matrix4 {}
+
+impl Matrix4 {
+    /// Returns whether two matrices are approximately equal within epsilon.
+    ///
+    /// Uses element-wise comparison with the specified tolerance.
+    ///
+    /// # Example
+    /// ```
+    /// use flui_types::Matrix4;
+    ///
+    /// let m1 = Matrix4::translation(1.0, 2.0, 0.0);
+    /// let m2 = Matrix4::translation(1.0000001, 2.0, 0.0);
+    ///
+    /// assert!(m1.approx_eq_eps(&m2, 0.001));
+    /// ```
+    #[must_use]
+    pub fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+        for i in 0..16 {
+            if (self.m[i] - other.m[i]).abs() > epsilon {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Returns whether two matrices are approximately equal (epsilon = 1e-5).
+    #[inline]
+    #[must_use]
+    pub fn approx_eq(&self, other: &Self) -> bool {
+        self.approx_eq_eps(other, 1e-5)
+    }
+}
+
 /// Matrix multiplication: C = A * B
 ///
 /// Matrices are applied right-to-left: (A * B) transforms first by B, then by A.
@@ -374,6 +569,86 @@ impl Mul for Matrix4 {
 impl MulAssign for Matrix4 {
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
+    }
+}
+
+/// Access matrix elements by linear index (0..16) in column-major order.
+///
+/// # Example
+/// ```
+/// use flui_types::Matrix4;
+/// let m = Matrix4::identity();
+/// assert_eq!(m[0], 1.0);  // m00
+/// assert_eq!(m[5], 1.0);  // m11
+/// ```
+impl Index<usize> for Matrix4 {
+    type Output = f32;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.m[index]
+    }
+}
+
+/// Mutably access matrix elements by linear index (0..16) in column-major order.
+impl IndexMut<usize> for Matrix4 {
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.m[index]
+    }
+}
+
+/// Construct from column-major array.
+impl From<[f32; 16]> for Matrix4 {
+    #[inline]
+    fn from(m: [f32; 16]) -> Self {
+        Self { m }
+    }
+}
+
+/// Convert to column-major array (zero-copy).
+impl From<Matrix4> for [f32; 16] {
+    #[inline]
+    fn from(matrix: Matrix4) -> Self {
+        matrix.m
+    }
+}
+
+/// Construct from column-major 2D array.
+impl From<[[f32; 4]; 4]> for Matrix4 {
+    fn from(arr: [[f32; 4]; 4]) -> Self {
+        Self {
+            m: [
+                arr[0][0], arr[0][1], arr[0][2], arr[0][3],
+                arr[1][0], arr[1][1], arr[1][2], arr[1][3],
+                arr[2][0], arr[2][1], arr[2][2], arr[2][3],
+                arr[3][0], arr[3][1], arr[3][2], arr[3][3],
+            ],
+        }
+    }
+}
+
+/// Convert to column-major 2D array.
+impl From<Matrix4> for [[f32; 4]; 4] {
+    #[inline]
+    fn from(matrix: Matrix4) -> Self {
+        matrix.to_col_major_2d()
+    }
+}
+
+/// Borrow as slice for efficient read access.
+impl AsRef<[f32; 16]> for Matrix4 {
+    #[inline]
+    fn as_ref(&self) -> &[f32; 16] {
+        &self.m
+    }
+}
+
+/// Mutably borrow as slice for efficient write access.
+impl AsMut<[f32; 16]> for Matrix4 {
+    #[inline]
+    fn as_mut(&mut self) -> &mut [f32; 16] {
+        &mut self.m
     }
 }
 
@@ -672,5 +947,198 @@ mod tests {
         assert!(display.contains("1.000"));
         assert!(display.contains("2.000"));
         assert!(display.contains("3.000"));
+    }
+
+    #[test]
+    fn test_matrix4_transpose() {
+        let m = Matrix4::new(
+            1.0,  2.0,  3.0,  4.0,
+            5.0,  6.0,  7.0,  8.0,
+            9.0,  10.0, 11.0, 12.0,
+            13.0, 14.0, 15.0, 16.0,
+        );
+
+        let t = m.transpose();
+
+        // Verify transpose swaps rows and columns
+        assert_eq!(t.get(0, 0), m.get(0, 0)); // diagonal unchanged
+        assert_eq!(t.get(0, 1), m.get(1, 0));
+        assert_eq!(t.get(1, 0), m.get(0, 1));
+        assert_eq!(t.get(2, 3), m.get(3, 2));
+    }
+
+    #[test]
+    fn test_matrix4_transpose_rotation() {
+        // For rotation matrices, transpose should equal inverse
+        let angle = std::f32::consts::PI / 4.0;
+        let m = Matrix4::rotation_z(angle);
+        let t = m.transpose();
+        let inv = m.try_inverse().unwrap();
+
+        for i in 0..16 {
+            assert!((t.m[i] - inv.m[i]).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_matrix4_index() {
+        let m = Matrix4::identity();
+        assert_eq!(m[0], 1.0);
+        assert_eq!(m[5], 1.0);
+        assert_eq!(m[10], 1.0);
+        assert_eq!(m[15], 1.0);
+    }
+
+    #[test]
+    fn test_matrix4_index_mut() {
+        let mut m = Matrix4::identity();
+        m[12] = 5.0;
+        m[13] = 10.0;
+
+        let (tx, ty, _) = m.translation_component();
+        assert_eq!(tx, 5.0);
+        assert_eq!(ty, 10.0);
+    }
+
+    #[test]
+    fn test_matrix4_get() {
+        let m = Matrix4::translation(10.0, 20.0, 30.0);
+        assert_eq!(m.get(0, 3), 10.0); // tx
+        assert_eq!(m.get(1, 3), 20.0); // ty
+        assert_eq!(m.get(2, 3), 30.0); // tz
+    }
+
+    #[test]
+    fn test_matrix4_get_mut() {
+        let mut m = Matrix4::identity();
+        *m.get_mut(0, 3) = 15.0;
+
+        let (tx, _, _) = m.translation_component();
+        assert_eq!(tx, 15.0);
+    }
+
+    #[test]
+    fn test_matrix4_from_array() {
+        let arr = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            5.0, 10.0, 0.0, 1.0,
+        ];
+        let m = Matrix4::from(arr);
+
+        let (tx, ty, _) = m.translation_component();
+        assert_eq!(tx, 5.0);
+        assert_eq!(ty, 10.0);
+    }
+
+    #[test]
+    fn test_matrix4_into_array() {
+        let m = Matrix4::translation(3.0, 6.0, 9.0);
+        let arr: [f32; 16] = m.into();
+
+        assert_eq!(arr[12], 3.0);
+        assert_eq!(arr[13], 6.0);
+        assert_eq!(arr[14], 9.0);
+    }
+
+    #[test]
+    fn test_matrix4_from_2d_array() {
+        let arr = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [7.0, 8.0, 9.0, 1.0],
+        ];
+        let m = Matrix4::from(arr);
+
+        let (tx, ty, tz) = m.translation_component();
+        assert_eq!(tx, 7.0);
+        assert_eq!(ty, 8.0);
+        assert_eq!(tz, 9.0);
+    }
+
+    #[test]
+    fn test_matrix4_to_row_major_2d() {
+        let m = Matrix4::translation(1.0, 2.0, 3.0);
+        let arr = m.to_row_major_2d();
+
+        assert_eq!(arr[0][3], 1.0); // tx
+        assert_eq!(arr[1][3], 2.0); // ty
+        assert_eq!(arr[2][3], 3.0); // tz
+    }
+
+    #[test]
+    fn test_matrix4_as_ref() {
+        let m = Matrix4::identity();
+        let slice: &[f32; 16] = m.as_ref();
+        assert_eq!(slice[0], 1.0);
+        assert_eq!(slice[15], 1.0);
+    }
+
+    #[test]
+    fn test_matrix4_as_mut() {
+        let mut m = Matrix4::identity();
+        let slice: &mut [f32; 16] = m.as_mut();
+        slice[12] = 42.0;
+
+        let (tx, _, _) = m.translation_component();
+        assert_eq!(tx, 42.0);
+    }
+
+    #[test]
+    fn test_matrix4_const_identity() {
+        // Verify identity() is const
+        const IDENTITY: Matrix4 = Matrix4::identity();
+        assert_eq!(IDENTITY.m[0], 1.0);
+        assert_eq!(IDENTITY.m[5], 1.0);
+    }
+
+    #[test]
+    fn test_matrix4_transpose_in_place() {
+        let mut m = Matrix4::new(
+            1.0,  2.0,  3.0,  4.0,
+            5.0,  6.0,  7.0,  8.0,
+            9.0,  10.0, 11.0, 12.0,
+            13.0, 14.0, 15.0, 16.0,
+        );
+
+        let original = m;
+        m.transpose_in_place();
+
+        // Verify transpose swaps rows and columns
+        assert_eq!(m.get(0, 1), original.get(1, 0));
+        assert_eq!(m.get(1, 0), original.get(0, 1));
+        assert_eq!(m.get(2, 3), original.get(3, 2));
+
+        // Transpose twice should give original
+        m.transpose_in_place();
+        assert_eq!(m, original);
+    }
+
+    #[test]
+    fn test_matrix4_approx_eq() {
+        let m1 = Matrix4::translation(1.0, 2.0, 0.0);
+        let m2 = Matrix4::translation(1.0 + 1e-6, 2.0, 0.0);
+
+        assert!(m1.approx_eq(&m2));
+        assert!(!m1.eq(&m2)); // Exact equality should fail
+    }
+
+    #[test]
+    fn test_matrix4_approx_eq_eps() {
+        let m1 = Matrix4::scaling(2.0, 3.0, 1.0);
+        let m2 = Matrix4::scaling(2.01, 3.0, 1.0);
+
+        assert!(!m1.approx_eq(&m2)); // Default epsilon too small
+        assert!(m1.approx_eq_eps(&m2, 0.02)); // Larger epsilon passes
+    }
+
+    #[test]
+    fn test_matrix4_eq_exact() {
+        let m1 = Matrix4::identity();
+        let m2 = Matrix4::identity();
+
+        assert_eq!(m1, m2);
     }
 }

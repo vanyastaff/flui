@@ -11,6 +11,18 @@ use std::time::Duration;
 /// Similar to Flutter's `Velocity`. Describes the speed of movement
 /// in pixels per second along the x and y axes.
 ///
+/// # Memory Safety
+/// - Stack-allocated `Copy` type with no heap allocations
+/// - All calculations use safe floating-point math
+///
+/// # Type Safety
+/// - `#[must_use]` on all pure methods
+/// - Validation methods prevent invalid states
+///
+/// # Performance
+/// - `#[inline]` on hot-path methods
+/// - Zero-cost abstractions for velocity calculations
+///
 /// # Examples
 ///
 /// ```
@@ -23,6 +35,9 @@ use std::time::Duration;
 /// // Get magnitude (speed)
 /// let speed = velocity.magnitude();
 /// assert!((speed - 111.80).abs() < 0.1);
+///
+/// // Validate velocity
+/// assert!(velocity.is_finite());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -49,8 +64,49 @@ impl Velocity {
     /// assert_eq!(velocity.pixels_per_second.dx, 100.0);
     /// assert_eq!(velocity.pixels_per_second.dy, -50.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub const fn new(pixels_per_second: Offset) -> Self {
         Self { pixels_per_second }
+    }
+
+    /// Creates a velocity from x and y components
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    ///
+    /// let velocity = Velocity::from_components(100.0, 50.0);
+    /// assert_eq!(velocity.pixels_per_second.dx, 100.0);
+    /// assert_eq!(velocity.pixels_per_second.dy, 50.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn from_components(dx: f32, dy: f32) -> Self {
+        Self::new(Offset::new(dx, dy))
+    }
+
+    /// Creates a velocity from magnitude and direction
+    ///
+    /// # Arguments
+    ///
+    /// * `magnitude` - The speed in pixels per second
+    /// * `direction` - The direction in radians from the positive x-axis
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    ///
+    /// let velocity = Velocity::from_direction(100.0, 0.0);
+    /// assert!((velocity.pixels_per_second.dx - 100.0).abs() < 0.01);
+    /// assert!(velocity.pixels_per_second.dy.abs() < 0.01);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn from_direction(magnitude: f32, direction: f32) -> Self {
+        Self::new(Offset::from_direction(direction, magnitude))
     }
 
     /// Returns the magnitude (speed) of the velocity
@@ -66,6 +122,8 @@ impl Velocity {
     /// let velocity = Velocity::new(Offset::new(3.0, 4.0));
     /// assert_eq!(velocity.magnitude(), 5.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn magnitude(&self) -> f32 {
         self.pixels_per_second.distance()
     }
@@ -87,8 +145,47 @@ impl Velocity {
     /// let velocity_up = Velocity::new(Offset::new(0.0, 1.0));
     /// assert!((velocity_up.direction() - PI / 2.0).abs() < 0.01);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn direction(&self) -> f32 {
         self.pixels_per_second.direction()
+    }
+
+    /// Returns whether this velocity is zero
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    ///
+    /// assert!(Velocity::ZERO.is_zero());
+    /// assert!(!Velocity::new(Offset::new(1.0, 0.0)).is_zero());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        self.pixels_per_second.is_zero()
+    }
+
+    /// Returns whether all components are finite
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    ///
+    /// let valid = Velocity::new(Offset::new(100.0, 50.0));
+    /// assert!(valid.is_finite());
+    ///
+    /// let invalid = Velocity::new(Offset::new(f32::NAN, 50.0));
+    /// assert!(!invalid.is_finite());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_finite(&self) -> bool {
+        self.pixels_per_second.dx.is_finite() && self.pixels_per_second.dy.is_finite()
     }
 
     /// Clamps the magnitude of the velocity
@@ -105,6 +202,7 @@ impl Velocity {
     /// let clamped = velocity.clamp_magnitude(0.0, 50.0);
     /// assert_eq!(clamped.magnitude(), 50.0);
     /// ```
+    #[must_use]
     pub fn clamp_magnitude(&self, min: f32, max: f32) -> Self {
         let magnitude = self.magnitude();
         if magnitude == 0.0 {
@@ -118,6 +216,97 @@ impl Velocity {
 
         let scale = clamped_magnitude / magnitude;
         Self::new(self.pixels_per_second * scale)
+    }
+
+    /// Negates the velocity (reverses direction)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    ///
+    /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
+    /// let negated = velocity.negate();
+    /// assert_eq!(negated.pixels_per_second, Offset::new(-100.0, 50.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn negate(&self) -> Self {
+        Self::new(-self.pixels_per_second)
+    }
+
+    /// Scales the velocity by a factor
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    ///
+    /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
+    /// let scaled = velocity.scale(0.5);
+    /// assert_eq!(scaled.pixels_per_second, Offset::new(50.0, 25.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn scale(&self, factor: f32) -> Self {
+        Self::new(self.pixels_per_second * factor)
+    }
+
+    /// Calculates the distance traveled over a duration
+    ///
+    /// Useful for predictive rendering and animation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
+    /// let distance = velocity.distance_over_duration(Duration::from_secs(1));
+    /// assert_eq!(distance, Offset::new(100.0, 0.0));
+    /// ```
+    #[must_use]
+    pub fn distance_over_duration(&self, duration: Duration) -> Offset {
+        let seconds = duration.as_secs_f32();
+        self.pixels_per_second * seconds
+    }
+
+    /// Returns the horizontal (x) component of velocity
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    ///
+    /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
+    /// assert_eq!(velocity.dx(), 100.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn dx(&self) -> f32 {
+        self.pixels_per_second.dx
+    }
+
+    /// Returns the vertical (y) component of velocity
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    ///
+    /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
+    /// assert_eq!(velocity.dy(), 50.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn dy(&self) -> f32 {
+        self.pixels_per_second.dy
     }
 }
 
@@ -169,6 +358,23 @@ pub struct VelocityEstimate {
 
 impl VelocityEstimate {
     /// Creates a new velocity estimate
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::VelocityEstimate;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// let estimate = VelocityEstimate::new(
+    ///     Offset::new(100.0, 50.0),
+    ///     Offset::new(200.0, -100.0),
+    ///     Duration::from_millis(16),
+    ///     0.95,
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
     pub const fn new(
         offset: Offset,
         pixels_per_second: Offset,
@@ -184,6 +390,25 @@ impl VelocityEstimate {
     }
 
     /// Returns the velocity
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::VelocityEstimate;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// let estimate = VelocityEstimate::new(
+    ///     Offset::ZERO,
+    ///     Offset::new(200.0, -100.0),
+    ///     Duration::from_millis(16),
+    ///     0.95,
+    /// );
+    /// let velocity = estimate.velocity();
+    /// assert_eq!(velocity.pixels_per_second, Offset::new(200.0, -100.0));
+    /// ```
+    #[inline]
+    #[must_use]
     pub fn velocity(&self) -> Velocity {
         Velocity::new(self.pixels_per_second)
     }
@@ -191,8 +416,109 @@ impl VelocityEstimate {
     /// Returns whether this estimate is reliable
     ///
     /// An estimate is considered reliable if the confidence is above 0.5.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::VelocityEstimate;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// let reliable = VelocityEstimate::new(
+    ///     Offset::ZERO,
+    ///     Offset::ZERO,
+    ///     Duration::from_millis(16),
+    ///     0.8,
+    /// );
+    /// assert!(reliable.is_reliable());
+    /// ```
+    #[inline]
+    #[must_use]
     pub fn is_reliable(&self) -> bool {
         self.confidence > 0.5
+    }
+
+    /// Returns whether all values are finite
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::VelocityEstimate;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// let valid = VelocityEstimate::new(
+    ///     Offset::new(100.0, 50.0),
+    ///     Offset::new(200.0, -100.0),
+    ///     Duration::from_millis(16),
+    ///     0.95,
+    /// );
+    /// assert!(valid.is_finite());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_finite(&self) -> bool {
+        self.offset.dx.is_finite()
+            && self.offset.dy.is_finite()
+            && self.pixels_per_second.dx.is_finite()
+            && self.pixels_per_second.dy.is_finite()
+            && self.confidence.is_finite()
+    }
+
+    /// Returns whether the estimate is valid
+    ///
+    /// An estimate is valid if all values are finite and confidence is in [0, 1].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::VelocityEstimate;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// let valid = VelocityEstimate::new(
+    ///     Offset::new(100.0, 50.0),
+    ///     Offset::new(200.0, -100.0),
+    ///     Duration::from_millis(16),
+    ///     0.95,
+    /// );
+    /// assert!(valid.is_valid());
+    ///
+    /// let invalid = VelocityEstimate::new(
+    ///     Offset::ZERO,
+    ///     Offset::ZERO,
+    ///     Duration::from_millis(16),
+    ///     1.5, // Invalid confidence
+    /// );
+    /// assert!(!invalid.is_valid());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.is_finite() && self.confidence >= 0.0 && self.confidence <= 1.0
+    }
+
+    /// Returns the magnitude of the velocity estimate
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::VelocityEstimate;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// let estimate = VelocityEstimate::new(
+    ///     Offset::ZERO,
+    ///     Offset::new(3.0, 4.0),
+    ///     Duration::from_millis(16),
+    ///     0.95,
+    /// );
+    /// assert_eq!(estimate.magnitude(), 5.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn magnitude(&self) -> f32 {
+        self.velocity().magnitude()
     }
 }
 

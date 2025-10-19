@@ -70,6 +70,8 @@ pub struct SliverConstraints {
 
 impl SliverConstraints {
     /// Creates new sliver constraints
+    #[inline]
+    #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         axis_direction: AxisDirection,
@@ -94,17 +96,23 @@ impl SliverConstraints {
     }
 
     /// Returns the axis along which the sliver scrolls
+    #[inline]
+    #[must_use]
     pub const fn axis(&self) -> Axis {
         self.axis
     }
 
     /// Returns the direction in which content grows
+    #[inline]
+    #[must_use]
     pub const fn growth_direction(&self) -> GrowthDirection {
         self.growth_direction
     }
 
     /// Returns whether the sliver's leading edge is visible in the viewport
-    pub fn is_visible(&self) -> bool {
+    #[inline]
+    #[must_use]
+    pub const fn is_visible(&self) -> bool {
         self.remaining_paint_extent > 0.0
     }
 
@@ -112,6 +120,8 @@ impl SliverConstraints {
     ///
     /// If the sliver's scroll offset is negative, it means the previous sliver
     /// extended past its normal extent and is overlapping this sliver.
+    #[inline]
+    #[must_use]
     pub fn overlap(&self) -> f32 {
         if self.scroll_offset < 0.0 {
             -self.scroll_offset
@@ -121,15 +131,90 @@ impl SliverConstraints {
     }
 
     /// Returns the scroll offset without any overlap
+    #[inline]
+    #[must_use]
     pub fn scroll_offset_corrected(&self) -> f32 {
         self.scroll_offset.max(0.0)
     }
 
     /// Returns whether the sliver is normalized (valid)
+    #[inline]
+    #[must_use]
     pub fn is_normalized(&self) -> bool {
         self.remaining_paint_extent >= 0.0
             && self.viewport_main_axis_extent >= 0.0
             && self.cross_axis_extent >= 0.0
+    }
+
+    // ===== Helper methods for layout and rendering =====
+
+    /// Returns whether the sliver can paint content
+    #[inline]
+    #[must_use]
+    pub const fn can_paint(&self) -> bool {
+        self.remaining_paint_extent > 0.0 && self.cross_axis_extent > 0.0
+    }
+
+    /// Returns whether the sliver is completely scrolled out of view
+    #[inline]
+    #[must_use]
+    pub fn is_offscreen(&self) -> bool {
+        self.scroll_offset >= self.viewport_main_axis_extent
+    }
+
+    /// Returns the maximum extent this sliver can paint
+    #[inline]
+    #[must_use]
+    pub const fn max_paint_extent(&self) -> f32 {
+        self.remaining_paint_extent
+    }
+
+    /// Clamp a proposed extent to valid paint range
+    #[inline]
+    #[must_use]
+    pub fn clamp_paint_extent(&self, extent: f32) -> f32 {
+        extent.clamp(0.0, self.remaining_paint_extent)
+    }
+
+    /// Returns the visible portion of the sliver based on scroll offset
+    ///
+    /// If scroll_offset is positive, some of the sliver is scrolled off-screen.
+    /// Returns the extent that should be painted.
+    #[inline]
+    #[must_use]
+    pub fn visible_extent(&self, total_extent: f32) -> f32 {
+        let corrected_offset = self.scroll_offset_corrected();
+        (total_extent - corrected_offset).max(0.0).min(self.remaining_paint_extent)
+    }
+
+    /// Copy constraints with different scroll offset
+    #[inline]
+    #[must_use]
+    pub fn with_scroll_offset(&self, scroll_offset: f32) -> Self {
+        Self {
+            scroll_offset,
+            ..*self
+        }
+    }
+
+    /// Copy constraints with different remaining paint extent
+    #[inline]
+    #[must_use]
+    pub fn with_remaining_paint_extent(&self, remaining_paint_extent: f32) -> Self {
+        Self {
+            remaining_paint_extent,
+            ..*self
+        }
+    }
+
+    /// Copy constraints with different preceding scroll extent
+    #[inline]
+    #[must_use]
+    pub fn with_preceding_scroll_extent(&self, preceding_scroll_extent: f32) -> Self {
+        Self {
+            preceding_scroll_extent,
+            ..*self
+        }
     }
 }
 
@@ -225,6 +310,8 @@ pub struct SliverGeometry {
 
 impl SliverGeometry {
     /// Creates a new sliver geometry
+    #[inline]
+    #[must_use]
     pub fn new(scroll_extent: f32, paint_extent: f32, paint_origin: f32) -> Self {
         Self {
             scroll_extent,
@@ -241,7 +328,9 @@ impl SliverGeometry {
     }
 
     /// Creates a geometry for a zero-size sliver
-    pub fn zero() -> Self {
+    #[inline]
+    #[must_use]
+    pub const fn zero() -> Self {
         Self {
             scroll_extent: 0.0,
             paint_extent: 0.0,
@@ -259,80 +348,145 @@ impl SliverGeometry {
     /// Returns the actual layout extent
     ///
     /// This is either the explicitly set layout extent, or the paint extent.
+    #[inline]
+    #[must_use]
     pub fn layout_extent(&self) -> f32 {
         self.layout_extent.unwrap_or(self.paint_extent)
     }
 
     /// Returns the actual max paint extent
+    #[inline]
+    #[must_use]
     pub fn max_paint_extent(&self) -> f32 {
         self.max_paint_extent.unwrap_or(self.paint_extent)
     }
 
     /// Returns the actual max scroll extent
+    #[inline]
+    #[must_use]
     pub fn max_scroll_extent(&self) -> f32 {
         self.max_scroll_extent.unwrap_or(self.scroll_extent)
     }
 
     /// Returns the actual hit test extent
+    #[inline]
+    #[must_use]
     pub fn hit_test_extent(&self) -> f32 {
         self.hit_test_extent.unwrap_or(self.paint_extent)
     }
 
     /// Returns whether this sliver is hit testable
+    #[inline]
+    #[must_use]
     pub fn is_hit_testable(&self) -> bool {
         self.visible && self.hit_test_extent() > 0.0
     }
 
     /// Returns whether this sliver is visible
+    #[inline]
+    #[must_use]
     pub const fn is_visible(&self) -> bool {
         self.visible && self.paint_extent > 0.0
     }
 
     /// Returns whether this sliver is empty (has no extent)
+    #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.scroll_extent == 0.0 && self.paint_extent == 0.0
     }
 
     /// Builder method to set the layout extent
+    #[inline]
+    #[must_use]
     pub fn with_layout_extent(mut self, extent: f32) -> Self {
         self.layout_extent = Some(extent);
         self
     }
 
     /// Builder method to set the max paint extent
+    #[inline]
+    #[must_use]
     pub fn with_max_paint_extent(mut self, extent: f32) -> Self {
         self.max_paint_extent = Some(extent);
         self
     }
 
     /// Builder method to set the max scroll extent
+    #[inline]
+    #[must_use]
     pub fn with_max_scroll_extent(mut self, extent: f32) -> Self {
         self.max_scroll_extent = Some(extent);
         self
     }
 
     /// Builder method to set the hit test extent
+    #[inline]
+    #[must_use]
     pub fn with_hit_test_extent(mut self, extent: f32) -> Self {
         self.hit_test_extent = Some(extent);
         self
     }
 
     /// Builder method to set visibility
+    #[inline]
+    #[must_use]
     pub fn with_visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
     /// Builder method to set visual overflow
+    #[inline]
+    #[must_use]
     pub fn with_visual_overflow(mut self, has_overflow: bool) -> Self {
         self.has_visual_overflow = has_overflow;
         self
     }
 
     /// Builder method to set cache extent
+    #[inline]
+    #[must_use]
     pub fn with_cache_extent(mut self, extent: f32) -> Self {
         self.cache_extent = Some(extent);
         self
+    }
+
+    // ===== Helper methods for rendering =====
+
+    /// Returns the actual painted area bounds (accounting for paint origin)
+    #[inline]
+    #[must_use]
+    pub const fn paint_bounds(&self) -> (f32, f32) {
+        (self.paint_origin, self.paint_origin + self.paint_extent)
+    }
+
+    /// Returns whether this geometry represents a scrollable sliver
+    #[inline]
+    #[must_use]
+    pub fn is_scrollable(&self) -> bool {
+        self.scroll_extent > 0.0
+    }
+
+    /// Returns the ratio of paint extent to scroll extent
+    ///
+    /// This can be useful for determining how much of the sliver is visible.
+    /// Returns 1.0 if the entire sliver is visible, < 1.0 if partially visible.
+    #[inline]
+    #[must_use]
+    pub fn visibility_ratio(&self) -> f32 {
+        if self.scroll_extent > 0.0 {
+            (self.paint_extent / self.scroll_extent).min(1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Returns whether the sliver extends beyond its paint extent
+    #[inline]
+    #[must_use]
+    pub fn extends_beyond_viewport(&self) -> bool {
+        self.scroll_extent > self.paint_extent
     }
 }
 

@@ -4,10 +4,23 @@
 
 use super::{Simulation, Tolerance};
 
-/// A simulation of an object moving under gravity
+/// A simulation of an object moving under constant acceleration (gravity)
 ///
 /// Similar to Flutter's `GravitySimulation`. Models projectile motion
 /// with constant acceleration (like throwing or dropping an object).
+///
+/// # Physics Model
+/// - Position: `p(t) = p₀ + v₀*t + 0.5*a*t²`
+/// - Velocity: `v(t) = v₀ + a*t`
+/// - Where a is the acceleration (gravity)
+///
+/// # Memory Safety
+/// - Stack-allocated `Copy` type with no heap allocations
+/// - All calculations use safe floating-point math
+///
+/// # Type Safety
+/// - `#[must_use]` on all pure methods
+/// - Validation methods prevent invalid states
 ///
 /// # Examples
 ///
@@ -62,6 +75,8 @@ impl GravitySimulation {
     /// // Simulate dropping an object
     /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn new(acceleration: f32, start: f32, end: f32, velocity: f32) -> Self {
         Self {
             acceleration,
@@ -83,9 +98,95 @@ impl GravitySimulation {
     /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0)
     ///     .with_tolerance(tolerance);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn with_tolerance(mut self, tolerance: Tolerance) -> Self {
         self.tolerance = tolerance;
         self
+    }
+
+    /// Returns the acceleration
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::GravitySimulation;
+    ///
+    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
+    /// assert_eq!(sim.acceleration(), 9.8);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn acceleration(&self) -> f32 {
+        self.acceleration
+    }
+
+    /// Returns the starting position
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::GravitySimulation;
+    ///
+    /// let sim = GravitySimulation::new(9.8, 10.0, 100.0, 0.0);
+    /// assert_eq!(sim.start(), 10.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn start(&self) -> f32 {
+        self.start
+    }
+
+    /// Returns the ending position
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::GravitySimulation;
+    ///
+    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
+    /// assert_eq!(sim.end(), 100.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn end(&self) -> f32 {
+        self.end
+    }
+
+    /// Returns the initial velocity
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::GravitySimulation;
+    ///
+    /// let sim = GravitySimulation::new(9.8, 0.0, 100.0, 20.0);
+    /// assert_eq!(sim.initial_velocity(), 20.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn initial_velocity(&self) -> f32 {
+        self.initial_velocity
+    }
+
+    /// Checks if the simulation parameters are valid
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::GravitySimulation;
+    ///
+    /// let valid = GravitySimulation::new(9.8, 0.0, 100.0, 0.0);
+    /// assert!(valid.is_valid());
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.acceleration.is_finite()
+            && self.start.is_finite()
+            && self.end.is_finite()
+            && self.initial_velocity.is_finite()
+            && self.tolerance.is_valid()
     }
 
     /// Returns the time at which the simulation reaches the end position
@@ -103,6 +204,7 @@ impl GravitySimulation {
     /// assert!(time.is_some());
     /// assert!(time.unwrap() > 0.0);
     /// ```
+    #[must_use]
     pub fn time_at_end(&self) -> Option<f32> {
         let distance = self.end - self.start;
 
@@ -143,16 +245,19 @@ impl GravitySimulation {
 }
 
 impl Simulation for GravitySimulation {
+    #[inline]
     fn position(&self, time: f32) -> f32 {
         // position = start + velocity*t + 0.5*acceleration*t^2
         self.start + self.initial_velocity * time + 0.5 * self.acceleration * time * time
     }
 
+    #[inline]
     fn velocity(&self, time: f32) -> f32 {
         // velocity = initial_velocity + acceleration*t
         self.initial_velocity + self.acceleration * time
     }
 
+    #[inline]
     fn is_done(&self, time: f32) -> bool {
         let pos = self.position(time);
 
@@ -176,6 +281,7 @@ impl Simulation for GravitySimulation {
         }
     }
 
+    #[inline]
     fn tolerance(&self) -> Tolerance {
         self.tolerance
     }

@@ -317,6 +317,8 @@ impl Alignment {
     /// assert_eq!(offset.dx, 25.0); // (100 - 50) / 2
     /// assert_eq!(offset.dy, 15.0); // (60 - 30) / 2
     /// ```
+    #[inline]
+    #[must_use]
     pub fn calculate_offset(self, child_size: Size, parent_size: Size) -> Offset {
         let available_space = Size::new(
             parent_size.width - child_size.width,
@@ -342,6 +344,8 @@ impl Alignment {
     ///
     /// assert_eq!(mid, Alignment::CENTER);
     /// ```
+    #[inline]
+    #[must_use]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)

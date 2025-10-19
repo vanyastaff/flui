@@ -63,6 +63,8 @@ pub struct FixedExtentMetrics {
 
 impl FixedExtentMetrics {
     /// Creates new fixed extent metrics
+    #[inline]
+    #[must_use]
     pub fn new(
         min_scroll_extent: f32,
         max_scroll_extent: f32,
@@ -84,6 +86,8 @@ impl FixedExtentMetrics {
     /// Returns the current item index based on the scroll position
     ///
     /// This is calculated as `floor(pixels / item_extent)`.
+    #[inline]
+    #[must_use]
     pub fn item_index(&self) -> usize {
         if self.item_extent > 0.0 {
             (self.pixels / self.item_extent).floor().max(0.0) as usize
@@ -95,6 +99,8 @@ impl FixedExtentMetrics {
     /// Returns the fractional part of the current scroll position
     ///
     /// This is the offset within the current item, in the range [0.0, 1.0).
+    #[inline]
+    #[must_use]
     pub fn item_offset_fraction(&self) -> f32 {
         if self.item_extent > 0.0 {
             (self.pixels % self.item_extent) / self.item_extent
@@ -104,6 +110,8 @@ impl FixedExtentMetrics {
     }
 
     /// Returns how many items are fully or partially visible in the viewport
+    #[inline]
+    #[must_use]
     pub fn visible_item_count(&self) -> usize {
         if self.item_extent > 0.0 {
             (self.viewport_dimension / self.item_extent).ceil() as usize + 1
@@ -113,6 +121,8 @@ impl FixedExtentMetrics {
     }
 
     /// Returns the total number of items that can be scrolled through
+    #[inline]
+    #[must_use]
     pub fn total_item_count(&self) -> usize {
         if self.item_extent > 0.0 {
             ((self.max_scroll_extent - self.min_scroll_extent) / self.item_extent).ceil() as usize
@@ -122,21 +132,29 @@ impl FixedExtentMetrics {
     }
 
     /// Returns whether the scroll position is at the start
+    #[inline]
+    #[must_use]
     pub fn at_edge_start(&self) -> bool {
         self.pixels <= self.min_scroll_extent
     }
 
     /// Returns whether the scroll position is at the end
+    #[inline]
+    #[must_use]
     pub fn at_edge_end(&self) -> bool {
         self.pixels >= self.max_scroll_extent
     }
 
     /// Returns whether the scroll position is out of bounds
+    #[inline]
+    #[must_use]
     pub fn out_of_range(&self) -> bool {
         self.pixels < self.min_scroll_extent || self.pixels > self.max_scroll_extent
     }
 
     /// Returns the amount of overscroll at the start
+    #[inline]
+    #[must_use]
     pub fn overscroll_start(&self) -> f32 {
         if self.pixels < self.min_scroll_extent {
             self.min_scroll_extent - self.pixels
@@ -146,6 +164,8 @@ impl FixedExtentMetrics {
     }
 
     /// Returns the amount of overscroll at the end
+    #[inline]
+    #[must_use]
     pub fn overscroll_end(&self) -> f32 {
         if self.pixels > self.max_scroll_extent {
             self.pixels - self.max_scroll_extent
@@ -155,8 +175,53 @@ impl FixedExtentMetrics {
     }
 
     /// Returns the total scrollable extent
+    #[inline]
+    #[must_use]
     pub fn extent(&self) -> f32 {
         self.max_scroll_extent - self.min_scroll_extent
+    }
+
+    // ===== Helper methods for layout and rendering =====
+
+    /// Returns the pixel offset of a specific item
+    #[inline]
+    #[must_use]
+    pub fn item_offset(&self, index: usize) -> f32 {
+        self.min_scroll_extent + (index as f32 * self.item_extent)
+    }
+
+    /// Returns the range of visible item indices (start, end)
+    #[inline]
+    #[must_use]
+    pub fn visible_item_range(&self) -> (usize, usize) {
+        let start = self.item_index();
+        let end = start + self.visible_item_count();
+        (start, end.min(self.total_item_count()))
+    }
+
+    /// Clamp a scroll position to valid bounds
+    #[inline]
+    #[must_use]
+    pub fn clamp_pixels(&self, pixels: f32) -> f32 {
+        pixels.clamp(self.min_scroll_extent, self.max_scroll_extent)
+    }
+
+    /// Snap to the nearest item boundary
+    #[inline]
+    #[must_use]
+    pub fn snap_to_item(&self) -> f32 {
+        if self.item_extent > 0.0 {
+            (self.pixels / self.item_extent).round() * self.item_extent
+        } else {
+            self.pixels
+        }
+    }
+
+    /// Returns whether this metrics represents infinite scrolling (no bounds)
+    #[inline]
+    #[must_use]
+    pub fn is_infinite(&self) -> bool {
+        self.max_scroll_extent.is_infinite()
     }
 }
 
@@ -203,6 +268,8 @@ pub struct FixedScrollMetrics {
 
 impl FixedScrollMetrics {
     /// Creates new fixed scroll metrics
+    #[inline]
+    #[must_use]
     pub fn new(
         min_scroll_extent: f32,
         max_scroll_extent: f32,
@@ -220,26 +287,36 @@ impl FixedScrollMetrics {
     }
 
     /// Returns the total scrollable extent
+    #[inline]
+    #[must_use]
     pub fn extent(&self) -> f32 {
         self.max_scroll_extent - self.min_scroll_extent
     }
 
     /// Returns whether the scroll position is at the start
+    #[inline]
+    #[must_use]
     pub fn at_edge_start(&self) -> bool {
         self.pixels <= self.min_scroll_extent
     }
 
     /// Returns whether the scroll position is at the end
+    #[inline]
+    #[must_use]
     pub fn at_edge_end(&self) -> bool {
         self.pixels >= self.max_scroll_extent
     }
 
     /// Returns whether the scroll position is out of bounds
+    #[inline]
+    #[must_use]
     pub fn out_of_range(&self) -> bool {
         self.pixels < self.min_scroll_extent || self.pixels > self.max_scroll_extent
     }
 
     /// Returns the amount of overscroll at the start
+    #[inline]
+    #[must_use]
     pub fn overscroll_start(&self) -> f32 {
         if self.pixels < self.min_scroll_extent {
             self.min_scroll_extent - self.pixels
@@ -249,6 +326,8 @@ impl FixedScrollMetrics {
     }
 
     /// Returns the amount of overscroll at the end
+    #[inline]
+    #[must_use]
     pub fn overscroll_end(&self) -> f32 {
         if self.pixels > self.max_scroll_extent {
             self.pixels - self.max_scroll_extent
@@ -261,6 +340,8 @@ impl FixedScrollMetrics {
     ///
     /// Returns a value between 0.0 (at start) and 1.0 (at end).
     /// Returns 0.0 if the extent is zero.
+    #[inline]
+    #[must_use]
     pub fn scroll_fraction(&self) -> f32 {
         let extent = self.extent();
         if extent > 0.0 {
@@ -271,6 +352,8 @@ impl FixedScrollMetrics {
     }
 
     /// Returns the number of viewport-sized pages in the scrollable area
+    #[inline]
+    #[must_use]
     pub fn page_count(&self) -> f32 {
         if self.viewport_dimension > 0.0 {
             self.extent() / self.viewport_dimension
@@ -282,6 +365,8 @@ impl FixedScrollMetrics {
     /// Returns the current page index (0-based)
     ///
     /// This is calculated based on the viewport dimension.
+    #[inline]
+    #[must_use]
     pub fn current_page(&self) -> usize {
         if self.viewport_dimension > 0.0 {
             ((self.pixels - self.min_scroll_extent) / self.viewport_dimension)
@@ -293,13 +378,78 @@ impl FixedScrollMetrics {
     }
 
     /// Returns the amount of content visible beyond the trailing edge
+    #[inline]
+    #[must_use]
     pub fn trailing_content(&self) -> f32 {
         (self.max_scroll_extent - self.pixels).max(0.0)
     }
 
     /// Returns the amount of content before the leading edge
+    #[inline]
+    #[must_use]
     pub fn leading_content(&self) -> f32 {
         (self.pixels - self.min_scroll_extent).max(0.0)
+    }
+
+    // ===== Helper methods for layout and rendering =====
+
+    /// Clamp a scroll position to valid bounds
+    #[inline]
+    #[must_use]
+    pub fn clamp_pixels(&self, pixels: f32) -> f32 {
+        pixels.clamp(self.min_scroll_extent, self.max_scroll_extent)
+    }
+
+    /// Returns whether this metrics represents infinite scrolling (no bounds)
+    #[inline]
+    #[must_use]
+    pub fn is_infinite(&self) -> bool {
+        self.max_scroll_extent.is_infinite()
+    }
+
+    /// Returns whether the scroll is within valid bounds
+    #[inline]
+    #[must_use]
+    pub fn is_in_range(&self) -> bool {
+        !self.out_of_range()
+    }
+
+    /// Scroll to a specific fraction (0.0 = start, 1.0 = end)
+    #[inline]
+    #[must_use]
+    pub fn pixels_from_fraction(&self, fraction: f32) -> f32 {
+        self.min_scroll_extent + (self.extent() * fraction.clamp(0.0, 1.0))
+    }
+
+    /// Scroll to a specific page index
+    #[inline]
+    #[must_use]
+    pub fn pixels_from_page(&self, page: usize) -> f32 {
+        self.min_scroll_extent + (page as f32 * self.viewport_dimension)
+    }
+
+    /// Returns the total amount of overscroll (start + end)
+    #[inline]
+    #[must_use]
+    pub fn total_overscroll(&self) -> f32 {
+        self.overscroll_start() + self.overscroll_end()
+    }
+
+    /// Returns whether the viewport can scroll (content exceeds viewport)
+    #[inline]
+    #[must_use]
+    pub fn can_scroll(&self) -> bool {
+        self.extent() > self.viewport_dimension
+    }
+
+    /// Copy metrics with new pixel offset
+    #[inline]
+    #[must_use]
+    pub fn with_pixels(&self, pixels: f32) -> Self {
+        Self {
+            pixels,
+            ..*self
+        }
     }
 }
 

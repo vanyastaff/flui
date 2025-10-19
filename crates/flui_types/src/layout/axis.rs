@@ -76,7 +76,9 @@ impl Axis {
     /// assert_eq!(Axis::Horizontal.select_size(size), 100.0);
     /// assert_eq!(Axis::Vertical.select_size(size), 50.0);
     /// ```
-    pub fn select_size(self, size: Size) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn select_size(self, size: Size) -> f32 {
         match self {
             Axis::Horizontal => size.width,
             Axis::Vertical => size.height,
@@ -93,7 +95,9 @@ impl Axis {
     /// assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(100.0, 0.0));
     /// assert_eq!(Axis::Vertical.make_size(100.0), Size::new(0.0, 100.0));
     /// ```
-    pub fn make_size(self, value: f32) -> Size {
+    #[inline]
+    #[must_use]
+    pub const fn make_size(self, value: f32) -> Size {
         match self {
             Axis::Horizontal => Size::new(value, 0.0),
             Axis::Vertical => Size::new(0.0, value),
@@ -112,7 +116,9 @@ impl Axis {
     /// assert_eq!(Axis::Horizontal.make_size_with_cross(100.0, 50.0), Size::new(100.0, 50.0));
     /// assert_eq!(Axis::Vertical.make_size_with_cross(100.0, 50.0), Size::new(50.0, 100.0));
     /// ```
-    pub fn make_size_with_cross(self, main: f32, cross: f32) -> Size {
+    #[inline]
+    #[must_use]
+    pub const fn make_size_with_cross(self, main: f32, cross: f32) -> Size {
         match self {
             Axis::Horizontal => Size::new(main, cross),
             Axis::Vertical => Size::new(cross, main),
@@ -132,7 +138,9 @@ impl Axis {
     /// assert_eq!(Axis::Horizontal.flip_size(size), Size::new(100.0, 50.0));
     /// assert_eq!(Axis::Vertical.flip_size(size), Size::new(50.0, 100.0));
     /// ```
-    pub fn flip_size(self, size: Size) -> Size {
+    #[inline]
+    #[must_use]
+    pub const fn flip_size(self, size: Size) -> Size {
         match self {
             Axis::Horizontal => size,
             Axis::Vertical => Size::new(size.height, size.width),
@@ -150,7 +158,9 @@ impl Axis {
     /// assert_eq!(Axis::Horizontal.main_size(size), 100.0);
     /// assert_eq!(Axis::Vertical.main_size(size), 50.0);
     /// ```
-    pub fn main_size(self, size: Size) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn main_size(self, size: Size) -> f32 {
         self.select_size(size)
     }
 
@@ -165,7 +175,9 @@ impl Axis {
     /// assert_eq!(Axis::Horizontal.cross_size(size), 50.0);
     /// assert_eq!(Axis::Vertical.cross_size(size), 100.0);
     /// ```
-    pub fn cross_size(self, size: Size) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn cross_size(self, size: Size) -> f32 {
         self.opposite().select_size(size)
     }
 }
@@ -286,7 +298,9 @@ impl AxisDirection {
     /// assert_eq!(AxisDirection::LeftToRight.sign(), 1.0);
     /// assert_eq!(AxisDirection::RightToLeft.sign(), -1.0);
     /// ```
-    pub fn sign(self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn sign(self) -> f32 {
         if self.is_positive() {
             1.0
         } else {
@@ -361,7 +375,9 @@ impl Orientation {
     /// assert_eq!(Orientation::from_size(Size::new(100.0, 200.0)), Orientation::Portrait);
     /// assert_eq!(Orientation::from_size(Size::new(200.0, 100.0)), Orientation::Landscape);
     /// ```
-    pub fn from_size(size: Size) -> Self {
+    #[inline]
+    #[must_use]
+    pub const fn from_size(size: Size) -> Self {
         if size.height > size.width {
             Orientation::Portrait
         } else {

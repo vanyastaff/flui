@@ -46,6 +46,8 @@ impl Offset {
     /// assert_eq!(offset.dx, 10.0);
     /// assert_eq!(offset.dy, 20.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub const fn new(dx: f32, dy: f32) -> Self {
         Self { dx, dy }
     }
@@ -227,8 +229,94 @@ impl Offset {
     /// let size = offset.to_size();
     /// assert_eq!(size, Size::new(10.0, 20.0));
     /// ```
-    pub fn to_size(self) -> Size {
-        Size::new(self.dx.max(0.0), self.dy.max(0.0))
+    #[inline]
+    #[must_use]
+    pub const fn to_size(self) -> Size {
+        Size::new(
+            if self.dx > 0.0 { self.dx } else { 0.0 },
+            if self.dy > 0.0 { self.dy } else { 0.0 },
+        )
+    }
+
+    // ===== Helper methods for rendering =====
+
+    /// Normalize this offset to a unit vector.
+    ///
+    /// Returns `Offset::ZERO` if magnitude is zero.
+    #[inline]
+    #[must_use]
+    pub fn normalize(&self) -> Offset {
+        let dist = self.distance();
+        if dist > f32::EPSILON {
+            Offset::new(self.dx / dist, self.dy / dist)
+        } else {
+            Offset::ZERO
+        }
+    }
+
+    /// Dot product with another offset.
+    #[inline]
+    #[must_use]
+    pub const fn dot(&self, other: Offset) -> f32 {
+        self.dx * other.dx + self.dy * other.dy
+    }
+
+    /// Cross product magnitude (2D cross is a scalar).
+    #[inline]
+    #[must_use]
+    pub const fn cross(&self, other: Offset) -> f32 {
+        self.dx * other.dy - self.dy * other.dx
+    }
+
+    /// Rotate this offset by an angle (in radians).
+    #[must_use]
+    pub fn rotate(&self, angle: f32) -> Offset {
+        let (sin, cos) = angle.sin_cos();
+        Offset::new(
+            self.dx * cos - self.dy * sin,
+            self.dx * sin + self.dy * cos,
+        )
+    }
+
+    /// Round components to nearest integer.
+    #[inline]
+    #[must_use]
+    pub fn round(&self) -> Offset {
+        Offset::new(self.dx.round(), self.dy.round())
+    }
+
+    /// Floor components.
+    #[inline]
+    #[must_use]
+    pub fn floor(&self) -> Offset {
+        Offset::new(self.dx.floor(), self.dy.floor())
+    }
+
+    /// Ceil components.
+    #[inline]
+    #[must_use]
+    pub fn ceil(&self) -> Offset {
+        Offset::new(self.dx.ceil(), self.dy.ceil())
+    }
+
+    /// Clamp components between min and max.
+    #[inline]
+    #[must_use]
+    pub fn clamp(&self, min: Offset, max: Offset) -> Offset {
+        Offset::new(
+            self.dx.clamp(min.dx, max.dx),
+            self.dy.clamp(min.dy, max.dy),
+        )
+    }
+
+    /// Get absolute values of components.
+    #[inline]
+    #[must_use]
+    pub const fn abs(&self) -> Offset {
+        Offset::new(
+            if self.dx >= 0.0 { self.dx } else { -self.dx },
+            if self.dy >= 0.0 { self.dy } else { -self.dy },
+        )
     }
 }
 

@@ -80,6 +80,8 @@ pub enum Shader {
 
 impl Shader {
     /// Creates a linear gradient shader.
+    #[inline]
+    #[must_use]
     pub fn linear_gradient(
         from: Offset,
         to: Offset,
@@ -97,6 +99,8 @@ impl Shader {
     }
 
     /// Creates a radial gradient shader.
+    #[inline]
+    #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn radial_gradient(
         center: Offset,
@@ -119,6 +123,8 @@ impl Shader {
     }
 
     /// Creates a sweep gradient shader.
+    #[inline]
+    #[must_use]
     pub fn sweep_gradient(
         center: Offset,
         colors: Vec<Color>,
@@ -138,8 +144,34 @@ impl Shader {
     }
 
     /// Creates an image shader.
+    #[inline]
+    #[must_use]
     pub fn image(shader: ImageShader) -> Self {
         Shader::Image(shader)
+    }
+
+    /// Returns the number of colors in this shader.
+    #[inline]
+    #[must_use]
+    pub fn color_count(&self) -> usize {
+        match self {
+            Shader::LinearGradient { colors, .. }
+            | Shader::RadialGradient { colors, .. }
+            | Shader::SweepGradient { colors, .. } => colors.len(),
+            Shader::Image(_) => 0,
+        }
+    }
+
+    /// Returns true if this shader uses color stops.
+    #[inline]
+    #[must_use]
+    pub fn has_stops(&self) -> bool {
+        match self {
+            Shader::LinearGradient { stops, .. }
+            | Shader::RadialGradient { stops, .. }
+            | Shader::SweepGradient { stops, .. } => stops.is_some(),
+            Shader::Image(_) => false,
+        }
     }
 }
 
@@ -172,6 +204,8 @@ pub struct ImageShader {
 
 impl ImageShader {
     /// Creates a new image shader.
+    #[inline]
+    #[must_use]
     pub const fn new(tile_mode_x: TileMode, tile_mode_y: TileMode) -> Self {
         Self {
             tile_mode_x,
@@ -182,18 +216,39 @@ impl ImageShader {
     }
 
     /// Creates a new image shader with a transformation matrix.
+    #[inline]
+    #[must_use]
     pub const fn with_transform(mut self, transform: [[f32; 3]; 3]) -> Self {
         self.transform = Some(transform);
         self
     }
 
     /// Creates a new image shader with filter quality.
+    #[inline]
+    #[must_use]
     pub const fn with_filter_quality(
         mut self,
         quality: crate::painting::FilterQuality,
     ) -> Self {
         self.filter_quality = Some(quality);
         self
+    }
+
+    /// Returns true if this shader has a transformation.
+    #[inline]
+    #[must_use]
+    pub const fn has_transform(&self) -> bool {
+        self.transform.is_some()
+    }
+
+    /// Returns the effective filter quality (defaults to Low).
+    #[inline]
+    #[must_use]
+    pub const fn effective_filter_quality(&self) -> crate::painting::FilterQuality {
+        match self.filter_quality {
+            Some(quality) => quality,
+            None => crate::painting::FilterQuality::Low,
+        }
     }
 }
 
@@ -223,28 +278,59 @@ pub struct MaskFilter {
 
 impl MaskFilter {
     /// Creates a new blur mask filter.
+    #[inline]
+    #[must_use]
     pub const fn blur(style: BlurStyle, sigma: f32) -> Self {
         Self { style, sigma }
     }
 
     /// Creates a normal blur with the given sigma.
+    #[inline]
+    #[must_use]
     pub const fn normal(sigma: f32) -> Self {
         Self::blur(BlurStyle::Normal, sigma)
     }
 
     /// Creates a solid blur with the given sigma.
+    #[inline]
+    #[must_use]
     pub const fn solid(sigma: f32) -> Self {
         Self::blur(BlurStyle::Solid, sigma)
     }
 
     /// Creates an outer blur with the given sigma.
+    #[inline]
+    #[must_use]
     pub const fn outer(sigma: f32) -> Self {
         Self::blur(BlurStyle::Outer, sigma)
     }
 
     /// Creates an inner blur with the given sigma.
+    #[inline]
+    #[must_use]
     pub const fn inner(sigma: f32) -> Self {
         Self::blur(BlurStyle::Inner, sigma)
+    }
+
+    /// Returns the blur radius (approximately 2 * sigma).
+    #[inline]
+    #[must_use]
+    pub const fn blur_radius(&self) -> f32 {
+        self.sigma * 2.0
+    }
+
+    /// Returns true if this filter affects the interior of shapes.
+    #[inline]
+    #[must_use]
+    pub const fn affects_interior(&self) -> bool {
+        matches!(self.style, BlurStyle::Normal | BlurStyle::Inner)
+    }
+
+    /// Returns true if this filter affects the exterior of shapes.
+    #[inline]
+    #[must_use]
+    pub const fn affects_exterior(&self) -> bool {
+        matches!(self.style, BlurStyle::Normal | BlurStyle::Outer | BlurStyle::Solid)
     }
 }
 

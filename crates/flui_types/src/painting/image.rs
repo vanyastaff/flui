@@ -60,6 +60,7 @@ impl BoxFit {
     /// Returns `(fitted_size, source_size)` where:
     /// - `fitted_size` is the size the image should be rendered at
     /// - `source_size` is the portion of the source image to use
+    #[must_use]
     pub fn apply(self, input_size: Size, output_size: Size) -> FittedSizes {
         let input_aspect_ratio = if input_size.height != 0.0 {
             input_size.width / input_size.height
@@ -214,6 +215,8 @@ pub struct ImageConfiguration {
 
 impl ImageConfiguration {
     /// Creates a new empty image configuration.
+    #[inline]
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             size: None,
@@ -223,21 +226,47 @@ impl ImageConfiguration {
     }
 
     /// Creates a configuration with the given size.
+    #[inline]
+    #[must_use]
     pub const fn with_size(mut self, size: Size) -> Self {
         self.size = Some(size);
         self
     }
 
     /// Creates a configuration with the given device pixel ratio.
+    #[inline]
+    #[must_use]
     pub const fn with_device_pixel_ratio(mut self, ratio: f32) -> Self {
         self.device_pixel_ratio = Some(ratio);
         self
     }
 
     /// Creates a configuration with the given platform.
+    #[inline]
+    #[must_use]
     pub fn with_platform(mut self, platform: String) -> Self {
         self.platform = Some(platform);
         self
+    }
+
+    /// Returns the effective device pixel ratio (defaults to 1.0).
+    #[inline]
+    #[must_use]
+    pub const fn effective_device_pixel_ratio(&self) -> f32 {
+        match self.device_pixel_ratio {
+            Some(ratio) => ratio,
+            None => 1.0,
+        }
+    }
+
+    /// Returns the logical size in physical pixels.
+    #[inline]
+    #[must_use]
+    pub fn physical_size(&self) -> Option<Size> {
+        self.size.map(|s| Size::new(
+            s.width * self.effective_device_pixel_ratio(),
+            s.height * self.effective_device_pixel_ratio(),
+        ))
     }
 }
 
@@ -276,11 +305,38 @@ pub struct FittedSizes {
 
 impl FittedSizes {
     /// Creates a new fitted sizes struct.
+    #[inline]
+    #[must_use]
     pub const fn new(source: Size, destination: Size) -> Self {
         Self {
             source,
             destination,
         }
+    }
+
+    /// Returns the scale factor from source to destination.
+    #[inline]
+    #[must_use]
+    pub fn scale_factor(&self) -> f32 {
+        if self.source.width > 0.0 {
+            self.destination.width / self.source.width
+        } else {
+            1.0
+        }
+    }
+
+    /// Returns true if the image needs to be scaled.
+    #[inline]
+    #[must_use]
+    pub fn needs_scaling(&self) -> bool {
+        self.source != self.destination
+    }
+
+    /// Returns true if the image will be clipped.
+    #[inline]
+    #[must_use]
+    pub fn will_clip(&self) -> bool {
+        self.destination.width > self.source.width || self.destination.height > self.source.height
     }
 }
 
@@ -328,23 +384,68 @@ pub enum ColorFilter {
 
 impl ColorFilter {
     /// Creates a color filter that applies a color blend mode.
+    #[inline]
+    #[must_use]
     pub const fn mode(color: Color, blend_mode: BlendMode) -> Self {
         ColorFilter::Mode { color, blend_mode }
     }
 
     /// Creates a color filter that applies a matrix transformation.
+    #[inline]
+    #[must_use]
     pub const fn matrix(matrix: [f32; 20]) -> Self {
         ColorFilter::Matrix(matrix)
     }
 
     /// Creates a color filter that converts from linear to sRGB gamma.
+    #[inline]
+    #[must_use]
     pub const fn linear_to_srgb_gamma() -> Self {
         ColorFilter::LinearToSrgbGamma
     }
 
     /// Creates a color filter that converts from sRGB to linear gamma.
+    #[inline]
+    #[must_use]
     pub const fn srgb_to_linear_gamma() -> Self {
         ColorFilter::SrgbToLinearGamma
+    }
+
+    /// Creates a grayscale color filter using luminance.
+    #[inline]
+    #[must_use]
+    pub const fn grayscale() -> Self {
+        #[allow(clippy::excessive_precision)]
+        ColorFilter::Matrix([
+            0.2126, 0.7152, 0.0722, 0.0, 0.0, // R = luminance
+            0.2126, 0.7152, 0.0722, 0.0, 0.0, // G = luminance
+            0.2126, 0.7152, 0.0722, 0.0, 0.0, // B = luminance
+            0.0, 0.0, 0.0, 1.0, 0.0,          // A = unchanged
+        ])
+    }
+
+    /// Creates a sepia tone color filter.
+    #[inline]
+    #[must_use]
+    pub const fn sepia() -> Self {
+        ColorFilter::Matrix([
+            0.393, 0.769, 0.189, 0.0, 0.0,
+            0.349, 0.686, 0.168, 0.0, 0.0,
+            0.272, 0.534, 0.131, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        ])
+    }
+
+    /// Creates an inverted color filter.
+    #[inline]
+    #[must_use]
+    pub const fn invert() -> Self {
+        ColorFilter::Matrix([
+            -1.0, 0.0, 0.0, 0.0, 255.0,
+            0.0, -1.0, 0.0, 0.0, 255.0,
+            0.0, 0.0, -1.0, 0.0, 255.0,
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        ])
     }
 }
 

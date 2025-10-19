@@ -47,13 +47,31 @@ pub enum Clip {
 
 impl Clip {
     /// Returns true if this clip mode requires anti-aliasing.
+    #[inline]
+    #[must_use]
     pub const fn is_anti_aliased(&self) -> bool {
         matches!(self, Clip::AntiAlias | Clip::AntiAliasWithSaveLayer)
     }
 
     /// Returns true if this clip mode saves a layer.
+    #[inline]
+    #[must_use]
     pub const fn saves_layer(&self) -> bool {
         matches!(self, Clip::AntiAliasWithSaveLayer)
+    }
+
+    /// Returns true if this clip mode performs clipping.
+    #[inline]
+    #[must_use]
+    pub const fn clips(&self) -> bool {
+        !matches!(self, Clip::None)
+    }
+
+    /// Returns true if this is the most efficient clip mode.
+    #[inline]
+    #[must_use]
+    pub const fn is_efficient(&self) -> bool {
+        matches!(self, Clip::None | Clip::HardEdge)
     }
 }
 
@@ -97,6 +115,8 @@ pub enum ClipBehavior {
 
 impl ClipBehavior {
     /// Converts this clip behavior to a `Clip` mode.
+    #[inline]
+    #[must_use]
     pub const fn to_clip(self) -> Clip {
         match self {
             ClipBehavior::None => Clip::None,
@@ -104,6 +124,20 @@ impl ClipBehavior {
             ClipBehavior::AntiAlias => Clip::AntiAlias,
             ClipBehavior::AntiAliasWithSaveLayer => Clip::AntiAliasWithSaveLayer,
         }
+    }
+
+    /// Returns true if this behavior performs clipping.
+    #[inline]
+    #[must_use]
+    pub const fn clips(self) -> bool {
+        !matches!(self, ClipBehavior::None)
+    }
+
+    /// Returns true if this behavior uses anti-aliasing.
+    #[inline]
+    #[must_use]
+    pub const fn is_anti_aliased(self) -> bool {
+        matches!(self, ClipBehavior::AntiAlias | ClipBehavior::AntiAliasWithSaveLayer)
     }
 }
 
@@ -154,11 +188,15 @@ pub struct CircularNotchedRectangle {
 
 impl CircularNotchedRectangle {
     /// Creates a new circular notched rectangle.
+    #[inline]
+    #[must_use]
     pub const fn new() -> Self {
         Self { margin: 4.0 }
     }
 
     /// Creates a circular notched rectangle with the given margin.
+    #[inline]
+    #[must_use]
     pub const fn with_margin(margin: f32) -> Self {
         Self { margin }
     }
@@ -248,11 +286,15 @@ pub struct AutomaticNotchedShape<T: NotchedShape> {
 
 impl<T: NotchedShape> AutomaticNotchedShape<T> {
     /// Creates a new automatic notched shape.
+    #[inline]
+    #[must_use]
     pub const fn new(inner: T) -> Self {
         Self { inner, scale: 1.0 }
     }
 
     /// Creates a new automatic notched shape with a custom scale.
+    #[inline]
+    #[must_use]
     pub const fn with_scale(inner: T, scale: f32) -> Self {
         Self { inner, scale }
     }

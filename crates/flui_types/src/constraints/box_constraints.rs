@@ -56,6 +56,8 @@ impl BoxConstraints {
     /// assert_eq!(constraints.min_width, 50.0);
     /// assert_eq!(constraints.max_width, 150.0);
     /// ```
+    #[inline]
+    #[must_use]
     pub const fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
         Self {
             min_width,
@@ -499,6 +501,69 @@ impl BoxConstraints {
             min_height: self.min_height + insets.vertical_total(),
             max_height: self.max_height + insets.vertical_total(),
         }
+    }
+
+    // ===== Helper methods for layout =====
+
+    /// Check if constraints have bounded width (max < infinity).
+    #[inline]
+    #[must_use]
+    pub const fn has_bounded_width(&self) -> bool {
+        self.max_width < f32::INFINITY
+    }
+
+    /// Check if constraints have bounded height (max < infinity).
+    #[inline]
+    #[must_use]
+    pub const fn has_bounded_height(&self) -> bool {
+        self.max_height < f32::INFINITY
+    }
+
+    /// Check if constraints are fully bounded (both width and height).
+    #[inline]
+    #[must_use]
+    pub const fn is_bounded(&self) -> bool {
+        self.has_bounded_width() && self.has_bounded_height()
+    }
+
+    /// Check if constraints have infinite width requirement.
+    #[inline]
+    #[must_use]
+    pub const fn has_infinite_width(&self) -> bool {
+        self.min_width >= f32::INFINITY
+    }
+
+    /// Check if constraints have infinite height requirement.
+    #[inline]
+    #[must_use]
+    pub const fn has_infinite_height(&self) -> bool {
+        self.min_height >= f32::INFINITY
+    }
+
+    /// Clamp another constraint to be within this constraint's bounds.
+    #[inline]
+    #[must_use]
+    pub fn clamp_constraints(&self, other: BoxConstraints) -> BoxConstraints {
+        BoxConstraints {
+            min_width: other.min_width.clamp(self.min_width, self.max_width),
+            max_width: other.max_width.clamp(self.min_width, self.max_width),
+            min_height: other.min_height.clamp(self.min_height, self.max_height),
+            max_height: other.max_height.clamp(self.min_height, self.max_height),
+        }
+    }
+
+    /// Get the width range as a tuple (min, max).
+    #[inline]
+    #[must_use]
+    pub const fn width_range(&self) -> (f32, f32) {
+        (self.min_width, self.max_width)
+    }
+
+    /// Get the height range as a tuple (min, max).
+    #[inline]
+    #[must_use]
+    pub const fn height_range(&self) -> (f32, f32) {
+        (self.min_height, self.max_height)
     }
 }
 

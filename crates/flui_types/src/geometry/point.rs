@@ -3,6 +3,7 @@
 //! This module provides type-safe point types representing absolute positions in 2D space.
 
 use std::fmt;
+use std::ops::{Add, Sub, Mul, Div, Neg};
 
 /// Represents a point in 2D space with absolute coordinates.
 ///
@@ -28,11 +29,15 @@ impl Point {
     };
 
     /// Create a new point at the given coordinates.
+    #[inline]
+    #[must_use]
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
 
     /// Calculate distance from this point to another.
+    #[inline]
+    #[must_use]
     pub fn distance_to(&self, other: impl Into<Point>) -> f32 {
         let other = other.into();
         let dx = other.x - self.x;
@@ -41,6 +46,8 @@ impl Point {
     }
 
     /// Calculate squared distance (faster, avoids sqrt).
+    #[inline]
+    #[must_use]
     pub fn distance_squared_to(&self, other: impl Into<Point>) -> f32 {
         let other = other.into();
         let dx = other.x - self.x;
@@ -49,12 +56,15 @@ impl Point {
     }
 
     /// Calculate the midpoint between this point and another.
+    #[inline]
+    #[must_use]
     pub fn midpoint(&self, other: impl Into<Point>) -> Point {
         let other = other.into();
         Point::new((self.x + other.x) * 0.5, (self.y + other.y) * 0.5)
     }
 
     /// Linear interpolation between two points.
+    #[must_use]
     pub fn lerp(a: impl Into<Point>, b: impl Into<Point>, t: f32) -> Point {
         let a = a.into();
         let b = b.into();
@@ -65,6 +75,8 @@ impl Point {
     }
 
     /// Clamp point to a rectangular region.
+    #[inline]
+    #[must_use]
     pub fn clamp(&self, min: impl Into<Point>, max: impl Into<Point>) -> Point {
         let min = min.into();
         let max = max.into();
@@ -75,11 +87,14 @@ impl Point {
     }
 
     /// Check if point is finite (not NaN or infinity).
-    pub fn is_finite(&self) -> bool {
+    #[inline]
+    #[must_use]
+    pub const fn is_finite(&self) -> bool {
         self.x.is_finite() && self.y.is_finite()
     }
 
     /// Get the minimum of two points (component-wise).
+    #[must_use]
     pub fn min(a: impl Into<Point>, b: impl Into<Point>) -> Point {
         let a = a.into();
         let b = b.into();
@@ -90,6 +105,7 @@ impl Point {
     }
 
     /// Get the maximum of two points (component-wise).
+    #[must_use]
     pub fn max(a: impl Into<Point>, b: impl Into<Point>) -> Point {
         let a = a.into();
         let b = b.into();
@@ -100,6 +116,8 @@ impl Point {
     }
 
     /// Round coordinates to nearest integer.
+    #[inline]
+    #[must_use]
     pub fn round(&self) -> Point {
         Point {
             x: self.x.round(),
@@ -108,6 +126,8 @@ impl Point {
     }
 
     /// Floor coordinates to integer.
+    #[inline]
+    #[must_use]
     pub fn floor(&self) -> Point {
         Point {
             x: self.x.floor(),
@@ -116,11 +136,48 @@ impl Point {
     }
 
     /// Ceil coordinates to integer.
+    #[inline]
+    #[must_use]
     pub fn ceil(&self) -> Point {
         Point {
             x: self.x.ceil(),
             y: self.y.ceil(),
         }
+    }
+
+    /// Returns the magnitude (length) of the vector from origin to this point.
+    #[inline]
+    #[must_use]
+    pub fn magnitude(&self) -> f32 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+
+    /// Returns the squared magnitude (avoids sqrt for performance).
+    #[inline]
+    #[must_use]
+    pub fn magnitude_squared(&self) -> f32 {
+        self.x * self.x + self.y * self.y
+    }
+
+    /// Normalizes this point as a vector (returns unit vector).
+    ///
+    /// Returns `Point::ZERO` if magnitude is zero.
+    #[must_use]
+    pub fn normalize(&self) -> Point {
+        let mag = self.magnitude();
+        if mag > f32::EPSILON {
+            Point::new(self.x / mag, self.y / mag)
+        } else {
+            Point::ZERO
+        }
+    }
+
+    /// Returns the dot product with another point (treating as vectors).
+    #[inline]
+    #[must_use]
+    pub fn dot(&self, other: impl Into<Point>) -> f32 {
+        let other = other.into();
+        self.x * other.x + self.y * other.y
     }
 }
 
@@ -158,6 +215,61 @@ impl From<Point> for [f32; 2] {
 impl fmt::Display for Point {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "({:.1}, {:.1})", self.x, self.y)
+    }
+}
+
+// Math operators
+impl Add for Point {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+impl Sub for Point {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl Mul<f32> for Point {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self::new(self.x * rhs, self.y * rhs)
+    }
+}
+
+impl Mul<Point> for f32 {
+    type Output = Point;
+
+    #[inline]
+    fn mul(self, rhs: Point) -> Self::Output {
+        Point::new(rhs.x * self, rhs.y * self)
+    }
+}
+
+impl Div<f32> for Point {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, rhs: f32) -> Self::Output {
+        Self::new(self.x / rhs, self.y / rhs)
+    }
+}
+
+impl Neg for Point {
+    type Output = Self;
+
+    #[inline]
+    fn neg(self) -> Self::Output {
+        Self::new(-self.x, -self.y)
     }
 }
 
@@ -269,5 +381,60 @@ mod tests {
         assert!(Point::new(10.0, 20.0).is_finite());
         assert!(!Point::INFINITY.is_finite());
         assert!(!Point::new(f32::NAN, 10.0).is_finite());
+    }
+
+    #[test]
+    fn test_point_math_operators() {
+        let p1 = Point::new(10.0, 20.0);
+        let p2 = Point::new(5.0, 8.0);
+
+        // Addition
+        assert_eq!(p1 + p2, Point::new(15.0, 28.0));
+
+        // Subtraction
+        assert_eq!(p1 - p2, Point::new(5.0, 12.0));
+
+        // Multiplication by scalar
+        assert_eq!(p1 * 2.0, Point::new(20.0, 40.0));
+        assert_eq!(2.0 * p1, Point::new(20.0, 40.0));
+
+        // Division by scalar
+        assert_eq!(p1 / 2.0, Point::new(5.0, 10.0));
+
+        // Negation
+        assert_eq!(-p1, Point::new(-10.0, -20.0));
+    }
+
+    #[test]
+    fn test_point_magnitude() {
+        let p = Point::new(3.0, 4.0);
+        assert_eq!(p.magnitude(), 5.0);
+        assert_eq!(p.magnitude_squared(), 25.0);
+    }
+
+    #[test]
+    fn test_point_normalize() {
+        let p = Point::new(3.0, 4.0);
+        let normalized = p.normalize();
+
+        assert!((normalized.magnitude() - 1.0).abs() < 0.0001);
+        assert!((normalized.x - 0.6).abs() < 0.0001);
+        assert!((normalized.y - 0.8).abs() < 0.0001);
+
+        // Zero vector should normalize to zero
+        assert_eq!(Point::ZERO.normalize(), Point::ZERO);
+    }
+
+    #[test]
+    fn test_point_dot_product() {
+        let p1 = Point::new(2.0, 3.0);
+        let p2 = Point::new(4.0, 5.0);
+
+        assert_eq!(p1.dot(p2), 23.0); // 2*4 + 3*5 = 23
+
+        // Perpendicular vectors
+        let p3 = Point::new(1.0, 0.0);
+        let p4 = Point::new(0.0, 1.0);
+        assert_eq!(p3.dot(p4), 0.0);
     }
 }
