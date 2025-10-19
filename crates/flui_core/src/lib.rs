@@ -19,6 +19,11 @@
 //! (new)     (reused)   (reused)
 //! ```
 
+// New modular structure
+pub mod foundation;
+pub mod error;
+
+// Legacy modules (will be moved to new structure)
 pub mod build_context;
 pub mod constraints;
 pub mod element;
@@ -44,16 +49,21 @@ pub mod widget;
 
 
 
+
 // Re-export types from flui_types
 pub use flui_types::{
     Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
     MainAxisSize, Offset, Orientation, Point, Rect, Size, VerticalDirection,
 };
 
-// Re-exports
+// Re-export foundation types
+pub use foundation::{ElementId, Lifecycle, Slot};
+pub use error::{CoreError, Result};
+
+// Re-export legacy types (old API)
 pub use build_context::BuildContext;
 pub use constraints::BoxConstraints;
-pub use element::{ComponentElement, Element, ElementId, RenderObjectElement, StatefulElement};
+pub use element::{ComponentElement, Element, RenderObjectElement, StatefulElement};
 pub use element_tree::ElementTree;
 pub use inherited_widget::{InheritedElement, InheritedWidget};
 pub use leaf_render_object_element::LeafRenderObjectElement;
@@ -72,10 +82,12 @@ pub use widget::{IntoWidget, State, StatefulWidget, StatelessWidget, Widget};
 pub mod prelude {
     pub use crate::build_context::BuildContext;
     pub use crate::constraints::{BoxConstraints, Size};
-    pub use crate::element::{Element, ElementId};
+    pub use crate::element::Element;
+    pub use crate::foundation::ElementId;
     pub use crate::element_tree::ElementTree;
     pub use crate::widget::{IntoWidget, StatelessWidget, Widget};
 }
+
 
 
 

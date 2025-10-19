@@ -364,7 +364,7 @@ mod tests {
         let widget = TestTheme { value: 42 };
         let mut element = InheritedElement::new(widget);
 
-        let parent_id = crate::ElementId(100);
+        let parent_id = crate::ElementId::from_raw(100);
         element.mount(Some(parent_id), 0);
 
         assert_eq!(element.parent(), Some(parent_id));

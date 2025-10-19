@@ -5,40 +5,13 @@
 
 use std::any::Any;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use downcast_rs::{impl_downcast, DowncastSync};
 use flui_foundation::Key;
 use parking_lot::RwLock;
 
-use crate::{BuildContext, ElementTree, RenderObject, RenderObjectWidget, StatelessWidget};
-
-/// Unique identifier for elements in the tree
-///
-/// Similar to Flutter's element identity. Each element gets a unique ID when created.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ElementId(pub u64);
-
-impl ElementId {
-    /// Generate a new unique element ID
-    pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl Default for ElementId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Display for ElementId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ElementId({})", self.0)
-    }
-}
+use crate::{BuildContext, ElementTree, ElementId, RenderObject, RenderObjectWidget, StatelessWidget};
 
 /// Core Element trait - mutable state holder in element tree
 ///
@@ -666,8 +639,8 @@ mod tests {
 
     #[test]
     fn test_element_id_display() {
-        let id = ElementId(42);
-        assert_eq!(format!("{}", id), "ElementId(42)");
+        let id = ElementId::from_raw(42);
+        assert_eq!(format!("{}", id), "#42");
     }
 
     // Test helper for StatefulWidget
@@ -715,7 +688,7 @@ mod tests {
     fn test_stateful_element_mount() {
         let widget = TestStatefulWidget { value: 42 };
         let mut element = StatefulElement::new(widget);
-        let parent_id = ElementId(100);
+        let parent_id = ElementId::from_raw(100);
 
         element.mount(Some(parent_id), 0);
 
@@ -876,7 +849,7 @@ mod tests {
             height: 50.0,
         };
         let mut element = RenderObjectElement::new(widget);
-        let parent_id = ElementId(100);
+        let parent_id = ElementId::from_raw(100);
 
         element.mount(Some(parent_id), 0);
 

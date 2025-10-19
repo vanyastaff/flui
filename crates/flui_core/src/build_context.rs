@@ -483,8 +483,6 @@ impl BuildContext {
     pub fn find_ancestor_render_object_of_type<R: crate::RenderObject + 'static>(
         &self,
     ) -> Option<ElementId> {
-        use crate::RenderObject;
-
         let tree = self.tree.read();
         let mut current_id = self.parent();
 
@@ -704,11 +702,11 @@ mod tests {
     #[test]
     fn test_build_context_element_id() {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let element_id = ElementId(42);
+        let element_id = ElementId::from_raw(42);
 
         let context = BuildContext::new(tree, element_id);
 
-        assert_eq!(context.element_id(), ElementId(42));
+        assert_eq!(context.element_id(), ElementId::from_raw(42));
     }
 
     #[test]

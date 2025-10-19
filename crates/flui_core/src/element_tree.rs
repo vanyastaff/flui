@@ -800,7 +800,7 @@ mod tests {
     fn test_element_tree_mount_child_invalid_parent() {
         let mut tree = ElementTree::new();
 
-        let invalid_parent = ElementId(99999);
+        let invalid_parent = ElementId::from_raw(99999);
         let child_widget = TestWidget::new("child");
 
         let result = tree.mount_child(invalid_parent, Box::new(child_widget), 0);
@@ -1024,7 +1024,7 @@ mod tests {
     fn test_element_tree_update_invalid_element() {
         let mut tree = ElementTree::new();
 
-        let invalid_id = ElementId(99999);
+        let invalid_id = ElementId::from_raw(99999);
         let widget = TestWidget::new("test");
 
         let result = tree.update_element(invalid_id, Box::new(widget));
