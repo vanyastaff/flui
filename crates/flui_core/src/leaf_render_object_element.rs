@@ -346,7 +346,7 @@ mod tests {
         };
         let mut element = LeafRenderObjectElement::new(widget);
 
-        assert_eq!(element.child_ids(), Vec::<ElementId>::new());
+        assert_eq!(element.children(), Vec::<ElementId>::new());
         assert_eq!(element.take_old_child_for_rebuild(), None);
     }
 
@@ -358,12 +358,12 @@ mod tests {
         let mut element = LeafRenderObjectElement::new(widget);
 
         let mut visited = false;
-        element.visit_children(&mut |_| {
+        element.walk_children(&mut |_| {
             visited = true;
         });
         assert!(!visited);
 
-        element.visit_children_mut(&mut |_| {
+        element.walk_children_mut(&mut |_| {
             visited = true;
         });
         assert!(!visited);

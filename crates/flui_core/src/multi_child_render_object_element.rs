@@ -145,7 +145,7 @@ impl<W: MultiChildRenderObjectWidget> Element for MultiChildRenderObjectElement<
         // Unmount all children first
         if let Some(tree) = &self.tree {
             for child_id in self.children.drain(..) {
-                tree.write().unmount_element(child_id);
+                tree.write().remove(child_id);
             }
         }
         // Then clear render object
@@ -203,7 +203,7 @@ impl<W: MultiChildRenderObjectWidget> Element for MultiChildRenderObjectElement<
         if let Some(tree) = &self.tree {
             let tree_guard = tree.read();
             for child_id in &self.children {
-                if let Some(child_element) = tree_guard.get_element(*child_id) {
+                if let Some(child_element) = tree_guard.get(*child_id) {
                     visitor(child_element);
                 }
             }
@@ -214,7 +214,7 @@ impl<W: MultiChildRenderObjectWidget> Element for MultiChildRenderObjectElement<
         if let Some(tree) = &self.tree {
             let mut tree_guard = tree.write();
             for child_id in &self.children {
-                if let Some(child_element) = tree_guard.get_element_mut(*child_id) {
+                if let Some(child_element) = tree_guard.get_mut(*child_id) {
                     visitor(child_element);
                 }
             }
@@ -453,13 +453,13 @@ mod tests {
         };
         let mut element = MultiChildRenderObjectElement::new(widget);
 
-        assert_eq!(element.child_ids(), Vec::<ElementId>::new());
+        assert_eq!(element.children(), Vec::<ElementId>::new());
 
         let child_id1 = ElementId::new();
         let child_id2 = ElementId::new();
         element.set_children(SmallVec::from_vec(vec![child_id1, child_id2]));
 
-        assert_eq!(element.child_ids(), vec![child_id1, child_id2]);
+        assert_eq!(element.children(), vec![child_id1, child_id2]);
     }
 
     #[test]

@@ -18,7 +18,7 @@
 //! impl StatelessWidget for MyWidget {
 //!     fn build(&self, context: &BuildContext) -> Box<dyn Widget> {
 //!         // Access inherited widget data
-//!         let theme = context.depend_on_inherited_widget::<Theme>();
+//!         let theme = context.subscribe_to::<Theme>();
 //!
 //!         // Get size after layout
 //!         if let Some(size) = context.size() {
@@ -26,7 +26,7 @@
 //!         }
 //!
 //!         // Find ancestor widget
-//!         let parent = context.find_ancestor_widget_of_type::<Container>();
+//!         let parent = context.find_ancestor::<Container>();
 //!
 //!         // Build child widgets
 //!         Box::new(Text::new("Hello"))
@@ -158,11 +158,18 @@ impl BuildContext {
     /// # Example
     ///
     /// ```rust,ignore
-    /// context.mark_needs_build();
+    /// context.mark_dirty();
     /// ```
     pub fn mark_needs_build(&self) {
         let mut tree = self.tree_mut();
         tree.mark_element_dirty(self.element_id);
+    }
+
+    /// Mark the current element as needing rebuild - short form
+    ///
+    /// Rust-idiomatic short name. See [mark_needs_build](Self::mark_needs_build).
+    pub fn mark_dirty(&self) {
+        self.mark_needs_build()
     }
 
     /// Get the parent element ID
@@ -172,7 +179,7 @@ impl BuildContext {
     /// The parent element ID, or None if this is the root element
     pub fn parent(&self) -> Option<ElementId> {
         let tree = self.tree();
-        tree.get_element(self.element_id)
+        tree.get(self.element_id)
             .and_then(|element| element.parent())
     }
 
@@ -190,7 +197,7 @@ impl BuildContext {
     /// # Example
     ///
     /// ```rust,ignore
-    /// context.visit_ancestor_elements(&mut |element| {
+    /// context.walk_ancestors(&mut |element| {
     ///     println!("Ancestor: {:?}", element.id());
     ///     true // Continue visiting
     /// });
@@ -203,7 +210,7 @@ impl BuildContext {
         let mut current_id = self.parent();
 
         while let Some(id) = current_id {
-            if let Some(element) = tree.get_element(id) {
+            if let Some(element) = tree.get(id) {
                 if !visitor(element) {
                     break;
                 }
@@ -212,6 +219,16 @@ impl BuildContext {
                 break;
             }
         }
+    }
+
+    /// Visit ancestor elements - short form
+    ///
+    /// Rust-idiomatic short name. See [visit_ancestor_elements](Self::visit_ancestor_elements).
+    pub fn walk_ancestors<F>(&self, visitor: &mut F)
+    where
+        F: FnMut(&dyn Element) -> bool,
+    {
+        self.visit_ancestor_elements(visitor)
     }
 
     /// Find the nearest ancestor widget of a specific type
@@ -230,7 +247,7 @@ impl BuildContext {
     /// # Example
     ///
     /// ```rust,ignore
-    /// if let Some(scaffold) = context.find_ancestor_widget_of_type::<Scaffold>() {
+    /// if let Some(scaffold) = context.find_ancestor::<Scaffold>() {
     ///     // Use scaffold...
     /// }
     /// ```
@@ -239,7 +256,7 @@ impl BuildContext {
 
         let mut current_id = self.parent();
         while let Some(id) = current_id {
-            if let Some(element) = tree.get_element(id) {
+            if let Some(element) = tree.get(id) {
                 // Try to get the widget from the element
                 // Note: This is a simplified version. In a full implementation,
                 // we'd need a way to get the widget from any element type.
@@ -253,6 +270,13 @@ impl BuildContext {
         }
 
         None
+    }
+
+    /// Find the nearest ancestor widget - short form
+    ///
+    /// Rust-idiomatic short name. See [find_ancestor_widget_of_type](Self::find_ancestor_widget_of_type).
+    pub fn find_ancestor<W: Widget + 'static>(&self) -> Option<W> {
+        self.find_ancestor_widget_of_type()
     }
 
     /// Find the nearest ancestor element of a specific type
@@ -270,7 +294,7 @@ impl BuildContext {
     /// # Example
     ///
     /// ```rust,ignore
-    /// if let Some(element) = context.find_ancestor_element_of_type::<RenderObjectElement>() {
+    /// if let Some(element) = context.find_ancestor_element::<RenderObjectElement>() {
     ///     // Use element...
     /// }
     /// ```
@@ -280,7 +304,7 @@ impl BuildContext {
 
         let mut current_id = self.parent();
         while let Some(id) = current_id {
-            if let Some(element) = tree.get_element(id) {
+            if let Some(element) = tree.get(id) {
                 if element.is::<E>() {
                     result = Some(id);
                     break;
@@ -292,6 +316,13 @@ impl BuildContext {
         }
 
         result
+    }
+
+    /// Find the nearest ancestor element - short form
+    ///
+    /// Rust-idiomatic short name. See [find_ancestor_element_of_type](Self::find_ancestor_element_of_type).
+    pub fn find_ancestor_element<E: Element + 'static>(&self) -> Option<ElementId> {
+        self.find_ancestor_element_of_type::<E>()
     }
 
     /// Access an InheritedWidget's data from the tree
@@ -313,7 +344,7 @@ impl BuildContext {
     /// # Example
     ///
     /// ```rust,ignore
-    /// if let Some(theme) = context.depend_on_inherited_widget::<Theme>() {
+    /// if let Some(theme) = context.subscribe_to::<Theme>() {
     ///     let color = theme.data().primary_color;
     /// }
     /// ```
@@ -325,6 +356,13 @@ impl BuildContext {
     /// InheritedWidget changes.
     pub fn depend_on_inherited_widget<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
         self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), true)
+    }
+
+    /// Access an InheritedWidget's data from the tree - short form
+    ///
+    /// Rust-idiomatic short name. See [depend_on_inherited_widget](Self::depend_on_inherited_widget).
+    pub fn subscribe_to<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
+        self.depend_on_inherited_widget()
     }
 
     /// Access an InheritedWidget without establishing a dependency
@@ -345,6 +383,13 @@ impl BuildContext {
         self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), false)
     }
 
+    /// Access an InheritedWidget without establishing a dependency - short form
+    ///
+    /// Rust-idiomatic short name. See [get_inherited_widget](Self::get_inherited_widget).
+    pub fn find_inherited<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
+        self.get_inherited_widget()
+    }
+
     /// Internal implementation for getting inherited widgets
     fn get_inherited_widget_impl<W: InheritedWidget + Clone + 'static>(
         &self,
@@ -358,7 +403,7 @@ impl BuildContext {
 
         // Walk up the tree looking for InheritedElement<W>
         while let Some(id) = current_id {
-            if let Some(element) = tree.get_element(id) {
+            if let Some(element) = tree.get(id) {
                 // Try to downcast to InheritedElement<W>
                 if let Some(inherited_elem) = element.downcast_ref::<InheritedElement<W>>() {
                     // Found matching InheritedWidget!
@@ -371,7 +416,7 @@ impl BuildContext {
                         // Register this element as dependent
                         let mut tree_mut = self.tree.write();
                         if let Some(inherited_elem_mut) = tree_mut
-                            .get_element_mut(id)
+                            .get_mut(id)
                             .and_then(|e| e.downcast_mut::<InheritedElement<W>>())
                         {
                             inherited_elem_mut.register_dependent(self.element_id);
@@ -380,7 +425,7 @@ impl BuildContext {
                         // Re-acquire read lock to get widget
                         let tree = self.tree.read();
                         if let Some(inherited_elem) = tree
-                            .get_element(id)
+                            .get(id)
                             .and_then(|e| e.downcast_ref::<InheritedElement<W>>())
                         {
                             return Some(inherited_elem.widget().clone());
@@ -419,7 +464,7 @@ impl BuildContext {
     /// ```
     pub fn size(&self) -> Option<Size> {
         let tree = self.tree.read();
-        let element = tree.get_element(self.element_id)?;
+        let element = tree.get(self.element_id)?;
         let render_object = element.render_object()?;
         Some(render_object.size())
     }
@@ -447,7 +492,7 @@ impl BuildContext {
     /// reference to the RenderObject. Use the ElementTree to access the actual object.
     pub fn find_render_object(&self) -> Option<ElementId> {
         let tree = self.tree.read();
-        let element = tree.get_element(self.element_id)?;
+        let element = tree.get(self.element_id)?;
 
         // Check if this element has a render object
         if element.render_object().is_some() {
@@ -476,7 +521,7 @@ impl BuildContext {
     /// ```rust,ignore
     /// use flui_rendering::RenderPadding;
     ///
-    /// if let Some(padding_id) = context.find_ancestor_render_object_of_type::<RenderPadding>() {
+    /// if let Some(padding_id) = context.find_ancestor_render::<RenderPadding>() {
     ///     // Found ancestor RenderPadding
     /// }
     /// ```
@@ -487,7 +532,7 @@ impl BuildContext {
         let mut current_id = self.parent();
 
         while let Some(id) = current_id {
-            if let Some(element) = tree.get_element(id) {
+            if let Some(element) = tree.get(id) {
                 // Check if this element has a RenderObject of type R
                 if let Some(render_object) = element.render_object() {
                     if render_object.is::<R>() {
@@ -515,7 +560,7 @@ impl BuildContext {
     /// # Example
     ///
     /// ```rust,ignore
-    /// context.visit_child_elements(&mut |child| {
+    /// context.walk_children(&mut |child| {
     ///     println!("Child: {:?}", child.id());
     /// });
     /// ```
@@ -525,17 +570,27 @@ impl BuildContext {
     {
         let tree = self.tree.read();
 
-        if let Some(element) = tree.get_element(self.element_id) {
+        if let Some(element) = tree.get(self.element_id) {
             // Get child IDs from element
-            let child_ids = element.child_ids();
+            let child_ids = element.children();
 
             // Visit each child
             for child_id in child_ids {
-                if let Some(child_element) = tree.get_element(child_id) {
+                if let Some(child_element) = tree.get(child_id) {
                     visitor(child_element);
                 }
             }
         }
+    }
+
+    /// Visit child elements - short form
+    ///
+    /// Rust-idiomatic short name. See [visit_child_elements](Self::visit_child_elements).
+    pub fn walk_children<F>(&self, visitor: &mut F)
+    where
+        F: FnMut(&dyn Element),
+    {
+        self.visit_child_elements(visitor)
     }
 
     /// Check if this element is currently mounted in the tree
@@ -566,7 +621,7 @@ impl BuildContext {
     /// true if the element still exists in the tree, false otherwise
     pub fn is_valid(&self) -> bool {
         let tree = self.tree();
-        tree.get_element(self.element_id).is_some()
+        tree.get(self.element_id).is_some()
     }
 
     /// Get the InheritedElement for a specific InheritedWidget type without creating a dependency
@@ -587,7 +642,7 @@ impl BuildContext {
     ///
     /// ```rust,ignore
     /// // One-time access to Theme without dependency
-    /// if let Some(theme_id) = context.get_element_for_inherited_widget_of_exact_type::<Theme>() {
+    /// if let Some(theme_id) = context.find_inherited_element::<Theme>() {
     ///     println!("Found Theme element: {}", theme_id);
     /// }
     /// ```
@@ -605,7 +660,7 @@ impl BuildContext {
         let mut current_id = self.parent();
 
         while let Some(id) = current_id {
-            if let Some(element) = tree.get_element(id) {
+            if let Some(element) = tree.get(id) {
                 // Try to downcast to InheritedElement<W>
                 if let Some(_inherited_elem) = element.downcast_ref::<InheritedElement<W>>() {
                     return Some(id);
@@ -629,7 +684,7 @@ impl BuildContext {
     pub fn debug_info(&self) -> String {
         let tree = self.tree();
 
-        if let Some(element) = tree.get_element(self.element_id) {
+        if let Some(element) = tree.get(self.element_id) {
             let parent_str = match element.parent() {
                 Some(parent_id) => format!("Some({})", parent_id),
                 None => "None (root)".to_string(),
@@ -717,7 +772,7 @@ mod tests {
         let widget = TestWidget::new("root");
         let element_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(Box::new(widget))
+            tree_guard.set_root(Box::new(widget))
         };
 
         let context = BuildContext::new(Arc::clone(&tree), element_id);
@@ -733,8 +788,8 @@ mod tests {
         let widget = TestWidget::new("root");
         let element_id = {
             let mut tree_guard = tree.write();
-            let id = tree_guard.mount_root(Box::new(widget));
-            tree_guard.unmount_element(id);
+            let id = tree_guard.set_root(Box::new(widget));
+            tree_guard.remove(id);
             id
         };
 
@@ -750,8 +805,8 @@ mod tests {
         // Mount root and child
         let (root_id, child_id) = {
             let mut tree_guard = tree.write();
-            let root_id = tree_guard.mount_root(Box::new(TestWidget::new("root")));
-            let child_id = tree_guard.mount_child(root_id, Box::new(TestWidget::new("child")), 0).unwrap();
+            let root_id = tree_guard.set_root(Box::new(TestWidget::new("root")));
+            let child_id = tree_guard.insert_child(root_id, Box::new(TestWidget::new("child")), 0).unwrap();
             (root_id, child_id)
         };
 
@@ -772,23 +827,23 @@ mod tests {
         let widget = TestWidget::new("root");
         let element_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(Box::new(widget))
+            tree_guard.set_root(Box::new(widget))
         };
 
         // Clear dirty state
         {
             let mut tree_guard = tree.write();
-            tree_guard.rebuild_dirty_elements();
+            tree_guard.rebuild();
         }
 
         let context = BuildContext::new(Arc::clone(&tree), element_id);
 
         // Mark needs build
-        context.mark_needs_build();
+        context.mark_dirty();
 
         // Check if marked dirty
         let tree_guard = tree.read();
-        assert!(tree_guard.has_dirty_elements());
+        assert!(tree_guard.has_dirty());
     }
 
     #[test]
@@ -798,9 +853,9 @@ mod tests {
         // Mount root -> child -> grandchild
         let (root_id, child_id, grandchild_id) = {
             let mut tree_guard = tree.write();
-            let root_id = tree_guard.mount_root(Box::new(TestWidget::new("root")));
-            let child_id = tree_guard.mount_child(root_id, Box::new(TestWidget::new("child")), 0).unwrap();
-            let grandchild_id = tree_guard.mount_child(child_id, Box::new(TestWidget::new("grandchild")), 0).unwrap();
+            let root_id = tree_guard.set_root(Box::new(TestWidget::new("root")));
+            let child_id = tree_guard.insert_child(root_id, Box::new(TestWidget::new("child")), 0).unwrap();
+            let grandchild_id = tree_guard.insert_child(child_id, Box::new(TestWidget::new("grandchild")), 0).unwrap();
             (root_id, child_id, grandchild_id)
         };
 
@@ -808,7 +863,7 @@ mod tests {
 
         // Visit ancestors
         let mut visited = Vec::new();
-        grandchild_context.visit_ancestor_elements(&mut |element| {
+        grandchild_context.walk_ancestors(&mut |element| {
             visited.push(element.id());
             true
         });
@@ -823,9 +878,9 @@ mod tests {
         // Mount root -> child -> grandchild
         let (_root_id, child_id, grandchild_id) = {
             let mut tree_guard = tree.write();
-            let root_id = tree_guard.mount_root(Box::new(TestWidget::new("root")));
-            let child_id = tree_guard.mount_child(root_id, Box::new(TestWidget::new("child")), 0).unwrap();
-            let grandchild_id = tree_guard.mount_child(child_id, Box::new(TestWidget::new("grandchild")), 0).unwrap();
+            let root_id = tree_guard.set_root(Box::new(TestWidget::new("root")));
+            let child_id = tree_guard.insert_child(root_id, Box::new(TestWidget::new("child")), 0).unwrap();
+            let grandchild_id = tree_guard.insert_child(child_id, Box::new(TestWidget::new("grandchild")), 0).unwrap();
             (root_id, child_id, grandchild_id)
         };
 
@@ -833,7 +888,7 @@ mod tests {
 
         // Visit ancestors but stop at first one
         let mut visited = Vec::new();
-        grandchild_context.visit_ancestor_elements(&mut |element| {
+        grandchild_context.walk_ancestors(&mut |element| {
             visited.push(element.id());
             false // Stop immediately
         });
@@ -848,7 +903,7 @@ mod tests {
         let widget = TestWidget::new("root");
         let element_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(Box::new(widget))
+            tree_guard.set_root(Box::new(widget))
         };
 
         let context = BuildContext::new(Arc::clone(&tree), element_id);
@@ -892,7 +947,7 @@ mod tests {
         let widget = TestWidget::new("root");
         let element_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(Box::new(widget))
+            tree_guard.set_root(Box::new(widget))
         };
 
         let context = BuildContext::new(Arc::clone(&tree), element_id);
@@ -903,7 +958,7 @@ mod tests {
         // Unmount
         {
             let mut tree_guard = tree.write();
-            tree_guard.unmount_element(element_id);
+            tree_guard.remove(element_id);
         }
 
         // Should not be mounted
@@ -926,15 +981,15 @@ mod tests {
         // Note: ComponentElement only supports single child through rebuild()
         let (root_id, child_id) = {
             let mut tree_guard = tree.write();
-            let root_id = tree_guard.mount_root(Box::new(TestWidget::new("root")));
+            let root_id = tree_guard.set_root(Box::new(TestWidget::new("root")));
 
             // Rebuild to create child
-            tree_guard.mark_element_dirty(root_id);
-            tree_guard.rebuild_dirty_elements();
+            tree_guard.mark_dirty(root_id);
+            tree_guard.rebuild();
 
             // Get the child that was created by build()
-            let child_ids = tree_guard.get_element(root_id)
-                .map(|e| e.child_ids())
+            let child_ids = tree_guard.get(root_id)
+                .map(|e| e.children())
                 .unwrap_or_default();
 
             let child_id = child_ids.first().copied();
@@ -945,7 +1000,7 @@ mod tests {
 
         // Visit children
         let mut visited = Vec::new();
-        root_context.visit_child_elements(&mut |child| {
+        root_context.walk_children(&mut |child| {
             visited.push(child.id());
         });
 
@@ -966,14 +1021,14 @@ mod tests {
         // Mount leaf widget
         let element_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(Box::new(TestWidget::new("leaf")))
+            tree_guard.set_root(Box::new(TestWidget::new("leaf")))
         };
 
         let context = BuildContext::new(Arc::clone(&tree), element_id);
 
         // Visit children (should be none)
         let mut visited = 0;
-        context.visit_child_elements(&mut |_| {
+        context.walk_children(&mut |_| {
             visited += 1;
         });
 

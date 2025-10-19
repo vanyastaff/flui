@@ -83,9 +83,23 @@ pub trait Element: DowncastSync + fmt::Debug {
         // Default: no children
     }
 
+    /// Visit child elements (read-only) - short form
+    ///
+    /// Rust-idiomatic short name. See [visit_children](Self::visit_children).
+    fn walk_children(&self, visitor: &mut dyn FnMut(&dyn Element)) {
+        self.visit_children(visitor)
+    }
+
     /// Visit child elements (mutable)
     fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn Element)) {
         // Default: no children
+    }
+
+    /// Visit child elements (mutable) - short form
+    ///
+    /// Rust-idiomatic short name. See [visit_children_mut](Self::visit_children_mut).
+    fn walk_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn Element)) {
+        self.visit_children_mut(visitor)
     }
 
     /// Set tree reference for ComponentElements
@@ -144,6 +158,13 @@ pub trait Element: DowncastSync + fmt::Debug {
     /// Returns a Vec of child element IDs.
     fn child_ids(&self) -> Vec<ElementId> {
         Vec::new() // Default: no children
+    }
+
+    /// Get child element IDs - short form
+    ///
+    /// Rust-idiomatic short name. See [child_ids](Self::child_ids).
+    fn children(&self) -> Vec<ElementId> {
+        self.child_ids()
     }
 }
 
@@ -242,7 +263,7 @@ impl<W: StatelessWidget> Element for ComponentElement<W> {
         if let Some(child_id) = self.child.take() {
             if let Some(tree) = &self.tree {
                 let mut tree_guard = tree.write();
-                tree_guard.unmount_element(child_id);
+                tree_guard.remove(child_id);
             }
         }
     }
@@ -283,7 +304,7 @@ impl<W: StatelessWidget> Element for ComponentElement<W> {
         if let Some(child_id) = self.child {
             if let Some(tree) = &self.tree {
                 let tree_guard = tree.read();
-                if let Some(child_element) = tree_guard.get_element(child_id) {
+                if let Some(child_element) = tree_guard.get(child_id) {
                     visitor(child_element);
                 }
             }
@@ -294,7 +315,7 @@ impl<W: StatelessWidget> Element for ComponentElement<W> {
         if let Some(child_id) = self.child {
             if let Some(tree) = &self.tree {
                 let mut tree_guard = tree.write();
-                if let Some(child_element) = tree_guard.get_element_mut(child_id) {
+                if let Some(child_element) = tree_guard.get_mut(child_id) {
                     visitor(child_element);
                 }
             }
@@ -388,7 +409,7 @@ impl Element for StatefulElement {
         // Unmount child first
         if let Some(child_id) = self.child.take() {
             if let Some(tree) = &self.tree {
-                tree.write().unmount_element(child_id);
+                tree.write().remove(child_id);
             }
         }
 

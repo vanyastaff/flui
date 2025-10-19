@@ -239,10 +239,10 @@ pub trait State: DowncastSync + fmt::Debug {
     /// Marks the element as dirty so it will rebuild on the next frame.
     ///
     /// Note: This method is deprecated. Use `BuildContext::mark_needs_build()` instead.
-    /// State objects should call `context.mark_needs_build()` after modifying state.
+    /// State objects should call `context.mark_dirty()` after modifying state.
     #[deprecated(note = "Use BuildContext::mark_needs_build() instead")]
     fn mark_needs_build(&mut self) {
-        // No-op: Users should call context.mark_needs_build() directly
+        // No-op: Users should call context.mark_dirty() directly
     }
 }
 

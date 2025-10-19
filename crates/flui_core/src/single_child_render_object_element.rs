@@ -124,7 +124,7 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         // Unmount child first
         if let Some(child_id) = self.child.take() {
             if let Some(tree) = &self.tree {
-                tree.write().unmount_element(child_id);
+                tree.write().remove(child_id);
             }
         }
         // Then clear render object
@@ -178,7 +178,7 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         if let Some(child_id) = self.child {
             if let Some(tree) = &self.tree {
                 let tree_guard = tree.read();
-                if let Some(child_element) = tree_guard.get_element(child_id) {
+                if let Some(child_element) = tree_guard.get(child_id) {
                     visitor(child_element);
                 }
             }
@@ -189,7 +189,7 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         if let Some(child_id) = self.child {
             if let Some(tree) = &self.tree {
                 let mut tree_guard = tree.write();
-                if let Some(child_element) = tree_guard.get_element_mut(child_id) {
+                if let Some(child_element) = tree_guard.get_mut(child_id) {
                     visitor(child_element);
                 }
             }
@@ -439,10 +439,10 @@ mod tests {
         };
         let mut element = SingleChildRenderObjectElement::new(widget);
 
-        assert_eq!(element.child_ids(), Vec::<ElementId>::new());
+        assert_eq!(element.children(), Vec::<ElementId>::new());
 
         let child_id = ElementId::new();
         element.set_child(child_id);
-        assert_eq!(element.child_ids(), vec![child_id]);
+        assert_eq!(element.children(), vec![child_id]);
     }
 }

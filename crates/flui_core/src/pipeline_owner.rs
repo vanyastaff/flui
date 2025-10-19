@@ -16,7 +16,7 @@
 //! use flui_core::{PipelineOwner, Widget};
 //!
 //! let mut pipeline = PipelineOwner::new();
-//! pipeline.mount_root(Box::new(MyApp::new()));
+//! pipeline.set_root(Box::new(MyApp::new()));
 //!
 //! // Each frame:
 //! pipeline.flush_build(); // Rebuild dirty widgets
@@ -99,6 +99,13 @@ impl PipelineOwner {
         id
     }
 
+    /// Mount the root widget - short form
+    ///
+    /// Rust-idiomatic short name. See [mount_root](Self::mount_root).
+    pub fn set_root(&mut self, root_widget: Box<dyn Widget>) -> ElementId {
+        self.mount_root(root_widget)
+    }
+
     /// Flush the build phase
     ///
     /// Rebuilds all dirty elements. This should be called before layout.
@@ -112,7 +119,7 @@ impl PipelineOwner {
         }
 
         let mut tree_guard = self.tree.write();
-        tree_guard.rebuild_dirty_elements();
+        tree_guard.rebuild();
         let remaining = tree_guard.dirty_element_count();
         tracing::debug!("PipelineOwner::flush_build: remaining dirty after rebuild: {}", remaining);
     }

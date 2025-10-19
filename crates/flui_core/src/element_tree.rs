@@ -27,10 +27,10 @@
 //!
 //! // Mount root widget
 //! let root_widget = MyApp::new();
-//! tree.mount_root(Box::new(root_widget));
+//! tree.set_root(Box::new(root_widget));
 //!
 //! // Process dirty elements
-//! tree.rebuild_dirty_elements();
+//! tree.rebuild();
 //! ```
 
 use std::collections::{HashMap, VecDeque};
@@ -57,13 +57,13 @@ use crate::{Element, ElementId, Widget};
 /// let mut tree = ElementTree::new();
 ///
 /// // Mount root
-/// tree.mount_root(Box::new(MyApp::new()));
+/// tree.set_root(Box::new(MyApp::new()));
 ///
 /// // Mark element dirty (e.g., from setState)
-/// tree.mark_element_dirty(element_id);
+/// tree.mark_dirty(element_id);
 ///
 /// // Rebuild all dirty elements
-/// tree.rebuild_dirty_elements();
+/// tree.rebuild();
 /// ```
 #[derive(Debug)]
 pub struct ElementTree {
@@ -150,7 +150,7 @@ impl ElementTree {
 
     /// Find RenderObject starting from given element ID (immutable)
     fn find_render_object(&self, element_id: ElementId) -> Option<&dyn crate::RenderObject> {
-        let element = self.get_element(element_id)?;
+        let element = self.get(element_id)?;
 
         // Check if this element has a RenderObject
         if let Some(render_object) = element.render_object() {
@@ -158,7 +158,7 @@ impl ElementTree {
         }
 
         // If not, search in children - get child IDs without locking
-        let child_ids = element.child_ids();
+        let child_ids = element.children();
 
         // Search children recursively
         for child_id in child_ids {
@@ -188,7 +188,7 @@ impl ElementTree {
         // Collect child IDs without acquiring locks
         let child_ids: Vec<ElementId> = {
             let element = self.elements.get(&element_id)?;
-            element.child_ids()
+            element.children()
         };
 
         // Search children - only search first child for now
@@ -217,7 +217,7 @@ impl ElementTree {
     ///
     /// ```rust,ignore
     /// let mut tree = ElementTree::new();
-    /// let root_id = tree.mount_root(Box::new(MyApp::new()));
+    /// let root_id = tree.set_root(Box::new(MyApp::new()));
     /// assert_eq!(tree.root(), Some(root_id));
     /// ```
     pub fn mount_root(&mut self, widget: Box<dyn Widget>) -> ElementId {
@@ -241,6 +241,13 @@ impl ElementTree {
         self.mark_element_dirty(element_id);
 
         element_id
+    }
+
+    /// Mount a widget as the root of the tree - short form
+    ///
+    /// Rust-idiomatic short name. See [mount_root](Self::mount_root).
+    pub fn set_root(&mut self, widget: Box<dyn Widget>) -> ElementId {
+        self.mount_root(widget)
     }
 
     /// Set tree reference for an element
@@ -278,6 +285,13 @@ impl ElementTree {
         self.elements.get(&id).map(|e| e.as_ref())
     }
 
+    /// Get an element by ID (immutable) - short form
+    ///
+    /// Rust-idiomatic short name. See [get_element](Self::get_element).
+    pub fn get(&self, id: ElementId) -> Option<&dyn Element> {
+        self.get_element(id)
+    }
+
     /// Get an element by ID (mutable)
     ///
     /// # Parameters
@@ -289,6 +303,13 @@ impl ElementTree {
     /// Mutable reference to the element, or `None` if not found
     pub fn get_element_mut(&mut self, id: ElementId) -> Option<&mut dyn Element> {
         self.elements.get_mut(&id).map(|e| e.as_mut())
+    }
+
+    /// Get an element by ID (mutable) - short form
+    ///
+    /// Rust-idiomatic short name. See [get_element_mut](Self::get_element_mut).
+    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn Element> {
+        self.get_element_mut(id)
     }
 
     /// Mount a child element under a parent
@@ -308,7 +329,7 @@ impl ElementTree {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let child_id = tree.mount_child(parent_id, Box::new(Text::new("Hello")), 0);
+    /// let child_id = tree.insert_child(parent_id, Box::new(Text::new("Hello")), 0);
     /// ```
     pub fn mount_child(
         &mut self,
@@ -337,6 +358,18 @@ impl ElementTree {
         Some(element_id)
     }
 
+    /// Mount a child element under a parent - short form
+    ///
+    /// Rust-idiomatic short name. See [mount_child](Self::mount_child).
+    pub fn insert_child(
+        &mut self,
+        parent_id: ElementId,
+        widget: Box<dyn Widget>,
+        slot: usize,
+    ) -> Option<ElementId> {
+        self.mount_child(parent_id, widget, slot)
+    }
+
     /// Update an element with a new widget
     ///
     /// If the widget can update the existing element (same type and key), the element
@@ -357,7 +390,7 @@ impl ElementTree {
     ///
     /// ```rust,ignore
     /// // Update with new widget
-    /// tree.update_element(element_id, Box::new(Text::new("New text")))?;
+    /// tree.update(element_id, Box::new(Text::new("New text")))?;
     /// ```
     pub fn update_element(
         &mut self,
@@ -391,6 +424,17 @@ impl ElementTree {
         Ok(element_id)
     }
 
+    /// Update an element with a new widget - short form
+    ///
+    /// Rust-idiomatic short name. See [update_element](Self::update_element).
+    pub fn update(
+        &mut self,
+        element_id: ElementId,
+        new_widget: Box<dyn Widget>,
+    ) -> Result<ElementId, ()> {
+        self.update_element(element_id, new_widget)
+    }
+
     /// Unmount an element and all its descendants
     ///
     /// Removes the element from the tree and calls unmount() to clean up resources.
@@ -402,7 +446,7 @@ impl ElementTree {
     /// # Example
     ///
     /// ```rust,ignore
-    /// tree.unmount_element(element_id);
+    /// tree.remove(element_id);
     /// ```
     pub fn unmount_element(&mut self, element_id: ElementId) {
         // Collect child IDs first (all elements that have this element as parent)
@@ -433,6 +477,13 @@ impl ElementTree {
         }
     }
 
+    /// Unmount an element and all its descendants - short form
+    ///
+    /// Rust-idiomatic short name. See [unmount_element](Self::unmount_element).
+    pub fn remove(&mut self, element_id: ElementId) {
+        self.unmount_element(element_id)
+    }
+
     /// Mark an element as dirty (needs rebuild)
     ///
     /// Adds the element to the dirty queue for rebuilding. The element will be
@@ -446,10 +497,10 @@ impl ElementTree {
     ///
     /// ```rust,ignore
     /// // Mark element dirty (e.g., from setState)
-    /// tree.mark_element_dirty(element_id);
+    /// tree.mark_dirty(element_id);
     ///
     /// // Later, rebuild all dirty elements
-    /// tree.rebuild_dirty_elements();
+    /// tree.rebuild();
     /// ```
     pub fn mark_element_dirty(&mut self, element_id: ElementId) {
         // Don't add duplicates
@@ -463,6 +514,13 @@ impl ElementTree {
         }
     }
 
+    /// Mark an element as dirty (needs rebuild) - short form
+    ///
+    /// Rust-idiomatic short name. See [mark_element_dirty](Self::mark_element_dirty).
+    pub fn mark_dirty(&mut self, element_id: ElementId) {
+        self.mark_element_dirty(element_id)
+    }
+
     /// Check if there are any dirty elements
     ///
     /// # Returns
@@ -470,6 +528,13 @@ impl ElementTree {
     /// `true` if there are elements that need rebuilding, `false` otherwise
     pub fn has_dirty_elements(&self) -> bool {
         !self.dirty_elements.is_empty()
+    }
+
+    /// Check if there are any dirty elements - short form
+    ///
+    /// Rust-idiomatic short name. See [has_dirty_elements](Self::has_dirty_elements).
+    pub fn has_dirty(&self) -> bool {
+        self.has_dirty_elements()
     }
 
     /// Get the number of dirty elements
@@ -496,11 +561,11 @@ impl ElementTree {
     ///
     /// ```rust,ignore
     /// // Mark some elements dirty
-    /// tree.mark_element_dirty(element1);
-    /// tree.mark_element_dirty(element2);
+    /// tree.mark_dirty(element1);
+    /// tree.mark_dirty(element2);
     ///
     /// // Rebuild them all
-    /// tree.rebuild_dirty_elements();
+    /// tree.rebuild();
     /// ```
     pub fn rebuild_dirty_elements(&mut self) {
         if self.building {
@@ -565,12 +630,12 @@ impl ElementTree {
 
             // Now unmount the old child (after dropping the element reference)
             if let Some(old_id) = old_child_id {
-                self.unmount_element(old_id);
+                self.remove(old_id);
             }
 
             // Mount children that were returned by rebuild
             for (parent_id, child_widget, slot) in children_to_mount {
-                if let Some(new_child_id) = self.mount_child(parent_id, child_widget, slot) {
+                if let Some(new_child_id) = self.insert_child(parent_id, child_widget, slot) {
                     // Set tree reference for the new child
                     if let Some(tree_arc) = self.tree_ref.clone() {
                         self.set_element_tree_ref(new_child_id, tree_arc);
@@ -592,6 +657,13 @@ impl ElementTree {
             rebuilds_performed,
             remaining
         );
+    }
+
+    /// Rebuild all dirty elements - short form
+    ///
+    /// Rust-idiomatic short name. See [rebuild_dirty_elements](Self::rebuild_dirty_elements).
+    pub fn rebuild(&mut self) {
+        self.rebuild_dirty_elements()
     }
 
     /// Get the total number of elements in the tree
@@ -616,7 +688,7 @@ impl ElementTree {
     /// ```
     pub fn clear(&mut self) {
         if let Some(root_id) = self.root {
-            self.unmount_element(root_id);
+            self.remove(root_id);
         }
 
         self.elements.clear();
@@ -681,7 +753,7 @@ impl ElementTree {
             while i < element_ids.len() {
                 let current_id = element_ids[i];
                 if let Some(element) = self.elements.get(&current_id) {
-                    element.visit_children(&mut |child| {
+                    element.walk_children(&mut |child| {
                         element_ids.push(child.id());
                     });
                 }
@@ -706,7 +778,7 @@ impl ElementTree {
         visitor(element);
 
         // Visit children
-        element.visit_children(&mut |child| {
+        element.walk_children(&mut |child| {
             self.visit_element_recursive(child, visitor);
         });
     }
@@ -746,7 +818,7 @@ mod tests {
         let tree = ElementTree::new();
         assert!(!tree.has_root());
         assert_eq!(tree.element_count(), 0);
-        assert!(!tree.has_dirty_elements());
+        assert!(!tree.has_dirty());
     }
 
     #[test]
@@ -754,12 +826,12 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(widget));
+        let root_id = tree.set_root(Box::new(widget));
 
         assert!(tree.has_root());
         assert_eq!(tree.root(), Some(root_id));
         assert_eq!(tree.element_count(), 1);
-        assert!(tree.has_dirty_elements()); // Newly mounted elements are dirty
+        assert!(tree.has_dirty()); // Newly mounted elements are dirty
     }
 
     #[test]
@@ -767,14 +839,14 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(widget));
+        let root_id = tree.set_root(Box::new(widget));
 
         // Test get_element
-        let element = tree.get_element(root_id).unwrap();
+        let element = tree.get(root_id).unwrap();
         assert_eq!(element.id(), root_id);
 
         // Test get_element_mut
-        let element_mut = tree.get_element_mut(root_id).unwrap();
+        let element_mut = tree.get_mut(root_id).unwrap();
         assert_eq!(element_mut.id(), root_id);
     }
 
@@ -783,16 +855,16 @@ mod tests {
         let mut tree = ElementTree::new();
         let root_widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(root_widget));
+        let root_id = tree.set_root(Box::new(root_widget));
 
         // Mount a child
         let child_widget = TestWidget::new("child");
-        let child_id = tree.mount_child(root_id, Box::new(child_widget), 0);
+        let child_id = tree.insert_child(root_id, Box::new(child_widget), 0);
 
         assert!(child_id.is_some());
         assert_eq!(tree.element_count(), 2);
 
-        let child = tree.get_element(child_id.unwrap()).unwrap();
+        let child = tree.get(child_id.unwrap()).unwrap();
         assert_eq!(child.parent(), Some(root_id));
     }
 
@@ -803,7 +875,7 @@ mod tests {
         let invalid_parent = ElementId::from_raw(99999);
         let child_widget = TestWidget::new("child");
 
-        let result = tree.mount_child(invalid_parent, Box::new(child_widget), 0);
+        let result = tree.insert_child(invalid_parent, Box::new(child_widget), 0);
 
         assert!(result.is_none());
         assert_eq!(tree.element_count(), 0);
@@ -814,14 +886,14 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(widget));
+        let root_id = tree.set_root(Box::new(widget));
         assert_eq!(tree.element_count(), 1);
 
-        tree.unmount_element(root_id);
+        tree.remove(root_id);
 
         assert!(!tree.has_root());
         assert_eq!(tree.element_count(), 0);
-        assert!(tree.get_element(root_id).is_none());
+        assert!(tree.get(root_id).is_none());
     }
 
     #[test]
@@ -829,19 +901,19 @@ mod tests {
         let mut tree = ElementTree::new();
         let root_widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(root_widget));
+        let root_id = tree.set_root(Box::new(root_widget));
 
-        let child1_id = tree.mount_child(root_id, Box::new(TestWidget::new("child1")), 0);
-        let child2_id = tree.mount_child(root_id, Box::new(TestWidget::new("child2")), 1);
+        let child1_id = tree.insert_child(root_id, Box::new(TestWidget::new("child1")), 0);
+        let child2_id = tree.insert_child(root_id, Box::new(TestWidget::new("child2")), 1);
 
         assert_eq!(tree.element_count(), 3);
 
         // Unmount root should unmount all children
-        tree.unmount_element(root_id);
+        tree.remove(root_id);
 
         assert_eq!(tree.element_count(), 0);
-        assert!(tree.get_element(child1_id.unwrap()).is_none());
-        assert!(tree.get_element(child2_id.unwrap()).is_none());
+        assert!(tree.get(child1_id.unwrap()).is_none());
+        assert!(tree.get(child2_id.unwrap()).is_none());
     }
 
     #[test]
@@ -849,19 +921,19 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(widget));
+        let root_id = tree.set_root(Box::new(widget));
 
         // Clear dirty queue from initial mount
-        tree.rebuild_dirty_elements();
-        assert!(!tree.has_dirty_elements());
+        tree.rebuild();
+        assert!(!tree.has_dirty());
 
         // Mark dirty
-        tree.mark_element_dirty(root_id);
+        tree.mark_dirty(root_id);
 
-        assert!(tree.has_dirty_elements());
+        assert!(tree.has_dirty());
         assert_eq!(tree.dirty_element_count(), 1);
 
-        let element = tree.get_element(root_id).unwrap();
+        let element = tree.get(root_id).unwrap();
         assert!(element.is_dirty());
     }
 
@@ -870,13 +942,13 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(widget));
-        tree.rebuild_dirty_elements();
+        let root_id = tree.set_root(Box::new(widget));
+        tree.rebuild();
 
         // Mark dirty multiple times
-        tree.mark_element_dirty(root_id);
-        tree.mark_element_dirty(root_id);
-        tree.mark_element_dirty(root_id);
+        tree.mark_dirty(root_id);
+        tree.mark_dirty(root_id);
+        tree.mark_dirty(root_id);
 
         // Should only appear once in queue
         assert_eq!(tree.dirty_element_count(), 1);
@@ -887,15 +959,15 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(widget));
-        assert!(tree.has_dirty_elements());
+        let root_id = tree.set_root(Box::new(widget));
+        assert!(tree.has_dirty());
 
-        tree.rebuild_dirty_elements();
+        tree.rebuild();
 
-        assert!(!tree.has_dirty_elements());
+        assert!(!tree.has_dirty());
         assert_eq!(tree.dirty_element_count(), 0);
 
-        let element = tree.get_element(root_id).unwrap();
+        let element = tree.get(root_id).unwrap();
         assert!(!element.is_dirty());
     }
 
@@ -904,20 +976,20 @@ mod tests {
         let mut tree = ElementTree::new();
         let root_widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(root_widget));
-        let child1_id = tree.mount_child(root_id, Box::new(TestWidget::new("child1")), 0).unwrap();
-        let child2_id = tree.mount_child(root_id, Box::new(TestWidget::new("child2")), 1).unwrap();
+        let root_id = tree.set_root(Box::new(root_widget));
+        let child1_id = tree.insert_child(root_id, Box::new(TestWidget::new("child1")), 0).unwrap();
+        let child2_id = tree.insert_child(root_id, Box::new(TestWidget::new("child2")), 1).unwrap();
 
-        tree.rebuild_dirty_elements();
+        tree.rebuild();
 
         // Mark all dirty
-        tree.mark_element_dirty(root_id);
-        tree.mark_element_dirty(child1_id);
-        tree.mark_element_dirty(child2_id);
+        tree.mark_dirty(root_id);
+        tree.mark_dirty(child1_id);
+        tree.mark_dirty(child2_id);
 
         assert_eq!(tree.dirty_element_count(), 3);
 
-        tree.rebuild_dirty_elements();
+        tree.rebuild();
 
         assert_eq!(tree.dirty_element_count(), 0);
     }
@@ -928,7 +1000,7 @@ mod tests {
         let mut tree = ElementTree::new();
         tree.building = true; // Simulate already building
 
-        tree.rebuild_dirty_elements(); // Should panic
+        tree.rebuild(); // Should panic
     }
 
     #[test]
@@ -936,8 +1008,8 @@ mod tests {
         let mut tree = ElementTree::new();
         let root_widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(root_widget));
-        tree.mount_child(root_id, Box::new(TestWidget::new("child")), 0);
+        let root_id = tree.set_root(Box::new(root_widget));
+        tree.insert_child(root_id, Box::new(TestWidget::new("child")), 0);
 
         assert_eq!(tree.element_count(), 2);
 
@@ -945,7 +1017,7 @@ mod tests {
 
         assert!(!tree.has_root());
         assert_eq!(tree.element_count(), 0);
-        assert!(!tree.has_dirty_elements());
+        assert!(!tree.has_dirty());
     }
 
     #[test]
@@ -953,9 +1025,9 @@ mod tests {
         let mut tree = ElementTree::new();
         let root_widget = TestWidget::new("root");
 
-        let root_id = tree.mount_root(Box::new(root_widget));
-        tree.mount_child(root_id, Box::new(TestWidget::new("child1")), 0);
-        tree.mount_child(root_id, Box::new(TestWidget::new("child2")), 1);
+        let root_id = tree.set_root(Box::new(root_widget));
+        tree.insert_child(root_id, Box::new(TestWidget::new("child1")), 0);
+        tree.insert_child(root_id, Box::new(TestWidget::new("child2")), 1);
 
         let mut count = 0;
         tree.visit_all_elements(&mut |_element| {
@@ -972,7 +1044,7 @@ mod tests {
         let mut tree = ElementTree::new();
         let root_widget = TestWidget::new("root");
 
-        tree.mount_root(Box::new(root_widget));
+        tree.set_root(Box::new(root_widget));
 
         // Mark all elements dirty via visitor
         tree.visit_all_elements_mut(&mut |element| {
@@ -980,7 +1052,7 @@ mod tests {
         });
 
         // Should have dirty elements
-        assert!(tree.has_dirty_elements());
+        assert!(tree.has_dirty());
     }
 
     #[test]
@@ -988,19 +1060,19 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget1 = TestWidget::new("root1");
 
-        let root_id1 = tree.mount_root(Box::new(widget1));
+        let root_id1 = tree.set_root(Box::new(widget1));
         assert_eq!(tree.root(), Some(root_id1));
 
         // Mount new root (should replace old one)
         let widget2 = TestWidget::new("root2");
-        let root_id2 = tree.mount_root(Box::new(widget2));
+        let root_id2 = tree.set_root(Box::new(widget2));
 
         assert_ne!(root_id1, root_id2);
         assert_eq!(tree.root(), Some(root_id2));
         assert_eq!(tree.element_count(), 1);
 
         // Old root should be gone
-        assert!(tree.get_element(root_id1).is_none());
+        assert!(tree.get(root_id1).is_none());
     }
 
     #[test]
@@ -1008,16 +1080,16 @@ mod tests {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("original");
 
-        let element_id = tree.mount_root(Box::new(widget));
-        tree.rebuild_dirty_elements();
+        let element_id = tree.set_root(Box::new(widget));
+        tree.rebuild();
 
         // Update with new widget
         let new_widget = TestWidget::new("updated");
-        let result = tree.update_element(element_id, Box::new(new_widget));
+        let result = tree.update(element_id, Box::new(new_widget));
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), element_id);
-        assert!(tree.has_dirty_elements());
+        assert!(tree.has_dirty());
     }
 
     #[test]
@@ -1027,7 +1099,7 @@ mod tests {
         let invalid_id = ElementId::from_raw(99999);
         let widget = TestWidget::new("test");
 
-        let result = tree.update_element(invalid_id, Box::new(widget));
+        let result = tree.update(invalid_id, Box::new(widget));
 
         assert!(result.is_err());
     }

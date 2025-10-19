@@ -70,7 +70,7 @@ impl FluiApp {
     /// - `root_widget`: The root widget of the application
     pub fn new(root_widget: Box<dyn Widget>) -> Self {
         let mut pipeline = PipelineOwner::new();
-        pipeline.mount_root(root_widget);
+        pipeline.set_root(root_widget);
 
         Self {
             pipeline,
@@ -197,7 +197,7 @@ impl FluiApp {
         self.stats.log();
 
         // Request repaint if there are dirty elements waiting
-        if self.pipeline.tree().read().has_dirty_elements() {
+        if self.pipeline.tree().read().has_dirty() {
             ctx.request_repaint();
         }
     }

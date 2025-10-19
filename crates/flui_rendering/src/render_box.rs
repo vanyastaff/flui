@@ -365,7 +365,7 @@ mod tests {
         proxy.set_child(Box::new(RenderBox::new()));
 
         let mut count = 0;
-        proxy.visit_children_mut(&mut |child| {
+        proxy.walk_children_mut(&mut |child| {
             child.mark_needs_layout();
             count += 1;
         });
@@ -381,7 +381,7 @@ mod tests {
         proxy.visit_children(&mut |_| count += 1);
         assert_eq!(count, 0);
 
-        proxy.visit_children_mut(&mut |_| count += 1);
+        proxy.walk_children_mut(&mut |_| count += 1);
         assert_eq!(count, 0);
     }
 

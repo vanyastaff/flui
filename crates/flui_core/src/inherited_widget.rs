@@ -47,7 +47,7 @@ use crate::{Element, Widget};
 /// // Access the theme from descendant widgets:
 /// impl StatelessWidget for MyButton {
 ///     fn build(&self, context: &BuildContext) -> Box<dyn Widget> {
-///         let theme = context.depend_on_inherited_widget::<Theme>().unwrap();
+///         let theme = context.subscribe_to::<Theme>().unwrap();
 ///         // Use theme.data()...
 ///     }
 /// }
@@ -139,7 +139,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
         // Lock is acquired and released for each element to avoid deadlocks
         for dependent_id in dependent_ids {
             let mut tree_guard = tree.write();
-            tree_guard.mark_element_dirty(dependent_id);
+            tree_guard.mark_dirty(dependent_id);
         }
     }
 
@@ -171,7 +171,7 @@ impl<W: InheritedWidget> Element for InheritedElement<W> {
         // Unmount child first
         if let Some(child_id) = self.child.take() {
             if let Some(tree) = &self.tree {
-                tree.write().unmount_element(child_id);
+                tree.write().remove(child_id);
             }
         }
 
@@ -411,7 +411,7 @@ mod tests {
         impl StatelessWidget for DependentWidget {
             fn build(&self, context: &BuildContext) -> Box<dyn Widget> {
                 // Access the inherited widget - this should register dependency
-                if let Some(theme) = context.depend_on_inherited_widget::<TestTheme>() {
+                if let Some(theme) = context.subscribe_to::<TestTheme>() {
                     assert_eq!(*theme.data(), 42);
                 }
                 Box::new(ChildWidget)
@@ -441,13 +441,13 @@ mod tests {
 
         let _root_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(root_widget)
+            tree_guard.set_root(root_widget)
         };
 
         // Rebuild to trigger build() which calls depend_on_inherited_widget()
         {
             let mut tree_guard = tree.write();
-            tree_guard.rebuild_dirty_elements();
+            tree_guard.rebuild();
         }
 
         // Success - test validates that the infrastructure for dependency tracking exists
@@ -495,7 +495,7 @@ mod tests {
         let dependent_widget = Box::new(ChildWidget);
         let dependent_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(dependent_widget)
+            tree_guard.set_root(dependent_widget)
         };
 
         // Register the dependent
@@ -504,13 +504,13 @@ mod tests {
         // Clear dirty state
         {
             let mut tree_guard = tree.write();
-            tree_guard.rebuild_dirty_elements();
+            tree_guard.rebuild();
         }
 
         // Verify dependent is not dirty
         {
             let tree_guard = tree.read();
-            let element = tree_guard.get_element(dependent_id).unwrap();
+            let element = tree_guard.get(dependent_id).unwrap();
             assert!(!element.is_dirty());
         }
 
@@ -520,7 +520,7 @@ mod tests {
         // Verify dependent is now dirty
         {
             let tree_guard = tree.read();
-            let element = tree_guard.get_element(dependent_id).unwrap();
+            let element = tree_guard.get(dependent_id).unwrap();
             assert!(element.is_dirty());
         }
     }
@@ -535,7 +535,7 @@ mod tests {
         // Implement Flutter-style static methods for TestTheme
         impl TestTheme {
             pub fn maybe_of(context: &BuildContext) -> Option<Self> {
-                context.depend_on_inherited_widget::<TestTheme>()
+                context.subscribe_to::<TestTheme>()
             }
 
             pub fn of(context: &BuildContext) -> Self {
@@ -562,13 +562,13 @@ mod tests {
 
         let _root_id = {
             let mut tree_guard = tree.write();
-            tree_guard.mount_root(root_widget)
+            tree_guard.set_root(root_widget)
         };
 
         // Rebuild triggers build()
         {
             let mut tree_guard = tree.write();
-            tree_guard.rebuild_dirty_elements();
+            tree_guard.rebuild();
         }
 
         // Test passed - maybe_of returned None correctly
