@@ -71,7 +71,7 @@ pub use basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Pad
 pub use layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
 pub use visual_effects::{ClipRRect, Opacity, Transform};
 pub use gestures::GestureDetector;
-pub use interaction::{AbsorbPointer, IgnorePointer};
+pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
 pub use flui_core::{BoxConstraints, BuildContext, Widget};
@@ -91,7 +91,7 @@ pub mod prelude {
     pub use crate::layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
     pub use crate::visual_effects::{ClipRRect, Opacity, Transform};
     pub use crate::gestures::GestureDetector;
-    pub use crate::interaction::{AbsorbPointer, IgnorePointer};
+    pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
     // Re-export core types
     pub use flui_core::{BoxConstraints, BuildContext, Widget};

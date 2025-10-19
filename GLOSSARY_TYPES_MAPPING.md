@@ -462,7 +462,7 @@
 
 ---
 
-### flui_rendering - Rendering system (212 тестів, +157 нових)
+### flui_rendering - Rendering system (221 тест, +166 нових)
 
 **З rendering.md (~550 типів):**
 
@@ -473,7 +473,7 @@
 - ✅ RenderProxyBox (passes layout to child)
 - ⏳ RenderShiftedBox (планується)
 
-**Specialized render objects (🚧 В ПРОЦЕСІ - 17/45 реалізовано):**
+**Specialized render objects (🚧 В ПРОЦЕСІ - 18/45 реалізовано):**
 
 **Layout render objects:**
 - ✅ **RenderFlex** (550 строк, 15 тестів) - Row/Column layout з flexible children, MainAxisAlignment, CrossAxisAlignment
@@ -509,7 +509,7 @@
 - ✅ **RenderPointerListener** (203 строк, built-in тести) - Перехоплює pointer events, реєструє handler в HitTestEntry (2025-01-19)
 - ✅ **RenderIgnorePointer** (328 строк, 5 тестів) - Робить віджет прозорим для hit testing (events проходять далі) (2025-01-19)
 - ✅ **RenderAbsorbPointer** (342 строк, 6 тестів) - Поглинає pointer events (блокує, але не пропускає далі) (2025-01-19)
-- ⏳ RenderMouseRegion
+- ✅ **RenderMouseRegion** (560 строк, 9 тестів) - Відстежує mouse enter/exit/hover events (2025-01-19)
 
 **Accessibility render objects:**
 - ⏳ RenderSemanticsAnnotations
@@ -984,11 +984,11 @@
 
 ---
 
-### flui_widgets - Widget library (✅ COMPLETED Week 5-6 + Interaction - 19/19 виджетів реалізовано!)
+### flui_widgets - Widget library (✅ COMPLETED Week 5-6 + Interaction - 20/20 виджетів реалізовано!)
 
 **З widgets.md (~1000+ типів):**
 
-Це ВЕЛИЧЕЗНА бібліотека. **Week 5-6 Result:** 19 базових виджетів реалізовано! (~7500 строк, 325 тестів)
+Це ВЕЛИЧЕЗНА бібліотека. **Week 5-6 Result:** 20 базових виджетів реалізовано! (~8000 строк, 336 тестів)
 
 **✅ Basic Layout widgets (РЕАЛИЗОВАНО - 7 виджетів):**
 - ✅ **Container** (335 строк, 18 тестів) - StatelessWidget композиція всіх layout properties
@@ -1015,9 +1015,10 @@
 - ✅ **Transform** (536 строк, 23 теста) - RenderObjectWidget → RenderTransform
 - ✅ **ClipRRect** (609 строк, 21 тест) - RenderObjectWidget → RenderClipRRect
 
-**✅ Interaction widgets (РЕАЛИЗОВАНО - 2 виджета):**
+**✅ Interaction widgets (РЕАЛИЗОВАНО - 3 виджета):**
 - ✅ **IgnorePointer** (~230 строк, 9 тестів) - RenderObjectWidget → RenderIgnorePointer (прозорий для pointer events) (2025-01-19)
 - ✅ **AbsorbPointer** (~230 строк, 9 тестів) - RenderObjectWidget → RenderAbsorbPointer (блокує pointer events) (2025-01-19)
+- ✅ **MouseRegion** (~340 строк, 11 тестів) - RenderObjectWidget → RenderMouseRegion (відстежує mouse enter/exit/hover) (2025-01-19)
 
 **⏳ Додаткові базові віджети (планується пізніше):**
 - ⏳ ConstrainedBox (використати RenderConstrainedBox)
