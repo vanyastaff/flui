@@ -4,11 +4,14 @@
 //! Flutter's three-tree architecture: Widget → Element → RenderObject
 
 use std::fmt;
+use std::sync::Arc;
 
 use downcast_rs::{impl_downcast, DowncastSync};
 use flui_types::{events::HitTestResult, Offset, Size};
+use glam::Mat4;
+use parking_lot::RwLock;
 
-use crate::BoxConstraints;
+use crate::{BoxConstraints, ParentData, PipelineOwner};
 
 /// RenderObject - handles layout and painting
 ///
@@ -231,6 +234,194 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
     /// Default: no children (leaf render object)
     fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn RenderObject)) {
         // Default: no children
+    }
+
+    // ============================================================================
+    // Flutter-like extended API
+    // ============================================================================
+
+    // --- ParentData ---
+
+    /// Get parent data for this render object
+    ///
+    /// Parent data is set by the parent and can store child-specific layout information
+    /// like position, flex factor, etc.
+    fn parent_data(&self) -> Option<&dyn ParentData> {
+        None
+    }
+
+    /// Get mutable parent data for this render object
+    fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
+        None
+    }
+
+    /// Set parent data for this render object
+    ///
+    /// Called by parent when adopting a child.
+    fn set_parent_data(&mut self, _parent_data: Box<dyn ParentData>) {
+        // Default: no parent data storage
+    }
+
+    /// Setup parent data for a child
+    ///
+    /// Override this to initialize parent data with the correct type for your children.
+    /// Called by adoptChild before the child is added to the child list.
+    fn setup_parent_data(&self, _child: &mut dyn RenderObject) {
+        // Default: no setup needed
+    }
+
+    // --- Tree Structure ---
+
+    /// Get the parent render object
+    ///
+    /// Returns None if this is the root of the render tree.
+    fn parent(&self) -> Option<&dyn RenderObject> {
+        None
+    }
+
+    /// Get the depth of this render object in the tree
+    ///
+    /// The root has depth 0, its children have depth 1, etc.
+    fn depth(&self) -> i32 {
+        0
+    }
+
+    // --- Lifecycle ---
+
+    /// Attach this render object to a PipelineOwner
+    ///
+    /// Called when the render object is inserted into the render tree.
+    /// The render object should mark itself dirty if needed.
+    fn attach(&mut self, _owner: Arc<RwLock<PipelineOwner>>) {
+        // Default: no attachment needed
+        // Most implementations will want to mark_needs_layout() here
+    }
+
+    /// Detach this render object from its PipelineOwner
+    ///
+    /// Called when the render object is removed from the render tree.
+    fn detach(&mut self) {
+        // Default: no detachment needed
+    }
+
+    /// Dispose of this render object
+    ///
+    /// Called when the render object is no longer needed.
+    /// Should release any expensive resources like images or layers.
+    fn dispose(&mut self) {
+        // Default: no disposal needed
+    }
+
+    /// Adopt a child render object
+    ///
+    /// Called when adding a child to this render object.
+    /// Sets up parent data and updates the child's parent pointer.
+    fn adopt_child(&mut self, _child: &mut dyn RenderObject) {
+        // Default implementation in RenderBox
+    }
+
+    /// Drop a child render object
+    ///
+    /// Called when removing a child from this render object.
+    /// Clears the child's parent pointer.
+    fn drop_child(&mut self, _child: &mut dyn RenderObject) {
+        // Default implementation in RenderBox
+    }
+
+    // --- Layout Optimization ---
+
+    /// Whether the size of this render object depends only on the constraints
+    ///
+    /// If true, performResize() will be called during layout instead of performLayout().
+    /// This is an optimization for render objects whose size doesn't depend on their children.
+    ///
+    /// Example: RenderConstrainedBox with tight constraints
+    fn sized_by_parent(&self) -> bool {
+        false
+    }
+
+    /// Perform resize when sized_by_parent is true
+    ///
+    /// This is called instead of performLayout() when sized_by_parent returns true.
+    /// Should only update the size, not touch children.
+    fn perform_resize(&mut self, _constraints: BoxConstraints) {
+        // Default: do nothing
+        // Override if sized_by_parent returns true
+    }
+
+    /// Perform layout (internal implementation)
+    ///
+    /// This is the actual layout implementation, separated from the public layout() method.
+    /// When sized_by_parent is true, perform_resize() is called first, then this method.
+    fn perform_layout(&mut self, _constraints: BoxConstraints) {
+        // Default: delegates to layout()
+        // Most implementations will override this instead of layout()
+    }
+
+    // --- Compositing and Layers ---
+
+    /// Whether this render object paints in its own layer
+    ///
+    /// If true, this render object acts as a repaint boundary - changes to this subtree
+    /// don't cause repaints of ancestors.
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    /// Whether this render object or any descendant needs compositing
+    ///
+    /// Compositing means using layers for rendering. This is automatically maintained
+    /// by the framework.
+    fn needs_compositing(&self) -> bool {
+        false
+    }
+
+    /// Mark needs compositing bits update
+    ///
+    /// Called when isRepaintBoundary changes or when children change.
+    fn mark_needs_compositing_bits_update(&mut self) {
+        // Default: no compositing
+    }
+
+    // --- Transforms ---
+
+    /// Apply the transform from this render object to the given child
+    ///
+    /// Used for hit testing and coordinate conversion.
+    /// The transform should map from the parent's coordinate system to the child's.
+    ///
+    /// Default: applies the child's offset from BoxParentData if available.
+    fn apply_paint_transform(&self, _child: &dyn RenderObject, transform: &mut Mat4) {
+        // Default: identity transform (no change)
+        // Most render boxes will apply the child's offset here
+        let _ = transform; // Suppress unused warning
+    }
+
+    /// Get the transform from this render object to the target
+    ///
+    /// Returns the transformation matrix that maps points in this object's
+    /// coordinate system to the target's coordinate system.
+    fn get_transform_to(&self, _target: Option<&dyn RenderObject>) -> Mat4 {
+        // Default: identity
+        Mat4::IDENTITY
+    }
+
+    // --- Relayout Boundaries ---
+
+    /// Whether this render object is a relayout boundary
+    ///
+    /// A relayout boundary means that when this object is marked dirty,
+    /// the layout doesn't propagate past this node to ancestors.
+    fn is_relayout_boundary(&self) -> bool {
+        false
+    }
+
+    /// Mark this render object and ancestors as needing layout
+    ///
+    /// Propagates up the tree until hitting a relayout boundary.
+    fn mark_parent_needs_layout(&mut self) {
+        // Default: mark self
+        self.mark_needs_layout();
     }
 }
 

@@ -1052,6 +1052,7 @@ dependencies = [
  "egui 0.33.0",
  "flui_foundation",
  "flui_types",
+ "glam",
  "parking_lot",
  "serde",
  "thiserror 2.0.17",
@@ -1184,6 +1185,16 @@ dependencies = [
  "khronos_api",
  "log",
  "xml-rs",
+]
+
+[[package]]
+name = "glam"
+version = "0.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
+dependencies = [
+ "bytemuck",
+ "serde",
 ]
 
 [[package]]
