@@ -26,7 +26,8 @@
       "Bash(taskkill //F //IM counter.exe)",
       "Bash(git checkout build_context.rs)",
       "Bash(for file in element.rs inherited_widget.rs)",
-      "Bash(do sed -i 's/ElementId(\\([0-9]\\+\\))/ElementId::from_raw(\\1)/g' \"$file\")"
+      "Bash(do sed -i 's/ElementId(\\([0-9]\\+\\))/ElementId::from_raw(\\1)/g' \"$file\")",
+      "Bash(chmod +x scripts/rename_methods.sh)"
     ],
     "deny": [],
     "ask": []
