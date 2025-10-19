@@ -13,5 +13,6 @@ categories = ["gui"]
 flui_core = { path = "../flui_core", version = "0.1.0" }
 flui_rendering = { path = "../flui_rendering", version = "0.1.0" }
 flui_types = { path = "../flui_types", version = "0.1.0" }
+bon = { workspace = true }
 
 [dev-dependencies]
