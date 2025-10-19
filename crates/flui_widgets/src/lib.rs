@@ -23,14 +23,20 @@
 //! ## Layout Widgets (`layout` module)
 //! - **Row**: Horizontal flex layout
 //! - **Column**: Vertical flex layout
-//! - Stack, Wrap (future)
+//! - **Stack**: Positioned layout with z-ordering
+//! - **IndexedStack**: Shows only one child at a time
 //!
-//! ## Visual Effects (`basic` module - in progress)
+//! ## Visual Effects (`visual_effects` module)
+//! - **Opacity**: Controls child opacity
+//! - **Transform**: Applies matrix transformations
+//! - **ClipRRect**: Clips child with rounded rectangle
 //! - **DecoratedBox**: Paints decoration before or after child
 //!
+//! ## Interaction Widgets (`interaction` module)
+//! - **IgnorePointer**: Makes widget transparent to pointer events
+//! - **AbsorbPointer**: Blocks pointer events from passing through
+//!
 //! ## Future Categories
-//! - **Visual effects:** Opacity, Transform, ClipRRect
-//! - **Flex children:** Expanded, Flexible, Spacer
 //! - **Scrolling:** ListView, GridView, ScrollView
 //!
 //! # Examples
@@ -54,6 +60,7 @@ pub mod basic;
 pub mod layout;
 pub mod visual_effects;
 pub mod gestures;
+pub mod interaction;
 
 
 
@@ -64,6 +71,7 @@ pub use basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Pad
 pub use layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
 pub use visual_effects::{ClipRRect, Opacity, Transform};
 pub use gestures::GestureDetector;
+pub use interaction::{AbsorbPointer, IgnorePointer};
 
 // Re-export commonly used types
 pub use flui_core::{BoxConstraints, BuildContext, Widget};
@@ -83,6 +91,7 @@ pub mod prelude {
     pub use crate::layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
     pub use crate::visual_effects::{ClipRRect, Opacity, Transform};
     pub use crate::gestures::GestureDetector;
+    pub use crate::interaction::{AbsorbPointer, IgnorePointer};
 
     // Re-export core types
     pub use flui_core::{BoxConstraints, BuildContext, Widget};

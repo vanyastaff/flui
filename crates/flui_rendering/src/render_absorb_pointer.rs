@@ -1,0 +1,371 @@
+//! RenderAbsorbPointer - absorbs pointer events preventing them from reaching widgets behind
+//!
+//! Used by AbsorbPointer widget to conditionally block pointer events.
+
+use crate::render_object::RenderObject;
+use flui_core::BoxConstraints;
+use flui_types::events::{HitTestEntry, HitTestResult};
+use flui_types::{Offset, Size};
+
+/// RenderAbsorbPointer absorbs pointer events, preventing them from passing through
+///
+/// When `absorbing` is true, this render object will participate in hit testing
+/// and prevent events from reaching widgets behind it, but won't forward them to children.
+///
+/// # Layout Algorithm
+///
+/// Simply passes constraints to child and adopts child size (like RenderProxyBox).
+///
+/// # Hit Testing
+///
+/// - When `absorbing` is true: Returns true from hit_test, adding entry to result,
+///   but doesn't test children. This blocks events from passing through.
+/// - When `absorbing` is false: Performs normal hit testing.
+///
+/// # Difference from RenderIgnorePointer
+///
+/// - **IgnorePointer**: Transparent to hit testing - events pass through to widgets behind
+/// - **AbsorbPointer**: Opaque to hit testing - events don't pass through but are absorbed
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderAbsorbPointer;
+///
+/// // Create and absorb pointer events
+/// let mut render = RenderAbsorbPointer::new(true);
+/// ```
+pub struct RenderAbsorbPointer {
+    /// Whether to absorb pointer events
+    absorbing: bool,
+    /// Child render object
+    child: Option<Box<dyn RenderObject>>,
+    /// Current size
+    size: Size,
+    /// Layout dirty flag
+    needs_layout_flag: bool,
+    /// Paint dirty flag
+    needs_paint_flag: bool,
+}
+
+impl RenderAbsorbPointer {
+    /// Creates a new RenderAbsorbPointer
+    ///
+    /// # Parameters
+    ///
+    /// - `absorbing`: If true, absorbs pointer events
+    pub fn new(absorbing: bool) -> Self {
+        Self {
+            absorbing,
+            child: None,
+            size: Size::zero(),
+            needs_layout_flag: true,
+            needs_paint_flag: true,
+        }
+    }
+
+    /// Sets the child
+    pub fn set_child(&mut self, child: Option<Box<dyn RenderObject>>) {
+        self.child = child;
+        self.mark_needs_layout();
+    }
+
+    /// Returns a reference to the child
+    pub fn child(&self) -> Option<&dyn RenderObject> {
+        self.child.as_deref()
+    }
+
+    /// Sets whether to absorb pointer events
+    pub fn set_absorbing(&mut self, absorbing: bool) {
+        if self.absorbing != absorbing {
+            self.absorbing = absorbing;
+            // No need to mark_needs_layout or mark_needs_paint,
+            // but hit testing behavior changes
+        }
+    }
+
+    /// Returns whether absorbing pointer events
+    pub fn absorbing(&self) -> bool {
+        self.absorbing
+    }
+}
+
+impl RenderObject for RenderAbsorbPointer {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        if let Some(child) = &mut self.child {
+            // Pass constraints through to child
+            self.size = child.layout(constraints);
+        } else {
+            // Without child, use smallest size
+            self.size = constraints.smallest();
+        }
+
+        self.needs_layout_flag = false;
+        self.size
+    }
+
+    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+        if let Some(child) = &self.child {
+            // Simply paint child - absorbing doesn't affect rendering
+            child.paint(painter, offset);
+        }
+    }
+
+    fn hit_test_self(&self, _position: Offset) -> bool {
+        // When absorbing, we hit ourselves to block events
+        // When not absorbing, we don't hit ourselves
+        self.absorbing
+    }
+
+    fn hit_test_children(
+        &self,
+        result: &mut HitTestResult,
+        position: Offset,
+    ) -> bool {
+        if self.absorbing {
+            // Don't test children when absorbing - we block the events
+            false
+        } else if let Some(child) = &self.child {
+            // Normal hit testing when not absorbing
+            child.hit_test(result, position)
+        } else {
+            false
+        }
+    }
+
+    /// Override hit_test to implement absorbing behavior
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        // Check bounds first
+        if position.dx < 0.0
+            || position.dx >= self.size().width
+            || position.dy < 0.0
+            || position.dy >= self.size().height
+        {
+            return false;
+        }
+
+        if self.absorbing {
+            // When absorbing, we consume the hit test
+            // Add ourselves to the result to block events from passing through
+            result.add(HitTestEntry::new(position, self.size()));
+            return true;
+        }
+
+        // When not absorbing, perform normal hit testing on children
+        self.hit_test_children(result, position)
+    }
+
+    fn size(&self) -> Size {
+        self.size
+    }
+
+    fn constraints(&self) -> Option<BoxConstraints> {
+        None
+    }
+
+    fn needs_layout(&self) -> bool {
+        self.needs_layout_flag
+    }
+
+    fn mark_needs_layout(&mut self) {
+        self.needs_layout_flag = true;
+    }
+
+    fn needs_paint(&self) -> bool {
+        self.needs_paint_flag
+    }
+
+    fn mark_needs_paint(&mut self) {
+        self.needs_paint_flag = true;
+    }
+
+    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn RenderObject)) {
+        if let Some(child) = &self.child {
+            visitor(&**child);
+        }
+    }
+
+    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn RenderObject)) {
+        if let Some(child) = &mut self.child {
+            visitor(&mut **child);
+        }
+    }
+}
+
+impl std::fmt::Debug for RenderAbsorbPointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderAbsorbPointer")
+            .field("absorbing", &self.absorbing)
+            .field("has_child", &self.child.is_some())
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RenderConstrainedBox;
+
+    #[test]
+    fn test_absorb_pointer_layout() {
+        let mut render = RenderAbsorbPointer::new(true);
+
+        // Add a child
+        let child = Box::new(RenderConstrainedBox::new(
+            BoxConstraints::tight(Size::new(100.0, 50.0)),
+        ));
+        render.set_child(Some(child));
+
+        // Layout should pass through child size
+        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
+        let size = render.layout(constraints);
+
+        assert_eq!(size, Size::new(100.0, 50.0));
+    }
+
+    #[test]
+    fn test_absorb_pointer_hit_test_when_absorbing() {
+        let mut render = RenderAbsorbPointer::new(true);
+
+        // Add a child
+        let child = Box::new(RenderConstrainedBox::new(
+            BoxConstraints::tight(Size::new(100.0, 50.0)),
+        ));
+        render.set_child(Some(child));
+
+        // Layout first
+        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
+        render.layout(constraints);
+
+        // Hit test should succeed when absorbing (but block children)
+        let mut result = HitTestResult::new();
+        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
+
+        assert!(hit);
+        // Result should contain only the absorber, not the child
+        assert_eq!(result.entries().len(), 1);
+    }
+
+    #[test]
+    fn test_absorb_pointer_hit_test_when_not_absorbing() {
+        let mut render = RenderAbsorbPointer::new(false);
+
+        // Add a child
+        let child = Box::new(RenderConstrainedBox::new(
+            BoxConstraints::tight(Size::new(100.0, 50.0)),
+        ));
+        render.set_child(Some(child));
+
+        // Layout first
+        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
+        render.layout(constraints);
+
+        // Hit test should pass through to child when not absorbing
+        let mut result = HitTestResult::new();
+        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
+
+        assert!(hit);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_absorb_pointer_toggle() {
+        let mut render = RenderAbsorbPointer::new(false);
+
+        // Add a child
+        let child = Box::new(RenderConstrainedBox::new(
+            BoxConstraints::tight(Size::new(100.0, 50.0)),
+        ));
+        render.set_child(Some(child));
+
+        // Layout first
+        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
+        render.layout(constraints);
+
+        // Initially not absorbing - should pass through to child
+        let mut result = HitTestResult::new();
+        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
+        assert!(hit);
+        let initial_count = result.entries().len();
+
+        // Toggle to absorbing
+        render.set_absorbing(true);
+
+        // Now should absorb (only absorber in result, not child)
+        let mut result = HitTestResult::new();
+        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
+        assert!(hit);
+        assert_eq!(result.entries().len(), 1); // Only the absorber
+
+        // Toggle back to not absorbing
+        render.set_absorbing(false);
+
+        // Should pass through to child again
+        let mut result = HitTestResult::new();
+        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
+        assert!(hit);
+        assert_eq!(result.entries().len(), initial_count);
+    }
+
+    #[test]
+    fn test_absorb_pointer_out_of_bounds() {
+        let mut render = RenderAbsorbPointer::new(true);
+
+        // Add a child
+        let child = Box::new(RenderConstrainedBox::new(
+            BoxConstraints::tight(Size::new(100.0, 50.0)),
+        ));
+        render.set_child(Some(child));
+
+        // Layout first
+        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
+        render.layout(constraints);
+
+        // Out of bounds should not hit even when absorbing
+        let mut result = HitTestResult::new();
+        let hit = render.hit_test(&mut result, Offset::new(150.0, 25.0));
+
+        assert!(!hit);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_absorb_vs_ignore_behavior() {
+        // This test demonstrates the key difference:
+        // - IgnorePointer: transparent (returns false, no entry added)
+        // - AbsorbPointer: opaque (returns true, entry added to block)
+
+        let mut absorb = RenderAbsorbPointer::new(true);
+        let child = Box::new(RenderConstrainedBox::new(
+            BoxConstraints::tight(Size::new(100.0, 50.0)),
+        ));
+        absorb.set_child(Some(child));
+
+        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
+        absorb.layout(constraints);
+
+        // AbsorbPointer returns true and adds entry
+        let mut absorb_result = HitTestResult::new();
+        let absorb_hit = absorb.hit_test(&mut absorb_result, Offset::new(50.0, 25.0));
+
+        assert!(absorb_hit); // Absorb DOES hit
+        assert!(!absorb_result.is_empty()); // And adds entry to block
+
+        // Compare with IgnorePointer (would return false and add no entry)
+        use crate::render_ignore_pointer::RenderIgnorePointer;
+
+        let mut ignore = RenderIgnorePointer::new(true);
+        let child = Box::new(RenderConstrainedBox::new(
+            BoxConstraints::tight(Size::new(100.0, 50.0)),
+        ));
+        ignore.set_child(Some(child));
+        ignore.layout(constraints);
+
+        let mut ignore_result = HitTestResult::new();
+        let ignore_hit = ignore.hit_test(&mut ignore_result, Offset::new(50.0, 25.0));
+
+        assert!(!ignore_hit); // Ignore does NOT hit
+        assert!(ignore_result.is_empty()); // And adds no entry (transparent)
+    }
+}
