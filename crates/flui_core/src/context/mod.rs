@@ -44,26 +44,25 @@ use crate::{Element, ElementId, Size, Widget};
 use crate::tree::ElementTree;
 use crate::widget::InheritedWidget;
 
-/// Build context provides access to the element tree and services
+/// Build context provides access to the element tree and framework services
 ///
-/// Similar to Flutter's BuildContext. Passed to build() methods to provide
-/// access to the framework.
+/// Rust-idiomatic name for Flutter's BuildContext. Passed to build() methods.
 ///
-/// BuildContext is cheap to clone - it contains only references to shared data.
+/// Context is cheap to clone - it contains only Arc references to shared data.
 ///
 /// # Lifetime
 ///
-/// A BuildContext is only valid during the build phase. Do not store it for
+/// A Context is only valid during the build phase. Do not store it for
 /// later use, as the element tree may have changed.
 ///
 /// # Thread Safety
 ///
-/// BuildContext is Send + Sync, but the underlying ElementTree uses RwLock
-/// for interior mutability. This means:
-/// - Multiple readers can access the tree concurrently
+/// Context is Send + Sync. The underlying ElementTree uses RwLock for
+/// interior mutability:
+/// - Multiple readers can access concurrently
 /// - Writers block all readers and other writers
 #[derive(Clone)]
-pub struct BuildContext {
+pub struct Context {
     /// Reference to the element tree
     tree: Arc<RwLock<ElementTree>>,
 
@@ -71,7 +70,7 @@ pub struct BuildContext {
     element_id: ElementId,
 }
 
-impl BuildContext {
+impl Context {
     /// Create a new build context
     ///
     /// This is an internal API used by the framework.
@@ -1037,3 +1036,6 @@ mod tests {
         assert_eq!(visited, 0);
     }
 }
+
+// Backward compatibility alias
+pub type BuildContext = Context;

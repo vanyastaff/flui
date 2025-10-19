@@ -54,7 +54,7 @@ pub use foundation::{ElementId, Lifecycle, Slot};
 pub use error::{CoreError, Result};
 
 // Re-export from new modular structure
-pub use context::BuildContext;
+pub use context::{Context, BuildContext}; // BuildContext is alias for backward compat
 pub use constraints::BoxConstraints;
 pub use element::{ComponentElement, Element, RenderObjectElement, StatefulElement};
 pub use element::render::{
@@ -77,7 +77,7 @@ pub use render::widget::{
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::context::BuildContext;
+    pub use crate::context::Context;
     pub use crate::constraints::BoxConstraints;
     pub use crate::element::Element;
     pub use crate::foundation::ElementId;

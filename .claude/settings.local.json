@@ -27,7 +27,19 @@
       "Bash(git checkout build_context.rs)",
       "Bash(for file in element.rs inherited_widget.rs)",
       "Bash(do sed -i 's/ElementId(\\([0-9]\\+\\))/ElementId::from_raw(\\1)/g' \"$file\")",
-      "Bash(chmod +x scripts/rename_methods.sh)"
+      "Bash(chmod +x scripts/rename_methods.sh)",
+      "Bash(git mv widget.rs widget/mod.rs)",
+      "Bash(git mv inherited_widget.rs widget/provider.rs)",
+      "Bash(git mv leaf_render_object_element.rs element/render/leaf.rs)",
+      "Bash(git mv single_child_render_object_element.rs element/render/single.rs)",
+      "Bash(git mv multi_child_render_object_element.rs element/render/multi.rs)",
+      "Bash(git mv element.rs element/mod.rs)",
+      "Bash(git mv build_context.rs context/mod.rs)",
+      "Bash(git mv element_tree.rs tree/element_tree.rs)",
+      "Bash(git mv pipeline_owner.rs tree/pipeline.rs)",
+      "Bash(git mv render_object.rs render/mod.rs)",
+      "Bash(git mv render_object_widget.rs render/widget.rs)",
+      "Bash(git mv parent_data.rs render/parent_data.rs)"
     ],
     "deny": [],
     "ask": []
