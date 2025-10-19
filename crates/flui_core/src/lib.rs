@@ -24,11 +24,17 @@ pub mod constraints;
 pub mod element;
 pub mod element_tree;
 pub mod inherited_widget;
+pub mod leaf_render_object_element;
+pub mod multi_child_render_object_element;
 pub mod parent_data;
 pub mod pipeline_owner;
 pub mod render_object;
 pub mod render_object_widget;
+pub mod single_child_render_object_element;
 pub mod widget;
+
+
+
 
 
 
@@ -50,6 +56,8 @@ pub use constraints::BoxConstraints;
 pub use element::{ComponentElement, Element, ElementId, RenderObjectElement, StatefulElement};
 pub use element_tree::ElementTree;
 pub use inherited_widget::{InheritedElement, InheritedWidget};
+pub use leaf_render_object_element::LeafRenderObjectElement;
+pub use multi_child_render_object_element::MultiChildRenderObjectElement;
 pub use pipeline_owner::PipelineOwner;
 pub use parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData};
 pub use render_object::RenderObject;
@@ -57,6 +65,7 @@ pub use render_object_widget::{
     LeafRenderObjectWidget, MultiChildRenderObjectWidget, RenderObjectWidget,
     SingleChildRenderObjectWidget,
 };
+pub use single_child_render_object_element::SingleChildRenderObjectElement;
 pub use widget::{IntoWidget, State, StatefulWidget, StatelessWidget, Widget};
 
 /// Prelude module for convenient imports
@@ -67,6 +76,9 @@ pub mod prelude {
     pub use crate::element_tree::ElementTree;
     pub use crate::widget::{IntoWidget, StatelessWidget, Widget};
 }
+
+
+
 
 
 
