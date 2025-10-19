@@ -6,11 +6,13 @@
 use std::any::Any;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use downcast_rs::{impl_downcast, DowncastSync};
 use flui_foundation::Key;
+use parking_lot::RwLock;
 
-use crate::{BuildContext, RenderObject, RenderObjectWidget, StatelessWidget};
+use crate::{BuildContext, ElementTree, RenderObject, RenderObjectWidget, StatelessWidget};
 
 /// Unique identifier for elements in the tree
 ///
@@ -70,13 +72,17 @@ pub trait Element: DowncastSync + fmt::Debug {
     ///
     /// Called when parent rebuilds with a new widget that can update this element
     /// (same type and key). Should update internal state with new configuration.
-    fn update(&mut self, new_widget: Box<dyn Any>);
+    fn update(&mut self, new_widget: Box<dyn Any + Send + Sync>);
 
     /// Rebuild this element's subtree
     ///
     /// Called when element is marked dirty. Should rebuild child widgets and
     /// update child elements.
-    fn rebuild(&mut self);
+    ///
+    /// Returns a list of (parent_id, child_widget, slot) tuples for children
+    /// that need to be mounted. The caller (ElementTree) will handle the actual
+    /// mounting to avoid lock recursion.
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::Widget>, usize)>;
 
     /// Get the element's unique ID
     fn id(&self) -> ElementId;
@@ -108,6 +114,64 @@ pub trait Element: DowncastSync + fmt::Debug {
     fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn Element)) {
         // Default: no children
     }
+
+    /// Set tree reference for ComponentElements
+    ///
+    /// This allows ComponentElements to mount their children. Only ComponentElements
+    /// need this - other element types can ignore it.
+    fn set_tree_ref(&mut self, _tree: std::sync::Arc<parking_lot::RwLock<crate::ElementTree>>) {
+        // Default: do nothing
+    }
+
+    /// Get widget type ID for update checks
+    fn widget_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<()>()
+    }
+
+    /// Get RenderObject if this element has one
+    ///
+    /// Only RenderObjectElements return Some. ComponentElements and StatefulElements
+    /// return None.
+    ///
+    /// # Returns
+    ///
+    /// Reference to the RenderObject, or None if this element doesn't have one
+    fn render_object(&self) -> Option<&dyn crate::RenderObject> {
+        None
+    }
+
+    /// Get mutable RenderObject if this element has one
+    ///
+    /// # Returns
+    ///
+    /// Mutable reference to the RenderObject, or None if this element doesn't have one
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::RenderObject> {
+        None
+    }
+
+    /// Take old child ID before rebuild (for ComponentElement)
+    ///
+    /// This is used by ElementTree to unmount old children before mounting new ones.
+    /// Only ComponentElement needs to implement this.
+    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
+        None
+    }
+
+    /// Set child ID after mounting (for ComponentElement)
+    ///
+    /// This is used by ElementTree to update the parent's child reference after
+    /// mounting a new child. Only ComponentElement needs to implement this.
+    fn set_child_after_mount(&mut self, _child_id: ElementId) {
+        // Default: do nothing
+    }
+
+    /// Get child element IDs without acquiring any locks
+    ///
+    /// This is used internally by ElementTree to traverse the tree without deadlocking.
+    /// Returns a Vec of child element IDs.
+    fn child_ids(&self) -> Vec<ElementId> {
+        Vec::new() // Default: no children
+    }
 }
 
 // Enable downcasting for Element trait objects
@@ -121,6 +185,10 @@ pub struct ComponentElement<W: StatelessWidget> {
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
+    /// Child element created by build()
+    child: Option<ElementId>,
+    /// Reference to element tree for building children
+    tree: Option<std::sync::Arc<parking_lot::RwLock<crate::ElementTree>>>,
 }
 
 impl<W: StatelessWidget> ComponentElement<W> {
@@ -131,25 +199,51 @@ impl<W: StatelessWidget> ComponentElement<W> {
             widget,
             parent: None,
             dirty: true,
+            child: None,
+            tree: None,
         }
     }
 
     /// Perform rebuild
-    fn perform_rebuild(&mut self) {
+    ///
+    /// Returns list of children to mount: (parent_id, child_widget, slot)
+    fn perform_rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::Widget>, usize)> {
         if !self.dirty {
-            return;
+            return Vec::new();
         }
 
         self.dirty = false;
 
+        let tree = match &self.tree {
+            Some(t) => t.clone(),
+            None => {
+                // No tree reference yet - this happens during initial mount
+                // The tree will be set later via set_tree()
+                return Vec::new();
+            }
+        };
+
         // Create build context
-        let context = BuildContext::new();
+        let context = BuildContext::new(tree.clone(), self.id);
 
-        // Call build() on the widget
-        // In a full implementation, this would create/update child elements
-        let _child_widget = self.widget.build(&context);
+        // Call build() on the widget to get child widget
+        let child_widget = self.widget.build(&context);
 
-        // TODO: Handle child element creation/update
+        // Mark old child for unmounting (will be handled by caller)
+        self.child = None;
+
+        // Return the child that needs to be mounted
+        vec![(self.id, child_widget, 0)]
+    }
+
+    /// Set the child element ID after it's been mounted
+    pub(crate) fn set_child(&mut self, child_id: ElementId) {
+        self.child = Some(child_id);
+    }
+
+    /// Get old child ID and clear it (for unmounting before rebuild)
+    pub(crate) fn take_old_child(&mut self) -> Option<ElementId> {
+        self.child.take()
     }
 }
 
@@ -171,16 +265,25 @@ impl<W: StatelessWidget> Element for ComponentElement<W> {
     }
 
     fn unmount(&mut self) {
-        // TODO: Unmount children
+        // Unmount child if exists
+        if let Some(child_id) = self.child.take() {
+            if let Some(tree) = &self.tree {
+                let mut tree_guard = tree.write();
+                tree_guard.unmount_element(child_id);
+            }
+        }
     }
 
-    fn update(&mut self, _new_widget: Box<dyn Any>) {
-        // TODO: Update widget and mark dirty
-        self.dirty = true;
+    fn update(&mut self, new_widget: Box<dyn Any + Send + Sync>) {
+        // Try to downcast to our widget type
+        if let Ok(widget) = new_widget.downcast::<W>() {
+            self.widget = *widget;
+            self.dirty = true;
+        }
     }
 
-    fn rebuild(&mut self) {
-        self.perform_rebuild();
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::Widget>, usize)> {
+        self.perform_rebuild()
     }
 
     fn id(&self) -> ElementId {
@@ -202,6 +305,52 @@ impl<W: StatelessWidget> Element for ComponentElement<W> {
     fn mark_dirty(&mut self) {
         self.dirty = true;
     }
+
+    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn Element)) {
+        if let Some(child_id) = self.child {
+            if let Some(tree) = &self.tree {
+                let tree_guard = tree.read();
+                if let Some(child_element) = tree_guard.get_element(child_id) {
+                    visitor(child_element);
+                }
+            }
+        }
+    }
+
+    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn Element)) {
+        if let Some(child_id) = self.child {
+            if let Some(tree) = &self.tree {
+                let mut tree_guard = tree.write();
+                if let Some(child_element) = tree_guard.get_element_mut(child_id) {
+                    visitor(child_element);
+                }
+            }
+        }
+    }
+
+    fn set_tree_ref(&mut self, tree: std::sync::Arc<parking_lot::RwLock<crate::ElementTree>>) {
+        self.tree = Some(tree);
+    }
+
+    fn widget_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<W>()
+    }
+
+    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
+        self.take_old_child()
+    }
+
+    fn set_child_after_mount(&mut self, child_id: ElementId) {
+        self.set_child(child_id)
+    }
+
+    fn child_ids(&self) -> Vec<ElementId> {
+        if let Some(child_id) = self.child {
+            vec![child_id]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 /// StatefulElement - for StatefulWidget
@@ -211,25 +360,32 @@ pub struct StatefulElement {
     id: ElementId,
     parent: Option<ElementId>,
     dirty: bool,
-    // TODO: Add state field when StatefulWidget is implemented
+    /// The widget that created this element
+    widget: Option<Box<dyn Any + Send + Sync>>,
+    /// The state object
+    state: Option<Box<dyn crate::State>>,
+    /// Child element ID
+    child: Option<ElementId>,
+    /// Tree reference for mounting children
+    tree: Option<Arc<RwLock<ElementTree>>>,
 }
 
 impl StatefulElement {
-    /// Create new stateful element
-    pub fn new() -> Self {
+    /// Create new stateful element with widget and state
+    pub fn new<W: crate::StatefulWidget>(widget: W) -> Self {
+        let state = widget.create_state();
         Self {
             id: ElementId::new(),
             parent: None,
             dirty: true,
+            widget: Some(Box::new(widget)),
+            state: Some(Box::new(state)),
+            child: None,
+            tree: None,
         }
     }
 }
 
-impl Default for StatefulElement {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl fmt::Debug for StatefulElement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -237,6 +393,9 @@ impl fmt::Debug for StatefulElement {
             .field("id", &self.id)
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
+            .field("has_widget", &self.widget.is_some())
+            .field("has_state", &self.state.is_some())
+            .field("child", &self.child)
             .finish()
     }
 }
@@ -245,24 +404,63 @@ impl Element for StatefulElement {
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
         self.dirty = true;
-        // TODO: Create state and call init_state()
+
+        // Call init_state() on first mount
+        if let Some(state) = &mut self.state {
+            state.init_state();
+        }
     }
 
     fn unmount(&mut self) {
-        // TODO: Call dispose() on state and unmount children
+        // Unmount child first
+        if let Some(child_id) = self.child.take() {
+            if let Some(tree) = &self.tree {
+                tree.write().unmount_element(child_id);
+            }
+        }
+
+        // Call dispose() on state
+        if let Some(state) = &mut self.state {
+            state.dispose();
+        }
     }
 
-    fn update(&mut self, _new_widget: Box<dyn Any>) {
-        // TODO: Call did_update_widget() on state
+    fn update(&mut self, new_widget: Box<dyn Any + Send + Sync>) {
+        // Store old widget for did_update_widget
+        let old_widget = self.widget.take();
+        self.widget = Some(new_widget);
+
+        // Call did_update_widget() on state
+        if let Some(state) = &mut self.state {
+            if let Some(old) = old_widget.as_ref() {
+                state.did_update_widget(old.as_ref());
+            }
+        }
+
         self.dirty = true;
     }
 
-    fn rebuild(&mut self) {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::Widget>, usize)> {
         if !self.dirty {
-            return;
+            return Vec::new();
         }
         self.dirty = false;
-        // TODO: Call build() on state
+
+        // Call build() on state
+        if let Some(state) = &mut self.state {
+            if let Some(tree) = &self.tree {
+                let context = crate::BuildContext::new(tree.clone(), self.id);
+                let child_widget = state.build(&context);
+
+                // Mark old child for unmounting
+                self.child = None;
+
+                // Return child to mount
+                return vec![(self.id, child_widget, 0)];
+            }
+        }
+
+        Vec::new()
     }
 
     fn id(&self) -> ElementId {
@@ -279,6 +477,43 @@ impl Element for StatefulElement {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    fn set_tree_ref(&mut self, tree: std::sync::Arc<parking_lot::RwLock<crate::ElementTree>>) {
+        self.tree = Some(tree);
+    }
+
+    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
+        self.child.take()
+    }
+
+    fn set_child_after_mount(&mut self, child_id: ElementId) {
+        self.child = Some(child_id);
+    }
+
+    fn child_ids(&self) -> Vec<ElementId> {
+        if let Some(child_id) = self.child {
+            vec![child_id]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl StatefulElement {
+    /// Set tree reference (called by ElementTree after mounting)
+    pub(crate) fn set_tree(&mut self, tree: Arc<RwLock<ElementTree>>) {
+        self.tree = Some(tree);
+    }
+
+    /// Set child element ID
+    pub(crate) fn set_child(&mut self, child_id: ElementId) {
+        self.child = Some(child_id);
+    }
+
+    /// Get child element ID
+    pub(crate) fn child(&self) -> Option<ElementId> {
+        self.child
     }
 }
 
@@ -358,7 +593,7 @@ impl<W: RenderObjectWidget> Element for RenderObjectElement<W> {
         self.render_object = None;
     }
 
-    fn update(&mut self, new_widget: Box<dyn Any>) {
+    fn update(&mut self, new_widget: Box<dyn Any + Send + Sync>) {
         // Try to downcast to our widget type
         if let Ok(widget) = new_widget.downcast::<W>() {
             self.widget = *widget;
@@ -367,9 +602,9 @@ impl<W: RenderObjectWidget> Element for RenderObjectElement<W> {
         }
     }
 
-    fn rebuild(&mut self) {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::Widget>, usize)> {
         if !self.dirty {
-            return;
+            return Vec::new();
         }
         self.dirty = false;
 
@@ -378,6 +613,7 @@ impl<W: RenderObjectWidget> Element for RenderObjectElement<W> {
 
         // RenderObjectElement typically doesn't have child elements
         // (those are managed by specific subclasses)
+        Vec::new()
     }
 
     fn id(&self) -> ElementId {
@@ -398,6 +634,18 @@ impl<W: RenderObjectWidget> Element for RenderObjectElement<W> {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    fn widget_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<W>()
+    }
+
+    fn render_object(&self) -> Option<&dyn crate::RenderObject> {
+        self.render_object.as_ref().map(|ro| ro.as_ref())
+    }
+
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::RenderObject> {
+        self.render_object.as_mut().map(|ro| ro.as_mut())
     }
 }
 
@@ -422,16 +670,51 @@ mod tests {
         assert_eq!(format!("{}", id), "ElementId(42)");
     }
 
+    // Test helper for StatefulWidget
+    #[derive(Debug, Clone)]
+    struct TestStatefulWidget {
+        value: i32,
+    }
+
+    #[derive(Debug)]
+    struct TestState {
+        count: i32,
+    }
+
+    impl crate::StatefulWidget for TestStatefulWidget {
+        type State = TestState;
+
+        fn create_state(&self) -> Self::State {
+            TestState { count: self.value }
+        }
+    }
+
+    impl crate::State for TestState {
+        fn build(&mut self, _context: &crate::BuildContext) -> Box<dyn crate::Widget> {
+            // Return a simple widget for testing
+            Box::new(TestStatefulWidget { value: self.count })
+        }
+    }
+
+    // Manual Widget impl (no blanket impl for StatefulWidget)
+    impl crate::Widget for TestStatefulWidget {
+        fn create_element(&self) -> Box<dyn Element> {
+            Box::new(StatefulElement::new(self.clone()))
+        }
+    }
+
     #[test]
     fn test_stateful_element_creation() {
-        let element = StatefulElement::new();
+        let widget = TestStatefulWidget { value: 42 };
+        let element = StatefulElement::new(widget);
         assert!(element.is_dirty());
         assert_eq!(element.parent(), None);
     }
 
     #[test]
     fn test_stateful_element_mount() {
-        let mut element = StatefulElement::new();
+        let widget = TestStatefulWidget { value: 42 };
+        let mut element = StatefulElement::new(widget);
         let parent_id = ElementId(100);
 
         element.mount(Some(parent_id), 0);
@@ -442,7 +725,8 @@ mod tests {
 
     #[test]
     fn test_stateful_element_mark_dirty() {
-        let mut element = StatefulElement::new();
+        let widget = TestStatefulWidget { value: 42 };
+        let mut element = StatefulElement::new(widget);
         element.dirty = false;
 
         assert!(!element.is_dirty());
@@ -453,7 +737,8 @@ mod tests {
 
     #[test]
     fn test_element_downcast() {
-        let element = StatefulElement::new();
+        let widget = TestStatefulWidget { value: 42 };
+        let element = StatefulElement::new(widget);
         let boxed: Box<dyn Element> = Box::new(element);
 
         // Test is() check
@@ -466,7 +751,8 @@ mod tests {
 
     #[test]
     fn test_element_downcast_mut() {
-        let element = StatefulElement::new();
+        let widget = TestStatefulWidget { value: 42 };
+        let element = StatefulElement::new(widget);
         let mut boxed: Box<dyn Element> = Box::new(element);
 
         boxed.downcast_mut::<StatefulElement>().unwrap().dirty = false;
@@ -476,7 +762,8 @@ mod tests {
 
     #[test]
     fn test_element_downcast_owned() {
-        let element = StatefulElement::new();
+        let widget = TestStatefulWidget { value: 42 };
+        let element = StatefulElement::new(widget);
         let id = element.id();
         let boxed: Box<dyn Element> = Box::new(element);
 

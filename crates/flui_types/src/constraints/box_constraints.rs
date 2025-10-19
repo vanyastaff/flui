@@ -45,6 +45,14 @@ pub struct BoxConstraints {
 }
 
 impl BoxConstraints {
+    /// Unconstrained box constraints - widget can be any size
+    pub const UNCONSTRAINED: Self = Self {
+        min_width: 0.0,
+        max_width: f32::INFINITY,
+        min_height: 0.0,
+        max_height: f32::INFINITY,
+    };
+
     /// Create new box constraints
     ///
     /// # Examples
@@ -114,6 +122,39 @@ impl BoxConstraints {
             max_width: size.width,
             min_height: 0.0,
             max_height: size.height,
+        }
+    }
+
+    /// Create constraints with optional tight width and/or height
+    ///
+    /// Allows specifying tight constraints for width and/or height independently.
+    /// If a dimension is None, it remains unconstrained.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::constraints::BoxConstraints;
+    ///
+    /// // Tight width and height
+    /// let constraints = BoxConstraints::tight_for(Some(100.0), Some(50.0));
+    /// assert!(constraints.has_tight_width());
+    /// assert!(constraints.has_tight_height());
+    ///
+    /// // Tight width only
+    /// let constraints = BoxConstraints::tight_for(Some(100.0), None);
+    /// assert!(constraints.has_tight_width());
+    /// assert!(!constraints.has_tight_height());
+    ///
+    /// // Unconstrained
+    /// let constraints = BoxConstraints::tight_for(None, None);
+    /// assert_eq!(constraints, BoxConstraints::UNCONSTRAINED);
+    /// ```
+    pub fn tight_for(width: Option<f32>, height: Option<f32>) -> Self {
+        Self {
+            min_width: width.unwrap_or(0.0),
+            max_width: width.unwrap_or(f32::INFINITY),
+            min_height: height.unwrap_or(0.0),
+            max_height: height.unwrap_or(f32::INFINITY),
         }
     }
 

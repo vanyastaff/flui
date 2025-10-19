@@ -9,7 +9,20 @@
       "Bash(cargo fix:*)",
       "Bash(awk:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(for file in basic/{align,padding,sized_box}.rs layout/{row,column}.rs)",
+      "Bash(do)",
+      "Bash(done)",
+      "Bash(xargs basename -a)",
+      "Bash(for file in basic/{align,padding,sized_box}.rs layout/{row,column}.rs visual_effects/{opacity,transform,clip_rrect}.rs)",
+      "Bash(do basename \"$file\")",
+      "Bash(cat crates/flui_app/src/lib.rs)",
+      "Bash(cargo run --example hello_world)",
+      "Bash(taskkill /F /IM hello_world.exe)",
+      "Bash(RUST_LOG=debug cargo run --example hello_world)",
+      "Bash(taskkill //F //IM hello_world.exe)",
+      "Bash(RUST_LOG=info cargo run --example hello_world)",
+      "Bash(RUST_LOG=debug cargo run --example counter)"
     ],
     "deny": [],
     "ask": []

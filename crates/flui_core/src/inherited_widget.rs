@@ -94,7 +94,9 @@ pub struct InheritedElement<W: InheritedWidget> {
     widget: W,
     parent: Option<crate::ElementId>,
     dirty: bool,
-    // TODO: Track dependent elements for efficient rebuild
+    /// Elements that depend on this InheritedWidget
+    /// When data changes, these elements will be marked dirty
+    dependents: std::collections::HashSet<crate::ElementId>,
 }
 
 impl<W: InheritedWidget> InheritedElement<W> {
@@ -105,6 +107,24 @@ impl<W: InheritedWidget> InheritedElement<W> {
             widget,
             parent: None,
             dirty: true,
+            dependents: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Register an element as dependent on this InheritedWidget
+    ///
+    /// When the data changes, registered dependents will be marked dirty.
+    pub fn register_dependent(&mut self, element_id: crate::ElementId) {
+        self.dependents.insert(element_id);
+    }
+
+    /// Notify all dependents that data has changed
+    ///
+    /// Marks all dependent elements as dirty so they will rebuild.
+    fn notify_dependents(&mut self, tree: &std::sync::Arc<parking_lot::RwLock<crate::ElementTree>>) {
+        for &dependent_id in &self.dependents {
+            let mut tree_guard = tree.write();
+            tree_guard.mark_element_dirty(dependent_id);
         }
     }
 
@@ -136,7 +156,7 @@ impl<W: InheritedWidget> Element for InheritedElement<W> {
         // TODO: Unmount child and notify dependents
     }
 
-    fn update(&mut self, new_widget: Box<dyn Any>) {
+    fn update(&mut self, new_widget: Box<dyn Any + Send + Sync>) {
         if let Ok(new_w) = new_widget.downcast::<W>() {
             let should_notify = new_w.update_should_notify(&self.widget);
             self.widget = *new_w;
@@ -148,12 +168,13 @@ impl<W: InheritedWidget> Element for InheritedElement<W> {
         }
     }
 
-    fn rebuild(&mut self) {
+    fn rebuild(&mut self) -> Vec<(crate::ElementId, Box<dyn crate::Widget>, usize)> {
         if !self.dirty {
-            return;
+            return Vec::new();
         }
         self.dirty = false;
         // TODO: Rebuild child
+        Vec::new()
     }
 
     fn id(&self) -> crate::ElementId {

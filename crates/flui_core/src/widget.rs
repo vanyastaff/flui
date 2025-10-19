@@ -187,6 +187,17 @@ pub trait StatefulWidget: fmt::Debug + Clone + Send + Sync + 'static {
     }
 }
 
+// TODO: Cannot have blanket impl for both StatelessWidget and StatefulWidget
+// because they conflict. Need to use macros or manual implementation.
+// For now, users must manually implement Widget for StatefulWidget types.
+//
+// Example:
+// impl Widget for MyStatefulWidget {
+//     fn create_element(&self) -> Box<dyn Element> {
+//         Box::new(StatefulElement::new(self.clone()))
+//     }
+// }
+
 /// State - mutable state for StatefulWidget
 ///
 /// Similar to Flutter's State. Holds mutable state and builds widget tree.
@@ -226,8 +237,12 @@ pub trait State: DowncastSync + fmt::Debug {
     /// Request rebuild (like setState in Flutter)
     ///
     /// Marks the element as dirty so it will rebuild on the next frame.
+    ///
+    /// Note: This method is deprecated. Use `BuildContext::mark_needs_build()` instead.
+    /// State objects should call `context.mark_needs_build()` after modifying state.
+    #[deprecated(note = "Use BuildContext::mark_needs_build() instead")]
     fn mark_needs_build(&mut self) {
-        // TODO: Implement when we have build context stored in state
+        // No-op: Users should call context.mark_needs_build() directly
     }
 }
 
@@ -331,7 +346,7 @@ mod tests {
     #[test]
     fn test_state_build() {
         let mut state = CounterState { count: 5 };
-        let context = BuildContext::new();
+        let context = BuildContext::empty();
 
         let child = state.build(&context);
         // Should create a widget

@@ -6,13 +6,13 @@ members = [
     "crates/flui_core",
     "crates/flui_rendering",
     "crates/flui_widgets",
+    "crates/flui_app",          # Application framework
     # "crates/flui_painting",
     # "crates/flui_animation",
     # "crates/flui_gestures",
     # "crates/flui_scheduler",
     # "crates/flui_platform",
     # "crates/flui_provider",
-    # "flui",
 ]
 
 [workspace.package]
@@ -94,11 +94,17 @@ description = "Flutter-inspired declarative UI framework built on egui 0.33"
 keywords = ["gui", "ui", "egui", "flutter", "reactive"]
 
 [dependencies]
+# Flui crates
+flui_app = { path = "crates/flui_app" }
+flui_widgets = { path = "crates/flui_widgets" }
+
+# Workspace dependencies
 egui.workspace = true
 eframe.workspace = true
 tokio.workspace = true
 serde.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "flui_app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Application framework for Flui - Flutter-inspired UI on egui"
+
+[dependencies]
+# Flui crates
+flui_core = { path = "../flui_core" }
+flui_types = { path = "../flui_types" }
+flui_rendering = { path = "../flui_rendering" }
+flui_widgets = { path = "../flui_widgets" }
+
+# egui & platform
+egui.workspace = true
+eframe.workspace = true
+
+# Utilities
+tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]

@@ -473,7 +473,7 @@
 - ✅ RenderProxyBox (passes layout to child)
 - ⏳ RenderShiftedBox (планується)
 
-**Specialized render objects (🚧 В ПРОЦЕСІ - 11/42 реалізовано):**
+**Specialized render objects (🚧 В ПРОЦЕСІ - 14/42 реалізовано):**
 
 **Layout render objects:**
 - ✅ **RenderFlex** (550 строк, 15 тестів) - Row/Column layout з flexible children, MainAxisAlignment, CrossAxisAlignment
@@ -494,14 +494,16 @@
 
 **Visual effects render objects:**
 - ✅ **RenderOpacity** (280 строк, 15 тестів) - Прозрачність child (opacity 0.0-1.0), optimization для повністю прозорих (2025-01-18)
-- ⏳ RenderAnimatedOpacity
-- ⏳ RenderTransform, RenderRotatedBox
-- ⏳ RenderClipRect, RenderClipRRect, RenderClipOval, RenderClipPath
-- ⏳ RenderPhysicalModel, RenderPhysicalShape
-- ⏳ RenderCustomPaint
-- ⏳ RenderRepaintBoundary
-- ⏳ RenderBackdropFilter
-- ⏳ RenderShaderMask
+- ✅ **RenderTransform** - Matrix4 transformations (translate, rotate, scale) (2025-01-18)
+- ✅ **RenderClipRRect** - Rounded rectangle clipping з BorderRadius (2025-01-18)
+- ⏳ RenderAnimatedOpacity (планується)
+- ⏳ RenderRotatedBox (планується)
+- ⏳ RenderClipRect, RenderClipOval, RenderClipPath (планується)
+- ⏳ RenderPhysicalModel, RenderPhysicalShape (планується)
+- ⏳ RenderCustomPaint (планується)
+- ⏳ RenderRepaintBoundary (планується)
+- ⏳ RenderBackdropFilter (планується)
+- ⏳ RenderShaderMask (планується)
 
 **Interaction render objects:**
 - ⏳ RenderIgnorePointer, RenderAbsorbPointer
@@ -981,27 +983,55 @@
 
 ---
 
-### flui_widgets - Widget library
+### flui_widgets - Widget library (✅ COMPLETED Week 5-6 - 17/17 виджетів реалізовано!)
 
 **З widgets.md (~1000+ типів):**
 
-Це ВЕЛИЧЕЗНА бібліотека. Основні категорії:
+Це ВЕЛИЧЕЗНА бібліотека. **Week 5-6 Result:** 17 базових виджетів реалізовано! (~7000 строк, 292 теста)
 
-**Basic widgets:**
-- Container, Padding, Center, Align
-- SizedBox, ConstrainedBox, AspectRatio
-- Baseline, FittedBox, FractionallySizedBox
-- LimitedBox, Offstage, OverflowBox
-- Transform, RotatedBox
-- Visibility
+**✅ Basic Layout widgets (РЕАЛИЗОВАНО - 7 виджетів):**
+- ✅ **Container** (335 строк, 18 тестів) - StatelessWidget композиція всіх layout properties
+- ✅ **SizedBox** (279 строк, 18 тестів) - RenderObjectWidget → RenderConstrainedBox
+- ✅ **Padding** (242 строк, 11 тестів) - RenderObjectWidget → RenderPadding
+- ✅ **Center** (210 строк, 11 тестів) - RenderObjectWidget → RenderPositionedBox with CENTER
+- ✅ **Align** (332 строк, 17 тестів) - RenderObjectWidget → RenderPositionedBox
+- ✅ **DecoratedBox** (464 строки, 15 тестів) - RenderObjectWidget → RenderDecoratedBox
+- ✅ **AspectRatio** (~340 строк, 19 тестів) - RenderObjectWidget → RenderAspectRatio
 
-**Layout:**
-- Row, Column, Flex
-- Stack, Positioned, IndexedStack
-- Wrap, Flow
-- ListBody, ListView, GridView
-- Table, TableRow, TableCell
-- CustomMultiChildLayout, CustomSingleChildLayout
+**✅ Flex Layout widgets (РЕАЛИЗОВАНО - 4 виджета):**
+- ✅ **Row** (261 строка, 13 тестів) - MultiChildRenderObjectWidget → RenderFlex Horizontal
+- ✅ **Column** (261 строка, 13 тестів) - MultiChildRenderObjectWidget → RenderFlex Vertical
+- ✅ **Flexible** (~440 строк, 19 тестів) - ParentDataWidget для RenderFlex з FlexFit::Loose
+- ✅ **Expanded** (~420 строк, 13 тестів) - ParentDataWidget для RenderFlex з FlexFit::Tight
+
+**✅ Stack Layout widgets (РЕАЛИЗОВАНО - 3 виджета):**
+- ✅ **Stack** (542 строки, 18 тестів) - MultiChildRenderObjectWidget → RenderStack
+- ✅ **Positioned** (737 строк, 22 теста) - ParentDataWidget для Stack з координатами
+- ✅ **IndexedStack** (624 строки, 22 теста) - MultiChildRenderObjectWidget → RenderIndexedStack
+
+**✅ Visual Effects widgets (РЕАЛИЗОВАНО - 3 виджета):**
+- ✅ **Opacity** (~350 строк, 18 тестів) - RenderObjectWidget → RenderOpacity
+- ✅ **Transform** (536 строк, 23 теста) - RenderObjectWidget → RenderTransform
+- ✅ **ClipRRect** (609 строк, 21 тест) - RenderObjectWidget → RenderClipRRect
+
+**⏳ Додаткові базові віджети (планується пізніше):**
+- ⏳ ConstrainedBox (використати RenderConstrainedBox)
+- ⏳ Baseline
+- ⏳ FittedBox (використати RenderFractionallySizedBox)
+- ⏳ FractionallySizedBox
+- ⏳ LimitedBox
+- ⏳ Offstage
+- ⏳ OverflowBox
+- ⏳ RotatedBox
+- ⏳ Visibility
+
+**⏳ Додаткові layout віджети (планується пізніше):**
+- ⏳ Flex
+- ⏳ Wrap
+- ⏳ Flow
+- ⏳ ListBody, ListView, GridView
+- ⏳ Table, TableRow, TableCell
+- ⏳ CustomMultiChildLayout, CustomSingleChildLayout
 
 **Scrolling:**
 - SingleChildScrollView
@@ -1038,6 +1068,15 @@
 - OutlinedButton
 - IconButton
 - FloatingActionButton
+
+**🎨 Visual effects (ПЛАНУЄТЬСЯ Week 6 - 5 виджетів):**
+- ⏳ **DecoratedBox** (планується - використати RenderDecoratedBox)
+- ⏳ **Opacity** (планується - використати RenderOpacity)
+- ⏳ **Transform** (планується - використати RenderTransform)
+- ⏳ **ClipRRect** (планується - використати RenderClipRRect)
+- ⏳ ClipRect, ClipOval, ClipPath (планується пізніше)
+- ⏳ BackdropFilter (планується пізніше)
+- ⏳ ShaderMask (планується пізніше)
 
 **Interaction:**
 - GestureDetector
@@ -1222,6 +1261,17 @@
 - ✅ ParentData система (4 types з DowncastSync)
 
 **Разом: 49 тестів**, що реалізує **повну архітектуру Widget → Element → RenderObject**!
+
+**🚀 НОВИНКА Week 5!** В `flui_widgets` почато реалізацію віджетів:
+- ✅ **7 базових віджетів** реалізовано (Container, Row, Column, SizedBox, Padding, Center, Align)
+- ✅ **~1865 строк коду** в flui_widgets
+- ✅ **102 тести** (превысили план Week 5 в 2.5x!)
+- ✅ **RenderObjectWidget** інтеграція працює
+- ✅ **bon Builder** паттерн реалізовано
+- ✅ **Архітектурна документація:** WIDGET_GUIDELINES.md, WIDGET_TEMPLATE.rs, ARCHITECTURE_DECISIONS.md
+- ✅ **Структура папок:** basic/, layout/, visual_effects/ (planned)
+
+**Week 6 План:** +9 віджетів (DecoratedBox, AspectRatio, Opacity, Transform, ClipRRect, Stack, Positioned, Expanded, Flexible)
 
 ---
 

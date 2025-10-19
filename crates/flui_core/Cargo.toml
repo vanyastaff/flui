@@ -16,6 +16,7 @@ thiserror.workspace = true
 dyn-clone.workspace = true
 downcast-rs.workspace = true
 egui.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
