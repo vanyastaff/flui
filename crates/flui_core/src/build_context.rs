@@ -571,6 +571,56 @@ impl BuildContext {
         tree.get_element(self.element_id).is_some()
     }
 
+    /// Get the InheritedElement for a specific InheritedWidget type without creating a dependency
+    ///
+    /// Similar to Flutter's `context.getElementForInheritedWidgetOfExactType<T>()`.
+    /// This is like `depend_on_inherited_widget()` but does NOT register a dependency,
+    /// so this element will NOT rebuild when the InheritedWidget changes.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `W`: The InheritedWidget type to search for
+    ///
+    /// # Returns
+    ///
+    /// Element ID of the InheritedElement if found, None otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // One-time access to Theme without dependency
+    /// if let Some(theme_id) = context.get_element_for_inherited_widget_of_exact_type::<Theme>() {
+    ///     println!("Found Theme element: {}", theme_id);
+    /// }
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// Use this only when you need one-time access to inherited data.
+    /// For most cases, use `depend_on_inherited_widget()` instead.
+    pub fn get_element_for_inherited_widget_of_exact_type<W: InheritedWidget + Clone + 'static>(
+        &self,
+    ) -> Option<ElementId> {
+        use crate::InheritedElement;
+
+        let tree = self.tree.read();
+        let mut current_id = self.parent();
+
+        while let Some(id) = current_id {
+            if let Some(element) = tree.get_element(id) {
+                // Try to downcast to InheritedElement<W>
+                if let Some(_inherited_elem) = element.downcast_ref::<InheritedElement<W>>() {
+                    return Some(id);
+                }
+                current_id = element.parent();
+            } else {
+                break;
+            }
+        }
+
+        None
+    }
+
     /// Get debug information about this context
     ///
     /// Returns a string with information about the element and its position in the tree.
