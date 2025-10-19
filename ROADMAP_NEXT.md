@@ -1,760 +1,607 @@
-# Flui Framework - Next Roadmap (Week 3-4)
+# Flui Framework - Week 5-6 Roadmap: flui_widgets
 
-> План развития на ближайшие 2 недели (19 октября - 2 ноября 2025)
+> План развития на следующие 2 недели (20 октября - 3 ноября 2025)
+> **Фокус:** Реализация базовых виджетов на основе готовых RenderObjects
 
 ## 🎯 Current Status (2025-10-19)
 
-**Completed RenderObjects (13/13) - 100%!:**
-- ✅ RenderFlex (550 строк, 15 тестов) - Row/Column layout
-- ✅ RenderPadding (280 строк, 8 тестов)
-- ✅ RenderStack (330 строк, 13 тестов) - Positioned layout
-- ✅ RenderConstrainedBox (180 строк, 10 тестов)
-- ✅ RenderDecoratedBox (320 строк, 10 тестов)
-- ✅ RenderAspectRatio (390 строк, 17 тестов)
-- ✅ RenderLimitedBox (380 строк, 13 тестов)
-- ✅ RenderIndexedStack (430 строк, 13 тестов)
-- ✅ RenderPositionedBox (410 строк, 16 тестов)
-- ✅ RenderFractionallySizedBox (400 строк, 15 тестов)
-- ✅ RenderOpacity (280 строк, 15 тестов)
-- ✅ RenderTransform (400 строк, 14 тестов)
-- ✅ **RenderClipRRect (360 строк, 13 тестов)** - ЗАВЕРШЕНО СЕГОДНЯ!
+**✅ Завершено Week 3-4:**
+- ✅ **13/13 RenderObjects** полностью готовы (flui_rendering complete!)
+- ✅ **814 тестов** проходят во всём workspace
+- ✅ **~23,550 строк кода** написано
+- ✅ **0 clippy warnings**
 
-**Total Progress:**
-- **814 тестов** (584 flui_types + 49 flui_core + 127 flui_animation + 27 flui_foundation + 27 flui_types_benchmarks)
-- **13 RenderObjects** готовы - 100% выполнено! 🎉
-- **~23,550 строк кода**
+**🚀 Готовы к старту Week 5-6:**
+- 🎯 Создать **flui_widgets** crate
+- 🎯 Реализовать базовые виджеты
+- 🎯 Интеграция Widget → Element → RenderObject
+- 🎯 Первые работающие примеры
 
 ---
 
-## 📋 Week 3: Simple Layout RenderObjects (19-26 октября) ✅ ЗАВЕРШЕНО
+## 📋 Week 5: Basic Widgets (20-27 октября)
 
-### Priority 1: RenderLimitedBox (~150 строк, 8 тестов) ✅ ГОТОВО
+### Priority 1: Setup flui_widgets Crate (~2 часа)
+
+**Задачи:**
+- Создать `crates/flui_widgets/` структуру
+- Настроить Cargo.toml с зависимостями
+- Создать lib.rs с базовой структурой
+- Настроить re-exports
+
+**Зависимости:**
+```toml
+[dependencies]
+flui_core = { path = "../flui_core" }
+flui_rendering = { path = "../flui_rendering" }
+flui_types = { path = "../flui_types" }
+```
+
+---
+
+### Priority 2: Container Widget (~300 строк, 12 тестов)
+
+**Время:** 2 дня
+
+**Описание:** Базовый контейнер - композиция всех layout виджетов
+
+**Структура:**
+```rust
+pub struct Container {
+    key: Option<Key>,
+    // Layout properties
+    width: Option<f32>,
+    height: Option<f32>,
+    padding: Option<EdgeInsets>,
+    margin: Option<EdgeInsets>,
+    alignment: Option<Alignment>,
+
+    // Decoration
+    color: Option<Color>,
+    decoration: Option<BoxDecoration>,
+
+    // Constraints
+    constraints: Option<BoxConstraints>,
+
+    // Child
+    child: Option<Box<dyn Widget>>,
+}
+```
+
+**Реализация:**
+- Использует RenderConstrainedBox, RenderPadding, RenderDecoratedBox, RenderPositionedBox
+- Композиция через вложенные виджеты
+- Builder pattern для удобного API
+
+**Тесты:**
+- Container with width/height
+- Container with padding
+- Container with decoration
+- Container with alignment
+- Container composition
+
+---
+
+### Priority 3: Row & Column Widgets (~150 строк каждый, 8 тестов)
+
+**Время:** 1.5 дня
+
+**Описание:** Layout widgets для горизонтального и вертикального размещения
+
+**Row:**
+```rust
+pub struct Row {
+    key: Option<Key>,
+    main_axis_alignment: MainAxisAlignment,
+    cross_axis_alignment: CrossAxisAlignment,
+    main_axis_size: MainAxisSize,
+    children: Vec<Box<dyn Widget>>,
+}
+
+impl RenderObjectWidget for Row {
+    type RenderObjectType = RenderFlex;
+
+    fn create_render_object(&self, context: &BuildContext) -> Self::RenderObjectType {
+        RenderFlex::new(
+            Axis::Horizontal,
+            self.main_axis_alignment,
+            self.cross_axis_alignment,
+            self.main_axis_size,
+        )
+    }
+}
+```
+
+**Column:** аналогично, но с Axis::Vertical
+
+**Тесты:**
+- Row with multiple children
+- Column with multiple children
+- MainAxisAlignment variants
+- CrossAxisAlignment variants
+- MainAxisSize::Min vs Max
+
+---
+
+### Priority 4: SizedBox, Padding, Center Widgets (~100 строк каждый, 6 тестов)
+
+**Время:** 1.5 дня
+
+**Описание:** Простые single-child layout виджеты
+
+**SizedBox:**
+```rust
+pub struct SizedBox {
+    key: Option<Key>,
+    width: Option<f32>,
+    height: Option<f32>,
+    child: Option<Box<dyn Widget>>,
+}
+
+impl RenderObjectWidget for SizedBox {
+    type RenderObjectType = RenderConstrainedBox;
+
+    fn create_render_object(&self, context: &BuildContext) -> Self::RenderObjectType {
+        RenderConstrainedBox::new(BoxConstraints::tightFor(
+            self.width,
+            self.height,
+        ))
+    }
+}
+```
+
+**Padding:**
+```rust
+pub struct Padding {
+    key: Option<Key>,
+    padding: EdgeInsets,
+    child: Option<Box<dyn Widget>>,
+}
+```
+
+**Center:**
+```rust
+pub struct Center {
+    key: Option<Key>,
+    width_factor: Option<f32>,
+    height_factor: Option<f32>,
+    child: Option<Box<dyn Widget>>,
+}
+```
+
+---
+
+### Priority 5: Align Widget (~120 строк, 8 тестов)
 
 **Время:** 1 день
 
-**Описание:** Ограничивает размер child при unbounded constraints
+**Описание:** Выравнивание child внутри доступного пространства
 
-**Алгоритм:**
 ```rust
-fn layout(&mut self, constraints: BoxConstraints) -> Size {
-    let child_constraints = BoxConstraints::new(
-        constraints.min_width,
-        if constraints.max_width.is_infinite() {
-            self.max_width
-        } else {
-            constraints.max_width
-        },
-        constraints.min_height,
-        if constraints.max_height.is_infinite() {
-            self.max_height
-        } else {
-            constraints.max_height
-        },
-    );
+pub struct Align {
+    key: Option<Key>,
+    alignment: Alignment,
+    width_factor: Option<f32>,
+    height_factor: Option<f32>,
+    child: Option<Box<dyn Widget>>,
+}
 
-    let child_size = child.layout(child_constraints);
-    constraints.constrain(child_size)
+impl RenderObjectWidget for Align {
+    type RenderObjectType = RenderPositionedBox;
+
+    fn create_render_object(&self, context: &BuildContext) -> Self::RenderObjectType {
+        RenderPositionedBox::new(
+            self.alignment,
+            self.width_factor,
+            self.height_factor,
+        )
+    }
 }
 ```
 
-**Примеры использования:**
-- Ограничение размера текста в unbounded контексте
-- Ограничение размера изображений
-- Предотвращение бесконечных размеров
+---
 
-**Тесты:**
-- Unbounded width → limited to maxWidth
-- Unbounded height → limited to maxHeight
-- Bounded constraints → pass through
-- No child → smallest size
+### Summary Week 5:
+- ✅ flui_widgets crate setup
+- ✅ **6 базовых виджетов** (Container, Row, Column, SizedBox, Padding, Center, Align)
+- ✅ **~920 строк кода**
+- ✅ **40 тестов**
+- ✅ Widget → RenderObject integration работает
 
 ---
 
-### Priority 2: RenderIndexedStack (~200 строк, 10 тестов) ✅ ГОТОВО
+## 📋 Week 6: Flex & Stack Widgets (28 октября - 3 ноября)
 
-**Время:** 1.5 дня (фактически выполнено)
+### Priority 6: Expanded & Flexible Widgets (~150 строк, 8 тестов)
 
-**Описание:** Stack, который показывает только один child по индексу
+**Время:** 1 день
 
-**Алгоритм:**
+**Описание:** Flex children с автоматическим распределением пространства
+
+**Expanded:**
 ```rust
-struct RenderIndexedStack {
-    index: Option<usize>,
-    alignment: Alignment,
-    sizing: StackFit,
-    children: Vec<Box<dyn RenderObject>>,
+pub struct Expanded {
+    key: Option<Key>,
+    flex: i32,
+    child: Box<dyn Widget>,
 }
 
-fn layout(&mut self, constraints: BoxConstraints) -> Size {
-    // Layout ALL children (для правильного size calculation)
-    // Но paint только child с индексом `index`
-
-    let mut size = Size::zero();
-    for (i, child) in self.children.iter_mut().enumerate() {
-        let child_size = child.layout(loose_constraints);
-        if Some(i) == self.index || self.index.is_none() {
-            size = size.max(child_size); // Учитываем размер видимого
-        }
-    }
-
-    constraints.constrain(size)
-}
-
-fn paint(&self, painter: &egui::Painter, offset: Offset) {
-    // Paint только видимого child
-    if let Some(index) = self.index {
-        if let Some(child) = self.children.get(index) {
-            child.paint(painter, offset);
+impl ParentDataWidget for Expanded {
+    fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+        if let Some(flex_parent) = render_object.downcast_mut::<RenderFlex>() {
+            flex_parent.set_flex(self.flex);
         }
     }
 }
 ```
 
-**Примеры использования:**
-- Tab navigation (показывать только активный tab)
-- Wizard steps (показывать текущий шаг)
-- Page view (показывать текущую страницу)
-
-**Тесты:**
-- Index 0 → shows first child
-- Index out of bounds → shows nothing
-- index = None → shows nothing
-- Alignment with visible child
-- StackFit::Loose vs Expand
+**Flexible:**
+```rust
+pub struct Flexible {
+    key: Option<Key>,
+    flex: i32,
+    fit: FlexFit,
+    child: Box<dyn Widget>,
+}
+```
 
 ---
 
-### Priority 3: RenderPositionedBox (Align) (~180 строк, 10 тестов) ✅ ГОТОВО
+### Priority 7: Stack & Positioned Widgets (~200 строк, 10 тестов)
 
-**Время:** 1.5 дня (фактически выполнено)
+**Время:** 1.5 дня
 
-**Описание:** Выравнивает child внутри доступного пространства
+**Описание:** Позиционирование детей друг над другом
 
-**Алгоритм:**
+**Stack:**
 ```rust
-struct RenderPositionedBox {
+pub struct Stack {
+    key: Option<Key>,
     alignment: Alignment,
-    width_factor: Option<f32>,  // Size = child.width * width_factor
-    height_factor: Option<f32>,
-    child: Option<Box<dyn RenderObject>>,
+    fit: StackFit,
+    children: Vec<Box<dyn Widget>>,
 }
 
-fn layout(&mut self, constraints: BoxConstraints) -> Size {
-    let child_constraints = constraints.loosen();
-    let child_size = child.layout(child_constraints);
+impl MultiChildRenderObjectWidget for Stack {
+    type RenderObjectType = RenderStack;
 
-    let width = if let Some(factor) = self.width_factor {
-        (child_size.width * factor).max(constraints.min_width)
-    } else {
-        constraints.constrain_width(child_size.width)
-    };
-
-    let height = if let Some(factor) = self.height_factor {
-        (child_size.height * factor).max(constraints.min_height)
-    } else {
-        constraints.constrain_height(child_size.height)
-    };
-
-    Size::new(width, height)
-}
-
-fn paint(&self, painter: &egui::Painter, offset: Offset) {
-    // Calculate child offset based on alignment
-    let child_offset = self.alignment.along_size(
-        Size::new(self.size.width - child.size.width,
-                  self.size.height - child.size.height)
-    );
-
-    child.paint(painter, offset + child_offset);
+    fn create_render_object(&self, context: &BuildContext) -> Self::RenderObjectType {
+        RenderStack::new(self.alignment, self.fit)
+    }
 }
 ```
 
-**Примеры использования:**
-- Center widget (alignment = Alignment::CENTER)
-- Align widget (любое выравнивание)
-- Sized container (width_factor / height_factor)
-
-**Тесты:**
-- Alignment::CENTER
-- Alignment::TOP_LEFT
-- Alignment::BOTTOM_RIGHT
-- width_factor = 2.0 → parent twice child width
-- height_factor = 0.5 → parent half child height
+**Positioned:**
+```rust
+pub struct Positioned {
+    key: Option<Key>,
+    left: Option<f32>,
+    top: Option<f32>,
+    right: Option<f32>,
+    bottom: Option<f32>,
+    width: Option<f32>,
+    height: Option<f32>,
+    child: Box<dyn Widget>,
+}
+```
 
 ---
 
-### Priority 4: RenderFractionallySizedBox (~200 строк, 10 тестов) ✅ ГОТОВО
+### Priority 8: AspectRatio & DecoratedBox Widgets (~120 строк, 6 тестов)
 
-**Время:** 1.5 дня (фактически выполнено)
+**Время:** 1 день
 
-**Описание:** Размер child как процент от parent
+**Описание:** Специализированные layout и decoration виджеты
 
-**Алгоритм:**
+**AspectRatio:**
 ```rust
-struct RenderFractionallySizedBox {
-    width_factor: Option<f32>,   // 0.0 to 1.0 (or > 1.0)
-    height_factor: Option<f32>,
+pub struct AspectRatio {
+    key: Option<Key>,
+    aspect_ratio: f32,
+    child: Option<Box<dyn Widget>>,
+}
+```
+
+**DecoratedBox:**
+```rust
+pub struct DecoratedBox {
+    key: Option<Key>,
+    decoration: BoxDecoration,
+    position: DecorationPosition,
+    child: Option<Box<dyn Widget>>,
+}
+```
+
+---
+
+### Priority 9: Opacity, Transform, ClipRRect Widgets (~100 строк каждый, 6 тестов)
+
+**Время:** 1.5 дня
+
+**Описание:** Visual effects виджеты
+
+**Opacity:**
+```rust
+pub struct Opacity {
+    key: Option<Key>,
+    opacity: f32,
+    child: Option<Box<dyn Widget>>,
+}
+```
+
+**Transform:**
+```rust
+pub struct Transform {
+    key: Option<Key>,
+    transform: Matrix4,
     alignment: Alignment,
-    child: Option<Box<dyn RenderObject>>,
-}
-
-fn layout(&mut self, constraints: BoxConstraints) -> Size {
-    let child_constraints = BoxConstraints::new(
-        if let Some(factor) = self.width_factor {
-            constraints.max_width * factor
-        } else {
-            0.0
-        },
-        if let Some(factor) = self.width_factor {
-            constraints.max_width * factor
-        } else {
-            constraints.max_width
-        },
-        // Same for height
-    );
-
-    let child_size = child.layout(child_constraints);
-    constraints.constrain(child_size)
+    child: Option<Box<dyn Widget>>,
 }
 ```
 
-**Примеры использования:**
-- 50% width: `FractionallySizedBox(widthFactor: 0.5)`
-- 75% height: `FractionallySizedBox(heightFactor: 0.75)`
-- Responsive layouts
-
-**Тесты:**
-- widthFactor = 0.5 → child is 50% parent width
-- heightFactor = 0.75 → child is 75% parent height
-- widthFactor = None → child uses full width
-- Alignment with smaller child
-
----
-
-### Summary Week 3: ✅ ЗАВЕРШЕНО
-- ✅ **4 RenderObjects** (RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox)
-- ✅ **~1620 строк кода** (фактически больше, чем планировалось)
-- ✅ **57 тестов** (фактически больше, чем планировалось)
-- ✅ **Итого после Week 3:** 10 RenderObjects, 126 тестов в flui_rendering
-
----
-
-## 📋 Week 4: Complex Layout & Visual Effects (27 октября - 2 ноября) ✅ ПОЧТИ ЗАВЕРШЕНО
-
-### Priority 5: RenderOpacity (~150 строк, 8 тестов) ✅ ГОТОВО
-
-**Время:** 1 день (фактически выполнено раньше срока)
-
-**Описание:** Применяет opacity к child
-
-**Алгоритм:**
+**ClipRRect:**
 ```rust
-struct RenderOpacity {
-    opacity: f32,  // 0.0 to 1.0
-    child: Option<Box<dyn RenderObject>>,
-}
-
-fn paint(&self, painter: &egui::Painter, offset: Offset) {
-    // Set opacity on painter
-    let old_opacity = painter.opacity();
-    painter.set_opacity(self.opacity);
-
-    child.paint(painter, offset);
-
-    painter.set_opacity(old_opacity);
-}
-```
-
-**Тесты:**
-- Opacity 0.0 → invisible
-- Opacity 1.0 → fully visible
-- Opacity 0.5 → semi-transparent
-
----
-
-### Priority 6: RenderTransform (~250 строк, 12 тестов) ✅ ГОТОВО
-
-**Время:** 2 дня (фактически выполнено раньше срока)
-
-**Описание:** Применяет 2D трансформации (translate, rotate, scale)
-
-**Алгоритм:**
-```rust
-struct RenderTransform {
-    transform: Transform,
-    alignment: Alignment,
-    child: Option<Box<dyn RenderObject>>,
-}
-
-enum Transform {
-    Translate(Offset),
-    Rotate(f32),  // radians
-    Scale(f32, f32),
-    Matrix(Matrix3),
-}
-
-fn paint(&self, painter: &egui::Painter, offset: Offset) {
-    // Apply transform
-    let transform_offset = match &self.transform {
-        Transform::Translate(t) => offset + *t,
-        Transform::Rotate(angle) => {
-            // Rotate around alignment point
-            let pivot = self.alignment.along_size(self.size);
-            // ... rotation math
-        },
-        // etc
-    };
-
-    child.paint(painter, transform_offset);
-}
-```
-
-**Примеры использования:**
-- Анимированные трансформации
-- Rotate widget
-- Scale widget
-
-**Тесты:**
-- Translate by (10, 20)
-- Rotate 90 degrees
-- Scale 2x
-- Combined transforms
-
----
-
-### Priority 7: RenderClipRRect (~200 строк, 10 тестов) ✅ ГОТОВО!
-
-**Время:** 1.5 дня (завершено сегодня!)
-
-**Описание:** Обрезает child по rounded rectangle - **ПОСЛЕДНИЙ RenderObject ЗАВЕРШЕН!**
-
-**Алгоритм:**
-```rust
-struct RenderClipRRect {
+pub struct ClipRRect {
+    key: Option<Key>,
     border_radius: BorderRadius,
     clip_behavior: Clip,
-    child: Option<Box<dyn RenderObject>>,
-}
-
-enum Clip {
-    None,
-    HardEdge,
-    AntiAlias,
-    AntiAliasWithSaveLayer,
-}
-
-fn paint(&self, painter: &egui::Painter, offset: Offset) {
-    // Set clip rect with border radius
-    let rect = egui::Rect::from_min_size(
-        offset.to_pos2(),
-        self.size.to_vec2(),
-    );
-
-    let rounding = self.border_radius.to_egui_rounding();
-
-    painter.clip_rect_rounded(rect, rounding, |painter| {
-        child.paint(painter, offset);
-    });
+    child: Option<Box<dyn Widget>>,
 }
 ```
 
-**Примеры использования:**
-- Rounded image containers
-- Rounded card corners
-- Clipping overflow content
+---
 
-**Тесты:**
-- Circular clipping (all corners same)
-- Different corner radii
-- Clip::None vs HardEdge
-- Child larger than clip area
+### Summary Week 6:
+- ✅ **8 дополнительных виджетов** (Expanded, Flexible, Stack, Positioned, AspectRatio, DecoratedBox, Opacity, Transform, ClipRRect)
+- ✅ **~670 строк кода**
+- ✅ **36 тестов**
+- ✅ ParentDataWidget support
 
 ---
 
-### Summary Week 4: ✅ 100% ЗАВЕРШЕНО!
-- ✅ **3 RenderObjects готовы** (RenderOpacity, RenderTransform, RenderClipRRect)
-- ✅ **~1040 строк кода** написано
-- ✅ **42 теста** написано
-- ✅ **Цель достигнута:** 13 RenderObjects, 198 тестов в flui_rendering!
+## 🎯 Goals After 2 Weeks
 
----
+### Виджеты реализованы (14 total):
 
-## 🎯 Goals After 2 Weeks (100% ДОСТИГНУТО! 🎉)
+**Layout widgets:**
+1. Container - композиция всех layout свойств
+2. Row - горизонтальный flex layout
+3. Column - вертикальный flex layout
+4. SizedBox - фиксированный размер
+5. Padding - отступы
+6. Center - центрирование
+7. Align - выравнивание
+8. Expanded - flex child с автоматическим размером
+9. Flexible - flex child с настраиваемым fit
+10. Stack - layered positioning
+11. Positioned - абсолютное позиционирование
+12. AspectRatio - соотношение сторон
 
-### RenderObjects Completed:
-1. ✅ RenderFlex (Row/Column) - 550 строк, 15 тестов
-2. ✅ RenderPadding - 280 строк, 8 тестов
-3. ✅ RenderStack (Positioned) - 330 строк, 13 тестов
-4. ✅ RenderConstrainedBox (SizedBox) - 180 строк, 10 тестов
-5. ✅ RenderDecoratedBox - 320 строк, 10 тестов
-6. ✅ RenderAspectRatio - 390 строк, 17 тестов
-7. ✅ RenderLimitedBox - 380 строк, 13 тестов
-8. ✅ RenderIndexedStack - 430 строк, 13 тестов
-9. ✅ RenderPositionedBox (Align/Center) - 410 строк, 16 тестов
-10. ✅ RenderFractionallySizedBox - 400 строк, 15 тестов
-11. ✅ RenderOpacity - 280 строк, 15 тестов
-12. ✅ RenderTransform - 400 строк, 14 тестов
-13. ✅ RenderClipRRect - 360 строк, 13 тестов - **ЗАВЕРШЕНО!**
+**Visual effects widgets:**
+13. DecoratedBox - декорирование
+14. Opacity - прозрачность
+15. Transform - трансформации
+16. ClipRRect - закругленное обрезание
 
-### Statistics After 2 Weeks (ФИНАЛЬНЫЕ):
-- **13/13 RenderObjects** готовы (100% 🎉)
-- **198 тестов** в flui_rendering (цель была 167, превышено на 19%!)
-- **~6600 строк кода** в flui_rendering (цель была ~5000, превышено на 32%!)
-- **814 тестов** total (цель была ~770, превышено на 6%!)
-
-### Next Phase After Week 4 (ГОТОВЫ К СТАРТУ! 🚀):
-- ✅ **flui_rendering** - ПОЛНОСТЬЮ ЗАВЕРШЕН! Все 13 RenderObjects готовы!
-- 🎯 **flui_widgets** - начать реализацию виджетов (следующий шаг)
-- 🎯 **Widget implementations** - Container, Row, Column, SizedBox, Padding, Center, Align
-- 🎯 **Integration tests** - создать примеры использования
-- 🎯 **FluiApp** - базовая интеграция с egui/eframe
+### Statistics After Week 5-6:
+- **16 базовых виджетов** реализовано
+- **~1590 строк кода** в flui_widgets
+- **76 тестов** в flui_widgets
+- **890+ тестов** total в workspace
+- **Widget → Element → RenderObject** pipeline работает
 
 ---
 
 ## 📊 Success Metrics
 
-### Week 3 Goals: ✅ ВСЕ ВЫПОЛНЕНО
-- ✅ 4 новых RenderObjects (RenderLimitedBox, RenderIndexedStack, RenderPositionedBox, RenderFractionallySizedBox)
-- ✅ +57 тестов (цель была +38, превышено!)
-- ✅ 0 clippy warnings
-- ✅ Все тесты проходят
+### Week 5 Goals:
+- [ ] flui_widgets crate создан и настроен
+- [ ] 6 базовых виджетов (Container, Row, Column, SizedBox, Padding, Center, Align)
+- [ ] 40 тестов
+- [ ] 0 clippy warnings
+- [ ] Все тесты проходят
 
-### Week 4 Goals: ✅ 100% ВЫПОЛНЕНО!
-- ✅ 3 из 3 RenderObjects (RenderOpacity, RenderTransform, RenderClipRRect)
-- ✅ +42 теста добавлено (цель была +30, превышено!)
-- ✅ 0 clippy warnings
-- ✅ Начать документацию для виджетов (готовы!)
+### Week 6 Goals:
+- [ ] 8 дополнительных виджетов (Expanded, Flexible, Stack, Positioned, etc.)
+- [ ] 36 тестов
+- [ ] ParentDataWidget trait реализован
+- [ ] MultiChildRenderObjectWidget support
+- [ ] Документация для всех виджетов
 
-### Overall 2-Week Goals: ✅ 100% ДОСТИГНУТО! 🎉
-- ✅ **13/13 RenderObjects** total (прогресс: 100%!)
-- ✅ **198 тестов** в flui_rendering (цель 167, превышено на 19%!)
-- ✅ **100%** основных layout RenderObjects готовы
-- ✅ **100%** visual effects RenderObjects готовы
-- ✅ **Ready to start flui_widgets immediately!**
+### Overall 2-Week Goals:
+- [ ] **16 виджетов** total
+- [ ] **76 тестов** в flui_widgets
+- [ ] **890+ тестов** в workspace
+- [ ] **100%** базовых layout виджетов готовы
+- [ ] **100%** visual effects виджетов готовы
+- [ ] Ready to start FluiApp integration
 
 ---
 
-## 🚀 Long-Term Vision (Week 5-8)
+## 🚀 Long-Term Vision (Week 7-8)
 
-### Week 5-6: flui_widgets - Basic Widgets
-- Container, Row, Column, Padding, SizedBox, Center, Align
-- Expanded, Flexible, Spacer
-- DecoratedBox, AspectRatio, LimitedBox
+### Week 7: FluiApp & Platform Integration
+- ElementTree management
+- BuildContext implementation
+- Widget lifecycle (mount, unmount, update)
+- setState mechanism
+- Integration с eframe
 
-### Week 7-8: flui_widgets - Interactive Widgets
-- GestureDetector, InkWell
-- Button, IconButton
-- Text (basic), RichText
-
-### Week 9-10: Examples & Integration
+### Week 8: Examples & Demo
 - Hello World example
 - Counter example (StatefulWidget)
 - Layout showcase
 - Styling showcase
+- First working demo app!
 
 ---
 
-## 🔧 Technical Dependencies & Decisions
+## ⚠️ Technical Challenges
 
-### Core Dependencies Status:
-- ✅ **flui_types** - Complete (Matrix4, Size, Offset, Rect, etc.)
-- ✅ **flui_core** - Widget trait, Element lifecycle
-- ✅ **flui_rendering** - RenderObject trait, basic layout protocol
-- ✅ **flui_animation** - Basic animation infrastructure
-- ⏳ **egui integration** - Painting & event handling (partial)
+### High Priority:
+1. **Widget → Element → RenderObject lifecycle**
+   - Правильная реализация create_element()
+   - Element updates и rebuilds
+   - RenderObject updates
 
-### Key Technical Decisions:
-1. **Layout Protocol:** Two-pass (layout → paint) ✅ Decided
-2. **Constraints:** BoxConstraints with min/max ✅ Implemented
-3. **ParentData:** Generic trait-based system ✅ Implemented
-4. **Transform Matrix:** Matrix4 for all transforms ✅ Implemented
-5. **Paint Backend:** egui as rendering backend ✅ Decided
+2. **ParentDataWidget integration**
+   - Применение parent data к RenderObjects
+   - Flexible/Expanded integration с RenderFlex
 
-### Pending Decisions:
-- [ ] **RenderTransform:** Full Matrix4 vs simple transforms?
-- [ ] **Clipping:** egui clip_rect vs custom implementation?
-- [ ] **Layer composition:** Offscreen buffers for Opacity+Transform?
-- [ ] **Text rendering:** egui text vs custom text layout?
+3. **BuildContext implementation**
+   - Доступ к Element tree
+   - InheritedWidget lookups
+   - Theme/MediaQuery support
 
----
+### Medium Priority:
+4. **MultiChildRenderObjectWidget**
+   - Управление списком детей
+   - Efficient updates
 
-## ⚠️ Risks & Mitigation
-
-### High Priority Risks:
-1. **Performance of RenderTransform**
-   - Risk: Matrix math performance in Rust
-   - Mitigation: Benchmark early, optimize with SIMD if needed
-   - Impact: High (affects all animations)
-
-2. **egui clipping limitations**
-   - Risk: egui may not support all clipping features
-   - Mitigation: Test edge cases early, fallback to simple rect clipping
-   - Impact: Medium (affects visual polish)
-
-3. **Test coverage gaps**
-   - Risk: Complex layout interactions may have bugs
-   - Mitigation: Add integration tests, not just unit tests
-   - Impact: Medium (affects reliability)
-
-### Medium Priority Risks:
-4. **API consistency with Flutter**
-   - Risk: Rust patterns may diverge from Flutter idioms
-   - Mitigation: Regular API review, document differences
-   - Impact: Low (Flui is not Flutter clone)
-
-5. **Documentation debt**
-   - Risk: Code written faster than docs
-   - Mitigation: Write docs as we go, not after
-   - Impact: Low (can catch up later)
+5. **Key system**
+   - Widget identification
+   - Element reuse
 
 ---
 
 ## 📅 Detailed Daily Breakdown
 
-### Week 3 Schedule (19-26 октября):
+### Week 5 Schedule (20-27 октября):
 
-**Day 1 (Oct 19): RenderLimitedBox** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Implementation (~2 hours)
-- ✅ Afternoon: Tests + docs (~2 hours)
-- ✅ Evening: Code review + clippy
+**Day 1 (Oct 20): Setup & Container Part 1**
+- Morning: Create flui_widgets crate (~1 hour)
+- Afternoon: Container implementation start (~3 hours)
 
-**Day 2 (Oct 20): RenderIndexedStack Part 1** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Core layout logic (~2 hours)
-- ✅ Afternoon: Paint logic (~2 hours)
-- ✅ Evening: Initial tests
+**Day 2 (Oct 21): Container Part 2**
+- Morning: Container tests (~2 hours)
+- Afternoon: Container documentation (~2 hours)
 
-**Day 3 (Oct 21): RenderIndexedStack Part 2** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Complete tests (~2 hours)
-- ✅ Afternoon: Edge cases + docs (~2 hours)
-- ✅ Evening: Integration testing
+**Day 3 (Oct 22): Row & Column Part 1**
+- Morning: Row implementation (~2 hours)
+- Afternoon: Column implementation (~2 hours)
 
-**Day 4 (Oct 22): RenderPositionedBox Part 1** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Alignment logic (~2 hours)
-- ✅ Afternoon: Size factor logic (~2 hours)
-- ✅ Evening: Basic tests
+**Day 4 (Oct 23): Row & Column Part 2**
+- Morning: Row/Column tests (~2 hours)
+- Afternoon: Documentation (~2 hours)
 
-**Day 5 (Oct 23): RenderPositionedBox Part 2** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Complete tests (~2 hours)
-- ✅ Afternoon: Documentation (~2 hours)
-- ✅ Evening: Code review
+**Day 5 (Oct 24): SizedBox, Padding, Center**
+- Morning: SizedBox & Padding (~2 hours)
+- Afternoon: Center & tests (~2 hours)
 
-**Day 6 (Oct 24): RenderFractionallySizedBox Part 1** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Core implementation (~2 hours)
-- ✅ Afternoon: Factor calculation (~2 hours)
-- ✅ Evening: Basic tests
+**Day 6 (Oct 25): Align Widget**
+- Morning: Align implementation (~2 hours)
+- Afternoon: Align tests & docs (~2 hours)
 
-**Day 7 (Oct 25): RenderFractionallySizedBox Part 2 + Week Review** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Complete tests (~2 hours)
-- ✅ Afternoon: Documentation (~1 hour)
-- ✅ Evening: Week 3 retrospective (~1 hour)
+**Day 7 (Oct 26-27): Week Review**
+- Review all widgets
+- Integration testing
+- Week 5 retrospective
 
-### Week 4 Schedule (27 октября - 2 ноября):
+### Week 6 Schedule (28 октября - 3 ноября):
 
-**Day 8 (Oct 27): RenderOpacity** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Implementation (~2 hours)
-- ✅ Afternoon: Tests + docs (~2 hours)
-- ✅ Evening: Opacity composition tests
+**Day 8 (Oct 28): Expanded & Flexible**
+- Morning: ParentDataWidget trait (~2 hours)
+- Afternoon: Expanded & Flexible implementation (~2 hours)
 
-**Day 9 (Oct 28): RenderTransform Part 1** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Transform enum + Matrix4 (~2 hours)
-- ✅ Afternoon: Translate + Scale (~2 hours)
-- ✅ Evening: Basic tests
+**Day 9 (Oct 29): Stack Widget**
+- Morning: Stack implementation (~2 hours)
+- Afternoon: Stack tests (~2 hours)
 
-**Day 10 (Oct 29): RenderTransform Part 2** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Rotation logic (~2 hours)
-- ✅ Afternoon: Combined transforms (~2 hours)
-- ✅ Evening: Transform tests
+**Day 10 (Oct 30): Positioned Widget**
+- Morning: Positioned implementation (~2 hours)
+- Afternoon: Positioned tests (~2 hours)
 
-**Day 11 (Oct 30): RenderTransform Part 3** ✅ ЗАВЕРШЕНО
-- ✅ Morning: Hit testing with transforms (~2 hours)
-- ✅ Afternoon: Documentation (~2 hours)
-- ✅ Evening: Performance benchmarks
+**Day 11 (Oct 31): AspectRatio & DecoratedBox**
+- Morning: AspectRatio (~1.5 hours)
+- Afternoon: DecoratedBox (~1.5 hours)
 
-**Day 12 (Oct 19): RenderClipRRect Complete!** ✅ ЗАВЕРШЕНО!
-- ✅ Morning: Clipping implementation (~2 hours)
-- ✅ Afternoon: BorderRadius integration (~2 hours)
-- ✅ Evening: All tests passing (13 tests!)
+**Day 12 (Nov 1): Visual Effects Part 1**
+- Morning: Opacity (~1.5 hours)
+- Afternoon: Transform (~1.5 hours)
 
-**Day 13-14 (Oct 20-21): Week Completion & Planning** ⏳ СЛЕДУЮЩИЕ ШАГИ
-- Update all documentation (ROADMAP_NEXT, CURRENT_STATUS, ROADMAP)
-- Week 4 retrospective
-- Create Week 5-6 roadmap for flui_widgets
-- Prepare flui_widgets architecture
+**Day 13 (Nov 2): Visual Effects Part 2**
+- Morning: ClipRRect (~2 hours)
+- Afternoon: All tests & documentation (~2 hours)
+
+**Day 14 (Nov 3): Final Review & Planning**
+- Morning: Week 6 retrospective
+- Afternoon: Plan Week 7-8 (FluiApp)
+- Evening: Prepare for platform integration
 
 ---
 
 ## 🎓 Learning Goals
 
-### Technical Skills to Develop:
-- **Advanced Rust patterns:** Trait objects, dynamic dispatch optimization
-- **Graphics programming:** Transform matrices, clipping algorithms
-- **Performance optimization:** Layout caching, paint layer optimization
-- **Testing strategies:** Property-based testing for layout correctness
+### Technical Skills:
+- **Widget patterns:** Composition, inheritance, mixins
+- **Rust patterns:** Builder pattern, trait objects, downcasting
+- **Testing:** Widget testing strategies
+- **API design:** Fluent APIs, builder APIs
 
-### Deliverables for Learning:
-- [ ] Write blog post: "Building a UI Framework in Rust"
-- [ ] Document: "Flui Layout Protocol Explained"
-- [ ] Tutorial: "Adding Custom RenderObjects to Flui"
-- [ ] Benchmark report: "Flui vs egui Layout Performance"
-
----
-
-## 📈 Progress Tracking
-
-### Week 3 Checklist: ✅ 100% ЗАВЕРШЕНО
-- ✅ Day 1: RenderLimitedBox complete
-- ✅ Day 2-3: RenderIndexedStack complete
-- ✅ Day 4-5: RenderPositionedBox complete
-- ✅ Day 6-7: RenderFractionallySizedBox complete
-- ✅ All Week 3 tests passing (57 новых тестов!)
-- ✅ No clippy warnings
-- ✅ Documentation updated
-
-### Week 4 Checklist: ✅ 100% ЗАВЕРШЕНО!
-- ✅ Day 8: RenderOpacity complete
-- ✅ Day 9-11: RenderTransform complete
-- ✅ Day 12: RenderClipRRect **ЗАВЕРШЕНО!**
-- ✅ All Week 4 tests passing (198 тестов!)
-- ✅ Performance benchmarks run
-- ✅ Week 5-6 roadmap ready to create
-
-### Quality Gates:
-- **Code Coverage:** >80% for all new RenderObjects
-- **Clippy Warnings:** 0
-- **Cargo Test:** 100% passing
-- **Documentation:** Every public API documented
-- **Examples:** At least 1 example per RenderObject
+### Deliverables:
+- [ ] Document: "Flui Widget Architecture"
+- [ ] Tutorial: "Creating Custom Widgets"
+- [ ] Examples: "Common Layout Patterns"
 
 ---
 
 ## 🔄 Iteration Strategy
 
-### After Each RenderObject:
-1. **Implement** core layout/paint logic
-2. **Test** unit tests + edge cases
-3. **Document** public API + examples
-4. **Review** code quality + performance
-5. **Integrate** into existing codebase
-6. **Commit** with clear message
+### After Each Widget:
+1. **Design** API и структуру
+2. **Implement** create_render_object
+3. **Test** все комбинации параметров
+4. **Document** с примерами
+5. **Review** API ergonomics
+6. **Integrate** в flui_widgets
 
-### After Each Week:
-1. **Retrospective:** What went well? What didn't?
-2. **Metrics Review:** Test count, code coverage, performance
-3. **Adjust Plan:** Update next week based on learnings
-4. **Celebrate Wins:** Acknowledge progress made
-
-### Red Flags to Watch:
-- ⚠️ Tests failing for >1 day → Stop, investigate
-- ⚠️ Clippy warnings accumulating → Stop, fix immediately
-- ⚠️ Implementation taking >2x estimated time → Re-scope
-- ⚠️ API feels awkward → Pause, discuss design
-- ⚠️ Performance regression → Profile, optimize before continuing
+### Red Flags:
+- ⚠️ Виджет API неудобен → переделать
+- ⚠️ RenderObject не подходит → расширить
+- ⚠️ Тесты сложные → упростить API
+- ⚠️ Много boilerplate → создать макрос
 
 ---
 
 ## 🎯 Definition of Done
 
-### For Each RenderObject:
-- ✅ Implementation complete (layout + paint + hit testing)
-- ✅ All unit tests passing (min 8 tests per RenderObject)
+### For Each Widget:
+- ✅ Implementation complete
+- ✅ RenderObject integration working
+- ✅ Minimum 6 tests per widget
 - ✅ Documentation with examples
 - ✅ No clippy warnings
-- ✅ Code review completed
-- ✅ Integrated into crate (exports, re-exports)
-- ✅ Committed with clear message
+- ✅ Exported from lib.rs
 
 ### For Each Week:
-- ✅ All planned RenderObjects complete
-- ✅ All tests passing (100%)
-- ✅ Documentation updated
-- ✅ Roadmap updated for next week
+- ✅ All planned widgets complete
+- ✅ All tests passing
+- ✅ Documentation complete
 - ✅ Retrospective notes written
+- ✅ Next week planned
 
-### For the 2-Week Milestone:
-- ✅ 13 RenderObjects total (6 existing + 7 new)
-- ✅ ~167 tests in flui_rendering
-- ✅ ~5000 lines of code in flui_rendering
-- ✅ Performance benchmarks documented
-- ✅ Ready to start flui_widgets
-- ✅ Architecture decisions documented
-
----
+### For 2-Week Milestone:
+- ✅ 16 widgets implemented
+- ✅ 76 tests in flui_widgets
+- ✅ 890+ tests total
+- ✅ Ready for FluiApp integration
+- ✅ Examples prepared
 
 ---
 
-## 🎊 РЕЗЮМЕ: Week 3-4 ЗАВЕРШЕНЫ НА 100%! 🎉
+## 🎊 Ready to Start!
 
-### Что было достигнуто:
-- ✅ **Week 3 завершена на 100%** - все 4 RenderObjects готовы
-- ✅ **Week 4 завершена на 100%** - все 3 RenderObjects готовы!
-- ✅ **13 из 13 RenderObjects** полностью реализованы и протестированы (100%!)
-- ✅ **198 тестов** в flui_rendering (превышено на 19% от цели!)
-- ✅ **~6600 строк кода** в flui_rendering (превышено на 32% от цели!)
-- ✅ **814 тестов** во всём проекте (превышено на 6% от цели!)
-- ✅ **0 clippy warnings**
-- ✅ **Все тесты проходят!**
+**Previous Achievement:** ✅ flui_rendering complete (13 RenderObjects)
+**Current Focus:** 🎯 flui_widgets implementation
+**Next Milestone:** 🚀 FluiApp & first working demo
 
-### flui_rendering - ПОЛНОСТЬЮ ГОТОВ! 🚀
-
-**13 RenderObjects реализовано:**
-1. RenderBox, RenderProxyBox - базовые протоколы
-2. RenderFlex - Row/Column layouts
-3. RenderPadding - отступы
-4. RenderStack - позиционирование
-5. RenderConstrainedBox - ограничения размеров
-6. RenderDecoratedBox - декорирование
-7. RenderAspectRatio - соотношение сторон
-8. RenderLimitedBox - ограничение unbounded constraints
-9. RenderIndexedStack - отображение одного child
-10. RenderPositionedBox - выравнивание
-11. RenderFractionallySizedBox - процентные размеры
-12. RenderOpacity - прозрачность
-13. RenderTransform - трансформации
-14. **RenderClipRRect - закругленное обрезание (завершено сегодня!)**
-
-### Следующие шаги - Week 5-6:
-
-1. **flui_widgets - основные виджеты** (1-2 недели)
-   - Container, Row, Column, Center, Align
-   - SizedBox, Padding, AspectRatio
-   - Expanded, Flexible, Spacer
-   - Базовый Text widget
-
-2. **FluiApp интеграция** (1 неделя)
-   - Интеграция с eframe
-   - Element tree management
-   - Build → Layout → Paint pipeline
-   - Event handling basics
-
-3. **Первый работающий пример** (~2-3 недели)
-   - Hello World app
-   - Counter app (StatefulWidget)
-   - Layout demo
-
-### Оценка времени до первого demo:
-- **flui_widgets (базовые):** 1-2 недели
-- **FluiApp интеграция:** 1 неделя
-- **Первый работающий пример:** ~2-3 недели от сегодня
+**Let's build amazing widgets!** 🎨
 
 ---
 
 **Last Updated:** 2025-10-19
 **Version:** 0.1.0-alpha
-**Phase:** Week 3-4 - 100% COMPLETE! 🎉
-**Next Review:** Week 5-6 Planning (flui_widgets)
+**Phase:** Week 5-6 Planning - flui_widgets
+**Next Review:** 2025-11-03 (After Week 6)
 **Owner:** Flui Core Team
-**Status:** 🎉🎉🎉 WEEK 3-4 ЗАВЕРШЕНЫ! Все 13 RenderObjects готовы!
-**Next Phase:** 🚀 flui_widgets - начинаем реализацию виджетов!
-
----
-
-## 🏆 MILESTONE ACHIEVED: flui_rendering COMPLETE!
-
-**Week 3-4 Goals:** ✅ 100% выполнено
-**RenderObjects:** ✅ 13/13 (100%)
-**Tests:** ✅ 198 в flui_rendering (цель 167, +19%)
-**Code:** ✅ ~6600 строк (цель ~5000, +32%)
-**Total Tests:** ✅ 814 (цель ~770, +6%)
-**Quality:** ✅ 0 clippy warnings, все тесты проходят
-
-**🎊 Готовы к следующему этапу: flui_widgets!**
+**Status:** 🚀 Ready to implement widgets!
