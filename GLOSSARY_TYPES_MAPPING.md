@@ -462,7 +462,7 @@
 
 ---
 
-### flui_rendering - Rendering system (221 тест, +166 нових)
+### flui_rendering - Rendering system (238 тестів, +183 нових)
 
 **З rendering.md (~550 типів):**
 
@@ -473,7 +473,7 @@
 - ✅ RenderProxyBox (passes layout to child)
 - ⏳ RenderShiftedBox (планується)
 
-**Specialized render objects (🚧 В ПРОЦЕСІ - 18/45 реалізовано):**
+**Specialized render objects (🚧 В ПРОЦЕСІ - 21/45 реалізовано):**
 
 **Layout render objects:**
 - ✅ **RenderFlex** (550 строк, 15 тестів) - Row/Column layout з flexible children, MainAxisAlignment, CrossAxisAlignment
@@ -496,9 +496,11 @@
 - ✅ **RenderOpacity** (280 строк, 15 тестів) - Прозрачність child (opacity 0.0-1.0), optimization для повністю прозорих (2025-01-18)
 - ✅ **RenderTransform** - Matrix4 transformations (translate, rotate, scale) (2025-01-18)
 - ✅ **RenderClipRRect** - Rounded rectangle clipping з BorderRadius (2025-01-18)
+- ✅ **RenderClipRect** (350 строк, 10 тестів) - Rectangular clipping з Clip behavior (2025-01-19)
+- ✅ **RenderOffstage** (380 строк, 7 тестів) - Приховує child від painting/hit testing (preserves layout) (2025-01-19)
 - ⏳ RenderAnimatedOpacity (планується)
 - ⏳ RenderRotatedBox (планується)
-- ⏳ RenderClipRect, RenderClipOval, RenderClipPath (планується)
+- ⏳ RenderClipOval, RenderClipPath (планується)
 - ⏳ RenderPhysicalModel, RenderPhysicalShape (планується)
 - ⏳ RenderCustomPaint (планується)
 - ⏳ RenderRepaintBoundary (планується)
@@ -984,11 +986,11 @@
 
 ---
 
-### flui_widgets - Widget library (✅ COMPLETED Week 5-6 + Interaction - 20/20 виджетів реалізовано!)
+### flui_widgets - Widget library (✅ COMPLETED Week 5-6 + Interaction + Visual - 22/22 виджетів реалізовано!)
 
 **З widgets.md (~1000+ типів):**
 
-Це ВЕЛИЧЕЗНА бібліотека. **Week 5-6 Result:** 20 базових виджетів реалізовано! (~8000 строк, 336 тестів)
+Це ВЕЛИЧЕЗНА бібліотека. **Week 5-6 Result:** 22 базових виджетів реалізовано! (~8500 строк, 352 тести)
 
 **✅ Basic Layout widgets (РЕАЛИЗОВАНО - 7 виджетів):**
 - ✅ **Container** (335 строк, 18 тестів) - StatelessWidget композиція всіх layout properties
@@ -1010,10 +1012,12 @@
 - ✅ **Positioned** (737 строк, 22 теста) - ParentDataWidget для Stack з координатами
 - ✅ **IndexedStack** (624 строки, 22 теста) - MultiChildRenderObjectWidget → RenderIndexedStack
 
-**✅ Visual Effects widgets (РЕАЛИЗОВАНО - 3 виджета):**
+**✅ Visual Effects widgets (РЕАЛИЗОВАНО - 5 виджетів):**
 - ✅ **Opacity** (~350 строк, 18 тестів) - RenderObjectWidget → RenderOpacity
 - ✅ **Transform** (536 строк, 23 теста) - RenderObjectWidget → RenderTransform
 - ✅ **ClipRRect** (609 строк, 21 тест) - RenderObjectWidget → RenderClipRRect
+- ✅ **ClipRect** (~240 строк, 7 тестів) - RenderObjectWidget → RenderClipRect (rectangular clipping) (2025-01-19)
+- ✅ **Offstage** (~240 строк, 9 тестів) - RenderObjectWidget → RenderOffstage (приховує child, зберігає layout) (2025-01-19)
 
 **✅ Interaction widgets (РЕАЛИЗОВАНО - 3 виджета):**
 - ✅ **IgnorePointer** (~230 строк, 9 тестів) - RenderObjectWidget → RenderIgnorePointer (прозорий для pointer events) (2025-01-19)
