@@ -19,6 +19,7 @@ egui.workspace = true
 tracing.workspace = true
 ahash.workspace = true
 glam.workspace = true
+smallvec = { workspace = true, features = ["union", "const_generics"] }
 
 [dev-dependencies]
 criterion.workspace = true
