@@ -1,0 +1,17 @@
+[package]
+name = "flui_widgets"
+version = "0.1.0"
+edition = "2021"
+authors = ["Flui Contributors"]
+description = "Widget implementations for Flui framework"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-org/flui"
+keywords = ["ui", "gui", "widgets", "flutter"]
+categories = ["gui"]
+
+[dependencies]
+flui_core = { path = "../flui_core", version = "0.1.0" }
+flui_rendering = { path = "../flui_rendering", version = "0.1.0" }
+flui_types = { path = "../flui_types", version = "0.1.0" }
+
+[dev-dependencies]

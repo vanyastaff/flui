@@ -5,7 +5,7 @@ members = [
     "crates/flui_foundation",
     "crates/flui_core",
     "crates/flui_rendering",
-    # "crates/flui_widgets",
+    "crates/flui_widgets",
     # "crates/flui_painting",
     # "crates/flui_animation",
     # "crates/flui_gestures",

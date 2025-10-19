@@ -1012,6 +1012,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui_widgets"
+version = "0.1.0"
+dependencies = [
+ "flui_core",
+ "flui_rendering",
+ "flui_types",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
