@@ -163,7 +163,7 @@ impl Context {
     /// ```
     pub fn mark_needs_build(&self) {
         let mut tree = self.tree_mut();
-        tree.mark_element_dirty(self.element_id);
+        tree.mark_dirty(self.element_id);
     }
 
     /// Mark the current element as needing rebuild - short form

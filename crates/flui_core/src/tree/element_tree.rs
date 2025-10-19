@@ -202,16 +202,8 @@ impl ElementTree {
 
     /// Mount a widget as the root of the tree
     ///
-    /// This creates a new element from the widget and mounts it as the root.
+    /// Creates an element from the widget and mounts it as the root.
     /// If a root already exists, it will be unmounted first.
-    ///
-    /// # Parameters
-    ///
-    /// - `widget`: The root widget to mount
-    ///
-    /// # Returns
-    ///
-    /// The ElementId of the newly mounted root element
     ///
     /// # Example
     ///
@@ -220,10 +212,10 @@ impl ElementTree {
     /// let root_id = tree.set_root(Box::new(MyApp::new()));
     /// assert_eq!(tree.root(), Some(root_id));
     /// ```
-    pub fn mount_root(&mut self, widget: Box<dyn Widget>) -> ElementId {
+    pub fn set_root(&mut self, widget: Box<dyn Widget>) -> ElementId {
         // Unmount existing root if present
         if let Some(old_root_id) = self.root {
-            self.unmount_element(old_root_id);
+            self.remove(old_root_id);
         }
 
         // Create element from widget
@@ -238,16 +230,9 @@ impl ElementTree {
         self.root = Some(element_id);
 
         // Mark as dirty for initial build
-        self.mark_element_dirty(element_id);
+        self.mark_dirty(element_id);
 
         element_id
-    }
-
-    /// Mount a widget as the root of the tree - short form
-    ///
-    /// Rust-idiomatic short name. See [mount_root](Self::mount_root).
-    pub fn set_root(&mut self, widget: Box<dyn Widget>) -> ElementId {
-        self.mount_root(widget)
     }
 
     /// Set tree reference for an element
@@ -272,66 +257,20 @@ impl ElementTree {
         }
     }
 
+
     /// Get an element by ID (immutable)
-    ///
-    /// # Parameters
-    ///
-    /// - `id`: The element ID to look up
-    ///
-    /// # Returns
-    ///
-    /// Reference to the element, or `None` if not found
-    pub fn get_element(&self, id: ElementId) -> Option<&dyn Element> {
+    pub fn get(&self, id: ElementId) -> Option<&dyn Element> {
         self.elements.get(&id).map(|e| e.as_ref())
     }
 
-    /// Get an element by ID (immutable) - short form
-    ///
-    /// Rust-idiomatic short name. See [get_element](Self::get_element).
-    pub fn get(&self, id: ElementId) -> Option<&dyn Element> {
-        self.get_element(id)
-    }
-
     /// Get an element by ID (mutable)
-    ///
-    /// # Parameters
-    ///
-    /// - `id`: The element ID to look up
-    ///
-    /// # Returns
-    ///
-    /// Mutable reference to the element, or `None` if not found
-    pub fn get_element_mut(&mut self, id: ElementId) -> Option<&mut dyn Element> {
+    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn Element> {
         self.elements.get_mut(&id).map(|e| e.as_mut())
     }
 
-    /// Get an element by ID (mutable) - short form
-    ///
-    /// Rust-idiomatic short name. See [get_element_mut](Self::get_element_mut).
-    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn Element> {
-        self.get_element_mut(id)
-    }
 
     /// Mount a child element under a parent
-    ///
-    /// Creates an element from the widget and mounts it as a child of the parent.
-    ///
-    /// # Parameters
-    ///
-    /// - `parent_id`: Parent element ID
-    /// - `widget`: Child widget to mount
-    /// - `slot`: Position in parent's child list
-    ///
-    /// # Returns
-    ///
-    /// The ElementId of the newly mounted child, or `None` if parent not found
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let child_id = tree.insert_child(parent_id, Box::new(Text::new("Hello")), 0);
-    /// ```
-    pub fn mount_child(
+    pub fn insert_child(
         &mut self,
         parent_id: ElementId,
         widget: Box<dyn Widget>,
@@ -353,46 +292,13 @@ impl ElementTree {
         self.elements.insert(element_id, element);
 
         // Mark as dirty for initial build
-        self.mark_element_dirty(element_id);
+        self.mark_dirty(element_id);
 
         Some(element_id)
     }
 
-    /// Mount a child element under a parent - short form
-    ///
-    /// Rust-idiomatic short name. See [mount_child](Self::mount_child).
-    pub fn insert_child(
-        &mut self,
-        parent_id: ElementId,
-        widget: Box<dyn Widget>,
-        slot: usize,
-    ) -> Option<ElementId> {
-        self.mount_child(parent_id, widget, slot)
-    }
-
     /// Update an element with a new widget
-    ///
-    /// If the widget can update the existing element (same type and key), the element
-    /// is updated. Otherwise, the old element is unmounted and a new one is created.
-    ///
-    /// # Parameters
-    ///
-    /// - `element_id`: The element to update
-    /// - `new_widget`: The new widget configuration
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(element_id)` if the element was updated in place
-    /// - `Ok(new_element_id)` if a new element was created
-    /// - `Err(())` if the element was not found
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Update with new widget
-    /// tree.update(element_id, Box::new(Text::new("New text")))?;
-    /// ```
-    pub fn update_element(
+    pub fn update(
         &mut self,
         element_id: ElementId,
         new_widget: Box<dyn Widget>,
@@ -402,14 +308,10 @@ impl ElementTree {
             return Err(());
         }
 
-        // Check if we can update in place
-        // For now, we'll always try to update (proper widget.can_update check would go here)
-
         // Remove element temporarily for update
         let mut element = self.elements.remove(&element_id).ok_or(())?;
 
         // Update the element
-        // Note: We're passing the widget as Any - elements handle the downcast
         element.update(Box::new(new_widget));
 
         // Mark as dirty
@@ -419,36 +321,14 @@ impl ElementTree {
         self.elements.insert(element_id, element);
 
         // Add to dirty queue
-        self.mark_element_dirty(element_id);
+        self.mark_dirty(element_id);
 
         Ok(element_id)
     }
 
-    /// Update an element with a new widget - short form
-    ///
-    /// Rust-idiomatic short name. See [update_element](Self::update_element).
-    pub fn update(
-        &mut self,
-        element_id: ElementId,
-        new_widget: Box<dyn Widget>,
-    ) -> Result<ElementId, ()> {
-        self.update_element(element_id, new_widget)
-    }
 
     /// Unmount an element and all its descendants
-    ///
-    /// Removes the element from the tree and calls unmount() to clean up resources.
-    ///
-    /// # Parameters
-    ///
-    /// - `element_id`: The element to unmount
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// tree.remove(element_id);
-    /// ```
-    pub fn unmount_element(&mut self, element_id: ElementId) {
+    pub fn remove(&mut self, element_id: ElementId) {
         // Collect child IDs first (all elements that have this element as parent)
         let child_ids: Vec<ElementId> = self
             .elements
@@ -459,7 +339,7 @@ impl ElementTree {
 
         // Unmount children first (recursive)
         for child_id in child_ids {
-            self.unmount_element(child_id);
+            self.remove(child_id);
         }
 
         // Now unmount this element
@@ -477,32 +357,9 @@ impl ElementTree {
         }
     }
 
-    /// Unmount an element and all its descendants - short form
-    ///
-    /// Rust-idiomatic short name. See [unmount_element](Self::unmount_element).
-    pub fn remove(&mut self, element_id: ElementId) {
-        self.unmount_element(element_id)
-    }
 
     /// Mark an element as dirty (needs rebuild)
-    ///
-    /// Adds the element to the dirty queue for rebuilding. The element will be
-    /// rebuilt the next time `rebuild_dirty_elements()` is called.
-    ///
-    /// # Parameters
-    ///
-    /// - `element_id`: The element to mark dirty
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Mark element dirty (e.g., from setState)
-    /// tree.mark_dirty(element_id);
-    ///
-    /// // Later, rebuild all dirty elements
-    /// tree.rebuild();
-    /// ```
-    pub fn mark_element_dirty(&mut self, element_id: ElementId) {
+    pub fn mark_dirty(&mut self, element_id: ElementId) {
         // Don't add duplicates
         if !self.dirty_elements.contains(&element_id) {
             self.dirty_elements.push_back(element_id);
@@ -514,27 +371,9 @@ impl ElementTree {
         }
     }
 
-    /// Mark an element as dirty (needs rebuild) - short form
-    ///
-    /// Rust-idiomatic short name. See [mark_element_dirty](Self::mark_element_dirty).
-    pub fn mark_dirty(&mut self, element_id: ElementId) {
-        self.mark_element_dirty(element_id)
-    }
-
     /// Check if there are any dirty elements
-    ///
-    /// # Returns
-    ///
-    /// `true` if there are elements that need rebuilding, `false` otherwise
-    pub fn has_dirty_elements(&self) -> bool {
-        !self.dirty_elements.is_empty()
-    }
-
-    /// Check if there are any dirty elements - short form
-    ///
-    /// Rust-idiomatic short name. See [has_dirty_elements](Self::has_dirty_elements).
     pub fn has_dirty(&self) -> bool {
-        self.has_dirty_elements()
+        !self.dirty_elements.is_empty()
     }
 
     /// Get the number of dirty elements
@@ -546,37 +385,18 @@ impl ElementTree {
         self.dirty_elements.len()
     }
 
+
     /// Rebuild all dirty elements
-    ///
-    /// Processes the dirty element queue, calling rebuild() on each element.
-    /// Elements are rebuilt in the order they were marked dirty.
-    ///
-    /// This method is idempotent - it's safe to call even if no elements are dirty.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called recursively (while already building).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Mark some elements dirty
-    /// tree.mark_dirty(element1);
-    /// tree.mark_dirty(element2);
-    ///
-    /// // Rebuild them all
-    /// tree.rebuild();
-    /// ```
-    pub fn rebuild_dirty_elements(&mut self) {
+    pub fn rebuild(&mut self) {
         if self.building {
             panic!("ElementTree: Recursive rebuild detected");
         }
 
         let initial_dirty = self.dirty_elements.len();
         if initial_dirty == 0 {
-            tracing::debug!("ElementTree::rebuild_dirty_elements called: no dirty elements");
+            tracing::debug!("ElementTree::rebuild called: no dirty elements");
         } else {
-            tracing::info!("ElementTree::rebuild_dirty_elements start: {} dirty elements", initial_dirty);
+            tracing::info!("ElementTree::rebuild start: {} dirty elements", initial_dirty);
         }
 
         self.building = true;
@@ -590,8 +410,6 @@ impl ElementTree {
         while let Some(element_id) = self.dirty_elements.pop_front() {
             rebuilds_attempted += 1;
             if rebuilds_attempted > MAX_REBUILDS_PER_FRAME {
-                // We've likely hit a self-rebuild loop. Keep current and remaining items for the next frame.
-                // Push back the current element and any remaining already queued ones.
                 self.dirty_elements.push_front(element_id);
                 tracing::warn!(
                     "ElementTree: reached MAX_REBUILDS_PER_FRAME ({}). Breaking to avoid infinite build loop. Remaining dirty elements: {}",
@@ -602,7 +420,6 @@ impl ElementTree {
             }
 
             // Check if element still exists (might have been unmounted)
-            // First, get old child ID and rebuild, then unmount old child
             let (children_to_mount, old_child_id) = if let Some(element) = self.elements.get_mut(&element_id) {
                 // Only rebuild if still dirty (might have been cleared)
                 if element.is_dirty() {
@@ -615,7 +432,6 @@ impl ElementTree {
                     rebuilds_performed += 1;
 
                     // If it is still dirty after rebuild, re-queue it to try again later.
-                    // This allows progress while preventing tight loops in a single frame.
                     if element.is_dirty() {
                         self.dirty_elements.push_back(element_id);
                     }
@@ -653,17 +469,10 @@ impl ElementTree {
 
         let remaining = self.dirty_elements.len();
         tracing::debug!(
-            "ElementTree::rebuild_dirty_elements end: performed {} rebuild(s), remaining dirty: {}",
+            "ElementTree::rebuild end: performed {} rebuild(s), remaining dirty: {}",
             rebuilds_performed,
             remaining
         );
-    }
-
-    /// Rebuild all dirty elements - short form
-    ///
-    /// Rust-idiomatic short name. See [rebuild_dirty_elements](Self::rebuild_dirty_elements).
-    pub fn rebuild(&mut self) {
-        self.rebuild_dirty_elements()
     }
 
     /// Get the total number of elements in the tree

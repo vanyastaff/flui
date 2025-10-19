@@ -87,23 +87,18 @@ impl PipelineOwner {
     /// # Returns
     ///
     /// The ElementId of the root element
-    pub fn mount_root(&mut self, root_widget: Box<dyn Widget>) -> ElementId {
+    /// Mount the root widget - short form
+    ///
+    /// Rust-idiomatic short name. See [mount_root](Self::mount_root).
+    pub fn set_root(&mut self, root_widget: Box<dyn Widget>) -> ElementId {
         let mut tree_guard = self.tree.write();
-        let id = tree_guard.mount_root(root_widget);
+        let id = tree_guard.set_root(root_widget);
 
-        // Set tree reference so ComponentElements can mount children
         tree_guard.set_element_tree_ref(id, self.tree.clone());
 
         drop(tree_guard);
         self.root_element_id = Some(id);
         id
-    }
-
-    /// Mount the root widget - short form
-    ///
-    /// Rust-idiomatic short name. See [mount_root](Self::mount_root).
-    pub fn set_root(&mut self, root_widget: Box<dyn Widget>) -> ElementId {
-        self.mount_root(root_widget)
     }
 
     /// Flush the build phase
