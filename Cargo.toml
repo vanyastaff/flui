@@ -68,7 +68,10 @@ resvg = "0.45"
 usvg = "0.45"
 
 # MEMORY & CACHING
-lru = "0.16"
+lru = "0.16"  # Simple LRU (keep for compatibility)
+moka = { version = "0.12", features = ["future"] }  # High-performance cache
+bumpalo = "3.16"  # Bump allocator for frame-temp data
+typed-arena = "2.0"  # Type-safe arena allocator
 
 # NETWORKING
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
@@ -77,12 +80,25 @@ url = { version = "2.5", features = ["serde"] }
 # UTILITIES
 itertools = "0.14.0"
 ahash = "0.8"
+rustc-hash = "2.0"  # FxHash - faster for small keys
 bitflags = "2.9"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
+fastrand = "2.0"  # Fast RNG for widget IDs, jitter
+
+# STRING INTERNING
+lasso = { version = "0.7", features = ["multi-threaded"] }  # Fast string interning
+
+# OPTIMIZED SMART POINTERS
+triomphe = "0.1"  # Arc optimized for immutable data
+
+# SPECIALIZED COLLECTIONS
+tinyvec = { version = "1.8", features = ["alloc"] }  # Smaller than SmallVec
 
 # PERFORMANCE & PROFILING
 criterion = "0.7"
+tracing-tracy = "0.11"  # Tracy profiler integration
+puffin_http = "0.16"  # Puffin HTTP server
 
 [package]
 name = "flui"
@@ -106,21 +122,21 @@ serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# Optional profiling dependencies
+puffin = { version = "0.19", optional = true }
+puffin_egui = { version = "0.29", optional = true }
+tracing-tracy = { workspace = true, optional = true }
+puffin_http = { workspace = true, optional = true }
+
 [dev-dependencies]
 criterion.workspace = true
-
-[dependencies.puffin]
-version = "0.19"
-optional = true
-
-[dependencies.puffin_egui]
-version = "0.29"
-optional = true
 
 [features]
 default = ["persistence"]
 persistence = ["eframe/persistence"]
-profiling = ["puffin", "puffin_egui"]
+profiling = ["puffin", "puffin_egui", "puffin_http"]
+tracy = ["tracing-tracy"]
+full-profiling = ["profiling", "tracy"]
 
 [profile.release]
 opt-level = 3
