@@ -424,6 +424,141 @@ impl BuildContext {
         Some(render_object.size())
     }
 
+    /// Find the RenderObject for this context
+    ///
+    /// Similar to Flutter's `context.findRenderObject()`.
+    /// Returns the RenderObject associated with this element.
+    ///
+    /// # Returns
+    ///
+    /// The element ID if this element has a RenderObject, None otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(render_object_id) = context.find_render_object() {
+    ///     // Access render object through tree
+    /// }
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// Due to Rust ownership rules, we return the ElementId rather than a direct
+    /// reference to the RenderObject. Use the ElementTree to access the actual object.
+    pub fn find_render_object(&self) -> Option<ElementId> {
+        let tree = self.tree.read();
+        let element = tree.get_element(self.element_id)?;
+
+        // Check if this element has a render object
+        if element.render_object().is_some() {
+            Some(self.element_id)
+        } else {
+            None
+        }
+    }
+
+    /// Find the nearest ancestor RenderObject of a specific type
+    ///
+    /// Similar to Flutter's `context.findAncestorRenderObjectOfType<T>()`.
+    /// Searches up the tree for the first ancestor element that has a RenderObject
+    /// of type `R`.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `R`: The RenderObject type to search for (must implement RenderObject + 'static)
+    ///
+    /// # Returns
+    ///
+    /// Element ID of the ancestor with the matching RenderObject type, None if not found
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_rendering::RenderPadding;
+    ///
+    /// if let Some(padding_id) = context.find_ancestor_render_object_of_type::<RenderPadding>() {
+    ///     // Found ancestor RenderPadding
+    /// }
+    /// ```
+    pub fn find_ancestor_render_object_of_type<R: crate::RenderObject + 'static>(
+        &self,
+    ) -> Option<ElementId> {
+        use crate::RenderObject;
+
+        let tree = self.tree.read();
+        let mut current_id = self.parent();
+
+        while let Some(id) = current_id {
+            if let Some(element) = tree.get_element(id) {
+                // Check if this element has a RenderObject of type R
+                if let Some(render_object) = element.render_object() {
+                    if render_object.is::<R>() {
+                        return Some(id);
+                    }
+                }
+                current_id = element.parent();
+            } else {
+                break;
+            }
+        }
+
+        None
+    }
+
+    /// Visit child elements
+    ///
+    /// Similar to Flutter's `context.visitChildElements()`.
+    /// Calls the visitor function for each immediate child element.
+    ///
+    /// # Parameters
+    ///
+    /// - `visitor`: Function called for each child element
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// context.visit_child_elements(&mut |child| {
+    ///     println!("Child: {:?}", child.id());
+    /// });
+    /// ```
+    pub fn visit_child_elements<F>(&self, visitor: &mut F)
+    where
+        F: FnMut(&dyn Element),
+    {
+        let tree = self.tree.read();
+
+        if let Some(element) = tree.get_element(self.element_id) {
+            // Get child IDs from element
+            let child_ids = element.child_ids();
+
+            // Visit each child
+            for child_id in child_ids {
+                if let Some(child_element) = tree.get_element(child_id) {
+                    visitor(child_element);
+                }
+            }
+        }
+    }
+
+    /// Check if this element is currently mounted in the tree
+    ///
+    /// Similar to Flutter's `mounted` property on State.
+    ///
+    /// # Returns
+    ///
+    /// true if the element is mounted, false otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if context.mounted() {
+    ///     // Safe to use context
+    /// }
+    /// ```
+    pub fn mounted(&self) -> bool {
+        self.is_valid()
+    }
+
     /// Check if this context is still valid
     ///
     /// A context becomes invalid if its element has been unmounted from the tree.
@@ -699,5 +834,101 @@ mod tests {
         let context2 = context1.clone();
 
         assert_eq!(context1.element_id(), context2.element_id());
+    }
+
+    #[test]
+    fn test_build_context_mounted() {
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+
+        // Mount a widget
+        let widget = TestWidget::new("root");
+        let element_id = {
+            let mut tree_guard = tree.write();
+            tree_guard.mount_root(Box::new(widget))
+        };
+
+        let context = BuildContext::new(Arc::clone(&tree), element_id);
+
+        // Should be mounted
+        assert!(context.mounted());
+
+        // Unmount
+        {
+            let mut tree_guard = tree.write();
+            tree_guard.unmount_element(element_id);
+        }
+
+        // Should not be mounted
+        assert!(!context.mounted());
+    }
+
+    #[test]
+    fn test_build_context_find_render_object() {
+        let context = BuildContext::test();
+
+        // ComponentElement doesn't have RenderObject
+        assert!(context.find_render_object().is_none());
+    }
+
+    #[test]
+    fn test_build_context_visit_child_elements() {
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+
+        // Mount root with child
+        // Note: ComponentElement only supports single child through rebuild()
+        let (root_id, child_id) = {
+            let mut tree_guard = tree.write();
+            let root_id = tree_guard.mount_root(Box::new(TestWidget::new("root")));
+
+            // Rebuild to create child
+            tree_guard.mark_element_dirty(root_id);
+            tree_guard.rebuild_dirty_elements();
+
+            // Get the child that was created by build()
+            let child_ids = tree_guard.get_element(root_id)
+                .map(|e| e.child_ids())
+                .unwrap_or_default();
+
+            let child_id = child_ids.first().copied();
+            (root_id, child_id)
+        };
+
+        let root_context = BuildContext::new(Arc::clone(&tree), root_id);
+
+        // Visit children
+        let mut visited = Vec::new();
+        root_context.visit_child_elements(&mut |child| {
+            visited.push(child.id());
+        });
+
+        // ComponentElement has single child after rebuild
+        if let Some(child_id) = child_id {
+            assert_eq!(visited.len(), 1);
+            assert_eq!(visited[0], child_id);
+        } else {
+            // If no child was created, that's also valid
+            assert_eq!(visited.len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_build_context_visit_child_elements_no_children() {
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+
+        // Mount leaf widget
+        let element_id = {
+            let mut tree_guard = tree.write();
+            tree_guard.mount_root(Box::new(TestWidget::new("leaf")))
+        };
+
+        let context = BuildContext::new(Arc::clone(&tree), element_id);
+
+        // Visit children (should be none)
+        let mut visited = 0;
+        context.visit_child_elements(&mut |_| {
+            visited += 1;
+        });
+
+        assert_eq!(visited, 0);
     }
 }
