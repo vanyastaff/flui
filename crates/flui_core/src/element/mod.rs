@@ -11,7 +11,12 @@ use downcast_rs::{impl_downcast, DowncastSync};
 use flui_foundation::Key;
 use parking_lot::RwLock;
 
-use crate::{BuildContext, ElementTree, ElementId, RenderObject, RenderObjectWidget, StatelessWidget};
+use crate::{ElementId, RenderObject, StatelessWidget};
+use crate::context::BuildContext;
+use crate::tree::ElementTree;
+use crate::render::widget::RenderObjectWidget;
+
+pub mod render;
 
 /// Core Element trait - mutable state holder in element tree
 ///

@@ -22,21 +22,14 @@
 // New modular structure
 pub mod foundation;
 pub mod error;
-
-// Legacy modules (will be moved to new structure)
-pub mod build_context;
-pub mod constraints;
-pub mod element;
-pub mod element_tree;
-pub mod inherited_widget;
-pub mod leaf_render_object_element;
-pub mod multi_child_render_object_element;
-pub mod parent_data;
-pub mod pipeline_owner;
-pub mod render_object;
-pub mod render_object_widget;
-pub mod single_child_render_object_element;
 pub mod widget;
+pub mod element;
+pub mod render;
+pub mod context;
+pub mod tree;
+
+// Legacy modules (backward compatibility)
+pub mod constraints;
 
 
 
@@ -60,33 +53,50 @@ pub use flui_types::{
 pub use foundation::{ElementId, Lifecycle, Slot};
 pub use error::{CoreError, Result};
 
-// Re-export legacy types (old API)
-pub use build_context::BuildContext;
+// Re-export from new modular structure
+pub use context::BuildContext;
 pub use constraints::BoxConstraints;
 pub use element::{ComponentElement, Element, RenderObjectElement, StatefulElement};
-pub use element_tree::ElementTree;
-pub use inherited_widget::{InheritedElement, InheritedWidget};
-pub use leaf_render_object_element::LeafRenderObjectElement;
-pub use multi_child_render_object_element::MultiChildRenderObjectElement;
-pub use pipeline_owner::PipelineOwner;
-pub use parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData};
-pub use render_object::RenderObject;
-pub use render_object_widget::{
-    LeafRenderObjectWidget, MultiChildRenderObjectWidget, RenderObjectWidget,
+pub use element::render::{
+    LeafRenderObjectElement,
+    MultiChildRenderObjectElement,
+    SingleChildRenderObjectElement,
+};
+pub use tree::{ElementTree, PipelineOwner};
+pub use widget::{InheritedElement, InheritedWidget, IntoWidget, State, StatefulWidget, StatelessWidget, Widget};
+pub use render::{
+    RenderObject,
+    parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData},
+};
+pub use render::widget::{
+    LeafRenderObjectWidget,
+    MultiChildRenderObjectWidget,
+    RenderObjectWidget,
     SingleChildRenderObjectWidget,
 };
-pub use single_child_render_object_element::SingleChildRenderObjectElement;
-pub use widget::{IntoWidget, State, StatefulWidget, StatelessWidget, Widget};
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::build_context::BuildContext;
-    pub use crate::constraints::{BoxConstraints, Size};
+    pub use crate::context::BuildContext;
+    pub use crate::constraints::BoxConstraints;
     pub use crate::element::Element;
     pub use crate::foundation::ElementId;
-    pub use crate::element_tree::ElementTree;
+    pub use crate::tree::ElementTree;
     pub use crate::widget::{IntoWidget, StatelessWidget, Widget};
+    pub use crate::Size;
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

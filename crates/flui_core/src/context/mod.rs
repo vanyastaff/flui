@@ -40,7 +40,9 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::{Element, ElementId, ElementTree, InheritedWidget, Size, Widget};
+use crate::{Element, ElementId, Size, Widget};
+use crate::tree::ElementTree;
+use crate::widget::InheritedWidget;
 
 /// Build context provides access to the element tree and services
 ///
@@ -396,7 +398,7 @@ impl BuildContext {
         _type_id: TypeId,
         register_dependency: bool,
     ) -> Option<W> {
-        use crate::InheritedElement;
+        use crate::widget::InheritedElement;
 
         let tree = self.tree();
         let mut current_id = self.parent();
@@ -654,7 +656,7 @@ impl BuildContext {
     pub fn get_element_for_inherited_widget_of_exact_type<W: InheritedWidget + Clone + 'static>(
         &self,
     ) -> Option<ElementId> {
-        use crate::InheritedElement;
+        use crate::widget::InheritedElement;
 
         let tree = self.tree.read();
         let mut current_id = self.parent();

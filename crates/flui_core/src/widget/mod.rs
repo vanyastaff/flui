@@ -10,8 +10,13 @@ use downcast_rs::{impl_downcast, Downcast, DowncastSync};
 use dyn_clone::DynClone;
 use flui_foundation::Key;
 
-use crate::{BuildContext, ComponentElement, Element};
+use crate::context::BuildContext;
+use crate::element::{ComponentElement, Element};
 
+pub mod provider;
+
+// Re-export for backward compatibility
+pub use provider::{InheritedElement, InheritedWidget};
 /// Widget - immutable description of part of the UI
 ///
 /// Similar to Flutter's Widget. Widgets are immutable and lightweight.
@@ -445,3 +450,4 @@ mod tests {
         assert_eq!(owned.count, 100);
     }
 }
+
