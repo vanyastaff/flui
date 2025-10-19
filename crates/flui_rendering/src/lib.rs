@@ -31,6 +31,7 @@ pub mod egui_ext;
 pub mod flex_parent_data;
 pub mod render_aspect_ratio;
 pub mod render_box;
+pub mod render_clip_rrect;
 pub mod render_constrained_box;
 pub mod render_decorated_box;
 pub mod render_flex;
@@ -60,11 +61,13 @@ pub mod stack_parent_data;
 
 
 
+
 // Re-exports
 pub use decoration_painter::BoxDecorationPainter;
 pub use flex_parent_data::{FlexFit, FlexParentData};
 pub use render_aspect_ratio::RenderAspectRatio;
 pub use render_box::{RenderBox, RenderProxyBox};
+pub use render_clip_rrect::RenderClipRRect;
 pub use render_constrained_box::RenderConstrainedBox;
 pub use render_decorated_box::{DecorationPosition, RenderDecoratedBox};
 pub use render_flex::RenderFlex;
@@ -89,6 +92,7 @@ pub mod prelude {
     pub use crate::flex_parent_data::{FlexFit, FlexParentData};
     pub use crate::render_aspect_ratio::RenderAspectRatio;
     pub use crate::render_box::{RenderBox, RenderProxyBox};
+    pub use crate::render_clip_rrect::RenderClipRRect;
     pub use crate::render_constrained_box::RenderConstrainedBox;
     pub use crate::render_decorated_box::{DecorationPosition, RenderDecoratedBox};
     pub use crate::render_flex::RenderFlex;
@@ -105,6 +109,7 @@ pub mod prelude {
     pub use flui_core::BoxConstraints;
     pub use flui_types::{Matrix4, Offset, Point, Rect, Size};
 }
+
 
 
 
