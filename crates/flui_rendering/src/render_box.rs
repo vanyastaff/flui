@@ -224,6 +224,19 @@ impl RenderObject for RenderProxyBox {
             visitor(child.as_mut());
         }
     }
+
+    fn hit_test_children(
+        &self,
+        result: &mut flui_types::events::HitTestResult,
+        position: Offset,
+    ) -> bool {
+        if let Some(child) = &self.child {
+            // ProxyBox doesn't offset children, so pass position directly
+            child.hit_test(result, position)
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -370,5 +383,72 @@ mod tests {
 
         proxy.visit_children_mut(&mut |_| count += 1);
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_render_box_hit_test() {
+        use flui_types::events::HitTestResult;
+
+        let mut render_box = RenderBox::new();
+        render_box.layout(BoxConstraints::tight(Size::new(100.0, 100.0)));
+
+        let mut result = HitTestResult::new();
+
+        // Hit inside
+        assert!(render_box.hit_test(&mut result, Offset::new(50.0, 50.0)));
+        assert!(!result.is_empty());
+
+        // Miss outside
+        let mut result2 = HitTestResult::new();
+        assert!(!render_box.hit_test(&mut result2, Offset::new(150.0, 50.0)));
+        assert!(result2.is_empty());
+
+        // Edge cases
+        let mut result3 = HitTestResult::new();
+        assert!(render_box.hit_test(&mut result3, Offset::new(0.0, 0.0))); // Top-left corner
+        assert!(!result3.is_empty());
+
+        let mut result4 = HitTestResult::new();
+        assert!(!render_box.hit_test(&mut result4, Offset::new(100.0, 100.0))); // Just outside
+        assert!(result4.is_empty());
+    }
+
+    #[test]
+    fn test_render_proxy_box_hit_test() {
+        use flui_types::events::HitTestResult;
+
+        let mut proxy = RenderProxyBox::new();
+
+        // Create and add child
+        let mut child = RenderBox::new();
+        child.layout(BoxConstraints::tight(Size::new(50.0, 50.0)));
+        proxy.set_child(Box::new(child));
+
+        // Layout proxy
+        proxy.layout(BoxConstraints::tight(Size::new(50.0, 50.0)));
+
+        let mut result = HitTestResult::new();
+
+        // Hit child
+        assert!(proxy.hit_test(&mut result, Offset::new(25.0, 25.0)));
+        assert!(!result.is_empty());
+        // Should have 2 entries: child + proxy
+        assert_eq!(result.entries().len(), 2);
+    }
+
+    #[test]
+    fn test_render_proxy_box_hit_test_no_child() {
+        use flui_types::events::HitTestResult;
+
+        let mut proxy = RenderProxyBox::new();
+        proxy.layout(BoxConstraints::tight(Size::new(100.0, 100.0)));
+
+        let mut result = HitTestResult::new();
+
+        // Hit proxy itself (no child)
+        assert!(proxy.hit_test(&mut result, Offset::new(50.0, 50.0)));
+        assert!(!result.is_empty());
+        // Only proxy in result
+        assert_eq!(result.entries().len(), 1);
     }
 }

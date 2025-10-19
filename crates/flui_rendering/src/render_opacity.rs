@@ -156,13 +156,22 @@ impl RenderObject for RenderOpacity {
         }
     }
 
-    fn hit_test(&self, position: Offset) -> bool {
+    fn hit_test_self(&self, _position: Offset) -> bool {
+        // Fully transparent objects don't respond to hit tests
+        !self.is_transparent()
+    }
+
+    fn hit_test_children(
+        &self,
+        result: &mut flui_types::events::HitTestResult,
+        position: Offset,
+    ) -> bool {
+        if self.is_transparent() {
+            // Fully transparent - no hit testing
+            return false;
+        }
         if let Some(child) = &self.child {
-            // Fully transparent objects don't respond to hit tests
-            if self.is_transparent() {
-                return false;
-            }
-            child.hit_test(position)
+            child.hit_test(result, position)
         } else {
             false
         }
@@ -285,17 +294,21 @@ mod tests {
 
     #[test]
     fn test_render_opacity_hit_test_transparent() {
+        use flui_types::events::HitTestResult;
+
         let mut render = RenderOpacity::new(0.0);
         let child = Box::new(RenderBox::new());
         render.set_child(Some(child));
 
         // Fully transparent objects don't respond to hit tests
-        let result = render.hit_test(Offset::new(10.0, 10.0));
-        assert!(!result);
+        let mut result = HitTestResult::new();
+        assert!(!render.hit_test(&mut result, Offset::new(10.0, 10.0)));
     }
 
     #[test]
     fn test_render_opacity_hit_test_opaque() {
+        use flui_types::events::HitTestResult;
+
         let mut render = RenderOpacity::new(1.0);
         let child = Box::new(RenderBox::new());
         render.set_child(Some(child));
@@ -306,8 +319,8 @@ mod tests {
 
         // Opaque objects should pass hit test to child
         // RenderBox default hit_test returns true if position is within bounds
-        let result = render.hit_test(Offset::new(10.0, 10.0));
-        assert!(result); // Position (10, 10) is within 100x100 bounds
+        let mut result = HitTestResult::new();
+        assert!(render.hit_test(&mut result, Offset::new(10.0, 10.0))); // Position (10, 10) is within 100x100 bounds
     }
 
     #[test]

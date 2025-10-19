@@ -323,7 +323,7 @@ impl BuildContext {
     /// Currently, this does not track dependencies. In a full implementation,
     /// we would register this element as a dependent so it rebuilds when the
     /// InheritedWidget changes.
-    pub fn depend_on_inherited_widget<W: InheritedWidget + 'static>(&self) -> Option<W> {
+    pub fn depend_on_inherited_widget<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
         self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), true)
     }
 
@@ -341,21 +341,63 @@ impl BuildContext {
     /// # Returns
     ///
     /// Reference to the widget if found, None otherwise
-    pub fn get_inherited_widget<W: InheritedWidget + 'static>(&self) -> Option<W> {
+    pub fn get_inherited_widget<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
         self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), false)
     }
 
     /// Internal implementation for getting inherited widgets
-    fn get_inherited_widget_impl<W: InheritedWidget + 'static>(
+    fn get_inherited_widget_impl<W: InheritedWidget + Clone + 'static>(
         &self,
         _type_id: TypeId,
-        _register_dependency: bool,
+        register_dependency: bool,
     ) -> Option<W> {
-        // TODO: Implement InheritedWidget lookup
-        // For now, return None. In a full implementation:
-        // 1. Walk up the tree looking for InheritedElement<W>
-        // 2. If register_dependency is true, register this element as dependent
-        // 3. Return the widget data
+        use crate::InheritedElement;
+
+        let tree = self.tree();
+        let mut current_id = self.parent();
+
+        // Walk up the tree looking for InheritedElement<W>
+        while let Some(id) = current_id {
+            if let Some(element) = tree.get_element(id) {
+                // Try to downcast to InheritedElement<W>
+                if let Some(inherited_elem) = element.downcast_ref::<InheritedElement<W>>() {
+                    // Found matching InheritedWidget!
+
+                    // Register dependency if requested
+                    if register_dependency {
+                        // Drop read lock before acquiring write lock to avoid deadlock
+                        drop(tree);
+
+                        // Register this element as dependent
+                        let mut tree_mut = self.tree.write();
+                        if let Some(inherited_elem_mut) = tree_mut
+                            .get_element_mut(id)
+                            .and_then(|e| e.downcast_mut::<InheritedElement<W>>())
+                        {
+                            inherited_elem_mut.register_dependent(self.element_id);
+                        }
+
+                        // Re-acquire read lock to get widget
+                        let tree = self.tree.read();
+                        if let Some(inherited_elem) = tree
+                            .get_element(id)
+                            .and_then(|e| e.downcast_ref::<InheritedElement<W>>())
+                        {
+                            return Some(inherited_elem.widget().clone());
+                        }
+                        return None;
+                    } else {
+                        // No dependency registration needed, just return widget
+                        return Some(inherited_elem.widget().clone());
+                    }
+                }
+
+                current_id = element.parent();
+            } else {
+                break;
+            }
+        }
+
         None
     }
 

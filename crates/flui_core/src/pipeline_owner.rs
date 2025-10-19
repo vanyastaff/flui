@@ -30,6 +30,7 @@ use parking_lot::RwLock;
 use crate::{ElementTree, ElementId, Widget};
 use crate::BoxConstraints; // Re-exported from flui_types in lib.rs
 use flui_types::{Size, Offset};
+use flui_types::events::{PointerEvent, HitTestResult};
 
 /// PipelineOwner - orchestrates the rendering pipeline
 ///
@@ -147,6 +148,39 @@ impl PipelineOwner {
         if let Some(render_object) = tree_guard.root_render_object() {
             render_object.paint(painter, offset);
         }
+    }
+
+    /// Dispatch a pointer event through the render tree
+    ///
+    /// Performs hit testing to find which render objects are under the pointer,
+    /// then dispatches the event to them.
+    ///
+    /// # Parameters
+    ///
+    /// - `event`: The pointer event to dispatch
+    ///
+    /// # Returns
+    ///
+    /// The hit test result containing all hit render objects
+    pub fn dispatch_pointer_event(&mut self, event: PointerEvent) -> HitTestResult {
+        let tree_guard = self.tree.read();
+        let mut result = HitTestResult::new();
+
+        if let Some(render_object) = tree_guard.root_render_object() {
+            let position = event.position();
+            let hit = render_object.hit_test(&mut result, position);
+
+            if hit {
+                tracing::debug!(
+                    "Hit test for {:?} at {:?}: {} entries",
+                    event,
+                    position,
+                    result.entries().len()
+                );
+            }
+        }
+
+        result
     }
 }
 

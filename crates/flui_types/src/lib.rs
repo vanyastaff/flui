@@ -59,9 +59,9 @@
 //! This is the base crate with NO dependencies on other flui crates.
 
 #![warn(missing_docs)]
-
 pub mod animation;
 pub mod constraints;
+pub mod events;
 pub mod geometry;
 pub mod gestures;
 pub mod layout;
@@ -72,7 +72,9 @@ pub mod semantics;
 pub mod styling;
 pub mod typography;
 
+
 // Re-exports for convenience
+pub use events::{HitTestEntry, HitTestResult, PointerButton, PointerDeviceKind, PointerEvent, PointerEventData};
 pub use geometry::{Matrix4, Offset, Point, Rect, RRect, Size};
 pub use layout::{
     Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
@@ -99,3 +101,4 @@ pub mod prelude {
         TextSelection, TextSpan, TextStyle,
     };
 }
+

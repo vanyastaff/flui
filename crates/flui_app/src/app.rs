@@ -4,6 +4,7 @@
 //! element tree, and rendering pipeline integration with egui.
 
 use flui_core::{BoxConstraints, Offset, PipelineOwner, Size, Widget};
+use flui_types::events::{PointerEvent, PointerEventData, PointerDeviceKind, PointerButton};
 
 /// Performance statistics for debugging and optimization
 #[derive(Debug, Default)]
@@ -94,6 +95,47 @@ impl FluiApp {
         })
     }
 
+    /// Process pointer events from egui
+    ///
+    /// Converts egui pointer events to Flui PointerEvents and dispatches them
+    /// through hit testing.
+    fn process_pointer_events(&mut self, ui: &egui::Ui) {
+        let input = ui.input(|i| i.clone());
+
+        // Get pointer position
+        if let Some(pointer_pos) = input.pointer.latest_pos() {
+            let position = Offset::new(
+                pointer_pos.x - ui.min_rect().min.x,
+                pointer_pos.y - ui.min_rect().min.y,
+            );
+
+            // Check for pointer down events (button click)
+            if input.pointer.primary_clicked() {
+                let event_data = PointerEventData::new(position, PointerDeviceKind::Mouse)
+                    .with_button(PointerButton::Primary);
+                let event = PointerEvent::Down(event_data);
+                tracing::info!("🖱️ Pointer Down at {:?}", position);
+                self.pipeline.dispatch_pointer_event(event);
+            }
+
+            // Check for pointer up events (button release)
+            if input.pointer.primary_released() {
+                let event_data = PointerEventData::new(position, PointerDeviceKind::Mouse)
+                    .with_button(PointerButton::Primary);
+                let event = PointerEvent::Up(event_data);
+                tracing::info!("🖱️ Pointer Up at {:?}", position);
+                self.pipeline.dispatch_pointer_event(event);
+            }
+
+            // Check for pointer move events (only if pointer is over widget)
+            if input.pointer.is_moving() {
+                let event_data = PointerEventData::new(position, PointerDeviceKind::Mouse);
+                let event = PointerEvent::Move(event_data);
+                self.pipeline.dispatch_pointer_event(event);
+            }
+        }
+    }
+
     /// Update the application for one frame
     ///
     /// Three-phase rendering pipeline:
@@ -127,6 +169,10 @@ impl FluiApp {
                 self.last_size = Some(current_size);
             }
         }
+
+        // ===== Phase 2.5: Pointer Events =====
+        // Process pointer events after layout but before paint
+        self.process_pointer_events(ui);
 
         // ===== Phase 3: Paint =====
         // Note: egui clears screen every frame, so we must paint every frame

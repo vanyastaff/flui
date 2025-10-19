@@ -22,7 +22,8 @@
       "Bash(RUST_LOG=debug cargo run --example hello_world)",
       "Bash(taskkill //F //IM hello_world.exe)",
       "Bash(RUST_LOG=info cargo run --example hello_world)",
-      "Bash(RUST_LOG=debug cargo run --example counter)"
+      "Bash(RUST_LOG=debug cargo run --example counter)",
+      "Bash(taskkill //F //IM counter.exe)"
     ],
     "deny": [],
     "ask": []

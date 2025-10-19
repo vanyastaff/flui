@@ -53,15 +53,17 @@
 pub mod basic;
 pub mod layout;
 pub mod visual_effects;
+pub mod gestures;
 
 
 
 
 
 // Re-exports for convenient top-level access
-pub use basic::{Align, AspectRatio, Center, Container, DecoratedBox, Padding, SizedBox};
+pub use basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox};
 pub use layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
 pub use visual_effects::{ClipRRect, Opacity, Transform};
+pub use gestures::GestureDetector;
 
 // Re-export commonly used types
 pub use flui_core::{BoxConstraints, BuildContext, Widget};
@@ -77,9 +79,10 @@ pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
 /// ```
 pub mod prelude {
     // Re-export all widgets
-    pub use crate::basic::{Align, AspectRatio, Center, Container, DecoratedBox, Padding, SizedBox, Text};
+    pub use crate::basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox, Text};
     pub use crate::layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
     pub use crate::visual_effects::{ClipRRect, Opacity, Transform};
+    pub use crate::gestures::GestureDetector;
 
     // Re-export core types
     pub use flui_core::{BoxConstraints, BuildContext, Widget};

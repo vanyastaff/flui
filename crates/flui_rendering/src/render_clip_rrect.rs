@@ -259,16 +259,23 @@ impl RenderObject for RenderClipRRect {
         }
     }
 
-    fn hit_test(&self, position: Offset) -> bool {
+    fn hit_test_self(&self, position: Offset) -> bool {
+        // Check if position is within clipped region
+        self.is_point_in_clip_region(position)
+    }
+
+    fn hit_test_children(
+        &self,
+        result: &mut flui_types::events::HitTestResult,
+        position: Offset,
+    ) -> bool {
         if let Some(child) = &self.child {
-            // Check if position is within clipped region
-            if !self.is_point_in_clip_region(position) {
-                return false;
+            // Only hit test child if position is within clipped region
+            if self.is_point_in_clip_region(position) {
+                return child.hit_test(result, position);
             }
-            child.hit_test(position)
-        } else {
-            false
         }
+        false
     }
 
     fn size(&self) -> Size {
@@ -365,6 +372,8 @@ mod tests {
 
     #[test]
     fn test_render_clip_rrect_hit_test_inside() {
+        use flui_types::events::HitTestResult;
+
         let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
         let child = Box::new(RenderBox::new());
         render.set_child(Some(child));
@@ -374,12 +383,15 @@ mod tests {
         render.layout(constraints);
 
         // Test point in center (should be inside)
-        let result = render.hit_test(Offset::new(50.0, 50.0));
-        assert!(result);
+        let mut result = HitTestResult::new();
+        assert!(render.hit_test(&mut result, Offset::new(50.0, 50.0)));
+        assert!(!result.is_empty());
     }
 
     #[test]
     fn test_render_clip_rrect_hit_test_outside() {
+        use flui_types::events::HitTestResult;
+
         let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
         let child = Box::new(RenderBox::new());
         render.set_child(Some(child));
@@ -389,12 +401,15 @@ mod tests {
         render.layout(constraints);
 
         // Test point outside bounds
-        let result = render.hit_test(Offset::new(150.0, 150.0));
-        assert!(!result);
+        let mut result = HitTestResult::new();
+        assert!(!render.hit_test(&mut result, Offset::new(150.0, 150.0)));
+        assert!(result.is_empty());
     }
 
     #[test]
     fn test_render_clip_rrect_hit_test_in_corner() {
+        use flui_types::events::HitTestResult;
+
         let mut render = RenderClipRRect::new(BorderRadius::circular(20.0), Clip::AntiAlias);
         let child = Box::new(RenderBox::new());
         render.set_child(Some(child));
@@ -404,16 +419,18 @@ mod tests {
         render.layout(constraints);
 
         // Test point in top-left corner (should be outside due to rounding)
-        let result = render.hit_test(Offset::new(2.0, 2.0));
-        assert!(!result);
+        let mut result = HitTestResult::new();
+        assert!(!render.hit_test(&mut result, Offset::new(2.0, 2.0)));
 
         // Test point near corner but inside radius
-        let result = render.hit_test(Offset::new(15.0, 15.0));
-        assert!(result);
+        let mut result = HitTestResult::new();
+        assert!(render.hit_test(&mut result, Offset::new(15.0, 15.0)));
     }
 
     #[test]
     fn test_render_clip_rrect_no_clipping() {
+        use flui_types::events::HitTestResult;
+
         let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::None);
         let child = Box::new(RenderBox::new());
         render.set_child(Some(child));
@@ -423,8 +440,8 @@ mod tests {
         render.layout(constraints);
 
         // With Clip::None, all points should pass through
-        let result = render.hit_test(Offset::new(2.0, 2.0));
-        assert!(result);
+        let mut result = HitTestResult::new();
+        assert!(render.hit_test(&mut result, Offset::new(2.0, 2.0)));
     }
 
     #[test]

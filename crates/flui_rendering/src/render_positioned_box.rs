@@ -225,14 +225,18 @@ impl RenderObject for RenderPositionedBox {
         }
     }
 
-    fn hit_test(&self, position: Offset) -> bool {
+    fn hit_test_children(
+        &self,
+        result: &mut flui_types::events::HitTestResult,
+        position: Offset,
+    ) -> bool {
         if let Some(child) = &self.child {
-            // Check hit test for child with offset
+            // Adjust position for child offset
             let child_position = Offset::new(
                 position.dx - self.child_offset.dx,
                 position.dy - self.child_offset.dy,
             );
-            child.hit_test(child_position)
+            child.hit_test(result, child_position)
         } else {
             false
         }

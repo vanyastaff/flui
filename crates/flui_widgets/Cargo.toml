@@ -15,6 +15,7 @@ flui_rendering = { path = "../flui_rendering", version = "0.1.0" }
 flui_types = { path = "../flui_types", version = "0.1.0" }
 flui_foundation = { path = "../flui_foundation", version = "0.1.0" }
 bon = { workspace = true }
+dyn-clone = { workspace = true }
 egui = { workspace = true }
 
 [dev-dependencies]

@@ -6,7 +6,7 @@
 use std::fmt;
 
 use downcast_rs::{impl_downcast, DowncastSync};
-use flui_types::{Offset, Size};
+use flui_types::{events::HitTestResult, Offset, Size};
 
 use crate::BoxConstraints;
 
@@ -163,18 +163,60 @@ pub trait RenderObject: DowncastSync + fmt::Debug {
         f32::INFINITY
     }
 
-    /// Hit test - check if point is within this render object
+    /// Hit test this render object and its children
     ///
-    /// Used for mouse/touch event handling. Position is relative to
-    /// this render object's coordinate space.
+    /// Position is in the coordinate space of this render object.
+    /// Returns true if this or any child was hit.
     ///
-    /// Default implementation checks if point is within bounds.
-    fn hit_test(&self, position: Offset) -> bool {
-        let size = self.size();
-        position.dx >= 0.0
-            && position.dx < size.width
-            && position.dy >= 0.0
-            && position.dy < size.height
+    /// The default implementation:
+    /// 1. Checks if position is within bounds
+    /// 2. Calls hit_test_children()
+    /// 3. Calls hit_test_self() if children didn't consume the event
+    /// 4. Adds entry to result if hit
+    ///
+    /// Override for custom hit testing behavior.
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+        // Check bounds first
+        if position.dx < 0.0
+            || position.dx >= self.size().width
+            || position.dy < 0.0
+            || position.dy >= self.size().height
+        {
+            return false;
+        }
+
+        // Check children first (front to back)
+        let hit_child = self.hit_test_children(result, position);
+
+        // Then check self (if children didn't consume the event)
+        let hit_self = self.hit_test_self(position);
+
+        // Add to result if hit
+        if hit_child || hit_self {
+            result.add(flui_types::events::HitTestEntry::new(
+                position,
+                self.size(),
+            ));
+            return true;
+        }
+
+        false
+    }
+
+    /// Hit test only this render object (not children)
+    ///
+    /// Default: return true if within bounds (handled by hit_test())
+    /// Override to customize self hit testing.
+    fn hit_test_self(&self, _position: Offset) -> bool {
+        true
+    }
+
+    /// Hit test children
+    ///
+    /// Default: no children
+    /// Override to test children in paint order (front to back)
+    fn hit_test_children(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
+        false
     }
 
     /// Visit all children (read-only)
