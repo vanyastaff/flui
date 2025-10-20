@@ -40,7 +40,7 @@ use flui_types::Size;
 
 pub mod listener;
 
-pub use listener::{NotificationListener, NotificationListenerElement};
+pub use listener::NotificationListener;
 
 /// Base trait for notifications that bubble up the widget tree
 ///
