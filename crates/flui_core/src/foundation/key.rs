@@ -170,11 +170,7 @@ impl<T> Default for GlobalKey<T> {
 
 impl<T> Clone for GlobalKey<T> {
     fn clone(&self) -> Self {
-        // GlobalKeys are cloneable but share the same identity
-        Self {
-            id: self.id,
-            _phantom: std::marker::PhantomData,
-        }
+        *self
     }
 }
 

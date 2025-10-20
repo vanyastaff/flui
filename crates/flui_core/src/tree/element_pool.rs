@@ -77,6 +77,12 @@ pub struct ElementPool {
     store_count: usize,
 }
 
+impl Default for ElementPool {
+    fn default() -> Self {
+        Self::new(16)
+    }
+}
+
 impl ElementPool {
     /// Create new element pool
     ///
@@ -100,10 +106,6 @@ impl ElementPool {
         }
     }
 
-    /// Create pool with default settings (16 per type)
-    pub fn default() -> Self {
-        Self::new(16)
-    }
 
     /// Store an inactive element in the pool
     ///
@@ -133,7 +135,7 @@ impl ElementPool {
         }
 
         let type_id = element.widget_type_id();
-        let type_pool = self.pool.entry(type_id).or_insert_with(Vec::new);
+        let type_pool = self.pool.entry(type_id).or_default();
 
         if type_pool.len() >= self.max_per_type {
             // Pool full for this type, drop element

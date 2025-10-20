@@ -370,8 +370,9 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         }
 
         // Phase 4: Process children from end scan
-        for i in new_end..new_len {
-            let old_idx = old_end + (i - new_end);
+        for (offset, new_widget) in new_widgets.iter().skip(new_end).take(new_len - new_end).enumerate() {
+            let i = new_end + offset;
+            let old_idx = old_end + offset;
             let old_child_id = old_children[old_idx];
 
             // Phase 8: Create IndexedSlot with previous sibling
@@ -381,7 +382,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
                 None
             };
             let slot = Slot::with_previous_sibling(i, previous_sibling);
-            Self::update_child(&tree, old_child_id, new_widgets[i].as_ref(), slot);
+            Self::update_child(&tree, old_child_id, new_widget.as_ref(), slot);
             new_children.push(old_child_id);
         }
 
@@ -467,7 +468,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         let mut used_old_children = std::collections::HashSet::new();
 
         // Process each new widget
-        for (_i, new_widget) in new_middle.iter().enumerate() {
+        for new_widget in new_middle.iter() {
             let slot_index = start_slot + new_children.len();
 
             // Try to find matching old element

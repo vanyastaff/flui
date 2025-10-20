@@ -210,11 +210,11 @@ impl ElementTree {
     /// This is called internally to give ComponentElements access to the tree
     /// so they can mount their children.
     ///
+    /// Set the tree's self-reference
+    ///
     /// # Parameters
     ///
-    /// - `element_id`: ID of the element
     /// - `tree`: Arc reference to the element tree
-    /// Set the tree's self-reference
     ///
     /// This should be called once after the tree is wrapped in Arc<RwLock<>>
     pub fn set_tree_ref(&mut self, tree: Arc<RwLock<Self>>) {
@@ -272,14 +272,15 @@ impl ElementTree {
         &mut self,
         element_id: ElementId,
         new_widget: Box<dyn AnyWidget>,
-    ) -> Result<ElementId, ()> {
+    ) -> crate::Result<ElementId> {
         // Check if element exists
         if !self.elements.contains_key(&element_id) {
-            return Err(());
+            return Err(crate::CoreError::element_not_found(element_id));
         }
 
         // Remove element temporarily for update
-        let mut element = self.elements.remove(&element_id).ok_or(())?;
+        let mut element = self.elements.remove(&element_id)
+            .ok_or_else(|| crate::CoreError::element_not_found(element_id))?;
 
         // Update the element
         element.update_any(new_widget);
@@ -391,9 +392,7 @@ impl ElementTree {
             }
 
             // Inflate new widget
-            let new_id = self.inflate_widget(new_widget, parent_id, slot);
-
-            new_id
+            self.inflate_widget(new_widget, parent_id, slot)
         }
     }
 
