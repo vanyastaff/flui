@@ -8,6 +8,7 @@ use parking_lot::RwLock;
 
 use crate::{AnyWidget, AnyElement, ElementId};
 use crate::element::InactiveElements;
+use crate::tree::ElementPool;
 
 /// Element tree managing lifecycle and dirty tracking
 #[derive(Debug)]
@@ -17,6 +18,8 @@ pub struct ElementTree {
     dirty_elements: VecDeque<ElementId>,
     /// Inactive elements (deactivated, awaiting reactivation or unmount)
     inactive_elements: InactiveElements,
+    /// Element pool for reusing elements (optional performance optimization)
+    element_pool: Option<ElementPool>,
     building: bool,
     tree_ref: Option<Arc<RwLock<Self>>>,
 }
@@ -29,9 +32,50 @@ impl ElementTree {
             elements: HashMap::new(),
             dirty_elements: VecDeque::new(),
             inactive_elements: InactiveElements::new(),
+            element_pool: None, // Pooling disabled by default
             building: false,
             tree_ref: None,
         }
+    }
+
+    /// Enable element pooling for performance optimization
+    ///
+    /// When enabled, deactivated elements are stored in a pool and can be reused
+    /// instead of being dropped. This significantly reduces allocations for
+    /// dynamic UIs.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_per_type` - Maximum elements to pool per widget type (default: 16)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut tree = ElementTree::new();
+    /// tree.enable_pooling(16); // Pool up to 16 of each widget type
+    /// ```
+    pub fn enable_pooling(&mut self, max_per_type: usize) {
+        self.element_pool = Some(ElementPool::new(max_per_type));
+        tracing::info!("ElementTree: element pooling enabled (max_per_type={})", max_per_type);
+    }
+
+    /// Disable element pooling
+    ///
+    /// All pooled elements are dropped immediately.
+    pub fn disable_pooling(&mut self) {
+        if let Some(pool) = self.element_pool.take() {
+            tracing::info!("ElementTree: element pooling disabled (dropped {} elements)", pool.len());
+        }
+    }
+
+    /// Check if pooling is enabled
+    pub fn is_pooling_enabled(&self) -> bool {
+        self.element_pool.is_some()
+    }
+
+    /// Get pool statistics (if pooling enabled)
+    pub fn pool_stats(&self) -> Option<crate::tree::ElementPoolStats> {
+        self.element_pool.as_ref().map(|pool| pool.stats())
     }
 
     /// Check if tree has root
@@ -448,6 +492,15 @@ impl ElementTree {
 
             // Remove from dirty queue if present
             self.dirty_elements.retain(|&id| id != element_id);
+
+            // Try to pool element if pooling is enabled
+            if let Some(ref mut pool) = self.element_pool {
+                if !pool.store(element) {
+                    // Pool was full, element will be dropped
+                    tracing::trace!("ElementTree: pool full, dropping element {:?}", element_id);
+                }
+            }
+            // Otherwise element is dropped naturally
         }
 
         // Clear root if this was the root element

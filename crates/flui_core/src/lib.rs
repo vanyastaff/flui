@@ -92,7 +92,7 @@ pub use element::render::{
     MultiChildRenderObjectElement,
     SingleChildRenderObjectElement,
 };
-pub use tree::{BuildOwner, ElementTree, GlobalKeyId, PipelineOwner};
+pub use tree::{BuildOwner, ElementPool, ElementPoolStats, ElementTree, GlobalKeyId, PipelineOwner};
 pub use widget::{AnyWidget, InheritedElement, InheritedWidget, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget}; // Phase 10: ErrorWidget
 pub use render::{
     AnyRenderObject,
