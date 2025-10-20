@@ -9,7 +9,6 @@ repository.workspace = true
 
 [dependencies]
 flui_types = { path = "../flui_types" }
-flui_foundation = { path = "../flui_foundation" }
 parking_lot.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true

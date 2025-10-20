@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cat crates/flui_core/src/foundation/mod.rs)"
+      "Bash(cat crates/flui_core/src/foundation/mod.rs)",
+      "Bash(cargo check --workspace)"
     ],
     "deny": [],
     "ask": []
