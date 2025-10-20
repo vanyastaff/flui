@@ -268,6 +268,14 @@ where
             self.child = None;
         }
     }
+
+    /// Override reassemble for hot reload support
+    ///
+    /// Calls state.reassemble() and marks element dirty for rebuild.
+    fn reassemble(&mut self) {
+        self.state.reassemble();
+        self.dirty = true;
+    }
 }
 
 // ========== Implement Element for StatefulElement (with associated types) ==========

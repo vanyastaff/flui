@@ -149,6 +149,21 @@ pub trait AnyElement: Downcast + fmt::Debug + Send + Sync {
     /// Forget a child element (for GlobalKey reparenting)
     fn forget_child(&mut self, child_id: ElementId);
 
+    /// Reassemble this element (hot reload support)
+    ///
+    /// Called during hot reload to update element state with new code.
+    /// For StatefulElement, this calls `state.reassemble()` and marks dirty.
+    /// For other elements, this is a no-op (default implementation).
+    ///
+    /// # Hot Reload
+    ///
+    /// When code changes during development, reassemble() is called on all elements
+    /// to give them a chance to update. StatefulElements use this to clear caches
+    /// and update their state.
+    fn reassemble(&mut self) {
+        // Default: no-op (only StatefulElement overrides this)
+    }
+
     // ========== Phase 6: InheritedWidget Dependency Tracking ==========
 
     /// Register a dependency on this element (for InheritedElement)

@@ -67,21 +67,27 @@ pub fn reassemble_application(owner: &mut BuildOwner) {
 ///
 /// This allows State objects to clear caches and update themselves
 /// when code changes.
-fn reassemble_all_states(_tree: &mut ElementTree) {
+fn reassemble_all_states(tree: &mut ElementTree) {
     debug!("Calling reassemble() on all State objects");
 
-    // Visit all elements and call reassemble on StatefulElements
-    // Note: StatefulElement should implement reassemble() which calls state.reassemble()
-    // For now, this is a placeholder - full implementation needs StatefulElement update
+    // Collect all element IDs first (to avoid mutable borrow issues)
+    let mut element_ids = Vec::new();
+    tree.visit_all_elements(&mut |element| {
+        element_ids.push(element.id());
+    });
 
-    // TODO: Implement proper state reassemble traversal
-    // tree.visit_all_elements_mut(&mut |element| {
-    //     if let Some(stateful) = element.as_stateful_element_mut() {
-    //         stateful.reassemble_state();
-    //     }
-    // });
+    // Call reassemble() on each element
+    // StatefulElement overrides this to call state.reassemble()
+    // Other elements have no-op default implementation
+    let mut reassembled_count = 0;
+    for id in element_ids {
+        if let Some(element) = tree.get_mut(id) {
+            element.reassemble();
+            reassembled_count += 1;
+        }
+    }
 
-    debug!("State reassemble complete (stub)");
+    debug!("Reassembled {} elements", reassembled_count);
 }
 
 /// Mark all elements dirty to force complete rebuild
