@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 use crate::{AnyElement, Element, ElementId, ElementTree, SingleChildRenderObjectWidget};
 use super::super::ElementLifecycle;
 use crate::AnyWidget;
-use flui_foundation::Key;
+use crate::foundation::Key;
 
 /// Element for RenderObjects with single child (Padding, Opacity, Transform, etc.)
 pub struct SingleChildRenderObjectElement<W: SingleChildRenderObjectWidget> {

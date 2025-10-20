@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use flui_foundation::Key;
+use crate::foundation::Key;
 
 use crate::{AnyElement, Element, ElementId};
 use crate::render::widget::RenderObjectWidget;

@@ -126,7 +126,7 @@ impl Widget for Text {
         Box::new(flui_core::RenderObjectElement::new(self.clone()))
     }
 
-    fn key(&self) -> Option<&dyn flui_foundation::Key> {
+    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
         None
     }
 }

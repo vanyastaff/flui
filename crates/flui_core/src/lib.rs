@@ -74,13 +74,14 @@ pub use flui_types::{
 };
 
 // Re-export foundation types
-pub use foundation::{ElementId, Lifecycle, Slot};
+pub use foundation::{ElementId, Slot};
+pub use element::ElementLifecycle;
 pub use error::{CoreError, Result};
 
 // Re-export from modular structure
 pub use context::Context;
 pub use constraints::BoxConstraints;
-pub use element::{AnyElement, ComponentElement, Element, ElementLifecycle, InactiveElements, RenderObjectElement, StatefulElement};
+pub use element::{AnyElement, ComponentElement, Element, InactiveElements, RenderObjectElement, StatefulElement};
 pub use element::render::{
     LeafRenderObjectElement,
     MultiChildRenderObjectElement,

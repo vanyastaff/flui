@@ -9,7 +9,7 @@ use crate::{ElementId, StatefulWidget, State, Context};
 use crate::tree::ElementTree;
 use super::{AnyElement, Element, ElementLifecycle};
 use crate::AnyWidget;
-use flui_foundation::Key;
+use crate::foundation::Key;
 
 /// Element for StatefulWidget (holds State that persists across rebuilds)
 pub struct StatefulElement<W: StatefulWidget> {

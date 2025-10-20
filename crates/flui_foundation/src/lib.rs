@@ -28,7 +28,8 @@ pub use diagnostics::{
     DiagnosticsTreeStyle,
 };
 pub use key::{
-    IntKey, Key, KeyFactory, KeyId, LocalKey, StringKey, UniqueKey, ValueKey, WidgetKey,
+    GlobalKey, GlobalObjectKey, IntKey, Key, KeyFactory, KeyId, LabeledGlobalKey, LocalKey,
+    ObjectKey, StringKey, UniqueKey, ValueKey, WidgetKey,
 };
 pub use platform::{PlatformBrightness, TargetPlatform};
 
@@ -39,7 +40,7 @@ pub type VoidCallback = std::sync::Arc<dyn Fn() + Send + Sync>;
 pub mod prelude {
     pub use crate::change_notifier::{ChangeNotifier, Listenable, ValueNotifier};
     pub use crate::diagnostics::{Diagnosticable, DiagnosticsNode};
-    pub use crate::key::{Key, KeyFactory, UniqueKey, ValueKey};
+    pub use crate::key::{GlobalKey, Key, KeyFactory, UniqueKey, ValueKey};
     pub use crate::platform::TargetPlatform;
     pub use crate::VoidCallback;
 }

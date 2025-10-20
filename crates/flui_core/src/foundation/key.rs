@@ -56,7 +56,7 @@ pub trait LocalKey: Key {}
 /// # Example
 ///
 /// ```
-/// use flui_foundation::{GlobalKey, Key};
+/// use crate::foundation::{GlobalKey, Key};
 ///
 /// // Create a global key
 /// let key = GlobalKey::<()>::new();

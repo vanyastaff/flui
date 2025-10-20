@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use flui_foundation::Key;
+use crate::foundation::Key;
 
 use crate::{ElementId, StatelessWidget, Context};
 use crate::tree::ElementTree;

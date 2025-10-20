@@ -30,7 +30,7 @@ use std::fmt;
 
 use downcast_rs::{impl_downcast, Downcast};
 use dyn_clone::DynClone;
-use flui_foundation::Key;
+use crate::foundation::Key;
 
 use crate::element::AnyElement;
 

@@ -5,7 +5,7 @@ use std::fmt;
 use crate::{AnyElement, Element, ElementId, LeafRenderObjectWidget};
 use super::super::ElementLifecycle;
 use crate::AnyWidget;
-use flui_foundation::Key;
+use crate::foundation::Key;
 
 /// Element for RenderObjects with no children (optimized for leaf nodes)
 pub struct LeafRenderObjectElement<W: LeafRenderObjectWidget> {

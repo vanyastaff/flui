@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use crate::{AnyElement, Element, ElementId, ElementTree, MultiChildRenderObjectWidget};
 use super::super::ElementLifecycle;
 use crate::AnyWidget;
-use flui_foundation::Key;
+use crate::foundation::Key;
 
 /// Child list with inline storage for 4 children (stack allocated, heap fallback)
 type ChildList = SmallVec<[ElementId; 4]>;

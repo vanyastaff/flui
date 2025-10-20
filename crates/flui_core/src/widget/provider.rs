@@ -24,7 +24,7 @@ pub trait InheritedWidget: fmt::Debug + Clone + Send + Sync + 'static {
     fn update_should_notify(&self, old: &Self) -> bool;
 
     /// Optional key for widget identification
-    fn key(&self) -> Option<&dyn flui_foundation::Key> {
+    fn key(&self) -> Option<&dyn crate::foundation::Key> {
         None
     }
 
@@ -145,7 +145,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
         self.parent
     }
 
-    fn key(&self) -> Option<&dyn flui_foundation::Key> {
+    fn key(&self) -> Option<&dyn crate::foundation::Key> {
         InheritedWidget::key(&self.widget)
     }
 
