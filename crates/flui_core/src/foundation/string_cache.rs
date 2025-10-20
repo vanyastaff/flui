@@ -10,11 +10,13 @@ static INTERNER: Lazy<ThreadedRodeo> = Lazy::new(ThreadedRodeo::default);
 pub type InternedString = Spur;
 
 /// Intern string (O(1) amortized, returns handle)
+#[inline]
 pub fn intern(s: &str) -> InternedString {
     INTERNER.get_or_intern(s)
 }
 
 /// Resolve handle to &str
+#[inline]
 pub fn resolve(key: InternedString) -> &'static str {
     // SAFETY: ThreadedRodeo guarantees that interned strings live for the lifetime of the interner,
     // which is 'static since INTERNER is a static Lazy. The returned &str is valid for 'static.
@@ -27,16 +29,19 @@ pub fn resolve(key: InternedString) -> &'static str {
 }
 
 /// Check if string already interned (returns handle if yes)
+#[inline]
 pub fn try_get(s: &str) -> Option<InternedString> {
     INTERNER.get(s)
 }
 
 /// Get number of interned strings
+#[inline]
 pub fn len() -> usize {
     INTERNER.len()
 }
 
 /// Check if the interner is empty
+#[inline]
 pub fn is_empty() -> bool {
     INTERNER.is_empty()
 }
