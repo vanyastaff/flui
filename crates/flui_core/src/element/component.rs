@@ -17,6 +17,7 @@ pub struct ComponentElement<W: StatelessWidget> {
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
+    lifecycle: ElementLifecycle,
     /// Child element created by build()
     child: Option<ElementId>,
     /// Reference to element tree for building children
@@ -31,6 +32,7 @@ impl<W: StatelessWidget> ComponentElement<W> {
             widget,
             parent: None,
             dirty: true,
+            lifecycle: ElementLifecycle::Initial,
             child: None,
             tree: None,
         }
@@ -107,10 +109,13 @@ impl<W: StatelessWidget> AnyElement for ComponentElement<W> {
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
+        self.lifecycle = ElementLifecycle::Active;
         self.dirty = true;
     }
 
     fn unmount(&mut self) {
+        self.lifecycle = ElementLifecycle::Defunct;
+
         // Unmount child if exists
         if let Some(child_id) = self.child.take() {
             if let Some(tree) = &self.tree {
@@ -141,15 +146,19 @@ impl<W: StatelessWidget> AnyElement for ComponentElement<W> {
     }
 
     fn lifecycle(&self) -> ElementLifecycle {
-        ElementLifecycle::Active // Default
+        self.lifecycle
     }
 
     fn deactivate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Inactive;
+        // Note: child stays attached but inactive
+        // Will be unmounted if not reactivated before frame end
     }
 
     fn activate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Active;
+        // Element is being reinserted into tree (GlobalKey reparenting)
+        self.dirty = true; // Mark for rebuild in new location
     }
 
     fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {

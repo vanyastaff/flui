@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::{ElementId, StatefulWidget, State, Context};
+use crate::{ElementId, StatefulWidget, State, StateLifecycle, Context};
 use crate::tree::ElementTree;
 use super::{AnyElement, Element, ElementLifecycle};
 use crate::AnyWidget;
@@ -16,6 +16,9 @@ pub struct StatefulElement<W: StatefulWidget> {
     id: ElementId,
     parent: Option<ElementId>,
     dirty: bool,
+    lifecycle: ElementLifecycle,
+    /// State lifecycle tracking (Phase 2)
+    state_lifecycle: StateLifecycle,
     widget: W,
     state: Box<W::State>,
     child: Option<ElementId>,
@@ -30,11 +33,18 @@ impl<W: StatefulWidget> StatefulElement<W> {
             id: ElementId::new(),
             parent: None,
             dirty: true,
+            lifecycle: ElementLifecycle::Initial,
+            state_lifecycle: StateLifecycle::Created,
             widget,
             state: Box::new(state),
             child: None,
             tree: None,
         }
+    }
+
+    /// Get state lifecycle (Phase 2)
+    pub fn state_lifecycle(&self) -> StateLifecycle {
+        self.state_lifecycle
     }
 
     /// Set tree reference (test helper)
@@ -105,15 +115,34 @@ where
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
+        self.lifecycle = ElementLifecycle::Active;
         self.dirty = true;
+
+        // Phase 2: Validate state lifecycle
+        assert_eq!(
+            self.state_lifecycle,
+            StateLifecycle::Created,
+            "State must be Created before mount"
+        );
 
         // Call init_state() on first mount
         self.state.init_state();
+        self.state_lifecycle = StateLifecycle::Initialized;
+
         // Phase 2: Call did_change_dependencies() after init_state()
         self.state.did_change_dependencies();
+        self.state_lifecycle = StateLifecycle::Ready;
     }
 
     fn unmount(&mut self) {
+        self.lifecycle = ElementLifecycle::Defunct;
+
+        // Phase 2: Validate state is mounted
+        assert!(
+            self.state_lifecycle.is_mounted(),
+            "State must be mounted before unmount"
+        );
+
         // Phase 2: Call deactivate() before cleanup
         self.state.deactivate();
 
@@ -126,6 +155,7 @@ where
 
         // Phase 2: Call dispose() after deactivate()
         self.state.dispose();
+        self.state_lifecycle = StateLifecycle::Defunct;
     }
 
     fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
@@ -145,6 +175,13 @@ where
         if !self.dirty {
             return Vec::new();
         }
+
+        // Phase 2: Validate state can build
+        assert!(
+            self.state_lifecycle.can_build(),
+            "State must be Ready to build, current: {:?}",
+            self.state_lifecycle
+        );
         self.dirty = false;
 
         // Call build() on state
@@ -171,15 +208,23 @@ where
     }
 
     fn lifecycle(&self) -> ElementLifecycle {
-        ElementLifecycle::Active // Default
+        self.lifecycle
     }
 
     fn deactivate(&mut self) {
+        self.lifecycle = ElementLifecycle::Inactive;
+        // Call state's deactivate for State lifecycle
         self.state.deactivate();
+        // Note: child stays attached but inactive
+        // Will be unmounted if not reactivated before frame end
     }
 
     fn activate(&mut self) {
+        self.lifecycle = ElementLifecycle::Active;
+        // Call state's activate for State lifecycle
         self.state.activate();
+        // Element is being reinserted into tree (GlobalKey reparenting)
+        self.dirty = true; // Mark for rebuild in new location
     }
 
     fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {

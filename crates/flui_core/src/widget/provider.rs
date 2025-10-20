@@ -4,29 +4,25 @@ use std::any::TypeId;
 use std::fmt;
 use std::sync::Arc;
 
-use ahash::AHashSet;
 use parking_lot::RwLock;
 
 use crate::{AnyWidget, Element, Widget, AnyElement as _};
+use crate::context::dependency::DependencyTracker;
 
 /// Propagates data down the tree (dependents rebuild when data changes)
-pub trait InheritedWidget: fmt::Debug + Clone + Send + Sync + 'static {
+///
+/// InheritedWidget extends ProxyWidget (single child) and adds dependency tracking.
+/// When the data changes and `update_should_notify` returns true, all dependent
+/// elements are marked for rebuild.
+pub trait InheritedWidget: crate::ProxyWidget {
     /// Data type this widget provides
     type Data;
 
     /// Get the provided data
     fn data(&self) -> &Self::Data;
 
-    /// Get the child widget
-    fn child(&self) -> &dyn AnyWidget;
-
     /// Check if dependents should rebuild on update
     fn update_should_notify(&self, old: &Self) -> bool;
-
-    /// Optional key for widget identification
-    fn key(&self) -> Option<&dyn crate::foundation::Key> {
-        None
-    }
 
     /// Get TypeId for this specific inherited widget type
     ///
@@ -42,7 +38,8 @@ pub struct InheritedElement<W: InheritedWidget> {
     widget: W,
     parent: Option<crate::ElementId>,
     dirty: bool,
-    dependents: AHashSet<crate::ElementId>,
+    /// Phase 6: Enhanced dependency tracking with DependencyTracker
+    dependencies: DependencyTracker,
     tree: Option<Arc<RwLock<crate::ElementTree>>>,
     child: Option<crate::ElementId>,
 }
@@ -54,28 +51,111 @@ impl<W: InheritedWidget> InheritedElement<W> {
             widget,
             parent: None,
             dirty: true,
-            dependents: AHashSet::new(),
+            dependencies: DependencyTracker::new(),
             tree: None,
             child: None,
         }
     }
 
-    /// Register dependent element
-    pub fn register_dependent(&mut self, element_id: crate::ElementId) {
-        self.dependents.insert(element_id);
+    /// Register a dependency from another element (Phase 6)
+    ///
+    /// This is called when an element calls `depend_on_inherited_widget_of_exact_type<T>()`.
+    /// The dependent element will be notified (marked dirty) when this InheritedWidget changes.
+    pub fn update_dependencies(
+        &mut self,
+        dependent_id: crate::ElementId,
+        aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
+    ) {
+        self.dependencies.add_dependent(dependent_id, aspect);
+        tracing::trace!(
+            "InheritedElement({:?}): Added dependency from {:?}",
+            self.id,
+            dependent_id
+        );
     }
 
-    /// Notify dependents of data change
-    fn notify_dependents(&mut self, tree: &Arc<RwLock<crate::ElementTree>>) {
-        let dependent_ids: Vec<_> = self.dependents.iter().copied().collect();
-        for dependent_id in dependent_ids {
-            tree.write().mark_dirty(dependent_id);
+    /// Register dependent element (backward compatibility)
+    ///
+    /// This is the old API, kept for backward compatibility.
+    /// New code should use `update_dependencies()`.
+    pub fn register_dependent(&mut self, element_id: crate::ElementId) {
+        self.update_dependencies(element_id, None);
+    }
+
+    /// Notify a single dependent that the widget changed (Phase 6)
+    fn notify_dependent(&mut self, old_widget: &W, dependent_id: crate::ElementId) {
+        if !self.widget.update_should_notify(old_widget) {
+            return;
         }
+
+        // Mark the dependent as dirty
+        if let Some(tree) = &self.tree {
+            tree.write().mark_dirty(dependent_id);
+            tracing::trace!(
+                "InheritedElement({:?}): Notified dependent {:?}",
+                self.id,
+                dependent_id
+            );
+        }
+    }
+
+    /// Notify all dependents that the widget changed (Phase 6)
+    ///
+    /// Only notifies dependents if `update_should_notify()` returns true.
+    /// This is called automatically when the widget is updated.
+    pub fn notify_clients(&mut self, old_widget: &W) {
+        if !self.widget.update_should_notify(old_widget) {
+            tracing::trace!(
+                "InheritedElement({:?}): update_should_notify = false, skipping notifications",
+                self.id
+            );
+            return;
+        }
+
+        let dependent_count = self.dependencies.dependent_count();
+        tracing::info!(
+            "InheritedElement({:?}): Notifying {} dependents",
+            self.id,
+            dependent_count
+        );
+
+        // Collect dependent IDs to avoid borrow checker issues
+        let dependent_ids: Vec<crate::ElementId> = self
+            .dependencies
+            .dependents()
+            .map(|info| info.dependent_id)
+            .collect();
+
+        for dependent_id in dependent_ids {
+            self.notify_dependent(old_widget, dependent_id);
+        }
+    }
+
+    /// Notify dependents of data change (backward compatibility)
+    ///
+    /// This is the old API, kept for backward compatibility.
+    /// New code should use `notify_clients()`.
+    #[allow(dead_code)]
+    fn notify_dependents(&mut self, tree: &Arc<RwLock<crate::ElementTree>>) {
+        // Store tree ref if not already set
+        if self.tree.is_none() {
+            self.tree = Some(tree.clone());
+        }
+
+        // Get old widget (we don't have it, so create a clone)
+        // This is a limitation of the old API
+        let old_widget = self.widget.clone();
+        self.notify_clients(&old_widget);
     }
 
     /// Get the widget
     pub fn widget(&self) -> &W {
         &self.widget
+    }
+
+    /// Get count of dependents (Phase 6)
+    pub fn dependent_count(&self) -> usize {
+        self.dependencies.dependent_count()
     }
 }
 
@@ -146,7 +226,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
     }
 
     fn key(&self) -> Option<&dyn crate::foundation::Key> {
-        InheritedWidget::key(&self.widget)
+        crate::ProxyWidget::key(&self.widget)
     }
 
     fn mount(&mut self, parent: Option<crate::ElementId>, _slot: usize) {
@@ -162,23 +242,22 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
             }
         }
 
-        // Clear dependents (they will be removed from tree anyway)
-        self.dependents.clear();
+        // Phase 6: Clear all dependencies (they will be removed from tree anyway)
+        self.dependencies.clear();
     }
 
     fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
         // Try to downcast to our widget type
         if let Ok(widget) = new_widget.downcast::<W>() {
-            let should_notify = widget.update_should_notify(&self.widget);
-            self.widget = *widget;
+            // Phase 6: Use notify_clients for dependency tracking
+            let old_widget = std::mem::replace(&mut self.widget, *widget);
 
-            if should_notify {
+            // Notify dependents (only if update_should_notify returns true)
+            self.notify_clients(&old_widget);
+
+            // Mark self as dirty if notification happened
+            if old_widget.update_should_notify(&self.widget) {
                 self.mark_dirty();
-
-                // Notify all dependent elements to rebuild
-                if let Some(tree) = self.tree.clone() {
-                    self.notify_dependents(&tree);
-                }
             }
         }
     }
@@ -267,6 +346,24 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
             self.child = None;
         }
     }
+
+    // ========== Phase 6: InheritedWidget Dependency Tracking ==========
+
+    fn register_dependency(
+        &mut self,
+        dependent_id: crate::ElementId,
+        aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
+    ) {
+        self.update_dependencies(dependent_id, aspect);
+    }
+
+    fn widget_as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(&self.widget)
+    }
+
+    fn widget_has_type_id(&self, type_id: std::any::TypeId) -> bool {
+        std::any::TypeId::of::<W>() == type_id
+    }
 }
 
 // ========== Implement Element for InheritedElement (with associated types) ==========
@@ -275,17 +372,15 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> Element for Inh
     type Widget = W;
 
     fn update(&mut self, new_widget: W) {
-        // Zero-cost! No downcast needed!
-        let should_notify = new_widget.update_should_notify(&self.widget);
-        self.widget = new_widget;
+        // Phase 6: Zero-cost update with proper notification
+        let old_widget = std::mem::replace(&mut self.widget, new_widget);
 
-        if should_notify {
+        // Notify dependents (only if update_should_notify returns true)
+        self.notify_clients(&old_widget);
+
+        // Mark self as dirty if notification happened
+        if old_widget.update_should_notify(&self.widget) {
             self.mark_dirty();
-
-            // Notify all dependent elements to rebuild
-            if let Some(tree) = self.tree.clone() {
-                self.notify_dependents(&tree);
-            }
         }
     }
 
@@ -344,6 +439,7 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct TestTheme {
         value: i32,
+        child: Box<dyn AnyWidget>,
     }
 
     // Dummy child widget
@@ -356,16 +452,18 @@ mod tests {
         }
     }
 
+    // ProxyWidget implementation (required by InheritedWidget)
+    impl crate::ProxyWidget for TestTheme {
+        fn child(&self) -> &dyn AnyWidget {
+            &*self.child
+        }
+    }
+
     impl InheritedWidget for TestTheme {
         type Data = i32;
 
         fn data(&self) -> &Self::Data {
             &self.value
-        }
-
-        fn child(&self) -> &dyn AnyWidget {
-            // Placeholder - in real usage would return actual child
-            &ChildWidget as &dyn AnyWidget
         }
 
         fn update_should_notify(&self, old: &Self) -> bool {
@@ -378,7 +476,10 @@ mod tests {
 
     #[test]
     fn test_inherited_widget_create_element() {
-        let widget = TestTheme { value: 42 };
+        let widget = TestTheme {
+            value: 42,
+            child: Box::new(ChildWidget),
+        };
         let element = widget.create_element();
 
         assert!(element.is_dirty());
@@ -386,9 +487,18 @@ mod tests {
 
     #[test]
     fn test_inherited_widget_update_should_notify() {
-        let widget1 = TestTheme { value: 1 };
-        let widget2 = TestTheme { value: 2 };
-        let widget3 = TestTheme { value: 2 };
+        let widget1 = TestTheme {
+            value: 1,
+            child: Box::new(ChildWidget),
+        };
+        let widget2 = TestTheme {
+            value: 2,
+            child: Box::new(ChildWidget),
+        };
+        let widget3 = TestTheme {
+            value: 2,
+            child: Box::new(ChildWidget),
+        };
 
         assert!(widget2.update_should_notify(&widget1));
         assert!(!widget3.update_should_notify(&widget2));
@@ -396,13 +506,19 @@ mod tests {
 
     #[test]
     fn test_inherited_widget_data() {
-        let widget = TestTheme { value: 42 };
+        let widget = TestTheme {
+            value: 42,
+            child: Box::new(ChildWidget),
+        };
         assert_eq!(*widget.data(), 42);
     }
 
     #[test]
     fn test_inherited_element_mount() {
-        let widget = TestTheme { value: 42 };
+        let widget = TestTheme {
+            value: 42,
+            child: Box::new(ChildWidget),
+        };
         let mut element = InheritedElement::new(widget);
 
         let parent_id = crate::ElementId::from_raw(100);
@@ -414,11 +530,17 @@ mod tests {
 
     #[test]
     fn test_inherited_element_update() {
-        let widget1 = TestTheme { value: 1 };
+        let widget1 = TestTheme {
+            value: 1,
+            child: Box::new(ChildWidget),
+        };
         let mut element = InheritedElement::new(widget1);
         element.dirty = false;
 
-        let widget2 = TestTheme { value: 2 };
+        let widget2 = TestTheme {
+            value: 2,
+            child: Box::new(ChildWidget),
+        };
         element.update(Box::new(widget2.clone()));
 
         assert_eq!(element.widget().value, 2);
@@ -427,11 +549,17 @@ mod tests {
 
     #[test]
     fn test_inherited_element_update_no_notify() {
-        let widget1 = TestTheme { value: 1 };
+        let widget1 = TestTheme {
+            value: 1,
+            child: Box::new(ChildWidget),
+        };
         let mut element = InheritedElement::new(widget1);
         element.dirty = false;
 
-        let widget2 = TestTheme { value: 1 }; // Same value
+        let widget2 = TestTheme {
+            value: 1,
+            child: Box::new(ChildWidget),
+        }; // Same value
         element.update(Box::new(widget2));
 
         assert_eq!(element.widget().value, 1);
@@ -477,7 +605,10 @@ mod tests {
 
         // Mount root widget
         let root_widget = Box::new(ThemeWithChild {
-            theme: TestTheme { value: 42 },
+            theme: TestTheme {
+                value: 42,
+                child: Box::new(DependentWidget),
+            },
         });
 
         let _root_id = {
@@ -504,7 +635,10 @@ mod tests {
     fn test_register_dependent() {
         use crate::ElementId;
 
-        let widget = TestTheme { value: 42 };
+        let widget = TestTheme {
+            value: 42,
+            child: Box::new(ChildWidget),
+        };
         let mut element = InheritedElement::new(widget);
 
         let dependent_id1 = ElementId::new();
@@ -528,7 +662,10 @@ mod tests {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
 
         // Create inherited element
-        let widget = TestTheme { value: 42 };
+        let widget = TestTheme {
+            value: 42,
+            child: Box::new(ChildWidget),
+        };
         let mut inherited_elem = InheritedElement::new(widget);
         inherited_elem.tree = Some(tree.clone());
 

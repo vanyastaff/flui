@@ -16,6 +16,7 @@ pub struct SingleChildRenderObjectElement<W: SingleChildRenderObjectWidget> {
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
+    lifecycle: ElementLifecycle,
     render_object: Option<Box<dyn crate::AnyRenderObject>>,
     /// Child element ID (managed by ElementTree)
     child: Option<ElementId>,
@@ -31,6 +32,7 @@ impl<W: SingleChildRenderObjectWidget> SingleChildRenderObjectElement<W> {
             widget,
             parent: None,
             dirty: true,
+            lifecycle: ElementLifecycle::Initial,
             render_object: None,
             child: None,
             tree: None,
@@ -107,11 +109,13 @@ impl<W: SingleChildRenderObjectWidget> AnyElement for SingleChildRenderObjectEle
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
+        self.lifecycle = ElementLifecycle::Active;
         self.initialize_render_object();
         self.dirty = true;
     }
 
     fn unmount(&mut self) {
+        self.lifecycle = ElementLifecycle::Defunct;
         // Unmount child first
         if let Some(child_id) = self.child.take() {
             if let Some(tree) = &self.tree {
@@ -154,15 +158,19 @@ impl<W: SingleChildRenderObjectWidget> AnyElement for SingleChildRenderObjectEle
     }
 
     fn lifecycle(&self) -> ElementLifecycle {
-        ElementLifecycle::Active // Default
+        self.lifecycle
     }
 
     fn deactivate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Inactive;
+        // Note: child stays attached but inactive
+        // Will be unmounted if not reactivated before frame end
     }
 
     fn activate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Active;
+        // Element is being reinserted into tree (GlobalKey reparenting)
+        self.dirty = true; // Mark for rebuild in new location
     }
 
     fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {

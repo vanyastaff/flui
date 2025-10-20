@@ -31,10 +31,20 @@
 
 // Module declarations
 pub mod any_widget;
+pub mod equality;
+pub mod error_widget;
+pub mod inherited_model;
 mod into_widget;
 mod lifecycle;
+pub mod parent_data_widget;
 pub mod provider;
+pub mod proxy;
 mod traits;
+
+
+
+
+
 
 
 // Re-exports - Public API
@@ -42,7 +52,12 @@ pub use any_widget::AnyWidget;
 pub use traits::{State, StatefulWidget, StatelessWidget, Widget};
 pub use lifecycle::StateLifecycle;
 pub use into_widget::IntoWidget;
+pub use parent_data_widget::{ParentDataElement, ParentDataWidget};
 pub use provider::{InheritedElement, InheritedWidget};
+pub use proxy::{ProxyElement, ProxyWidget};
+pub use error_widget::ErrorWidget; // Phase 10
+pub use inherited_model::InheritedModel; // Phase 6 (InheritedModel)
+pub use equality::{WidgetEq, widgets_equal}; // Phase 12
 
 #[cfg(test)]
 mod tests {
@@ -464,6 +479,11 @@ mod tests {
         assert!(state.activate_called);
     }
 }
+
+
+
+
+
 
 
 

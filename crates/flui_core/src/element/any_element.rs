@@ -148,6 +148,49 @@ pub trait AnyElement: Downcast + fmt::Debug + Send + Sync {
 
     /// Forget a child element (for GlobalKey reparenting)
     fn forget_child(&mut self, child_id: ElementId);
+
+    // ========== Phase 6: InheritedWidget Dependency Tracking ==========
+
+    /// Register a dependency on this element (for InheritedElement)
+    ///
+    /// This is called when an element calls `depend_on_inherited_widget_of_exact_type<T>()`.
+    /// Only InheritedElement implements this; other elements do nothing.
+    fn register_dependency(
+        &mut self,
+        _dependent_id: ElementId,
+        _aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
+    ) {
+        // Default: no-op (only InheritedElement implements this)
+    }
+
+    /// Get widget as specific type (for Context methods)
+    ///
+    /// Returns Some(widget) if this element's widget matches type T, None otherwise.
+    /// Used by `depend_on_inherited_widget_of_exact_type<T>()`.
+    fn widget_as_any(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
+    /// Check if widget is specific type (for Context methods)
+    ///
+    /// Returns true if this element's widget has the given TypeId.
+    /// Used by `find_ancestor_inherited_element_of_type<T>()`.
+    fn widget_has_type_id(&self, _type_id: TypeId) -> bool {
+        false
+    }
+
+    // ========== Phase 11: Notification System ==========
+
+    /// Visit notification during bubbling
+    ///
+    /// Called when a notification bubbles up through this element.
+    /// Returns true to stop bubbling, false to continue.
+    ///
+    /// Default implementation continues bubbling (returns false).
+    /// Override in elements that want to handle notifications (e.g., NotificationListenerElement).
+    fn visit_notification(&self, _notification: &dyn crate::notification::AnyNotification) -> bool {
+        false
+    }
 }
 
 // Enable downcasting for AnyElement trait objects

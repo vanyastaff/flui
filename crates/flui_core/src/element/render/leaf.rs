@@ -13,6 +13,7 @@ pub struct LeafRenderObjectElement<W: LeafRenderObjectWidget> {
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
+    lifecycle: ElementLifecycle,
     render_object: Option<Box<dyn crate::AnyRenderObject>>,
 }
 
@@ -23,6 +24,7 @@ impl<W: LeafRenderObjectWidget> LeafRenderObjectElement<W> {
             widget,
             parent: None,
             dirty: true,
+            lifecycle: ElementLifecycle::Initial,
             render_object: None,
         }
     }
@@ -81,11 +83,13 @@ impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
+        self.lifecycle = ElementLifecycle::Active;
         self.initialize_render_object();
         self.dirty = true;
     }
 
     fn unmount(&mut self) {
+        self.lifecycle = ElementLifecycle::Defunct;
         // Leaf elements have no children to unmount
         self.render_object = None;
     }
@@ -120,15 +124,18 @@ impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
     }
 
     fn lifecycle(&self) -> ElementLifecycle {
-        ElementLifecycle::Active // Default
+        self.lifecycle
     }
 
     fn deactivate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Inactive;
+        // Leaf elements have no children to deactivate
     }
 
     fn activate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Active;
+        // Element is being reinserted into tree (GlobalKey reparenting)
+        self.dirty = true; // Mark for rebuild in new location
     }
 
     fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {

@@ -7,8 +7,10 @@ use parking_lot::RwLock;
 use crate::{Element, ElementId, Size, Widget};
 use crate::tree::ElementTree;
 
+pub mod dependency;
 mod inherited;
 mod iterators;
+
 
 pub use iterators::{Ancestors, Children, Descendants};
 
@@ -384,6 +386,109 @@ impl Context {
             format!("Context {{ element_id: {} (invalid) }}", self.element_id)
         }
     }
+
+    // ========== Phase 7: Enhanced Context Methods (Ergonomic Aliases) ==========
+
+    /// Visit children - ergonomic alias
+    ///
+    /// Short form of `visit_child_elements()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// context.visit_children(|child| {
+    ///     println!("Child: {:?}", child.id());
+    /// });
+    /// ```
+    pub fn visit_children<F>(&self, mut visitor: F)
+    where
+        F: FnMut(&dyn crate::AnyElement),
+    {
+        self.visit_child_elements(&mut visitor)
+    }
+
+    /// Find ancestor widget - ergonomic alias
+    ///
+    /// Short form of `find_ancestor_widget_of_type()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let scaffold = context.ancestor::<Scaffold>();
+    /// ```
+    pub fn ancestor<W: Widget + Clone + 'static>(&self) -> Option<W> {
+        self.find_ancestor_widget_of_type::<W>()
+    }
+
+    /// Find ancestor RenderObject - ergonomic alias
+    ///
+    /// Short form of `find_ancestor_render_object_of_type()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let render_box_id = context.ancestor_render::<RenderBox>();
+    /// ```
+    pub fn ancestor_render<R: crate::RenderObject + 'static>(&self) -> Option<ElementId> {
+        self.find_ancestor_render_object_of_type::<R>()
+    }
+
+    /// Find element with RenderObject - ergonomic alias
+    ///
+    /// Short form of `find_render_object()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let render_elem_id = context.render_elem();
+    /// ```
+    pub fn render_elem(&self) -> Option<ElementId> {
+        self.find_render_object()
+    }
+
+    // ========== Phase 11: Notification System ==========
+
+    /// Dispatch notification up the tree
+    ///
+    /// Bubbles the notification from this element up through ancestors,
+    /// invoking NotificationListener callbacks along the way.
+    /// Stops when a listener returns true or reaches the root.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::notification::ScrollNotification;
+    ///
+    /// context.dispatch_notification(&ScrollNotification {
+    ///     delta: 10.0,
+    ///     position: 100.0,
+    ///     max_extent: 1000.0,
+    /// });
+    /// ```
+    pub fn dispatch_notification(&self, notification: &dyn crate::notification::AnyNotification) {
+        let tree = self.tree.read();
+        let mut current_id = self.element_id;
+
+        // Bubble up through ancestors
+        loop {
+            // Get current element
+            let Some(element) = tree.get(current_id) else {
+                break; // Element not found, stop bubbling
+            };
+
+            // Visit this element
+            let stop = element.visit_notification(notification);
+            if stop {
+                break; // Listener returned true, stop bubbling
+            }
+
+            // Move to parent
+            let Some(parent_id) = element.parent() else {
+                break; // Reached root, stop bubbling
+            };
+            current_id = parent_id;
+        }
+    }
 }
 
 impl fmt::Debug for Context {
@@ -394,3 +499,4 @@ impl fmt::Debug for Context {
             .finish()
     }
 }
+

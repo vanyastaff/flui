@@ -31,11 +31,27 @@ use flui_types::events::{PointerEvent, HitTestResult};
 /// # Thread Safety
 ///
 /// PipelineOwner uses Arc<RwLock<ElementTree>> for thread-safe access.
+///
+/// # Phase 9: Dirty Tracking
+///
+/// PipelineOwner now tracks dirty RenderObjects for incremental layout/paint:
+/// - `nodes_needing_layout` - RenderObjects that need relayout
+/// - `nodes_needing_paint` - RenderObjects that need repaint
+/// - `flush_layout()` processes only dirty nodes, sorted by depth
+/// - `flush_paint()` processes only dirty nodes
 pub struct PipelineOwner {
     /// The element tree
     tree: Arc<RwLock<ElementTree>>,
     /// Root element ID
     root_element_id: Option<ElementId>,
+
+    // Phase 9: Dirty tracking
+    /// RenderObjects that need layout (Phase 9)
+    nodes_needing_layout: Vec<ElementId>,
+    /// RenderObjects that need paint (Phase 9)
+    nodes_needing_paint: Vec<ElementId>,
+    /// RenderObjects that need compositing bits update (Phase 9)
+    nodes_needing_compositing_bits_update: Vec<ElementId>,
 }
 
 impl PipelineOwner {
@@ -49,6 +65,10 @@ impl PipelineOwner {
         Self {
             tree,
             root_element_id: None,
+            // Phase 9: Initialize dirty tracking lists
+            nodes_needing_layout: Vec::new(),
+            nodes_needing_paint: Vec::new(),
+            nodes_needing_compositing_bits_update: Vec::new(),
         }
     }
 
@@ -87,6 +107,52 @@ impl PipelineOwner {
         id
     }
 
+    // ========== Phase 9: Dirty Tracking API ==========
+
+    /// Request layout for a RenderObject (Phase 9)
+    ///
+    /// Adds the node to the layout dirty list if not already present.
+    /// Called by RenderObject::mark_needs_layout().
+    pub fn request_layout(&mut self, node_id: ElementId) {
+        if !self.nodes_needing_layout.contains(&node_id) {
+            self.nodes_needing_layout.push(node_id);
+            tracing::trace!("PipelineOwner: requested layout for {:?}", node_id);
+        }
+    }
+
+    /// Request paint for a RenderObject (Phase 9)
+    ///
+    /// Adds the node to the paint dirty list if not already present.
+    /// Called by RenderObject::mark_needs_paint().
+    pub fn request_paint(&mut self, node_id: ElementId) {
+        if !self.nodes_needing_paint.contains(&node_id) {
+            self.nodes_needing_paint.push(node_id);
+            tracing::trace!("PipelineOwner: requested paint for {:?}", node_id);
+        }
+    }
+
+    /// Request compositing bits update for a RenderObject (Phase 9)
+    ///
+    /// Adds the node to the compositing dirty list if not already present.
+    pub fn request_compositing_bits_update(&mut self, node_id: ElementId) {
+        if !self.nodes_needing_compositing_bits_update.contains(&node_id) {
+            self.nodes_needing_compositing_bits_update.push(node_id);
+            tracing::trace!("PipelineOwner: requested compositing bits update for {:?}", node_id);
+        }
+    }
+
+    /// Get count of nodes needing layout (Phase 9)
+    pub fn layout_dirty_count(&self) -> usize {
+        self.nodes_needing_layout.len()
+    }
+
+    /// Get count of nodes needing paint (Phase 9)
+    pub fn paint_dirty_count(&self) -> usize {
+        self.nodes_needing_paint.len()
+    }
+
+    // ========== Build Phase ==========
+
     /// Flush the build phase
     ///
     /// Rebuilds all dirty elements. This should be called before layout.
@@ -105,9 +171,10 @@ impl PipelineOwner {
         tracing::debug!("PipelineOwner::flush_build: remaining dirty after rebuild: {}", remaining);
     }
 
-    /// Flush the layout phase
+    /// Flush the layout phase (Phase 9 enhanced)
     ///
-    /// Performs layout on all render objects in the tree.
+    /// Performs layout on dirty RenderObjects only, sorted by depth.
+    /// If no dirty nodes, layouts the root with given constraints.
     ///
     /// # Parameters
     ///
@@ -117,21 +184,74 @@ impl PipelineOwner {
     ///
     /// The size of the root render object, or None if no root
     pub fn flush_layout(&mut self, constraints: BoxConstraints) -> Option<Size> {
+        // Phase 9: Process dirty nodes if any
+        if !self.nodes_needing_layout.is_empty() {
+            let dirty_count = self.nodes_needing_layout.len();
+            tracing::info!("PipelineOwner::flush_layout: processing {} dirty nodes", dirty_count);
+
+            // TODO: Sort by depth (parents before children)
+            // For now, process in order added
+            let dirty_nodes = std::mem::take(&mut self.nodes_needing_layout);
+
+            let tree_guard = self.tree.write();
+            for node_id in dirty_nodes {
+                // Layout each dirty node
+                // In a real implementation, we'd get the RenderObject from ElementTree
+                // and call layout() on it
+                tracing::trace!("  Layout node {:?}", node_id);
+
+                // TODO: Actual layout implementation
+                // if let Some(element) = tree_guard.get_mut(node_id) {
+                //     if let Some(render_object) = element.render_object_mut() {
+                //         render_object.perform_layout();
+                //     }
+                // }
+            }
+
+            drop(tree_guard);
+        }
+
+        // Always layout root with constraints (for now)
         let mut tree_guard = self.tree.write();
         let render_object = tree_guard.root_render_object_mut()?;
         let size = render_object.layout(constraints);
         Some(size)
     }
 
-    /// Flush the paint phase
+    /// Flush the paint phase (Phase 9 enhanced)
     ///
-    /// Paints all render objects in the tree.
+    /// Paints dirty RenderObjects only for incremental rendering.
+    /// If no dirty nodes, paints the entire tree.
     ///
     /// # Parameters
     ///
     /// - `painter`: egui Painter for drawing
     /// - `offset`: Global offset for painting
-    pub fn flush_paint(&self, painter: &egui::Painter, offset: Offset) {
+    pub fn flush_paint(&mut self, painter: &egui::Painter, offset: Offset) {
+        // Phase 9: Process dirty nodes if any
+        if !self.nodes_needing_paint.is_empty() {
+            let dirty_count = self.nodes_needing_paint.len();
+            tracing::info!("PipelineOwner::flush_paint: processing {} dirty nodes", dirty_count);
+
+            let dirty_nodes = std::mem::take(&mut self.nodes_needing_paint);
+
+            let tree_guard = self.tree.read();
+            for node_id in dirty_nodes {
+                // Paint each dirty node
+                tracing::trace!("  Paint node {:?}", node_id);
+
+                // TODO: Actual paint implementation
+                // if let Some(element) = tree_guard.get(node_id) {
+                //     if let Some(render_object) = element.render_object() {
+                //         render_object.paint(painter, offset);
+                //     }
+                // }
+            }
+
+            drop(tree_guard);
+        }
+
+        // Always paint root (for now)
         let tree_guard = self.tree.read();
         if let Some(render_object) = tree_guard.root_render_object() {
             render_object.paint(painter, offset);

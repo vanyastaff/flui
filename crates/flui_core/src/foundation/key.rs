@@ -89,14 +89,77 @@ impl<T> GlobalKey<T> {
         }
     }
 
-    /// Get the raw ID (useful for BuildOwner registry)
+    /// Convert to GlobalKeyId for BuildOwner registry
+    ///
+    /// This allows registering the key with BuildOwner while maintaining type safety.
+    pub fn to_global_key_id(&self) -> crate::tree::build_owner::GlobalKeyId {
+        crate::tree::build_owner::GlobalKeyId::from_raw(self.id.0)
+    }
+
+    /// Get the raw ID (useful for debugging)
     pub fn raw_id(&self) -> u64 {
         self.id.0
     }
 
-    // Note: current_context(), current_widget(), current_state() methods
-    // require integration with BuildOwner/ElementTree, which we'll add later.
-    // For now, we provide the key structure.
+    /// Get the BuildContext for the element registered with this key
+    ///
+    /// Returns `None` if:
+    /// - The key is not registered with any element
+    /// - The element is not currently in the tree
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let key = GlobalKey::<()>::new();
+    /// // ... mount widget with this key ...
+    /// if let Some(context) = key.current_context(&owner) {
+    ///     // Use context
+    /// }
+    /// ```
+    pub fn current_context(&self, owner: &crate::tree::build_owner::BuildOwner) -> Option<crate::context::Context> {
+        let element_id = owner.get_element_for_global_key(self.to_global_key_id())?;
+        let tree = owner.tree();
+        let tree_guard = tree.read();
+
+        // Check if element exists in tree
+        tree_guard.get(element_id)?;
+
+        // Create Context from tree and element_id
+        Some(crate::context::Context::new(tree.clone(), element_id))
+    }
+
+    /// Get the Widget for the element registered with this key
+    ///
+    /// Returns `None` if:
+    /// - The key is not registered with any element
+    /// - The element is not currently in the tree
+    ///
+    /// Note: This returns a reference that's valid only during the read lock.
+    /// For now, this method is marked as unimplemented since we need to solve
+    /// lifetime issues with the tree lock.
+    pub fn current_widget(&self, _owner: &crate::tree::build_owner::BuildOwner) -> Option<()> {
+        // TODO: Implement this when we have a way to return widget references
+        // The challenge is that we need to keep the tree lock alive while
+        // returning a reference to the widget.
+        None
+    }
+
+    /// Get the State object for the StatefulElement registered with this key
+    ///
+    /// Returns `None` if:
+    /// - The key is not registered with any element
+    /// - The element is not a StatefulElement
+    /// - The state type doesn't match T
+    ///
+    /// Note: This method is marked as unimplemented since we need to solve
+    /// lifetime issues and add downcasting support for State objects.
+    pub fn current_state(&self, _owner: &crate::tree::build_owner::BuildOwner) -> Option<()> {
+        // TODO: Implement this when we have:
+        // 1. A way to downcast AnyElement to StatefulElement
+        // 2. A way to access State from StatefulElement
+        // 3. Lifetime management for the returned reference
+        None
+    }
 }
 
 impl<T> Default for GlobalKey<T> {

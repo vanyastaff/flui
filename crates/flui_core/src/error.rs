@@ -34,8 +34,10 @@
 //! ```
 
 use thiserror::Error;
+use std::any::TypeId;
+use std::sync::Arc;
 
-use crate::ElementId;
+use crate::{ElementId, ElementLifecycle};
 
 /// Core framework error type
 ///
@@ -91,6 +93,36 @@ pub enum CoreError {
     /// Tree is in invalid state
     #[error("Element tree in invalid state: {0}")]
     InvalidTreeState(String),
+
+    // Phase 10: Enhanced Error Handling
+
+    /// Widget build failed with source error
+    #[error("Failed to build widget '{widget_type}' (element {element_id}): {source}")]
+    BuildFailed {
+        widget_type: &'static str,
+        element_id: ElementId,
+        source: Arc<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Lifecycle violation (debug only)
+    #[error("Lifecycle violation for element {element_id}: Cannot {operation} in state {actual_state:?} (expected {expected_state:?})")]
+    LifecycleViolation {
+        element_id: ElementId,
+        expected_state: ElementLifecycle,
+        actual_state: ElementLifecycle,
+        operation: &'static str,
+    },
+
+    /// Global key error
+    #[error("{0}")]
+    KeyError(KeyError),
+
+    /// InheritedWidget not found
+    #[error("No InheritedWidget of type '{widget_type}' found in ancestor tree of element {context_element_id}. Did you forget to wrap your app with the widget?")]
+    InheritedWidgetNotFound {
+        widget_type: &'static str,
+        context_element_id: ElementId,
+    },
 }
 
 /// Result type for core operations
@@ -147,6 +179,68 @@ impl CoreError {
     pub fn invalid_tree_state(reason: impl Into<String>) -> Self {
         Self::InvalidTreeState(reason.into())
     }
+
+    // Phase 10: Enhanced Error Handling
+
+    /// Create a build failed error
+    pub fn build_failed(
+        widget_type: &'static str,
+        element_id: ElementId,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::BuildFailed {
+            widget_type,
+            element_id,
+            source: Arc::new(source),
+        }
+    }
+
+    /// Create a lifecycle violation error
+    pub fn lifecycle_violation(
+        element_id: ElementId,
+        expected_state: ElementLifecycle,
+        actual_state: ElementLifecycle,
+        operation: &'static str,
+    ) -> Self {
+        Self::LifecycleViolation {
+            element_id,
+            expected_state,
+            actual_state,
+            operation,
+        }
+    }
+
+    /// Create a key error
+    pub fn key_error(error: KeyError) -> Self {
+        Self::KeyError(error)
+    }
+
+    /// Create an inherited widget not found error
+    pub fn inherited_widget_not_found(
+        widget_type: &'static str,
+        context_element_id: ElementId,
+    ) -> Self {
+        Self::InheritedWidgetNotFound {
+            widget_type,
+            context_element_id,
+        }
+    }
+}
+
+/// Error types for global keys (Phase 10)
+#[derive(Error, Debug, Clone)]
+pub enum KeyError {
+    /// Duplicate global key detected
+    #[error("Duplicate GlobalKey detected: {key_id:?}. Each GlobalKey must be unique. Existing element: {existing_element}, New element: {new_element}")]
+    DuplicateKey {
+        key_id: TypeId,
+        existing_element: ElementId,
+        new_element: ElementId,
+    },
+
+    /// Global key not found
+    #[error("GlobalKey not found: {key_id:?}")]
+    KeyNotFound { key_id: TypeId },
 }
 
 #[cfg(test)]
@@ -182,5 +276,49 @@ mod tests {
 
         let msg = err.to_string();
         assert!(msg.contains("Invalid parent-child"));
+    }
+
+    // Phase 10: Enhanced error tests
+
+    #[test]
+    fn test_key_error_display() {
+        let error = KeyError::KeyNotFound {
+            key_id: TypeId::of::<()>(),
+        };
+        assert!(error.to_string().contains("GlobalKey"));
+        assert!(error.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_inherited_widget_not_found_error() {
+        let error = CoreError::inherited_widget_not_found("Theme", ElementId::from_raw(5));
+        let msg = error.to_string();
+        assert!(msg.contains("Theme"));
+        assert!(msg.contains("Did you forget"));
+    }
+
+    #[test]
+    fn test_lifecycle_violation_error() {
+        let error = CoreError::lifecycle_violation(
+            ElementId::from_raw(1),
+            ElementLifecycle::Active,
+            ElementLifecycle::Defunct,
+            "update",
+        );
+        let msg = error.to_string();
+        assert!(msg.contains("Cannot update"));
+        assert!(msg.contains("Defunct"));
+    }
+
+    #[test]
+    fn test_duplicate_key_error() {
+        let error = KeyError::DuplicateKey {
+            key_id: TypeId::of::<()>(),
+            existing_element: ElementId::from_raw(1),
+            new_element: ElementId::from_raw(2),
+        };
+        let msg = error.to_string();
+        assert!(msg.contains("Duplicate"));
+        assert!(msg.contains("GlobalKey"));
     }
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
 
-use crate::{AnyElement, Element, ElementId, ElementTree, MultiChildRenderObjectWidget};
+use crate::{AnyElement, Element, ElementId, ElementTree, MultiChildRenderObjectWidget, Slot};
 use super::super::ElementLifecycle;
 use crate::AnyWidget;
 use crate::foundation::Key;
@@ -20,6 +20,7 @@ pub struct MultiChildRenderObjectElement<W: MultiChildRenderObjectWidget> {
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
+    lifecycle: ElementLifecycle,
     render_object: Option<Box<dyn crate::AnyRenderObject>>,
     /// Child element IDs (SmallVec for performance - inline storage for 0-4 children)
     children: ChildList,
@@ -35,6 +36,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             widget,
             parent: None,
             dirty: true,
+            lifecycle: ElementLifecycle::Initial,
             render_object: None,
             children: SmallVec::new(), // Inline storage, no heap allocation
             tree: None,
@@ -125,11 +127,13 @@ impl<W: MultiChildRenderObjectWidget> AnyElement for MultiChildRenderObjectEleme
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
+        self.lifecycle = ElementLifecycle::Active;
         self.initialize_render_object();
         self.dirty = true;
     }
 
     fn unmount(&mut self) {
+        self.lifecycle = ElementLifecycle::Defunct;
         // Unmount all children first
         if let Some(tree) = &self.tree {
             for child_id in self.children.drain(..) {
@@ -157,14 +161,17 @@ impl<W: MultiChildRenderObjectWidget> AnyElement for MultiChildRenderObjectEleme
         // Update render object
         self.update_render_object();
 
-        // Return all child widgets to be mounted/updated by ElementTree
-        // Clone each child widget using dyn_clone::clone_box
-        let children = self.widget.children();
-        children
+        // Phase 8: Use efficient update_children() algorithm
+        let old_children = std::mem::take(&mut self.children);
+        // Clone widgets to avoid borrow conflict
+        let new_widgets: Vec<Box<dyn AnyWidget>> = self.widget.children()
             .iter()
-            .enumerate()
-            .map(|(slot, child_widget)| (self.id, dyn_clone::clone_box(child_widget.as_ref()), slot))
-            .collect()
+            .map(|w| dyn_clone::clone_box(w.as_ref()))
+            .collect();
+        self.children = self.update_children(old_children, &new_widgets);
+
+        // Return empty - children are managed internally now
+        Vec::new()
     }
 
     fn is_dirty(&self) -> bool {
@@ -176,15 +183,19 @@ impl<W: MultiChildRenderObjectWidget> AnyElement for MultiChildRenderObjectEleme
     }
 
     fn lifecycle(&self) -> ElementLifecycle {
-        ElementLifecycle::Active // Default
+        self.lifecycle
     }
 
     fn deactivate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Inactive;
+        // Note: children stay attached but inactive
+        // Will be unmounted if not reactivated before frame end
     }
 
     fn activate(&mut self) {
-        // Default: do nothing
+        self.lifecycle = ElementLifecycle::Active;
+        // Element is being reinserted into tree (GlobalKey reparenting)
+        self.dirty = true; // Mark for rebuild in new location
     }
 
     fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
@@ -242,6 +253,273 @@ impl<W: MultiChildRenderObjectWidget> Element for MultiChildRenderObjectElement<
 
     fn widget(&self) -> &W {
         &self.widget
+    }
+}
+
+// ========== Phase 8: Multi-Child Update Algorithm ==========
+
+impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
+    /// Update children efficiently using Flutter's updateChildren() algorithm
+    ///
+    /// This implements the three-phase scan algorithm:
+    /// 1. Scan from start - update matching children in-place
+    /// 2. Scan from end - update matching children in-place
+    /// 3. Handle middle section - reuse keyed children, insert/remove as needed
+    ///
+    /// Returns the new list of child element IDs.
+    fn update_children(
+        &mut self,
+        mut old_children: ChildList,
+        new_widgets: &[Box<dyn AnyWidget>],
+    ) -> ChildList {
+        if new_widgets.is_empty() {
+            // All children removed - unmount old children
+            if let Some(tree) = &self.tree {
+                let mut tree_guard = tree.write();
+                for child_id in old_children.drain(..) {
+                    tree_guard.remove(child_id);
+                }
+            }
+            return SmallVec::new();
+        }
+
+        if old_children.is_empty() {
+            // All children are new - mount them all
+            return self.mount_all_children(new_widgets);
+        }
+
+        // Get tree reference (needed for operations)
+        let tree = match &self.tree {
+            Some(t) => t.clone(),
+            None => return SmallVec::new(), // No tree - can't update
+        };
+
+        let mut new_children = SmallVec::with_capacity(new_widgets.len());
+        let old_len = old_children.len();
+        let new_len = new_widgets.len();
+
+        // Phase 1: Scan from start, update in-place while children match
+        let mut old_index = 0;
+        let mut new_index = 0;
+
+        while old_index < old_len && new_index < new_len {
+            let old_child_id = old_children[old_index];
+            let new_widget = &new_widgets[new_index];
+
+            // Check if we can update this child in-place
+            let can_update = {
+                let tree_guard = tree.read();
+                if let Some(old_element) = tree_guard.get(old_child_id) {
+                    Self::can_update(old_element, new_widget.as_ref())
+                } else {
+                    false
+                }
+            };
+
+            if can_update {
+                // Update in-place with IndexedSlot (Phase 8)
+                let previous_sibling = if new_index > 0 {
+                    new_children.last().copied()
+                } else {
+                    None
+                };
+                let slot = Slot::with_previous_sibling(new_index, previous_sibling);
+                Self::update_child(&tree, old_child_id, new_widget.as_ref(), slot);
+                new_children.push(old_child_id);
+                old_index += 1;
+                new_index += 1;
+            } else {
+                break; // Mismatch - proceed to middle section
+            }
+        }
+
+        // Phase 2: Scan from end, update in-place while children match
+        let mut old_end = old_len;
+        let mut new_end = new_len;
+
+        while old_index < old_end && new_index < new_end {
+            let old_child_id = old_children[old_end - 1];
+            let new_widget = &new_widgets[new_end - 1];
+
+            let can_update = {
+                let tree_guard = tree.read();
+                if let Some(old_element) = tree_guard.get(old_child_id) {
+                    Self::can_update(old_element, new_widget.as_ref())
+                } else {
+                    false
+                }
+            };
+
+            if can_update {
+                old_end -= 1;
+                new_end -= 1;
+            } else {
+                break; // Mismatch
+            }
+        }
+
+        // Phase 3: Handle middle section
+        if old_index < old_end || new_index < new_end {
+            self.handle_middle_section(
+                &old_children[old_index..old_end],
+                &new_widgets[new_index..new_end],
+                &mut new_children,
+                &tree,
+                new_index,
+            );
+        }
+
+        // Phase 4: Process children from end scan
+        for i in new_end..new_len {
+            let old_idx = old_end + (i - new_end);
+            let old_child_id = old_children[old_idx];
+
+            // Phase 8: Create IndexedSlot with previous sibling
+            let previous_sibling = if i > 0 {
+                new_children.last().copied()
+            } else {
+                None
+            };
+            let slot = Slot::with_previous_sibling(i, previous_sibling);
+            Self::update_child(&tree, old_child_id, new_widgets[i].as_ref(), slot);
+            new_children.push(old_child_id);
+        }
+
+        new_children
+    }
+
+    /// Check if an element can be updated with a new widget
+    fn can_update(element: &dyn AnyElement, widget: &dyn AnyWidget) -> bool {
+        // Must be same type
+        if element.widget_type_id() != widget.type_id() {
+            return false;
+        }
+
+        // Check key compatibility
+        match (element.key(), widget.key()) {
+            (None, None) => true, // Both unkeyed - OK
+            (Some(k1), Some(k2)) => k1.equals(k2), // Both keyed with same key - OK
+            _ => false, // One keyed, one not - incompatible
+        }
+    }
+
+    /// Update a child element with a new widget
+    ///
+    /// Phase 8: Now accepts Slot with optional previous_sibling for efficient
+    /// RenderObject child insertion.
+    fn update_child(
+        tree: &Arc<RwLock<ElementTree>>,
+        element_id: ElementId,
+        new_widget: &dyn AnyWidget,
+        slot: Slot,
+    ) {
+        let mut tree_guard = tree.write();
+        if let Some(element) = tree_guard.get_mut(element_id) {
+            // Update with new widget
+            element.update_any(dyn_clone::clone_box(new_widget));
+            // Update slot if needed (slot now contains index + previous_sibling)
+            element.update_slot_for_child(element_id, slot.index());
+        }
+    }
+
+    /// Mount all new children (when old list is empty)
+    fn mount_all_children(&mut self, new_widgets: &[Box<dyn AnyWidget>]) -> ChildList {
+        let mut children = SmallVec::with_capacity(new_widgets.len());
+
+        if let Some(tree) = &self.tree {
+            for (slot, widget) in new_widgets.iter().enumerate() {
+                let widget_clone = dyn_clone::clone_box(widget.as_ref());
+                if let Some(child_id) = tree.write().insert_child(self.id, widget_clone, slot) {
+                    children.push(child_id);
+                }
+            }
+        }
+
+        children
+    }
+
+    /// Handle the middle section where children don't match on both ends
+    fn handle_middle_section(
+        &mut self,
+        old_middle: &[ElementId],
+        new_middle: &[Box<dyn AnyWidget>],
+        new_children: &mut ChildList,
+        tree: &Arc<RwLock<ElementTree>>,
+        start_slot: usize,
+    ) {
+        use std::collections::HashMap;
+        use crate::foundation::key::KeyId;
+
+        // Build key → element map for old keyed children
+        let old_keyed: HashMap<KeyId, ElementId> = {
+            let tree_guard = tree.read();
+            old_middle
+                .iter()
+                .filter_map(|&id| {
+                    let element = tree_guard.get(id)?;
+                    let key = element.key()?;
+                    Some((key.id(), id))
+                })
+                .collect()
+        };
+
+        // Track which old children have been reused
+        let mut used_old_children = std::collections::HashSet::new();
+
+        // Process each new widget
+        for (_i, new_widget) in new_middle.iter().enumerate() {
+            let slot_index = start_slot + new_children.len();
+
+            // Try to find matching old element
+            let old_element_id = if let Some(key) = new_widget.key() {
+                // Keyed widget - lookup by key
+                old_keyed.get(&key.id()).copied()
+            } else {
+                // Unkeyed widget - try to find first unused matching element
+                old_middle.iter().find_map(|&old_id| {
+                    if used_old_children.contains(&old_id) {
+                        return None;
+                    }
+
+                    let tree_guard = tree.read();
+                    let old_element = tree_guard.get(old_id)?;
+
+                    if Self::can_update(old_element, new_widget.as_ref()) {
+                        Some(old_id)
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            if let Some(old_id) = old_element_id {
+                // Reuse existing element with IndexedSlot (Phase 8)
+                used_old_children.insert(old_id);
+
+                let previous_sibling = if slot_index > 0 {
+                    new_children.last().copied()
+                } else {
+                    None
+                };
+                let slot = Slot::with_previous_sibling(slot_index, previous_sibling);
+                Self::update_child(tree, old_id, new_widget.as_ref(), slot);
+                new_children.push(old_id);
+            } else {
+                // Create new element
+                let widget_clone = dyn_clone::clone_box(new_widget.as_ref());
+                if let Some(element_id) = tree.write().insert_child(self.id, widget_clone, slot_index) {
+                    new_children.push(element_id);
+                }
+            }
+        }
+
+        // Unmount unused old children
+        let mut tree_guard = tree.write();
+        for &old_id in old_middle {
+            if !used_old_children.contains(&old_id) {
+                tree_guard.remove(old_id);
+            }
+        }
     }
 }
 

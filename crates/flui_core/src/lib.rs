@@ -51,13 +51,18 @@
 pub mod cache;
 pub mod constraints;
 pub mod context;
+pub mod debug; // Phase 10: Debug infrastructure
 pub mod element;
 pub mod error;
 pub mod foundation;
+pub mod hot_reload; // Phase 14: Hot reload support
+pub mod notification; // Phase 11: Notification system
 pub mod profiling;
 pub mod render;
+pub mod testing; // Phase 15: Testing infrastructure
 pub mod tree;
 pub mod widget;
+
 
 
 
@@ -76,7 +81,7 @@ pub use flui_types::{
 // Re-export foundation types
 pub use foundation::{ElementId, Slot};
 pub use element::ElementLifecycle;
-pub use error::{CoreError, Result};
+pub use error::{CoreError, Result, KeyError}; // Phase 10: Enhanced error types (uses ElementLifecycle)
 
 // Re-export from modular structure
 pub use context::Context;
@@ -88,7 +93,7 @@ pub use element::render::{
     SingleChildRenderObjectElement,
 };
 pub use tree::{BuildOwner, ElementTree, GlobalKeyId, PipelineOwner};
-pub use widget::{AnyWidget, InheritedElement, InheritedWidget, IntoWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget};
+pub use widget::{AnyWidget, InheritedElement, InheritedWidget, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget}; // Phase 10: ErrorWidget
 pub use render::{
     AnyRenderObject,
     RenderObject,
@@ -122,6 +127,7 @@ pub mod prelude {
     pub use crate::cache::get_layout_cache;
     pub use crate::foundation::string_cache::intern;
 }
+
 
 
 

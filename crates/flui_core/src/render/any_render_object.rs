@@ -118,6 +118,33 @@ pub trait AnyRenderObject: DowncastSync + fmt::Debug {
     /// Mark this render object as needing paint
     fn mark_needs_paint(&mut self);
 
+    /// Check if compositing bits need update (Phase 9)
+    fn needs_compositing_bits_update(&self) -> bool {
+        false
+    }
+
+    /// Mark compositing bits as needing update (Phase 9)
+    fn mark_needs_compositing_bits_update(&mut self) {
+        // Default: no-op
+    }
+
+    // ========== Phase 9: Boundaries ==========
+
+    /// Is this a relayout boundary? (Phase 9)
+    fn is_relayout_boundary(&self) -> bool {
+        false
+    }
+
+    /// Is this a repaint boundary? (Phase 9)
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    /// Is size determined only by parent constraints? (Phase 9)
+    fn sized_by_parent(&self) -> bool {
+        false
+    }
+
     // ========== Intrinsic Sizing ==========
 
     /// Get minimum intrinsic width for given height
@@ -227,8 +254,18 @@ pub trait AnyRenderObject: DowncastSync + fmt::Debug {
     }
 
     /// Get the depth of this render object in the tree
-    fn depth(&self) -> i32 {
+    fn depth(&self) -> usize {
         0
+    }
+
+    /// Set the depth of this render object in the tree (Phase 9)
+    fn set_depth(&mut self, _depth: usize) {
+        // Default: no-op
+    }
+
+    /// Update depth of a child (Phase 9)
+    fn redepth_child(&mut self, _child: &mut dyn AnyRenderObject) {
+        // Default: no-op
     }
 
     // ========== Lifecycle ==========

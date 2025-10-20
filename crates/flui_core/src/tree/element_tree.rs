@@ -7,6 +7,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::{AnyWidget, AnyElement, ElementId};
+use crate::element::InactiveElements;
 
 /// Element tree managing lifecycle and dirty tracking
 #[derive(Debug)]
@@ -14,6 +15,8 @@ pub struct ElementTree {
     root: Option<ElementId>,
     elements: HashMap<ElementId, Box<dyn AnyElement>>,
     dirty_elements: VecDeque<ElementId>,
+    /// Inactive elements (deactivated, awaiting reactivation or unmount)
+    inactive_elements: InactiveElements,
     building: bool,
     tree_ref: Option<Arc<RwLock<Self>>>,
 }
@@ -25,6 +28,7 @@ impl ElementTree {
             root: None,
             elements: HashMap::new(),
             dirty_elements: VecDeque::new(),
+            inactive_elements: InactiveElements::new(),
             building: false,
             tree_ref: None,
         }
@@ -249,6 +253,179 @@ impl ElementTree {
     }
 
 
+    /// Smart child update: Update existing child or create new one
+    ///
+    /// This is the core algorithm for efficient element reuse. It implements
+    /// Flutter's update_child() logic with Key-based matching.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. If `new_widget` is None: unmount `old_child` and return None
+    /// 2. If `old_child` is None: inflate new widget and return new element
+    /// 3. If both exist:
+    ///    - Check if update is possible (same type, compatible keys)
+    ///    - If compatible: update existing element in-place
+    ///    - If incompatible: unmount old, inflate new
+    ///
+    /// # Parameters
+    ///
+    /// - `old_child`: ID of existing child element (or None)
+    /// - `new_widget`: New widget to use (or None to unmount)
+    /// - `parent_id`: ID of parent element
+    /// - `slot`: Slot position for the child
+    ///
+    /// # Returns
+    ///
+    /// ID of the resulting element (updated or newly created), or None if unmounted
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Update child with new widget
+    /// let new_child_id = tree.update_child(
+    ///     old_child_id,
+    ///     Some(new_widget),
+    ///     parent_id,
+    ///     0
+    /// );
+    /// ```
+    pub fn update_child(
+        &mut self,
+        old_child: Option<ElementId>,
+        new_widget: Option<Box<dyn AnyWidget>>,
+        parent_id: ElementId,
+        slot: usize,
+    ) -> Option<ElementId> {
+        // Case 1: No new widget -> unmount old child
+        if new_widget.is_none() {
+            if let Some(old_id) = old_child {
+                self.remove(old_id);
+            }
+            return None;
+        }
+
+        let new_widget = new_widget.unwrap();
+
+        // Case 2: No old child -> inflate new widget
+        if old_child.is_none() {
+            return self.inflate_widget(new_widget, parent_id, slot);
+        }
+
+        let old_id = old_child.unwrap();
+
+        // Case 3: Both exist -> check if we can update
+        let can_update = self.can_update(old_id, new_widget.as_ref());
+
+        if can_update {
+            // Update existing element in-place
+            tracing::debug!("update_child: updating element {:?} in-place", old_id);
+
+            // Update the element with new widget
+            if let Some(element) = self.elements.get_mut(&old_id) {
+                element.update_any(new_widget);
+                element.mark_dirty();
+
+                // Update slot if needed
+                if let Some(parent_elem) = self.elements.get_mut(&parent_id) {
+                    parent_elem.update_slot_for_child(old_id, slot);
+                }
+            }
+
+            // Add to dirty queue
+            self.mark_dirty(old_id);
+
+            Some(old_id)
+        } else {
+            // Cannot update -> deactivate old, inflate new
+            tracing::debug!("update_child: replacing element {:?}", old_id);
+
+            // Deactivate old element (may be reactivated by GlobalKey)
+            if let Some(element) = self.elements.get_mut(&old_id) {
+                element.deactivate();
+                // Add to inactive set for potential reactivation
+                self.inactive_elements.add(old_id);
+            }
+
+            // Inflate new widget
+            let new_id = self.inflate_widget(new_widget, parent_id, slot);
+
+            new_id
+        }
+    }
+
+    /// Check if an element can be updated with a new widget
+    ///
+    /// Returns true if:
+    /// - Widget type matches element's widget type
+    /// - Keys are compatible (both None, or both Some with same key)
+    ///
+    /// This implements Flutter's Widget.canUpdate() logic.
+    fn can_update(&self, element_id: ElementId, new_widget: &dyn AnyWidget) -> bool {
+        let element = match self.elements.get(&element_id) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        // Check type match
+        let widget_type = new_widget.type_id();
+        let element_widget_type = element.widget_type_id();
+
+        if widget_type != element_widget_type {
+            return false;
+        }
+
+        // Check key compatibility
+        let old_key = element.key();
+        let new_key = new_widget.key();
+
+        match (old_key, new_key) {
+            (None, None) => true, // Both have no key - compatible
+            (Some(k1), Some(k2)) => k1.equals(k2), // Both have keys - must match
+            _ => false, // One has key, other doesn't - incompatible
+        }
+    }
+
+    /// Inflate a widget into an element and mount it
+    ///
+    /// Creates a new element from the widget, mounts it under the parent,
+    /// and returns its ID.
+    ///
+    /// # Parameters
+    ///
+    /// - `widget`: Widget to inflate
+    /// - `parent_id`: ID of parent element
+    /// - `slot`: Slot position in parent
+    ///
+    /// # Returns
+    ///
+    /// ID of the newly created element
+    fn inflate_widget(
+        &mut self,
+        widget: Box<dyn AnyWidget>,
+        parent_id: ElementId,
+        slot: usize,
+    ) -> Option<ElementId> {
+        // Create element from widget
+        let mut element = widget.create_element();
+        let element_id = element.id();
+
+        // Mount the element
+        element.mount(Some(parent_id), slot);
+
+        // Store in tree
+        self.elements.insert(element_id, element);
+
+        // Give element access to tree
+        if let Some(tree_arc) = self.tree_ref.clone() {
+            self.set_element_tree_ref(element_id, tree_arc);
+        }
+
+        // Mark as dirty for initial build
+        self.mark_dirty(element_id);
+
+        Some(element_id)
+    }
+
     /// Unmount an element and all its descendants
     pub fn remove(&mut self, element_id: ElementId) {
         // Collect child IDs first (all elements that have this element as parent)
@@ -453,6 +630,78 @@ impl ElementTree {
             rebuilds_performed,
             remaining
         );
+
+        // Clean up inactive elements at end of frame
+        self.finalize_tree();
+    }
+
+    /// Attempt to reactivate an inactive element
+    ///
+    /// This is used for GlobalKey reparenting. If the element is inactive,
+    /// it will be reactivated and moved to the new parent/slot.
+    ///
+    /// # Parameters
+    ///
+    /// - `element_id`: ID of element to reactivate
+    /// - `new_parent`: New parent element ID
+    /// - `new_slot`: New slot position
+    ///
+    /// # Returns
+    ///
+    /// true if element was reactivated, false if it wasn't inactive
+    pub fn reactivate_element(
+        &mut self,
+        element_id: ElementId,
+        new_parent: ElementId,
+        new_slot: usize,
+    ) -> bool {
+        // Check if element is in inactive set
+        if self.inactive_elements.remove(element_id).is_none() {
+            return false; // Not inactive
+        }
+
+        tracing::debug!(
+            "ElementTree: reactivating element {:?} under parent {:?}",
+            element_id,
+            new_parent
+        );
+
+        // Reactivate the element
+        if let Some(element) = self.elements.get_mut(&element_id) {
+            element.activate();
+            // Mount under new parent
+            element.mount(Some(new_parent), new_slot);
+        }
+
+        // Mark as dirty for rebuild in new location
+        self.mark_dirty(element_id);
+
+        true
+    }
+
+    /// Finalize tree state at end of frame
+    ///
+    /// This unmounts any elements that were deactivated but not reactivated.
+    /// Called automatically at the end of rebuild().
+    fn finalize_tree(&mut self) {
+        if self.inactive_elements.is_empty() {
+            return;
+        }
+
+        let inactive_count = self.inactive_elements.len();
+        tracing::debug!(
+            "ElementTree::finalize_tree: unmounting {} inactive elements",
+            inactive_count
+        );
+
+        // Collect inactive element IDs first (to avoid double borrow)
+        let to_unmount: Vec<ElementId> = self.inactive_elements.drain().collect();
+
+        // Unmount all elements that stayed inactive
+        for element_id in to_unmount {
+            tracing::debug!("  Unmounting inactive element {:?}", element_id);
+            self.remove(element_id);
+        }
     }
 
     /// Get the total number of elements in the tree

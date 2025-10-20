@@ -14,35 +14,94 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::{AnyWidget, ElementId, ElementTree};
 
-/// Unique identifier for a global key
+/// Build batching system for performance optimization (Phase 13)
 ///
-/// This is a simple u64 ID for now, but could be made more sophisticated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GlobalKeyId(u64);
+/// Batches multiple setState() calls into a single rebuild to avoid redundant work.
+#[derive(Debug)]
+struct BuildBatcher {
+    /// Elements pending in current batch (with depths)
+    pending: HashMap<ElementId, usize>,
+    /// When the current batch started
+    batch_start: Option<Instant>,
+    /// How long to wait before flushing batch
+    batch_duration: Duration,
+    /// Total number of batches flushed
+    batches_flushed: usize,
+    /// Total number of builds saved by batching
+    builds_saved: usize,
+}
 
-impl GlobalKeyId {
-    /// Create a new unique global key ID
-    pub fn new() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+impl BuildBatcher {
+    fn new(batch_duration: Duration) -> Self {
+        Self {
+            pending: HashMap::new(),
+            batch_start: None,
+            batch_duration,
+            batches_flushed: 0,
+            builds_saved: 0,
+        }
     }
 
-    /// Create from raw ID (for testing)
-    #[cfg(test)]
-    pub(crate) fn from_raw(id: u64) -> Self {
-        Self(id)
+    /// Add element to batch
+    fn schedule(&mut self, element_id: ElementId, depth: usize) {
+        // Start batch timer if first element
+        if self.pending.is_empty() {
+            self.batch_start = Some(Instant::now());
+        }
+
+        // Track if this is a duplicate (saved build)
+        if self.pending.insert(element_id, depth).is_some() {
+            self.builds_saved += 1;
+            debug!("Build batched: element {:?} already in batch (saved 1 build)", element_id);
+        } else {
+            debug!("Build batched: added element {:?} to batch", element_id);
+        }
+    }
+
+    /// Check if batch is ready to flush
+    fn should_flush(&self) -> bool {
+        if let Some(start) = self.batch_start {
+            start.elapsed() >= self.batch_duration
+        } else {
+            false
+        }
+    }
+
+    /// Take all pending builds
+    fn take_pending(&mut self) -> HashMap<ElementId, usize> {
+        self.batches_flushed += 1;
+        self.batch_start = None;
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Get statistics
+    fn stats(&self) -> (usize, usize) {
+        (self.batches_flushed, self.builds_saved)
     }
 }
 
-impl Default for GlobalKeyId {
-    fn default() -> Self {
-        Self::new()
+/// Unique identifier for a global key in BuildOwner registry
+///
+/// This is separate from `GlobalKey<T>` to provide type safety and avoid
+/// generics in the BuildOwner API. Convert from GlobalKey using `GlobalKey::to_global_key_id()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlobalKeyId(pub(crate) u64);
+
+impl GlobalKeyId {
+    /// Create from raw ID (used by GlobalKey conversion)
+    pub(crate) fn from_raw(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// Get raw ID
+    pub fn raw(&self) -> u64 {
+        self.0
     }
 }
 
@@ -93,6 +152,10 @@ pub struct BuildOwner {
 
     /// Callback when a build is scheduled (optional)
     on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
+
+    /// Build batching system (Phase 13)
+    /// When enabled, batches multiple setState() calls
+    batcher: Option<BuildBatcher>,
 }
 
 impl BuildOwner {
@@ -110,6 +173,7 @@ impl BuildOwner {
             in_build_scope: false,
             build_locked: false,
             on_build_scheduled: None,
+            batcher: None, // Batching disabled by default
         }
     }
 
@@ -129,6 +193,78 @@ impl BuildOwner {
         F: Fn() + Send + Sync + 'static,
     {
         self.on_build_scheduled = Some(Box::new(callback));
+    }
+
+    // =========================================================================
+    // Build Batching (Phase 13)
+    // =========================================================================
+
+    /// Enable build batching to optimize rapid setState() calls
+    ///
+    /// When enabled, multiple setState() calls within `batch_duration` are
+    /// batched into a single rebuild, improving performance.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut owner = BuildOwner::new();
+    /// owner.enable_batching(Duration::from_millis(16)); // 1 frame
+    ///
+    /// // Multiple setState calls
+    /// owner.schedule_build(id1, 0);
+    /// owner.schedule_build(id2, 1); // Batched!
+    /// owner.schedule_build(id1, 0); // Duplicate - saved!
+    ///
+    /// // Later...
+    /// if owner.should_flush_batch() {
+    ///     owner.flush_batch();
+    /// }
+    /// ```
+    pub fn enable_batching(&mut self, batch_duration: Duration) {
+        info!("Enabling build batching with duration {:?}", batch_duration);
+        self.batcher = Some(BuildBatcher::new(batch_duration));
+    }
+
+    /// Disable build batching
+    pub fn disable_batching(&mut self) {
+        if let Some(ref batcher) = self.batcher {
+            let (batches, saved) = batcher.stats();
+            info!("Disabling build batching (flushed {} batches, saved {} builds)", batches, saved);
+        }
+        self.batcher = None;
+    }
+
+    /// Check if batching is enabled
+    pub fn is_batching_enabled(&self) -> bool {
+        self.batcher.is_some()
+    }
+
+    /// Check if batch is ready to flush
+    pub fn should_flush_batch(&self) -> bool {
+        self.batcher.as_ref().map(|b| b.should_flush()).unwrap_or(false)
+    }
+
+    /// Flush the current batch
+    ///
+    /// Moves all pending batched builds to dirty_elements for processing.
+    pub fn flush_batch(&mut self) {
+        if let Some(ref mut batcher) = self.batcher {
+            let pending = batcher.take_pending();
+            if !pending.is_empty() {
+                debug!("Flushing batch: {} elements", pending.len());
+                for (element_id, depth) in pending {
+                    // Add to dirty elements (bypass batching)
+                    if !self.dirty_elements.iter().any(|(id, _)| *id == element_id) {
+                        self.dirty_elements.push((element_id, depth));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get batching statistics (batches_flushed, builds_saved)
+    pub fn batching_stats(&self) -> (usize, usize) {
+        self.batcher.as_ref().map(|b| b.stats()).unwrap_or((0, 0))
     }
 
     /// Mount a widget as the root of the tree
@@ -154,12 +290,27 @@ impl BuildOwner {
     /// - `depth`: The depth of the element in the tree (0 = root)
     ///
     /// Elements are sorted by depth before building to ensure parents build before children.
+    ///
+    /// If batching is enabled, the build will be batched with other builds.
+    /// Otherwise, it's added to dirty_elements immediately.
     pub fn schedule_build_for(&mut self, element_id: ElementId, depth: usize) {
         if self.build_locked {
             warn!("Attempted to schedule build while locked (element {:?})", element_id);
             return;
         }
 
+        // If batching enabled, use batcher
+        if let Some(ref mut batcher) = self.batcher {
+            batcher.schedule(element_id, depth);
+
+            // Trigger callback
+            if let Some(ref callback) = self.on_build_scheduled {
+                callback();
+            }
+            return;
+        }
+
+        // Otherwise, add directly to dirty elements
         // Check if already scheduled
         if self.dirty_elements.iter().any(|(id, _)| *id == element_id) {
             debug!("Element {:?} already scheduled for rebuild", element_id);
@@ -390,41 +541,50 @@ mod tests {
 
     #[test]
     fn test_global_key_registry() {
+        use crate::foundation::key::GlobalKey;
+
         let mut owner = BuildOwner::new();
-        let key = GlobalKeyId::new();
+        let key = GlobalKey::<()>::new();
         let element_id = ElementId::new();
 
         // Register
-        owner.register_global_key(key, element_id);
+        let key_id = key.to_global_key_id();
+        owner.register_global_key(key_id, element_id);
         assert_eq!(owner.global_key_count(), 1);
-        assert_eq!(owner.get_element_for_global_key(key), Some(element_id));
+        assert_eq!(owner.get_element_for_global_key(key_id), Some(element_id));
 
         // Unregister
-        owner.unregister_global_key(key);
+        owner.unregister_global_key(key_id);
         assert_eq!(owner.global_key_count(), 0);
-        assert_eq!(owner.get_element_for_global_key(key), None);
+        assert_eq!(owner.get_element_for_global_key(key_id), None);
     }
 
     #[test]
     #[should_panic(expected = "already registered")]
     fn test_global_key_duplicate_panic() {
+        use crate::foundation::key::GlobalKey;
+
         let mut owner = BuildOwner::new();
-        let key = GlobalKeyId::new();
+        let key = GlobalKey::<()>::new();
         let id1 = ElementId::new();
         let id2 = ElementId::new();
 
-        owner.register_global_key(key, id1);
-        owner.register_global_key(key, id2); // Should panic
+        let key_id = key.to_global_key_id();
+        owner.register_global_key(key_id, id1);
+        owner.register_global_key(key_id, id2); // Should panic
     }
 
     #[test]
     fn test_global_key_same_element_ok() {
+        use crate::foundation::key::GlobalKey;
+
         let mut owner = BuildOwner::new();
-        let key = GlobalKeyId::new();
+        let key = GlobalKey::<()>::new();
         let element_id = ElementId::new();
 
-        owner.register_global_key(key, element_id);
-        owner.register_global_key(key, element_id); // Should not panic
+        let key_id = key.to_global_key_id();
+        owner.register_global_key(key_id, element_id);
+        owner.register_global_key(key_id, element_id); // Should not panic
         assert_eq!(owner.global_key_count(), 1);
     }
 
@@ -463,5 +623,124 @@ mod tests {
         owner.schedule_build_for(id, 0);
 
         assert!(*called.lock().unwrap());
+    }
+
+    // Phase 13: Build Batching Tests
+
+    #[test]
+    fn test_batching_disabled_by_default() {
+        let owner = BuildOwner::new();
+        assert!(!owner.is_batching_enabled());
+    }
+
+    #[test]
+    fn test_enable_disable_batching() {
+        let mut owner = BuildOwner::new();
+
+        owner.enable_batching(Duration::from_millis(16));
+        assert!(owner.is_batching_enabled());
+
+        owner.disable_batching();
+        assert!(!owner.is_batching_enabled());
+    }
+
+    #[test]
+    fn test_batching_deduplicates() {
+        let mut owner = BuildOwner::new();
+        owner.enable_batching(Duration::from_millis(16));
+
+        let id = ElementId::new();
+
+        // Schedule same element 3 times
+        owner.schedule_build_for(id, 0);
+        owner.schedule_build_for(id, 0);
+        owner.schedule_build_for(id, 0);
+
+        // Flush batch
+        owner.flush_batch();
+
+        // Should only have 1 dirty element
+        assert_eq!(owner.dirty_count(), 1);
+
+        // Stats should show 2 builds saved
+        let (batches, saved) = owner.batching_stats();
+        assert_eq!(batches, 1);
+        assert_eq!(saved, 2);
+    }
+
+    #[test]
+    fn test_batching_multiple_elements() {
+        let mut owner = BuildOwner::new();
+        owner.enable_batching(Duration::from_millis(16));
+
+        let id1 = ElementId::new();
+        let id2 = ElementId::new();
+        let id3 = ElementId::new();
+
+        owner.schedule_build_for(id1, 0);
+        owner.schedule_build_for(id2, 1);
+        owner.schedule_build_for(id3, 2);
+
+        owner.flush_batch();
+
+        // All 3 should be dirty
+        assert_eq!(owner.dirty_count(), 3);
+    }
+
+    #[test]
+    fn test_should_flush_batch_timing() {
+        let mut owner = BuildOwner::new();
+        owner.enable_batching(Duration::from_millis(10));
+
+        let id = ElementId::new();
+        owner.schedule_build_for(id, 0);
+
+        // Should not flush immediately
+        assert!(!owner.should_flush_batch());
+
+        // Wait for batch duration
+        std::thread::sleep(Duration::from_millis(15));
+
+        // Now should flush
+        assert!(owner.should_flush_batch());
+    }
+
+    #[test]
+    fn test_batching_without_enable() {
+        let mut owner = BuildOwner::new();
+        // Batching not enabled
+
+        let id = ElementId::new();
+        owner.schedule_build_for(id, 0);
+
+        // Should add directly to dirty elements
+        assert_eq!(owner.dirty_count(), 1);
+
+        // flush_batch should be no-op
+        owner.flush_batch();
+        assert_eq!(owner.dirty_count(), 1);
+    }
+
+    #[test]
+    fn test_batching_stats() {
+        let mut owner = BuildOwner::new();
+        owner.enable_batching(Duration::from_millis(16));
+
+        let id = ElementId::new();
+
+        // Initial stats
+        assert_eq!(owner.batching_stats(), (0, 0));
+
+        // Schedule same element twice
+        owner.schedule_build_for(id, 0);
+        owner.schedule_build_for(id, 0); // Duplicate
+
+        // Flush
+        owner.flush_batch();
+
+        // Should have 1 batch flushed, 1 build saved
+        let (batches, saved) = owner.batching_stats();
+        assert_eq!(batches, 1);
+        assert_eq!(saved, 1);
     }
 }
