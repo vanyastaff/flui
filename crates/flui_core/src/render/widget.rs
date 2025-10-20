@@ -129,18 +129,17 @@ pub trait MultiChildRenderObjectWidget:
     fn children(&self) -> &[Box<dyn AnyWidget>];
 }
 
-// TODO: Update tests for Phase 9 API changes (RenderObject trait simplified)
-// Tests need to be updated to use AnyRenderObject trait methods
+// Tests updated for Phase 9 AnyRenderObject API
 #[cfg(test)]
-#[allow(dead_code, unused_imports)]
-mod tests_disabled {
+mod tests {
     use super::*;
-    use crate::{AnyWidget, BoxConstraints, Context, Element, Offset, RenderObject, Size, StatelessWidget};
+    use crate::{AnyRenderObject, AnyWidget, BoxConstraints, Context, Offset, Size, StatelessWidget, Widget};
 
     // Simple test RenderObject
     #[derive(Debug)]
     struct TestRenderBox {
         size: Size,
+        constraints: Option<BoxConstraints>,
         needs_layout_flag: bool,
         needs_paint_flag: bool,
     }
@@ -149,25 +148,31 @@ mod tests_disabled {
         fn new() -> Self {
             Self {
                 size: Size::zero(),
+                constraints: None,
                 needs_layout_flag: true,
                 needs_paint_flag: true,
             }
         }
     }
 
-    impl RenderObject for TestRenderBox {
+    impl AnyRenderObject for TestRenderBox {
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
+            self.constraints = Some(constraints);
             self.size = constraints.biggest();
             self.needs_layout_flag = false;
             self.size
         }
 
         fn paint(&self, _painter: &egui::Painter, _offset: Offset) {
-            // Test implementation
+            // Test implementation - no-op
         }
 
         fn size(&self) -> Size {
             self.size
+        }
+
+        fn constraints(&self) -> Option<BoxConstraints> {
+            self.constraints
         }
 
         fn needs_layout(&self) -> bool {
@@ -195,11 +200,10 @@ mod tests_disabled {
     }
 
     impl Widget for TestLeafWidget {
-        type Element = crate::ComponentElement<TestStatelessWidget>;
+        type Element = crate::LeafRenderObjectElement<Self>;
 
         fn into_element(self) -> Self::Element {
-            // Placeholder - would create LeafRenderObjectElement
-            crate::ComponentElement::new(TestStatelessWidget)
+            crate::LeafRenderObjectElement::new(self)
         }
     }
 
