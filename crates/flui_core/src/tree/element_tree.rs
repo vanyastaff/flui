@@ -1,97 +1,25 @@
-//! Element Tree - manages the Widget → Element → RenderObject tree
+//! Element tree lifecycle management
 //!
-//! This module provides the ElementTree type that manages the lifecycle of the element tree.
-//! It handles mounting, updating, rebuilding, and unmounting elements.
-//!
-//! # Architecture
-//!
-//! The ElementTree is the core of Flui's reactive system. It maintains the mapping between
-//! widgets and their corresponding elements, manages parent-child relationships, and
-//! schedules rebuilds when elements are marked dirty.
-//!
-//! ```text
-//! ElementTree
-//! ├── Root Element
-//! │   ├── Child Element 1
-//! │   │   └── Grandchild Element
-//! │   └── Child Element 2
-//! └── Dirty elements queue (for rebuilding)
-//! ```
-//!
-//! # Usage
-//!
-//! ```rust,ignore
-//! use flui_core::{ElementTree, Widget};
-//!
-//! let mut tree = ElementTree::new();
-//!
-//! // Mount root widget
-//! let root_widget = MyApp::new();
-//! tree.set_root(Box::new(root_widget));
-//!
-//! // Process dirty elements
-//! tree.rebuild();
-//! ```
+//! Manages mounting, updating, rebuilding, and unmounting of elements.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use parking_lot::RwLock;
 
-use crate::{Element, ElementId, Widget};
+use crate::{AnyWidget, AnyElement, ElementId};
 
-/// ElementTree - manages the element tree lifecycle
-///
-/// Similar to Flutter's BuildOwner. Manages element lifecycle, tracks dirty elements,
-/// and schedules rebuilds.
-///
-/// # Responsibilities
-///
-/// 1. **Tree Management**: Maintains parent-child relationships
-/// 2. **Lifecycle**: Handles mount, update, unmount operations
-/// 3. **Dirty Tracking**: Tracks which elements need rebuild
-/// 4. **Rebuild Scheduling**: Processes dirty elements in correct order
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let mut tree = ElementTree::new();
-///
-/// // Mount root
-/// tree.set_root(Box::new(MyApp::new()));
-///
-/// // Mark element dirty (e.g., from setState)
-/// tree.mark_dirty(element_id);
-///
-/// // Rebuild all dirty elements
-/// tree.rebuild();
-/// ```
+/// Element tree managing lifecycle and dirty tracking
 #[derive(Debug)]
 pub struct ElementTree {
-    /// Root element of the tree
     root: Option<ElementId>,
-
-    /// All elements in the tree, indexed by their ID
-    elements: HashMap<ElementId, Box<dyn Element>>,
-
-    /// Elements that need to be rebuilt (marked dirty)
+    elements: HashMap<ElementId, Box<dyn AnyElement>>,
     dirty_elements: VecDeque<ElementId>,
-
-    /// Whether we're currently building (prevents recursive builds)
     building: bool,
-
-    /// Self-reference for passing to ComponentElements
     tree_ref: Option<Arc<RwLock<Self>>>,
 }
 
 impl ElementTree {
-    /// Create a new empty element tree
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let tree = ElementTree::new();
-    /// assert!(!tree.has_root());
-    /// ```
+    /// Create empty element tree
     pub fn new() -> Self {
         Self {
             root: None,
@@ -102,11 +30,7 @@ impl ElementTree {
         }
     }
 
-    /// Check if the tree has a root element
-    ///
-    /// # Returns
-    ///
-    /// `true` if a root element has been mounted, `false` otherwise.
+    /// Check if tree has root
     pub fn has_root(&self) -> bool {
         self.root.is_some()
     }
@@ -133,7 +57,7 @@ impl ElementTree {
     ///
     /// This is a simplified implementation that only works for simple trees.
     /// In a full implementation, we'd track the render tree separately.
-    pub fn root_render_object(&self) -> Option<&dyn crate::RenderObject> {
+    pub fn root_render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
         let root_id = self.root?;
         self.find_render_object(root_id)
     }
@@ -143,13 +67,13 @@ impl ElementTree {
     /// # Returns
     ///
     /// Mutable reference to the root RenderObject, or None if not found
-    pub fn root_render_object_mut(&mut self) -> Option<&mut dyn crate::RenderObject> {
+    pub fn root_render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
         let root_id = self.root?;
         self.find_render_object_mut(root_id)
     }
 
     /// Find RenderObject starting from given element ID (immutable)
-    fn find_render_object(&self, element_id: ElementId) -> Option<&dyn crate::RenderObject> {
+    fn find_render_object(&self, element_id: ElementId) -> Option<&dyn crate::AnyRenderObject> {
         let element = self.get(element_id)?;
 
         // Check if this element has a RenderObject
@@ -158,10 +82,8 @@ impl ElementTree {
         }
 
         // If not, search in children - get child IDs without locking
-        let child_ids = element.children();
-
         // Search children recursively
-        for child_id in child_ids {
+        for child_id in element.children_iter() {
             if let Some(render_object) = self.find_render_object(child_id) {
                 return Some(render_object);
             }
@@ -176,7 +98,7 @@ impl ElementTree {
     ///
     /// This is complex to implement correctly due to Rust's borrow checker.
     /// For now, we use unsafe to achieve the desired behavior.
-    fn find_render_object_mut(&mut self, element_id: ElementId) -> Option<&mut dyn crate::RenderObject> {
+    fn find_render_object_mut(&mut self, element_id: ElementId) -> Option<&mut dyn crate::AnyRenderObject> {
         // Check if this element has a RenderObject
         let has_render_object = self.elements.get(&element_id)?.render_object().is_some();
 
@@ -186,14 +108,14 @@ impl ElementTree {
         }
 
         // Collect child IDs without acquiring locks
-        let child_ids: Vec<ElementId> = {
+        let first_child_id: Option<ElementId> = {
             let element = self.elements.get(&element_id)?;
-            element.children()
+            element.children_iter().next()
         };
 
         // Search children - only search first child for now
         // Full recursive search requires more complex lifetime management
-        if let Some(&first_child) = child_ids.first() {
+        if let Some(first_child) = first_child_id {
             return self.find_render_object_mut(first_child);
         }
 
@@ -212,7 +134,7 @@ impl ElementTree {
     /// let root_id = tree.set_root(Box::new(MyApp::new()));
     /// assert_eq!(tree.root(), Some(root_id));
     /// ```
-    pub fn set_root(&mut self, widget: Box<dyn Widget>) -> ElementId {
+    pub fn set_root(&mut self, widget: Box<dyn AnyWidget>) -> ElementId {
         // Unmount existing root if present
         if let Some(old_root_id) = self.root {
             self.remove(old_root_id);
@@ -259,12 +181,12 @@ impl ElementTree {
 
 
     /// Get an element by ID (immutable)
-    pub fn get(&self, id: ElementId) -> Option<&dyn Element> {
+    pub fn get(&self, id: ElementId) -> Option<&dyn AnyElement> {
         self.elements.get(&id).map(|e| e.as_ref())
     }
 
     /// Get an element by ID (mutable)
-    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn Element> {
+    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn AnyElement> {
         self.elements.get_mut(&id).map(|e| e.as_mut())
     }
 
@@ -273,7 +195,7 @@ impl ElementTree {
     pub fn insert_child(
         &mut self,
         parent_id: ElementId,
-        widget: Box<dyn Widget>,
+        widget: Box<dyn AnyWidget>,
         slot: usize,
     ) -> Option<ElementId> {
         // Verify parent exists
@@ -301,7 +223,7 @@ impl ElementTree {
     pub fn update(
         &mut self,
         element_id: ElementId,
-        new_widget: Box<dyn Widget>,
+        new_widget: Box<dyn AnyWidget>,
     ) -> Result<ElementId, ()> {
         // Check if element exists
         if !self.elements.contains_key(&element_id) {
@@ -312,7 +234,7 @@ impl ElementTree {
         let mut element = self.elements.remove(&element_id).ok_or(())?;
 
         // Update the element
-        element.update(Box::new(new_widget));
+        element.update_any(new_widget);
 
         // Mark as dirty
         element.mark_dirty();
@@ -385,6 +307,64 @@ impl ElementTree {
         self.dirty_elements.len()
     }
 
+
+    /// Rebuild a specific element
+    ///
+    /// This rebuilds a single element by ID, useful for BuildOwner's depth-sorted rebuilding.
+    ///
+    /// # Returns
+    ///
+    /// True if the element was rebuilt, false if it wasn't found or wasn't dirty.
+    pub fn rebuild_element(&mut self, element_id: ElementId) -> bool {
+        // Check if element still exists and is dirty
+        let should_rebuild = if let Some(element) = self.elements.get(&element_id) {
+            element.is_dirty()
+        } else {
+            return false;
+        };
+
+        if !should_rebuild {
+            return false;
+        }
+
+        tracing::debug!("ElementTree: rebuilding single element {:?}", element_id);
+
+        // Get old child before rebuild
+        let old_child_id = if let Some(element) = self.elements.get_mut(&element_id) {
+            element.take_old_child_for_rebuild()
+        } else {
+            None
+        };
+
+        // Rebuild the element
+        let children_to_mount = if let Some(element) = self.elements.get_mut(&element_id) {
+            element.rebuild()
+        } else {
+            Vec::new()
+        };
+
+        // Unmount old child
+        if let Some(old_id) = old_child_id {
+            self.remove(old_id);
+        }
+
+        // Mount new children
+        for (parent_id, child_widget, slot) in children_to_mount {
+            if let Some(new_child_id) = self.insert_child(parent_id, child_widget, slot) {
+                // Set tree reference for the new child
+                if let Some(tree_arc) = self.tree_ref.clone() {
+                    self.set_element_tree_ref(new_child_id, tree_arc);
+                }
+
+                // Set the child ID on the parent ComponentElement
+                if let Some(parent_elem) = self.elements.get_mut(&parent_id) {
+                    parent_elem.set_child_after_mount(new_child_id);
+                }
+            }
+        }
+
+        true
+    }
 
     /// Rebuild all dirty elements
     pub fn rebuild(&mut self) {
@@ -524,12 +504,10 @@ impl ElementTree {
     /// ```
     pub fn visit_all_elements<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&dyn Element),
+        F: FnMut(&dyn AnyElement),
     {
         if let Some(root_id) = self.root {
-            if let Some(root) = self.elements.get(&root_id) {
-                self.visit_element_recursive(root.as_ref(), visitor);
-            }
+            self.visit_element_recursive(root_id, visitor);
         }
     }
 
@@ -551,7 +529,7 @@ impl ElementTree {
     /// ```
     pub fn visit_all_elements_mut<F>(&mut self, visitor: &mut F)
     where
-        F: FnMut(&mut dyn Element),
+        F: FnMut(&mut dyn AnyElement),
     {
         if let Some(root_id) = self.root {
             // Collect all element IDs first (can't borrow elements while iterating)
@@ -562,9 +540,9 @@ impl ElementTree {
             while i < element_ids.len() {
                 let current_id = element_ids[i];
                 if let Some(element) = self.elements.get(&current_id) {
-                    element.walk_children(&mut |child| {
-                        element_ids.push(child.id());
-                    });
+                    for child_id in element.children_iter() {
+                        element_ids.push(child_id);
+                    }
                 }
                 i += 1;
             }
@@ -579,17 +557,20 @@ impl ElementTree {
     }
 
     /// Helper for recursive element visitation (read-only)
-    fn visit_element_recursive<F>(&self, element: &dyn Element, visitor: &mut F)
+    fn visit_element_recursive<F>(&self, element_id: ElementId, visitor: &mut F)
     where
-        F: FnMut(&dyn Element),
+        F: FnMut(&dyn AnyElement),
     {
         // Visit this element
-        visitor(element);
+        if let Some(element) = self.elements.get(&element_id) {
+            visitor(element.as_ref());
 
-        // Visit children
-        element.walk_children(&mut |child| {
-            self.visit_element_recursive(child, visitor);
-        });
+            // Visit children
+            let child_ids: Vec<_> = element.children_iter().collect();
+            for child_id in child_ids {
+                self.visit_element_recursive(child_id, visitor);
+            }
+        }
     }
 }
 
@@ -602,7 +583,7 @@ impl Default for ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BuildContext, StatelessWidget, Widget};
+    use crate::{AnyWidget, Context, StatelessWidget, Widget};
 
     // Test widget for testing
     #[derive(Debug, Clone)]
@@ -617,7 +598,7 @@ mod tests {
     }
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
             Box::new(TestWidget::new(format!("{}_child", self.name)))
         }
     }

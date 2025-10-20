@@ -8,7 +8,6 @@ use downcast_rs::{impl_downcast, DowncastSync};
 
 /// ParentData - data that a parent RenderObject can attach to child elements
 ///
-/// Similar to Flutter's ParentData. This allows the parent to store layout-specific
 /// information about each child without having to maintain a separate data structure.
 ///
 /// The trait provides downcasting capabilities via the `downcast-rs` crate.
@@ -34,9 +33,14 @@ pub trait ParentData: DowncastSync + fmt::Debug {}
 // Enable downcasting for ParentData trait objects
 impl_downcast!(sync ParentData);
 
+// Implement ParentData for () (unit type) to represent "no parent data"
+//
+// This allows render objects that don't need parent data to use `type ParentData = ()`
+// without requiring a dedicated NoParentData type.
+impl ParentData for () {}
+
 /// Container parent data mixin
 ///
-/// Similar to Flutter's ContainerParentDataMixin. Adds prev/next sibling pointers
 /// for linked list of children.
 #[derive(Debug, Clone)]
 pub struct ContainerParentData<ChildId> {
@@ -78,7 +82,6 @@ impl<ChildId> ContainerParentData<ChildId> {
 
 /// Box parent data - used by RenderBox children
 ///
-/// Similar to Flutter's BoxParentData. Stores the offset where the child
 /// should be painted relative to the parent.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxParentData {
@@ -117,7 +120,6 @@ impl ParentData for BoxParentData {}
 
 /// Container box parent data - combines container and box parent data
 ///
-/// Similar to Flutter's ContainerBoxParentData. Used by parents that need both
 /// offset information and linked list of children.
 #[derive(Debug, Clone)]
 pub struct ContainerBoxParentData<ChildId> {

@@ -1,45 +1,22 @@
-//! SingleChildRenderObjectElement - for RenderObjects with one child
-//!
-//! A specialized element for RenderObjects that have exactly one child.
-//! This is the proper Flutter architecture pattern for single-child widgets
-//! like Padding, Opacity, Transform, etc.
+//! SingleChildRenderObjectElement for RenderObjects with one child
 
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::{Element, ElementId, ElementTree, RenderObject, SingleChildRenderObjectWidget, Widget};
+use crate::{AnyElement, Element, ElementId, ElementTree, SingleChildRenderObjectWidget};
+use super::super::ElementLifecycle;
+use crate::AnyWidget;
+use flui_foundation::Key;
 
-/// SingleChildRenderObjectElement manages RenderObjects with one child
-///
-/// This follows Flutter's architecture where each type of RenderObjectWidget
-/// has a corresponding specialized Element type. This element handles:
-/// - Creating and managing the RenderObject
-/// - Managing a single child element
-/// - Coordinating updates between widget, element, and render object
-///
-/// # Flutter Equivalent
-///
-/// This is the Rust equivalent of Flutter's `SingleChildRenderObjectElement`.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Padding widget creates a SingleChildRenderObjectElement
-/// impl Widget for Padding {
-///     fn create_element(&self) -> Box<dyn Element> {
-///         Box::new(SingleChildRenderObjectElement::new(self.clone()))
-///     }
-/// }
-/// ```
+/// Element for RenderObjects with single child (Padding, Opacity, Transform, etc.)
 pub struct SingleChildRenderObjectElement<W: SingleChildRenderObjectWidget> {
     id: ElementId,
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
-    render_object: Option<Box<dyn RenderObject>>,
+    render_object: Option<Box<dyn crate::AnyRenderObject>>,
     /// Child element ID (managed by ElementTree)
     child: Option<ElementId>,
     /// Reference to ElementTree for child management
@@ -61,12 +38,12 @@ impl<W: SingleChildRenderObjectWidget> SingleChildRenderObjectElement<W> {
     }
 
     /// Get reference to the render object
-    pub fn render_object_ref(&self) -> Option<&dyn RenderObject> {
+    pub fn render_object_ref(&self) -> Option<&dyn crate::AnyRenderObject> {
         self.render_object.as_ref().map(|r| r.as_ref())
     }
 
     /// Get mutable reference to the render object
-    pub fn render_object_mut_ref(&mut self) -> Option<&mut dyn RenderObject> {
+    pub fn render_object_mut_ref(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
         self.render_object.as_mut().map(|r| r.as_mut())
     }
 
@@ -113,7 +90,21 @@ impl<W: SingleChildRenderObjectWidget> fmt::Debug for SingleChildRenderObjectEle
     }
 }
 
-impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElement<W> {
+// ========== Implement AnyElement for SingleChildRenderObjectElement ==========
+
+impl<W: SingleChildRenderObjectWidget> AnyElement for SingleChildRenderObjectElement<W> {
+    fn id(&self) -> ElementId {
+        self.id
+    }
+
+    fn parent(&self) -> Option<ElementId> {
+        self.parent
+    }
+
+    fn key(&self) -> Option<&dyn Key> {
+        AnyWidget::key(&self.widget)
+    }
+
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
         self.initialize_render_object();
@@ -131,7 +122,7 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         self.render_object = None;
     }
 
-    fn update(&mut self, new_widget: Box<dyn Any + Send + Sync>) {
+    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
         if let Ok(new_widget) = new_widget.downcast::<W>() {
             self.widget = *new_widget;
             self.update_render_object();
@@ -139,7 +130,7 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn Widget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -154,18 +145,6 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         vec![(self.id, dyn_clone::clone_box(child_widget), 0)]
     }
 
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
-        self.parent
-    }
-
-    fn key(&self) -> Option<&dyn flui_foundation::Key> {
-        self.widget.key()
-    }
-
     fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -174,42 +153,24 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         self.dirty = true;
     }
 
-    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn Element)) {
-        if let Some(child_id) = self.child {
-            if let Some(tree) = &self.tree {
-                let tree_guard = tree.read();
-                if let Some(child_element) = tree_guard.get(child_id) {
-                    visitor(child_element);
-                }
-            }
-        }
+    fn lifecycle(&self) -> ElementLifecycle {
+        ElementLifecycle::Active // Default
     }
 
-    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn Element)) {
-        if let Some(child_id) = self.child {
-            if let Some(tree) = &self.tree {
-                let mut tree_guard = tree.write();
-                if let Some(child_element) = tree_guard.get_mut(child_id) {
-                    visitor(child_element);
-                }
-            }
-        }
+    fn deactivate(&mut self) {
+        // Default: do nothing
+    }
+
+    fn activate(&mut self) {
+        // Default: do nothing
+    }
+
+    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        Box::new(self.child.into_iter())
     }
 
     fn set_tree_ref(&mut self, tree: Arc<RwLock<ElementTree>>) {
         self.tree = Some(tree);
-    }
-
-    fn widget_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<W>()
-    }
-
-    fn render_object(&self) -> Option<&dyn RenderObject> {
-        self.render_object.as_ref().map(|ro| ro.as_ref())
-    }
-
-    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
-        self.render_object.as_mut().map(|ro| ro.as_mut())
     }
 
     fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
@@ -220,19 +181,54 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
         self.set_child(child_id)
     }
 
-    fn child_ids(&self) -> Vec<ElementId> {
-        if let Some(child_id) = self.child {
-            vec![child_id]
-        } else {
-            Vec::new()
+    fn widget_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<W>()
+    }
+
+    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+        self.render_object.as_ref().map(|ro| ro.as_ref())
+    }
+
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+        self.render_object.as_mut().map(|ro| ro.as_mut())
+    }
+
+    fn did_change_dependencies(&mut self) {
+        // Default: do nothing
+    }
+
+    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+        // Single child element doesn't need slot updates
+    }
+
+    fn forget_child(&mut self, child_id: ElementId) {
+        if self.child == Some(child_id) {
+            self.child = None;
         }
+    }
+}
+
+// ========== Implement Element for SingleChildRenderObjectElement (with associated types) ==========
+
+impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElement<W> {
+    type Widget = W;
+
+    fn update(&mut self, new_widget: W) {
+        // Zero-cost! No downcast needed!
+        self.widget = new_widget;
+        self.update_render_object();
+        self.dirty = true;
+    }
+
+    fn widget(&self) -> &W {
+        &self.widget
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BoxConstraints, BuildContext, RenderObjectWidget, StatelessWidget};
+    use crate::{BoxConstraints, Context, RenderObjectWidget, StatelessWidget};
     use flui_types::{EdgeInsets, Offset, Size};
 
     // Mock RenderObject for testing
@@ -293,9 +289,9 @@ mod tests {
             self.needs_paint_flag = true;
         }
 
-        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn RenderObject)) {}
+        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn crate::AnyRenderObject)) {}
 
-        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn RenderObject)) {}
+        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn crate::AnyRenderObject)) {}
     }
 
     // Mock child widget
@@ -303,7 +299,7 @@ mod tests {
     struct MockChildWidget;
 
     impl StatelessWidget for MockChildWidget {
-        fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
             Box::new(MockChildWidget)
         }
     }
@@ -312,21 +308,23 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockPaddingWidget {
         padding: EdgeInsets,
-        child: Box<dyn Widget>,
+        child: Box<dyn AnyWidget>,
     }
 
     impl Widget for MockPaddingWidget {
-        fn create_element(&self) -> Box<dyn Element> {
-            Box::new(SingleChildRenderObjectElement::new(self.clone()))
+        type Element = SingleChildRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            SingleChildRenderObjectElement::new(self)
         }
     }
 
     impl RenderObjectWidget for MockPaddingWidget {
-        fn create_render_object(&self) -> Box<dyn RenderObject> {
+        fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
             Box::new(MockRenderPadding::new(self.padding))
         }
 
-        fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+        fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
             if let Some(padding) = render_object.downcast_mut::<MockRenderPadding>() {
                 padding.set_padding(self.padding);
             }
@@ -334,7 +332,7 @@ mod tests {
     }
 
     impl SingleChildRenderObjectWidget for MockPaddingWidget {
-        fn child(&self) -> &dyn Widget {
+        fn child(&self) -> &dyn AnyWidget {
             &*self.child
         }
     }
@@ -392,7 +390,7 @@ mod tests {
             padding: EdgeInsets::all(20.0),
             child: Box::new(MockChildWidget),
         };
-        element.update(Box::new(new_widget));
+        Element::update(&mut element, new_widget);
 
         let render_object = element.render_object_ref().unwrap();
         let padding = render_object.downcast_ref::<MockRenderPadding>().unwrap();
@@ -439,10 +437,10 @@ mod tests {
         };
         let mut element = SingleChildRenderObjectElement::new(widget);
 
-        assert_eq!(element.children(), Vec::<ElementId>::new());
+        assert_eq!(element.children_iter().collect::<Vec<_>>(), Vec::<ElementId>::new());
 
         let child_id = ElementId::new();
         element.set_child(child_id);
-        assert_eq!(element.children(), vec![child_id]);
+        assert_eq!(element.children_iter().collect::<Vec<_>>(), vec![child_id]);
     }
 }

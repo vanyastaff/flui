@@ -4,29 +4,27 @@
 
 use std::fmt;
 
-use crate::{RenderObject, Widget};
+use crate::{AnyWidget, Widget};
 
 /// Base trait for widgets that create RenderObjects
 ///
-/// Similar to Flutter's RenderObjectWidget. These widgets directly manage
 /// a RenderObject for layout and painting, rather than composing other widgets.
 pub trait RenderObjectWidget: Widget {
     /// Create the RenderObject for this widget
     ///
     /// Called when element is first mounted. Should create and return a new
     /// RenderObject instance.
-    fn create_render_object(&self) -> Box<dyn RenderObject>;
+    fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject>;
 
     /// Update the RenderObject with new configuration
     ///
     /// Called when widget is updated. Should apply new configuration to the
     /// existing RenderObject.
-    fn update_render_object(&self, render_object: &mut dyn RenderObject);
+    fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject);
 }
 
 /// Widget that creates a RenderObject without children
 ///
-/// Similar to Flutter's LeafRenderObjectWidget. Used for widgets that don't
 /// have any children, like Image, Text (in some cases), or custom painters.
 ///
 /// # Example
@@ -40,11 +38,11 @@ pub trait RenderObjectWidget: Widget {
 /// }
 ///
 /// impl LeafRenderObjectWidget for CustomPaint {
-///     fn create_render_object(&self) -> Box<dyn RenderObject> {
+///     fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
 ///         Box::new(RenderCustomPaint::new(self.color))
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+///     fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
 ///         if let Some(render) = render_object.downcast_mut::<RenderCustomPaint>() {
 ///             render.set_color(self.color);
 ///         }
@@ -57,7 +55,6 @@ pub trait LeafRenderObjectWidget: RenderObjectWidget + fmt::Debug + Clone + Send
 
 /// Widget that creates a RenderObject with a single child
 ///
-/// Similar to Flutter's SingleChildRenderObjectWidget. Used for widgets that
 /// have exactly one child, like Padding, Opacity, or Transform.
 ///
 /// # Example
@@ -68,21 +65,21 @@ pub trait LeafRenderObjectWidget: RenderObjectWidget + fmt::Debug + Clone + Send
 /// #[derive(Debug, Clone)]
 /// struct Padding {
 ///     padding: EdgeInsets,
-///     child: Box<dyn Widget>,
+///     child: Box<dyn AnyWidget>,
 /// }
 ///
 /// impl SingleChildRenderObjectWidget for Padding {
-///     fn create_render_object(&self) -> Box<dyn RenderObject> {
+///     fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
 ///         Box::new(RenderPadding::new(self.padding))
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+///     fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
 ///         if let Some(render) = render_object.downcast_mut::<RenderPadding>() {
 ///             render.set_padding(self.padding);
 ///         }
 ///     }
 ///
-///     fn child(&self) -> &dyn Widget {
+///     fn child(&self) -> &dyn AnyWidget {
 ///         &*self.child
 ///     }
 /// }
@@ -91,12 +88,11 @@ pub trait SingleChildRenderObjectWidget:
     RenderObjectWidget + fmt::Debug + Clone + Send + Sync + 'static
 {
     /// Get the child widget
-    fn child(&self) -> &dyn Widget;
+    fn child(&self) -> &dyn AnyWidget;
 }
 
 /// Widget that creates a RenderObject with multiple children
 ///
-/// Similar to Flutter's MultiChildRenderObjectWidget. Used for widgets that
 /// have multiple children, like Row, Column, Stack, or Wrap.
 ///
 /// # Example
@@ -106,22 +102,22 @@ pub trait SingleChildRenderObjectWidget:
 ///
 /// #[derive(Debug, Clone)]
 /// struct Row {
-///     children: Vec<Box<dyn Widget>>,
+///     children: Vec<Box<dyn AnyWidget>>,
 ///     main_axis_alignment: MainAxisAlignment,
 /// }
 ///
 /// impl MultiChildRenderObjectWidget for Row {
-///     fn create_render_object(&self) -> Box<dyn RenderObject> {
+///     fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
 ///         Box::new(RenderFlex::new(Axis::Horizontal, self.main_axis_alignment))
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+///     fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
 ///         if let Some(render) = render_object.downcast_mut::<RenderFlex>() {
 ///             render.set_main_axis_alignment(self.main_axis_alignment);
 ///         }
 ///     }
 ///
-///     fn children(&self) -> &[Box<dyn Widget>] {
+///     fn children(&self) -> &[Box<dyn AnyWidget>] {
 ///         &self.children
 ///     }
 /// }
@@ -130,13 +126,13 @@ pub trait MultiChildRenderObjectWidget:
     RenderObjectWidget + fmt::Debug + Clone + Send + Sync + 'static
 {
     /// Get the children widgets
-    fn children(&self) -> &[Box<dyn Widget>];
+    fn children(&self) -> &[Box<dyn AnyWidget>];
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BoxConstraints, BuildContext, Element, Offset, RenderObject, Size, StatelessWidget};
+    use crate::{AnyWidget, BoxConstraints, Context, Element, Offset, RenderObject, Size, StatelessWidget};
 
     // Simple test RenderObject
     #[derive(Debug)]
@@ -196,18 +192,20 @@ mod tests {
     }
 
     impl Widget for TestLeafWidget {
-        fn create_element(&self) -> Box<dyn Element> {
+        type Element = crate::ComponentElement<TestStatelessWidget>;
+
+        fn into_element(self) -> Self::Element {
             // Placeholder - would create LeafRenderObjectElement
-            Box::new(crate::ComponentElement::new(TestStatelessWidget))
+            crate::ComponentElement::new(TestStatelessWidget)
         }
     }
 
     impl RenderObjectWidget for TestLeafWidget {
-        fn create_render_object(&self) -> Box<dyn RenderObject> {
+        fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
             Box::new(TestRenderBox::new())
         }
 
-        fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+        fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
             if let Some(render_box) = render_object.downcast_mut::<TestRenderBox>() {
                 render_box.mark_needs_layout();
             }
@@ -221,7 +219,7 @@ mod tests {
     struct TestStatelessWidget;
 
     impl StatelessWidget for TestStatelessWidget {
-        fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
             Box::new(TestStatelessWidget)
         }
     }
@@ -246,7 +244,7 @@ mod tests {
             width: 100.0,
             height: 50.0,
         };
-        let mut render_object: Box<dyn RenderObject> = Box::new(TestRenderBox::new());
+        let mut render_object: Box<dyn crate::AnyRenderObject> = Box::new(TestRenderBox::new());
 
         // Layout first
         render_object.layout(BoxConstraints::tight(Size::new(100.0, 50.0)));

@@ -1,0 +1,467 @@
+//! Build phase management and element lifecycle
+//! 5. **Focus Management**: Coordinates focus state (future)
+//!
+//! # Architecture
+//!
+//! ```text
+//! BuildOwner
+//!   ├─ dirty_elements: Vec<(ElementId, usize)>  // (id, depth)
+//!   ├─ global_keys: HashMap<GlobalKeyId, ElementId>
+//!   ├─ build_count: usize
+//!   ├─ in_build_scope: bool
+//!   └─ tree: Arc<RwLock<ElementTree>>
+//! ```
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use parking_lot::RwLock;
+use tracing::{debug, info, warn};
+
+use crate::{AnyWidget, ElementId, ElementTree};
+
+/// Unique identifier for a global key
+///
+/// This is a simple u64 ID for now, but could be made more sophisticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlobalKeyId(u64);
+
+impl GlobalKeyId {
+    /// Create a new unique global key ID
+    pub fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Create from raw ID (for testing)
+    #[cfg(test)]
+    pub(crate) fn from_raw(id: u64) -> Self {
+        Self(id)
+    }
+}
+
+impl Default for GlobalKeyId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// BuildOwner - manages the build phase and element lifecycle
+///
+/// This is the core coordinator for the widget build system.
+/// It tracks dirty elements, manages global keys, and orchestrates rebuilds.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let mut owner = BuildOwner::new();
+/// owner.set_root(Box::new(MyApp::new()));
+///
+/// // Mark element dirty
+/// owner.schedule_build_for(element_id, depth);
+///
+/// // Rebuild all dirty elements
+/// owner.build_scope(|| {
+///     owner.flush_build();
+/// });
+/// ```
+pub struct BuildOwner {
+    /// The element tree
+    tree: Arc<RwLock<ElementTree>>,
+
+    /// Root element ID
+    root_element_id: Option<ElementId>,
+
+    /// Dirty elements waiting to be rebuilt
+    /// Stored as (ElementId, depth) pairs for efficient sorting
+    dirty_elements: Vec<(ElementId, usize)>,
+
+    /// Global key registry
+    /// Maps global key IDs to element IDs
+    global_keys: HashMap<GlobalKeyId, ElementId>,
+
+    /// Build phase counter (for debugging)
+    build_count: usize,
+
+    /// Whether we're currently in a build scope
+    /// Prevents setState during build
+    in_build_scope: bool,
+
+    /// Whether build scheduling is currently locked
+    /// Used during finalize to prevent new builds
+    build_locked: bool,
+
+    /// Callback when a build is scheduled (optional)
+    on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
+}
+
+impl BuildOwner {
+    /// Create a new build owner
+    pub fn new() -> Self {
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        tree.write().set_tree_ref(tree.clone());
+
+        Self {
+            tree,
+            root_element_id: None,
+            dirty_elements: Vec::new(),
+            global_keys: HashMap::new(),
+            build_count: 0,
+            in_build_scope: false,
+            build_locked: false,
+            on_build_scheduled: None,
+        }
+    }
+
+    /// Get reference to the element tree
+    pub fn tree(&self) -> &Arc<RwLock<ElementTree>> {
+        &self.tree
+    }
+
+    /// Get the root element ID
+    pub fn root_element_id(&self) -> Option<ElementId> {
+        self.root_element_id
+    }
+
+    /// Set callback for when build is scheduled
+    pub fn set_on_build_scheduled<F>(&mut self, callback: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_build_scheduled = Some(Box::new(callback));
+    }
+
+    /// Mount a widget as the root of the tree
+    pub fn set_root(&mut self, root_widget: Box<dyn AnyWidget>) -> ElementId {
+        let mut tree_guard = self.tree.write();
+        let id = tree_guard.set_root(root_widget);
+        tree_guard.set_element_tree_ref(id, self.tree.clone());
+        drop(tree_guard);
+
+        self.root_element_id = Some(id);
+
+        // Root starts dirty
+        self.schedule_build_for(id, 0);
+
+        id
+    }
+
+    /// Schedule an element for rebuild
+    ///
+    /// # Parameters
+    ///
+    /// - `element_id`: The element to rebuild
+    /// - `depth`: The depth of the element in the tree (0 = root)
+    ///
+    /// Elements are sorted by depth before building to ensure parents build before children.
+    pub fn schedule_build_for(&mut self, element_id: ElementId, depth: usize) {
+        if self.build_locked {
+            warn!("Attempted to schedule build while locked (element {:?})", element_id);
+            return;
+        }
+
+        // Check if already scheduled
+        if self.dirty_elements.iter().any(|(id, _)| *id == element_id) {
+            debug!("Element {:?} already scheduled for rebuild", element_id);
+            return;
+        }
+
+        debug!("Scheduling element {:?} for rebuild (depth {})", element_id, depth);
+        self.dirty_elements.push((element_id, depth));
+
+        // Trigger callback
+        if let Some(ref callback) = self.on_build_scheduled {
+            callback();
+        }
+    }
+
+    /// Get count of dirty elements waiting to rebuild
+    pub fn dirty_count(&self) -> usize {
+        self.dirty_elements.len()
+    }
+
+    /// Check if currently in build scope
+    pub fn is_in_build_scope(&self) -> bool {
+        self.in_build_scope
+    }
+
+    /// Execute a build scope
+    ///
+    /// This sets the build scope flag to prevent setState during build,
+    /// then executes the callback.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// owner.build_scope(|| {
+    ///     owner.flush_build();
+    /// });
+    /// ```
+    pub fn build_scope<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        if self.in_build_scope {
+            warn!("Nested build_scope detected!");
+        }
+
+        self.in_build_scope = true;
+        let result = f(self);
+        self.in_build_scope = false;
+
+        result
+    }
+
+    /// Lock state changes
+    ///
+    /// Executes callback with state changes locked.
+    /// Any setState calls during this time will be ignored/warned.
+    pub fn lock_state<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        let was_locked = self.build_locked;
+        self.build_locked = true;
+        let result = f(self);
+        self.build_locked = was_locked;
+        result
+    }
+
+    /// Flush the build phase
+    ///
+    /// Rebuilds all dirty elements in depth order (parents before children).
+    /// This ensures that parent widgets build before their children.
+    pub fn flush_build(&mut self) {
+        if self.dirty_elements.is_empty() {
+            debug!("flush_build: no dirty elements");
+            return;
+        }
+
+        self.build_count += 1;
+        let build_num = self.build_count;
+
+        info!(
+            "flush_build #{}: rebuilding {} dirty elements",
+            build_num,
+            self.dirty_elements.len()
+        );
+
+        // Sort by depth (parents before children)
+        self.dirty_elements.sort_by_key(|(_, depth)| *depth);
+
+        // Take the dirty list to avoid borrow conflicts
+        let mut dirty = std::mem::take(&mut self.dirty_elements);
+
+        // Rebuild each element
+        for (element_id, depth) in dirty.drain(..) {
+            debug!("  Rebuilding element {:?} at depth {}", element_id, depth);
+
+            let mut tree_guard = self.tree.write();
+            // Element might have been removed during previous rebuilds
+            if tree_guard.get(element_id).is_some() {
+                tree_guard.rebuild_element(element_id);
+            } else {
+                warn!("  Element {:?} was removed before rebuild", element_id);
+            }
+            drop(tree_guard);
+        }
+
+        // Put back the (now empty) vector
+        self.dirty_elements = dirty;
+
+        info!("flush_build #{}: complete", build_num);
+    }
+
+    /// Finalize the tree after build
+    ///
+    /// This locks further builds and performs any cleanup needed.
+    pub fn finalize_tree(&mut self) {
+        self.lock_state(|owner| {
+            if owner.dirty_elements.is_empty() {
+                debug!("finalize_tree: tree is clean");
+            } else {
+                warn!("finalize_tree: {} dirty elements remaining", owner.dirty_elements.len());
+            }
+        });
+    }
+
+    // =========================================================================
+    // Global Key Registry
+    // =========================================================================
+
+    /// Register a global key
+    ///
+    /// # Panics
+    ///
+    /// Panics if the key is already registered to a different element.
+    pub fn register_global_key(&mut self, key: GlobalKeyId, element_id: ElementId) {
+        if let Some(existing_id) = self.global_keys.get(&key) {
+            if *existing_id != element_id {
+                panic!(
+                    "GlobalKey {:?} is already registered to element {:?}, cannot register to {:?}",
+                    key, existing_id, element_id
+                );
+            }
+            // Already registered to same element - OK
+            return;
+        }
+
+        debug!("Registering global key {:?} -> element {:?}", key, element_id);
+        self.global_keys.insert(key, element_id);
+    }
+
+    /// Unregister a global key
+    pub fn unregister_global_key(&mut self, key: GlobalKeyId) {
+        debug!("Unregistering global key {:?}", key);
+        self.global_keys.remove(&key);
+    }
+
+    /// Get element ID for a global key
+    pub fn get_element_for_global_key(&self, key: GlobalKeyId) -> Option<ElementId> {
+        self.global_keys.get(&key).copied()
+    }
+
+    /// Get count of registered global keys
+    pub fn global_key_count(&self) -> usize {
+        self.global_keys.len()
+    }
+}
+
+impl Default for BuildOwner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_owner_creation() {
+        let owner = BuildOwner::new();
+        assert!(owner.root_element_id().is_none());
+        assert_eq!(owner.dirty_count(), 0);
+        assert!(!owner.is_in_build_scope());
+    }
+
+    #[test]
+    fn test_schedule_build() {
+        let mut owner = BuildOwner::new();
+        let id = ElementId::new();
+
+        owner.schedule_build_for(id, 0);
+        assert_eq!(owner.dirty_count(), 1);
+
+        // Scheduling same element again should not duplicate
+        owner.schedule_build_for(id, 0);
+        assert_eq!(owner.dirty_count(), 1);
+    }
+
+    #[test]
+    fn test_build_scope() {
+        let mut owner = BuildOwner::new();
+
+        assert!(!owner.is_in_build_scope());
+
+        owner.build_scope(|o| {
+            assert!(o.is_in_build_scope());
+        });
+
+        assert!(!owner.is_in_build_scope());
+    }
+
+    #[test]
+    fn test_lock_state() {
+        let mut owner = BuildOwner::new();
+        let id = ElementId::new();
+
+        // Normal scheduling works
+        owner.schedule_build_for(id, 0);
+        assert_eq!(owner.dirty_count(), 1);
+
+        owner.lock_state(|o| {
+            // Scheduling while locked should be ignored
+            let id2 = ElementId::new();
+            o.schedule_build_for(id2, 0);
+            assert_eq!(o.dirty_count(), 1); // Still 1, not 2
+        });
+    }
+
+    #[test]
+    fn test_global_key_registry() {
+        let mut owner = BuildOwner::new();
+        let key = GlobalKeyId::new();
+        let element_id = ElementId::new();
+
+        // Register
+        owner.register_global_key(key, element_id);
+        assert_eq!(owner.global_key_count(), 1);
+        assert_eq!(owner.get_element_for_global_key(key), Some(element_id));
+
+        // Unregister
+        owner.unregister_global_key(key);
+        assert_eq!(owner.global_key_count(), 0);
+        assert_eq!(owner.get_element_for_global_key(key), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered")]
+    fn test_global_key_duplicate_panic() {
+        let mut owner = BuildOwner::new();
+        let key = GlobalKeyId::new();
+        let id1 = ElementId::new();
+        let id2 = ElementId::new();
+
+        owner.register_global_key(key, id1);
+        owner.register_global_key(key, id2); // Should panic
+    }
+
+    #[test]
+    fn test_global_key_same_element_ok() {
+        let mut owner = BuildOwner::new();
+        let key = GlobalKeyId::new();
+        let element_id = ElementId::new();
+
+        owner.register_global_key(key, element_id);
+        owner.register_global_key(key, element_id); // Should not panic
+        assert_eq!(owner.global_key_count(), 1);
+    }
+
+    #[test]
+    fn test_depth_sorting() {
+        let mut owner = BuildOwner::new();
+
+        let id1 = ElementId::new();
+        let id2 = ElementId::new();
+        let id3 = ElementId::new();
+
+        // Schedule in random order
+        owner.schedule_build_for(id2, 2);
+        owner.schedule_build_for(id1, 1);
+        owner.schedule_build_for(id3, 0);
+
+        // flush_build sorts by depth before rebuilding
+        // We can't easily test the actual sorting without mock elements,
+        // so just verify elements are scheduled
+        assert_eq!(owner.dirty_count(), 3);
+    }
+
+    #[test]
+    fn test_on_build_scheduled_callback() {
+        use std::sync::{Arc, Mutex};
+
+        let mut owner = BuildOwner::new();
+        let called = Arc::new(Mutex::new(false));
+        let called_clone = called.clone();
+
+        owner.set_on_build_scheduled(move || {
+            *called_clone.lock().unwrap() = true;
+        });
+
+        let id = ElementId::new();
+        owner.schedule_build_for(id, 0);
+
+        assert!(*called.lock().unwrap());
+    }
+}

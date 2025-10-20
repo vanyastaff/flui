@@ -1,7 +1,37 @@
 //! Error types for flui_core
 //!
-//! This module defines all error types that can occur in the core framework.
-//! We use `thiserror` for ergonomic error handling.
+//! This module defines error types that can occur in the core framework.
+//! It uses the `thiserror` crate to provide clear Display messages and ergonomic
+//! pattern matching when handling failures.
+//!
+//! # Examples
+//!
+//! Creating and returning a CoreError using the Result alias:
+//!
+//! ```rust
+//! use flui_core::{CoreError, Result, ElementId};
+//!
+//! fn find_element(id: ElementId) -> Result<()> {
+//!     // pretend lookup in a tree
+//!     let found = false;
+//!     if !found {
+//!         return Err(CoreError::element_not_found(id));
+//!     }
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Matching on specific variants:
+//!
+//! ```rust
+//! # use flui_core::{CoreError, ElementId};
+//! let id = ElementId::new();
+//! let err = CoreError::not_mounted(id);
+//! match err {
+//!     CoreError::NotMounted(eid) => assert_eq!(eid, id),
+//!     _ => unreachable!(),
+//! }
+//! ```
 
 use thiserror::Error;
 

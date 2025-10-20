@@ -1,4 +1,4 @@
-//! Build context for accessing the element tree
+//! Element tree context for widgets
 
 use std::fmt;
 use std::sync::Arc;
@@ -6,19 +6,15 @@ use parking_lot::RwLock;
 
 use crate::{Element, ElementId, Size, Widget};
 use crate::tree::ElementTree;
-use crate::widget::InheritedWidget;
 
 mod inherited;
 mod iterators;
 
-pub use iterators::Ancestors;
+pub use iterators::{Ancestors, Children, Descendants};
 
 // Re-export inherited methods
-pub use inherited::*;
 
-/// Build context provides access to the element tree and framework services
-///
-/// Rust-idiomatic name for Flutter's BuildContext.
+/// Element tree context (tree traversal, inherited widgets, rebuild marking)
 #[derive(Clone)]
 pub struct Context {
     tree: Arc<RwLock<ElementTree>>,
@@ -89,16 +85,76 @@ impl Context {
     }
 
     /// Iterate over ancestor elements (Rust idiomatic!)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let depth = context.ancestors().count();
+    /// let dirty_ancestors: Vec<_> = context.ancestors()
+    ///     .filter(|&id| is_dirty(id))
+    ///     .collect();
+    /// ```
     pub fn ancestors(&self) -> Ancestors<'_> {
         let tree = self.tree.read();
         let current = self.parent();
         Ancestors { tree, current }
     }
 
+    /// Iterate over direct child elements (Rust idiomatic!)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let child_count = context.children().count();
+    /// for child_id in context.children() {
+    ///     println!("Child: {:?}", child_id);
+    /// }
+    /// ```
+    pub fn children(&self) -> Children {
+        let tree = self.tree.read();
+        let children = if let Some(element) = tree.get(self.element_id) {
+            element.children_iter().collect()
+        } else {
+            Vec::new()
+        };
+        Children { children, index: 0 }
+    }
+
+    /// Iterate over all descendant elements in depth-first order (Rust idiomatic!)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Count all descendants
+    /// let total = context.descendants().count();
+    ///
+    /// // Find first dirty descendant
+    /// let dirty = context.descendants()
+    ///     .find(|&id| {
+    ///         let tree = context.tree();
+    ///         tree.get(id).map(|e| e.is_dirty()).unwrap_or(false)
+    ///     });
+    /// ```
+    pub fn descendants(&self) -> Descendants<'_> {
+        let tree = self.tree.read();
+        let mut stack = Vec::new();
+
+        // Initialize with current element's children
+        if let Some(element) = tree.get(self.element_id) {
+            let children: Vec<_> = element.children_iter().collect();
+            // Push in reverse for correct depth-first order
+            for child_id in children.into_iter().rev() {
+                stack.push(child_id);
+            }
+        }
+
+        Descendants { tree, stack }
+    }
+
     /// Visit ancestor elements
     pub fn visit_ancestor_elements<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&dyn Element) -> bool,
+        F: FnMut(&dyn crate::AnyElement) -> bool,
     {
         let tree = self.tree();
         let mut current_id = self.parent();
@@ -118,7 +174,7 @@ impl Context {
     /// Visit ancestors - short form
     pub fn walk_ancestors<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&dyn Element) -> bool,
+        F: FnMut(&dyn crate::AnyElement) -> bool,
     {
         self.visit_ancestor_elements(visitor)
     }
@@ -143,25 +199,36 @@ impl Context {
         self.find_ancestor_widget_of_type()
     }
 
-    /// Find ancestor element of specific type
+    /// Find ancestor element of specific type (iterator-based)
+    ///
+    /// Uses the iterator API for efficient traversal without manual loops.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Find first StatefulElement ancestor
+    /// if let Some(id) = context.find_ancestor_element::<StatefulElement>() {
+    ///     println!("Found stateful ancestor: {:?}", id);
+    /// }
+    /// ```
     pub fn find_ancestor_element_of_type<E: Element + 'static>(&self) -> Option<ElementId> {
-        let tree = self.tree();
-        let mut current_id = self.parent();
-
-        while let Some(id) = current_id {
-            if let Some(element) = tree.get(id) {
-                if element.is::<E>() {
-                    return Some(id);
-                }
-                current_id = element.parent();
-            } else {
-                break;
-            }
-        }
-        None
+        self.ancestors().find(|&id| {
+            let tree = self.tree();
+            tree.get(id)
+                .map(|elem| elem.is::<E>())
+                .unwrap_or(false)
+        })
     }
 
-    /// Find ancestor element - short form
+    /// Find ancestor element - short form (Rust-idiomatic)
+    ///
+    /// Generic version that's easier to use with turbofish syntax.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let stateful_id = context.find_ancestor_element::<StatefulElement>();
+    /// ```
     pub fn find_ancestor_element<E: Element + 'static>(&self) -> Option<ElementId> {
         self.find_ancestor_element_of_type::<E>()
     }
@@ -169,14 +236,12 @@ impl Context {
     /// Visit child elements
     pub fn visit_child_elements<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&dyn Element),
+        F: FnMut(&dyn crate::AnyElement),
     {
         let tree = self.tree.read();
 
         if let Some(element) = tree.get(self.element_id) {
-            let child_ids = element.children();
-
-            for child_id in child_ids {
+            for child_id in element.children_iter() {
                 if let Some(child_element) = tree.get(child_id) {
                     visitor(child_element);
                 }
@@ -187,7 +252,7 @@ impl Context {
     /// Visit children - short form
     pub fn walk_children<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&dyn Element),
+        F: FnMut(&dyn crate::AnyElement),
     {
         self.visit_child_elements(visitor)
     }
@@ -197,10 +262,68 @@ impl Context {
         let tree = self.tree();
         tree.get(self.element_id)
             .and_then(|element| element.render_object())
-            .and_then(|render_object| Some(render_object.size()))
+            .map(|render_object| render_object.size())
     }
 
-    /// Find nearest RenderObject element
+    /// Get depth of this element in the tree (iterator-based)
+    ///
+    /// Returns the number of ancestors, i.e., distance from root.
+    /// Root element has depth 0.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let depth = context.depth();
+    /// println!("Element is at depth {}", depth);
+    /// ```
+    pub fn depth(&self) -> usize {
+        self.ancestors().count()
+    }
+
+    /// Check if element has any ancestors (is not root)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if context.has_ancestor() {
+    ///     println!("Not a root element");
+    /// }
+    /// ```
+    pub fn has_ancestor(&self) -> bool {
+        self.parent().is_some()
+    }
+
+    /// Find ancestor element satisfying a predicate (iterator-based)
+    ///
+    /// More flexible than type-based search - allows custom predicates.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Find first dirty ancestor
+    /// let dirty_ancestor = context.find_ancestor_where(|id| {
+    ///     let tree = context.tree();
+    ///     tree.get(*id).map(|e| e.is_dirty()).unwrap_or(false)
+    /// });
+    /// ```
+    pub fn find_ancestor_where<F>(&self, mut predicate: F) -> Option<ElementId>
+    where
+        F: FnMut(&ElementId) -> bool,
+    {
+        self.ancestors().find(|id| predicate(id))
+    }
+
+    /// Find nearest RenderObject element (iterator-based)
+    ///
+    /// Searches current element first, then ancestors.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(render_id) = context.find_render_object() {
+    ///     println!("Found render object at: {:?}", render_id);
+    /// }
+    /// ```
     pub fn find_render_object(&self) -> Option<ElementId> {
         let tree = self.tree();
 
@@ -211,19 +334,12 @@ impl Context {
             }
         }
 
-        // Check ancestors
-        let mut current_id = self.parent();
-        while let Some(id) = current_id {
-            if let Some(element) = tree.get(id) {
-                if element.render_object().is_some() {
-                    return Some(id);
-                }
-                current_id = element.parent();
-            } else {
-                break;
-            }
-        }
-        None
+        // Check ancestors using iterator
+        self.ancestors().find(|&id| {
+            tree.get(id)
+                .and_then(|elem| elem.render_object())
+                .is_some()
+        })
     }
 
     /// Find ancestor RenderObject of specific type
@@ -278,6 +394,3 @@ impl fmt::Debug for Context {
             .finish()
     }
 }
-
-// Backward compatibility alias
-pub type BuildContext = Context;

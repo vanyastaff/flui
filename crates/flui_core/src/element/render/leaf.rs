@@ -1,46 +1,22 @@
-//! LeafRenderObjectElement - for RenderObjects without children
-//!
-//! A specialized element for RenderObjects that have no children.
-//! This is the proper Flutter architecture pattern for leaf widgets
-//! like Text, Image, or custom painters.
+//! LeafRenderObjectElement for RenderObjects without children
 
-use std::any::Any;
 use std::fmt;
 
-use crate::{Element, ElementId, LeafRenderObjectWidget, RenderObject};
+use crate::{AnyElement, Element, ElementId, LeafRenderObjectWidget};
+use super::super::ElementLifecycle;
+use crate::AnyWidget;
+use flui_foundation::Key;
 
-/// LeafRenderObjectElement manages RenderObjects with no children
-///
-/// This follows Flutter's architecture where each type of RenderObjectWidget
-/// has a corresponding specialized Element type. This element handles:
-/// - Creating and managing the RenderObject
-/// - Optimized for leaf nodes (no child management overhead)
-/// - Coordinating updates between widget and render object
-///
-/// # Flutter Equivalent
-///
-/// This is the Rust equivalent of Flutter's `LeafRenderObjectElement`.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Text widget creates a LeafRenderObjectElement
-/// impl Widget for Text {
-///     fn create_element(&self) -> Box<dyn Element> {
-///         Box::new(LeafRenderObjectElement::new(self.clone()))
-///     }
-/// }
-/// ```
+/// Element for RenderObjects with no children (optimized for leaf nodes)
 pub struct LeafRenderObjectElement<W: LeafRenderObjectWidget> {
     id: ElementId,
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
-    render_object: Option<Box<dyn RenderObject>>,
+    render_object: Option<Box<dyn crate::AnyRenderObject>>,
 }
 
 impl<W: LeafRenderObjectWidget> LeafRenderObjectElement<W> {
-    /// Create new leaf render object element from a widget
     pub fn new(widget: W) -> Self {
         Self {
             id: ElementId::new(),
@@ -52,12 +28,12 @@ impl<W: LeafRenderObjectWidget> LeafRenderObjectElement<W> {
     }
 
     /// Get reference to the render object
-    pub fn render_object_ref(&self) -> Option<&dyn RenderObject> {
+    pub fn render_object_ref(&self) -> Option<&dyn crate::AnyRenderObject> {
         self.render_object.as_ref().map(|r| r.as_ref())
     }
 
     /// Get mutable reference to the render object
-    pub fn render_object_mut_ref(&mut self) -> Option<&mut dyn RenderObject> {
+    pub fn render_object_mut_ref(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
         self.render_object.as_mut().map(|r| r.as_mut())
     }
 
@@ -88,7 +64,21 @@ impl<W: LeafRenderObjectWidget> fmt::Debug for LeafRenderObjectElement<W> {
     }
 }
 
-impl<W: LeafRenderObjectWidget> Element for LeafRenderObjectElement<W> {
+// ========== Implement AnyElement for LeafRenderObjectElement ==========
+
+impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
+    fn id(&self) -> ElementId {
+        self.id
+    }
+
+    fn parent(&self) -> Option<ElementId> {
+        self.parent
+    }
+
+    fn key(&self) -> Option<&dyn Key> {
+        AnyWidget::key(&self.widget)
+    }
+
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
         self.parent = parent;
         self.initialize_render_object();
@@ -100,7 +90,7 @@ impl<W: LeafRenderObjectWidget> Element for LeafRenderObjectElement<W> {
         self.render_object = None;
     }
 
-    fn update(&mut self, new_widget: Box<dyn Any + Send + Sync>) {
+    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
         if let Ok(new_widget) = new_widget.downcast::<W>() {
             self.widget = *new_widget;
             self.update_render_object();
@@ -108,7 +98,7 @@ impl<W: LeafRenderObjectWidget> Element for LeafRenderObjectElement<W> {
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::Widget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -121,18 +111,6 @@ impl<W: LeafRenderObjectWidget> Element for LeafRenderObjectElement<W> {
         Vec::new()
     }
 
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
-        self.parent
-    }
-
-    fn key(&self) -> Option<&dyn flui_foundation::Key> {
-        self.widget.key()
-    }
-
     fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -141,27 +119,73 @@ impl<W: LeafRenderObjectWidget> Element for LeafRenderObjectElement<W> {
         self.dirty = true;
     }
 
+    fn lifecycle(&self) -> ElementLifecycle {
+        ElementLifecycle::Active // Default
+    }
+
+    fn deactivate(&mut self) {
+        // Default: do nothing
+    }
+
+    fn activate(&mut self) {
+        // Default: do nothing
+    }
+
+    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        Box::new(std::iter::empty()) // No children
+    }
+
+    fn set_tree_ref(&mut self, _tree: std::sync::Arc<parking_lot::RwLock<crate::ElementTree>>) {
+        // Leaf elements don't need tree reference
+    }
+
+    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
+        None // No children
+    }
+
+    fn set_child_after_mount(&mut self, _child_id: ElementId) {
+        // No children
+    }
+
     fn widget_type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn RenderObject> {
+    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
         self.render_object.as_ref().map(|ro| ro.as_ref())
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
         self.render_object.as_mut().map(|ro| ro.as_mut())
     }
 
-    // Leaf elements never have children, so these methods do nothing
-    fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn Element)) {}
-    fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn Element)) {}
-    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
-        None
+    fn did_change_dependencies(&mut self) {
+        // Default: do nothing
     }
-    fn set_child_after_mount(&mut self, _child_id: ElementId) {}
-    fn child_ids(&self) -> Vec<ElementId> {
-        Vec::new()
+
+    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+        // No children
+    }
+
+    fn forget_child(&mut self, _child_id: ElementId) {
+        // No children
+    }
+}
+
+// ========== Implement Element for LeafRenderObjectElement (with associated types) ==========
+
+impl<W: LeafRenderObjectWidget> Element for LeafRenderObjectElement<W> {
+    type Widget = W;
+
+    fn update(&mut self, new_widget: W) {
+        // Zero-cost! No downcast needed!
+        self.widget = new_widget;
+        self.update_render_object();
+        self.dirty = true;
+    }
+
+    fn widget(&self) -> &W {
+        &self.widget
     }
 }
 
@@ -229,9 +253,9 @@ mod tests {
             self.needs_paint_flag = true;
         }
 
-        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn RenderObject)) {}
+        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn crate::AnyRenderObject)) {}
 
-        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn RenderObject)) {}
+        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn crate::AnyRenderObject)) {}
     }
 
     // Mock leaf widget (like Text)
@@ -241,17 +265,19 @@ mod tests {
     }
 
     impl Widget for MockTextWidget {
-        fn create_element(&self) -> Box<dyn Element> {
-            Box::new(LeafRenderObjectElement::new(self.clone()))
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
 
     impl RenderObjectWidget for MockTextWidget {
-        fn create_render_object(&self) -> Box<dyn RenderObject> {
+        fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
             Box::new(MockRenderText::new(self.text.clone()))
         }
 
-        fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+        fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
             if let Some(text) = render_object.downcast_mut::<MockRenderText>() {
                 text.set_text(self.text.clone());
             }

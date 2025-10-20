@@ -1,18 +1,4 @@
-//! Pipeline Owner - manages the rendering pipeline
-//!
-//! This module provides PipelineOwner, which orchestrates the rebuild, layout, and paint phases.
-//!
-//! # Architecture
-//!
-//! PipelineOwner is similar to Flutter's PipelineOwner. It coordinates:
-//!
-//! 1. **Build Phase**: Rebuilds dirty elements via ElementTree
-//! 2. **Layout Phase**: Walks render tree and performs layout
-//! 3. **Paint Phase**: Walks render tree and paints to screen
-//!
-//! # Usage
-//!
-//! ```rust,ignore
+//! Rendering pipeline coordination (build, layout, paint)
 //! use flui_core::{PipelineOwner, Widget};
 //!
 //! let mut pipeline = PipelineOwner::new();
@@ -27,7 +13,7 @@
 use std::sync::Arc;
 use parking_lot::RwLock;
 
-use crate::{ElementTree, ElementId, Widget};
+use crate::{AnyWidget, ElementTree, ElementId};
 use crate::BoxConstraints; // Re-exported from flui_types in lib.rs
 use flui_types::{Size, Offset};
 use flui_types::events::{PointerEvent, HitTestResult};
@@ -90,7 +76,7 @@ impl PipelineOwner {
     /// Mount the root widget - short form
     ///
     /// Rust-idiomatic short name. See [mount_root](Self::mount_root).
-    pub fn set_root(&mut self, root_widget: Box<dyn Widget>) -> ElementId {
+    pub fn set_root(&mut self, root_widget: Box<dyn AnyWidget>) -> ElementId {
         let mut tree_guard = self.tree.write();
         let id = tree_guard.set_root(root_widget);
 

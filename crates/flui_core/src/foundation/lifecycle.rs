@@ -6,7 +6,6 @@ use std::fmt;
 
 /// Element lifecycle state
 ///
-/// Similar to Flutter's _ElementLifecycle enum.
 ///
 /// # States
 ///
@@ -15,8 +14,10 @@ use std::fmt;
 /// - `Inactive`: Element temporarily removed (e.g., in KeepAlive)
 /// - `Defunct`: Element unmounted and disposed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum Lifecycle {
     /// Element created but not yet mounted
+    #[default]
     Initial,
 
     /// Element mounted and active in tree
@@ -55,11 +56,6 @@ impl Lifecycle {
     }
 }
 
-impl Default for Lifecycle {
-    fn default() -> Self {
-        Lifecycle::Initial
-    }
-}
 
 impl fmt::Display for Lifecycle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

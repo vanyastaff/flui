@@ -1,39 +1,55 @@
 //! InheritedWidget access methods
 
 use std::any::TypeId;
-use crate::{Element, ElementId};
+use crate::ElementId;
 use crate::widget::InheritedWidget;
 use super::Context;
 
 impl Context {
     /// Access an InheritedWidget's data and establish dependency
     ///
-    /// Similar to Flutter's `dependOnInheritedWidgetOfExactType<T>()`.
-    pub fn depend_on_inherited_widget<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
+    ///
+    /// Note: W must implement Widget (use `impl_widget_for_inherited!` macro).
+    pub fn depend_on_inherited_widget<W>(&self) -> Option<W>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
         self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), true)
     }
 
     /// Access InheritedWidget - short form
-    pub fn subscribe_to<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
+    pub fn subscribe_to<W>(&self) -> Option<W>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
         self.depend_on_inherited_widget()
     }
 
     /// Access InheritedWidget without establishing dependency
-    pub fn get_inherited_widget<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
+    pub fn get_inherited_widget<W>(&self) -> Option<W>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
         self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), false)
     }
 
     /// Access InheritedWidget without dependency - short form
-    pub fn find_inherited<W: InheritedWidget + Clone + 'static>(&self) -> Option<W> {
+    pub fn find_inherited<W>(&self) -> Option<W>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
         self.get_inherited_widget()
     }
 
     /// Internal implementation for getting inherited widgets
-    fn get_inherited_widget_impl<W: InheritedWidget + Clone + 'static>(
+    fn get_inherited_widget_impl<W>(
         &self,
         _type_id: TypeId,
         register_dependency: bool,
-    ) -> Option<W> {
+    ) -> Option<W>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
         use crate::widget::InheritedElement;
 
         let tree = self.tree();
@@ -86,9 +102,12 @@ impl Context {
     /// Find the element for an inherited widget
     ///
     /// Low-level API for advanced use cases.
-    pub fn get_element_for_inherited_widget_of_exact_type<W: InheritedWidget + Clone + 'static>(
+    pub fn get_element_for_inherited_widget_of_exact_type<W>(
         &self,
-    ) -> Option<ElementId> {
+    ) -> Option<ElementId>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
         use crate::widget::InheritedElement;
 
         let tree = self.tree.read();
@@ -109,9 +128,12 @@ impl Context {
     }
 
     /// Find inherited element - short form
-    pub fn find_inherited_element<W: InheritedWidget + Clone + 'static>(
+    pub fn find_inherited_element<W>(
         &self,
-    ) -> Option<ElementId> {
+    ) -> Option<ElementId>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
         self.get_element_for_inherited_widget_of_exact_type::<W>()
     }
 }

@@ -6,7 +6,6 @@ use std::fmt;
 
 /// Slot - position in parent's child list
 ///
-/// Similar to Flutter's slot concept. Represents where a child is positioned
 /// in its parent's child list.
 ///
 /// # Example

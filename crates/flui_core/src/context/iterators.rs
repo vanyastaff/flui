@@ -35,3 +35,77 @@ impl<'a> Iterator for Ancestors<'a> {
         }
     }
 }
+
+/// Iterator over child elements
+///
+/// Iterates over direct children of an element.
+/// Collects children into a Vec to avoid lifetime issues.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let child_count = context.children().count();
+/// for child_id in context.children() {
+///     println!("Child: {:?}", child_id);
+/// }
+/// ```
+pub struct Children {
+    pub(super) children: Vec<ElementId>,
+    pub(super) index: usize,
+}
+
+impl Iterator for Children {
+    type Item = ElementId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.children.len() {
+            let id = self.children[self.index];
+            self.index += 1;
+            Some(id)
+        } else {
+            None
+        }
+    }
+}
+
+/// Iterator over descendant elements (depth-first)
+///
+/// Iterates over all descendants in depth-first order.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Count all descendants
+/// let total = context.descendants().count();
+///
+/// // Find first dirty descendant
+/// let dirty = context.descendants()
+///     .find(|&id| {
+///         context.tree().get(id)
+///             .map(|e| e.is_dirty())
+///             .unwrap_or(false)
+///     });
+/// ```
+pub struct Descendants<'a> {
+    pub(super) tree: parking_lot::RwLockReadGuard<'a, ElementTree>,
+    pub(super) stack: Vec<ElementId>,
+}
+
+impl<'a> Iterator for Descendants<'a> {
+    type Item = ElementId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current_id = self.stack.pop()?;
+
+        // Add children to stack (in reverse order for correct depth-first)
+        if let Some(element) = self.tree.get(current_id) {
+            let children: Vec<_> = element.children_iter().collect();
+            // Push in reverse order so first child is processed first
+            for child_id in children.into_iter().rev() {
+                self.stack.push(child_id);
+            }
+        }
+
+        Some(current_id)
+    }
+}

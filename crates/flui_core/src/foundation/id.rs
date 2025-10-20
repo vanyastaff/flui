@@ -49,22 +49,6 @@ impl ElementId {
         self.0
     }
 
-    /// Create an ElementId from a raw u64
-    ///
-    /// # Safety
-    ///
-    /// This is pub(crate) to prevent users from creating arbitrary IDs.
-    /// Only the framework should create IDs.
-    ///
-    /// # Note
-    ///
-    /// In tests, use this to create specific element IDs for testing.
-    #[inline]
-    #[cfg(not(test))]
-    pub(crate) fn from_raw(raw: u64) -> Self {
-        Self(raw)
-    }
-
     /// Create an ElementId from a raw u64 (test only)
     ///
     /// In tests, you can create arbitrary element IDs for testing purposes.
