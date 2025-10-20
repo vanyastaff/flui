@@ -217,7 +217,7 @@ mod tests {
         struct DummyWidget;
 
         impl StatelessWidget for DummyWidget {
-            fn build(&self, _context: &Context) -> Box<crate::widget::AnyWidget> {
+            fn build(&self, _context: &Context) -> Box<dyn crate::widget::AnyWidget> {
                 Box::new(DummyWidget)
             }
         }

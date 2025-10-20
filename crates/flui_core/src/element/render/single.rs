@@ -236,7 +236,7 @@ impl<W: SingleChildRenderObjectWidget> Element for SingleChildRenderObjectElemen
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BoxConstraints, Context, RenderObjectWidget, StatelessWidget};
+    use crate::{BoxConstraints, Context, RenderObjectWidget, StatelessWidget, Widget};
     use flui_types::{EdgeInsets, Offset, Size};
 
     // Mock RenderObject for testing
@@ -264,7 +264,20 @@ mod tests {
         }
     }
 
-    impl RenderObject for MockRenderPadding {
+    impl crate::render::RenderObject for MockRenderPadding {
+        type ParentData = ();
+        type Child = Box<dyn crate::AnyRenderObject>;
+
+        fn parent_data(&self) -> Option<&Self::ParentData> {
+            None
+        }
+
+        fn parent_data_mut(&mut self) -> Option<&mut Self::ParentData> {
+            None
+        }
+    }
+
+    impl crate::AnyRenderObject for MockRenderPadding {
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
             self.size = constraints.smallest();
             self.needs_layout_flag = false;

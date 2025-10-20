@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_find_by_key() {
-        use crate::ValueKey;
+        use crate::foundation::ValueKey;
 
         // TODO: Add test when widgets support keys
         // For now, just test that find_by_key doesn't crash

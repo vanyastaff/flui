@@ -62,7 +62,7 @@ pub use equality::{WidgetEq, widgets_equal}; // Phase 12
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Context;
+    use crate::{Context, impl_widget_for_stateful};
 
     // Test widget for testing
     #[derive(Debug, Clone)]

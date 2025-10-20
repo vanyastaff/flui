@@ -227,7 +227,20 @@ mod tests {
         }
     }
 
-    impl RenderObject for MockRenderText {
+    impl crate::render::RenderObject for MockRenderText {
+        type ParentData = ();
+        type Child = ();
+
+        fn parent_data(&self) -> Option<&Self::ParentData> {
+            None
+        }
+
+        fn parent_data_mut(&mut self) -> Option<&mut Self::ParentData> {
+            None
+        }
+    }
+
+    impl crate::AnyRenderObject for MockRenderText {
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
             self.size = constraints.smallest();
             self.needs_layout_flag = false;

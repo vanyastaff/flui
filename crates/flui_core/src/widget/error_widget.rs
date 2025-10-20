@@ -154,7 +154,7 @@ mod tests {
 
     // Helper to create test context
     fn create_test_context() -> Context {
-        use crate::element::ElementId;
+        use crate::ElementId;
         use crate::tree::ElementTree;
         use std::sync::{Arc, RwLock};
 

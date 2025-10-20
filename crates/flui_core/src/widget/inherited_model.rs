@@ -147,6 +147,7 @@ mod tests {
     struct TestModel {
         value_a: i32,
         value_b: String,
+        data: (i32, String), // Store data as field
     }
 
     // ProxyWidget stub for testing
@@ -157,6 +158,12 @@ mod tests {
     }
 
     impl InheritedWidget for TestModel {
+        type Data = (i32, String);
+
+        fn data(&self) -> &Self::Data {
+            &self.data
+        }
+
         fn update_should_notify(&self, old: &Self) -> bool {
             self.value_a != old.value_a || self.value_b != old.value_b
         }
@@ -182,6 +189,7 @@ mod tests {
         let old = TestModel {
             value_a: 1,
             value_b: "test".to_string(),
+            data: (1, "test".to_string()),
         };
         let new = old.clone();
 
@@ -194,10 +202,12 @@ mod tests {
         let old = TestModel {
             value_a: 1,
             value_b: "test".to_string(),
+            data: (1, "test".to_string()),
         };
         let new = TestModel {
             value_a: 2,
             value_b: "test".to_string(),
+            data: (2, "test".to_string()),
         };
 
         // Depends on ValueA - should notify
@@ -214,10 +224,12 @@ mod tests {
         let old = TestModel {
             value_a: 1,
             value_b: "test".to_string(),
+            data: (1, "test".to_string()),
         };
         let new = TestModel {
             value_a: 1,
             value_b: "changed".to_string(),
+            data: (1, "changed".to_string()),
         };
 
         // Depends on ValueA - should NOT notify
@@ -234,10 +246,12 @@ mod tests {
         let old = TestModel {
             value_a: 1,
             value_b: "test".to_string(),
+            data: (1, "test".to_string()),
         };
         let new = TestModel {
             value_a: 2,
             value_b: "test".to_string(),
+            data: (2, "test".to_string()),
         };
 
         // Depends on both - should notify because A changed
