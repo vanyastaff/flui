@@ -43,21 +43,25 @@ impl Context {
     }
 
     /// Get element ID
+    #[inline]
     pub fn element_id(&self) -> ElementId {
         self.element_id
     }
 
     /// Get tree reference
+    #[inline]
     pub(crate) fn tree(&self) -> parking_lot::RwLockReadGuard<'_, ElementTree> {
         self.tree.read()
     }
 
     /// Get mutable tree reference
+    #[inline]
     pub(crate) fn tree_mut(&self) -> parking_lot::RwLockWriteGuard<'_, ElementTree> {
         self.tree.write()
     }
 
     /// Get parent element ID
+    #[inline]
     pub fn parent(&self) -> Option<ElementId> {
         let tree = self.tree();
         tree.get(self.element_id)
@@ -65,12 +69,14 @@ impl Context {
     }
 
     /// Check if context is still valid
+    #[inline]
     pub fn is_valid(&self) -> bool {
         let tree = self.tree();
         tree.get(self.element_id).is_some()
     }
 
     /// Check if element is mounted
+    #[inline]
     pub fn mounted(&self) -> bool {
         self.is_valid()
     }

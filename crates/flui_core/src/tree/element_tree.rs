@@ -79,6 +79,7 @@ impl ElementTree {
     }
 
     /// Check if tree has root
+    #[inline]
     pub fn has_root(&self) -> bool {
         self.root.is_some()
     }
@@ -88,6 +89,7 @@ impl ElementTree {
     /// # Returns
     ///
     /// The root element ID, or `None` if no root has been mounted.
+    #[inline]
     pub fn root(&self) -> Option<ElementId> {
         self.root
     }
@@ -229,11 +231,13 @@ impl ElementTree {
 
 
     /// Get an element by ID (immutable)
+    #[inline]
     pub fn get(&self, id: ElementId) -> Option<&dyn AnyElement> {
         self.elements.get(&id).map(|e| e.as_ref())
     }
 
     /// Get an element by ID (mutable)
+    #[inline]
     pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn AnyElement> {
         self.elements.get_mut(&id).map(|e| e.as_mut())
     }
@@ -403,13 +407,14 @@ impl ElementTree {
     /// - Keys are compatible (both None, or both Some with same key)
     ///
     /// This implements Flutter's Widget.canUpdate() logic.
+    #[inline]
     fn can_update(&self, element_id: ElementId, new_widget: &dyn AnyWidget) -> bool {
         let element = match self.elements.get(&element_id) {
             Some(e) => e,
             None => return false,
         };
 
-        // Check type match
+        // Check type match - fast path
         let widget_type = new_widget.type_id();
         let element_widget_type = element.widget_type_id();
 

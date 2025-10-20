@@ -21,6 +21,7 @@ pub struct Ancestors<'a> {
 impl<'a> Iterator for Ancestors<'a> {
     type Item = ElementId;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let current_id = self.current?;
 
@@ -57,6 +58,7 @@ pub struct Children {
 impl Iterator for Children {
     type Item = ElementId;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index < self.children.len() {
             let id = self.children[self.index];
@@ -65,6 +67,19 @@ impl Iterator for Children {
         } else {
             None
         }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.children.len() - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for Children {
+    #[inline]
+    fn len(&self) -> usize {
+        self.children.len() - self.index
     }
 }
 

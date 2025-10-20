@@ -37,6 +37,7 @@ impl Eq for LayoutCacheKey {}
 
 impl LayoutCacheKey {
     /// Create cache key
+    #[inline]
     pub fn new(element_id: ElementId, constraints: BoxConstraints) -> Self {
         Self {
             element_id,
@@ -56,6 +57,7 @@ pub struct LayoutResult {
 
 impl LayoutResult {
     /// Create layout result with size
+    #[inline]
     pub fn new(size: Size) -> Self {
         Self {
             size,
@@ -64,6 +66,7 @@ impl LayoutResult {
     }
 
     /// Create result marked for recalculation
+    #[inline]
     pub fn needs_layout() -> Self {
         Self {
             size: Size::zero(),
@@ -110,11 +113,13 @@ impl LayoutCache {
     }
 
     /// Get cached result (no computation)
+    #[inline]
     pub fn get(&self, key: &LayoutCacheKey) -> Option<LayoutResult> {
         self.cache.get(key)
     }
 
     /// Insert result into cache
+    #[inline]
     pub fn insert(&self, key: LayoutCacheKey, result: LayoutResult) {
         self.cache.insert(key, result);
     }
