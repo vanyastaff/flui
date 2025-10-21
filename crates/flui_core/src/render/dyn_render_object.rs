@@ -223,79 +223,76 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
 
     // ========== Intrinsic Sizing ==========
 
-    /// Get minimum intrinsic width for a given height
+    /// Computes minimum intrinsic width for a given height
     ///
     /// Returns the smallest width that this render object could be while still
     /// fitting all of its contents at the given height.
     ///
-    /// # Note on `get_` prefix
+    /// # Naming Convention
     ///
-    /// These methods use the `get_` prefix (contrary to typical Rust conventions)
-    /// because they:
-    /// 1. Take parameters and compute values (not simple field access)
-    /// 2. Match the Flutter API naming for consistency
-    /// 3. Distinguish from simple property getters like `size()`
+    /// This method follows Rust API Guidelines (C-GETTER) by omitting the `get_`
+    /// prefix. The method name directly describes what is being computed.
     ///
     /// # Arguments
     ///
-    /// - `height`: The height constraint (maybe infinite)
+    /// - `height`: The height constraint (may be infinite)
     ///
     /// # Returns
     ///
     /// The minimum intrinsic width
     #[must_use]
-    fn get_min_intrinsic_width(&self, _height: f32) -> f32 {
+    fn min_intrinsic_width(&self, _height: f32) -> f32 {
         0.0
     }
 
-    /// Get maximum intrinsic width for a given height
+    /// Computes maximum intrinsic width for a given height
     ///
     /// Returns the largest width that this render object would prefer to be
     /// at the given height.
     ///
     /// # Arguments
     ///
-    /// - `height`: The height constraint (maybe infinite)
+    /// - `height`: The height constraint (may be infinite)
     ///
     /// # Returns
     ///
-    /// The maximum intrinsic width (maybe infinite)
+    /// The maximum intrinsic width (may be infinite)
     #[must_use]
-    fn get_max_intrinsic_width(&self, _height: f32) -> f32 {
+    fn max_intrinsic_width(&self, _height: f32) -> f32 {
         f32::INFINITY
     }
 
-    /// Get minimum intrinsic height for a given width
+    /// Computes minimum intrinsic height for a given width
     ///
     /// Returns the smallest height that this render object could be while still
     /// fitting all of its contents at the given width.
     ///
     /// # Arguments
     ///
-    /// - `width`: The width constraint (maybe infinite)
+    /// - `width`: The width constraint (may be infinite)
     ///
     /// # Returns
     ///
     /// The minimum intrinsic height
     #[must_use]
-    fn get_min_intrinsic_height(&self, _width: f32) -> f32 {
+    fn min_intrinsic_height(&self, _width: f32) -> f32 {
         0.0
     }
 
-    /// Get maximum intrinsic height for a given width
+    /// Computes maximum intrinsic height for a given width
     ///
     /// Returns the largest height that this render object would prefer to be
     /// at the given width.
     ///
     /// # Arguments
     ///
-    /// - `width`: The width constraint (maybe infinite)
+    /// - `width`: The width constraint (may be infinite)
     ///
     /// # Returns
     ///
-    /// The maximum intrinsic height (maybe infinite)
+    /// The maximum intrinsic height (may be infinite)
     #[must_use]
-    fn get_max_intrinsic_height(&self, _width: f32) -> f32 {
+    fn max_intrinsic_height(&self, _width: f32) -> f32 {
         f32::INFINITY
     }
 

@@ -156,8 +156,13 @@ impl Default for LayoutCache {
     }
 }
 
-/// Get global layout cache
-pub fn get_layout_cache() -> &'static LayoutCache {
+/// Returns reference to global layout cache
+///
+/// # Naming Convention
+///
+/// This function follows Rust API Guidelines (C-GETTER) by omitting the `get_`
+/// prefix for accessors. The name directly describes what is returned.
+pub fn layout_cache() -> &'static LayoutCache {
     &LAYOUT_CACHE
 }
 
@@ -277,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_global_cache() {
-        let cache = get_layout_cache();
+        let cache = layout_cache();
         let id = ElementId::new();
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
         let key = LayoutCacheKey::new(id, constraints);
@@ -296,7 +301,7 @@ mod tests {
         let key = LayoutCacheKey::new(id, constraints);
 
         // Add to cache
-        get_layout_cache().insert(key.clone(), LayoutResult::new(Size::new(100.0, 100.0)));
+        layout_cache().insert(key.clone(), LayoutResult::new(Size::new(100.0, 100.0)));
 
         // Invalidate using convenience function (currently a no-op)
         invalidate_layout(id);

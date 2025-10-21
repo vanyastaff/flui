@@ -14,9 +14,9 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_core::cache::{get_layout_cache, LayoutCacheKey};
+//! use flui_core::cache::{layout_cache, LayoutCacheKey};
 //!
-//! let cache = get_layout_cache();
+//! let cache = layout_cache();
 //! let key = LayoutCacheKey::new(widget_id, constraints);
 //!
 //! let result = cache.get_or_compute(key, || {
@@ -29,5 +29,5 @@ pub mod layout_cache;
 
 pub use layout_cache::{
     LayoutCache, LayoutCacheKey, LayoutResult,
-    get_layout_cache, invalidate_layout, clear_layout_cache
+    layout_cache, invalidate_layout, clear_layout_cache
 };

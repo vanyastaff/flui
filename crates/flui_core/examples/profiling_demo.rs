@@ -11,7 +11,7 @@
 
 use flui_core::profiling::{profile_function, profile_scope, profile_expr};
 use flui_core::{BoxConstraints, ElementId, Size};
-use flui_core::cache::{get_layout_cache, LayoutCacheKey, LayoutResult};
+use flui_core::cache::{layout_cache, LayoutCacheKey, LayoutResult};
 
 fn simulate_expensive_layout(constraints: BoxConstraints) -> Size {
     profile_function!();
@@ -34,7 +34,7 @@ fn simulate_expensive_layout(constraints: BoxConstraints) -> Size {
 fn layout_with_cache(element_id: ElementId, constraints: BoxConstraints) -> Size {
     profile_function!();
 
-    let cache = get_layout_cache();
+    let cache = layout_cache();
     let key = LayoutCacheKey::new(element_id, constraints);
 
     let result = profile_expr!("cache_lookup", {
@@ -109,7 +109,7 @@ fn main() {
     }
 
     println!("Demo complete!");
-    println!("Cache stats: {:?}", get_layout_cache().stats());
+    println!("Cache stats: {:?}", layout_cache().stats());
 
     #[cfg(feature = "profiling")]
     {
