@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn test_notification_listener_creation() {
         let listener = NotificationListener::<TestNotification>::new(
-            |_notification| false,
+            |_notification| true, // Return true to handle notification
             Box::new(ChildWidget),
         );
 

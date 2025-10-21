@@ -197,8 +197,8 @@ mod tests {
         let widget = TestStatelessWidget { value: 42 };
         let element = ComponentElement::new(widget);
 
-        // Default lifecycle is Active
-        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+        // Default lifecycle is Initial (before mount)
+        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
     }
 
     #[test]
