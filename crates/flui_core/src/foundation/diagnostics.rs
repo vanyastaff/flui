@@ -4,87 +4,275 @@
 //! similar to Flutter's diagnostics system.
 
 use std::fmt;
+use std::str::FromStr;
 
 /// The level of importance of a diagnostic message.
 ///
 /// Similar to Flutter's `DiagnosticLevel`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_core::foundation::DiagnosticLevel;
+///
+/// let level = DiagnosticLevel::Info;
+/// assert!(level > DiagnosticLevel::Debug);
+/// println!("{}", level); // "info"
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum DiagnosticLevel {
     /// Hidden diagnostic level.
     Hidden,
-
-    /// A diagnostic that is likely to be low-value but where the diagnostic
-    /// may provide value for debugging.
+    /// A diagnostic that is likely to be low-value but may provide debugging value.
     Fine,
-
-    /// A diagnostic that is likely to be low-value but where the diagnostic
-    /// may provide value for debugging.
+    /// A diagnostic useful for debugging.
     Debug,
-
-    /// Diagnostics that are probably useful for debugging but do not rise
-    /// to the level of being "informational".
+    /// Diagnostics that are probably useful for debugging.
     Info,
-
     /// A diagnostic that is informational.
     Warning,
-
-    /// A diagnostic that we want to bring to the attention of the user.
+    /// A diagnostic that we want to bring to the user's attention.
     Hint,
-
     /// A diagnostic that indicates an error.
     Error,
 }
 
+impl DiagnosticLevel {
+    /// Returns the level as a lowercase string
+    #[must_use]
+    #[inline]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Hidden => "hidden",
+            Self::Fine => "fine",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Hint => "hint",
+            Self::Error => "error",
+        }
+    }
+
+    /// Checks if this is an error level
+    #[must_use]
+    #[inline]
+    pub const fn is_error(&self) -> bool {
+        matches!(self, Self::Error)
+    }
+
+    /// Checks if this is a warning level
+    #[must_use]
+    #[inline]
+    pub const fn is_warning(&self) -> bool {
+        matches!(self, Self::Warning)
+    }
+
+    /// Checks if this level should be visible in normal output
+    #[must_use]
+    #[inline]
+    pub const fn is_visible(&self) -> bool {
+        !matches!(self, Self::Hidden)
+    }
+}
+
+impl Default for DiagnosticLevel {
+    #[inline]
+    fn default() -> Self {
+        Self::Info
+    }
+}
+
+impl fmt::Display for DiagnosticLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for DiagnosticLevel {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl FromStr for DiagnosticLevel {
+    type Err = ParseDiagnosticLevelError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "hidden" => Ok(Self::Hidden),
+            "fine" => Ok(Self::Fine),
+            "debug" => Ok(Self::Debug),
+            "info" => Ok(Self::Info),
+            "warning" | "warn" => Ok(Self::Warning),
+            "hint" => Ok(Self::Hint),
+            "error" | "err" => Ok(Self::Error),
+            _ => Err(ParseDiagnosticLevelError(s.to_string())),
+        }
+    }
+}
+
+/// Error type for parsing DiagnosticLevel
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseDiagnosticLevelError(String);
+
+impl fmt::Display for ParseDiagnosticLevelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid diagnostic level: '{}'", self.0)
+    }
+}
+
+impl std::error::Error for ParseDiagnosticLevelError {}
+
 /// How a tree should be rendered.
 ///
 /// Similar to Flutter's `DiagnosticsTreeStyle`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_core::foundation::DiagnosticsTreeStyle;
+///
+/// let style = DiagnosticsTreeStyle::Sparse;
+/// println!("{}", style); // "sparse"
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum DiagnosticsTreeStyle {
     /// A style that is appropriate for displaying sparse trees.
     Sparse,
-
     /// A style that is appropriate for displaying the properties of an object.
     Shallow,
-
     /// A style that is appropriate for displaying a tree.
     Dense,
-
     /// A style that is appropriate for displaying a single line.
+    #[cfg_attr(feature = "serde", serde(rename = "singleline"))]
     SingleLine,
-
     /// A style that is appropriate for displaying an error.
+    #[cfg_attr(feature = "serde", serde(rename = "errorproperty"))]
     ErrorProperty,
 }
 
-/// A diagnostic property.
+impl DiagnosticsTreeStyle {
+    /// Returns the style as a lowercase string
+    #[must_use]
+    #[inline]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Sparse => "sparse",
+            Self::Shallow => "shallow",
+            Self::Dense => "dense",
+            Self::SingleLine => "singleline",
+            Self::ErrorProperty => "errorproperty",
+        }
+    }
+
+    /// Checks if this is a compact style
+    #[must_use]
+    #[inline]
+    pub const fn is_compact(&self) -> bool {
+        matches!(self, Self::SingleLine | Self::Shallow)
+    }
+}
+
+impl Default for DiagnosticsTreeStyle {
+    #[inline]
+    fn default() -> Self {
+        Self::Sparse
+    }
+}
+
+impl fmt::Display for DiagnosticsTreeStyle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for DiagnosticsTreeStyle {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl FromStr for DiagnosticsTreeStyle {
+    type Err = ParseDiagnosticsTreeStyleError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "sparse" => Ok(Self::Sparse),
+            "shallow" => Ok(Self::Shallow),
+            "dense" => Ok(Self::Dense),
+            "singleline" | "single_line" | "single-line" => Ok(Self::SingleLine),
+            "errorproperty" | "error_property" | "error-property" => Ok(Self::ErrorProperty),
+            _ => Err(ParseDiagnosticsTreeStyleError(s.to_string())),
+        }
+    }
+}
+
+/// Error type for parsing DiagnosticsTreeStyle
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseDiagnosticsTreeStyleError(String);
+
+impl fmt::Display for ParseDiagnosticsTreeStyleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid diagnostics tree style: '{}'", self.0)
+    }
+}
+
+impl std::error::Error for ParseDiagnosticsTreeStyleError {}
+
+/// A diagnostic property
 ///
 /// Similar to Flutter's `DiagnosticsProperty`.
-#[derive(Debug, Clone)]
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_core::foundation::DiagnosticsProperty;
+///
+/// let prop = DiagnosticsProperty::new("width", 100);
+/// assert_eq!(prop.name(), "width");
+/// assert_eq!(prop.value(), "100");
+/// println!("{}", prop); // "width: 100"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DiagnosticsProperty {
-    /// Name of the property
-    pub name: String,
+    name: String,
+    value: String,
+    #[cfg_attr(feature = "serde", serde(default))]
+    level: DiagnosticLevel,
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    show_name: bool,
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    show_separator: bool,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    default_value: Option<String>,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    tooltip: Option<String>,
+}
 
-    /// Value of the property as a string
-    pub value: String,
-
-    /// Diagnostic level
-    pub level: DiagnosticLevel,
-
-    /// Whether to show the name
-    pub show_name: bool,
-
-    /// Whether to show separator between name and value
-    pub show_separator: bool,
-
-    /// Default value (if this matches, the property may be hidden)
-    pub default_value: Option<String>,
-
-    /// Tooltip or description
-    pub tooltip: Option<String>,
+#[cfg(feature = "serde")]
+fn default_true() -> bool {
+    true
 }
 
 impl DiagnosticsProperty {
-    /// Create a new diagnostics property.
+    /// Create a new diagnostics property
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_core::foundation::DiagnosticsProperty;
+    ///
+    /// let prop = DiagnosticsProperty::new("width", 100);
+    /// assert_eq!(prop.name(), "width");
+    /// ```
+    #[must_use]
     pub fn new(name: impl Into<String>, value: impl fmt::Display) -> Self {
         Self {
             name: name.into(),
@@ -97,41 +285,93 @@ impl DiagnosticsProperty {
         }
     }
 
-    /// Create a property with a specific level.
-    pub fn with_level(mut self, level: DiagnosticLevel) -> Self {
+    /// Returns the property name
+    #[must_use]
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the property value as a string
+    #[must_use]
+    #[inline]
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    /// Returns the diagnostic level
+    #[must_use]
+    #[inline]
+    pub const fn level(&self) -> DiagnosticLevel {
+        self.level
+    }
+
+    /// Returns the tooltip if present
+    #[must_use]
+    #[inline]
+    pub fn tooltip(&self) -> Option<&str> {
+        self.tooltip.as_deref()
+    }
+
+    /// Checks if the property name should be shown
+    #[must_use]
+    #[inline]
+    pub const fn shows_name(&self) -> bool {
+        self.show_name
+    }
+
+    /// Checks if the separator should be shown
+    #[must_use]
+    #[inline]
+    pub const fn shows_separator(&self) -> bool {
+        self.show_separator
+    }
+
+    /// Set the diagnostic level (builder pattern)
+    #[must_use]
+    pub const fn with_level(mut self, level: DiagnosticLevel) -> Self {
         self.level = level;
         self
     }
 
-    /// Create a property without showing the name.
-    pub fn value_only(mut self) -> Self {
+    /// Hide the property name (builder pattern)
+    #[must_use]
+    pub const fn value_only(mut self) -> Self {
         self.show_name = false;
         self
     }
 
-    /// Set a default value.
+    /// Set a default value (builder pattern)
+    #[must_use]
     pub fn with_default(mut self, default: impl Into<String>) -> Self {
         self.default_value = Some(default.into());
         self
     }
 
-    /// Set a tooltip.
+    /// Set a tooltip (builder pattern)
+    #[must_use]
     pub fn with_tooltip(mut self, tooltip: impl Into<String>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
-    /// Check if this property is hidden based on its default value.
+    /// Checks if this property is hidden based on its default value
+    #[must_use]
+    #[inline]
     pub fn is_hidden(&self) -> bool {
-        if let Some(ref default) = self.default_value {
-            &self.value == default
-        } else {
-            false
-        }
+        self.default_value.as_ref().is_some_and(|default| &self.value == default)
     }
 
-    /// Format the property as a string.
-    pub fn to_string_with_style(&self, style: DiagnosticsTreeStyle) -> String {
+    /// Checks if this property should be displayed at the given level
+    #[must_use]
+    #[inline]
+    pub const fn is_visible_at_level(&self, min_level: DiagnosticLevel) -> bool {
+        self.level as u8 >= min_level as u8
+    }
+
+    /// Format the property as a string with given style
+    #[must_use]
+    pub fn format_with_style(&self, style: DiagnosticsTreeStyle) -> String {
         match style {
             DiagnosticsTreeStyle::SingleLine => {
                 if self.show_name {
@@ -155,29 +395,43 @@ impl DiagnosticsProperty {
     }
 }
 
-/// A node in the diagnostics tree.
+impl fmt::Display for DiagnosticsProperty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.format_with_style(DiagnosticsTreeStyle::SingleLine))
+    }
+}
+
+/// A node in the diagnostics tree
 ///
 /// Similar to Flutter's `DiagnosticsNode`.
-#[derive(Debug, Clone)]
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_core::foundation::{DiagnosticsNode, DiagnosticsProperty};
+///
+/// let mut node = DiagnosticsNode::new("MyWidget");
+/// node.add_property(DiagnosticsProperty::new("width", 100));
+/// println!("{}", node);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DiagnosticsNode {
-    /// Name of this node
-    pub name: Option<String>,
-
-    /// Properties of this node
-    pub properties: Vec<DiagnosticsProperty>,
-
-    /// Child nodes
-    pub children: Vec<DiagnosticsNode>,
-
-    /// The level of this diagnostic
-    pub level: DiagnosticLevel,
-
-    /// The style for rendering this node
-    pub style: DiagnosticsTreeStyle,
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    name: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    properties: Vec<DiagnosticsProperty>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    children: Vec<DiagnosticsNode>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    level: DiagnosticLevel,
+    #[cfg_attr(feature = "serde", serde(default))]
+    style: DiagnosticsTreeStyle,
 }
 
 impl DiagnosticsNode {
-    /// Create a new diagnostics node.
+    /// Create a new diagnostics node
+    #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -188,7 +442,8 @@ impl DiagnosticsNode {
         }
     }
 
-    /// Create a node without a name.
+    /// Create a node without a name
+    #[must_use]
     pub fn anonymous() -> Self {
         Self {
             name: None,
@@ -199,72 +454,161 @@ impl DiagnosticsNode {
         }
     }
 
-    /// Add a property.
+    /// Returns the node name
+    #[must_use]
+    #[inline]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Returns the properties
+    #[must_use]
+    #[inline]
+    pub fn properties(&self) -> &[DiagnosticsProperty] {
+        &self.properties
+    }
+
+    /// Returns mutable access to properties
+    #[inline]
+    pub fn properties_mut(&mut self) -> &mut Vec<DiagnosticsProperty> {
+        &mut self.properties
+    }
+
+    /// Returns the children
+    #[must_use]
+    #[inline]
+    pub fn children(&self) -> &[DiagnosticsNode] {
+        &self.children
+    }
+
+    /// Returns mutable access to children
+    #[inline]
+    pub fn children_mut(&mut self) -> &mut Vec<DiagnosticsNode> {
+        &mut self.children
+    }
+
+    /// Returns the diagnostic level
+    #[must_use]
+    #[inline]
+    pub const fn level(&self) -> DiagnosticLevel {
+        self.level
+    }
+
+    /// Returns the rendering style
+    #[must_use]
+    #[inline]
+    pub const fn style(&self) -> DiagnosticsTreeStyle {
+        self.style
+    }
+
+    /// Checks if this node has any properties
+    #[must_use]
+    #[inline]
+    pub fn has_properties(&self) -> bool {
+        !self.properties.is_empty()
+    }
+
+    /// Checks if this node has any children
+    #[must_use]
+    #[inline]
+    pub fn has_children(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    /// Add a property
     pub fn add_property(&mut self, property: DiagnosticsProperty) {
         self.properties.push(property);
     }
 
-    /// Add a child node.
+    /// Add a child node
     pub fn add_child(&mut self, child: DiagnosticsNode) {
         self.children.push(child);
     }
 
-    /// Set the diagnostic level.
-    pub fn with_level(mut self, level: DiagnosticLevel) -> Self {
+    /// Set the diagnostic level (builder pattern)
+    #[must_use]
+    pub const fn with_level(mut self, level: DiagnosticLevel) -> Self {
         self.level = level;
         self
     }
 
-    /// Set the rendering style.
-    pub fn with_style(mut self, style: DiagnosticsTreeStyle) -> Self {
+    /// Set the rendering style (builder pattern)
+    #[must_use]
+    pub const fn with_style(mut self, style: DiagnosticsTreeStyle) -> Self {
         self.style = style;
         self
     }
 
-    /// Convert to a string representation.
-    pub fn to_string_deep(&self, indent: usize) -> String {
+    /// Convert to a deep string representation
+    #[must_use]
+    pub fn format_deep(&self, indent: usize) -> String {
         let mut result = String::new();
         let prefix = "  ".repeat(indent);
 
-        // Add name
         if let Some(ref name) = self.name {
             result.push_str(&format!("{}{}\n", prefix, name));
         }
 
-        // Add properties
         for prop in &self.properties {
             if !prop.is_hidden() {
                 result.push_str(&format!(
                     "{}  {}\n",
                     prefix,
-                    prop.to_string_with_style(self.style)
+                    prop.format_with_style(self.style)
                 ));
             }
         }
 
-        // Add children
         for child in &self.children {
-            result.push_str(&child.to_string_deep(indent + 1));
+            result.push_str(&child.format_deep(indent + 1));
         }
 
         result
     }
 }
 
+impl Default for DiagnosticsNode {
+    #[inline]
+    fn default() -> Self {
+        Self::anonymous()
+    }
+}
+
 impl fmt::Display for DiagnosticsNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string_deep(0))
+        write!(f, "{}", self.format_deep(0))
     }
 }
 
 /// Trait for objects that can provide diagnostics information.
 ///
 /// Similar to Flutter's `Diagnosticable`.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_core::foundation::{Diagnosticable, DiagnosticsNode, DiagnosticsProperty};
+///
+/// #[derive(Debug)]
+/// struct MyWidget {
+///     width: i32,
+///     height: i32,
+/// }
+///
+/// impl Diagnosticable for MyWidget {
+///     fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
+///         properties.push(DiagnosticsProperty::new("width", self.width));
+///         properties.push(DiagnosticsProperty::new("height", self.height));
+///     }
+/// }
+/// ```
 pub trait Diagnosticable: fmt::Debug {
     /// Create a diagnostics node for this object.
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
         let type_name = std::any::type_name::<Self>();
-        DiagnosticsNode::new(type_name)
+        let mut node = DiagnosticsNode::new(type_name);
+        self.debug_fill_properties(node.properties_mut());
+        node
     }
 
     /// Collect diagnostic properties.
@@ -274,21 +618,46 @@ pub trait Diagnosticable: fmt::Debug {
 }
 
 /// Helper builder for diagnostic properties.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_core::foundation::DiagnosticsBuilder;
+///
+/// let mut builder = DiagnosticsBuilder::new();
+/// builder.add("width", 100);
+/// builder.add("height", 50);
+/// builder.add_optional("title", Some("Test"));
+/// let properties = builder.build();
+/// ```
+#[derive(Debug, Clone, Default)]
 pub struct DiagnosticsBuilder {
     properties: Vec<DiagnosticsProperty>,
 }
 
 impl DiagnosticsBuilder {
     /// Create a new builder.
+    #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self {
             properties: Vec::new(),
         }
     }
 
+    /// Create a builder with capacity
+    #[must_use]
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            properties: Vec::with_capacity(capacity),
+        }
+    }
+
     /// Add a property.
-    pub fn add(&mut self, name: impl Into<String>, value: impl fmt::Display) {
+    pub fn add(&mut self, name: impl Into<String>, value: impl fmt::Display) -> &mut Self {
         self.properties.push(DiagnosticsProperty::new(name, value));
+        self
     }
 
     /// Add a property with a specific level.
@@ -297,35 +666,51 @@ impl DiagnosticsBuilder {
         name: impl Into<String>,
         value: impl fmt::Display,
         level: DiagnosticLevel,
-    ) {
+    ) -> &mut Self {
         self.properties
             .push(DiagnosticsProperty::new(name, value).with_level(level));
+        self
     }
 
     /// Add a flag property (bool).
-    pub fn add_flag(&mut self, name: impl Into<String>, value: bool, if_true: &str) {
+    pub fn add_flag(&mut self, name: impl Into<String>, value: bool, if_true: &str) -> &mut Self {
         if value {
             self.properties
                 .push(DiagnosticsProperty::new(name, if_true));
         }
+        self
     }
 
     /// Add an optional property.
-    pub fn add_optional<T: fmt::Display>(&mut self, name: impl Into<String>, value: Option<T>) {
+    pub fn add_optional<T: fmt::Display>(
+        &mut self,
+        name: impl Into<String>,
+        value: Option<T>,
+    ) -> &mut Self {
         if let Some(v) = value {
             self.add(name, v);
         }
+        self
+    }
+
+    /// Returns the number of properties
+    #[must_use]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.properties.len()
+    }
+
+    /// Checks if the builder is empty
+    #[must_use]
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.properties.is_empty()
     }
 
     /// Build the properties list.
+    #[must_use]
     pub fn build(self) -> Vec<DiagnosticsProperty> {
         self.properties
-    }
-}
-
-impl Default for DiagnosticsBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -334,12 +719,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_diagnostic_level_default() {
+        assert_eq!(DiagnosticLevel::default(), DiagnosticLevel::Info);
+    }
+
+    #[test]
+    fn test_diagnostic_level_display() {
+        assert_eq!(format!("{}", DiagnosticLevel::Info), "info");
+        assert_eq!(format!("{}", DiagnosticLevel::Error), "error");
+    }
+
+    #[test]
+    fn test_diagnostic_level_as_str() {
+        assert_eq!(DiagnosticLevel::Debug.as_str(), "debug");
+        assert_eq!(DiagnosticLevel::Warning.as_str(), "warning");
+    }
+
+    #[test]
+    fn test_diagnostic_level_from_str() {
+        assert_eq!("info".parse::<DiagnosticLevel>().unwrap(), DiagnosticLevel::Info);
+        assert_eq!("ERROR".parse::<DiagnosticLevel>().unwrap(), DiagnosticLevel::Error);
+        assert_eq!("warn".parse::<DiagnosticLevel>().unwrap(), DiagnosticLevel::Warning);
+        assert!("invalid".parse::<DiagnosticLevel>().is_err());
+    }
+
+    #[test]
+    fn test_diagnostic_level_predicates() {
+        assert!(DiagnosticLevel::Error.is_error());
+        assert!(!DiagnosticLevel::Info.is_error());
+        assert!(DiagnosticLevel::Warning.is_warning());
+        assert!(DiagnosticLevel::Info.is_visible());
+        assert!(!DiagnosticLevel::Hidden.is_visible());
+    }
+
+    #[test]
+    fn test_diagnostics_tree_style_default() {
+        assert_eq!(DiagnosticsTreeStyle::default(), DiagnosticsTreeStyle::Sparse);
+    }
+
+    #[test]
+    fn test_diagnostics_tree_style_display() {
+        assert_eq!(format!("{}", DiagnosticsTreeStyle::Sparse), "sparse");
+        assert_eq!(format!("{}", DiagnosticsTreeStyle::SingleLine), "singleline");
+    }
+
+    #[test]
+    fn test_diagnostics_tree_style_from_str() {
+        assert_eq!(
+            "sparse".parse::<DiagnosticsTreeStyle>().unwrap(),
+            DiagnosticsTreeStyle::Sparse
+        );
+        assert_eq!(
+            "single-line".parse::<DiagnosticsTreeStyle>().unwrap(),
+            DiagnosticsTreeStyle::SingleLine
+        );
+    }
+
+    #[test]
+    fn test_diagnostics_tree_style_is_compact() {
+        assert!(DiagnosticsTreeStyle::SingleLine.is_compact());
+        assert!(DiagnosticsTreeStyle::Shallow.is_compact());
+        assert!(!DiagnosticsTreeStyle::Dense.is_compact());
+    }
+
+    #[test]
     fn test_diagnostics_property() {
         let prop = DiagnosticsProperty::new("width", 100);
-        assert_eq!(prop.name, "width");
-        assert_eq!(prop.value, "100");
-        assert_eq!(prop.level, DiagnosticLevel::Info);
+        assert_eq!(prop.name(), "width");
+        assert_eq!(prop.value(), "100");
+        assert_eq!(prop.level(), DiagnosticLevel::Info);
         assert!(!prop.is_hidden());
+    }
+
+    #[test]
+    fn test_diagnostics_property_display() {
+        let prop = DiagnosticsProperty::new("width", 100);
+        assert_eq!(format!("{}", prop), "width: 100");
+    }
+
+    #[test]
+    fn test_diagnostics_property_equality() {
+        let prop1 = DiagnosticsProperty::new("width", 100);
+        let prop2 = DiagnosticsProperty::new("width", 100);
+        let prop3 = DiagnosticsProperty::new("height", 100);
+
+        assert_eq!(prop1, prop2);
+        assert_ne!(prop1, prop3);
     }
 
     #[test]
@@ -357,8 +822,28 @@ mod tests {
         node.add_property(DiagnosticsProperty::new("width", 100));
         node.add_property(DiagnosticsProperty::new("height", 50));
 
-        assert_eq!(node.properties.len(), 2);
-        assert_eq!(node.name.as_ref().unwrap(), "MyWidget");
+        assert_eq!(node.properties().len(), 2);
+        assert_eq!(node.name().unwrap(), "MyWidget");
+        assert!(node.has_properties());
+        assert!(!node.has_children());
+    }
+
+    #[test]
+    fn test_diagnostics_node_default() {
+        let node = DiagnosticsNode::default();
+        assert_eq!(node.name(), None);
+        assert!(node.is_empty());
+    }
+
+    #[test]
+    fn test_diagnostics_node_equality() {
+        let mut node1 = DiagnosticsNode::new("Widget");
+        node1.add_property(DiagnosticsProperty::new("width", 100));
+
+        let mut node2 = DiagnosticsNode::new("Widget");
+        node2.add_property(DiagnosticsProperty::new("width", 100));
+
+        assert_eq!(node1, node2);
     }
 
     #[test]
@@ -371,8 +856,9 @@ mod tests {
 
         parent.add_child(child);
 
-        assert_eq!(parent.children.len(), 1);
-        assert_eq!(parent.children[0].name.as_ref().unwrap(), "Child");
+        assert_eq!(parent.children().len(), 1);
+        assert!(parent.has_children());
+        assert_eq!(parent.children()[0].name().unwrap(), "Child");
     }
 
     #[test]
@@ -385,8 +871,22 @@ mod tests {
         builder.add_flag("visible", true, "VISIBLE");
         builder.add_flag("hidden", false, "HIDDEN");
 
+        assert_eq!(builder.len(), 4);
+        assert!(!builder.is_empty());
+
         let props = builder.build();
-        assert_eq!(props.len(), 4); // width, height, title, visible flag
+        assert_eq!(props.len(), 4);
+    }
+
+    #[test]
+    fn test_diagnostics_builder_chaining() {
+        let props = DiagnosticsBuilder::new()
+            .add("width", 100)
+            .add("height", 50)
+            .add_optional("title", Some("Test"))
+            .build();
+
+        assert_eq!(props.len(), 3);
     }
 
     #[test]
@@ -406,10 +906,28 @@ mod tests {
         child.add_property(DiagnosticsProperty::new("name", "test"));
         root.add_child(child);
 
-        let output = root.to_string_deep(0);
+        let output = root.format_deep(0);
         assert!(output.contains("Root"));
         assert!(output.contains("id: 1"));
         assert!(output.contains("Child"));
         assert!(output.contains("name: test"));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_diagnostic_level_serde() {
+        let level = DiagnosticLevel::Info;
+        let json = serde_json::to_string(&level).unwrap();
+        let deserialized: DiagnosticLevel = serde_json::from_str(&json).unwrap();
+        assert_eq!(level, deserialized);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_diagnostics_property_serde() {
+        let prop = DiagnosticsProperty::new("width", 100);
+        let json = serde_json::to_string(&prop).unwrap();
+        let deserialized: DiagnosticsProperty = serde_json::from_str(&json).unwrap();
+        assert_eq!(prop, deserialized);
     }
 }

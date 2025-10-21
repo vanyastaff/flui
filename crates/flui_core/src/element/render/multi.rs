@@ -6,30 +6,51 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use smallvec::SmallVec;
 
-use crate::{AnyElement, Element, ElementId, ElementTree, MultiChildRenderObjectWidget, Slot};
+use crate::{DynElement, DynWidget, Element, ElementId, ElementTree, MultiChildRenderObjectWidget};
+use crate::foundation::{Key, Slot};
 use super::super::ElementLifecycle;
-use crate::AnyWidget;
-use crate::foundation::Key;
 
-/// Child list with inline storage for 4 children (stack allocated, heap fallback)
-type ChildList = SmallVec<[ElementId; 4]>;
+/// Type alias for a list of child element IDs (optimized for small lists)
+type ChildList = SmallVec<[ElementId; 8]>;
 
-/// Element for RenderObjects with multiple children (Row, Column, Stack, etc.)
+/// Element for RenderObjects with multiple children (Column, Row, Stack, etc.)
+///
+/// MultiChildRenderObjectElement is specialized for widgets that:
+/// - Create a RenderObject for layout and painting
+/// - Have MULTIPLE children widgets
+/// - Manage child lists efficiently (e.g., Column, Row, Stack, Wrap)
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Column widget creates a MultiChildRenderObjectElement
+/// let column = Column::new(vec![
+///     Text::new("Hello").into_widget(),
+///     Text::new("World").into_widget(),
+/// ]);
+/// let element = column.into_element(); // MultiChildRenderObjectElement<Column>
+/// ```
+///
+/// # See Also
+///
+/// - [`LeafRenderObjectElement`] - For widgets with no children
+/// - [`SingleChildRenderObjectElement`] - For widgets with one child
 pub struct MultiChildRenderObjectElement<W: MultiChildRenderObjectWidget> {
     id: ElementId,
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
     lifecycle: ElementLifecycle,
-    render_object: Option<Box<dyn crate::AnyRenderObject>>,
-    /// Child element IDs (SmallVec for performance - inline storage for 0-4 children)
+    render_object: Option<Box<dyn crate::DynRenderObject>>,
+    /// Child element IDs (managed by ElementTree)
     children: ChildList,
     /// Reference to ElementTree for child management
     tree: Option<Arc<RwLock<ElementTree>>>,
 }
 
 impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
-    /// Create new multi child render object element from a widget
+    /// Creates a new multi-child render object element
+    #[must_use]
     pub fn new(widget: W) -> Self {
         Self {
             id: ElementId::new(),
@@ -38,24 +59,35 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             dirty: true,
             lifecycle: ElementLifecycle::Initial,
             render_object: None,
-            children: SmallVec::new(), // Inline storage, no heap allocation
+            children: SmallVec::new(),
             tree: None,
         }
     }
 
-    /// Get reference to the render object
-    pub fn render_object_ref(&self) -> Option<&dyn crate::AnyRenderObject> {
-        self.render_object.as_ref().map(|r| r.as_ref())
-    }
-
-    /// Get mutable reference to the render object
-    pub fn render_object_mut_ref(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
-        self.render_object.as_mut().map(|r| r.as_mut())
-    }
-
-    /// Get child element IDs
-    pub fn children_ids(&self) -> &[ElementId] {
+    /// Returns a slice of child element IDs
+    #[must_use]
+    pub fn children(&self) -> &[ElementId] {
         &self.children
+    }
+
+    /// Iterate over child element IDs
+    pub fn children_iter(&self) -> impl Iterator<Item = ElementId> + '_ {
+        self.children.iter().copied()
+    }
+
+    /// Set children (called by ElementTree after mounting)
+    pub(crate) fn set_children(&mut self, children: ChildList) {
+        self.children = children;
+    }
+
+    /// Add a child to the list
+    pub(crate) fn add_child(&mut self, child_id: ElementId) {
+        self.children.push(child_id);
+    }
+
+    /// Take old children for rebuild (called by ElementTree during rebuild)
+    pub(crate) fn take_old_children(&mut self) -> ChildList {
+        std::mem::take(&mut self.children)
     }
 
     /// Initialize the render object
@@ -72,193 +104,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         }
     }
 
-    /// Set child element IDs (test helper)
-    #[cfg(test)]
-    pub(crate) fn set_children(&mut self, children: ChildList) {
-        self.children = children;
-    }
-
-    /// Set children from Vec (test helper)
-    #[cfg(test)]
-    pub(crate) fn set_children_vec(&mut self, children: Vec<ElementId>) {
-        self.children = SmallVec::from_vec(children);
-    }
-
-    /// Take old children for rebuild (test helper)
-    #[cfg(test)]
-    pub(crate) fn take_old_children(&mut self) -> ChildList {
-        std::mem::take(&mut self.children)
-    }
-
-    /// Add child element ID (test helper)
-    #[cfg(test)]
-    pub(crate) fn add_child(&mut self, child_id: ElementId) {
-        self.children.push(child_id);
-    }
-}
-
-impl<W: MultiChildRenderObjectWidget> fmt::Debug for MultiChildRenderObjectElement<W> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MultiChildRenderObjectElement")
-            .field("id", &self.id)
-            .field("widget_type", &std::any::type_name::<W>())
-            .field("parent", &self.parent)
-            .field("dirty", &self.dirty)
-            .field("has_render_object", &self.render_object.is_some())
-            .field("children_count", &self.children.len())
-            .finish()
-    }
-}
-
-// ========== Implement AnyElement for MultiChildRenderObjectElement ==========
-
-impl<W: MultiChildRenderObjectWidget> AnyElement for MultiChildRenderObjectElement<W> {
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
-        self.parent
-    }
-
-    fn key(&self) -> Option<&dyn Key> {
-        AnyWidget::key(&self.widget)
-    }
-
-    fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
-        self.parent = parent;
-        self.lifecycle = ElementLifecycle::Active;
-        self.initialize_render_object();
-        self.dirty = true;
-    }
-
-    fn unmount(&mut self) {
-        self.lifecycle = ElementLifecycle::Defunct;
-        // Unmount all children first
-        if let Some(tree) = &self.tree {
-            for child_id in self.children.drain(..) {
-                tree.write().remove(child_id);
-            }
-        }
-        // Then clear render object
-        self.render_object = None;
-    }
-
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
-        if let Ok(new_widget) = new_widget.downcast::<W>() {
-            self.widget = *new_widget;
-            self.update_render_object();
-            self.dirty = true;
-        }
-    }
-
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
-        if !self.dirty {
-            return Vec::new();
-        }
-        self.dirty = false;
-
-        // Update render object
-        self.update_render_object();
-
-        // Phase 8: Use efficient update_children() algorithm
-        let old_children = std::mem::take(&mut self.children);
-        // Clone widgets to avoid borrow conflict
-        let new_widgets: Vec<Box<dyn AnyWidget>> = self.widget.children()
-            .iter()
-            .map(|w| dyn_clone::clone_box(w.as_ref()))
-            .collect();
-        self.children = self.update_children(old_children, &new_widgets);
-
-        // Return empty - children are managed internally now
-        Vec::new()
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-
-    fn mark_dirty(&mut self) {
-        self.dirty = true;
-    }
-
-    fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
-        // Note: children stay attached but inactive
-        // Will be unmounted if not reactivated before frame end
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        // Element is being reinserted into tree (GlobalKey reparenting)
-        self.dirty = true; // Mark for rebuild in new location
-    }
-
-    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
-        Box::new(self.children.iter().copied())
-    }
-
-    fn set_tree_ref(&mut self, tree: Arc<RwLock<ElementTree>>) {
-        self.tree = Some(tree);
-    }
-
-    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
-        None // Multi-child elements manage children differently
-    }
-
-    fn set_child_after_mount(&mut self, child_id: ElementId) {
-        self.children.push(child_id);
-    }
-
-    fn widget_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<W>()
-    }
-
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
-        self.render_object.as_ref().map(|ro| ro.as_ref())
-    }
-
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
-        self.render_object.as_mut().map(|ro| ro.as_mut())
-    }
-
-    fn did_change_dependencies(&mut self) {
-        // Default: do nothing
-    }
-
-    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
-        // Multi-child elements handle slot management differently
-    }
-
-    fn forget_child(&mut self, child_id: ElementId) {
-        self.children.retain(|id| *id != child_id);
-    }
-}
-
-// ========== Implement Element for MultiChildRenderObjectElement (with associated types) ==========
-
-impl<W: MultiChildRenderObjectWidget> Element for MultiChildRenderObjectElement<W> {
-    type Widget = W;
-
-    fn update(&mut self, new_widget: W) {
-        // Zero-cost! No downcast needed!
-        self.widget = new_widget;
-        self.update_render_object();
-        self.dirty = true;
-    }
-
-    fn widget(&self) -> &W {
-        &self.widget
-    }
-}
-
-// ========== Phase 8: Multi-Child Update Algorithm ==========
-
-impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
+    // ========== Phase 8: Multi-Child Update Algorithm ==========
     /// Update children efficiently using Flutter's updateChildren() algorithm
     ///
     /// This implements the three-phase scan algorithm:
@@ -270,7 +116,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     fn update_children(
         &mut self,
         mut old_children: ChildList,
-        new_widgets: &[Box<dyn AnyWidget>],
+        new_widgets: &[Box<dyn DynWidget>],
     ) -> ChildList {
         if new_widgets.is_empty() {
             // All children removed - unmount old children
@@ -390,7 +236,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     }
 
     /// Check if an element can be updated with a new widget
-    fn can_update(element: &dyn AnyElement, widget: &dyn AnyWidget) -> bool {
+    fn can_update(element: &dyn DynElement, widget: &dyn DynWidget) -> bool {
         // Must be same type
         if element.widget_type_id() != widget.type_id() {
             return false;
@@ -399,7 +245,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         // Check key compatibility
         match (element.key(), widget.key()) {
             (None, None) => true, // Both unkeyed - OK
-            (Some(k1), Some(k2)) => k1.equals(k2), // Both keyed with same key - OK
+            (Some(k1), Some(k2)) => k1.key_eq(k2), // Both keyed with same key - OK
             _ => false, // One keyed, one not - incompatible
         }
     }
@@ -411,7 +257,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     fn update_child(
         tree: &Arc<RwLock<ElementTree>>,
         element_id: ElementId,
-        new_widget: &dyn AnyWidget,
+        new_widget: &dyn DynWidget,
         slot: Slot,
     ) {
         let mut tree_guard = tree.write();
@@ -424,7 +270,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     }
 
     /// Mount all new children (when old list is empty)
-    fn mount_all_children(&mut self, new_widgets: &[Box<dyn AnyWidget>]) -> ChildList {
+    fn mount_all_children(&mut self, new_widgets: &[Box<dyn DynWidget>]) -> ChildList {
         let mut children = SmallVec::with_capacity(new_widgets.len());
 
         if let Some(tree) = &self.tree {
@@ -443,7 +289,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     fn handle_middle_section(
         &mut self,
         old_middle: &[ElementId],
-        new_middle: &[Box<dyn AnyWidget>],
+        new_middle: &[Box<dyn DynWidget>],
         new_children: &mut ChildList,
         tree: &Arc<RwLock<ElementTree>>,
         start_slot: usize,
@@ -524,6 +370,165 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     }
 }
 
+// ========== Implement Debug for MultiChildRenderObjectElement ==========
+
+impl<W: MultiChildRenderObjectWidget> fmt::Debug for MultiChildRenderObjectElement<W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MultiChildRenderObjectElement")
+            .field("id", &self.id)
+            .field("widget_type", &std::any::type_name::<W>())
+            .field("parent", &self.parent)
+            .field("dirty", &self.dirty)
+            .field("lifecycle", &self.lifecycle)
+            .field("has_render_object", &self.render_object.is_some())
+            .field("children_count", &self.children.len())
+            .finish()
+    }
+}
+
+// ========== Implement DynElement for MultiChildRenderObjectElement ==========
+
+impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectElement<W> {
+    fn id(&self) -> ElementId {
+        self.id
+    }
+
+    fn parent(&self) -> Option<ElementId> {
+        self.parent
+    }
+
+    fn key(&self) -> Option<&dyn Key> {
+        DynWidget::key(&self.widget)
+    }
+
+    fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
+        self.parent = parent;
+        self.lifecycle = ElementLifecycle::Active;
+        self.initialize_render_object();
+        self.dirty = true;
+    }
+
+    fn unmount(&mut self) {
+        self.lifecycle = ElementLifecycle::Defunct;
+        // Unmount all children first
+        if let Some(tree) = &self.tree {
+            let mut tree_guard = tree.write();
+            for child_id in self.children.drain(..) {
+                tree_guard.remove(child_id);
+            }
+        }
+        // Then clear render object
+        self.render_object = None;
+    }
+
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
+        if let Ok(new_widget) = new_widget.downcast::<W>() {
+            self.widget = *new_widget;
+            self.update_render_object();
+            self.dirty = true;
+        }
+    }
+
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+        if !self.dirty {
+            return Vec::new();
+        }
+        self.dirty = false;
+
+        // Update render object
+        self.update_render_object();
+
+        // Return all child widgets to be mounted/updated by ElementTree
+        let children = self.widget.children();
+        children
+            .iter()
+            .enumerate()
+            .map(|(slot, child)| (self.id, dyn_clone::clone_box(child.as_ref()), slot))
+            .collect()
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    fn lifecycle(&self) -> ElementLifecycle {
+        self.lifecycle
+    }
+
+    fn deactivate(&mut self) {
+        self.lifecycle = ElementLifecycle::Inactive;
+        // Note: children stay attached but inactive
+        // Will be unmounted if not reactivated before frame end
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = ElementLifecycle::Active;
+        // Element is being reinserted into tree (GlobalKey reparenting)
+        self.dirty = true; // Mark for rebuild in new location
+    }
+
+    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        Box::new(self.children.iter().copied())
+    }
+
+    fn set_tree_ref(&mut self, tree: Arc<RwLock<ElementTree>>) {
+        self.tree = Some(tree);
+    }
+
+    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
+        None // Multi-child elements don't use this method
+    }
+
+    fn set_child_after_mount(&mut self, _child_id: ElementId) {
+        // Multi-child elements use set_children or add_child instead
+    }
+
+    fn widget_type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<W>()
+    }
+
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
+        self.render_object.as_ref().map(|ro| ro.as_ref())
+    }
+
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
+        self.render_object.as_mut().map(|ro| ro.as_mut())
+    }
+
+    fn did_change_dependencies(&mut self) {
+        // Default: do nothing
+    }
+
+    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+        // Multi-child slot updates are handled by update_children algorithm
+    }
+
+    fn forget_child(&mut self, child_id: ElementId) {
+        self.children.retain(|id| *id != child_id);
+    }
+}
+
+// ========== Implement Element for MultiChildRenderObjectElement (with associated types) ==========
+
+impl<W: MultiChildRenderObjectWidget> Element for MultiChildRenderObjectElement<W> {
+    type Widget = W;
+
+    fn update(&mut self, new_widget: W) {
+        // Zero-cost! No downcast needed!
+        self.widget = new_widget;
+        self.update_render_object();
+        self.dirty = true;
+    }
+
+    fn widget(&self) -> &W {
+        &self.widget
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,7 +555,7 @@ mod tests {
 
     impl crate::render::RenderObject for MockRenderFlex {
         type ParentData = ();
-        type Child = Box<dyn crate::AnyRenderObject>;
+        type Child = Box<dyn crate::DynRenderObject>;
 
         fn parent_data(&self) -> Option<&Self::ParentData> {
             None
@@ -561,7 +566,7 @@ mod tests {
         }
     }
 
-    impl crate::AnyRenderObject for MockRenderFlex {
+    impl crate::DynRenderObject for MockRenderFlex {
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
             self.size = constraints.smallest();
             self.needs_layout_flag = false;
@@ -594,9 +599,9 @@ mod tests {
             self.needs_paint_flag = true;
         }
 
-        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn crate::AnyRenderObject)) {}
+        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn crate::DynRenderObject)) {}
 
-        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn crate::AnyRenderObject)) {}
+        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn crate::DynRenderObject)) {}
     }
 
     // Mock child widget
@@ -604,7 +609,7 @@ mod tests {
     struct MockChildWidget;
 
     impl StatelessWidget for MockChildWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(MockChildWidget)
         }
     }
@@ -612,7 +617,7 @@ mod tests {
     // Mock parent widget (like Column)
     #[derive(Debug, Clone)]
     struct MockColumnWidget {
-        children: Vec<Box<dyn AnyWidget>>,
+        children: Vec<Box<dyn DynWidget>>,
     }
 
     impl Widget for MockColumnWidget {
@@ -624,15 +629,15 @@ mod tests {
     }
 
     impl RenderObjectWidget for MockColumnWidget {
-        fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
+        fn create_render_object(&self) -> Box<dyn crate::DynRenderObject> {
             Box::new(MockRenderFlex::new())
         }
 
-        fn update_render_object(&self, _render_object: &mut dyn crate::AnyRenderObject) {}
+        fn update_render_object(&self, _render_object: &mut dyn crate::DynRenderObject) {}
     }
 
     impl MultiChildRenderObjectWidget for MockColumnWidget {
-        fn children(&self) -> &[Box<dyn AnyWidget>] {
+        fn children(&self) -> &[Box<dyn DynWidget>] {
             &self.children
         }
     }
@@ -646,7 +651,8 @@ mod tests {
         assert!(element.parent.is_none());
         assert!(element.dirty);
         assert!(element.render_object.is_none());
-        assert!(element.children.is_empty());
+        assert!(element.children().is_empty());
+        assert_eq!(element.lifecycle, ElementLifecycle::Initial);
     }
 
     #[test]
@@ -662,37 +668,27 @@ mod tests {
 
         assert!(element.dirty);
         assert!(element.render_object.is_some());
+        assert_eq!(element.lifecycle, ElementLifecycle::Active);
     }
 
     #[test]
-    fn test_multi_child_element_render_object_creation() {
+    fn test_multi_child_element_children_method() {
         let widget = MockColumnWidget {
             children: vec![
-                Box::new(MockChildWidget),
-            ],
-        };
-        let mut element = MultiChildRenderObjectElement::new(widget);
-        element.mount(None, 0);
-
-        assert!(element.render_object_ref().is_some());
-    }
-
-    #[test]
-    fn test_multi_child_element_rebuild_returns_children() {
-        let widget = MockColumnWidget {
-            children: vec![
-                Box::new(MockChildWidget),
                 Box::new(MockChildWidget),
                 Box::new(MockChildWidget),
             ],
         };
         let mut element = MultiChildRenderObjectElement::new(widget);
-        element.mount(None, 0);
 
-        // Note: rebuild() requires tree reference to work properly
-        // Without tree, it returns empty Vec - this is expected
-        // This test verifies the element can be created and mounted
-        assert!(element.is_dirty());
+        let child_id1 = ElementId::new();
+        let child_id2 = ElementId::new();
+
+        element.set_children(SmallVec::from_vec(vec![child_id1, child_id2]));
+
+        // Test the new children() method (was children_ids)
+        let ids = element.children();
+        assert_eq!(ids, &[child_id1, child_id2]);
     }
 
     #[test]
@@ -709,11 +705,11 @@ mod tests {
         let child_id2 = ElementId::new();
 
         element.set_children(SmallVec::from_vec(vec![child_id1, child_id2]));
-        assert_eq!(element.children_ids(), &[child_id1, child_id2]);
+        assert_eq!(element.children(), &[child_id1, child_id2]);
 
         let taken = element.take_old_children();
         assert_eq!(taken.as_slice(), &[child_id1, child_id2]);
-        assert_eq!(element.children_ids().len(), 0);
+        assert_eq!(element.children().len(), 0);
     }
 
     #[test]
@@ -723,16 +719,16 @@ mod tests {
         };
         let mut element = MultiChildRenderObjectElement::new(widget);
 
-        assert_eq!(element.children_ids().len(), 0);
+        assert_eq!(element.children().len(), 0);
 
         let child_id = ElementId::new();
         element.add_child(child_id);
 
-        assert_eq!(element.children_ids(), &[child_id]);
+        assert_eq!(element.children(), &[child_id]);
     }
 
     #[test]
-    fn test_multi_child_element_child_ids() {
+    fn test_multi_child_element_children_iter() {
         let widget = MockColumnWidget {
             children: vec![
                 Box::new(MockChildWidget),
@@ -751,26 +747,28 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_child_element_update() {
+    fn test_multi_child_element_lifecycle_transitions() {
         let widget = MockColumnWidget {
             children: vec![Box::new(MockChildWidget)],
         };
         let mut element = MultiChildRenderObjectElement::new(widget);
+
+        // Initial -> Active
+        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
         element.mount(None, 0);
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
 
-        let new_widget = MockColumnWidget {
-            children: vec![
-                Box::new(MockChildWidget),
-                Box::new(MockChildWidget),
-                Box::new(MockChildWidget),
-            ],
-        };
-        element.update(new_widget);
+        // Active -> Inactive
+        element.deactivate();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Inactive);
 
-        assert!(element.dirty);
+        // Inactive -> Active
+        element.activate();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+        assert!(element.is_dirty());
 
-        // Note: rebuild() requires tree reference to actually mount children
-        // Without tree, rebuild returns empty Vec - this is expected behavior
-        // Full integration tests with tree are in separate test suite
+        // Active -> Defunct
+        element.unmount();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Defunct);
     }
 }

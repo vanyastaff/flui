@@ -8,8 +8,8 @@ use crate::foundation::Key;
 
 use crate::{ElementId, StatelessWidget, Context};
 use crate::tree::ElementTree;
-use super::{Element, AnyElement, ElementLifecycle};
-use crate::AnyWidget;
+use super::{Element, DynElement, ElementLifecycle};
+use crate::DynWidget;
 
 /// Element for StatelessWidget (calls build() to create child)
 pub struct ComponentElement<W: StatelessWidget> {
@@ -41,7 +41,7 @@ impl<W: StatelessWidget> ComponentElement<W> {
     /// Perform rebuild
     ///
     /// Returns list of children to mount: (parent_id, child_widget, slot)
-    fn perform_rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::AnyWidget>, usize)> {
+    fn perform_rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -92,9 +92,9 @@ impl<W: StatelessWidget> fmt::Debug for ComponentElement<W> {
     }
 }
 
-// ========== Implement AnyElement for ComponentElement ==========
+// ========== Implement DynElement for ComponentElement ==========
 
-impl<W: StatelessWidget> AnyElement for ComponentElement<W> {
+impl<W: StatelessWidget> DynElement for ComponentElement<W> {
     fn id(&self) -> ElementId {
         self.id
     }
@@ -104,7 +104,7 @@ impl<W: StatelessWidget> AnyElement for ComponentElement<W> {
     }
 
     fn key(&self) -> Option<&dyn Key> {
-        AnyWidget::key(&self.widget)
+        DynWidget::key(&self.widget)
     }
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
@@ -125,7 +125,7 @@ impl<W: StatelessWidget> AnyElement for ComponentElement<W> {
         }
     }
 
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         // Try to downcast to our widget type
         if let Ok(widget) = new_widget.downcast::<W>() {
             self.widget = *widget;
@@ -133,7 +133,7 @@ impl<W: StatelessWidget> AnyElement for ComponentElement<W> {
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         self.perform_rebuild()
     }
 
@@ -181,11 +181,11 @@ impl<W: StatelessWidget> AnyElement for ComponentElement<W> {
         std::any::TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // ComponentElement doesn't have RenderObject
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         None // ComponentElement doesn't have RenderObject
     }
 

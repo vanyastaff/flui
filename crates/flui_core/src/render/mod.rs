@@ -4,30 +4,30 @@
 
 use crate::ParentData;
 
-pub mod any_render_object;
+pub mod dyn_render_object;
 pub mod parent_data;
 pub mod widget;
 
-pub use any_render_object::AnyRenderObject;
+pub use dyn_render_object::DynRenderObject;
 
 /// RenderObject with associated types for zero-cost operations
 ///
 /// # Two-Trait Pattern
 ///
-/// - **AnyRenderObject** - Object-safe for `Box<dyn AnyRenderObject>` collections
+/// - **DynRenderObject** - Object-safe for `Box<dyn DynRenderObject>` collections
 /// - **RenderObject** - Zero-cost with associated types for concrete usage
 ///
 /// # Associated Types
 ///
 /// - `ParentData` - Concrete parent data type (use `()` if none)
-/// - `Child` - Child type: `()` (leaf), concrete type (single), or `Box<dyn AnyRenderObject>` (multi)
+/// - `Child` - Child type: `()` (leaf), concrete type (single), or `Box<dyn DynRenderObject>` (multi)
 ///
 /// # Example
 ///
 /// ```ignore
 /// impl RenderObject for RenderBox {
 ///     type ParentData = BoxParentData;
-///     type Child = Box<dyn AnyRenderObject>;
+///     type Child = Box<dyn DynRenderObject>;
 ///
 ///     fn parent_data(&self) -> Option<&Self::ParentData> {
 ///         self.parent_data.as_ref()
@@ -38,11 +38,11 @@ pub use any_render_object::AnyRenderObject;
 ///     }
 /// }
 /// ```
-pub trait RenderObject: AnyRenderObject + Sized {
+pub trait RenderObject: DynRenderObject + Sized {
     /// Parent data type (use `()` for none)
     type ParentData: ParentData;
 
-    /// Child type: `()`, concrete, or `Box<dyn AnyRenderObject>`
+    /// Child type: `()`, concrete, or `Box<dyn DynRenderObject>`
     type Child: Sized;
 
     /// Get parent data (zero-cost, no downcast)
@@ -52,8 +52,8 @@ pub trait RenderObject: AnyRenderObject + Sized {
     fn parent_data_mut(&mut self) -> Option<&mut Self::ParentData>;
 
     // Note: Phase 9 methods (dirty tracking, lifecycle, boundaries)
-    // are defined in AnyRenderObject trait and inherited automatically.
-    // RenderObject types implement them through AnyRenderObject.
+    // are defined in DynRenderObject trait and inherited automatically.
+    // RenderObject types implement them through DynRenderObject.
 }
 
 

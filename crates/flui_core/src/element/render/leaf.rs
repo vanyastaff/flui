@@ -2,22 +2,42 @@
 
 use std::fmt;
 
-use crate::{AnyElement, Element, ElementId, LeafRenderObjectWidget};
+use crate::{DynElement, Element, ElementId, LeafRenderObjectWidget};
 use super::super::ElementLifecycle;
-use crate::AnyWidget;
+use crate::DynWidget;
 use crate::foundation::Key;
 
 /// Element for RenderObjects with no children (optimized for leaf nodes)
+///
+/// LeafRenderObjectElement is a specialized element type for widgets that:
+/// - Create a RenderObject for layout and painting
+/// - Have NO children (e.g., Text, Image, Icon)
+/// - Are optimized for minimal memory overhead
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Text widget creates a LeafRenderObjectElement
+/// let text = Text::new("Hello");
+/// let element = text.into_element(); // LeafRenderObjectElement<Text>
+/// ```
+///
+/// # See Also
+///
+/// - [`SingleChildRenderObjectElement`] - For widgets with one child
+/// - [`MultiChildRenderObjectElement`] - For widgets with multiple children
 pub struct LeafRenderObjectElement<W: LeafRenderObjectWidget> {
     id: ElementId,
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
     lifecycle: ElementLifecycle,
-    render_object: Option<Box<dyn crate::AnyRenderObject>>,
+    render_object: Option<Box<dyn crate::DynRenderObject>>,
 }
 
 impl<W: LeafRenderObjectWidget> LeafRenderObjectElement<W> {
+    /// Creates a new leaf render object element
+    #[must_use]
     pub fn new(widget: W) -> Self {
         Self {
             id: ElementId::new(),
@@ -27,16 +47,6 @@ impl<W: LeafRenderObjectWidget> LeafRenderObjectElement<W> {
             lifecycle: ElementLifecycle::Initial,
             render_object: None,
         }
-    }
-
-    /// Get reference to the render object
-    pub fn render_object_ref(&self) -> Option<&dyn crate::AnyRenderObject> {
-        self.render_object.as_ref().map(|r| r.as_ref())
-    }
-
-    /// Get mutable reference to the render object
-    pub fn render_object_mut_ref(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
-        self.render_object.as_mut().map(|r| r.as_mut())
     }
 
     /// Initialize the render object
@@ -61,14 +71,15 @@ impl<W: LeafRenderObjectWidget> fmt::Debug for LeafRenderObjectElement<W> {
             .field("widget_type", &std::any::type_name::<W>())
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
+            .field("lifecycle", &self.lifecycle)
             .field("has_render_object", &self.render_object.is_some())
             .finish()
     }
 }
 
-// ========== Implement AnyElement for LeafRenderObjectElement ==========
+// ========== Implement DynElement for LeafRenderObjectElement ==========
 
-impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
+impl<W: LeafRenderObjectWidget> DynElement for LeafRenderObjectElement<W> {
     fn id(&self) -> ElementId {
         self.id
     }
@@ -78,7 +89,7 @@ impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
     }
 
     fn key(&self) -> Option<&dyn Key> {
-        AnyWidget::key(&self.widget)
+        DynWidget::key(&self.widget)
     }
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
@@ -94,7 +105,7 @@ impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
         self.render_object = None;
     }
 
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         if let Ok(new_widget) = new_widget.downcast::<W>() {
             self.widget = *new_widget;
             self.update_render_object();
@@ -102,7 +113,7 @@ impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -158,11 +169,11 @@ impl<W: LeafRenderObjectWidget> AnyElement for LeafRenderObjectElement<W> {
         std::any::TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         self.render_object.as_ref().map(|ro| ro.as_ref())
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         self.render_object.as_mut().map(|ro| ro.as_mut())
     }
 
@@ -240,7 +251,7 @@ mod tests {
         }
     }
 
-    impl crate::AnyRenderObject for MockRenderText {
+    impl crate::DynRenderObject for MockRenderText {
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
             self.size = constraints.smallest();
             self.needs_layout_flag = false;
@@ -273,9 +284,9 @@ mod tests {
             self.needs_paint_flag = true;
         }
 
-        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn crate::AnyRenderObject)) {}
+        fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn crate::DynRenderObject)) {}
 
-        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn crate::AnyRenderObject)) {}
+        fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn crate::DynRenderObject)) {}
     }
 
     // Mock leaf widget (like Text)
@@ -293,11 +304,11 @@ mod tests {
     }
 
     impl RenderObjectWidget for MockTextWidget {
-        fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
+        fn create_render_object(&self) -> Box<dyn crate::DynRenderObject> {
             Box::new(MockRenderText::new(self.text.clone()))
         }
 
-        fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
+        fn update_render_object(&self, render_object: &mut dyn crate::DynRenderObject) {
             if let Some(text) = render_object.downcast_mut::<MockRenderText>() {
                 text.set_text(self.text.clone());
             }
@@ -315,6 +326,7 @@ mod tests {
         assert!(element.parent.is_none());
         assert!(element.dirty);
         assert!(element.render_object.is_none());
+        assert_eq!(element.lifecycle, ElementLifecycle::Initial);
     }
 
     #[test]
@@ -327,6 +339,7 @@ mod tests {
 
         assert!(element.dirty);
         assert!(element.render_object.is_some());
+        assert_eq!(element.lifecycle, ElementLifecycle::Active);
     }
 
     #[test]
@@ -337,7 +350,7 @@ mod tests {
         let mut element = LeafRenderObjectElement::new(widget);
         element.mount(None, 0);
 
-        let render_object = element.render_object_ref().unwrap();
+        let render_object = element.render_object().unwrap();
         let text = render_object.downcast_ref::<MockRenderText>().unwrap();
         assert_eq!(text.text, "Hello");
     }
@@ -355,7 +368,7 @@ mod tests {
         };
         element.update(new_widget);
 
-        let render_object = element.render_object_ref().unwrap();
+        let render_object = element.render_object().unwrap();
         let text = render_object.downcast_ref::<MockRenderText>().unwrap();
         assert_eq!(text.text, "World");
     }
@@ -383,6 +396,7 @@ mod tests {
 
         element.unmount();
         assert!(element.render_object.is_none());
+        assert_eq!(element.lifecycle, ElementLifecycle::Defunct);
     }
 
     #[test]
@@ -394,5 +408,31 @@ mod tests {
 
         // Leaf elements have no children - verify via children_iter
         assert_eq!(element.children_iter().count(), 0);
+    }
+
+    #[test]
+    fn test_leaf_element_lifecycle_transitions() {
+        let widget = MockTextWidget {
+            text: "Hello".to_string(),
+        };
+        let mut element = LeafRenderObjectElement::new(widget);
+
+        // Initial -> Active
+        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
+        element.mount(None, 0);
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+
+        // Active -> Inactive
+        element.deactivate();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Inactive);
+
+        // Inactive -> Active (GlobalKey reparenting)
+        element.activate();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+        assert!(element.is_dirty()); // Marked dirty on activation
+
+        // Active -> Defunct
+        element.unmount();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Defunct);
     }
 }

@@ -34,7 +34,7 @@
 use std::any::Any;
 use std::fmt;
 
-use crate::element::AnyElement;
+use crate::element::DynElement;
 use crate::ElementId;
 use flui_types::Size;
 
@@ -67,7 +67,7 @@ pub trait Notification: Any + Send + Sync + fmt::Debug {
     ///
     /// Returns true to stop bubbling, false to continue.
     /// Default implementation continues bubbling.
-    fn visit_ancestor(&self, _element: &dyn AnyElement) -> bool {
+    fn visit_ancestor(&self, _element: &dyn DynElement) -> bool {
         false
     }
 }
@@ -78,7 +78,7 @@ pub trait Notification: Any + Send + Sync + fmt::Debug {
 /// Use `Notification` trait for implementing custom notifications.
 pub trait AnyNotification: Send + Sync + fmt::Debug {
     /// Called when visiting an ancestor element
-    fn visit_ancestor(&self, element: &dyn AnyElement) -> bool;
+    fn visit_ancestor(&self, element: &dyn DynElement) -> bool;
 
     /// Get notification as Any for downcasting
     fn as_any(&self) -> &dyn Any;
@@ -86,7 +86,7 @@ pub trait AnyNotification: Send + Sync + fmt::Debug {
 
 /// Blanket implementation of AnyNotification for all Notification types
 impl<T: Notification> AnyNotification for T {
-    fn visit_ancestor(&self, element: &dyn AnyElement) -> bool {
+    fn visit_ancestor(&self, element: &dyn DynElement) -> bool {
         Notification::visit_ancestor(self, element)
     }
 
@@ -217,7 +217,7 @@ mod tests {
         struct DummyWidget;
 
         impl StatelessWidget for DummyWidget {
-            fn build(&self, _context: &Context) -> Box<dyn crate::widget::AnyWidget> {
+            fn build(&self, _context: &Context) -> Box<dyn crate::widget::DynWidget> {
                 Box::new(DummyWidget)
             }
         }

@@ -7,10 +7,10 @@ use std::fmt;
 
 use crate::foundation::Key;
 
-use crate::{AnyElement, Element, ElementId};
+use crate::{DynElement, Element, ElementId};
 use crate::render::widget::RenderObjectWidget;
 use super::ElementLifecycle;
-use crate::AnyWidget;
+use crate::DynWidget;
 
 /// RenderObjectElement - for RenderObjectWidget
 ///
@@ -42,11 +42,11 @@ use crate::AnyWidget;
 /// impl RenderObjectWidget for MyBox {
 ///     type RenderObject = RenderBox;
 ///
-///     fn create_render_object(&self) -> Box<dyn crate::AnyRenderObject> {
+///     fn create_render_object(&self) -> Box<dyn crate::DynRenderObject> {
 ///         Box::new(RenderBox::new(self.width, self.height))
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut dyn crate::AnyRenderObject) {
+///     fn update_render_object(&self, render_object: &mut dyn crate::DynRenderObject) {
 ///         if let Some(box_obj) = render_object.downcast_mut::<RenderBox>() {
 ///             box_obj.set_size(self.width, self.height);
 ///         }
@@ -61,7 +61,7 @@ pub struct RenderObjectElement<W: RenderObjectWidget> {
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
-    render_object: Option<Box<dyn crate::AnyRenderObject>>,
+    render_object: Option<Box<dyn crate::DynRenderObject>>,
 }
 
 impl<W: RenderObjectWidget> RenderObjectElement<W> {
@@ -77,12 +77,12 @@ impl<W: RenderObjectWidget> RenderObjectElement<W> {
     }
 
     /// Get reference to the render object
-    pub fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    pub fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         self.render_object.as_ref().map(|r| r.as_ref())
     }
 
     /// Get mutable reference to the render object
-    pub fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    pub fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         self.render_object.as_mut().map(|r| r.as_mut())
     }
 
@@ -114,9 +114,9 @@ impl<W: RenderObjectWidget> fmt::Debug for RenderObjectElement<W> {
     }
 }
 
-// ========== Implement AnyElement for RenderObjectElement ==========
+// ========== Implement DynElement for RenderObjectElement ==========
 
-impl<W: RenderObjectWidget> AnyElement for RenderObjectElement<W> {
+impl<W: RenderObjectWidget> DynElement for RenderObjectElement<W> {
     fn id(&self) -> ElementId {
         self.id
     }
@@ -126,7 +126,7 @@ impl<W: RenderObjectWidget> AnyElement for RenderObjectElement<W> {
     }
 
     fn key(&self) -> Option<&dyn Key> {
-        AnyWidget::key(&self.widget)
+        DynWidget::key(&self.widget)
     }
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
@@ -140,7 +140,7 @@ impl<W: RenderObjectWidget> AnyElement for RenderObjectElement<W> {
         self.render_object = None;
     }
 
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         if let Ok(widget) = new_widget.downcast::<W>() {
             self.widget = *widget;
             self.update_render_object();
@@ -148,7 +148,7 @@ impl<W: RenderObjectWidget> AnyElement for RenderObjectElement<W> {
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -202,11 +202,11 @@ impl<W: RenderObjectWidget> AnyElement for RenderObjectElement<W> {
         std::any::TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         self.render_object.as_ref().map(|ro| ro.as_ref())
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         self.render_object.as_mut().map(|ro| ro.as_mut())
     }
 

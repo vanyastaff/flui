@@ -15,7 +15,7 @@ Successfully implemented the two-trait pattern (AnyElement + Element with associ
 
 ### 1. Core Trait Architecture
 
-- ✅ Created `AnyElement` trait in [element/any_element.rs](../crates/flui_core/src/element/any_element.rs)
+- ✅ Created `AnyElement` trait in [element/any_element.rs](../crates/flui_core/src/element/dyn_element.rs)
   - Object-safe base trait with all lifecycle methods
   - Includes `update_any()` for type-erased updates
   - Supports downcasting via `downcast-rs`

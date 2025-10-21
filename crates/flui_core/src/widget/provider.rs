@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::{AnyWidget, Element, Widget, AnyElement as _};
+use crate::{DynWidget, Element, Widget, DynElement as _};
 use crate::context::dependency::DependencyTracker;
 
 /// Propagates data down the tree (dependents rebuild when data changes)
@@ -112,7 +112,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
             return;
         }
 
-        let dependent_count = self.dependencies.dependent_count();
+        let dependent_count = self.dependencies.len();
         tracing::info!(
             "InheritedElement({:?}): Notifying {} dependents",
             self.id,
@@ -154,8 +154,10 @@ impl<W: InheritedWidget> InheritedElement<W> {
     }
 
     /// Get count of dependents (Phase 6)
+    #[must_use]
+    #[inline]
     pub fn dependent_count(&self) -> usize {
-        self.dependencies.dependent_count()
+        self.dependencies.len()
     }
 }
 
@@ -187,13 +189,13 @@ impl<W: InheritedWidget> fmt::Debug for InheritedElement<W> {
 /// #[derive(Debug, Clone)]
 /// struct Theme {
 ///     color: Color,
-///     child: Box<dyn AnyWidget>,
+///     child: Box<dyn DynWidget>,
 /// }
 ///
 /// impl InheritedWidget for Theme {
 ///     type Data = Color;
 ///     fn data(&self) -> &Color { &self.color }
-///     fn child(&self) -> &dyn AnyWidget { &*self.child }
+///     fn child(&self) -> &dyn DynWidget { &*self.child }
 ///     fn update_should_notify(&self, old: &Self) -> bool {
 ///         self.color != old.color
 ///     }
@@ -214,9 +216,9 @@ macro_rules! impl_widget_for_inherited {
     };
 }
 
-// ========== Implement AnyElement for InheritedElement ==========
+// ========== Implement DynElement for InheritedElement ==========
 
-impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyElement for InheritedElement<W> {
+impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::DynElement for InheritedElement<W> {
     fn id(&self) -> crate::ElementId {
         self.id
     }
@@ -246,7 +248,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
         self.dependencies.clear();
     }
 
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         // Try to downcast to our widget type
         if let Ok(widget) = new_widget.downcast::<W>() {
             // Phase 6: Use notify_clients for dependency tracking
@@ -262,7 +264,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(crate::ElementId, Box<dyn crate::AnyWidget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(crate::ElementId, Box<dyn crate::DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -270,13 +272,13 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
 
         // InheritedWidget just wraps its child widget
         // We need to clone the child widget for mounting
-        // Since we only have &dyn AnyWidget, we'll need to use the widget's clone ability
+        // Since we only have &dyn DynWidget, we'll need to use the widget's clone ability
         let child_ref = self.widget.child();
 
         // Clone the widget - we need to upcast to Any first to get a Box
-        // This is a limitation - child() returns &dyn AnyWidget, but we need Box<dyn AnyWidget>
+        // This is a limitation - child() returns &dyn DynWidget, but we need Box<dyn DynWidget>
         // For now, we'll Box::new it by cloning the entire InheritedWidget
-        let child_widget: Box<dyn crate::AnyWidget> = dyn_clone::clone_box(child_ref);
+        let child_widget: Box<dyn crate::DynWidget> = dyn_clone::clone_box(child_ref);
 
         // Mark old child for unmounting
         self.child = None;
@@ -325,11 +327,11 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::AnyEleme
         std::any::TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // InheritedElement doesn't have RenderObject
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         None // InheritedElement doesn't have RenderObject
     }
 
@@ -406,7 +408,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> Element for Inh
 /// impl InheritedWidget for MyTheme {
 ///     type Data = Color;
 ///     fn data(&self) -> &Self::Data { &self.primary_color }
-///     fn child(&self) -> &dyn AnyWidget { /* ... */ }
+///     fn child(&self) -> &dyn DynWidget { /* ... */ }
 ///     fn update_should_notify(&self, old: &Self) -> bool { /* ... */ }
 /// }
 ///
@@ -424,7 +426,7 @@ macro_rules! impl_inherited_widget {
             }
         }
 
-        // AnyWidget is automatically implemented via the blanket impl
+        // DynWidget is automatically implemented via the blanket impl
         // Note: InheritedWidget::key() should be handled by implementing key() on the struct if needed
     };
 }
@@ -439,14 +441,14 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TestTheme {
         value: i32,
-        child: Box<dyn AnyWidget>,
+        child: Box<dyn DynWidget>,
     }
 
-    // Manual PartialEq implementation (can't derive for Box<dyn AnyWidget>)
+    // Manual PartialEq implementation (can't derive for Box<dyn DynWidget>)
     impl PartialEq for TestTheme {
         fn eq(&self, other: &Self) -> bool {
             self.value == other.value
-            // Note: we can't compare Box<dyn AnyWidget>, so we only compare value
+            // Note: we can't compare Box<dyn DynWidget>, so we only compare value
         }
     }
 
@@ -455,14 +457,14 @@ mod tests {
     struct ChildWidget;
 
     impl StatelessWidget for ChildWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(ChildWidget)
         }
     }
 
     // ProxyWidget implementation (required by InheritedWidget)
     impl crate::ProxyWidget for TestTheme {
-        fn child(&self) -> &dyn AnyWidget {
+        fn child(&self) -> &dyn DynWidget {
             &*self.child
         }
     }
@@ -577,7 +579,7 @@ mod tests {
     /// Integration test for dependency tracking with ElementTree
     #[test]
     fn test_inherited_widget_dependency_tracking() {
-        use crate::{AnyWidget, ElementTree, StatelessWidget};
+        use crate::{DynWidget, ElementTree, StatelessWidget};
         use std::sync::Arc;
         use parking_lot::RwLock;
 
@@ -586,7 +588,7 @@ mod tests {
         struct DependentWidget;
 
         impl StatelessWidget for DependentWidget {
-            fn build(&self, context: &Context) -> Box<dyn AnyWidget> {
+            fn build(&self, context: &Context) -> Box<dyn DynWidget> {
                 // Access the inherited widget - this should register dependency
                 if let Some(theme) = context.subscribe_to::<TestTheme>() {
                     assert_eq!(*theme.data(), 42);
@@ -605,7 +607,7 @@ mod tests {
         }
 
         impl StatelessWidget for ThemeWithChild {
-            fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+            fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
                 // This would normally create InheritedElement with DependentWidget as child
                 Box::new(DependentWidget)
             }
@@ -712,7 +714,7 @@ mod tests {
     /// Test Flutter-style of() and maybeOf() pattern
     #[test]
     fn test_flutter_style_of_pattern() {
-        use crate::{AnyWidget, ElementTree, StatelessWidget};
+        use crate::{DynWidget, ElementTree, StatelessWidget};
         use std::sync::Arc;
         use parking_lot::RwLock;
 
@@ -732,7 +734,7 @@ mod tests {
         struct FlutterStyleWidget;
 
         impl StatelessWidget for FlutterStyleWidget {
-            fn build(&self, context: &Context) -> Box<dyn AnyWidget> {
+            fn build(&self, context: &Context) -> Box<dyn DynWidget> {
                 // Test maybe_of (should return None when no theme)
                 assert!(TestTheme::maybe_of(context).is_none());
 

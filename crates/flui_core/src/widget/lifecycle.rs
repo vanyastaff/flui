@@ -3,6 +3,8 @@
 //! This module defines the StateLifecycle enum that tracks the lifecycle
 //! progression of State objects from creation to disposal.
 
+use std::fmt;
+
 /// State lifecycle progression
 ///
 /// Tracks the lifecycle state of a State object from creation to disposal.
@@ -16,12 +18,25 @@
 ///  new()    initState()  build()  dispose()
 /// ```
 ///
+/// # Ordering
+///
+/// The lifecycle has a natural ordering:
+/// `Created < Initialized < Ready < Defunct`
+///
+/// This allows comparisons like:
+/// ```rust,ignore
+/// if lifecycle >= StateLifecycle::Ready {
+///     // Safe to build
+/// }
+/// ```
+///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_core::StateLifecycle;
 ///
-/// let lifecycle = StateLifecycle::Created;
+/// let lifecycle = StateLifecycle::default();
+/// assert_eq!(lifecycle, StateLifecycle::Created);
 /// assert!(!lifecycle.is_mounted());
 /// assert!(!lifecycle.can_build());
 ///
@@ -29,16 +44,16 @@
 /// assert!(lifecycle.is_mounted());
 /// assert!(lifecycle.can_build());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum StateLifecycle {
     /// State object created but initState() not yet called
-    Created,
+    Created = 0,
     /// initState() called, ready to build
-    Initialized,
+    Initialized = 1,
     /// State is active and can build/rebuild
-    Ready,
+    Ready = 2,
     /// dispose() called, state is defunct and cannot be used
-    Defunct,
+    Defunct = 3,
 }
 
 impl StateLifecycle {
@@ -50,13 +65,15 @@ impl StateLifecycle {
     /// # Example
     ///
     /// ```rust,ignore
-    /// assert_eq!(StateLifecycle::Created.is_mounted(), false);
-    /// assert_eq!(StateLifecycle::Initialized.is_mounted(), true);
-    /// assert_eq!(StateLifecycle::Ready.is_mounted(), true);
-    /// assert_eq!(StateLifecycle::Defunct.is_mounted(), false);
+    /// assert!(!StateLifecycle::Created.is_mounted());
+    /// assert!(StateLifecycle::Initialized.is_mounted());
+    /// assert!(StateLifecycle::Ready.is_mounted());
+    /// assert!(!StateLifecycle::Defunct.is_mounted());
     /// ```
-    pub fn is_mounted(&self) -> bool {
-        matches!(self, StateLifecycle::Initialized | StateLifecycle::Ready)
+    #[must_use]
+    #[inline]
+    pub const fn is_mounted(&self) -> bool {
+        matches!(self, Self::Initialized | Self::Ready)
     }
 
     /// Check if state can build
@@ -67,13 +84,57 @@ impl StateLifecycle {
     /// # Example
     ///
     /// ```rust,ignore
-    /// assert_eq!(StateLifecycle::Created.can_build(), false);
-    /// assert_eq!(StateLifecycle::Initialized.can_build(), false);
-    /// assert_eq!(StateLifecycle::Ready.can_build(), true);
-    /// assert_eq!(StateLifecycle::Defunct.can_build(), false);
+    /// assert!(!StateLifecycle::Created.can_build());
+    /// assert!(!StateLifecycle::Initialized.can_build());
+    /// assert!(StateLifecycle::Ready.can_build());
+    /// assert!(!StateLifecycle::Defunct.can_build());
     /// ```
-    pub fn can_build(&self) -> bool {
-        matches!(self, StateLifecycle::Ready)
+    #[must_use]
+    #[inline]
+    pub const fn can_build(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
+
+    /// Check if state is defunct (disposed)
+    ///
+    /// Returns `true` only for `Defunct` state.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// assert!(!StateLifecycle::Ready.is_defunct());
+    /// assert!(StateLifecycle::Defunct.is_defunct());
+    /// ```
+    #[must_use]
+    #[inline]
+    pub const fn is_defunct(&self) -> bool {
+        matches!(self, Self::Defunct)
+    }
+
+    /// Get a human-readable name
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Created => "Created",
+            Self::Initialized => "Initialized",
+            Self::Ready => "Ready",
+            Self::Defunct => "Defunct",
+        }
+    }
+}
+
+impl Default for StateLifecycle {
+    /// Default lifecycle state is `Created`
+    ///
+    /// This represents a newly created state object before `init_state()` is called.
+    fn default() -> Self {
+        Self::Created
+    }
+}
+
+impl fmt::Display for StateLifecycle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -82,31 +143,79 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_state_lifecycle_is_mounted() {
-        assert_eq!(StateLifecycle::Created.is_mounted(), false);
-        assert_eq!(StateLifecycle::Initialized.is_mounted(), true);
-        assert_eq!(StateLifecycle::Ready.is_mounted(), true);
-        assert_eq!(StateLifecycle::Defunct.is_mounted(), false);
+    fn test_lifecycle_ordering() {
+        assert!(StateLifecycle::Created < StateLifecycle::Initialized);
+        assert!(StateLifecycle::Initialized < StateLifecycle::Ready);
+        assert!(StateLifecycle::Ready < StateLifecycle::Defunct);
     }
 
     #[test]
-    fn test_state_lifecycle_can_build() {
-        assert_eq!(StateLifecycle::Created.can_build(), false);
-        assert_eq!(StateLifecycle::Initialized.can_build(), false);
-        assert_eq!(StateLifecycle::Ready.can_build(), true);
-        assert_eq!(StateLifecycle::Defunct.can_build(), false);
+    fn test_lifecycle_comparison() {
+        let lifecycle = StateLifecycle::Ready;
+        assert!(lifecycle >= StateLifecycle::Initialized);
+        assert!(lifecycle < StateLifecycle::Defunct);
     }
 
     #[test]
-    fn test_state_lifecycle_equality() {
-        assert_eq!(StateLifecycle::Created, StateLifecycle::Created);
-        assert_ne!(StateLifecycle::Created, StateLifecycle::Ready);
+    fn test_is_mounted() {
+        assert!(!StateLifecycle::Created.is_mounted());
+        assert!(StateLifecycle::Initialized.is_mounted());
+        assert!(StateLifecycle::Ready.is_mounted());
+        assert!(!StateLifecycle::Defunct.is_mounted());
     }
 
     #[test]
-    fn test_state_lifecycle_clone() {
+    fn test_can_build() {
+        assert!(!StateLifecycle::Created.can_build());
+        assert!(!StateLifecycle::Initialized.can_build());
+        assert!(StateLifecycle::Ready.can_build());
+        assert!(!StateLifecycle::Defunct.can_build());
+    }
+
+    #[test]
+    fn test_is_defunct() {
+        assert!(!StateLifecycle::Created.is_defunct());
+        assert!(!StateLifecycle::Ready.is_defunct());
+        assert!(StateLifecycle::Defunct.is_defunct());
+    }
+
+    #[test]
+    fn test_default() {
+        assert_eq!(StateLifecycle::default(), StateLifecycle::Created);
+    }
+
+    #[test]
+    fn test_display() {
+        assert_eq!(StateLifecycle::Created.to_string(), "Created");
+        assert_eq!(StateLifecycle::Ready.to_string(), "Ready");
+        assert_eq!(StateLifecycle::Defunct.to_string(), "Defunct");
+    }
+
+    #[test]
+    fn test_as_str() {
+        assert_eq!(StateLifecycle::Created.as_str(), "Created");
+        assert_eq!(StateLifecycle::Initialized.as_str(), "Initialized");
+        assert_eq!(StateLifecycle::Ready.as_str(), "Ready");
+        assert_eq!(StateLifecycle::Defunct.as_str(), "Defunct");
+    }
+
+    #[test]
+    fn test_clone_copy() {
         let lifecycle = StateLifecycle::Ready;
         let cloned = lifecycle;
         assert_eq!(lifecycle, cloned);
+    }
+
+    #[test]
+    fn test_hash() {
+        use std::collections::HashSet;
+
+        let mut set = HashSet::new();
+        set.insert(StateLifecycle::Created);
+        set.insert(StateLifecycle::Ready);
+
+        assert!(set.contains(&StateLifecycle::Created));
+        assert!(set.contains(&StateLifecycle::Ready));
+        assert!(!set.contains(&StateLifecycle::Initialized));
     }
 }

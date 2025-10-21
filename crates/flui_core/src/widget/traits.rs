@@ -1,7 +1,7 @@
 //! Core Widget trait definitions
 //!
 //! This module defines the fundamental traits that make up the widget system:
-//! - AnyWidget: Object-safe base trait for heterogeneous collections
+//! - DynWidget: Object-safe base trait for heterogeneous collections
 //! - Widget: Trait with associated types for zero-cost element creation
 //! - StatelessWidget: Immutable widgets that build once
 //! - StatefulWidget: Widgets with mutable state
@@ -13,20 +13,20 @@ use std::fmt;
 use downcast_rs::{impl_downcast, DowncastSync};
 
 use crate::context::Context;
-use crate::element::{AnyElement, ComponentElement, Element};
-use crate::widget::any_widget::AnyWidget;
+use crate::element::{DynElement, ComponentElement, Element};
+use crate::widget::DynWidget;
 
 /// Widget - Trait with associated types for zero-cost element creation
 ///
-/// This trait extends `AnyWidget` with associated types, enabling zero-cost
+/// This trait extends `DynWidget` with associated types, enabling zero-cost
 /// element creation when working with concrete widget types.
 ///
 /// # Two-Trait Pattern
 ///
-/// - **AnyWidget** - Object-safe, for `Box<dyn AnyWidget>` collections
+/// - **DynWidget** - Object-safe, for `Box<dyn DynWidget>` collections
 /// - **Widget** (this trait) - Has associated types, for concrete types
 ///
-/// All types implementing `Widget` automatically implement `AnyWidget` via a blanket impl.
+/// All types implementing `Widget` automatically implement `DynWidget` via a blanket impl.
 ///
 /// # Three Types of Widgets
 ///
@@ -50,9 +50,9 @@ use crate::widget::any_widget::AnyWidget;
 ///     }
 /// }
 ///
-/// // AnyWidget is automatically implemented via blanket impl
+/// // DynWidget is automatically implemented via blanket impl
 /// ```
-pub trait Widget: AnyWidget + Sized + Clone {
+pub trait Widget: DynWidget + Sized + Clone {
     /// Associated element type
     ///
     /// This allows the compiler to know the exact element type at compile time,
@@ -62,17 +62,17 @@ pub trait Widget: AnyWidget + Sized + Clone {
     /// Consume self and create element (zero-cost)
     ///
     /// This moves the widget into the element without boxing or dynamic dispatch.
-    /// For trait objects, use `AnyWidget::create_element()` instead.
+    /// For trait objects, use `DynWidget::create_element()` instead.
     fn into_element(self) -> Self::Element;
 }
 
-/// Blanket implementation of AnyWidget for all Widget types
+/// Blanket implementation of DynWidget for all Widget types
 ///
-/// This allows any `Widget` implementation to be used as `Box<dyn AnyWidget>`.
+/// This allows any `Widget` implementation to be used as `Box<dyn DynWidget>`.
 /// The `create_element()` method clones the widget and calls `into_element()`.
-impl<T: Widget> AnyWidget for T {
-    fn create_element(&self) -> Box<dyn AnyElement> {
-        // Clone self and convert to concrete element, then box it as AnyElement
+impl<T: Widget> DynWidget for T {
+    fn create_element(&self) -> Box<dyn DynElement> {
+        // Clone self and convert to concrete element, then box it as DynElement
         Box::new(self.clone().into_element())
     }
 
@@ -80,7 +80,7 @@ impl<T: Widget> AnyWidget for T {
         std::any::type_name::<Self>()
     }
 
-    fn can_update(&self, other: &dyn AnyWidget) -> bool {
+    fn can_update(&self, other: &dyn DynWidget) -> bool {
         // Same type required
         if self.type_id() != other.type_id() {
             return false;
@@ -109,7 +109,7 @@ impl<T: Widget> AnyWidget for T {
 /// }
 ///
 /// impl StatelessWidget for Greeting {
-///     fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+///     fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
 ///         Box::new(Text::new(format!("Hello, {}!", self.name)))
 ///     }
 /// }
@@ -119,7 +119,7 @@ pub trait StatelessWidget: fmt::Debug + Clone + Send + Sync + 'static {
     ///
     /// Called when the widget is first built or when it needs to rebuild.
     /// Should return the root widget of the child tree.
-    fn build(&self, context: &Context) -> Box<dyn AnyWidget>;
+    fn build(&self, context: &Context) -> Box<dyn DynWidget>;
 }
 
 /// Automatically implement Widget for all StatelessWidgets
@@ -131,7 +131,7 @@ impl<T: StatelessWidget> Widget for T {
     }
 }
 
-// AnyWidget is automatically implemented for all Widget types via the blanket impl above
+// DynWidget is automatically implemented for all Widget types via the blanket impl above
 
 /// StatefulWidget - widget with mutable state
 ///
@@ -161,7 +161,7 @@ impl<T: StatelessWidget> Widget for T {
 /// }
 ///
 /// impl State for CounterState {
-///     fn build(&mut self, _context: &Context) -> Box<dyn AnyWidget> {
+///     fn build(&mut self, _context: &Context) -> Box<dyn DynWidget> {
 ///         Box::new(Text::new(format!("Count: {}", self.count)))
 ///     }
 /// }
@@ -283,7 +283,7 @@ pub trait State: DowncastSync + fmt::Debug {
     ///
     /// Called whenever the state needs to rebuild. Should return the root widget
     /// of the child tree.
-    fn build(&mut self, context: &Context) -> Box<dyn AnyWidget>;
+    fn build(&mut self, context: &Context) -> Box<dyn DynWidget>;
 
     /// Called when state is first created
     ///
@@ -374,11 +374,34 @@ pub trait State: DowncastSync + fmt::Debug {
     fn dispose(&mut self) {}
 
     /// Check if state is mounted (managed by StatefulElement)
-    fn mounted(&self) -> bool {
-        true
+    ///
+    /// Returns `true` if the state is currently in the tree and can call setState.
+    /// Returns `false` if the state has not been mounted yet or has been disposed.
+    ///
+    /// # Naming Convention
+    ///
+    /// This method follows the Rust API Guidelines (C-QUESTION) by using the
+    /// `is_*` prefix for boolean predicates.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if self.is_mounted() {
+    ///     self.set_state(|| {
+    ///         self.counter += 1;
+    ///     });
+    /// }
+    /// ```
+    #[must_use]
+    fn is_mounted(&self) -> bool {
+        true // Default for backward compatibility
     }
 
     /// Get lifecycle state (managed by framework)
+    ///
+    /// Returns the current lifecycle state of this State object.
+    /// The default implementation returns `Ready` for backward compatibility.
+    #[must_use]
     fn lifecycle(&self) -> crate::StateLifecycle {
         crate::StateLifecycle::Ready
     }

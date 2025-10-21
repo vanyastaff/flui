@@ -5,8 +5,8 @@
 //!
 //! # Design Pattern: Two-Trait Approach
 //!
-//! Flui uses a two-trait pattern for elements (similar to Widget/AnyWidget):
-//! - **AnyElement** - Object-safe base trait for `Box<dyn AnyElement>` collections
+//! Flui uses a two-trait pattern for elements (similar to Widget/DynWidget):
+//! - **DynElement** - Object-safe base trait for `Box<dyn DynElement>` collections
 //! - **Element** - Extended trait with associated types for zero-cost concrete usage
 //!
 //! This allows:
@@ -16,17 +16,17 @@
 
 
 
-use super::any_element::AnyElement;
+use super::dyn_element::DynElement;
 
 /// Extended Element trait with associated types
 ///
-/// This trait extends AnyElement with associated types for zero-cost concrete operations.
-/// All types implementing Element automatically implement AnyElement via a blanket impl.
+/// This trait extends DynElement with associated types for zero-cost concrete operations.
+/// All types implementing Element automatically implement DynElement via a blanket impl.
 ///
 /// # Design Pattern
 ///
-/// Similar to Widget/AnyWidget split:
-/// - **AnyElement** (object-safe) → `Box<dyn AnyElement>` for heterogeneous storage
+/// Similar to Widget/DynWidget split:
+/// - **DynElement** (object-safe) → `Box<dyn DynElement>` for heterogeneous storage
 /// - **Element** (with associated types) → Zero-cost for concrete types
 ///
 /// # Associated Types
@@ -66,7 +66,7 @@ use super::any_element::AnyElement;
 ///     }
 /// }
 /// ```
-pub trait Element: AnyElement + Sized {
+pub trait Element: DynElement + Sized {
     /// The concrete widget type this element holds
     ///
     /// This associated type enables zero-cost widget updates and type-safe
@@ -75,7 +75,7 @@ pub trait Element: AnyElement + Sized {
 
     /// Update this element with a new widget configuration (zero-cost)
     ///
-    /// This is the type-safe version of `AnyElement::update_any()`.
+    /// This is the type-safe version of `DynElement::update_any()`.
     /// Use this for concrete element types to avoid runtime downcasts.
     ///
     /// # Parameters
@@ -90,7 +90,7 @@ pub trait Element: AnyElement + Sized {
 }
 
 // OldElement trait has been removed. All element types now use the new Element trait
-// with associated types (Element + AnyElement pattern).
+// with associated types (Element + DynElement pattern).
 
 // Note: Element trait is not dyn-compatible (requires Sized).
-// Downcasting is handled by AnyElement instead (see any_element.rs).
+// Downcasting is handled by DynElement instead (see dyn_element.rs).

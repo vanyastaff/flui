@@ -2,7 +2,7 @@
 //!
 //! This tests Phase 1: Key System Enhancement - GlobalKey methods
 
-use flui_core::{AnyWidget, BuildOwner, Context, StatelessWidget};
+use flui_core::{DynWidget, BuildOwner, Context, StatelessWidget};
 use flui_core::foundation::key::GlobalKey;
 
 // ============================================================================
@@ -16,7 +16,7 @@ struct TestWidget {
 }
 
 impl StatelessWidget for TestWidget {
-    fn build(&self, _ctx: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, _ctx: &Context) -> Box<dyn DynWidget> {
         Box::new(LeafWidget { value: self.text.clone() })
     }
 }
@@ -27,7 +27,7 @@ struct LeafWidget {
 }
 
 impl StatelessWidget for LeafWidget {
-    fn build(&self, _ctx: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, _ctx: &Context) -> Box<dyn DynWidget> {
         Box::new(self.clone())
     }
 }

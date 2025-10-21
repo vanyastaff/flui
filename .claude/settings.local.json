@@ -4,7 +4,20 @@
       "Bash(cat crates/flui_core/src/foundation/mod.rs)",
       "Bash(cargo check --workspace)",
       "Bash(cargo check -p flui_core --lib)",
-      "Bash(grep -B 3 \"unused import: \\`Widget\\`\")"
+      "Bash(grep -B 3 \"unused import: \\`Widget\\`\")",
+      "Bash(cargo clippy -p flui_core --lib -- -D warnings)",
+      "Bash(cargo test -p flui_core --lib foundation)",
+      "Bash(cargo clippy -p flui_core --lib)",
+      "Bash(find crates/flui_core/src -name \"*.rs\" -type f -exec sed -i 's/\\bAnyElement\\b/DynElement/g' {} +)",
+      "Bash(find crates/flui_core/src -name \"*.rs\" -type f -exec sed -i 's/\\bAnyWidget\\b/DynWidget/g' {} +)",
+      "Bash(cargo build -p flui_core --lib)",
+      "Bash(cargo test -p flui_core --lib)",
+      "Bash(find crates/flui_core/tests -name \"*.rs\" -type f -exec sed -i 's/AnyElement/DynElement/g' {} +)",
+      "Bash(find crates/flui_core/tests -name \"*.rs\" -type f -exec sed -i 's/AnyWidget/DynWidget/g' {} +)",
+      "Bash(find crates/flui_core/tests -name \"*.rs\" -type f -exec sed -i 's/AnyRenderObject/DynRenderObject/g' {} +)",
+      "Bash(cargo doc -p flui_core --lib --no-deps)",
+      "Bash(git remote add origin https://github.com/vanyastaff/flui.git)",
+      "Bash(git add -A)"
     ],
     "deny": [],
     "ask": []

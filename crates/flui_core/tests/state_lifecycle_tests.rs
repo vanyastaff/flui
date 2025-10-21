@@ -3,7 +3,7 @@
 //! Tests State lifecycle tracking, validation, and transitions.
 
 use flui_core::{
-    AnyElement, AnyWidget, Context, State, StateLifecycle, StatefulElement, StatefulWidget, Widget,
+    DynElement, DynWidget, Context, State, StateLifecycle, StatefulElement, StatefulWidget, Widget,
 };
 use std::sync::{Arc, Mutex};
 
@@ -45,7 +45,7 @@ struct CounterState {
 }
 
 impl State for CounterState {
-    fn build(&mut self, _context: &Context) -> Box<dyn AnyWidget> {
+    fn build(&mut self, _context: &Context) -> Box<dyn DynWidget> {
         self.log_event("build");
         Box::new(CounterWidget { initial: self.count })
     }

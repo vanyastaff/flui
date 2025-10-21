@@ -1,21 +1,21 @@
-//! AnyElement - Object-safe base trait for heterogeneous element collections
+//! DynElement - Object-safe base trait for heterogeneous element collections
 //!
-//! This module defines the `AnyElement` trait, which is object-safe and allows
-//! elements to be stored in heterogeneous collections like `Vec<Box<dyn AnyElement>>`.
+//! This module defines the `DynElement` trait, which is object-safe and allows
+//! elements to be stored in heterogeneous collections like `Vec<Box<dyn DynElement>>`.
 //!
-//! # Why AnyElement?
+//! # Why DynElement?
 //!
 //! The `Element` trait has associated types, which makes it not object-safe.
 //! This means you cannot create `Box<dyn Element>` or `Vec<Box<dyn Element>>`.
 //!
-//! `AnyElement` solves this by being object-safe - it doesn't have associated types.
-//! Any type that implements `Element` automatically implements `AnyElement` via a blanket impl.
+//! `DynElement` solves this by being object-safe - it doesn't have associated types.
+//! Any type that implements `Element` automatically implements `DynElement` via a blanket impl.
 //!
 //! # Usage
 //!
 //! ```rust,ignore
 //! // For heterogeneous collections (element tree storage)
-//! let elements: Vec<Box<dyn AnyElement>> = vec![
+//! let elements: Vec<Box<dyn DynElement>> = vec![
 //!     Box::new(ComponentElement::new(widget1)),
 //!     Box::new(StatefulElement::new(widget2)),
 //! ];
@@ -33,34 +33,39 @@ use downcast_rs::{impl_downcast, Downcast};
 use crate::foundation::Key;
 use parking_lot::RwLock;
 
-use crate::{AnyWidget, ElementId, ElementTree};
+use crate::{DynWidget, ElementId, ElementTree};
 use super::ElementLifecycle;
 
 /// Object-safe base trait for all elements
 ///
 /// This trait is automatically implemented for all types that implement `Element`.
-/// It's used when you need trait objects (`Box<dyn AnyElement>`) for heterogeneous
+/// It's used when you need trait objects (`Box<dyn DynElement>`) for heterogeneous
 /// element collections (like the element tree).
 ///
 /// # Design Pattern
 ///
 /// Flui uses a two-trait pattern:
-/// - **AnyElement** (this trait) - Object-safe, for `Box<dyn AnyElement>` collections
+/// - **DynElement** (this trait) - Object-safe, for `Box<dyn DynElement>` collections
 /// - **Element** - Has associated types, for zero-cost concrete usage
+///
+/// # Naming Convention
+///
+/// The `Dyn` prefix indicates this is the object-safe (dynamic dispatch) version,
+/// avoiding confusion with `std::any::Any`.
 ///
 /// # When to Use
 ///
-/// - Use `Box<dyn AnyElement>` when you need to store elements of different types
+/// - Use `Box<dyn DynElement>` when you need to store elements of different types
 /// - Use `Element` trait bound when working with concrete element types
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// struct ElementTree {
-///     elements: HashMap<ElementId, Box<dyn AnyElement>>,  // Heterogeneous storage
+///     elements: HashMap<ElementId, Box<dyn DynElement>>,  // Heterogeneous storage
 /// }
 /// ```
-pub trait AnyElement: Downcast + fmt::Debug + Send + Sync {
+pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
     // ========== Identity & Hierarchy ==========
 
     /// Get the element's unique ID
@@ -82,15 +87,15 @@ pub trait AnyElement: Downcast + fmt::Debug + Send + Sync {
 
     /// Update this element with a new widget configuration (type-erased)
     ///
-    /// This is the object-safe version that takes `Box<dyn AnyWidget>`.
+    /// This is the object-safe version that takes `Box<dyn DynWidget>`.
     /// For zero-cost updates with concrete types, use `Element::update()`.
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>);
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>);
 
     /// Rebuild this element's subtree
     ///
     /// Returns a list of (parent_id, child_widget, slot) tuples for children
     /// that need to be mounted.
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)>;
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)>;
 
     // ========== Dirty State Management ==========
 
@@ -133,10 +138,10 @@ pub trait AnyElement: Downcast + fmt::Debug + Send + Sync {
     fn widget_type_id(&self) -> TypeId;
 
     /// Get RenderObject if this element has one
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject>;
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject>;
 
     /// Get mutable RenderObject if this element has one
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject>;
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject>;
 
     // ========== Advanced Lifecycle ==========
 
@@ -208,5 +213,5 @@ pub trait AnyElement: Downcast + fmt::Debug + Send + Sync {
     }
 }
 
-// Enable downcasting for AnyElement trait objects
-impl_downcast!(AnyElement);
+// Enable downcasting for DynElement trait objects
+impl_downcast!(DynElement);

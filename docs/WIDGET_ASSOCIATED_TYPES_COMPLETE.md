@@ -293,5 +293,5 @@ Potential future improvements:
 ## References
 
 - Design Document: [`docs/WIDGET_ASSOCIATED_TYPES_DESIGN.md`](./WIDGET_ASSOCIATED_TYPES_DESIGN.md)
-- AnyWidget Implementation: [`crates/flui_core/src/widget/any_widget.rs`](../crates/flui_core/src/widget/any_widget.rs)
+- AnyWidget Implementation: [`crates/flui_core/src/widget/any_widget.rs`](../crates/flui_core/src/widget/dyn_widget.rs)
 - Widget Trait: [`crates/flui_core/src/widget/traits.rs`](../crates/flui_core/src/widget/traits.rs)

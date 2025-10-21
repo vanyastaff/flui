@@ -8,7 +8,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::{
-    AnyElement, AnyRenderObject, AnyWidget, Element, ElementId, ElementLifecycle, ElementTree,
+    DynElement, DynRenderObject, DynWidget, Element, ElementId, ElementLifecycle, ElementTree,
     ParentData, ProxyWidget,
 };
 
@@ -24,7 +24,7 @@ pub trait ParentDataWidget<T: ParentData>: ProxyWidget {
     /// Apply parent data to the child's RenderObject
     ///
     /// This is called when the RenderObject is created or when this widget updates.
-    fn apply_parent_data(&self, render_object: &mut dyn AnyRenderObject);
+    fn apply_parent_data(&self, render_object: &mut dyn DynRenderObject);
 
     /// Debug: Typical ancestor widget class that should contain this widget
     ///
@@ -136,9 +136,9 @@ where
     }
 }
 
-// ========== Implement AnyElement for ParentDataElement ==========
+// ========== Implement DynElement for ParentDataElement ==========
 
-impl<W, T> AnyElement for ParentDataElement<W, T>
+impl<W, T> DynElement for ParentDataElement<W, T>
 where
     W: ParentDataWidget<T> + crate::Widget<Element = ParentDataElement<W, T>>,
     T: ParentData,
@@ -172,7 +172,7 @@ where
         self.lifecycle = ElementLifecycle::Defunct;
     }
 
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         // Try to downcast to our widget type
         if let Ok(new_widget_typed) = new_widget.downcast::<W>() {
             self.widget = *new_widget_typed;
@@ -183,14 +183,14 @@ where
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
         self.dirty = false;
 
         // ParentDataWidget just wraps its child widget
-        let child_widget: Box<dyn AnyWidget> = dyn_clone::clone_box(self.widget.child());
+        let child_widget: Box<dyn DynWidget> = dyn_clone::clone_box(self.widget.child());
 
         // Mark old child for unmounting
         self.child = None;
@@ -242,11 +242,11 @@ where
         TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn AnyRenderObject> {
+    fn render_object(&self) -> Option<&dyn DynRenderObject> {
         None // ParentDataElement doesn't have RenderObject
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn AnyRenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn DynRenderObject> {
         None // ParentDataElement doesn't have RenderObject
     }
 
@@ -295,17 +295,17 @@ where
 /// #[derive(Debug, Clone)]
 /// struct Flexible {
 ///     flex: u32,
-///     child: Box<dyn AnyWidget>,
+///     child: Box<dyn DynWidget>,
 /// }
 ///
 /// impl ProxyWidget for Flexible {
-///     fn child(&self) -> &dyn AnyWidget {
+///     fn child(&self) -> &dyn DynWidget {
 ///         &*self.child
 ///     }
 /// }
 ///
 /// impl ParentDataWidget<FlexParentData> for Flexible {
-///     fn apply_parent_data(&self, render_object: &mut dyn AnyRenderObject) {
+///     fn apply_parent_data(&self, render_object: &mut dyn DynRenderObject) {
 ///         // Apply flex data
 ///     }
 ///
@@ -338,17 +338,17 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TestParentDataWidget {
         value: i32,
-        child: Box<dyn AnyWidget>,
+        child: Box<dyn DynWidget>,
     }
 
     impl ProxyWidget for TestParentDataWidget {
-        fn child(&self) -> &dyn AnyWidget {
+        fn child(&self) -> &dyn DynWidget {
             &*self.child
         }
     }
 
     impl ParentDataWidget<BoxParentData> for TestParentDataWidget {
-        fn apply_parent_data(&self, _render_object: &mut dyn AnyRenderObject) {
+        fn apply_parent_data(&self, _render_object: &mut dyn DynRenderObject) {
             // Test implementation
         }
 
@@ -364,7 +364,7 @@ mod tests {
     struct ChildWidget;
 
     impl StatelessWidget for ChildWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(ChildWidget)
         }
     }

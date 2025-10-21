@@ -4,7 +4,7 @@
 //! and InactiveElements integration.
 
 use flui_core::{
-    AnyElement, AnyWidget, Context, ElementLifecycle, ElementTree, StatelessWidget, Widget,
+    DynElement, DynWidget, Context, ElementLifecycle, ElementTree, StatelessWidget, Widget,
 };
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -20,7 +20,7 @@ struct TestWidget {
 }
 
 impl StatelessWidget for TestWidget {
-    fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
         Box::new(TestWidget { id: self.id + 100 })
     }
 }
@@ -32,7 +32,7 @@ struct OtherWidget {
 }
 
 impl StatelessWidget for OtherWidget {
-    fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
         Box::new(OtherWidget { value: self.value + 1 })
     }
 }

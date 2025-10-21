@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::notification::Notification;
-use crate::widget::any_widget::AnyWidget;
+use crate::widget::dyn_widget::DynWidget;
 use crate::widget::proxy::ProxyWidget;
 
 /// Widget that listens for notifications of type T bubbling up the tree
@@ -59,7 +59,7 @@ pub struct NotificationListener<T: Notification + Clone + 'static> {
     pub on_notification: Arc<dyn Fn(&T) -> bool + Send + Sync>,
 
     /// Child widget
-    pub child: Box<dyn AnyWidget>,
+    pub child: Box<dyn DynWidget>,
 
     /// Phantom data for type parameter
     _phantom: PhantomData<T>,
@@ -97,7 +97,7 @@ impl<T: Notification + Clone + 'static> NotificationListener<T> {
     /// ```
     pub fn new(
         on_notification: impl Fn(&T) -> bool + Send + Sync + 'static,
-        child: Box<dyn AnyWidget>,
+        child: Box<dyn DynWidget>,
     ) -> Self {
         Self {
             on_notification: Arc::new(on_notification),
@@ -121,7 +121,7 @@ impl<T: Notification + Clone + 'static> NotificationListener<T> {
 
 // Implement ProxyWidget trait
 impl<T: Notification + Clone + 'static> ProxyWidget for NotificationListener<T> {
-    fn child(&self) -> &dyn AnyWidget {
+    fn child(&self) -> &dyn DynWidget {
         &*self.child
     }
 
@@ -160,7 +160,7 @@ mod tests {
     struct ChildWidget;
 
     impl StatelessWidget for ChildWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(ChildWidget)
         }
     }

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{AnyWidget, ElementId, ElementTree};
+use crate::{DynWidget, ElementId, ElementTree};
 
 /// Build batching system for performance optimization (Phase 13)
 ///
@@ -268,7 +268,7 @@ impl BuildOwner {
     }
 
     /// Mount a widget as the root of the tree
-    pub fn set_root(&mut self, root_widget: Box<dyn AnyWidget>) -> ElementId {
+    pub fn set_root(&mut self, root_widget: Box<dyn DynWidget>) -> ElementId {
         let mut tree_guard = self.tree.write();
         let id = tree_guard.set_root(root_widget);
         tree_guard.set_element_tree_ref(id, self.tree.clone());

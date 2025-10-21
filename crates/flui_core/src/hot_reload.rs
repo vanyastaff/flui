@@ -174,7 +174,7 @@ fn mark_subtree_dirty(owner: &mut BuildOwner, root_id: crate::ElementId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnyWidget, StatelessWidget, Context};
+    use crate::{DynWidget, StatelessWidget, Context};
 
     #[derive(Debug, Clone)]
     struct TestWidget {
@@ -182,7 +182,7 @@ mod tests {
     }
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(TestWidget { value: self.value })
         }
     }

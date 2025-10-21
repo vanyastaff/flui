@@ -10,11 +10,11 @@ use parking_lot::RwLock;
 #[derive(Debug, Clone)]
 struct TestTheme {
     color: i32,
-    child: Box<dyn AnyWidget>,
+    child: Box<dyn DynWidget>,
 }
 
 impl ProxyWidget for TestTheme {
-    fn child(&self) -> &dyn AnyWidget {
+    fn child(&self) -> &dyn DynWidget {
         &*self.child
     }
 }
@@ -37,11 +37,11 @@ impl_widget_for_inherited!(TestTheme);
 #[derive(Debug, Clone)]
 struct TestLocale {
     language: String,
-    child: Box<dyn AnyWidget>,
+    child: Box<dyn DynWidget>,
 }
 
 impl ProxyWidget for TestLocale {
-    fn child(&self) -> &dyn AnyWidget {
+    fn child(&self) -> &dyn DynWidget {
         &*self.child
     }
 }
@@ -67,7 +67,7 @@ struct ChildWidget {
 }
 
 impl StatelessWidget for ChildWidget {
-    fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
         Box::new(ChildWidget { value: self.value })
     }
 }
@@ -79,7 +79,7 @@ struct ThemeDependentWidget {
 }
 
 impl StatelessWidget for ThemeDependentWidget {
-    fn build(&self, context: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, context: &Context) -> Box<dyn DynWidget> {
         // Access theme with dependency
         if let Some(theme) = context.depend_on_inherited_widget_of_exact_type::<TestTheme>() {
             *self.access_count.write() += 1;
@@ -95,7 +95,7 @@ impl StatelessWidget for ThemeDependentWidget {
 struct ThemeReaderWidget;
 
 impl StatelessWidget for ThemeReaderWidget {
-    fn build(&self, context: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, context: &Context) -> Box<dyn DynWidget> {
         // Read theme WITHOUT dependency
         if let Some(_theme) = context.get_inherited_widget_of_exact_type::<TestTheme>() {
             Box::new(ChildWidget { value: 1 })

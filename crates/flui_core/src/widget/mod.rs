@@ -5,7 +5,7 @@
 //!
 //! # Module Structure
 //!
-//! - `any_widget` - AnyWidget trait for heterogeneous collections
+//! - `dyn_widget` - DynWidget trait for heterogeneous collections
 //! - `traits` - Widget trait with associated types, StatelessWidget, StatefulWidget, State
 //! - `lifecycle` - State lifecycle tracking (StateLifecycle enum)
 //! - `into_widget` - Helper trait for converting types to Widget trait objects
@@ -14,7 +14,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use flui_core::{AnyWidget, Widget, StatelessWidget, StatefulWidget, State};
+//! use flui_core::{DynWidget, Widget, StatelessWidget, StatefulWidget, State};
 //!
 //! // StatelessWidget example
 //! #[derive(Debug, Clone)]
@@ -23,14 +23,15 @@
 //! }
 //!
 //! impl StatelessWidget for MyWidget {
-//!     fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+//!     fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
 //!         Box::new(Text::new(self.title.clone()))
 //!     }
 //! }
 //! ```
 
 // Module declarations
-pub mod any_widget;
+pub mod dyn_widget;
+pub mod element_macros;
 pub mod equality;
 pub mod error_widget;
 pub mod inherited_model;
@@ -47,8 +48,9 @@ mod traits;
 
 
 
+
 // Re-exports - Public API
-pub use any_widget::AnyWidget;
+pub use dyn_widget::DynWidget;
 pub use traits::{State, StatefulWidget, StatelessWidget, Widget};
 pub use lifecycle::StateLifecycle;
 pub use into_widget::IntoWidget;
@@ -71,7 +73,7 @@ mod tests {
     }
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             // Return self for testing purposes
             Box::new(TestWidget { value: self.value })
         }
@@ -94,7 +96,7 @@ mod tests {
     #[test]
     fn test_widget_downcast() {
         let widget = TestWidget { value: 42 };
-        let boxed: Box<dyn AnyWidget> = Box::new(widget);
+        let boxed: Box<dyn DynWidget> = Box::new(widget);
 
         // Test downcast_ref
         assert!(boxed.is::<TestWidget>());
@@ -105,7 +107,7 @@ mod tests {
     #[test]
     fn test_into_widget() {
         let widget = TestWidget { value: 42 };
-        let boxed: Box<dyn AnyWidget> = widget.into_widget();
+        let boxed: Box<dyn DynWidget> = widget.into_widget();
 
         assert!(boxed.type_name().contains("TestWidget"));
     }
@@ -144,7 +146,7 @@ mod tests {
     impl_widget_for_stateful!(CounterWidget);
 
     impl State for CounterState {
-        fn build(&mut self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&mut self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(TestWidget { value: self.count })
         }
     }
@@ -170,7 +172,7 @@ mod tests {
     #[test]
     fn test_widget_clone_box() {
         let widget = TestWidget { value: 42 };
-        let boxed: Box<dyn AnyWidget> = Box::new(widget);
+        let boxed: Box<dyn DynWidget> = Box::new(widget);
 
         // Clone the boxed trait object using dyn-clone
         let cloned = dyn_clone::clone_box(&*boxed);
@@ -183,14 +185,14 @@ mod tests {
 
     #[test]
     fn test_widget_vec_clone() {
-        let widgets: Vec<Box<dyn AnyWidget>> = vec![
+        let widgets: Vec<Box<dyn DynWidget>> = vec![
             Box::new(TestWidget { value: 1 }),
             Box::new(TestWidget { value: 2 }),
             Box::new(TestWidget { value: 3 }),
         ];
 
         // Clone the entire vector of trait objects
-        let cloned: Vec<Box<dyn AnyWidget>> = widgets.iter().map(|w| dyn_clone::clone_box(&**w)).collect();
+        let cloned: Vec<Box<dyn DynWidget>> = widgets.iter().map(|w| dyn_clone::clone_box(&**w)).collect();
 
         assert_eq!(cloned.len(), 3);
         for (i, widget) in cloned.iter().enumerate() {
@@ -202,7 +204,7 @@ mod tests {
     #[test]
     fn test_widget_downcast_mut() {
         let widget = TestWidget { value: 10 };
-        let mut boxed: Box<dyn AnyWidget> = Box::new(widget);
+        let mut boxed: Box<dyn DynWidget> = Box::new(widget);
 
         // Test downcast_mut
         if let Some(downcasted) = boxed.downcast_mut::<TestWidget>() {
@@ -216,7 +218,7 @@ mod tests {
     #[test]
     fn test_widget_downcast_owned() {
         let widget = TestWidget { value: 100 };
-        let boxed: Box<dyn AnyWidget> = Box::new(widget);
+        let boxed: Box<dyn DynWidget> = Box::new(widget);
 
         // Test downcast (owned)
         let downcasted: Box<TestWidget> = boxed.downcast::<TestWidget>().ok().unwrap();
@@ -291,7 +293,7 @@ mod tests {
     }
 
     impl State for LifecycleTrackingState {
-        fn build(&mut self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&mut self, _context: &Context) -> Box<dyn DynWidget> {
             self.build_count += 1;
             Box::new(TestWidget { value: self.build_count as i32 })
         }
@@ -479,6 +481,7 @@ mod tests {
         assert!(state.activate_called);
     }
 }
+
 
 
 

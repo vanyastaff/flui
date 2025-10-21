@@ -16,34 +16,66 @@ pub enum ElementLifecycle {
 }
 
 impl ElementLifecycle {
-    /// Check if element is active
+    /// Check if an element is active
     #[inline]
-    pub fn is_active(&self) -> bool {
+    pub const fn is_active(self) -> bool {
         matches!(self, ElementLifecycle::Active)
     }
 
-    /// Check if element can be reactivated
+    /// Check if an element can be reactivated
     #[inline]
-    pub fn can_reactivate(&self) -> bool {
+    pub const fn can_reactivate(self) -> bool {
         matches!(self, ElementLifecycle::Inactive)
     }
 
-    /// Check if element is mounted (Active or Inactive)
+    /// Check if an element is mounted (Active or Inactive)
     #[inline]
-    pub fn is_mounted(&self) -> bool {
+    pub const fn is_mounted(self) -> bool {
         matches!(self, ElementLifecycle::Active | ElementLifecycle::Inactive)
     }
 }
 
+impl Default for ElementLifecycle {
+    fn default() -> Self {
+        Self::Initial
+    }
+}
+
 /// Manager for inactive elements (supports GlobalKey reparenting)
+///
+/// Tracks elements that have been deactivated but not yet unmounted.
+/// These elements can be reactivated within the same frame for GlobalKey reparenting.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let mut inactive = InactiveElements::new();
+///
+/// // Deactivate element
+/// inactive.add(element_id);
+///
+/// // Check if inactive
+/// assert!(inactive.contains(element_id));
+///
+/// // Reactivate or cleanup at end of frame
+/// if let Some(id) = inactive.remove(element_id) {
+///     // Reactivate
+/// } else {
+///     // Cleanup inactive elements
+///     for id in inactive.drain() {
+///         tree.remove(id);
+///     }
+/// }
+/// ```
 #[derive(Debug, Default)]
 pub struct InactiveElements {
-    /// Deactivated elements (can be reactivated within same frame)
+    /// Deactivated elements (can be reactivated within the same frame)
     elements: std::collections::HashSet<ElementId>,
 }
 
 impl InactiveElements {
-    /// Create empty manager
+    /// Creates an empty inactive elements manager
+    #[must_use]
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -51,13 +83,26 @@ impl InactiveElements {
         }
     }
 
-    /// Add element to inactive set
+    /// Creates a manager with pre-allocated capacity
+    #[must_use]
     #[inline]
-    pub fn add(&mut self, element_id: ElementId) {
-        self.elements.insert(element_id);
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            elements: std::collections::HashSet::with_capacity(capacity),
+        }
     }
 
-    /// Remove element from inactive set (returns Some if was inactive)
+    /// Adds an element to the inactive set
+    ///
+    /// Returns `true` if the element was newly inserted, `false` if it was already present.
+    #[inline]
+    pub fn add(&mut self, element_id: ElementId) -> bool {
+        self.elements.insert(element_id)
+    }
+
+    /// Removes an element from the inactive set
+    ///
+    /// Returns `Some(element_id)` if the element was inactive, `None` otherwise.
     #[inline]
     pub fn remove(&mut self, element_id: ElementId) -> Option<ElementId> {
         if self.elements.remove(&element_id) {
@@ -67,34 +112,95 @@ impl InactiveElements {
         }
     }
 
-    /// Check if element is inactive
+    /// Checks if an element is inactive
+    #[must_use]
     #[inline]
     pub fn contains(&self, element_id: ElementId) -> bool {
         self.elements.contains(&element_id)
     }
 
-    /// Get the number of inactive elements
+    /// Returns the number of inactive elements
+    #[must_use]
     #[inline]
     pub fn len(&self) -> usize {
         self.elements.len()
     }
 
-    /// Check if there are no inactive elements
+    /// Checks if there are no inactive elements
+    #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
     }
 
-    /// Drain all inactive elements (for end-of-frame cleanup)
+    /// Drains all inactive elements (for end-of-frame cleanup)
+    ///
+    /// Returns an iterator over all inactive element IDs, clearing the set.
     #[inline]
     pub fn drain(&mut self) -> impl Iterator<Item = ElementId> + '_ {
         self.elements.drain()
     }
 
-    /// Clear all inactive elements without returning them
+    /// Clears all inactive elements without returning them
     #[inline]
     pub fn clear(&mut self) {
         self.elements.clear();
+    }
+
+    /// Reserves capacity for at least `additional` more elements
+    pub fn reserve(&mut self, additional: usize) {
+        self.elements.reserve(additional);
+    }
+
+    /// Shrinks the capacity to fit the current number of elements
+    pub fn shrink_to_fit(&mut self) {
+        self.elements.shrink_to_fit();
+    }
+}
+
+// ========== Trait Implementations ==========
+
+impl Clone for InactiveElements {
+    /// Clones the inactive elements set
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let inactive = InactiveElements::new();
+    /// inactive.add(element_id);
+    ///
+    /// let snapshot = inactive.clone();
+    /// assert_eq!(inactive, snapshot);
+    /// ```
+    fn clone(&self) -> Self {
+        Self {
+            elements: self.elements.clone(),
+        }
+    }
+}
+
+impl PartialEq for InactiveElements {
+    /// Compares two inactive element sets
+    ///
+    /// Two sets are equal if they contain the same element IDs.
+    fn eq(&self, other: &Self) -> bool {
+        self.elements == other.elements
+    }
+}
+
+impl Eq for InactiveElements {}
+
+impl std::hash::Hash for InactiveElements {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hash the number of elements
+        self.elements.len().hash(state);
+
+        // Hash elements in sorted order for consistency
+        let mut ids: Vec<_> = self.elements.iter().collect();
+        ids.sort_unstable();
+        for id in ids {
+            id.hash(state);
+        }
     }
 }
 
@@ -127,10 +233,31 @@ mod tests {
     }
 
     #[test]
+    fn test_element_lifecycle_default() {
+        assert_eq!(ElementLifecycle::default(), ElementLifecycle::Initial);
+    }
+
+    #[test]
     fn test_inactive_elements_new() {
         let inactive = InactiveElements::new();
         assert!(inactive.is_empty());
         assert_eq!(inactive.len(), 0);
+    }
+
+    #[test]
+    fn test_inactive_elements_with_capacity() {
+        let inactive = InactiveElements::with_capacity(10);
+        assert!(inactive.is_empty());
+    }
+
+    #[test]
+    fn test_inactive_elements_add() {
+        let mut inactive = InactiveElements::new();
+        let id = ElementId::new();
+
+        assert!(inactive.add(id));
+        assert!(!inactive.add(id)); // Already present
+        assert_eq!(inactive.len(), 1);
     }
 
     #[test]
@@ -149,6 +276,15 @@ mod tests {
     }
 
     #[test]
+    fn test_inactive_elements_remove_nonexistent() {
+        let mut inactive = InactiveElements::new();
+        let id = ElementId::new();
+
+        let removed = inactive.remove(id);
+        assert_eq!(removed, None);
+    }
+
+    #[test]
     fn test_inactive_elements_drain() {
         let mut inactive = InactiveElements::new();
         let id1 = ElementId::new();
@@ -163,5 +299,82 @@ mod tests {
         assert!(drained.contains(&id1));
         assert!(drained.contains(&id2));
         assert!(inactive.is_empty());
+    }
+
+    #[test]
+    fn test_inactive_elements_clear() {
+        let mut inactive = InactiveElements::new();
+        inactive.add(ElementId::new());
+        inactive.add(ElementId::new());
+        assert_eq!(inactive.len(), 2);
+
+        inactive.clear();
+        assert!(inactive.is_empty());
+    }
+
+    #[test]
+    fn test_inactive_elements_clone() {
+        let mut inactive = InactiveElements::new();
+        let id = ElementId::new();
+        inactive.add(id);
+
+        let cloned = inactive.clone();
+        assert_eq!(cloned.len(), 1);
+        assert!(cloned.contains(id));
+        assert_eq!(inactive, cloned);
+    }
+
+    #[test]
+    fn test_inactive_elements_equality() {
+        let mut inactive1 = InactiveElements::new();
+        let mut inactive2 = InactiveElements::new();
+        let id = ElementId::new();
+
+        inactive1.add(id);
+        inactive2.add(id);
+
+        assert_eq!(inactive1, inactive2);
+    }
+
+    #[test]
+    fn test_inactive_elements_inequality() {
+        let mut inactive1 = InactiveElements::new();
+        let mut inactive2 = InactiveElements::new();
+
+        inactive1.add(ElementId::new());
+        inactive2.add(ElementId::new());
+
+        assert_ne!(inactive1, inactive2);
+    }
+
+    #[test]
+    fn test_inactive_elements_hash() {
+        use std::collections::HashMap;
+
+        let mut inactive = InactiveElements::new();
+        inactive.add(ElementId::new());
+
+        let mut map = HashMap::new();
+        map.insert(inactive.clone(), "data");
+
+        assert_eq!(map.get(&inactive), Some(&"data"));
+    }
+
+    #[test]
+    fn test_inactive_elements_reserve() {
+        let mut inactive = InactiveElements::new();
+        inactive.reserve(100);
+        // Should not panic
+        assert_eq!(inactive.len(), 0);
+    }
+
+    #[test]
+    fn test_inactive_elements_shrink_to_fit() {
+        let mut inactive = InactiveElements::with_capacity(100);
+        let id = ElementId::new();
+        inactive.add(id);
+
+        inactive.shrink_to_fit();
+        assert_eq!(inactive.len(), 1);
     }
 }

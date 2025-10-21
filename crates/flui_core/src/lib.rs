@@ -86,16 +86,16 @@ pub use error::{CoreError, Result, KeyError}; // Phase 10: Enhanced error types 
 // Re-export from modular structure
 pub use context::Context;
 pub use constraints::BoxConstraints;
-pub use element::{AnyElement, ComponentElement, Element, InactiveElements, RenderObjectElement, StatefulElement};
+pub use element::{DynElement, ComponentElement, Element, InactiveElements, RenderObjectElement, StatefulElement};
 pub use element::render::{
     LeafRenderObjectElement,
     MultiChildRenderObjectElement,
     SingleChildRenderObjectElement,
 };
 pub use tree::{BuildOwner, ElementPool, ElementPoolStats, ElementTree, GlobalKeyId, PipelineOwner};
-pub use widget::{AnyWidget, InheritedElement, InheritedWidget, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget}; // Phase 10: ErrorWidget
+pub use widget::{DynWidget, InheritedElement, InheritedWidget, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget}; // Phase 10: ErrorWidget
 pub use render::{
-    AnyRenderObject,
+    DynRenderObject,
     RenderObject,
     parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData},
 };
@@ -113,16 +113,16 @@ pub use cache::{
 };
 
 // Re-export string cache
-pub use foundation::string_cache::{InternedString, intern, resolve};
+pub use foundation::string_cache::{capacity, get, intern, is_empty, len, resolve, InternedString};
 
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::context::Context;
     pub use crate::constraints::BoxConstraints;
-    pub use crate::element::{AnyElement, Element};
+    pub use crate::element::{DynElement, Element};
     pub use crate::foundation::ElementId;
     pub use crate::tree::ElementTree;
-    pub use crate::widget::{AnyWidget, IntoWidget, StatelessWidget, Widget};
+    pub use crate::widget::{DynWidget, IntoWidget, StatelessWidget, Widget};
     pub use crate::Size;
     pub use crate::cache::get_layout_cache;
     pub use crate::foundation::string_cache::intern;

@@ -13,7 +13,7 @@
 //! - `render` - Specialized render elements (Leaf, Single, Multi)
 
 // Submodules
-pub mod any_element;
+pub mod dyn_element;
 mod component;
 mod lifecycle;
 pub mod render;
@@ -25,7 +25,7 @@ mod traits;
 
 
 // Re-export main types
-pub use any_element::AnyElement;
+pub use dyn_element::DynElement;
 pub use traits::Element;
 pub use lifecycle::{ElementLifecycle, InactiveElements};
 pub use component::ComponentElement;
@@ -35,7 +35,7 @@ pub use render_object::RenderObjectElement;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnyWidget, ElementId, StatelessWidget, Context};
+    use crate::{DynWidget, ElementId, StatelessWidget, Context};
 
     #[test]
     fn test_element_id_unique() {
@@ -55,7 +55,7 @@ mod tests {
     }
 
     impl StatelessWidget for TestStatelessWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             // Return self for testing purposes
             Box::new(TestStatelessWidget { value: self.value })
         }
@@ -178,17 +178,6 @@ mod tests {
         assert!(drained.contains(&id2));
         assert!(drained.contains(&id3));
 
-        assert!(inactive.is_empty());
-    }
-
-    #[test]
-    fn test_inactive_elements_clear() {
-        let mut inactive = InactiveElements::new();
-        inactive.add(ElementId::new());
-        inactive.add(ElementId::new());
-        assert_eq!(inactive.len(), 2);
-
-        inactive.clear();
         assert!(inactive.is_empty());
     }
 

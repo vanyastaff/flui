@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::{AnyElement, AnyWidget, Element, ElementId, ElementLifecycle, ElementTree};
+use crate::{DynElement, DynWidget, Element, ElementId, ElementLifecycle, ElementTree};
 
 /// Widget that wraps a single child and provides services
 ///
@@ -19,7 +19,7 @@ use crate::{AnyElement, AnyWidget, Element, ElementId, ElementLifecycle, Element
 /// - Delegate layout/paint to their child
 pub trait ProxyWidget: fmt::Debug + Clone + Send + Sync + 'static {
     /// Get the child widget
-    fn child(&self) -> &dyn AnyWidget;
+    fn child(&self) -> &dyn DynWidget;
 
     /// Optional key for widget identification
     fn key(&self) -> Option<&dyn crate::foundation::Key> {
@@ -88,9 +88,9 @@ impl<W: ProxyWidget> fmt::Debug for ProxyElement<W> {
     }
 }
 
-// ========== Implement AnyElement for ProxyElement ==========
+// ========== Implement DynElement for ProxyElement ==========
 
-impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> AnyElement for ProxyElement<W> {
+impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for ProxyElement<W> {
     fn id(&self) -> ElementId {
         self.id
     }
@@ -120,7 +120,7 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> AnyElement for P
         self.lifecycle = ElementLifecycle::Defunct;
     }
 
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         // Try to downcast to our widget type
         if let Ok(new_widget_typed) = new_widget.downcast::<W>() {
             let old_widget = std::mem::replace(&mut self.widget, *new_widget_typed);
@@ -128,14 +128,14 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> AnyElement for P
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
         self.dirty = false;
 
         // ProxyWidget just wraps its child widget
-        let child_widget: Box<dyn AnyWidget> = dyn_clone::clone_box(self.widget.child());
+        let child_widget: Box<dyn DynWidget> = dyn_clone::clone_box(self.widget.child());
 
         // Mark old child for unmounting
         self.child = None;
@@ -184,11 +184,11 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> AnyElement for P
         TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // ProxyElement doesn't have RenderObject
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         None // ProxyElement doesn't have RenderObject
     }
 
@@ -229,11 +229,11 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> Element for Prox
 /// ```rust,ignore
 /// #[derive(Debug, Clone)]
 /// struct MyProxy {
-///     child: Box<dyn AnyWidget>,
+///     child: Box<dyn DynWidget>,
 /// }
 ///
 /// impl ProxyWidget for MyProxy {
-///     fn child(&self) -> &dyn AnyWidget {
+///     fn child(&self) -> &dyn DynWidget {
 ///         &*self.child
 ///     }
 /// }
@@ -262,11 +262,11 @@ mod tests {
     #[derive(Debug, Clone)]
     struct TestProxy {
         value: i32,
-        child: Box<dyn AnyWidget>,
+        child: Box<dyn DynWidget>,
     }
 
     impl ProxyWidget for TestProxy {
-        fn child(&self) -> &dyn AnyWidget {
+        fn child(&self) -> &dyn DynWidget {
             &*self.child
         }
     }
@@ -278,7 +278,7 @@ mod tests {
     struct ChildWidget;
 
     impl StatelessWidget for ChildWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(ChildWidget)
         }
     }

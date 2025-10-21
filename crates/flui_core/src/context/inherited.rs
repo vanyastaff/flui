@@ -1,23 +1,197 @@
-//! InheritedWidget access methods
+//! InheritedWidget access methods for Context
+//!
+//! Provides clean, ergonomic APIs for accessing InheritedWidgets from the element tree,
+//! with or without establishing dependencies for rebuild notifications.
+//!
+//! # Recommended API
+//!
+//! Use the short, ergonomic methods for the best experience:
+//!
+//! ```rust,ignore
+//! // With dependency (auto-rebuild on change)
+//! let theme = context.inherit::<Theme>()?;
+//! let theme = context.watch::<Theme>()?;     // React-style alias
+//!
+//! // Without dependency (one-time read)
+//! let theme = context.read::<Theme>()?;
+//!
+//! // With aspect (for InheritedModel)
+//! let theme = context.inherit_aspect::<Theme>(Some(Box::new(ThemeAspect::Color)))?;
+//! ```
+//!
+//! # Legacy API
+//!
+//! For compatibility with macros, these methods are also available:
+//!
+//! ```rust,ignore
+//! let theme = context.depend_on_inherited_widget::<Theme>()?;
+//! let theme = context.get_inherited_widget::<Theme>()?;
+//! ```
 
 use std::any::TypeId;
 use crate::ElementId;
 use crate::widget::InheritedWidget;
 use super::Context;
 
+// =============================================================================
+// Modern Type-Safe API (Recommended)
+// =============================================================================
+
 impl Context {
-    /// Access an InheritedWidget's data and establish dependency
+    /// Accesses an InheritedWidget and establishes dependency
     ///
+    /// This is the **primary API** for accessing InheritedWidgets. When the
+    /// widget changes, the current element will automatically rebuild.
     ///
-    /// Note: W must implement Widget (use `impl_widget_for_inherited!` macro).
+    /// # Returns
+    ///
+    /// A cloned widget if found, `None` if no ancestor has this type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Simple access with auto-rebuild
+    /// let theme = context.inherit::<Theme>().unwrap();
+    /// println!("Theme color: {:?}", theme.primary_color);
+    ///
+    /// // With unwrap_or_default
+    /// let theme = context.inherit::<Theme>().unwrap_or_default();
+    /// ```
+    #[must_use]
+    pub fn inherit<T>(&self) -> Option<T>
+    where
+        T: InheritedWidget + Clone + 'static,
+    {
+        self.inherited_widget_impl::<T>(true, None)
+    }
+
+    /// Accesses an InheritedWidget with React-style naming
+    ///
+    /// Alias for [`inherit`](Self::inherit), inspired by React hooks.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let theme = context.watch::<Theme>()?;  // Like React's useContext
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn watch<T>(&self) -> Option<T>
+    where
+        T: InheritedWidget + Clone + 'static,
+    {
+        self.inherit::<T>()
+    }
+
+    /// Accesses an InheritedWidget without dependency
+    ///
+    /// Use this when you only need to **read once** without automatic rebuilds.
+    /// The element will NOT be notified when the widget changes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // One-time read at initialization
+    /// let theme = context.read::<Theme>()?;
+    /// println!("Initial theme: {:?}", theme.name);
+    /// ```
+    #[must_use]
+    pub fn read<T>(&self) -> Option<T>
+    where
+        T: InheritedWidget + Clone + 'static,
+    {
+        self.inherited_widget_impl::<T>(false, None)
+    }
+
+    /// Accesses an InheritedWidget with a specific aspect dependency
+    ///
+    /// Used by InheritedModel to register aspect-based dependencies.
+    /// Only rebuilds when the specified aspect of the widget changes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use std::any::Any;
+    ///
+    /// #[derive(Debug)]
+    /// enum ThemeAspect {
+    ///     PrimaryColor,
+    ///     Typography,
+    /// }
+    ///
+    /// let theme = context.inherit_aspect::<AppTheme>(
+    ///     Some(Box::new(ThemeAspect::PrimaryColor))
+    /// )?;
+    /// // Only rebuilds when PrimaryColor aspect changes
+    /// ```
+    #[must_use]
+    pub fn inherit_aspect<T>(
+        &self,
+        aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
+    ) -> Option<T>
+    where
+        T: InheritedWidget + Clone + 'static,
+    {
+        self.inherited_widget_impl::<T>(true, aspect)
+    }
+}
+
+// =============================================================================
+// Element-Level Access
+// =============================================================================
+
+impl Context {
+    /// Finds the element ID for an inherited widget
+    ///
+    /// Low-level API that returns the ElementId rather than the widget.
+    /// Useful for advanced use cases or debugging.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(theme_id) = context.inherited_element::<Theme>() {
+    ///     println!("Theme element: {:?}", theme_id);
+    /// }
+    /// ```
+    #[must_use]
+    pub fn inherited_element<W>(&self) -> Option<ElementId>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
+        use crate::widget::InheritedElement;
+
+        let tree = self.tree();
+
+        self.ancestors().find(|&id| {
+            tree.get(id)
+                .map(|elem| elem.is::<InheritedElement<W>>())
+                .unwrap_or(false)
+        })
+    }
+}
+
+// =============================================================================
+// Legacy Macro-Based API (For Compatibility)
+// =============================================================================
+
+impl Context {
+    /// Accesses InheritedWidget with dependency (legacy, for macros)
+    ///
+    /// Used with the `impl_widget_for_inherited!` macro.
+    /// For direct usage, prefer [`inherit()`](Self::inherit).
+    ///
+    /// Note: W must implement a Widget with `Element = InheritedElement<W>`.
+    #[must_use]
     pub fn depend_on_inherited_widget<W>(&self) -> Option<W>
     where
         W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
     {
-        self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), true)
+        self.legacy_inherited_widget_impl::<W>(true)
     }
 
-    /// Access InheritedWidget - short form
+    /// Accesses InheritedWidget with dependency (legacy alias)
+    #[must_use]
+    #[inline]
     pub fn subscribe_to<W>(&self) -> Option<W>
     where
         W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
@@ -25,26 +199,96 @@ impl Context {
         self.depend_on_inherited_widget()
     }
 
-    /// Access InheritedWidget without establishing dependency
+    /// Accesses InheritedWidget without dependency (legacy, for macros)
+    ///
+    /// For direct usage, prefer [`read()`](Self::read).
+    #[must_use]
     pub fn get_inherited_widget<W>(&self) -> Option<W>
     where
         W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
     {
-        self.get_inherited_widget_impl::<W>(TypeId::of::<W>(), false)
+        self.legacy_inherited_widget_impl::<W>(false)
     }
 
-    /// Access InheritedWidget without dependency - short form
+    /// Accesses InheritedWidget without dependency (legacy alias)
+    #[must_use]
+    #[inline]
     pub fn find_inherited<W>(&self) -> Option<W>
     where
         W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
     {
         self.get_inherited_widget()
     }
+}
 
-    /// Internal implementation for getting inherited widgets
-    fn get_inherited_widget_impl<W>(
+// =============================================================================
+// Internal Implementation
+// =============================================================================
+
+impl Context {
+    /// Finds ancestor InheritedElement of type T
+    ///
+    /// Internal helper that uses TypeId for efficient type checking.
+    fn find_inherited_element_by_type<T>(&self) -> Option<ElementId>
+    where
+        T: InheritedWidget + 'static,
+    {
+        let tree = self.tree();
+        let target_type_id = TypeId::of::<T>();
+
+        self.ancestors().find(|&ancestor_id| {
+            tree.get(ancestor_id)
+                .map(|elem| elem.widget_has_type_id(target_type_id))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Registers a dependency on an InheritedElement
+    ///
+    /// Low-level method used internally. Prefer typed methods.
+    fn register_dependency(
         &self,
-        _type_id: TypeId,
+        ancestor_id: ElementId,
+        aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
+    ) {
+        let mut tree = self.tree_mut();
+        if let Some(ancestor) = tree.get_mut(ancestor_id) {
+            ancestor.register_dependency(self.element_id(), aspect);
+        }
+    }
+
+    /// Modern implementation for type-safe InheritedWidget access
+    ///
+    /// This is the core implementation used by the public APIs.
+    fn inherited_widget_impl<T>(
+        &self,
+        register_dependency: bool,
+        aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
+    ) -> Option<T>
+    where
+        T: InheritedWidget + Clone + 'static,
+    {
+        // Find the inherited element
+        let ancestor_id = self.find_inherited_element_by_type::<T>()?;
+
+        // Register dependency if requested
+        if register_dependency {
+            self.register_dependency(ancestor_id, aspect);
+        }
+
+        // Get and clone the widget
+        let tree = self.tree();
+        tree.get(ancestor_id)
+            .and_then(|element| element.widget_as_any())
+            .and_then(|any| any.downcast_ref::<T>())
+            .cloned()
+    }
+
+    /// Legacy implementation for macro-based InheritedWidget access
+    ///
+    /// This handles the complex locking logic needed with InheritedElement<W>.
+    fn legacy_inherited_widget_impl<W>(
+        &self,
         register_dependency: bool,
     ) -> Option<W>
     where
@@ -62,31 +306,28 @@ impl Context {
                 if let Some(inherited_elem) = element.downcast_ref::<InheritedElement<W>>() {
                     // Found matching InheritedWidget!
 
-                    if register_dependency {
+                    return if register_dependency {
                         // Drop read lock before acquiring write lock
                         drop(tree);
 
                         // Register dependency
-                        let mut tree_mut = self.tree.write();
+                        let mut tree_mut = self.tree_mut();
                         if let Some(inherited_elem_mut) = tree_mut
                             .get_mut(id)
                             .and_then(|e| e.downcast_mut::<InheritedElement<W>>())
                         {
-                            inherited_elem_mut.register_dependent(self.element_id);
+                            inherited_elem_mut.register_dependent(self.element_id());
                         }
 
-                        // Re-acquire read lock to get widget
-                        let tree = self.tree.read();
-                        if let Some(inherited_elem) = tree
+                        // Re-acquire read lock to get a widget
+                        let tree = self.tree();
+                        tree
                             .get(id)
                             .and_then(|e| e.downcast_ref::<InheritedElement<W>>())
-                        {
-                            return Some(inherited_elem.widget().clone());
-                        }
-                        return None;
+                            .map(|elem| elem.widget().clone())
                     } else {
                         // No dependency registration
-                        return Some(inherited_elem.widget().clone());
+                        Some(inherited_elem.widget().clone())
                     }
                 }
 
@@ -98,248 +339,40 @@ impl Context {
 
         None
     }
+}
 
-    /// Find the element for an inherited widget
-    ///
-    /// Low-level API for advanced use cases.
-    pub fn get_element_for_inherited_widget_of_exact_type<W>(
-        &self,
-    ) -> Option<ElementId>
-    where
-        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
-    {
-        use crate::widget::InheritedElement;
+// =============================================================================
+// Deprecated Aliases (For Migration)
+// =============================================================================
 
-        let tree = self.tree.read();
-        let mut current_id = self.parent();
-
-        while let Some(id) = current_id {
-            if let Some(element) = tree.get(id) {
-                if element.is::<InheritedElement<W>>() {
-                    return Some(id);
-                }
-                current_id = element.parent();
-            } else {
-                break;
-            }
-        }
-
-        None
-    }
-
-    /// Find inherited element - short form
-    pub fn find_inherited_element<W>(
-        &self,
-    ) -> Option<ElementId>
-    where
-        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
-    {
-        self.get_element_for_inherited_widget_of_exact_type::<W>()
-    }
-
-    // ========== Phase 6: Enhanced Flutter-style API ==========
-
-    /// Create a dependency on an InheritedElement (Phase 6)
-    ///
-    /// Low-level method that uses AnyElement trait methods.
-    /// Prefer using typed methods like `depend_on_inherited_widget_of_exact_type<T>()`.
-    ///
-    /// # Parameters
-    ///
-    /// - `ancestor_id`: ID of the InheritedElement to depend on
-    /// - `aspect`: Optional aspect for partial dependencies (future: InheritedModel)
-    pub fn depend_on_inherited_element(
-        &self,
-        ancestor_id: ElementId,
-        aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
-    ) {
-        let mut tree = self.tree.write();
-        if let Some(ancestor) = tree.get_mut(ancestor_id) {
-            ancestor.register_dependency(self.element_id, aspect);
-        }
-    }
-
-    /// Get and depend on an InheritedWidget of exact type T (Phase 6)
-    ///
-    /// This creates a dependency, so the current element will rebuild
-    /// when the InheritedWidget changes.
-    ///
-    /// Returns a cloned widget if found, None otherwise.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `T`: The InheritedWidget type to find
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // In build() method:
-    /// if let Some(theme) = context.depend_on_inherited_widget_of_exact_type::<Theme>() {
-    ///     println!("Theme color: {:?}", theme.color);
-    /// }
-    /// ```
+#[allow(deprecated)]
+impl Context {
+    /// Deprecated: use [`inherit()`](Self::inherit) instead
+    #[deprecated(since = "0.2.0", note = "use `inherit()` instead")]
+    #[must_use]
+    #[inline]
     pub fn depend_on_inherited_widget_of_exact_type<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        // Find the InheritedWidget ancestor
-        let ancestor_id = self.find_ancestor_inherited_element_of_type::<T>()?;
-
-        // Register dependency
-        self.depend_on_inherited_element(ancestor_id, None);
-
-        // Return cloned widget
-        let tree = self.tree.read();
-        if let Some(element) = tree.get(ancestor_id) {
-            if let Some(widget_any) = element.widget_as_any() {
-                if let Some(widget) = widget_any.downcast_ref::<T>() {
-                    return Some(widget.clone());
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Get InheritedWidget without creating dependency (Phase 6)
-    ///
-    /// This does NOT cause rebuilds when the widget changes.
-    /// Use this when you only need to read the value once.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Read theme once without dependency
-    /// if let Some(theme) = context.get_inherited_widget_of_exact_type::<Theme>() {
-    ///     println!("Theme initialized with color: {:?}", theme.color);
-    /// }
-    /// ```
-    pub fn get_inherited_widget_of_exact_type<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        let ancestor_id = self.find_ancestor_inherited_element_of_type::<T>()?;
-
-        let tree = self.tree.read();
-        if let Some(element) = tree.get(ancestor_id) {
-            if let Some(widget_any) = element.widget_as_any() {
-                if let Some(widget) = widget_any.downcast_ref::<T>() {
-                    return Some(widget.clone());
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Helper: Find ancestor InheritedElement of type T (Phase 6)
-    ///
-    /// Returns the ElementId of the first ancestor InheritedElement
-    /// whose widget has type T.
-    fn find_ancestor_inherited_element_of_type<T>(&self) -> Option<ElementId>
-    where
-        T: InheritedWidget + 'static,
-    {
-        let tree = self.tree.read();
-        let target_type_id = TypeId::of::<T>();
-
-        let mut current = self.parent();
-        while let Some(parent_id) = current {
-            if let Some(element) = tree.get(parent_id) {
-                // Check if this is an InheritedElement with widget type T
-                if element.widget_has_type_id(target_type_id) {
-                    return Some(parent_id);
-                }
-                current = element.parent();
-            } else {
-                break;
-            }
-        }
-
-        None
-    }
-
-    // ========== Rust-Idiomatic Short Names (Phase 6 Ergonomics) ==========
-
-    /// Get InheritedWidget and create dependency (Rust-idiomatic short name)
-    ///
-    /// Short, ergonomic alternative to `depend_on_inherited_widget_of_exact_type<T>()`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Short and sweet! 🎉
-    /// let theme = context.inherit::<Theme>();
-    /// ```
-    pub fn inherit<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        self.depend_on_inherited_widget_of_exact_type::<T>()
-    }
-
-    /// Get InheritedWidget without dependency (Rust-idiomatic short name)
-    ///
-    /// Short, ergonomic alternative to `get_inherited_widget_of_exact_type<T>()`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Short read without dependency
-    /// let theme = context.read_inherited::<Theme>();
-    /// ```
-    pub fn read_inherited<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        self.get_inherited_widget_of_exact_type::<T>()
-    }
-
-    /// Get InheritedWidget and create dependency (short alias)
-    ///
-    /// Alternative name for `inherit()`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let theme = context.watch::<Theme>();  // Like React hooks!
-    /// ```
-    pub fn watch<T>(&self) -> Option<T>
     where
         T: InheritedWidget + Clone + 'static,
     {
         self.inherit::<T>()
     }
 
-    /// Get InheritedWidget without dependency (short alias)
-    ///
-    /// Alternative name for `read_inherited()`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let theme = context.read::<Theme>();  // Like React hooks!
-    /// ```
-    pub fn read<T>(&self) -> Option<T>
+    /// Deprecated: use [`read()`](Self::read) instead
+    #[deprecated(since = "0.2.0", note = "use `read()` instead")]
+    #[must_use]
+    #[inline]
+    pub fn get_inherited_widget_of_exact_type<T>(&self) -> Option<T>
     where
         T: InheritedWidget + Clone + 'static,
     {
-        self.read_inherited::<T>()
+        self.read::<T>()
     }
 
-    // ========== Phase 6: InheritedModel Support ==========
-
-    /// Access InheritedWidget with specific aspect dependency
-    ///
-    /// Used by InheritedModel to register aspect-based dependencies.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let theme = context.depend_on_inherited_widget_of_exact_type_with_aspect::<AppTheme>(
-    ///     Some(Box::new(ThemeAspect::PrimaryColor))
-    /// );
-    /// ```
+    /// Deprecated: use [`inherit_aspect()`](Self::inherit_aspect) instead
+    #[deprecated(since = "0.2.0", note = "use `inherit_aspect()` instead")]
+    #[must_use]
+    #[inline]
     pub fn depend_on_inherited_widget_of_exact_type_with_aspect<T>(
         &self,
         aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
@@ -347,29 +380,95 @@ impl Context {
     where
         T: InheritedWidget + Clone + 'static,
     {
-        // Find inherited element
-        let tree = self.tree.read();
-        let type_id = TypeId::of::<T>();
+        self.inherit_aspect::<T>(aspect)
+    }
 
-        let ancestor_id = self
-            .ancestors()
-            .find(|&ancestor_id| {
-                if let Some(element) = tree.get(ancestor_id) {
-                    element.widget_has_type_id(type_id)
-                } else {
-                    false
-                }
-            })?;
+    /// Deprecated: use [`inherited_element()`](Self::inherited_element) instead
+    #[deprecated(since = "0.2.0", note = "use `inherited_element()` instead")]
+    #[must_use]
+    #[inline]
+    pub fn get_element_for_inherited_widget_of_exact_type<W>(&self) -> Option<ElementId>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
+        self.inherited_element::<W>()
+    }
 
-        // Register dependency with aspect
-        self.depend_on_inherited_element(ancestor_id, aspect);
+    /// Deprecated: use [`inherited_element()`](Self::inherited_element) instead
+    #[deprecated(since = "0.2.0", note = "use `inherited_element()` instead")]
+    #[must_use]
+    #[inline]
+    pub fn find_inherited_element<W>(&self) -> Option<ElementId>
+    where
+        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
+    {
+        self.inherited_element::<W>()
+    }
 
-        // Get widget value
-        let element = tree.get(ancestor_id)?;
-        element
-            .widget_as_any()
-            .and_then(|any| any.downcast_ref::<T>())
-            .cloned()
+    /// Deprecated: use [`read()`](Self::read) instead
+    #[deprecated(since = "0.2.0", note = "use `read()` instead")]
+    #[must_use]
+    #[inline]
+    pub fn read_inherited<T>(&self) -> Option<T>
+    where
+        T: InheritedWidget + Clone + 'static,
+    {
+        self.read::<T>()
     }
 }
 
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fake widget for testing
+    #[derive(Clone)]
+    struct DummyWidget {
+        value: i32,
+    }
+
+    impl InheritedWidget for DummyWidget {
+        fn update_should_notify(&self, _old: &Self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn test_api_consistency() {
+        let context = Context::empty();
+
+        // All these should be equivalent (if the widget existed)
+        let _w1 = context.inherit::<DummyWidget>();
+        let _w2 = context.watch::<DummyWidget>();
+    }
+
+    #[test]
+    fn test_read_api() {
+        let context = Context::empty();
+
+        // Read without dependency
+        let _w = context.read::<DummyWidget>();
+    }
+
+    #[test]
+    fn test_aspect_api() {
+        let context = Context::empty();
+
+        // With aspect
+        let _w = context.inherit_aspect::<DummyWidget>(None);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_apis() {
+        let context = Context::empty();
+
+        // These should still work but emit warnings
+        let _w1 = context.depend_on_inherited_widget_of_exact_type::<DummyWidget>();
+        let _w2 = context.get_inherited_widget_of_exact_type::<DummyWidget>();
+    }
+}

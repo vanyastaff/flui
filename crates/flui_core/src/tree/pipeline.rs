@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use parking_lot::RwLock;
 
-use crate::{AnyWidget, ElementTree, ElementId};
+use crate::{DynWidget, ElementTree, ElementId};
 use crate::BoxConstraints; // Re-exported from flui_types in lib.rs
 use flui_types::{Size, Offset};
 use flui_types::events::{PointerEvent, HitTestResult};
@@ -96,7 +96,7 @@ impl PipelineOwner {
     /// Mount the root widget - short form
     ///
     /// Rust-idiomatic short name. See [mount_root](Self::mount_root).
-    pub fn set_root(&mut self, root_widget: Box<dyn AnyWidget>) -> ElementId {
+    pub fn set_root(&mut self, root_widget: Box<dyn DynWidget>) -> ElementId {
         let mut tree_guard = self.tree.write();
         let id = tree_guard.set_root(root_widget);
 

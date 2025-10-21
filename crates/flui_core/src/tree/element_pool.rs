@@ -28,7 +28,7 @@
 use std::any::TypeId;
 use std::collections::HashMap;
 
-use crate::element::any_element::AnyElement;
+use crate::element::dyn_element::DynElement;
 
 /// Pool for reusing inactive elements
 ///
@@ -62,7 +62,7 @@ use crate::element::any_element::AnyElement;
 #[derive(Debug)]
 pub struct ElementPool {
     /// Pool of inactive elements by TypeId
-    pool: HashMap<TypeId, Vec<Box<dyn AnyElement>>>,
+    pool: HashMap<TypeId, Vec<Box<dyn DynElement>>>,
 
     /// Maximum elements to keep per type
     max_per_type: usize,
@@ -129,7 +129,7 @@ impl ElementPool {
     ///     // Pool full, element was dropped
     /// }
     /// ```
-    pub fn store(&mut self, element: Box<dyn AnyElement>) -> bool {
+    pub fn store(&mut self, element: Box<dyn DynElement>) -> bool {
         if self.max_per_type == 0 {
             return false; // Pooling disabled
         }
@@ -178,7 +178,7 @@ impl ElementPool {
     ///     // ... update with new widget, mount, etc.
     /// }
     /// ```
-    pub fn try_reuse(&mut self, type_id: TypeId) -> Option<Box<dyn AnyElement>> {
+    pub fn try_reuse(&mut self, type_id: TypeId) -> Option<Box<dyn DynElement>> {
         let type_pool = self.pool.get_mut(&type_id)?;
 
         if type_pool.is_empty() {
@@ -302,12 +302,12 @@ mod tests {
     }
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &Context) -> Box<dyn crate::widget::AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn crate::widget::DynWidget> {
             Box::new(TestWidget { value: self.value })
         }
     }
 
-    fn create_test_element() -> Box<dyn AnyElement> {
+    fn create_test_element() -> Box<dyn DynElement> {
         let widget = TestWidget { value: 42 };
         Box::new(widget.into_element())
     }

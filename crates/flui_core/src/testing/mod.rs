@@ -27,7 +27,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use crate::foundation::Key;
-use crate::{AnyWidget, BuildOwner, ElementId, ElementTree};
+use crate::{DynWidget, BuildOwner, ElementId, ElementTree};
 
 /// Widget testing harness
 ///
@@ -88,7 +88,7 @@ impl WidgetTester {
     /// let mut tester = WidgetTester::new();
     /// tester.pump_widget(Box::new(MyWidget::new()));
     /// ```
-    pub fn pump_widget(&mut self, widget: Box<dyn AnyWidget>) -> ElementId {
+    pub fn pump_widget(&mut self, widget: Box<dyn DynWidget>) -> ElementId {
         let root_id = self.owner.set_root(widget);
 
         // Build the tree
@@ -234,7 +234,7 @@ pub fn count_by_type<W: 'static>(tester: &WidgetTester) -> usize {
 /// Find element by key
 ///
 /// Returns the first element whose widget has the given key.
-/// Uses the `key()` method from AnyElement to check keys.
+/// Uses the `key()` method from DynElement to check keys.
 ///
 /// # Example
 ///
@@ -253,7 +253,7 @@ pub fn find_by_key(tester: &WidgetTester, key: &dyn Key) -> Option<ElementId> {
     tree.visit_all_elements(&mut |element| {
         if found.is_none() {
             if let Some(element_key) = element.key() {
-                if element_key.equals(key) {
+                if element_key.key_eq(key) {
                     found = Some(element.id());
                 }
             }
@@ -321,7 +321,7 @@ mod tests {
     }
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(TestWidget { value: self.value })
         }
     }

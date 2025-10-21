@@ -6,7 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use parking_lot::RwLock;
 
-use crate::{AnyWidget, AnyElement, ElementId};
+use crate::{DynWidget, DynElement, ElementId};
 use crate::element::InactiveElements;
 use crate::tree::ElementPool;
 
@@ -14,7 +14,7 @@ use crate::tree::ElementPool;
 #[derive(Debug)]
 pub struct ElementTree {
     root: Option<ElementId>,
-    elements: HashMap<ElementId, Box<dyn AnyElement>>,
+    elements: HashMap<ElementId, Box<dyn DynElement>>,
     dirty_elements: VecDeque<ElementId>,
     /// Inactive elements (deactivated, awaiting reactivation or unmount)
     inactive_elements: InactiveElements,
@@ -107,7 +107,7 @@ impl ElementTree {
     ///
     /// This is a simplified implementation that only works for simple trees.
     /// In a full implementation, we'd track the render tree separately.
-    pub fn root_render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    pub fn root_render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         let root_id = self.root?;
         self.find_render_object(root_id)
     }
@@ -117,13 +117,13 @@ impl ElementTree {
     /// # Returns
     ///
     /// Mutable reference to the root RenderObject, or None if not found
-    pub fn root_render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    pub fn root_render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         let root_id = self.root?;
         self.find_render_object_mut(root_id)
     }
 
     /// Find RenderObject starting from given element ID (immutable)
-    fn find_render_object(&self, element_id: ElementId) -> Option<&dyn crate::AnyRenderObject> {
+    fn find_render_object(&self, element_id: ElementId) -> Option<&dyn crate::DynRenderObject> {
         let element = self.get(element_id)?;
 
         // Check if this element has a RenderObject
@@ -148,7 +148,7 @@ impl ElementTree {
     ///
     /// This is complex to implement correctly due to Rust's borrow checker.
     /// For now, we use unsafe to achieve the desired behavior.
-    fn find_render_object_mut(&mut self, element_id: ElementId) -> Option<&mut dyn crate::AnyRenderObject> {
+    fn find_render_object_mut(&mut self, element_id: ElementId) -> Option<&mut dyn crate::DynRenderObject> {
         // Check if this element has a RenderObject
         let has_render_object = self.elements.get(&element_id)?.render_object().is_some();
 
@@ -184,7 +184,7 @@ impl ElementTree {
     /// let root_id = tree.set_root(Box::new(MyApp::new()));
     /// assert_eq!(tree.root(), Some(root_id));
     /// ```
-    pub fn set_root(&mut self, widget: Box<dyn AnyWidget>) -> ElementId {
+    pub fn set_root(&mut self, widget: Box<dyn DynWidget>) -> ElementId {
         // Unmount existing root if present
         if let Some(old_root_id) = self.root {
             self.remove(old_root_id);
@@ -232,13 +232,13 @@ impl ElementTree {
 
     /// Get an element by ID (immutable)
     #[inline]
-    pub fn get(&self, id: ElementId) -> Option<&dyn AnyElement> {
+    pub fn get(&self, id: ElementId) -> Option<&dyn DynElement> {
         self.elements.get(&id).map(|e| e.as_ref())
     }
 
     /// Get an element by ID (mutable)
     #[inline]
-    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn AnyElement> {
+    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn DynElement> {
         self.elements.get_mut(&id).map(|e| e.as_mut())
     }
 
@@ -247,7 +247,7 @@ impl ElementTree {
     pub fn insert_child(
         &mut self,
         parent_id: ElementId,
-        widget: Box<dyn AnyWidget>,
+        widget: Box<dyn DynWidget>,
         slot: usize,
     ) -> Option<ElementId> {
         // Verify parent exists
@@ -275,7 +275,7 @@ impl ElementTree {
     pub fn update(
         &mut self,
         element_id: ElementId,
-        new_widget: Box<dyn AnyWidget>,
+        new_widget: Box<dyn DynWidget>,
     ) -> crate::Result<ElementId> {
         // Check if element exists
         if !self.elements.contains_key(&element_id) {
@@ -341,7 +341,7 @@ impl ElementTree {
     pub fn update_child(
         &mut self,
         old_child: Option<ElementId>,
-        new_widget: Option<Box<dyn AnyWidget>>,
+        new_widget: Option<Box<dyn DynWidget>>,
         parent_id: ElementId,
         slot: usize,
     ) -> Option<ElementId> {
@@ -408,7 +408,7 @@ impl ElementTree {
     ///
     /// This implements Flutter's Widget.canUpdate() logic.
     #[inline]
-    fn can_update(&self, element_id: ElementId, new_widget: &dyn AnyWidget) -> bool {
+    fn can_update(&self, element_id: ElementId, new_widget: &dyn DynWidget) -> bool {
         let element = match self.elements.get(&element_id) {
             Some(e) => e,
             None => return false,
@@ -428,7 +428,7 @@ impl ElementTree {
 
         match (old_key, new_key) {
             (None, None) => true, // Both have no key - compatible
-            (Some(k1), Some(k2)) => k1.equals(k2), // Both have keys - must match
+            (Some(k1), Some(k2)) => k1.key_eq(k2), // Both have keys - must match
             _ => false, // One has key, other doesn't - incompatible
         }
     }
@@ -449,7 +449,7 @@ impl ElementTree {
     /// ID of the newly created element
     fn inflate_widget(
         &mut self,
-        widget: Box<dyn AnyWidget>,
+        widget: Box<dyn DynWidget>,
         parent_id: ElementId,
         slot: usize,
     ) -> Option<ElementId> {
@@ -810,7 +810,7 @@ impl ElementTree {
     /// ```
     pub fn visit_all_elements<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&dyn AnyElement),
+        F: FnMut(&dyn DynElement),
     {
         if let Some(root_id) = self.root {
             self.visit_element_recursive(root_id, visitor);
@@ -835,7 +835,7 @@ impl ElementTree {
     /// ```
     pub fn visit_all_elements_mut<F>(&mut self, visitor: &mut F)
     where
-        F: FnMut(&mut dyn AnyElement),
+        F: FnMut(&mut dyn DynElement),
     {
         if let Some(root_id) = self.root {
             // Collect all element IDs first (can't borrow elements while iterating)
@@ -865,7 +865,7 @@ impl ElementTree {
     /// Helper for recursive element visitation (read-only)
     fn visit_element_recursive<F>(&self, element_id: ElementId, visitor: &mut F)
     where
-        F: FnMut(&dyn AnyElement),
+        F: FnMut(&dyn DynElement),
     {
         // Visit this element
         if let Some(element) = self.elements.get(&element_id) {
@@ -889,7 +889,7 @@ impl Default for ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnyWidget, Context, StatelessWidget};
+    use crate::{DynWidget, Context, StatelessWidget};
 
     // Test widget for testing
     #[derive(Debug, Clone)]
@@ -904,7 +904,7 @@ mod tests {
     }
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &Context) -> Box<dyn AnyWidget> {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
             Box::new(TestWidget::new(format!("{}_child", self.name)))
         }
     }

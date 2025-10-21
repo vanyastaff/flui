@@ -100,7 +100,7 @@ pub trait InheritedModel: InheritedWidget {
     {
         // Register dependency with aspect
         let aspect_boxed: Box<dyn Any + Send + Sync> = Box::new(aspect);
-        context.depend_on_inherited_widget_of_exact_type_with_aspect::<Self>(Some(aspect_boxed))
+        context.inherit_aspect::<Self>(Some(aspect_boxed))
     }
 }
 
@@ -152,7 +152,7 @@ mod tests {
 
     // ProxyWidget stub for testing
     impl crate::ProxyWidget for TestModel {
-        fn child(&self) -> &dyn crate::AnyWidget {
+        fn child(&self) -> &dyn crate::DynWidget {
             panic!("TestModel is a test stub")
         }
     }

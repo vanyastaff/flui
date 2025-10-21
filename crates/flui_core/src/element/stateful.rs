@@ -7,8 +7,8 @@ use parking_lot::RwLock;
 
 use crate::{ElementId, StatefulWidget, State, StateLifecycle, Context};
 use crate::tree::ElementTree;
-use super::{AnyElement, Element, ElementLifecycle};
-use crate::AnyWidget;
+use super::{DynElement, Element, ElementLifecycle};
+use crate::DynWidget;
 use crate::foundation::Key;
 
 /// Element for StatefulWidget (holds State that persists across rebuilds)
@@ -95,9 +95,9 @@ impl<W: StatefulWidget> fmt::Debug for StatefulElement<W> {
     }
 }
 
-// ========== Implement AnyElement for StatefulElement ==========
+// ========== Implement DynElement for StatefulElement ==========
 
-impl<W> AnyElement for StatefulElement<W>
+impl<W> DynElement for StatefulElement<W>
 where
     W: StatefulWidget + crate::Widget<Element = StatefulElement<W>>,
 {
@@ -110,7 +110,7 @@ where
     }
 
     fn key(&self) -> Option<&dyn Key> {
-        AnyWidget::key(&self.widget)
+        DynWidget::key(&self.widget)
     }
 
     fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
@@ -158,7 +158,7 @@ where
         self.state_lifecycle = StateLifecycle::Defunct;
     }
 
-    fn update_any(&mut self, new_widget: Box<dyn AnyWidget>) {
+    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         // Try to downcast to our widget type
         if let Ok(widget) = new_widget.downcast::<W>() {
             // Store old widget for did_update_widget
@@ -171,7 +171,7 @@ where
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn AnyWidget>, usize)> {
+    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -247,11 +247,11 @@ where
         std::any::TypeId::of::<W>()
     }
 
-    fn render_object(&self) -> Option<&dyn crate::AnyRenderObject> {
+    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // StatefulElement doesn't have RenderObject
     }
 
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::AnyRenderObject> {
+    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         None // StatefulElement doesn't have RenderObject
     }
 

@@ -3,7 +3,7 @@
 //! Tests the efficient update_children() algorithm in MultiChildRenderObjectElement
 
 use flui_core::{
-    AnyWidget, BuildOwner, Context, ElementTree, MultiChildRenderObjectWidget,
+    DynWidget, BuildOwner, Context, ElementTree, MultiChildRenderObjectWidget,
     RenderObjectWidget, StatefulWidget, State, StatelessWidget, Widget,
 };
 use flui_core::foundation::key::{GlobalKey, Key, ValueKey};
@@ -22,12 +22,12 @@ struct TestChild {
 }
 
 impl StatelessWidget for TestChild {
-    fn build(&self, _ctx: &Context) -> Box<dyn AnyWidget> {
+    fn build(&self, _ctx: &Context) -> Box<dyn DynWidget> {
         Box::new(self.clone())
     }
 }
 
-impl flui_core::AnyWidget for TestChild {
+impl flui_core::DynWidget for TestChild {
     fn key(&self) -> Option<&dyn Key> {
         self.key.as_ref().map(|k| k as &dyn Key)
     }
@@ -50,7 +50,7 @@ impl StatefulWidget for StatefulChild {
     }
 }
 
-impl flui_core::AnyWidget for StatefulChild {
+impl flui_core::DynWidget for StatefulChild {
     fn key(&self) -> Option<&dyn Key> {
         self.key.as_ref().map(|k| k as &dyn Key)
     }
@@ -62,7 +62,7 @@ struct StatefulChildState {
 }
 
 impl State for StatefulChildState {
-    fn build(&mut self, _ctx: &Context) -> Box<dyn AnyWidget> {
+    fn build(&mut self, _ctx: &Context) -> Box<dyn DynWidget> {
         Box::new(TestChild { id: self.value, key: None })
     }
 }
@@ -70,24 +70,24 @@ impl State for StatefulChildState {
 /// Mock multi-child widget (like Row/Column)
 #[derive(Debug, Clone)]
 struct MockRow {
-    children: Vec<Box<dyn AnyWidget>>,
+    children: Vec<Box<dyn DynWidget>>,
 }
 
 impl MultiChildRenderObjectWidget for MockRow {
-    fn children(&self) -> &[Box<dyn AnyWidget>] {
+    fn children(&self) -> &[Box<dyn DynWidget>] {
         &self.children
     }
 
-    fn create_render_object(&self) -> Box<dyn flui_core::AnyRenderObject> {
+    fn create_render_object(&self) -> Box<dyn flui_core::DynRenderObject> {
         Box::new(MockRenderFlex::new())
     }
 
-    fn update_render_object(&self, _render_object: &mut dyn flui_core::AnyRenderObject) {
+    fn update_render_object(&self, _render_object: &mut dyn flui_core::DynRenderObject) {
         // No-op for testing
     }
 }
 
-impl flui_core::AnyWidget for MockRow {
+impl flui_core::DynWidget for MockRow {
     fn key(&self) -> Option<&dyn Key> {
         None
     }
@@ -109,11 +109,11 @@ impl MockRenderFlex {
 // Helper Functions
 // ============================================================================
 
-fn child(id: u32) -> Box<dyn AnyWidget> {
+fn child(id: u32) -> Box<dyn DynWidget> {
     Box::new(TestChild { id, key: None })
 }
 
-fn keyed_child(id: u32, key: u32) -> Box<dyn AnyWidget> {
+fn keyed_child(id: u32, key: u32) -> Box<dyn DynWidget> {
     Box::new(TestChild {
         id,
         key: Some(ValueKey::new(key)),
@@ -371,7 +371,7 @@ fn test_many_children() {
     // New: [1..100]
     // Expected: All updated in-place
 
-    let children: Vec<Box<dyn AnyWidget>> = (1..=100)
+    let children: Vec<Box<dyn DynWidget>> = (1..=100)
         .map(|i| child(i))
         .collect();
 
@@ -432,7 +432,7 @@ fn test_large_list_append() {
     // Verify that appending to large list is efficient
     // Should only mount new children, not rebuild all
 
-    let mut children: Vec<Box<dyn AnyWidget>> = (1..=1000)
+    let mut children: Vec<Box<dyn DynWidget>> = (1..=1000)
         .map(|i| keyed_child(i, i))
         .collect();
 
@@ -450,7 +450,7 @@ fn test_large_list_remove_end() {
     // Verify that removing from end is efficient
     // Should only unmount removed children
 
-    let children: Vec<Box<dyn AnyWidget>> = (1..=900)
+    let children: Vec<Box<dyn DynWidget>> = (1..=900)
         .map(|i| keyed_child(i, i))
         .collect();
 

@@ -2,7 +2,7 @@
 //!
 //! Provides utilities to print element trees in a human-readable format.
 
-use crate::element::AnyElement;
+use crate::element::DynElement;
 use std::fmt::Write;
 
 /// Print element tree to string with indentation
@@ -16,14 +16,14 @@ use std::fmt::Write;
 ///   │  └─ Button #ElementId(4)
 ///   └─ Column #ElementId(5)
 /// ```
-pub fn print_element_tree(element: &dyn AnyElement) -> String {
+pub fn print_element_tree(element: &dyn DynElement) -> String {
     let mut output = String::new();
     print_element_recursive(element, &mut output, "", true);
     output
 }
 
 fn print_element_recursive(
-    element: &dyn AnyElement,
+    element: &dyn DynElement,
     output: &mut String,
     prefix: &str,
     is_last: bool,
@@ -67,7 +67,7 @@ fn print_element_recursive(
 }
 
 /// Simple diagnostic info for an element
-pub fn element_info(element: &dyn AnyElement) -> String {
+pub fn element_info(element: &dyn DynElement) -> String {
     format!(
         "{} #{:?} (lifecycle: {:?}, dirty: {})",
         format!("{:?}", element.widget_type_id())
@@ -94,7 +94,7 @@ mod tests {
         struct TestWidget;
 
         impl StatelessWidget for TestWidget {
-            fn build(&self, _context: &Context) -> Box<dyn crate::widget::AnyWidget> {
+            fn build(&self, _context: &Context) -> Box<dyn crate::widget::DynWidget> {
                 Box::new(TestWidget)
             }
         }

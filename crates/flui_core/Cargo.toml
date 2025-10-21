@@ -29,6 +29,8 @@ lasso.workspace = true
 puffin = { version = "0.19", optional = true }
 puffin_http = { workspace = true, optional = true }
 tracy-client = { version = "0.17", optional = true, default-features = false }
+rand = "0.10.0-rc.0"
+serde_json = "1.0.145"
 
 [dev-dependencies]
 criterion.workspace = true
