@@ -109,7 +109,7 @@ pub use render::widget::{
 // Re-export cache types
 pub use cache::{
     LayoutCache, LayoutCacheKey, LayoutResult,
-    get_layout_cache, invalidate_layout, clear_layout_cache,
+    layout_cache, invalidate_layout, clear_layout_cache,
 };
 
 // Re-export string cache
@@ -124,7 +124,7 @@ pub mod prelude {
     pub use crate::tree::ElementTree;
     pub use crate::widget::{DynWidget, IntoWidget, StatelessWidget, Widget};
     pub use crate::Size;
-    pub use crate::cache::get_layout_cache;
+    pub use crate::cache::layout_cache;
     pub use crate::foundation::string_cache::intern;
 }
 
