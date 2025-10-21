@@ -49,7 +49,6 @@
 
 // New modular structure
 pub mod cache;
-pub mod constraints;
 pub mod context;
 pub mod debug; // Phase 10: Debug infrastructure
 pub mod element;
@@ -77,6 +76,8 @@ pub use flui_types::{
     Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
     MainAxisSize, Offset, Orientation, Point, Rect, Size, VerticalDirection,
 };
+// BoxConstraints is also from flui_types
+pub use flui_types::constraints::BoxConstraints;
 
 // Re-export foundation types
 pub use foundation::{ElementId, Slot};
@@ -85,7 +86,6 @@ pub use error::{CoreError, Result, KeyError}; // Phase 10: Enhanced error types 
 
 // Re-export from modular structure
 pub use context::Context;
-pub use constraints::BoxConstraints;
 pub use element::{DynElement, ComponentElement, Element, InactiveElements, RenderObjectElement, StatefulElement};
 pub use element::render::{
     LeafRenderObjectElement,

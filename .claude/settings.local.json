@@ -22,7 +22,8 @@
       "Bash(cargo clippy --lib --all-features -- -W missing-debug-implementations -W missing-copy-implementations)",
       "Bash(cargo build --lib)",
       "Bash(git add -A)",
-      "Bash(git commit -m \"chore: Remove remaining temporary documentation files\n\nRemoved leftover documentation files from crates/flui_core/:\n- MIGRATION_GUIDE.md\n- REFACTORING_REPORT.md\n- REFACTORING_SUMMARY.md\n\nThese were temporary files from previous refactoring sessions.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\")"
+      "Bash(git commit -m \"chore: Remove remaining temporary documentation files\n\nRemoved leftover documentation files from crates/flui_core/:\n- MIGRATION_GUIDE.md\n- REFACTORING_REPORT.md\n- REFACTORING_SUMMARY.md\n\nThese were temporary files from previous refactoring sessions.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\")",
+      "Bash(git commit -m \"refactor: Remove redundant constraints module\n\nThe constraints.rs module was just re-exporting BoxConstraints from\nflui_types, which is already available through the main re-export.\nRemoved the intermediate module and re-export BoxConstraints directly\nfrom flui_types in lib.rs.\n\nChanges:\n- Deleted crates/flui_core/src/constraints.rs\n- Updated lib.rs to re-export BoxConstraints directly from flui_types\n- No functional changes, just code cleanup\n\nAll 443 tests passing, 0 clippy warnings.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\")"
     ],
     "deny": [],
     "ask": []
