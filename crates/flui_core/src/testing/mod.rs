@@ -184,7 +184,7 @@ pub fn find_by_type<W: 'static>(tester: &WidgetTester) -> Vec<ElementId> {
     let mut found = Vec::new();
 
     tree.visit_all_elements(&mut |element| {
-        if element.widget_has_type_id(type_id) {
+        if element.widget_type_id() == type_id {
             found.push(element.id());
         }
     });
@@ -209,7 +209,7 @@ pub fn find_first_by_type<W: 'static>(tester: &WidgetTester) -> Option<ElementId
     let mut found = None;
 
     tree.visit_all_elements(&mut |element| {
-        if found.is_none() && element.widget_has_type_id(type_id) {
+        if found.is_none() && element.widget_type_id() == type_id {
             found = Some(element.id());
         }
     });
