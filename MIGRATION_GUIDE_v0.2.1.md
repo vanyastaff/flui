@@ -1,16 +1,176 @@
-# Migration Guide: v0.2.0 → v0.2.1
+# Migration Guide: v0.2.0 → v0.3.0
 
-## API Naming Improvements (Rust API Guidelines Compliance)
+## MAJOR BREAKING CHANGES - Trait Object Renaming
 
-This release improves naming consistency to fully comply with Rust API Guidelines (RFC 199).
+This release includes **major breaking changes** to achieve full compliance with Rust API Guidelines (RFC 199).
 
 ### Summary of Changes
 
-All changes are focused on removing the `get_` prefix from methods where it's not idiomatic per [Rust API Guidelines C-GETTER](https://rust-lang.github.io/api-guidelines/naming.html#c-getter).
+This release includes two categories of breaking changes:
+
+1. **🔴 MAJOR: Trait object renaming** (`Any*` → `Dyn*`) - Affects all code using trait objects
+2. **API naming improvements** - Removing `get_` prefix for better compliance
+
+⚠️ **All changes require code updates** - See automated migration tools below.
 
 ---
 
-## 1. Intrinsic Size Methods (DynRenderObject trait)
+## 🔴 PART 1: MAJOR BREAKING CHANGES - Trait Object Renaming
+
+### Overview: `Any*` → `Dyn*` Migration
+
+**Rationale:** The `Any*` prefix was confusing because it suggested a relationship with `std::any::Any`.
+The new `Dyn*` prefix clearly indicates these are object-safe traits for dynamic dispatch, following Rust conventions.
+
+**Impact:** 182+ occurrences renamed across 120+ files.
+
+---
+
+## 1. AnyElement → DynElement
+
+**Location:** `flui_core::element::DynElement`
+
+### Breaking Changes
+
+| Old Name | New Name | Type | Usage |
+|----------|----------|------|-------|
+| `AnyElement` | `DynElement` | Trait | Object-safe element trait |
+| `Box<dyn AnyElement>` | `Box<dyn DynElement>` | Type | Trait object |
+| `any_element` module | `dyn_element` module | Module | Renamed file |
+
+### Migration Example
+
+```rust
+// Before
+use flui_core::AnyElement;
+
+fn process_element(element: &dyn AnyElement) {
+    // ...
+}
+
+let elements: Vec<Box<dyn AnyElement>> = vec![];
+
+// After
+use flui_core::DynElement;
+
+fn process_element(element: &dyn DynElement) {
+    // ...
+}
+
+let elements: Vec<Box<dyn DynElement>> = vec![];
+```
+
+**Search & Replace:**
+- `AnyElement` → `DynElement` (all occurrences)
+- `use flui_core::element::any_element` → `use flui_core::element::dyn_element`
+
+---
+
+## 2. AnyWidget → DynWidget
+
+**Location:** `flui_core::widget::DynWidget`
+
+### Breaking Changes
+
+| Old Name | New Name | Type | Usage |
+|----------|----------|------|-------|
+| `AnyWidget` | `DynWidget` | Trait | Object-safe widget trait |
+| `Box<dyn AnyWidget>` | `Box<dyn DynWidget>` | Type | Trait object |
+| `any_widget` module | `dyn_widget` module | Module | Renamed file |
+
+### Migration Example
+
+```rust
+// Before
+use flui_core::AnyWidget;
+
+struct Row {
+    children: Vec<Box<dyn AnyWidget>>,
+}
+
+impl StatelessWidget for MyWidget {
+    fn build(&self, context: &Context) -> Box<dyn AnyWidget> {
+        Box::new(Text::new("Hello"))
+    }
+}
+
+// After
+use flui_core::DynWidget;
+
+struct Row {
+    children: Vec<Box<dyn DynWidget>>,
+}
+
+impl StatelessWidget for MyWidget {
+    fn build(&self, context: &Context) -> Box<dyn DynWidget> {
+        Box::new(Text::new("Hello"))
+    }
+}
+```
+
+**Search & Replace:**
+- `AnyWidget` → `DynWidget` (all occurrences)
+- `use flui_core::widget::any_widget` → `use flui_core::widget::dyn_widget`
+
+---
+
+## 3. AnyRenderObject → DynRenderObject
+
+**Location:** `flui_core::render::DynRenderObject`
+
+### Breaking Changes
+
+| Old Name | New Name | Type | Usage |
+|----------|----------|------|-------|
+| `AnyRenderObject` | `DynRenderObject` | Trait | Object-safe render object trait |
+| `Box<dyn AnyRenderObject>` | `Box<dyn DynRenderObject>` | Type | Trait object |
+| `any_render_object` module | `dyn_render_object` module | Module | Renamed file |
+
+### Migration Example
+
+```rust
+// Before
+use flui_core::AnyRenderObject;
+
+impl RenderObjectWidget for Padding {
+    fn create_render_object(&self) -> Box<dyn AnyRenderObject> {
+        Box::new(RenderPadding::new(self.padding))
+    }
+
+    fn update_render_object(&self, render_object: &mut dyn AnyRenderObject) {
+        // ...
+    }
+}
+
+// After
+use flui_core::DynRenderObject;
+
+impl RenderObjectWidget for Padding {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+        Box::new(RenderPadding::new(self.padding))
+    }
+
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
+        // ...
+    }
+}
+```
+
+**Search & Replace:**
+- `AnyRenderObject` → `DynRenderObject` (all occurrences)
+- `use flui_core::render::any_render_object` → `use flui_core::render::dyn_render_object`
+
+---
+
+## 🔵 PART 2: API Naming Improvements
+
+### Overview
+
+Removing the `get_` prefix from methods per [Rust API Guidelines C-GETTER](https://rust-lang.github.io/api-guidelines/naming.html#c-getter).
+
+---
+
+## 4. Intrinsic Size Methods (DynRenderObject trait)
 
 **Location:** `flui_core::render::DynRenderObject`
 
@@ -122,16 +282,29 @@ let theme = context.inherit::<Theme>();
 
 ## Automated Migration
 
+⚠️ **IMPORTANT:** Backup your code first! These are breaking changes.
+
+```bash
+git commit -am "backup before migration to flui v0.3.0"
+```
+
 ### Using sed (Unix/Linux/macOS)
 
 ```bash
 # Navigate to your project root
 cd /path/to/your/project
 
-# Backup your code first!
-git commit -am "backup before migration"
+# PART 1: Rename trait objects (Any* → Dyn*)
+find . -name "*.rs" -type f -exec sed -i '' \
+  -e 's/AnyElement/DynElement/g' \
+  -e 's/AnyWidget/DynWidget/g' \
+  -e 's/AnyRenderObject/DynRenderObject/g' \
+  -e 's/any_element/dyn_element/g' \
+  -e 's/any_widget/dyn_widget/g' \
+  -e 's/any_render_object/dyn_render_object/g' \
+  {} +
 
-# Apply automatic replacements
+# PART 2: Remove get_ prefix from methods
 find . -name "*.rs" -type f -exec sed -i '' \
   -e 's/get_min_intrinsic_width/min_intrinsic_width/g' \
   -e 's/get_max_intrinsic_width/max_intrinsic_width/g' \
@@ -144,26 +317,66 @@ find . -name "*.rs" -type f -exec sed -i '' \
 cargo check
 
 # If successful
-git commit -am "migrate to flui v0.2.1 naming conventions"
+git commit -am "migrate to flui v0.3.0 naming conventions"
 ```
 
-### Using ripgrep + sd (Cross-platform)
+### Using sed (Windows Git Bash)
 
 ```bash
-# Install tools if needed
-# cargo install sd
+# Navigate to your project root
+cd /c/path/to/your/project
 
-# Intrinsic size methods
-rg -l 'get_min_intrinsic_width' | xargs sd 'get_min_intrinsic_width' 'min_intrinsic_width'
-rg -l 'get_max_intrinsic_width' | xargs sd 'get_max_intrinsic_width' 'max_intrinsic_width'
-rg -l 'get_min_intrinsic_height' | xargs sd 'get_min_intrinsic_height' 'min_intrinsic_height'
-rg -l 'get_max_intrinsic_height' | xargs sd 'get_max_intrinsic_height' 'max_intrinsic_height'
+# PART 1: Rename trait objects (Any* → Dyn*)
+find . -name "*.rs" -type f -exec sed -i \
+  -e 's/AnyElement/DynElement/g' \
+  -e 's/AnyWidget/DynWidget/g' \
+  -e 's/AnyRenderObject/DynRenderObject/g' \
+  -e 's/any_element/dyn_element/g' \
+  -e 's/any_widget/dyn_widget/g' \
+  -e 's/any_render_object/dyn_render_object/g' \
+  {} +
 
-# Layout cache
-rg -l 'get_layout_cache' | xargs sd 'get_layout_cache' 'layout_cache'
+# PART 2: Remove get_ prefix
+find . -name "*.rs" -type f -exec sed -i \
+  -e 's/get_min_intrinsic_width/min_intrinsic_width/g' \
+  -e 's/get_max_intrinsic_width/max_intrinsic_width/g' \
+  -e 's/get_min_intrinsic_height/min_intrinsic_height/g' \
+  -e 's/get_max_intrinsic_height/max_intrinsic_height/g' \
+  -e 's/get_layout_cache/layout_cache/g' \
+  {} +
 
 # Verify
 cargo check
+```
+
+### Using ripgrep + sd (Cross-platform - Recommended)
+
+```bash
+# Install tools if needed
+# cargo install sd ripgrep
+
+# PART 1: Rename trait objects (Any* → Dyn*)
+rg -l 'AnyElement' --type rust | xargs sd 'AnyElement' 'DynElement'
+rg -l 'AnyWidget' --type rust | xargs sd 'AnyWidget' 'DynWidget'
+rg -l 'AnyRenderObject' --type rust | xargs sd 'AnyRenderObject' 'DynRenderObject'
+
+# Rename module paths
+rg -l 'any_element' --type rust | xargs sd 'any_element' 'dyn_element'
+rg -l 'any_widget' --type rust | xargs sd 'any_widget' 'dyn_widget'
+rg -l 'any_render_object' --type rust | xargs sd 'any_render_object' 'dyn_render_object'
+
+# PART 2: Remove get_ prefix from methods
+rg -l 'get_min_intrinsic_width' --type rust | xargs sd 'get_min_intrinsic_width' 'min_intrinsic_width'
+rg -l 'get_max_intrinsic_width' --type rust | xargs sd 'get_max_intrinsic_width' 'max_intrinsic_width'
+rg -l 'get_min_intrinsic_height' --type rust | xargs sd 'get_min_intrinsic_height' 'min_intrinsic_height'
+rg -l 'get_max_intrinsic_height' --type rust | xargs sd 'get_max_intrinsic_height' 'max_intrinsic_height'
+rg -l 'get_layout_cache' --type rust | xargs sd 'get_layout_cache' 'layout_cache'
+
+# Verify
+cargo check
+
+# If successful
+git commit -am "migrate to flui v0.3.0"
 ```
 
 ---
@@ -172,25 +385,64 @@ cargo check
 
 ### Who is affected?
 
-1. **Users implementing custom `RenderObject` traits** - If you override intrinsic size methods
-2. **Users calling `get_layout_cache()` directly** - Update to `layout_cache()`
-3. **Most widget users** - ✅ No changes needed (high-level API unchanged)
+**🔴 EVERYONE using flui_core is affected by Any* → Dyn* changes**
+
+1. **ALL users** - Any code using `Box<dyn AnyElement>`, `Box<dyn AnyWidget>`, or `Box<dyn AnyRenderObject>`
+2. **Widget developers** - All `StatelessWidget::build()` return types
+3. **RenderObject implementors** - All `create_render_object()` and `update_render_object()` methods
+4. **Custom element creators** - All trait object usage
+5. **Users calling `get_layout_cache()` directly** - Update to `layout_cache()`
+6. **Users implementing intrinsic size methods** - Remove `get_` prefix
 
 ### Compilation Errors You Might See
 
+#### Error 1: Cannot find type `AnyElement`
+
 ```
-error[E0599]: no function or associated item named `get_min_intrinsic_width` found for type `MyRenderObject`
+error[E0412]: cannot find type `AnyElement` in this scope
+  --> src/my_widget.rs:15:32
+   |
+15 | fn process(element: &dyn AnyElement) {
+   |                          ^^^^^^^^^^ not found in this scope
+   |
+help: consider importing this trait
+   |
+1  | use flui_core::DynElement;
+   |
+```
+
+**Fix:** Replace `AnyElement` with `DynElement` and update imports.
+
+#### Error 2: Cannot find type `AnyWidget`
+
+```
+error[E0412]: cannot find type `AnyWidget` in crate `flui_core`
+  --> src/my_widget.rs:8:37
+   |
+8  |     fn build(&self) -> Box<dyn AnyWidget> {
+   |                                 ^^^^^^^^^ not found in this scope
+   |
+help: consider importing this trait
+   |
+1  | use flui_core::DynWidget;
+   |
+```
+
+**Fix:** Replace `AnyWidget` with `DynWidget`.
+
+#### Error 3: Method renamed
+
+```
+error[E0599]: no function named `get_min_intrinsic_width` found
   --> src/my_render_object.rs:42:5
    |
 42 |     fn get_min_intrinsic_width(&self, height: f32) -> f32 {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = help: items from traits can only be used if the trait is implemented and in scope
-   = note: the following trait defines an item `min_intrinsic_width`, perhaps you need to implement it:
-           candidate #1: `DynRenderObject`
+   = note: the trait `DynRenderObject` defines an item `min_intrinsic_width`
 ```
 
-**Fix:** Rename the method to `min_intrinsic_width`.
+**Fix:** Rename to `min_intrinsic_width` (remove `get_` prefix).
 
 ---
 
@@ -251,14 +503,41 @@ cargo build --release
 
 ## Summary
 
-✅ **3 breaking changes** (method/function renames)
-✅ **Simple migration** (find & replace)
-✅ **Improved compliance** with Rust API Guidelines
-✅ **Better developer experience**
+### Breaking Changes Count
 
-Most projects can migrate in **< 5 minutes** using automated find & replace.
+🔴 **MAJOR: 3 trait object renames** (Any* → Dyn*)
+- `AnyElement` → `DynElement` (82+ occurrences)
+- `AnyWidget` → `DynWidget` (60+ occurrences)
+- `AnyRenderObject` → `DynRenderObject` (40+ occurrences)
+
+🔵 **Minor: 5 method/function renames** (remove get_ prefix)
+- 4 intrinsic size methods
+- 1 layout cache function
+
+### Migration Time
+
+- **Automated migration:** < 5 minutes using sed/ripgrep
+- **Manual verification:** 5-10 minutes
+- **Total time:** ~10-15 minutes for most projects
+
+### Benefits
+
+✅ **100% Rust API Guidelines compliance** - No more confusing `Any*` prefix
+✅ **Clearer code** - `Dyn*` explicitly indicates dynamic dispatch
+✅ **Better IDE support** - Less confusion with `std::any::Any`
+✅ **Improved maintainability** - Consistent with Rust ecosystem
+
+### Migration Checklist
+
+- [ ] Backup code (`git commit -am "backup"`)
+- [ ] Run automated migration script
+- [ ] Verify with `cargo check`
+- [ ] Run tests (`cargo test`)
+- [ ] Review changes (`git diff`)
+- [ ] Commit (`git commit -am "migrate to flui v0.3.0"`)
 
 ---
 
 *Last updated: 2025-10-21*
-*Flui version: 0.2.1*
+*Flui version: 0.3.0*
+*Migration difficulty: ⭐⭐ (Easy with automation)*
