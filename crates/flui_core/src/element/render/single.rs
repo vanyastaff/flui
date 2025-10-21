@@ -204,6 +204,10 @@ impl<W: SingleChildRenderObjectWidget> DynElement for SingleChildRenderObjectEle
         std::any::TypeId::of::<W>()
     }
 
+    fn widget(&self) -> &dyn crate::DynWidget {
+        &self.widget
+    }
+
     fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         self.render_object.as_ref().map(|ro| ro.as_ref())
     }

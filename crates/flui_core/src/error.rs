@@ -36,6 +36,7 @@
 use thiserror::Error;
 use std::any::TypeId;
 use std::sync::Arc;
+use std::borrow::Cow;
 
 use crate::{ElementId, ElementLifecycle};
 
@@ -69,7 +70,7 @@ pub enum CoreError {
     #[error("Rebuild failed for element {id}: {reason}")]
     RebuildFailed {
         id: ElementId,
-        reason: String,
+        reason: Cow<'static, str>,
     },
 
     /// Element is already mounted
@@ -87,12 +88,12 @@ pub enum CoreError {
     #[error("Invalid operation on element {id}: {reason}")]
     InvalidOperation {
         id: ElementId,
-        reason: String,
+        reason: Cow<'static, str>,
     },
 
     /// Tree is in invalid state
     #[error("Element tree in invalid state: {0}")]
-    InvalidTreeState(String),
+    InvalidTreeState(Cow<'static, str>),
 
     // Phase 10: Enhanced Error Handling
 
@@ -130,27 +131,46 @@ pub type Result<T> = std::result::Result<T, CoreError>;
 
 impl CoreError {
     /// Create an element not found error
+    #[must_use]
     pub fn element_not_found(id: ElementId) -> Self {
         Self::ElementNotFound(id)
     }
 
     /// Create an invalid hierarchy error
+    #[must_use]
     pub fn invalid_hierarchy(parent: ElementId, child: ElementId) -> Self {
         Self::InvalidHierarchy { parent, child }
     }
 
     /// Create a not mounted error
+    #[must_use]
     pub fn not_mounted(id: ElementId) -> Self {
         Self::NotMounted(id)
     }
 
     /// Create a type mismatch error
+    #[must_use]
     pub fn type_mismatch(id: ElementId) -> Self {
         Self::TypeMismatch { id }
     }
 
     /// Create a rebuild failed error
-    pub fn rebuild_failed(id: ElementId, reason: impl Into<String>) -> Self {
+    ///
+    /// Accepts both static strings (zero-cost) and dynamic strings (allocated):
+    ///
+    /// ```rust
+    /// use flui_core::{CoreError, ElementId};
+    ///
+    /// let id = ElementId::new();
+    ///
+    /// // Static string - zero allocation!
+    /// let err1 = CoreError::rebuild_failed(id, "static reason");
+    ///
+    /// // Dynamic string - allocated when needed
+    /// let err2 = CoreError::rebuild_failed(id, format!("dynamic {}", 42));
+    /// ```
+    #[must_use]
+    pub fn rebuild_failed(id: ElementId, reason: impl Into<Cow<'static, str>>) -> Self {
         Self::RebuildFailed {
             id,
             reason: reason.into(),
@@ -158,17 +178,22 @@ impl CoreError {
     }
 
     /// Create an already mounted error
+    #[must_use]
     pub fn already_mounted(id: ElementId) -> Self {
         Self::AlreadyMounted(id)
     }
 
     /// Create a slot out of bounds error
+    #[must_use]
     pub fn slot_out_of_bounds(element: ElementId, slot: usize) -> Self {
         Self::SlotOutOfBounds { element, slot }
     }
 
     /// Create an invalid operation error
-    pub fn invalid_operation(id: ElementId, reason: impl Into<String>) -> Self {
+    ///
+    /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
+    #[must_use]
+    pub fn invalid_operation(id: ElementId, reason: impl Into<Cow<'static, str>>) -> Self {
         Self::InvalidOperation {
             id,
             reason: reason.into(),
@@ -176,13 +201,17 @@ impl CoreError {
     }
 
     /// Create an invalid tree state error
-    pub fn invalid_tree_state(reason: impl Into<String>) -> Self {
+    ///
+    /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
+    #[must_use]
+    pub fn invalid_tree_state(reason: impl Into<Cow<'static, str>>) -> Self {
         Self::InvalidTreeState(reason.into())
     }
 
     // Phase 10: Enhanced Error Handling
 
     /// Create a build failed error
+    #[must_use]
     pub fn build_failed(
         widget_type: &'static str,
         element_id: ElementId,
@@ -196,6 +225,7 @@ impl CoreError {
     }
 
     /// Create a lifecycle violation error
+    #[must_use]
     pub fn lifecycle_violation(
         element_id: ElementId,
         expected_state: ElementLifecycle,
@@ -211,11 +241,13 @@ impl CoreError {
     }
 
     /// Create a key error
+    #[must_use]
     pub fn key_error(error: KeyError) -> Self {
         Self::KeyError(error)
     }
 
     /// Create an inherited widget not found error
+    #[must_use]
     pub fn inherited_widget_not_found(
         widget_type: &'static str,
         context_element_id: ElementId,
@@ -228,7 +260,7 @@ impl CoreError {
 }
 
 /// Error types for global keys (Phase 10)
-#[derive(Error, Debug, Clone)]
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyError {
     /// Duplicate global key detected
     #[error("Duplicate GlobalKey detected: {key_id:?}. Each GlobalKey must be unique. Existing element: {existing_element}, New element: {new_element}")]
@@ -291,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_inherited_widget_not_found_error() {
-        let error = CoreError::inherited_widget_not_found("Theme", ElementId::from_raw(5));
+        let error = CoreError::inherited_widget_not_found("Theme", unsafe { ElementId::from_raw(5) });
         let msg = error.to_string();
         assert!(msg.contains("Theme"));
         assert!(msg.contains("Did you forget"));
@@ -300,7 +332,7 @@ mod tests {
     #[test]
     fn test_lifecycle_violation_error() {
         let error = CoreError::lifecycle_violation(
-            ElementId::from_raw(1),
+            unsafe { ElementId::from_raw(1) },
             ElementLifecycle::Active,
             ElementLifecycle::Defunct,
             "update",
@@ -314,8 +346,8 @@ mod tests {
     fn test_duplicate_key_error() {
         let error = KeyError::DuplicateKey {
             key_id: TypeId::of::<()>(),
-            existing_element: ElementId::from_raw(1),
-            new_element: ElementId::from_raw(2),
+            existing_element: unsafe { ElementId::from_raw(1) },
+            new_element: unsafe { ElementId::from_raw(2) },
         };
         let msg = error.to_string();
         assert!(msg.contains("Duplicate"));

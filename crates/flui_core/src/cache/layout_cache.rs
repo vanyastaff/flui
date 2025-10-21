@@ -8,7 +8,7 @@ use crate::{BoxConstraints, ElementId};
 use flui_types::Size;
 
 /// Cache key (element_id + constraints)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct LayoutCacheKey {
     /// The widget or element ID being laid out
     pub element_id: ElementId,
@@ -47,7 +47,7 @@ impl LayoutCacheKey {
 }
 
 /// Cached layout result (size + needs_layout flag)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayoutResult {
     /// The computed size
     pub size: Size,
@@ -81,6 +81,15 @@ static LAYOUT_CACHE: Lazy<LayoutCache> = Lazy::new(LayoutCache::new);
 /// Thread-safe layout cache (10k entries, 60s TTL)
 pub struct LayoutCache {
     cache: Cache<LayoutCacheKey, LayoutResult>,
+}
+
+impl std::fmt::Debug for LayoutCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LayoutCache")
+            .field("entry_count", &self.cache.entry_count())
+            .field("weighted_size", &self.cache.weighted_size())
+            .finish()
+    }
 }
 
 impl LayoutCache {

@@ -202,6 +202,12 @@ impl Context {
     /// Accesses InheritedWidget without dependency (legacy, for macros)
     ///
     /// For direct usage, prefer [`read()`](Self::read).
+    ///
+    /// # Deprecation Note
+    ///
+    /// This method uses the `get_*` prefix which violates Rust API Guidelines (C-GETTER).
+    /// It is kept for legacy macro support only. New code should use [`read()`](Self::read).
+    #[deprecated(since = "0.5.0", note = "use `read()` instead; this is for legacy macro support only")]
     #[must_use]
     pub fn get_inherited_widget<W>(&self) -> Option<W>
     where
@@ -213,6 +219,7 @@ impl Context {
     /// Accesses InheritedWidget without dependency (legacy alias)
     #[must_use]
     #[inline]
+    #[allow(deprecated)]
     pub fn find_inherited<W>(&self) -> Option<W>
     where
         W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
@@ -426,14 +433,37 @@ mod tests {
     use super::*;
 
     // Fake widget for testing
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     struct DummyWidget {
         value: i32,
+        child: Box<dyn crate::DynWidget>,
+    }
+
+    impl crate::ProxyWidget for DummyWidget {
+        fn child(&self) -> &dyn crate::DynWidget {
+            &*self.child
+        }
     }
 
     impl InheritedWidget for DummyWidget {
+        type Data = i32;
+
+        fn data(&self) -> &Self::Data {
+            &self.value
+        }
+
         fn update_should_notify(&self, _old: &Self) -> bool {
             true
+        }
+    }
+
+    // Simple child widget for testing
+    #[derive(Debug, Clone)]
+    struct TestChild;
+
+    impl crate::StatelessWidget for TestChild {
+        fn build(&self, _context: &Context) -> Box<dyn crate::DynWidget> {
+            Box::new(TestChild)
         }
     }
 

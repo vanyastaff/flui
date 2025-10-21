@@ -113,7 +113,7 @@ impl<T: Notification> AnyNotification for T {
 ///     max_extent: 1000.0,
 /// });
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollNotification {
     /// Scroll delta (positive = scroll down/right, negative = scroll up/left)
     pub delta: f64,
@@ -130,7 +130,7 @@ impl Notification for ScrollNotification {}
 /// Notification dispatched when an element's layout changes
 ///
 /// This allows ancestors to react to layout changes in descendants.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LayoutChangedNotification {
     /// Element that changed layout
     pub element_id: ElementId,
@@ -141,7 +141,7 @@ impl Notification for LayoutChangedNotification {}
 /// Notification dispatched when an element's size changes
 ///
 /// More specific than LayoutChangedNotification, provides old and new sizes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SizeChangedLayoutNotification {
     /// Element that changed size
     pub element_id: ElementId,
@@ -158,7 +158,7 @@ impl Notification for SizeChangedLayoutNotification {}
 /// Notification used by AutomaticKeepAlive to request staying alive
 ///
 /// Used in lazy lists to keep items alive even when scrolled out of view.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeepAliveNotification {
     /// Element to keep alive
     pub element_id: ElementId,
@@ -172,7 +172,7 @@ impl Notification for KeepAliveNotification {}
 /// Notification dispatched when focus changes
 ///
 /// Bubbles up to notify ancestors about focus changes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FocusChangedNotification {
     /// Element that gained or lost focus
     pub element_id: ElementId,

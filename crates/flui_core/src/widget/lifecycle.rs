@@ -4,6 +4,7 @@
 //! progression of State objects from creation to disposal.
 
 use std::fmt;
+use std::str::FromStr;
 
 /// State lifecycle progression
 ///
@@ -121,6 +122,59 @@ impl StateLifecycle {
             Self::Defunct => "Defunct",
         }
     }
+
+    /// Check if this lifecycle state can transition to another
+    ///
+    /// Valid transitions:
+    /// - Created → Initialized (init_state called)
+    /// - Initialized → Ready (ready to build)
+    /// - Ready → Defunct (dispose called)
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_core::StateLifecycle;
+    ///
+    /// // Valid transitions
+    /// assert!(StateLifecycle::Created.can_transition_to(StateLifecycle::Initialized));
+    /// assert!(StateLifecycle::Initialized.can_transition_to(StateLifecycle::Ready));
+    /// assert!(StateLifecycle::Ready.can_transition_to(StateLifecycle::Defunct));
+    ///
+    /// // Invalid transitions
+    /// assert!(!StateLifecycle::Defunct.can_transition_to(StateLifecycle::Ready));
+    /// assert!(!StateLifecycle::Created.can_transition_to(StateLifecycle::Ready));
+    /// ```
+    #[must_use]
+    #[inline]
+    pub const fn can_transition_to(&self, to: Self) -> bool {
+        matches!(
+            (self, to),
+            (Self::Created, Self::Initialized)
+                | (Self::Initialized, Self::Ready)
+                | (Self::Ready, Self::Defunct)
+        )
+    }
+
+    /// Check if this is the Created state
+    #[must_use]
+    #[inline]
+    pub const fn is_created(&self) -> bool {
+        matches!(self, Self::Created)
+    }
+
+    /// Check if this is the Initialized state
+    #[must_use]
+    #[inline]
+    pub const fn is_initialized(&self) -> bool {
+        matches!(self, Self::Initialized)
+    }
+
+    /// Check if this is the Ready state
+    #[must_use]
+    #[inline]
+    pub const fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
 }
 
 impl Default for StateLifecycle {
@@ -135,6 +189,40 @@ impl Default for StateLifecycle {
 impl fmt::Display for StateLifecycle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// Error type for parsing StateLifecycle from string
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseStateLifecycleError {
+    invalid_value: String,
+}
+
+impl fmt::Display for ParseStateLifecycleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid state lifecycle '{}', expected one of: Created, Initialized, Ready, Defunct (case-insensitive)",
+            self.invalid_value
+        )
+    }
+}
+
+impl std::error::Error for ParseStateLifecycleError {}
+
+impl FromStr for StateLifecycle {
+    type Err = ParseStateLifecycleError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "created" => Ok(Self::Created),
+            "initialized" => Ok(Self::Initialized),
+            "ready" => Ok(Self::Ready),
+            "defunct" => Ok(Self::Defunct),
+            _ => Err(ParseStateLifecycleError {
+                invalid_value: s.to_string(),
+            }),
+        }
     }
 }
 

@@ -129,6 +129,21 @@ impl<T: Notification + Clone + 'static> ProxyWidget for NotificationListener<T> 
         // NotificationListener doesn't support keys by default
         None
     }
+
+    /// Handle notification bubbling (Phase 3.4)
+    ///
+    /// Tries to downcast the notification to type T and call the callback.
+    fn handle_notification(&self, notification: &dyn crate::notification::AnyNotification) -> Option<bool> {
+        // Try to downcast to the specific type T
+        if let Some(typed_notification) = notification.as_any().downcast_ref::<T>() {
+            // Call the callback and return its result
+            let should_stop = (self.on_notification)(typed_notification);
+            Some(should_stop)
+        } else {
+            // Wrong type, this listener doesn't handle it
+            None
+        }
+    }
 }
 
 // Use macro to implement Widget trait automatically
@@ -257,5 +272,74 @@ mod tests {
         let debug_str = format!("{:?}", listener);
         assert!(debug_str.contains("NotificationListener"));
         assert!(debug_str.contains("TestNotification"));
+    }
+
+    // ========== Phase 3.4: Integration Tests ==========
+
+    #[test]
+    fn test_proxy_widget_handle_notification_correct_type() {
+        use crate::widget::proxy::ProxyWidget;
+
+        let listener = NotificationListener::<TestNotification>::new(
+            |notification| {
+                assert_eq!(notification.message, "test");
+                true // Stop bubbling
+            },
+            Box::new(ChildWidget),
+        );
+
+        let notification = TestNotification {
+            message: "test".to_string(),
+        };
+
+        // Should handle notification of correct type via ProxyWidget trait
+        let result = ProxyWidget::handle_notification(&listener, &notification);
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn test_proxy_widget_handle_notification_wrong_type() {
+        use crate::widget::proxy::ProxyWidget;
+        use crate::notification::ScrollNotification;
+
+        let listener = NotificationListener::<TestNotification>::new(
+            |_| true,
+            Box::new(ChildWidget),
+        );
+
+        let scroll = ScrollNotification {
+            delta: 10.0,
+            position: 100.0,
+            max_extent: 1000.0,
+        };
+
+        // Should return None for wrong type
+        let result = ProxyWidget::handle_notification(&listener, &scroll);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_proxy_widget_handle_notification_callback_result() {
+        use crate::widget::proxy::ProxyWidget;
+
+        // Test with callback returning false (continue bubbling)
+        let listener_continue = NotificationListener::<TestNotification>::new(
+            |_| false,
+            Box::new(ChildWidget),
+        );
+
+        let notification = TestNotification {
+            message: "test".to_string(),
+        };
+
+        assert_eq!(ProxyWidget::handle_notification(&listener_continue, &notification), Some(false));
+
+        // Test with callback returning true (stop bubbling)
+        let listener_stop = NotificationListener::<TestNotification>::new(
+            |_| true,
+            Box::new(ChildWidget),
+        );
+
+        assert_eq!(ProxyWidget::handle_notification(&listener_stop, &notification), Some(true));
     }
 }

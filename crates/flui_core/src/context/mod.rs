@@ -25,12 +25,12 @@
 //! context.mark_dirty();
 //! ```
 
-mod context;
+mod impl_;
 pub mod dependency;
 mod inherited;
 mod iterators;
 
 // Re-exports
-pub use context::Context;
+pub use impl_::Context;
 pub use dependency::{DependencyInfo, DependencyTracker};
 pub use iterators::{Ancestors, Children, Descendants};

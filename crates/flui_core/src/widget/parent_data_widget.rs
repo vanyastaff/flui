@@ -242,6 +242,10 @@ where
         TypeId::of::<W>()
     }
 
+    fn widget(&self) -> &dyn crate::DynWidget {
+        &self.widget
+    }
+
     fn render_object(&self) -> Option<&dyn DynRenderObject> {
         None // ParentDataElement doesn't have RenderObject
     }
@@ -389,7 +393,7 @@ mod tests {
         };
         let mut element = ParentDataElement::new(widget);
 
-        let parent_id = ElementId::from_raw(100);
+        let parent_id = unsafe { ElementId::from_raw(100) };
         element.mount(Some(parent_id), 0);
 
         assert_eq!(element.parent(), Some(parent_id));

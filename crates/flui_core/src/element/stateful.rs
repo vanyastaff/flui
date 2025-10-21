@@ -247,6 +247,18 @@ where
         std::any::TypeId::of::<W>()
     }
 
+    fn widget(&self) -> &dyn crate::DynWidget {
+        &self.widget
+    }
+
+    fn state(&self) -> Option<&dyn crate::State> {
+        Some(self.state.as_ref())
+    }
+
+    fn state_mut(&mut self) -> Option<&mut dyn crate::State> {
+        Some(self.state.as_mut())
+    }
+
     fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // StatefulElement doesn't have RenderObject
     }

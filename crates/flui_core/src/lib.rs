@@ -93,7 +93,7 @@ pub use element::render::{
     SingleChildRenderObjectElement,
 };
 pub use tree::{BuildOwner, ElementPool, ElementPoolStats, ElementTree, GlobalKeyId, PipelineOwner};
-pub use widget::{DynWidget, InheritedElement, InheritedWidget, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget}; // Phase 10: ErrorWidget
+pub use widget::{DynWidget, InheritedElement, InheritedWidget, InheritedModel, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget, ErrorDetails, ErrorWidgetBuilder}; // Phase 3.3: ErrorWidget + builder, Phase 5.2: InheritedModel
 pub use render::{
     DynRenderObject,
     RenderObject,
@@ -115,17 +115,91 @@ pub use cache::{
 // Re-export string cache
 pub use foundation::string_cache::{capacity, get, intern, is_empty, len, resolve, InternedString};
 
+// ========== Type Aliases for Common Patterns ==========
+
+/// Boxed widget trait object
+///
+/// Commonly used for heterogeneous collections of widgets.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_core::BoxedWidget;
+///
+/// let widgets: Vec<BoxedWidget> = vec![
+///     // Box::new(Text::new("Hello")),
+///     // Box::new(Container::new()),
+/// ];
+/// ```
+pub type BoxedWidget = Box<dyn DynWidget>;
+
+/// Boxed element trait object
+///
+/// Commonly used for heterogeneous collections of elements.
+pub type BoxedElement = Box<dyn DynElement>;
+
+/// Boxed render object trait object
+///
+/// Commonly used for heterogeneous collections of render objects.
+pub type BoxedRenderObject = Box<dyn DynRenderObject>;
+
 /// Prelude module for convenient imports
+///
+/// This module re-exports the most commonly used types and traits for building UI.
+/// Import everything with:
+///
+/// ```rust
+/// use flui_core::prelude::*;
+/// ```
 pub mod prelude {
-    pub use crate::context::Context;
-    pub use crate::constraints::BoxConstraints;
-    pub use crate::element::{DynElement, Element};
-    pub use crate::foundation::ElementId;
-    pub use crate::tree::ElementTree;
-    pub use crate::widget::{DynWidget, IntoWidget, StatelessWidget, Widget};
-    pub use crate::Size;
+    // Core types
+    pub use crate::{
+        Context, BoxConstraints, Size, ElementId, ElementTree,
+        DynWidget, DynElement, Widget, Element,
+        StatelessWidget, StatefulWidget, State,
+        IntoWidget,
+    };
+
+    // Keys (very commonly used)
+    pub use crate::foundation::{
+        Key, GlobalKey, ValueKey, UniqueKey, ObjectKey, WidgetKey,
+        Slot,
+    };
+
+    // Lifecycle enums
+    pub use crate::{ElementLifecycle, StateLifecycle};
+
+    // Errors and Results
+    pub use crate::{CoreError, Result, KeyError};
+
+    // Common widget types
+    pub use crate::{
+        InheritedWidget, InheritedElement,
+        ParentDataWidget, ParentDataElement,
+        ProxyWidget, ProxyElement,
+        ErrorWidget,
+    };
+
+    // Render types
+    pub use crate::{
+        DynRenderObject, RenderObject,
+        LeafRenderObjectWidget, SingleChildRenderObjectWidget, MultiChildRenderObjectWidget,
+    };
+
+    // Geometry types from flui_types
+    pub use crate::{
+        Offset, Point, Rect, Alignment, EdgeInsets,
+        Axis, AxisDirection, Orientation,
+        MainAxisAlignment, CrossAxisAlignment, MainAxisSize,
+        VerticalDirection,
+    };
+
+    // Utilities
     pub use crate::cache::layout_cache;
     pub use crate::foundation::string_cache::intern;
+
+    // Type aliases
+    pub use crate::{BoxedWidget, BoxedElement, BoxedRenderObject};
 }
 
 

@@ -22,6 +22,12 @@ pub struct ElementTree {
     element_pool: Option<ElementPool>,
     building: bool,
     tree_ref: Option<Arc<RwLock<Self>>>,
+    /// Whether we're currently in a build scope (Phase 3.2)
+    /// When true, mark_dirty calls are deferred to avoid infinite rebuild loops
+    in_build_scope: bool,
+    /// Elements that tried to mark_dirty during build scope (Phase 3.2)
+    /// These will be processed after the build scope completes
+    deferred_dirty: VecDeque<ElementId>,
 }
 
 impl ElementTree {
@@ -35,6 +41,8 @@ impl ElementTree {
             element_pool: None, // Pooling disabled by default
             building: false,
             tree_ref: None,
+            in_build_scope: false, // Phase 3.2
+            deferred_dirty: VecDeque::new(), // Phase 3.2
         }
     }
 
@@ -338,6 +346,7 @@ impl ElementTree {
     ///     0
     /// );
     /// ```
+    #[tracing::instrument(level = "trace", skip(self, new_widget), fields(has_new_widget = new_widget.is_some()))]
     pub fn update_child(
         &mut self,
         old_child: Option<ElementId>,
@@ -447,6 +456,7 @@ impl ElementTree {
     /// # Returns
     ///
     /// ID of the newly created element
+    #[tracing::instrument(level = "trace", skip(self, widget), fields(widget_type = %widget.type_name()))]
     fn inflate_widget(
         &mut self,
         widget: Box<dyn DynWidget>,
@@ -475,6 +485,7 @@ impl ElementTree {
     }
 
     /// Unmount an element and all its descendants
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn remove(&mut self, element_id: ElementId) {
         // Collect child IDs first (all elements that have this element as parent)
         let child_ids: Vec<ElementId> = self
@@ -515,8 +526,29 @@ impl ElementTree {
 
 
     /// Mark an element as dirty (needs rebuild)
+    ///
+    /// # Phase 3.2: Build Scope Isolation
+    ///
+    /// If called during a build scope, the dirty marking is deferred to avoid
+    /// infinite rebuild loops. The element will be marked dirty after the
+    /// build scope completes.
     pub fn mark_dirty(&mut self, element_id: ElementId) {
-        // Don't add duplicates
+        // Phase 3.2: If in build scope, defer the dirty marking
+        if self.in_build_scope {
+            #[cfg(debug_assertions)]
+            tracing::warn!(
+                "markNeedsBuild() called during build for element {:?}, deferring",
+                element_id
+            );
+
+            // Add to deferred list if not already there
+            if !self.deferred_dirty.contains(&element_id) {
+                self.deferred_dirty.push_back(element_id);
+            }
+            return;
+        }
+
+        // Normal path: mark dirty immediately
         if !self.dirty_elements.contains(&element_id) {
             self.dirty_elements.push_back(element_id);
         }
@@ -539,6 +571,47 @@ impl ElementTree {
     /// The number of elements in the dirty queue
     pub fn dirty_element_count(&self) -> usize {
         self.dirty_elements.len()
+    }
+
+    // ========== Build Scope Management (Phase 3.2) ==========
+
+    /// Set build scope state (called by BuildOwner) (Phase 3.2)
+    ///
+    /// When entering a build scope, this should be set to `true`.
+    /// When exiting, set to `false` and call `flush_deferred_dirty()`.
+    pub(crate) fn set_in_build_scope(&mut self, value: bool) {
+        self.in_build_scope = value;
+    }
+
+    /// Check if currently in build scope (Phase 3.2)
+    ///
+    /// # Returns
+    ///
+    /// `true` if we're currently inside a build scope
+    pub fn is_in_build_scope(&self) -> bool {
+        self.in_build_scope
+    }
+
+    /// Flush deferred dirty elements (Phase 3.2)
+    ///
+    /// Processes all elements that tried to mark_dirty during the build scope.
+    /// Should be called after exiting the build scope.
+    pub(crate) fn flush_deferred_dirty(&mut self) {
+        while let Some(element_id) = self.deferred_dirty.pop_front() {
+            // Check if element still exists
+            if !self.elements.contains_key(&element_id) {
+                continue;
+            }
+
+            // Now safe to mark dirty
+            if !self.dirty_elements.contains(&element_id) {
+                self.dirty_elements.push_back(element_id);
+            }
+
+            if let Some(element) = self.elements.get_mut(&element_id) {
+                element.mark_dirty();
+            }
+        }
     }
 
 
@@ -601,6 +674,14 @@ impl ElementTree {
     }
 
     /// Rebuild all dirty elements
+    #[tracing::instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            dirty_count = self.dirty_elements.len(),
+            element_count = self.elements.len()
+        )
+    )]
     pub fn rebuild(&mut self) {
         if self.building {
             panic!("ElementTree: Recursive rebuild detected");
@@ -690,6 +771,64 @@ impl ElementTree {
 
         // Clean up inactive elements at end of frame
         self.finalize_tree();
+    }
+
+    /// Deactivate a child element (Phase 2.2)
+    ///
+    /// If the element has a GlobalKey, it will be deactivated and added to the
+    /// inactive elements set. This allows it to be reactivated later if the same
+    /// GlobalKey appears elsewhere in the tree.
+    ///
+    /// If the element doesn't have a GlobalKey, it will be immediately removed
+    /// since there's no way to reactivate it later.
+    ///
+    /// # Parameters
+    ///
+    /// - `element_id`: ID of element to deactivate
+    ///
+    /// # Returns
+    ///
+    /// true if element was deactivated (has GlobalKey), false if it was removed
+    pub fn deactivate_child(&mut self, element_id: ElementId) -> bool {
+        // Check if element exists and has a GlobalKey
+        // We check by trying to downcast to GlobalKey<()> - any GlobalKey will match
+        let has_global_key = self
+            .elements
+            .get(&element_id)
+            .and_then(|element| element.key())
+            .map(|key| {
+                // Check if it's any kind of GlobalKey by looking at the debug output
+                // GlobalKey types have IDs >= 1_000_000
+                key.id().value() >= 1_000_000
+            })
+            .unwrap_or(false);
+
+        if has_global_key {
+            tracing::debug!(
+                "ElementTree: deactivating element {:?} (has GlobalKey)",
+                element_id
+            );
+
+            // Deactivate the element
+            if let Some(element) = self.elements.get_mut(&element_id) {
+                element.deactivate();
+            }
+
+            // Add to inactive set
+            self.inactive_elements.add(element_id);
+
+            true
+        } else {
+            tracing::debug!(
+                "ElementTree: removing element {:?} (no GlobalKey)",
+                element_id
+            );
+
+            // No GlobalKey, just remove immediately
+            self.remove(element_id);
+
+            false
+        }
     }
 
     /// Attempt to reactivate an inactive element
@@ -968,7 +1107,7 @@ mod tests {
     fn test_element_tree_mount_child_invalid_parent() {
         let mut tree = ElementTree::new();
 
-        let invalid_parent = ElementId::from_raw(99999);
+        let invalid_parent = unsafe { ElementId::from_raw(99999) };
         let child_widget = TestWidget::new("child");
 
         let result = tree.insert_child(invalid_parent, Box::new(child_widget), 0);
@@ -1192,11 +1331,173 @@ mod tests {
     fn test_element_tree_update_invalid_element() {
         let mut tree = ElementTree::new();
 
-        let invalid_id = ElementId::from_raw(99999);
+        let invalid_id = unsafe { ElementId::from_raw(99999) };
         let widget = TestWidget::new("test");
 
         let result = tree.update(invalid_id, Box::new(widget));
 
         assert!(result.is_err());
+    }
+
+    // ========== Phase 3.2: Build Scope Isolation Tests ==========
+
+    #[test]
+    fn test_mark_dirty_outside_build_scope_is_immediate() {
+        let mut tree = ElementTree::new();
+        let widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(widget));
+
+        // Clear initial dirty state
+        tree.dirty_elements.clear();
+
+        // NOT in build scope
+        assert!(!tree.is_in_build_scope());
+
+        // Mark dirty
+        tree.mark_dirty(root_id);
+
+        // Should be in dirty_elements immediately
+        assert!(tree.dirty_elements.contains(&root_id));
+        assert_eq!(tree.deferred_dirty.len(), 0);
+    }
+
+    #[test]
+    fn test_mark_dirty_during_build_scope_is_deferred() {
+        let mut tree = ElementTree::new();
+        let widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(widget));
+
+        // Clear initial dirty state
+        tree.dirty_elements.clear();
+
+        // Enter build scope
+        tree.set_in_build_scope(true);
+        assert!(tree.is_in_build_scope());
+
+        // Mark dirty during build scope
+        tree.mark_dirty(root_id);
+
+        // Should NOT be in dirty_elements yet
+        assert!(!tree.dirty_elements.contains(&root_id));
+        // Should be in deferred_dirty
+        assert_eq!(tree.deferred_dirty.len(), 1);
+        assert!(tree.deferred_dirty.contains(&root_id));
+    }
+
+    #[test]
+    fn test_flush_deferred_dirty() {
+        let mut tree = ElementTree::new();
+        let widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(widget));
+
+        // Clear initial dirty state
+        tree.dirty_elements.clear();
+
+        // Enter build scope and mark dirty
+        tree.set_in_build_scope(true);
+        tree.mark_dirty(root_id);
+
+        assert!(!tree.dirty_elements.contains(&root_id));
+        assert_eq!(tree.deferred_dirty.len(), 1);
+
+        // Exit build scope and flush
+        tree.set_in_build_scope(false);
+        tree.flush_deferred_dirty();
+
+        // Now should be in dirty_elements
+        assert!(tree.dirty_elements.contains(&root_id));
+        assert_eq!(tree.deferred_dirty.len(), 0);
+    }
+
+    #[test]
+    fn test_flush_deferred_dirty_skips_removed_elements() {
+        let mut tree = ElementTree::new();
+        let widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(widget));
+
+        // Clear initial dirty state
+        tree.dirty_elements.clear();
+
+        // Enter build scope and mark dirty
+        tree.set_in_build_scope(true);
+        tree.mark_dirty(root_id);
+
+        // Remove the element while still in build scope
+        tree.remove(root_id);
+
+        // Exit build scope and flush
+        tree.set_in_build_scope(false);
+        tree.flush_deferred_dirty();
+
+        // Should not be in dirty_elements (element was removed)
+        assert!(!tree.dirty_elements.contains(&root_id));
+        assert_eq!(tree.deferred_dirty.len(), 0);
+    }
+
+    #[test]
+    fn test_deferred_dirty_deduplication() {
+        let mut tree = ElementTree::new();
+        let widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(widget));
+
+        // Clear initial dirty state
+        tree.dirty_elements.clear();
+
+        // Enter build scope
+        tree.set_in_build_scope(true);
+
+        // Mark dirty multiple times
+        tree.mark_dirty(root_id);
+        tree.mark_dirty(root_id);
+        tree.mark_dirty(root_id);
+
+        // Should only be in deferred list once
+        assert_eq!(tree.deferred_dirty.len(), 1);
+
+        // Flush
+        tree.set_in_build_scope(false);
+        tree.flush_deferred_dirty();
+
+        // Should only be in dirty_elements once
+        assert_eq!(tree.dirty_elements.len(), 1);
+        assert!(tree.dirty_elements.contains(&root_id));
+    }
+
+    #[test]
+    fn test_multiple_elements_deferred() {
+        let mut tree = ElementTree::new();
+        let root_widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(root_widget));
+
+        let child1_widget = TestWidget::new("child1");
+        let child1_id = tree.insert_child(root_id, Box::new(child1_widget), 0).unwrap();
+
+        let child2_widget = TestWidget::new("child2");
+        let child2_id = tree.insert_child(root_id, Box::new(child2_widget), 1).unwrap();
+
+        // Clear initial dirty state
+        tree.dirty_elements.clear();
+
+        // Enter build scope
+        tree.set_in_build_scope(true);
+
+        // Mark all three dirty
+        tree.mark_dirty(root_id);
+        tree.mark_dirty(child1_id);
+        tree.mark_dirty(child2_id);
+
+        // All should be deferred
+        assert_eq!(tree.deferred_dirty.len(), 3);
+        assert_eq!(tree.dirty_elements.len(), 0);
+
+        // Flush
+        tree.set_in_build_scope(false);
+        tree.flush_deferred_dirty();
+
+        // All should now be in dirty_elements
+        assert_eq!(tree.dirty_elements.len(), 3);
+        assert!(tree.dirty_elements.contains(&root_id));
+        assert!(tree.dirty_elements.contains(&child1_id));
+        assert!(tree.dirty_elements.contains(&child2_id));
     }
 }

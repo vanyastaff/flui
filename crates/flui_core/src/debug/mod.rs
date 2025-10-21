@@ -47,7 +47,7 @@ pub mod lifecycle;
 ///
 /// // Now widget builds will be logged
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DebugFlags {
     /// Print when build() is called on widgets
     pub debug_print_build_scope: bool,

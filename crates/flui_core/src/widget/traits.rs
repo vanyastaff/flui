@@ -52,6 +52,11 @@ use crate::widget::DynWidget;
 ///
 /// // DynWidget is automatically implemented via blanket impl
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be used as a Widget",
+    label = "this type doesn't implement `Widget`",
+    note = "consider implementing `Widget`, `StatelessWidget`, or `StatefulWidget` for `{Self}`"
+)]
 pub trait Widget: DynWidget + Sized + Clone {
     /// Associated element type
     ///
@@ -114,6 +119,11 @@ impl<T: Widget> DynWidget for T {
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be used as a StatelessWidget",
+    label = "this type doesn't implement `StatelessWidget`",
+    note = "implement the `build(&self, context: &Context) -> Box<dyn DynWidget>` method for `{Self}`"
+)]
 pub trait StatelessWidget: fmt::Debug + Clone + Send + Sync + 'static {
     /// Build this widget's child widget tree
     ///
@@ -166,6 +176,11 @@ impl<T: StatelessWidget> Widget for T {
 ///     }
 /// }
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be used as a StatefulWidget",
+    label = "this type doesn't implement `StatefulWidget`",
+    note = "implement `create_state(&self) -> Self::State` and define an associated `State` type for `{Self}`"
+)]
 pub trait StatefulWidget: fmt::Debug + Clone + Send + Sync + 'static {
     /// Associated State type
     type State: State;
@@ -278,6 +293,11 @@ macro_rules! impl_widget_for_stateful {
 ///
 /// The State object tracks its lifecycle through the `StateLifecycle` enum to
 /// enforce correct ordering and prevent operations on unmounted state.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be used as a State",
+    label = "this type doesn't implement `State`",
+    note = "State types must implement `State` trait and provide a `build(&mut self, context: &Context) -> Box<dyn DynWidget>` method"
+)]
 pub trait State: DowncastSync + fmt::Debug {
     /// Build the widget tree
     ///

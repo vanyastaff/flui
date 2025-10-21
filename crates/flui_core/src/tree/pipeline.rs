@@ -54,6 +54,17 @@ pub struct PipelineOwner {
     nodes_needing_compositing_bits_update: Vec<ElementId>,
 }
 
+impl std::fmt::Debug for PipelineOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PipelineOwner")
+            .field("root_element_id", &self.root_element_id)
+            .field("nodes_needing_layout_count", &self.nodes_needing_layout.len())
+            .field("nodes_needing_paint_count", &self.nodes_needing_paint.len())
+            .field("nodes_needing_compositing_bits_count", &self.nodes_needing_compositing_bits_update.len())
+            .finish()
+    }
+}
+
 impl PipelineOwner {
     /// Create a new pipeline owner
     pub fn new() -> Self {

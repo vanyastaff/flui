@@ -309,7 +309,31 @@ impl std::convert::TryFrom<isize> for Slot {
 
     fn try_from(value: isize) -> Result<Self, Self::Error> {
         if value < 0 {
-            Err(SlotConversionError::Negative(value))
+            Err(SlotConversionError::NegativeI(value))
+        } else {
+            Ok(Self::new(value as usize))
+        }
+    }
+}
+
+impl std::convert::TryFrom<i32> for Slot {
+    type Error = SlotConversionError;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        if value < 0 {
+            Err(SlotConversionError::Negative32(value))
+        } else {
+            Ok(Self::new(value as usize))
+        }
+    }
+}
+
+impl std::convert::TryFrom<i64> for Slot {
+    type Error = SlotConversionError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        if value < 0 {
+            Err(SlotConversionError::Negative64(value))
         } else {
             Ok(Self::new(value as usize))
         }
@@ -368,15 +392,25 @@ impl fmt::Display for Slot {
 /// Error type for Slot conversion
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotConversionError {
-    /// Attempted to convert negative value
-    Negative(isize),
+    /// Attempted to convert negative isize value
+    NegativeI(isize),
+    /// Attempted to convert negative i32 value
+    Negative32(i32),
+    /// Attempted to convert negative i64 value
+    Negative64(i64),
 }
 
 impl fmt::Display for SlotConversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Negative(value) => {
-                write!(f, "cannot convert negative value {} to Slot", value)
+            Self::NegativeI(value) => {
+                write!(f, "cannot convert negative isize value {} to Slot", value)
+            }
+            Self::Negative32(value) => {
+                write!(f, "cannot convert negative i32 value {} to Slot", value)
+            }
+            Self::Negative64(value) => {
+                write!(f, "cannot convert negative i64 value {} to Slot", value)
             }
         }
     }

@@ -69,6 +69,14 @@ pub struct WidgetTester {
     owner: BuildOwner,
 }
 
+impl std::fmt::Debug for WidgetTester {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WidgetTester")
+            .field("owner", &"<BuildOwner>")
+            .finish()
+    }
+}
+
 impl WidgetTester {
     /// Create a new widget tester
     pub fn new() -> Self {

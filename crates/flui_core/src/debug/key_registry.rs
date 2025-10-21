@@ -16,6 +16,14 @@ pub struct GlobalKeyRegistry {
     keys: HashMap<TypeId, ElementId>,
 }
 
+impl std::fmt::Debug for GlobalKeyRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlobalKeyRegistry")
+            .field("key_count", &self.keys.len())
+            .finish()
+    }
+}
+
 impl GlobalKeyRegistry {
     /// Create new empty registry
     pub fn new() -> Self {

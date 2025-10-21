@@ -327,6 +327,10 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::DynEleme
         std::any::TypeId::of::<W>()
     }
 
+    fn widget(&self) -> &dyn crate::DynWidget {
+        &self.widget
+    }
+
     fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // InheritedElement doesn't have RenderObject
     }
@@ -531,7 +535,7 @@ mod tests {
         };
         let mut element = InheritedElement::new(widget);
 
-        let parent_id = crate::ElementId::from_raw(100);
+        let parent_id = unsafe { crate::ElementId::from_raw(100) };
         element.mount(Some(parent_id), 0);
 
         assert_eq!(element.parent(), Some(parent_id));

@@ -57,7 +57,7 @@ pub use into_widget::IntoWidget;
 pub use parent_data_widget::{ParentDataElement, ParentDataWidget};
 pub use provider::{InheritedElement, InheritedWidget};
 pub use proxy::{ProxyElement, ProxyWidget};
-pub use error_widget::ErrorWidget; // Phase 10
+pub use error_widget::{ErrorWidget, ErrorDetails, ErrorWidgetBuilder}; // Phase 3.3
 pub use inherited_model::InheritedModel; // Phase 6 (InheritedModel)
 pub use equality::{WidgetEq, widgets_equal}; // Phase 12
 
@@ -367,7 +367,7 @@ mod tests {
     fn test_state_mounted_default() {
         let state = CounterState { count: 0 };
         // Default implementation returns true for backward compatibility
-        assert!(state.mounted());
+        assert!(state.is_mounted());
     }
 
     #[test]

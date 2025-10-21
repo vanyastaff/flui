@@ -137,6 +137,46 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
     /// Get widget type ID for update checks
     fn widget_type_id(&self) -> TypeId;
 
+    /// Get a reference to the widget configuration (Phase 3.1)
+    ///
+    /// All elements hold a widget, so this always returns a value.
+    /// The returned reference is valid as long as the element exists.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let widget_ref = element.widget();
+    /// println!("Widget type: {}", widget_ref.type_name());
+    /// ```
+    fn widget(&self) -> &dyn crate::DynWidget;
+
+    /// Get a reference to the state object (Phase 3.1)
+    ///
+    /// Returns `Some` only for `StatefulElement`, `None` for all other element types.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(state) = element.state() {
+    ///     // Access state methods
+    /// }
+    /// ```
+    fn state(&self) -> Option<&dyn crate::State> {
+        None  // Default: no state (only StatefulElement overrides this)
+    }
+
+    /// Get a mutable reference to the state object (Phase 3.1)
+    ///
+    /// Returns `Some` only for `StatefulElement`, `None` for all other element types.
+    ///
+    /// # Warning
+    ///
+    /// Mutating state directly bypasses `setState()` and won't trigger rebuilds.
+    /// Use `Context` and `setState()` instead for state updates that need to trigger rebuilds.
+    fn state_mut(&mut self) -> Option<&mut dyn crate::State> {
+        None  // Default: no state (only StatefulElement overrides this)
+    }
+
     /// Get RenderObject if this element has one
     fn render_object(&self) -> Option<&dyn crate::DynRenderObject>;
 

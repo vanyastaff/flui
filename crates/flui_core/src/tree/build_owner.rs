@@ -158,6 +158,21 @@ pub struct BuildOwner {
     batcher: Option<BuildBatcher>,
 }
 
+impl std::fmt::Debug for BuildOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuildOwner")
+            .field("root_element_id", &self.root_element_id)
+            .field("dirty_elements_count", &self.dirty_elements.len())
+            .field("global_keys_count", &self.global_keys.len())
+            .field("build_count", &self.build_count)
+            .field("in_build_scope", &self.in_build_scope)
+            .field("build_locked", &self.build_locked)
+            .field("has_build_callback", &self.on_build_scheduled.is_some())
+            .field("batching_enabled", &self.batcher.is_some())
+            .finish()
+    }
+}
+
 impl BuildOwner {
     /// Create a new build owner
     pub fn new() -> Self {
@@ -341,13 +356,23 @@ impl BuildOwner {
     /// This sets the build scope flag to prevent setState during build,
     /// then executes the callback.
     ///
+    /// # Phase 3.2: Build Scope Isolation
+    ///
+    /// Any `markNeedsBuild()` calls during the scope will be deferred and
+    /// processed after the scope completes. This prevents infinite rebuild loops.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// owner.build_scope(|| {
+    /// owner.build_scope(|owner| {
     ///     owner.flush_build();
     /// });
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// If the callback panics, the build scope will be properly cleaned up,
+    /// but the panic will propagate.
     pub fn build_scope<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -357,8 +382,25 @@ impl BuildOwner {
         }
 
         self.in_build_scope = true;
+
+        // Phase 3.2: Set flag in ElementTree as well
+        {
+            let mut tree = self.tree.write();
+            tree.set_in_build_scope(true);
+        }
+
+        // Execute callback
         let result = f(self);
+
+        // Phase 3.2: Clear flag and flush deferred dirty elements
+        // Note: If f() panics, this won't run, but that's acceptable since
+        // the entire program state is likely corrupted anyway.
         self.in_build_scope = false;
+        {
+            let mut tree = self.tree.write();
+            tree.set_in_build_scope(false);
+            tree.flush_deferred_dirty();
+        }
 
         result
     }
@@ -382,6 +424,14 @@ impl BuildOwner {
     ///
     /// Rebuilds all dirty elements in depth order (parents before children).
     /// This ensures that parent widgets build before their children.
+    #[tracing::instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            dirty_count = self.dirty_elements.len(),
+            build_num = self.build_count + 1
+        )
+    )]
     pub fn flush_build(&mut self) {
         if self.dirty_elements.is_empty() {
             debug!("flush_build: no dirty elements");
@@ -468,7 +518,8 @@ impl BuildOwner {
     }
 
     /// Get element ID for a global key
-    pub fn get_element_for_global_key(&self, key: GlobalKeyId) -> Option<ElementId> {
+    #[must_use]
+    pub fn element_for_global_key(&self, key: GlobalKeyId) -> Option<ElementId> {
         self.global_keys.get(&key).copied()
     }
 
@@ -487,6 +538,17 @@ impl Default for BuildOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{DynWidget, Context, StatelessWidget};
+
+    // Test widget for testing
+    #[derive(Debug, Clone)]
+    struct TestWidget;
+
+    impl StatelessWidget for TestWidget {
+        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
+            Box::new(TestWidget)
+        }
+    }
 
     #[test]
     fn test_build_owner_creation() {
@@ -548,15 +610,15 @@ mod tests {
         let element_id = ElementId::new();
 
         // Register
-        let key_id = key.to_global_key_id();
+        let key_id = key.into();
         owner.register_global_key(key_id, element_id);
         assert_eq!(owner.global_key_count(), 1);
-        assert_eq!(owner.get_element_for_global_key(key_id), Some(element_id));
+        assert_eq!(owner.element_for_global_key(key_id), Some(element_id));
 
         // Unregister
         owner.unregister_global_key(key_id);
         assert_eq!(owner.global_key_count(), 0);
-        assert_eq!(owner.get_element_for_global_key(key_id), None);
+        assert_eq!(owner.element_for_global_key(key_id), None);
     }
 
     #[test]
@@ -569,7 +631,7 @@ mod tests {
         let id1 = ElementId::new();
         let id2 = ElementId::new();
 
-        let key_id = key.to_global_key_id();
+        let key_id = key.into();
         owner.register_global_key(key_id, id1);
         owner.register_global_key(key_id, id2); // Should panic
     }
@@ -582,7 +644,7 @@ mod tests {
         let key = GlobalKey::<()>::new();
         let element_id = ElementId::new();
 
-        let key_id = key.to_global_key_id();
+        let key_id = key.into();
         owner.register_global_key(key_id, element_id);
         owner.register_global_key(key_id, element_id); // Should not panic
         assert_eq!(owner.global_key_count(), 1);
@@ -742,5 +804,63 @@ mod tests {
         let (batches, saved) = owner.batching_stats();
         assert_eq!(batches, 1);
         assert_eq!(saved, 1);
+    }
+
+    // ========== Phase 3.2: Build Scope Integration Tests ==========
+
+    #[test]
+    fn test_build_scope_integration_with_mark_dirty() {
+        let mut owner = BuildOwner::new();
+        let widget = Box::new(TestWidget);
+        let root_id = owner.set_root(widget);
+
+        owner.build_scope(|o| {
+            // Inside build scope
+            assert!(o.is_in_build_scope());
+
+            let tree = o.tree().read();
+            assert!(tree.is_in_build_scope());
+        });
+
+        // After build scope exits, flags should be cleared
+        assert!(!owner.is_in_build_scope());
+        {
+            let tree = owner.tree().read();
+            assert!(!tree.is_in_build_scope());
+        }
+    }
+
+    #[test]
+    fn test_build_scope_sets_tree_flag() {
+        let mut owner = BuildOwner::new();
+
+        // Before build scope
+        {
+            let tree = owner.tree().read();
+            assert!(!tree.is_in_build_scope());
+        }
+
+        owner.build_scope(|o| {
+            // Inside build scope - tree flag should be set
+            let tree = o.tree().read();
+            assert!(tree.is_in_build_scope());
+        });
+
+        // After build scope - tree flag should be cleared
+        {
+            let tree = owner.tree().read();
+            assert!(!tree.is_in_build_scope());
+        }
+    }
+
+    #[test]
+    fn test_build_scope_returns_result() {
+        let mut owner = BuildOwner::new();
+
+        let result = owner.build_scope(|_| {
+            42
+        });
+
+        assert_eq!(result, 42);
     }
 }

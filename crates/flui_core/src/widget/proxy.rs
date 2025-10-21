@@ -25,6 +25,22 @@ pub trait ProxyWidget: fmt::Debug + Clone + Send + Sync + 'static {
     fn key(&self) -> Option<&dyn crate::foundation::Key> {
         None
     }
+
+    /// Handle notification bubbling through this widget (Phase 3.4)
+    ///
+    /// Called when a notification bubbles up through this element.
+    /// Widgets like `NotificationListener` override this to intercept notifications.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(true)` - Notification handled, stop bubbling
+    /// - `Some(false)` - Notification handled, continue bubbling
+    /// - `None` - This widget doesn't handle this notification type
+    ///
+    /// Default implementation returns `None` (don't handle).
+    fn handle_notification(&self, _notification: &dyn crate::notification::AnyNotification) -> Option<bool> {
+        None
+    }
 }
 
 /// Element for ProxyWidget (delegates to single child)
@@ -184,6 +200,10 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for P
         TypeId::of::<W>()
     }
 
+    fn widget(&self) -> &dyn crate::DynWidget {
+        &self.widget
+    }
+
     fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // ProxyElement doesn't have RenderObject
     }
@@ -204,6 +224,18 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for P
         if self.child == Some(child_id) {
             self.child = None;
         }
+    }
+
+    // ========== Phase 3.4: Notification System ==========
+
+    fn visit_notification(&self, notification: &dyn crate::notification::AnyNotification) -> bool {
+        // Ask widget if it wants to handle this notification
+        if let Some(should_stop) = self.widget.handle_notification(notification) {
+            return should_stop;
+        }
+
+        // Widget didn't handle it, continue bubbling
+        false
     }
 }
 
@@ -303,7 +335,7 @@ mod tests {
         };
         let mut element = ProxyElement::new(widget);
 
-        let parent_id = ElementId::from_raw(100);
+        let parent_id = unsafe { ElementId::from_raw(100) };
         element.mount(Some(parent_id), 0);
 
         assert_eq!(element.parent(), Some(parent_id));

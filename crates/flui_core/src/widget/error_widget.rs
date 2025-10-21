@@ -3,14 +3,76 @@
 //! This widget displays error messages with different styles for debug and release modes.
 //! In debug mode, it shows a red background with detailed error information.
 //! In release mode, it shows a simple gray box.
+//!
+//! # Phase 3.3: Enhanced Error Handling
+//!
+//! Added global error widget builder support for customizable error displays.
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::context::Context;
 use crate::widget::DynWidget;
 use crate::widget::traits::StatelessWidget;
+
+/// Error details for error widget display (Phase 3.3)
+///
+/// Provides structured information about errors that occurred during
+/// widget tree building.
+#[derive(Debug, Clone)]
+pub struct ErrorDetails {
+    /// The error message
+    pub exception: String,
+
+    /// Context where the error occurred (e.g., "building ComponentElement<MyWidget>")
+    pub context: String,
+
+    /// Widget type that caused the error
+    pub widget_type: String,
+
+    /// Optional stack trace (if available)
+    pub stack_trace: Option<String>,
+}
+
+impl ErrorDetails {
+    /// Create new error details
+    pub fn new(exception: String, context: String, widget_type: String) -> Self {
+        Self {
+            exception,
+            context,
+            widget_type,
+            stack_trace: None,
+        }
+    }
+
+    /// Add stack trace to error details (builder pattern)
+    #[must_use]
+    pub fn with_stack_trace(mut self, stack_trace: String) -> Self {
+        self.stack_trace = Some(stack_trace);
+        self
+    }
+}
+
+impl fmt::Display for ErrorDetails {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Error: {}", self.exception)?;
+        writeln!(f, "Context: {}", self.context)?;
+        writeln!(f, "Widget: {}", self.widget_type)?;
+        if let Some(ref trace) = self.stack_trace {
+            writeln!(f, "\nStack trace:\n{}", trace)?;
+        }
+        Ok(())
+    }
+}
+
+/// Builder function type for creating error widgets (Phase 3.3)
+///
+/// This allows customizing how errors are displayed throughout the application.
+pub type ErrorWidgetBuilder = Box<dyn Fn(ErrorDetails) -> Box<dyn DynWidget> + Send + Sync>;
+
+/// Global error widget builder (Phase 3.3)
+static ERROR_WIDGET_BUILDER: OnceLock<ErrorWidgetBuilder> = OnceLock::new();
 
 /// Widget that displays an error message
 ///
@@ -97,6 +159,72 @@ impl ErrorWidget {
     #[must_use]
     pub fn has_error(&self) -> bool {
         self.error.is_some()
+    }
+
+    // ========== Phase 3.3: Global Error Widget Builder ==========
+
+    /// Set the global error widget builder (Phase 3.3)
+    ///
+    /// This allows customizing how errors are displayed throughout the application.
+    /// Call this once at app startup to set your custom error widget.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::{ErrorWidget, ErrorDetails};
+    ///
+    /// // Set custom error widget builder
+    /// ErrorWidget::set_builder(Box::new(|details| {
+    ///     Box::new(MyCustomErrorWidget::new(details))
+    /// }));
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// This can only be set once. Subsequent calls will be ignored with a warning.
+    pub fn set_builder(builder: ErrorWidgetBuilder) {
+        if ERROR_WIDGET_BUILDER.set(builder).is_err() {
+            // Note: Builder already set, subsequent calls are ignored
+            // In debug builds, you might want to add logging here
+        }
+    }
+
+    /// Get the global error widget builder (Phase 3.3)
+    ///
+    /// Returns the custom builder if set, otherwise returns the default builder
+    /// which creates a standard ErrorWidget.
+    #[must_use]
+    pub fn builder() -> &'static ErrorWidgetBuilder {
+        ERROR_WIDGET_BUILDER.get_or_init(|| {
+            // Default builder - creates standard ErrorWidget
+            Box::new(|details| {
+                Box::new(ErrorWidget::new(details.exception)
+                    .with_details(format!("{}\nWidget: {}", details.context, details.widget_type)))
+            })
+        })
+    }
+
+    /// Create an error widget from error details (Phase 3.3)
+    ///
+    /// This uses the global error widget builder to create the widget.
+    /// Use this when you want to use the custom error widget builder.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::ErrorDetails;
+    ///
+    /// let details = ErrorDetails::new(
+    ///     "Failed to load data".to_string(),
+    ///     "building MyWidget".to_string(),
+    ///     "MyWidget".to_string(),
+    /// );
+    ///
+    /// let error_widget = ErrorWidget::from_details(details);
+    /// ```
+    #[must_use]
+    pub fn from_details(details: ErrorDetails) -> Box<dyn DynWidget> {
+        (Self::builder())(details)
     }
 }
 

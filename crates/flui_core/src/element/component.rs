@@ -181,6 +181,10 @@ impl<W: StatelessWidget> DynElement for ComponentElement<W> {
         std::any::TypeId::of::<W>()
     }
 
+    fn widget(&self) -> &dyn crate::DynWidget {
+        &self.widget
+    }
+
     fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
         None // ComponentElement doesn't have RenderObject
     }

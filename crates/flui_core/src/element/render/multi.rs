@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 use smallvec::SmallVec;
 
 use crate::{DynElement, DynWidget, Element, ElementId, ElementTree, MultiChildRenderObjectWidget};
-use crate::foundation::{Key, Slot};
+use crate::foundation::{Key, Slot};  // Phase 2.1: Added Slot for updateChildren
 use super::super::ElementLifecycle;
 
 /// Type alias for a list of child element IDs (optimized for small lists)
@@ -75,17 +75,20 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         self.children.iter().copied()
     }
 
-    /// Set children (called by ElementTree after mounting)
+    /// Set children (used by tests)
+    #[cfg(test)]
     pub(crate) fn set_children(&mut self, children: ChildList) {
         self.children = children;
     }
 
-    /// Add a child to the list
+    /// Add a child (used by tests)
+    #[cfg(test)]
     pub(crate) fn add_child(&mut self, child_id: ElementId) {
         self.children.push(child_id);
     }
 
-    /// Take old children for rebuild (called by ElementTree during rebuild)
+    /// Take old children (used by tests)
+    #[cfg(test)]
     pub(crate) fn take_old_children(&mut self) -> ChildList {
         std::mem::take(&mut self.children)
     }
@@ -104,7 +107,8 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         }
     }
 
-    // ========== Phase 8: Multi-Child Update Algorithm ==========
+    // ========== Phase 2.1: Multi-Child Update Algorithm (ACTIVATED) ==========
+    // Efficient incremental child update using Flutter's updateChildren() algorithm
     /// Update children efficiently using Flutter's updateChildren() algorithm
     ///
     /// This implements the three-phase scan algorithm:
@@ -113,6 +117,15 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     /// 3. Handle middle section - reuse keyed children, insert/remove as needed
     ///
     /// Returns the new list of child element IDs.
+    #[allow(dead_code)]
+    #[tracing::instrument(
+        level = "debug",
+        skip(self, old_children, new_widgets),
+        fields(
+            old_count = old_children.len(),
+            new_count = new_widgets.len()
+        )
+    )]
     fn update_children(
         &mut self,
         mut old_children: ChildList,
@@ -360,11 +373,13 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             }
         }
 
-        // Unmount unused old children
+        // Deactivate or remove unused old children (Phase 2.2)
+        // If element has GlobalKey, deactivate it so it can be reactivated later
+        // Otherwise, remove it immediately
         let mut tree_guard = tree.write();
         for &old_id in old_middle {
             if !used_old_children.contains(&old_id) {
-                tree_guard.remove(old_id);
+                tree_guard.deactivate_child(old_id);
             }
         }
     }
@@ -489,6 +504,10 @@ impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectEleme
 
     fn widget_type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<W>()
+    }
+
+    fn widget(&self) -> &dyn crate::DynWidget {
+        &self.widget
     }
 
     fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
