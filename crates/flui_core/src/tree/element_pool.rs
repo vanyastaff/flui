@@ -293,7 +293,7 @@ impl std::fmt::Display for ElementPoolStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, ComponentElement, StatelessWidget, Widget};
+    use crate::{Context, StatelessWidget, Widget};
 
     // Test widget
     #[derive(Debug, Clone)]
@@ -341,7 +341,7 @@ mod tests {
         let mut pool = ElementPool::new(2); // Max 2 per type
 
         let element1 = create_test_element();
-        let type_id = element1.widget_type_id();
+        let _type_id = element1.widget_type_id();
 
         // Store 2 elements
         assert!(pool.store(element1));

@@ -156,11 +156,12 @@ mod tests {
     fn create_test_context() -> Context {
         use crate::ElementId;
         use crate::tree::ElementTree;
-        use std::sync::{Arc, RwLock};
+        use std::sync::Arc;
+        use parking_lot::RwLock;
 
         let tree = Arc::new(RwLock::new(ElementTree::new()));
         let element_id = ElementId::new();
 
-        Context::new(element_id, tree)
+        Context::new(tree, element_id)
     }
 }

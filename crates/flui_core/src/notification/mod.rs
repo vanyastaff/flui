@@ -223,7 +223,8 @@ mod tests {
         }
 
         let element = ComponentElement::new(DummyWidget);
-        assert!(!notification.visit_ancestor(&element));
+        // Use explicit trait to disambiguate
+        assert!(!<TestNotification as Notification>::visit_ancestor(&notification, &element));
     }
 
     #[test]

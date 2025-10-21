@@ -250,7 +250,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         cache.run_pending_tasks();
 
-        let (count_before, _) = cache.stats();
+        let (_count_before, _) = cache.stats();
         // Note: count may be 0 due to async nature, so we just check clear doesn't panic
         // assert!(count_before >= 0); // Always true
 

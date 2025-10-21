@@ -436,10 +436,18 @@ mod tests {
     use crate::StatelessWidget;
 
     // Test inherited widget
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Debug, Clone)]
     struct TestTheme {
         value: i32,
         child: Box<dyn AnyWidget>,
+    }
+
+    // Manual PartialEq implementation (can't derive for Box<dyn AnyWidget>)
+    impl PartialEq for TestTheme {
+        fn eq(&self, other: &Self) -> bool {
+            self.value == other.value
+            // Note: we can't compare Box<dyn AnyWidget>, so we only compare value
+        }
     }
 
     // Dummy child widget
@@ -541,7 +549,7 @@ mod tests {
             value: 2,
             child: Box::new(ChildWidget),
         };
-        element.update(Box::new(widget2.clone()));
+        element.update(widget2.clone());
 
         assert_eq!(element.widget().value, 2);
         assert!(element.is_dirty()); // Should be dirty because value changed
@@ -560,7 +568,7 @@ mod tests {
             value: 1,
             child: Box::new(ChildWidget),
         }; // Same value
-        element.update(Box::new(widget2));
+        element.update(widget2);
 
         assert_eq!(element.widget().value, 1);
         assert!(!element.is_dirty()); // Should not be dirty because value didn't change
@@ -654,7 +662,7 @@ mod tests {
     /// Test notify_dependents marks elements dirty
     #[test]
     fn test_notify_dependents_marks_dirty() {
-        use crate::{AnyWidget, ElementTree, ElementId};
+        use crate::ElementTree;
         use std::sync::Arc;
         use parking_lot::RwLock;
 
@@ -756,7 +764,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "No TestTheme found in context")]
     fn test_of_panics_without_theme() {
-        use crate::{AnyWidget, Context, ElementTree};
+        use crate::{Context, ElementTree};
         use std::sync::Arc;
         use parking_lot::RwLock;
 

@@ -889,7 +889,7 @@ impl Default for ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnyWidget, Context, StatelessWidget, Widget};
+    use crate::{AnyWidget, Context, StatelessWidget};
 
     // Test widget for testing
     #[derive(Debug, Clone)]

@@ -35,7 +35,7 @@ pub use render_object::RenderObjectElement;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnyWidget, ElementId, StatelessWidget, Context, Widget};
+    use crate::{AnyWidget, ElementId, StatelessWidget, Context};
 
     #[test]
     fn test_element_id_unique() {
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn test_component_element_mark_dirty() {
         let widget = TestStatelessWidget { value: 42 };
-        let mut element = ComponentElement::new(widget);
+        let element = ComponentElement::new(widget);
 
         // Element starts dirty
         assert!(element.is_dirty());

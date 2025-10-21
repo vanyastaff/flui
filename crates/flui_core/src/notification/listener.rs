@@ -172,7 +172,9 @@ mod tests {
             Box::new(ChildWidget),
         );
 
-        assert!(listener.callback().as_ref() as *const _ != std::ptr::null());
+        // Callback exists and can be called
+        let test = TestNotification { message: "test".to_string() };
+        assert!(listener.handle_notification(&test));
     }
 
     #[test]

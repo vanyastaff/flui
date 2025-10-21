@@ -3,7 +3,8 @@
     "allow": [
       "Bash(cat crates/flui_core/src/foundation/mod.rs)",
       "Bash(cargo check --workspace)",
-      "Bash(cargo check -p flui_core --lib)"
+      "Bash(cargo check -p flui_core --lib)",
+      "Bash(grep -B 3 \"unused import: \\`Widget\\`\")"
     ],
     "deny": [],
     "ask": []

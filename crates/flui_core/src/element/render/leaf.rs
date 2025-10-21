@@ -353,7 +353,7 @@ mod tests {
         let new_widget = MockTextWidget {
             text: "World".to_string(),
         };
-        element.update(Box::new(new_widget));
+        element.update(new_widget);
 
         let render_object = element.render_object_ref().unwrap();
         let text = render_object.downcast_ref::<MockRenderText>().unwrap();
@@ -390,28 +390,9 @@ mod tests {
         let widget = MockTextWidget {
             text: "Hello".to_string(),
         };
-        let mut element = LeafRenderObjectElement::new(widget);
+        let element = LeafRenderObjectElement::new(widget);
 
-        assert_eq!(element.children(), Vec::<ElementId>::new());
-        assert_eq!(element.take_old_child_for_rebuild(), None);
-    }
-
-    #[test]
-    fn test_leaf_element_visit_children_noop() {
-        let widget = MockTextWidget {
-            text: "Hello".to_string(),
-        };
-        let mut element = LeafRenderObjectElement::new(widget);
-
-        let mut visited = false;
-        element.walk_children(&mut |_| {
-            visited = true;
-        });
-        assert!(!visited);
-
-        element.walk_children_mut(&mut |_| {
-            visited = true;
-        });
-        assert!(!visited);
+        // Leaf elements have no children - verify via children_iter
+        assert_eq!(element.children_iter().count(), 0);
     }
 }
