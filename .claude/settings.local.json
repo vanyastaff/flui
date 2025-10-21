@@ -21,7 +21,8 @@
       "Bash(cargo clippy --all-features -- -W missing-debug-implementations -W missing-copy-implementations)",
       "Bash(cargo clippy --lib --all-features -- -W missing-debug-implementations -W missing-copy-implementations)",
       "Bash(cargo build --lib)",
-      "Bash(git add -A)"
+      "Bash(git add -A)",
+      "Bash(git commit -m \"chore: Remove remaining temporary documentation files\n\nRemoved leftover documentation files from crates/flui_core/:\n- MIGRATION_GUIDE.md\n- REFACTORING_REPORT.md\n- REFACTORING_SUMMARY.md\n\nThese were temporary files from previous refactoring sessions.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\")"
     ],
     "deny": [],
     "ask": []
