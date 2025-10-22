@@ -24,81 +24,57 @@
 //! 1. Paint yourself
 //! 2. Paint children in order
 //! 3. Children are painted at their offsets
+//!
+//! # Module Organization
+//!
+//! - `core` - Core rendering infrastructure (RenderObject, RenderBox)
+//! - `parent_data` - Parent data types for child communication
+//! - `objects` - All render object implementations
+//!   - `layout` - Layout render objects (Flex, Stack, Padding, etc.)
+//!   - `effects` - Visual effects (Opacity, Transform, Clip, etc.)
+//!   - `interaction` - Pointer/mouse interaction
+//!   - `text` - Text rendering (future)
+//!   - `media` - Image/video rendering (future)
+//!   - `sliver` - Scrollable content (future)
+//! - `painting` - Painting infrastructure
+//! - `hit_testing` - Hit testing infrastructure
+//! - `egui` - egui integration
 
 #![warn(missing_docs)]
-pub mod decoration_painter;
-pub mod egui_ext;
-pub mod flex_parent_data;
-pub mod render_absorb_pointer;
-pub mod render_aspect_ratio;
-pub mod render_box;
-pub mod render_clip_rect;
-pub mod render_clip_rrect;
-pub mod render_constrained_box;
-pub mod render_decorated_box;
-pub mod render_flex;
-pub mod render_fractionally_sized_box;
-pub mod render_ignore_pointer;
-pub mod render_indexed_stack;
-pub mod render_limited_box;
-pub mod render_mouse_region;
-pub mod render_object;
-pub mod render_offstage;
-pub mod render_opacity;
-pub mod render_padding;
-pub mod render_pointer_listener;
-pub mod render_positioned_box;
-pub mod render_stack;
-pub mod render_transform;
-pub mod stack_parent_data;
 
+// Core modules
+pub mod core;
+pub mod parent_data;
+pub mod objects;
+pub mod painting;
+pub mod hit_testing;
+pub mod mouse;
+pub mod delegates;
+pub mod platform;
+pub mod utils;
+pub mod egui;
+pub mod testing;
 
+// Re-exports for macros (hidden from docs)
+#[doc(hidden)]
+pub use utils::layout_macros::__layout_cache_deps;
 
+// Re-exports from core
+pub use core::{RenderBox, RenderObject, RenderProxyBox};
 
+// Re-exports from parent_data
+pub use parent_data::{FlexFit, FlexParentData, StackParentData};
 
+// Re-exports from objects
+pub use objects::layout::*;
+pub use objects::effects::*;
+pub use objects::interaction::*;
 
+// Re-exports from painting
+pub use painting::BoxDecorationPainter;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Re-exports
-pub use decoration_painter::BoxDecorationPainter;
-pub use flex_parent_data::{FlexFit, FlexParentData};
-pub use render_absorb_pointer::RenderAbsorbPointer;
-pub use render_aspect_ratio::RenderAspectRatio;
-pub use render_box::{RenderBox, RenderProxyBox};
-pub use render_clip_rect::RenderClipRect;
-pub use render_clip_rrect::RenderClipRRect;
-pub use render_constrained_box::RenderConstrainedBox;
-pub use render_decorated_box::{DecorationPosition, RenderDecoratedBox};
-pub use render_flex::RenderFlex;
-pub use render_fractionally_sized_box::RenderFractionallySizedBox;
-pub use render_ignore_pointer::RenderIgnorePointer;
-pub use render_indexed_stack::RenderIndexedStack;
-pub use render_limited_box::RenderLimitedBox;
-pub use render_mouse_region::{MouseRegionCallbacks, RenderMouseRegion};
-pub use render_object::RenderObject;
-pub use render_offstage::RenderOffstage;
-pub use render_opacity::RenderOpacity;
-pub use render_padding::RenderPadding;
-pub use render_pointer_listener::RenderPointerListener;
-pub use render_positioned_box::RenderPositionedBox;
-pub use render_stack::{RenderStack, StackFit};
-pub use render_transform::RenderTransform;
-pub use stack_parent_data::StackParentData;
+// Re-exports from hit_testing
+pub use hit_testing::{HitTestEntry, HitTestResult};
 
 // Re-export types from dependencies
 pub use flui_core::BoxConstraints;
@@ -106,52 +82,25 @@ pub use flui_types::{Matrix4, Offset, Point, Rect, Size};
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::decoration_painter::BoxDecorationPainter;
-    pub use crate::flex_parent_data::{FlexFit, FlexParentData};
-    pub use crate::render_absorb_pointer::RenderAbsorbPointer;
-    pub use crate::render_aspect_ratio::RenderAspectRatio;
-    pub use crate::render_box::{RenderBox, RenderProxyBox};
-    pub use crate::render_clip_rect::RenderClipRect;
-    pub use crate::render_clip_rrect::RenderClipRRect;
-    pub use crate::render_constrained_box::RenderConstrainedBox;
-    pub use crate::render_decorated_box::{DecorationPosition, RenderDecoratedBox};
-    pub use crate::render_flex::RenderFlex;
-    pub use crate::render_fractionally_sized_box::RenderFractionallySizedBox;
-    pub use crate::render_ignore_pointer::RenderIgnorePointer;
-    pub use crate::render_indexed_stack::RenderIndexedStack;
-    pub use crate::render_limited_box::RenderLimitedBox;
-    pub use crate::render_mouse_region::{MouseRegionCallbacks, RenderMouseRegion};
-    pub use crate::render_object::RenderObject;
-    pub use crate::render_offstage::RenderOffstage;
-    pub use crate::render_opacity::RenderOpacity;
-    pub use crate::render_padding::RenderPadding;
-    pub use crate::render_pointer_listener::RenderPointerListener;
-    pub use crate::render_positioned_box::RenderPositionedBox;
-    pub use crate::render_stack::{RenderStack, StackFit};
-    pub use crate::render_transform::RenderTransform;
-    pub use crate::stack_parent_data::StackParentData;
+    pub use crate::core::{RenderBox, RenderObject, RenderProxyBox};
+    pub use crate::parent_data::{FlexFit, FlexParentData, StackParentData};
+
+    // Layout objects
+    pub use crate::objects::layout::*;
+
+    // Effects objects
+    pub use crate::objects::effects::*;
+
+    // Interaction objects
+    pub use crate::objects::interaction::*;
+
+    // Painting
+    pub use crate::painting::BoxDecorationPainter;
+
+    // Hit testing
+    pub use crate::hit_testing::{HitTestEntry, HitTestResult};
+
+    // Re-exports
     pub use flui_core::BoxConstraints;
     pub use flui_types::{Matrix4, Offset, Point, Rect, Size};
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
