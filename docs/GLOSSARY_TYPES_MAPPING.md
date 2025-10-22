@@ -386,9 +386,9 @@
 - ✅ DiagnosticLevel (enum)
 - ✅ + багато інших diagnostic типів
 
-**Utilities (⚠️ NOT NEEDED - using Rust crates):**
-- ⚠️ BitField<T> → Use `bitflags` crate instead
-- ⚠️ CachingIterable<E> → Use `itertools` crate instead
+**Utilities (✅ INTEGRATED - using Rust crates):**
+- ✅ BitField<T> → **INTEGRATED** `bitflags 2.9` crate (DebugFlags in flui_core/debug/mod.rs)
+- ✅ CachingIterable<E> → **INTEGRATED** `itertools 0.14.0` crate (.collect_vec(), zip_eq(), etc.)
 - ⚠️ Unicode (константи) → Use `unicode-segmentation` crate if needed
 - ⚠️ Factory<T> → Use `Fn/FnOnce` traits directly
 - ⚠️ Category, DocumentationIcon, Summary → Documentation annotations (not critical)
