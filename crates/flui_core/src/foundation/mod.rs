@@ -42,13 +42,19 @@
 //! use flui_core::foundation::prelude::*;
 //! ```
 
+pub mod binding;
 pub mod change_notifier;
 pub mod diagnostics;
+pub mod futures;
 pub mod id;
 pub mod key;
+pub mod observer_list;
 pub mod platform;
 pub mod slot;
 pub mod string_cache;
+
+
+
 
 // Prelude module for convenient imports
 pub mod prelude {
@@ -77,6 +83,10 @@ pub mod prelude {
     pub use super::string_cache::InternedString;
 }
 
+// Re-exports - Bindings
+#[doc(inline)]
+pub use binding::{BindingBase, ExampleBinding, FrameCallbackId};
+
 // Re-exports - Change Notification
 #[doc(inline)]
 pub use change_notifier::{
@@ -90,6 +100,10 @@ pub use diagnostics::{
     DiagnosticsTreeStyle, ParseDiagnosticLevelError, ParseDiagnosticsTreeStyleError,
 };
 
+// Re-exports - Futures
+#[doc(inline)]
+pub use futures::SynchronousFuture;
+
 // Re-exports - IDs
 #[doc(inline)]
 pub use id::ElementId;
@@ -100,6 +114,10 @@ pub use key::{
     GlobalKey, GlobalObjectKey, IntKey, Key, KeyId, LabeledGlobalKey, LocalKey, ObjectKey,
     StringKey, UniqueKey, ValueKey, WidgetKey,
 };
+
+// Re-exports - Observer Lists
+#[doc(inline)]
+pub use observer_list::{HashedObserverList, ObserverList};
 
 // Re-exports - Platform
 #[doc(inline)]
