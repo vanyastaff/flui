@@ -27,7 +27,7 @@ use crate::ElementId;
 /// assert!(Slot::new(0) < Slot::new(5));
 /// ```
 ///
-/// # Phase 8: IndexedSlot Enhancement
+/// # IndexedSlot Enhancement
 ///
 /// For efficient RenderObject child insertion, slot can optionally store
 /// the previous sibling's ElementId.
@@ -62,7 +62,7 @@ impl Slot {
         }
     }
 
-    /// Create a slot with previous sibling reference (Phase 8)
+    /// Create a slot with previous sibling reference
     ///
     /// This is the efficient version used by update_children() for
     /// optimal RenderObject child insertion.
@@ -97,7 +97,7 @@ impl Slot {
         self.index
     }
 
-    /// Returns the previous sibling (Phase 8)
+    /// Returns the previous sibling
     ///
     /// Returns the previous sibling's ElementId if tracked,
     /// None if this is the first child or tracking not enabled.

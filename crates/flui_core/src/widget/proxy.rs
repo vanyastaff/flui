@@ -26,7 +26,7 @@ pub trait ProxyWidget: fmt::Debug + Clone + Send + Sync + 'static {
         None
     }
 
-    /// Handle notification bubbling through this widget (Phase 3.4)
+    /// Handle notification bubbling through this widget
     ///
     /// Called when a notification bubbles up through this element.
     /// Widgets like `NotificationListener` override this to intercept notifications.
@@ -226,7 +226,7 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for P
         }
     }
 
-    // ========== Phase 3.4: Notification System ==========
+    // ========== Notification System ==========
 
     fn visit_notification(&self, notification: &dyn crate::notification::AnyNotification) -> bool {
         // Ask widget if it wants to handle this notification

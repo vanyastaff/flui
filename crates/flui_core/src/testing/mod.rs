@@ -1,4 +1,4 @@
-//! Testing infrastructure for widgets (Phase 15)
+//! Testing infrastructure for widgets
 //!
 //! Provides utilities for testing widgets in isolation without a full application.
 //!

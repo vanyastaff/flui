@@ -33,7 +33,7 @@ use super::dyn_element::DynElement;
 ///
 /// - `Widget` - The concrete widget type this element holds
 ///
-/// # Enhanced Lifecycle (Phase 3)
+/// # Enhanced Lifecycle
 ///
 /// 1. **Initial**: Element created
 /// 2. **Mount**: Element inserted into tree → Active

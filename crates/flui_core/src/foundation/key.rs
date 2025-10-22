@@ -253,7 +253,7 @@ impl<T> GlobalKey<T> {
         Some(crate::context::Context::new(tree.clone(), element_id))
     }
 
-    /// Access the current widget via callback (Phase 3.1)
+    /// Access the current widget via callback
     ///
     /// The callback receives a reference to the widget and can extract
     /// any data it needs. The tree lock is held for the duration of the callback.
@@ -282,7 +282,7 @@ impl<T> GlobalKey<T> {
         Some(f(element.widget()))
     }
 
-    /// Access the current state via callback (for StatefulWidget only) (Phase 3.1)
+    /// Access the current state via callback (for StatefulWidget only)
     ///
     /// The callback receives a reference to the state and can extract
     /// any data it needs. The tree lock is held for the duration of the callback.
@@ -313,7 +313,7 @@ impl<T> GlobalKey<T> {
         Some(f(state))
     }
 
-    /// Access the current state mutably via callback (for StatefulWidget only) (Phase 3.1)
+    /// Access the current state mutably via callback (for StatefulWidget only)
     ///
     /// # Warning
     ///

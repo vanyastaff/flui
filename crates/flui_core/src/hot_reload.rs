@@ -1,4 +1,4 @@
-//! Hot reload support (Phase 14)
+//! Hot reload support
 //!
 //! Provides infrastructure for Flutter-style hot reload during development.
 //! When code changes, widgets are rebuilt while preserving state.

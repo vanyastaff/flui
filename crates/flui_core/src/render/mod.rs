@@ -69,7 +69,7 @@ pub trait RenderObject: DynRenderObject + Sized {
     /// Get mutable parent data (zero-cost, no downcast)
     fn parent_data_mut(&mut self) -> Option<&mut Self::ParentData>;
 
-    // Note: Phase 9 methods (dirty tracking, lifecycle, boundaries)
+    // Note: Dirty tracking, lifecycle, and boundaries methods
     // are defined in DynRenderObject trait and inherited automatically.
     // RenderObject types implement them through DynRenderObject.
 }

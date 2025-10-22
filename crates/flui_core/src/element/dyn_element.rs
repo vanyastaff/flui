@@ -137,7 +137,7 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
     /// Get widget type ID for update checks
     fn widget_type_id(&self) -> TypeId;
 
-    /// Get a reference to the widget configuration (Phase 3.1)
+    /// Get a reference to the widget configuration
     ///
     /// All elements hold a widget, so this always returns a value.
     /// The returned reference is valid as long as the element exists.
@@ -150,7 +150,7 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
     /// ```
     fn widget(&self) -> &dyn crate::DynWidget;
 
-    /// Get a reference to the state object (Phase 3.1)
+    /// Get a reference to the state object
     ///
     /// Returns `Some` only for `StatefulElement`, `None` for all other element types.
     ///
@@ -165,7 +165,7 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
         None  // Default: no state (only StatefulElement overrides this)
     }
 
-    /// Get a mutable reference to the state object (Phase 3.1)
+    /// Get a mutable reference to the state object
     ///
     /// Returns `Some` only for `StatefulElement`, `None` for all other element types.
     ///
@@ -209,7 +209,7 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
         // Default: no-op (only StatefulElement overrides this)
     }
 
-    // ========== Phase 6: InheritedWidget Dependency Tracking ==========
+    // ========== InheritedWidget Dependency Tracking ==========
 
     /// Register a dependency on this element (for InheritedElement)
     ///
@@ -239,7 +239,7 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
         false
     }
 
-    // ========== Phase 11: Notification System ==========
+    // ========== Notification System ==========
 
     /// Visit notification during bubbling
     ///

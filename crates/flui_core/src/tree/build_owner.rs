@@ -20,7 +20,7 @@ use tracing::{debug, info, warn};
 
 use crate::{DynWidget, ElementId, ElementTree};
 
-/// Build batching system for performance optimization (Phase 13)
+/// Build batching system for performance optimization
 ///
 /// Batches multiple setState() calls into a single rebuild to avoid redundant work.
 #[derive(Debug)]
@@ -153,7 +153,7 @@ pub struct BuildOwner {
     /// Callback when a build is scheduled (optional)
     on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
 
-    /// Build batching system (Phase 13)
+    /// Build batching system
     /// When enabled, batches multiple setState() calls
     batcher: Option<BuildBatcher>,
 }
@@ -211,7 +211,7 @@ impl BuildOwner {
     }
 
     // =========================================================================
-    // Build Batching (Phase 13)
+    // Build Batching
     // =========================================================================
 
     /// Enable build batching to optimize rapid setState() calls
@@ -356,7 +356,7 @@ impl BuildOwner {
     /// This sets the build scope flag to prevent setState during build,
     /// then executes the callback.
     ///
-    /// # Phase 3.2: Build Scope Isolation
+    /// # Build Scope Isolation
     ///
     /// Any `markNeedsBuild()` calls during the scope will be deferred and
     /// processed after the scope completes. This prevents infinite rebuild loops.
@@ -383,7 +383,7 @@ impl BuildOwner {
 
         self.in_build_scope = true;
 
-        // Phase 3.2: Set flag in ElementTree as well
+        // Set flag in ElementTree as well
         {
             let mut tree = self.tree.write();
             tree.set_in_build_scope(true);
@@ -392,7 +392,7 @@ impl BuildOwner {
         // Execute callback
         let result = f(self);
 
-        // Phase 3.2: Clear flag and flush deferred dirty elements
+        // Clear flag and flush deferred dirty elements
         // Note: If f() panics, this won't run, but that's acceptable since
         // the entire program state is likely corrupted anyway.
         self.in_build_scope = false;
@@ -687,7 +687,7 @@ mod tests {
         assert!(*called.lock().unwrap());
     }
 
-    // Phase 13: Build Batching Tests
+    // Build Batching Tests
 
     #[test]
     fn test_batching_disabled_by_default() {
@@ -806,7 +806,7 @@ mod tests {
         assert_eq!(saved, 1);
     }
 
-    // ========== Phase 3.2: Build Scope Integration Tests ==========
+    // ========== Build Scope Integration Tests ==========
 
     #[test]
     fn test_build_scope_integration_with_mark_dirty() {

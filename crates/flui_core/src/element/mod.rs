@@ -99,7 +99,7 @@ mod tests {
         // Can't test rebuild without tree setup
     }
 
-    // Phase 3: Element Lifecycle Tests
+    // Element Lifecycle Tests
 
     #[test]
     fn test_element_lifecycle_enum() {

@@ -129,7 +129,6 @@ pub trait MultiChildRenderObjectWidget:
     fn children(&self) -> &[Box<dyn DynWidget>];
 }
 
-// Tests updated for Phase 9 DynRenderObject API
 #[cfg(test)]
 mod tests {
     use super::*;

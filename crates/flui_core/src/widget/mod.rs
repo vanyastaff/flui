@@ -56,7 +56,7 @@ pub use into_widget::IntoWidget;
 pub use parent_data_widget::{ParentDataElement, ParentDataWidget};
 pub use provider::{InheritedElement, InheritedWidget};
 pub use proxy::{ProxyElement, ProxyWidget};
-pub use error_widget::{ErrorWidget, ErrorDetails, ErrorWidgetBuilder}; // Phase 3.3
+pub use error_widget::{ErrorWidget, ErrorDetails, ErrorWidgetBuilder};
 pub use inherited_model::InheritedModel;
 pub use equality::{WidgetEq, widgets_equal};
 
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(owned.count, 100);
     }
 
-    // Phase 2: State Lifecycle Tests
+    // State Lifecycle Tests
 
     #[test]
     fn test_state_lifecycle_enum() {

@@ -38,7 +38,7 @@ pub struct InheritedElement<W: InheritedWidget> {
     widget: W,
     parent: Option<crate::ElementId>,
     dirty: bool,
-    /// Phase 6: Enhanced dependency tracking with DependencyTracker
+    /// Enhanced dependency tracking with DependencyTracker
     dependencies: DependencyTracker,
     tree: Option<Arc<RwLock<crate::ElementTree>>>,
     child: Option<crate::ElementId>,
@@ -57,7 +57,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
         }
     }
 
-    /// Register a dependency from another element (Phase 6)
+    /// Register a dependency from another element
     ///
     /// This is called when an element calls `depend_on_inherited_widget_of_exact_type<T>()`.
     /// The dependent element will be notified (marked dirty) when this InheritedWidget changes.
@@ -82,7 +82,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
         self.update_dependencies(element_id, None);
     }
 
-    /// Notify a single dependent that the widget changed (Phase 6)
+    /// Notify a single dependent that the widget changed
     fn notify_dependent(&mut self, old_widget: &W, dependent_id: crate::ElementId) {
         if !self.widget.update_should_notify(old_widget) {
             return;
@@ -99,7 +99,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
         }
     }
 
-    /// Notify all dependents that the widget changed (Phase 6)
+    /// Notify all dependents that the widget changed
     ///
     /// Only notifies dependents if `update_should_notify()` returns true.
     /// This is called automatically when the widget is updated.
@@ -153,7 +153,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
         &self.widget
     }
 
-    /// Get count of dependents (Phase 6)
+    /// Get count of dependents
     #[must_use]
     #[inline]
     pub fn dependent_count(&self) -> usize {
@@ -244,14 +244,14 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::DynEleme
             }
         }
 
-        // Phase 6: Clear all dependencies (they will be removed from tree anyway)
+        // Clear all dependencies (they will be removed from tree anyway)
         self.dependencies.clear();
     }
 
     fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         // Try to downcast to our widget type
         if let Ok(widget) = new_widget.downcast::<W>() {
-            // Phase 6: Use notify_clients for dependency tracking
+            // Use notify_clients for dependency tracking
             let old_widget = std::mem::replace(&mut self.widget, *widget);
 
             // Notify dependents (only if update_should_notify returns true)
@@ -353,7 +353,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::DynEleme
         }
     }
 
-    // ========== Phase 6: InheritedWidget Dependency Tracking ==========
+    // ========== InheritedWidget Dependency Tracking ==========
 
     fn register_dependency(
         &mut self,
@@ -378,7 +378,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> Element for Inh
     type Widget = W;
 
     fn update(&mut self, new_widget: W) {
-        // Phase 6: Zero-cost update with proper notification
+        // Zero-cost update with proper notification
         let old_widget = std::mem::replace(&mut self.widget, new_widget);
 
         // Notify dependents (only if update_should_notify returns true)

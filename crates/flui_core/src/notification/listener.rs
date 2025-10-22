@@ -130,7 +130,7 @@ impl<T: Notification + Clone + 'static> ProxyWidget for NotificationListener<T> 
         None
     }
 
-    /// Handle notification bubbling (Phase 3.4)
+    /// Handle notification bubbling
     ///
     /// Tries to downcast the notification to type T and call the callback.
     fn handle_notification(&self, notification: &dyn crate::notification::AnyNotification) -> Option<bool> {
@@ -274,7 +274,7 @@ mod tests {
         assert!(debug_str.contains("TestNotification"));
     }
 
-    // ========== Phase 3.4: Integration Tests ==========
+    // ========== Integration Tests ==========
 
     #[test]
     fn test_proxy_widget_handle_notification_correct_type() {

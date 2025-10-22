@@ -22,10 +22,10 @@ pub struct ElementTree {
     element_pool: Option<ElementPool>,
     building: bool,
     tree_ref: Option<Arc<RwLock<Self>>>,
-    /// Whether we're currently in a build scope (Phase 3.2)
+    /// Whether we're currently in a build scope
     /// When true, mark_dirty calls are deferred to avoid infinite rebuild loops
     in_build_scope: bool,
-    /// Elements that tried to mark_dirty during build scope (Phase 3.2)
+    /// Elements that tried to mark_dirty during build scope
     /// These will be processed after the build scope completes
     deferred_dirty: VecDeque<ElementId>,
 }
@@ -41,8 +41,8 @@ impl ElementTree {
             element_pool: None, // Pooling disabled by default
             building: false,
             tree_ref: None,
-            in_build_scope: false, // Phase 3.2
-            deferred_dirty: VecDeque::new(), // Phase 3.2
+            in_build_scope: false,
+            deferred_dirty: VecDeque::new(),
         }
     }
 
@@ -527,13 +527,13 @@ impl ElementTree {
 
     /// Mark an element as dirty (needs rebuild)
     ///
-    /// # Phase 3.2: Build Scope Isolation
+    /// # Build Scope Isolation
     ///
     /// If called during a build scope, the dirty marking is deferred to avoid
     /// infinite rebuild loops. The element will be marked dirty after the
     /// build scope completes.
     pub fn mark_dirty(&mut self, element_id: ElementId) {
-        // Phase 3.2: If in build scope, defer the dirty marking
+        // If in build scope, defer the dirty marking
         if self.in_build_scope {
             #[cfg(debug_assertions)]
             tracing::warn!(
@@ -573,9 +573,9 @@ impl ElementTree {
         self.dirty_elements.len()
     }
 
-    // ========== Build Scope Management (Phase 3.2) ==========
+    // ========== Build Scope Management ==========
 
-    /// Set build scope state (called by BuildOwner) (Phase 3.2)
+    /// Set build scope state (called by BuildOwner)
     ///
     /// When entering a build scope, this should be set to `true`.
     /// When exiting, set to `false` and call `flush_deferred_dirty()`.
@@ -583,7 +583,7 @@ impl ElementTree {
         self.in_build_scope = value;
     }
 
-    /// Check if currently in build scope (Phase 3.2)
+    /// Check if currently in build scope
     ///
     /// # Returns
     ///
@@ -592,7 +592,7 @@ impl ElementTree {
         self.in_build_scope
     }
 
-    /// Flush deferred dirty elements (Phase 3.2)
+    /// Flush deferred dirty elements
     ///
     /// Processes all elements that tried to mark_dirty during the build scope.
     /// Should be called after exiting the build scope.
@@ -773,7 +773,7 @@ impl ElementTree {
         self.finalize_tree();
     }
 
-    /// Deactivate a child element (Phase 2.2)
+    /// Deactivate a child element
     ///
     /// If the element has a GlobalKey, it will be deactivated and added to the
     /// inactive elements set. This allows it to be reactivated later if the same
@@ -1339,7 +1339,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ========== Phase 3.2: Build Scope Isolation Tests ==========
+    // ========== Build Scope Isolation Tests ==========
 
     #[test]
     fn test_mark_dirty_outside_build_scope_is_immediate() {

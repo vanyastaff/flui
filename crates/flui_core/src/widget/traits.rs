@@ -278,7 +278,7 @@ macro_rules! impl_widget_for_stateful {
 ///
 /// The trait provides downcasting capabilities via the `downcast-rs` crate.
 ///
-/// # Enhanced Lifecycle (Phase 2)
+/// # Enhanced Lifecycle
 ///
 /// 1. **init_state()** - Called once when state is created and element mounted
 /// 2. **did_change_dependencies()** - Called after initState and when InheritedWidget dependencies change
@@ -326,7 +326,7 @@ pub trait State: DowncastSync + fmt::Debug {
     /// Use this to respond to changes in InheritedWidgets obtained via
     /// `Context::depend_on_inherited_widget()`.
     ///
-    /// # Phase 2 Enhancement
+    /// 
     ///
     /// This callback enables proper dependency tracking with InheritedWidgets.
     fn did_change_dependencies(&mut self) {}
@@ -353,7 +353,7 @@ pub trait State: DowncastSync + fmt::Debug {
     /// This gives the state a chance to reinitialize data that was prepared
     /// in the constructor or init_state(), as if the object was newly created.
     ///
-    /// # Phase 2 Enhancement
+    /// 
     ///
     /// Enables hot reload support for development workflows.
     fn reassemble(&mut self) {}
@@ -367,7 +367,7 @@ pub trait State: DowncastSync + fmt::Debug {
     /// - Reinserted (activate() will be called)
     /// - Permanently removed (dispose() will be called)
     ///
-    /// # Phase 2 Enhancement
+    /// 
     ///
     /// Supports element reparenting and GlobalKey scenarios.
     fn deactivate(&mut self) {}
@@ -377,7 +377,7 @@ pub trait State: DowncastSync + fmt::Debug {
     /// This is called when a deactivated element is reinserted into the tree
     /// at a new location (e.g., via GlobalKey reparenting).
     ///
-    /// # Phase 2 Enhancement
+    /// 
     ///
     /// Supports element reparenting and GlobalKey scenarios.
     fn activate(&mut self) {}

@@ -159,7 +159,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     /// This schedules the render object for painting during the next frame.
     fn mark_needs_paint(&mut self);
 
-    /// Check if compositing bits need update (Phase 9)
+    /// Check if compositing bits need update
     ///
     /// Returns `true` if `mark_needs_compositing_bits_update()` has been called.
     #[must_use]
@@ -167,16 +167,16 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
         false
     }
 
-    /// Mark compositing bits as needing update (Phase 9)
+    /// Mark compositing bits as needing update
     ///
     /// This schedules the render object's compositing bits for recalculation.
     fn mark_needs_compositing_bits_update(&mut self) {
         // Default: no-op
     }
 
-    // ========== Phase 9: Boundaries ==========
+    // ========== Boundaries ==========
 
-    /// Is this a relayout boundary? (Phase 9)
+    /// Is this a relayout boundary?
     ///
     /// A relayout boundary prevents layout changes from propagating to ancestors.
     /// This is an optimization that allows layout to be performed more efficiently.
@@ -190,7 +190,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
         false
     }
 
-    /// Is this a repaint boundary? (Phase 9)
+    /// Is this a repaint boundary?
     ///
     /// A repaint boundary prevents paint invalidation from propagating to ancestors.
     /// This is an optimization that allows painting to be performed more efficiently.
@@ -204,7 +204,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
         false
     }
 
-    /// Is size determined only by parent constraints? (Phase 9)
+    /// Is size determined only by parent constraints?
     ///
     /// Returns `true` if this render object's size is entirely determined by
     /// its incoming constraints, without needing to query its children.
@@ -473,7 +473,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
         0
     }
 
-    /// Set the depth of this render object in the tree (Phase 9)
+    /// Set the depth of this render object in the tree
     ///
     /// Called when the render object is moved to a different depth in the tree.
     ///
@@ -484,7 +484,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
         // Default: no-op
     }
 
-    /// Update depth of a child (Phase 9)
+    /// Update depth of a child
     ///
     /// Called to recursively update a child's depth after reparenting.
     ///
@@ -557,7 +557,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     /// # Note
     ///
     /// This is very similar to `sized_by_parent()`. The difference is subtle:
-    /// - `sized_by_parent()`: Phase 9 optimization flag
+    /// - `sized_by_parent()`: optimization flag
     /// - `sizes_are_determined_by_constraints()`: General query method
     ///
     /// In practice, they usually return the same value.

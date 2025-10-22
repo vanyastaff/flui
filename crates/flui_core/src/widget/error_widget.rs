@@ -4,7 +4,7 @@
 //! In debug mode, it shows a red background with detailed error information.
 //! In release mode, it shows a simple gray box.
 //!
-//! # Phase 3.3: Enhanced Error Handling
+//! # Enhanced Error Handling
 //!
 //! Added global error widget builder support for customizable error displays.
 
@@ -16,7 +16,7 @@ use crate::context::Context;
 use crate::widget::DynWidget;
 use crate::widget::traits::StatelessWidget;
 
-/// Error details for error widget display (Phase 3.3)
+/// Error details for error widget display
 ///
 /// Provides structured information about errors that occurred during
 /// widget tree building.
@@ -66,12 +66,12 @@ impl fmt::Display for ErrorDetails {
     }
 }
 
-/// Builder function type for creating error widgets (Phase 3.3)
+/// Builder function type for creating error widgets
 ///
 /// This allows customizing how errors are displayed throughout the application.
 pub type ErrorWidgetBuilder = Box<dyn Fn(ErrorDetails) -> Box<dyn DynWidget> + Send + Sync>;
 
-/// Global error widget builder (Phase 3.3)
+/// Global error widget builder
 static ERROR_WIDGET_BUILDER: OnceLock<ErrorWidgetBuilder> = OnceLock::new();
 
 /// Widget that displays an error message
@@ -161,9 +161,9 @@ impl ErrorWidget {
         self.error.is_some()
     }
 
-    // ========== Phase 3.3: Global Error Widget Builder ==========
+    // ========== Global Error Widget Builder ==========
 
-    /// Set the global error widget builder (Phase 3.3)
+    /// Set the global error widget builder
     ///
     /// This allows customizing how errors are displayed throughout the application.
     /// Call this once at app startup to set your custom error widget.
@@ -189,7 +189,7 @@ impl ErrorWidget {
         }
     }
 
-    /// Get the global error widget builder (Phase 3.3)
+    /// Get the global error widget builder
     ///
     /// Returns the custom builder if set, otherwise returns the default builder
     /// which creates a standard ErrorWidget.
@@ -204,7 +204,7 @@ impl ErrorWidget {
         })
     }
 
-    /// Create an error widget from error details (Phase 3.3)
+    /// Create an error widget from error details
     ///
     /// This uses the global error widget builder to create the widget.
     /// Use this when you want to use the custom error widget builder.

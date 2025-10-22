@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 use smallvec::SmallVec;
 
 use crate::{DynElement, DynWidget, Element, ElementId, ElementTree, MultiChildRenderObjectWidget};
-use crate::foundation::{Key, Slot};  // Phase 2.1: Added Slot for updateChildren
+use crate::foundation::{Key, Slot};  // Added Slot for updateChildren
 use super::super::ElementLifecycle;
 
 /// Type alias for a list of child element IDs (optimized for small lists)
@@ -107,7 +107,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         }
     }
 
-    // ========== Phase 2.1: Multi-Child Update Algorithm (ACTIVATED) ==========
+    // ========== Multi-Child Update Algorithm (ACTIVATED) ==========
     // Efficient incremental child update using Flutter's updateChildren() algorithm
     /// Update children efficiently using Flutter's updateChildren() algorithm
     ///
@@ -157,7 +157,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         let old_len = old_children.len();
         let new_len = new_widgets.len();
 
-        // Phase 1: Scan from start, update in-place while children match
+        // Scan from start, update in-place while children match
         let mut old_index = 0;
         let mut new_index = 0;
 
@@ -176,7 +176,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             };
 
             if can_update {
-                // Update in-place with IndexedSlot (Phase 8)
+                // Update in-place with IndexedSlot
                 let previous_sibling = if new_index > 0 {
                     new_children.last().copied()
                 } else {
@@ -192,7 +192,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             }
         }
 
-        // Phase 2: Scan from end, update in-place while children match
+        // Scan from end, update in-place while children match
         let mut old_end = old_len;
         let mut new_end = new_len;
 
@@ -217,7 +217,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             }
         }
 
-        // Phase 3: Handle middle section
+        // Handle middle section
         if old_index < old_end || new_index < new_end {
             self.handle_middle_section(
                 &old_children[old_index..old_end],
@@ -228,13 +228,13 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             );
         }
 
-        // Phase 4: Process children from end scan
+        // Process children from end scan
         for (offset, new_widget) in new_widgets.iter().skip(new_end).take(new_len - new_end).enumerate() {
             let i = new_end + offset;
             let old_idx = old_end + offset;
             let old_child_id = old_children[old_idx];
 
-            // Phase 8: Create IndexedSlot with previous sibling
+            // Create IndexedSlot with previous sibling
             let previous_sibling = if i > 0 {
                 new_children.last().copied()
             } else {
@@ -265,7 +265,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
 
     /// Update a child element with a new widget
     ///
-    /// Phase 8: Now accepts Slot with optional previous_sibling for efficient
+    /// Now accepts Slot with optional previous_sibling for efficient
     /// RenderObject child insertion.
     fn update_child(
         tree: &Arc<RwLock<ElementTree>>,
@@ -353,7 +353,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             };
 
             if let Some(old_id) = old_element_id {
-                // Reuse existing element with IndexedSlot (Phase 8)
+                // Reuse existing element with IndexedSlot
                 used_old_children.insert(old_id);
 
                 let previous_sibling = if slot_index > 0 {
@@ -373,7 +373,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             }
         }
 
-        // Deactivate or remove unused old children (Phase 2.2)
+        // Deactivate or remove unused old children
         // If element has GlobalKey, deactivate it so it can be reactivated later
         // Otherwise, remove it immediately
         let mut tree_guard = tree.write();

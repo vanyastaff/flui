@@ -95,8 +95,6 @@ pub enum CoreError {
     #[error("Element tree in invalid state: {0}")]
     InvalidTreeState(Cow<'static, str>),
 
-    // Phase 10: Enhanced Error Handling
-
     /// Widget build failed with source error
     #[error("Failed to build widget '{widget_type}' (element {element_id}): {source}")]
     BuildFailed {
@@ -208,7 +206,6 @@ impl CoreError {
         Self::InvalidTreeState(reason.into())
     }
 
-    // Phase 10: Enhanced Error Handling
 
     /// Create a build failed error
     #[must_use]
@@ -259,7 +256,7 @@ impl CoreError {
     }
 }
 
-/// Error types for global keys (Phase 10)
+/// Error types for global keys
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyError {
     /// Duplicate global key detected
@@ -310,7 +307,6 @@ mod tests {
         assert!(msg.contains("Invalid parent-child"));
     }
 
-    // Phase 10: Enhanced error tests
 
     #[test]
     fn test_key_error_display() {
