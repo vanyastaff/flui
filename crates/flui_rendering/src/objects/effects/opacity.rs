@@ -4,6 +4,7 @@
 
 use flui_core::{BoxConstraints, DynRenderObject};
 use flui_types::{Offset, Size};
+use crate::RenderFlags;
 
 /// RenderOpacity applies opacity to child rendering
 ///
@@ -49,10 +50,8 @@ pub struct RenderOpacity {
     size: Size,
     /// Current constraints
     constraints: Option<BoxConstraints>,
-    /// Layout dirty flag
-    needs_layout_flag: bool,
-    /// Paint dirty flag
-    needs_paint_flag: bool,
+    /// State flags (needs_layout, needs_paint, etc.)
+    flags: RenderFlags,
 }
 
 impl RenderOpacity {
@@ -78,8 +77,7 @@ impl RenderOpacity {
             child: None,
             size: Size::zero(),
             constraints: None,
-            needs_layout_flag: true,
-            needs_paint_flag: true,
+            flags: RenderFlags::new(),
         }
     }
 
@@ -97,8 +95,7 @@ impl RenderOpacity {
             child: None,
             size: Size::zero(),
             constraints: None,
-            needs_layout_flag: true,
-            needs_paint_flag: true,
+            flags: RenderFlags::new(),
         }
     }
 
@@ -219,20 +216,19 @@ impl DynRenderObject for RenderOpacity {
     }
 
     fn needs_layout(&self) -> bool {
-        self.needs_layout_flag
+        self.flags.needs_layout()
     }
 
     fn mark_needs_layout(&mut self) {
-        self.needs_layout_flag = true;
-        self.mark_needs_paint();
+        self.flags.mark_needs_layout();
     }
 
     fn needs_paint(&self) -> bool {
-        self.needs_paint_flag
+        self.flags.needs_paint()
     }
 
     fn mark_needs_paint(&mut self) {
-        self.needs_paint_flag = true;
+        self.flags.mark_needs_paint();
     }
 
     fn visit_children(&self, visitor: &mut dyn FnMut(&dyn DynRenderObject)) {
@@ -398,12 +394,12 @@ mod tests {
         let mut render = RenderOpacity::new(0.5);
 
         // Changing opacity should only trigger repaint, not relayout
-        render.needs_layout_flag = false;
-        render.needs_paint_flag = false;
+        render.flags.clear_needs_layout();
+        render.flags.clear_needs_paint();
 
         render.set_opacity(0.8);
 
-        // Should mark needs_paint (and transitively needs_layout via mark_needs_layout in mark_needs_paint)
+        // Should mark needs_paint
         assert!(render.needs_paint());
     }
 }

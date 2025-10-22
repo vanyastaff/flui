@@ -52,7 +52,7 @@ macro_rules! impl_cached_layout {
     // Single-child variant (no child_count)
     ($self:ident, $constraints:ident, $layout_code:block) => {{
         // ⚡ FAST PATH: Early return if layout not needed (~2ns)
-        if !$self.needs_layout_flag && $self.constraints == Some($constraints) {
+        if !$self.flags.needs_layout() && $self.constraints == Some($constraints) {
             #[cfg(debug_assertions)]
             {
                 // Debug: можно логировать cache hits
@@ -63,7 +63,7 @@ macro_rules! impl_cached_layout {
 
         // 🔍 GLOBAL CACHE: Check layout cache (~20ns)
         if let Some(element_id) = $self.element_id {
-            if !$self.needs_layout_flag {
+            if !$self.flags.needs_layout() {
                 let cache_key = $crate::__layout_cache_deps::LayoutCacheKey::new(
                     element_id, 
                     $constraints
@@ -92,8 +92,9 @@ macro_rules! impl_cached_layout {
             // Debug: можно логировать cache misses
             // eprintln!("[LAYOUT COMPUTE] {:?}", $self.element_id);
         }
-        
-        $self.needs_layout_flag = false;
+
+        $self.flags.clear_needs_layout();
+        $self.flags.clear_needs_paint();
         let size = $layout_code;
 
         // Сохранить результат в self перед кешированием
@@ -118,7 +119,7 @@ macro_rules! impl_cached_layout {
     // Multi-child variant (with child_count)
     ($self:ident, $constraints:ident, $child_count:expr, $layout_code:block) => {{
         // ⚡ FAST PATH: Early return if layout not needed (~2ns)
-        if !$self.needs_layout_flag && $self.constraints == Some($constraints) {
+        if !$self.flags.needs_layout() && $self.constraints == Some($constraints) {
             #[cfg(debug_assertions)]
             {
                 // Debug: можно логировать cache hits
@@ -130,7 +131,7 @@ macro_rules! impl_cached_layout {
         // 🔍 GLOBAL CACHE: Check layout cache (~20ns)
         // CRITICAL: Include child_count to detect structural changes!
         if let Some(element_id) = $self.element_id {
-            if !$self.needs_layout_flag {
+            if !$self.flags.needs_layout() {
                 let cache_key = $crate::__layout_cache_deps::LayoutCacheKey::new(
                     element_id, 
                     $constraints
@@ -159,8 +160,9 @@ macro_rules! impl_cached_layout {
             // Debug: можно логировать cache misses
             // eprintln!("[LAYOUT COMPUTE] {:?} (children: {})", $self.element_id, $child_count);
         }
-        
-        $self.needs_layout_flag = false;
+
+        $self.flags.clear_needs_layout();
+        $self.flags.clear_needs_paint();
         let size = $layout_code;
 
         // Сохранить результат в self перед кешированием
@@ -199,7 +201,7 @@ mod tests {
         element_id: Option<flui_core::ElementId>,
         size: flui_types::Size,
         constraints: Option<flui_core::BoxConstraints>,
-        needs_layout_flag: bool,
+        flags: crate::RenderFlags,
     }
 
     impl MockWidget {
@@ -208,7 +210,7 @@ mod tests {
                 element_id: None,
                 size: flui_types::Size::zero(),
                 constraints: None,
-                needs_layout_flag: true,
+                flags: crate::RenderFlags::new(),
             }
         }
 
@@ -217,7 +219,7 @@ mod tests {
                 element_id: Some(id),
                 size: flui_types::Size::zero(),
                 constraints: None,
-                needs_layout_flag: true,
+                flags: crate::RenderFlags::new(),
             }
         }
 
@@ -257,7 +259,7 @@ mod tests {
         element_id: Option<flui_core::ElementId>,
         size: flui_types::Size,
         constraints: Option<flui_core::BoxConstraints>,
-        needs_layout_flag: bool,
+        flags: crate::RenderFlags,
         child_count: usize,
     }
 
@@ -267,7 +269,7 @@ mod tests {
                 element_id: Some(id),
                 size: flui_types::Size::zero(),
                 constraints: None,
-                needs_layout_flag: true,
+                flags: crate::RenderFlags::new(),
                 child_count,
             }
         }
@@ -284,7 +286,7 @@ mod tests {
 
         fn set_child_count(&mut self, count: usize) {
             self.child_count = count;
-            self.needs_layout_flag = true;
+            self.flags.mark_needs_layout();
         }
     }
 
