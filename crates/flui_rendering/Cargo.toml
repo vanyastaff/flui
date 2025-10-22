@@ -10,11 +10,13 @@ repository.workspace = true
 [dependencies]
 flui_types = { path = "../flui_types" }
 flui_core = { path = "../flui_core" }
+flui_painting = { path = "../flui_painting" }
 parking_lot.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 egui.workspace = true
 downcast-rs.workspace = true
+bitflags.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

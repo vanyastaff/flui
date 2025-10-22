@@ -60,7 +60,7 @@ pub mod testing;
 pub use utils::layout_macros::__layout_cache_deps;
 
 // Re-exports from core
-pub use core::{RenderBox, RenderObject, RenderProxyBox};
+pub use core::{RenderBox, RenderFlags, RenderObject, RenderProxyBox};
 
 // Re-exports from parent_data
 pub use parent_data::{FlexFit, FlexParentData, StackParentData};
