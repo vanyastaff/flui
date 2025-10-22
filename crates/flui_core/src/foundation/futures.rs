@@ -63,6 +63,25 @@ impl<T> SynchronousFuture<T> {
         Self { value: Some(value) }
     }
 
+    /// Create a future that's immediately ready with a value
+    ///
+    /// This is an alias for `new()` that matches the naming convention
+    /// of `std::future::ready()`. Prefer this method for better API consistency.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_core::foundation::SynchronousFuture;
+    /// use futures::executor::block_on;
+    ///
+    /// let future = SynchronousFuture::ready(42);
+    /// assert_eq!(block_on(future), 42);
+    /// ```
+    #[inline]
+    pub const fn ready(value: T) -> Self {
+        Self { value: Some(value) }
+    }
+
     /// Get the value without awaiting
     ///
     /// This consumes the future and returns its value directly.
@@ -77,6 +96,57 @@ impl<T> SynchronousFuture<T> {
     /// ```
     pub fn into_inner(mut self) -> T {
         self.value.take().expect("SynchronousFuture polled after completion")
+    }
+
+    /// Check if the future still has a value
+    ///
+    /// Returns `false` if the future has already been polled to completion.
+    /// Since `SynchronousFuture` can only be polled once, this effectively
+    /// tells you whether the future has been consumed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_core::foundation::SynchronousFuture;
+    ///
+    /// let future = SynchronousFuture::new(42);
+    /// assert!(future.is_ready());
+    ///
+    /// let value = future.into_inner();
+    /// assert_eq!(value, 42);
+    /// // Note: future is consumed after into_inner()
+    /// ```
+    pub fn is_ready(&self) -> bool {
+        self.value.is_some()
+    }
+
+    /// Map the value inside the future
+    ///
+    /// Transforms the value using the provided function, returning a new
+    /// `SynchronousFuture` with the transformed value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_core::foundation::SynchronousFuture;
+    /// use futures::executor::block_on;
+    ///
+    /// let future = SynchronousFuture::new(21).map(|x| x * 2);
+    /// assert_eq!(block_on(future), 42);
+    /// ```
+    ///
+    /// ```rust
+    /// use flui_core::foundation::SynchronousFuture;
+    /// use futures::executor::block_on;
+    ///
+    /// let future = SynchronousFuture::new("hello").map(|s| s.to_uppercase());
+    /// assert_eq!(block_on(future), "HELLO");
+    /// ```
+    pub fn map<U, F>(self, f: F) -> SynchronousFuture<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        SynchronousFuture::new(f(self.into_inner()))
     }
 }
 
@@ -241,5 +311,78 @@ mod tests {
         let future = SynchronousFuture::new(data.clone());
         let result = block_on(future);
         assert_eq!(result, data);
+    }
+
+    #[test]
+    fn test_synchronous_future_ready() {
+        let future = SynchronousFuture::ready(42);
+        assert_eq!(block_on(future), 42);
+    }
+
+    #[test]
+    fn test_synchronous_future_ready_const() {
+        // Test that ready() is const
+        const FUTURE: SynchronousFuture<i32> = SynchronousFuture::ready(42);
+        assert_eq!(block_on(FUTURE), 42);
+    }
+
+    #[test]
+    fn test_synchronous_future_is_ready() {
+        let mut future = SynchronousFuture::new(42);
+        assert!(future.is_ready());
+
+        // After polling, value is taken
+        use std::task::{Context, RawWaker, RawWakerVTable, Waker};
+        unsafe fn clone_waker(_: *const ()) -> RawWaker {
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        unsafe fn wake(_: *const ()) {}
+        unsafe fn wake_by_ref(_: *const ()) {}
+        unsafe fn drop_waker(_: *const ()) {}
+        static VTABLE: RawWakerVTable =
+            RawWakerVTable::new(clone_waker, wake, wake_by_ref, drop_waker);
+
+        let raw_waker = RawWaker::new(std::ptr::null(), &VTABLE);
+        let waker = unsafe { Waker::from_raw(raw_waker) };
+        let mut context = Context::from_waker(&waker);
+
+        let pinned = Pin::new(&mut future);
+        let _ = pinned.poll(&mut context);
+
+        assert!(!future.is_ready());
+    }
+
+    #[test]
+    fn test_synchronous_future_map() {
+        let future = SynchronousFuture::new(21).map(|x| x * 2);
+        assert_eq!(block_on(future), 42);
+    }
+
+    #[test]
+    fn test_synchronous_future_map_string() {
+        let future = SynchronousFuture::new("hello").map(|s| s.to_uppercase());
+        assert_eq!(block_on(future), "HELLO");
+    }
+
+    #[test]
+    fn test_synchronous_future_map_chain() {
+        let future = SynchronousFuture::new(10)
+            .map(|x| x * 2) // 20
+            .map(|x| x + 2) // 22
+            .map(|x| x * 2); // 44
+
+        assert_eq!(block_on(future), 44);
+    }
+
+    #[test]
+    fn test_synchronous_future_map_type_change() {
+        let future = SynchronousFuture::new(42).map(|x| format!("Value: {}", x));
+        assert_eq!(block_on(future), "Value: 42");
+    }
+
+    #[test]
+    fn test_synchronous_future_ready_with_map() {
+        let future = SynchronousFuture::ready(5).map(|x| x * x);
+        assert_eq!(block_on(future), 25);
     }
 }
