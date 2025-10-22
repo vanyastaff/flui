@@ -25,12 +25,19 @@
 //! context.mark_dirty();
 //! ```
 
+// ============================================================================
+// Module Declarations
+// ============================================================================
+
 mod impl_;
 pub mod dependency;
 mod inherited;
 mod iterators;
 
-// Re-exports
+// ============================================================================
+// Public API Re-exports
+// ============================================================================
+
 pub use impl_::Context;
 pub use dependency::{DependencyInfo, DependencyTracker};
 pub use iterators::{Ancestors, Children, Descendants};

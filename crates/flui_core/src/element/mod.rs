@@ -12,7 +12,10 @@
 //! - `render_object` - RenderObjectElement for RenderObjectWidget
 //! - `render` - Specialized render elements (Leaf, Single, Multi)
 
-// Submodules
+// ============================================================================
+// Module Declarations
+// ============================================================================
+
 pub mod dyn_element;
 mod component;
 mod lifecycle;
@@ -21,16 +24,20 @@ mod render_object;
 mod stateful;
 mod traits;
 
+// ============================================================================
+// Public API Re-exports
+// ============================================================================
 
-
-
-// Re-export main types
 pub use dyn_element::DynElement;
 pub use traits::Element;
 pub use lifecycle::{ElementLifecycle, InactiveElements};
 pub use component::ComponentElement;
 pub use stateful::StatefulElement;
 pub use render_object::RenderObjectElement;
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -229,6 +236,3 @@ mod tests {
         element.forget_child(child_id);
     }
 }
-
-
-

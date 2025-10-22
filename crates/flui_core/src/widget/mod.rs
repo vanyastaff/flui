@@ -29,7 +29,10 @@
 //! }
 //! ```
 
-// Module declarations
+// ============================================================================
+// Module Declarations
+// ============================================================================
+
 pub mod dyn_widget;
 pub mod element_macros;
 pub mod equality;
@@ -42,14 +45,10 @@ pub mod provider;
 pub mod proxy;
 mod traits;
 
+// ============================================================================
+// Public API Re-exports
+// ============================================================================
 
-
-
-
-
-
-
-// Re-exports - Public API
 pub use dyn_widget::DynWidget;
 pub use traits::{State, StatefulWidget, StatelessWidget, Widget};
 pub use lifecycle::StateLifecycle;
@@ -58,8 +57,12 @@ pub use parent_data_widget::{ParentDataElement, ParentDataWidget};
 pub use provider::{InheritedElement, InheritedWidget};
 pub use proxy::{ProxyElement, ProxyWidget};
 pub use error_widget::{ErrorWidget, ErrorDetails, ErrorWidgetBuilder}; // Phase 3.3
-pub use inherited_model::InheritedModel; // Phase 6 (InheritedModel)
-pub use equality::{WidgetEq, widgets_equal}; // Phase 12
+pub use inherited_model::InheritedModel;
+pub use equality::{WidgetEq, widgets_equal};
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -481,15 +484,3 @@ mod tests {
         assert!(state.activate_called);
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

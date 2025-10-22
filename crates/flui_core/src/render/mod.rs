@@ -1,14 +1,32 @@
 //! Rendering layer with zero-cost abstractions
 //!
 //! Third tree in Flui's architecture: Widget → Element → RenderObject
+//!
+//! # Module Structure
+//!
+//! - `dyn_render_object` - Object-safe DynRenderObject trait
+//! - `parent_data` - Parent data types for layout
+//! - `widget` - RenderObjectWidget implementations
 
 use crate::ParentData;
+
+// ============================================================================
+// Module Declarations
+// ============================================================================
 
 pub mod dyn_render_object;
 pub mod parent_data;
 pub mod widget;
 
+// ============================================================================
+// Public API Re-exports
+// ============================================================================
+
 pub use dyn_render_object::DynRenderObject;
+
+// ============================================================================
+// Core Traits
+// ============================================================================
 
 /// RenderObject with associated types for zero-cost operations
 ///
@@ -55,6 +73,3 @@ pub trait RenderObject: DynRenderObject + Sized {
     // are defined in DynRenderObject trait and inherited automatically.
     // RenderObject types implement them through DynRenderObject.
 }
-
-
-
