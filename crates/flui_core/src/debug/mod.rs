@@ -5,13 +5,24 @@
 //!
 //! # Debug Flags
 //!
-//! Global debug flags control logging and validation:
+//! Global debug flags control logging and validation using efficient bit flags:
 //!
 //! ```rust,ignore
 //! use flui_core::debug::DebugFlags;
 //!
-//! // Enable debug logging
-//! DebugFlags::global().write().debug_print_build_scope = true;
+//! // Enable specific debug logging
+//! DebugFlags::enable(DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_MARK_NEEDS_BUILD);
+//!
+//! // Check if flag is enabled
+//! if DebugFlags::is_enabled(DebugFlags::PRINT_BUILD_SCOPE) {
+//!     println!("Building...");
+//! }
+//!
+//! // Enable all flags
+//! DebugFlags::enable_all();
+//!
+//! // Disable specific flags
+//! DebugFlags::disable(DebugFlags::PRINT_BUILD_SCOPE);
 //! ```
 //!
 //! # Submodules
@@ -20,114 +31,139 @@
 //! - `lifecycle` - Lifecycle validation
 //! - `key_registry` - Global key uniqueness validation
 
+use bitflags::bitflags;
 use std::sync::RwLock;
 
 pub mod diagnostics;
 pub mod key_registry;
 pub mod lifecycle;
 
+bitflags! {
+    /// Global debug flags for controlling debug output
+    ///
+    /// These flags use efficient bit operations for fast checks at runtime.
+    /// In release builds with `#[cfg(debug_assertions)]` guards, flag checks
+    /// should be optimized away by the compiler.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::debug::DebugFlags;
+    ///
+    /// // Enable multiple flags at once
+    /// DebugFlags::enable(
+    ///     DebugFlags::PRINT_BUILD_SCOPE |
+    ///     DebugFlags::PRINT_MARK_NEEDS_BUILD
+    /// );
+    ///
+    /// // Check if enabled
+    /// if DebugFlags::is_enabled(DebugFlags::PRINT_BUILD_SCOPE) {
+    ///     println!("Building widget...");
+    /// }
+    ///
+    /// // Enable all debugging
+    /// DebugFlags::enable_all();
+    /// ```
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct DebugFlags: u32 {
+        /// Print when build() is called on widgets
+        const PRINT_BUILD_SCOPE = 1 << 0;
 
-/// Global debug flags for controlling debug output
-///
-/// These flags are checked at runtime to control debug logging and validation.
-/// In release builds, these checks should be optimized away by the compiler when
-/// wrapped in `#[cfg(debug_assertions)]`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_core::debug::DebugFlags;
-///
-/// // Enable debug printing
-/// {
-///     let mut flags = DebugFlags::global().write().unwrap();
-///     flags.debug_print_build_scope = true;
-///     flags.debug_print_mark_needs_build = true;
-/// }
-///
-/// // Now widget builds will be logged
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DebugFlags {
-    /// Print when build() is called on widgets
-    pub debug_print_build_scope: bool,
+        /// Print when mark_needs_build() is called
+        const PRINT_MARK_NEEDS_BUILD = 1 << 1;
 
-    /// Print when mark_needs_build() is called
-    pub debug_print_mark_needs_build: bool,
+        /// Print when layout() is called on RenderObjects
+        const PRINT_LAYOUT = 1 << 2;
 
-    /// Print when layout() is called on RenderObjects
-    pub debug_print_layout: bool,
+        /// Print when rebuild is scheduled
+        const PRINT_SCHEDULE_BUILD = 1 << 3;
 
-    /// Print when rebuild is scheduled
-    pub debug_print_schedule_build: bool,
+        /// Print global key registration/deregistration
+        const PRINT_GLOBAL_KEY_REGISTRY = 1 << 4;
 
-    /// Print global key registration/deregistration
-    pub debug_print_global_key_registry: bool,
+        /// Enable element lifecycle validation
+        const CHECK_ELEMENT_LIFECYCLE = 1 << 5;
 
-    /// Enable element lifecycle validation
-    pub debug_check_element_lifecycle: bool,
+        /// Enable intrinsic size validation
+        const CHECK_INTRINSIC_SIZES = 1 << 6;
 
-    /// Enable intrinsic size validation
-    pub debug_check_intrinsic_sizes: bool,
+        /// Print when InheritedWidget notifies dependents
+        const PRINT_INHERITED_WIDGET_NOTIFY = 1 << 7;
 
-    /// Print when InheritedWidget notifies dependents
-    pub debug_print_inherited_widget_notify: bool,
-
-    /// Print when dependencies are registered
-    pub debug_print_dependencies: bool,
-}
-
-impl Default for DebugFlags {
-    fn default() -> Self {
-        Self::new()
+        /// Print when dependencies are registered
+        const PRINT_DEPENDENCIES = 1 << 8;
     }
 }
 
 impl DebugFlags {
-    /// Create new debug flags with all flags disabled
-    pub fn new() -> Self {
-        Self {
-            debug_print_build_scope: false,
-            debug_print_mark_needs_build: false,
-            debug_print_layout: false,
-            debug_print_schedule_build: false,
-            debug_print_global_key_registry: false,
-            debug_check_element_lifecycle: false,
-            debug_check_intrinsic_sizes: false,
-            debug_print_inherited_widget_notify: false,
-            debug_print_dependencies: false,
-        }
-    }
-
-    /// Create debug flags with all flags enabled
-    pub fn all() -> Self {
-        Self {
-            debug_print_build_scope: true,
-            debug_print_mark_needs_build: true,
-            debug_print_layout: true,
-            debug_print_schedule_build: true,
-            debug_print_global_key_registry: true,
-            debug_check_element_lifecycle: true,
-            debug_check_intrinsic_sizes: true,
-            debug_print_inherited_widget_notify: true,
-            debug_print_dependencies: true,
-        }
-    }
-
-    /// Get global debug flags instance (thread-local)
+    /// Get global debug flags instance
     pub fn global() -> &'static RwLock<Self> {
-        static INSTANCE: RwLock<DebugFlags> = RwLock::new(DebugFlags {
-            debug_print_build_scope: false,
-            debug_print_mark_needs_build: false,
-            debug_print_layout: false,
-            debug_print_schedule_build: false,
-            debug_print_global_key_registry: false,
-            debug_check_element_lifecycle: false,
-            debug_check_intrinsic_sizes: false,
-            debug_print_inherited_widget_notify: false,
-            debug_print_dependencies: false,
-        });
+        static INSTANCE: RwLock<DebugFlags> = RwLock::new(DebugFlags::empty());
         &INSTANCE
+    }
+
+    /// Check if any of the given flags are enabled
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if DebugFlags::is_enabled(DebugFlags::PRINT_BUILD_SCOPE) {
+    ///     println!("Build scope debugging enabled");
+    /// }
+    /// ```
+    pub fn is_enabled(flags: DebugFlags) -> bool {
+        Self::global().read().unwrap().contains(flags)
+    }
+
+    /// Enable the given debug flags
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Enable multiple flags
+    /// DebugFlags::enable(DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_LAYOUT);
+    /// ```
+    pub fn enable(flags: DebugFlags) {
+        Self::global().write().unwrap().insert(flags);
+    }
+
+    /// Disable the given debug flags
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// DebugFlags::disable(DebugFlags::PRINT_BUILD_SCOPE);
+    /// ```
+    pub fn disable(flags: DebugFlags) {
+        Self::global().write().unwrap().remove(flags);
+    }
+
+    /// Enable all debug flags
+    ///
+    /// Useful for maximum debugging verbosity.
+    pub fn enable_all() {
+        *Self::global().write().unwrap() = Self::all();
+    }
+
+    /// Disable all debug flags
+    ///
+    /// Returns to minimal debugging output.
+    pub fn disable_all() {
+        *Self::global().write().unwrap() = Self::empty();
+    }
+
+    /// Set debug flags to exact value
+    ///
+    /// Replaces all current flags with the given set.
+    pub fn set_global(flags: DebugFlags) {
+        *Self::global().write().unwrap() = flags;
+    }
+
+    /// Get current debug flags
+    ///
+    /// Returns a copy of the current flag state.
+    pub fn get_global() -> Self {
+        *Self::global().read().unwrap()
     }
 }
 
@@ -141,14 +177,14 @@ impl DebugFlags {
 /// ```rust,ignore
 /// use flui_core::debug_println;
 ///
-/// debug_println!(debug_print_build_scope, "Building widget: {}", widget_name);
+/// debug_println!(PRINT_BUILD_SCOPE, "Building widget: {}", widget_name);
 /// ```
 #[macro_export]
 macro_rules! debug_println {
     ($flag:ident, $($arg:tt)*) => {
         #[cfg(debug_assertions)]
         {
-            if $crate::debug::DebugFlags::global().read().unwrap().$flag {
+            if $crate::debug::DebugFlags::is_enabled($crate::debug::DebugFlags::$flag) {
                 println!($($arg)*);
             }
         }
@@ -164,7 +200,7 @@ macro_rules! debug_println {
 /// ```rust,ignore
 /// use flui_core::debug_exec;
 ///
-/// debug_exec!(debug_check_element_lifecycle, {
+/// debug_exec!(CHECK_ELEMENT_LIFECYCLE, {
 ///     validate_lifecycle_state();
 /// });
 /// ```
@@ -173,7 +209,7 @@ macro_rules! debug_exec {
     ($flag:ident, $code:block) => {
         #[cfg(debug_assertions)]
         {
-            if $crate::debug::DebugFlags::global().read().unwrap().$flag {
+            if $crate::debug::DebugFlags::is_enabled($crate::debug::DebugFlags::$flag) {
                 $code
             }
         }
@@ -185,67 +221,162 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_debug_flags_new() {
-        let flags = DebugFlags::new();
-        assert!(!flags.debug_print_build_scope);
-        assert!(!flags.debug_print_mark_needs_build);
-        assert!(!flags.debug_print_layout);
-        assert!(!flags.debug_check_element_lifecycle);
+    fn test_debug_flags_empty() {
+        let flags = DebugFlags::empty();
+        assert!(!flags.contains(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(!flags.contains(DebugFlags::PRINT_MARK_NEEDS_BUILD));
+        assert!(!flags.contains(DebugFlags::PRINT_LAYOUT));
     }
 
     #[test]
     fn test_debug_flags_all() {
         let flags = DebugFlags::all();
-        assert!(flags.debug_print_build_scope);
-        assert!(flags.debug_print_mark_needs_build);
-        assert!(flags.debug_print_layout);
-        assert!(flags.debug_check_element_lifecycle);
+        assert!(flags.contains(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(flags.contains(DebugFlags::PRINT_MARK_NEEDS_BUILD));
+        assert!(flags.contains(DebugFlags::PRINT_LAYOUT));
+        assert!(flags.contains(DebugFlags::CHECK_ELEMENT_LIFECYCLE));
+    }
+
+    #[test]
+    fn test_debug_flags_insert() {
+        let mut flags = DebugFlags::empty();
+        flags.insert(DebugFlags::PRINT_BUILD_SCOPE);
+
+        assert!(flags.contains(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(!flags.contains(DebugFlags::PRINT_LAYOUT));
+    }
+
+    #[test]
+    fn test_debug_flags_remove() {
+        let mut flags = DebugFlags::all();
+        flags.remove(DebugFlags::PRINT_BUILD_SCOPE);
+
+        assert!(!flags.contains(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(flags.contains(DebugFlags::PRINT_LAYOUT));
+    }
+
+    #[test]
+    fn test_debug_flags_toggle() {
+        let mut flags = DebugFlags::empty();
+
+        flags.toggle(DebugFlags::PRINT_BUILD_SCOPE);
+        assert!(flags.contains(DebugFlags::PRINT_BUILD_SCOPE));
+
+        flags.toggle(DebugFlags::PRINT_BUILD_SCOPE);
+        assert!(!flags.contains(DebugFlags::PRINT_BUILD_SCOPE));
+    }
+
+    #[test]
+    fn test_debug_flags_union() {
+        let flags1 = DebugFlags::PRINT_BUILD_SCOPE;
+        let flags2 = DebugFlags::PRINT_LAYOUT;
+        let combined = flags1 | flags2;
+
+        assert!(combined.contains(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(combined.contains(DebugFlags::PRINT_LAYOUT));
+    }
+
+    #[test]
+    fn test_debug_flags_intersection() {
+        let flags = DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_LAYOUT;
+        let mask = DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_MARK_NEEDS_BUILD;
+        let result = flags & mask;
+
+        assert!(result.contains(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(!result.contains(DebugFlags::PRINT_LAYOUT));
+        assert!(!result.contains(DebugFlags::PRINT_MARK_NEEDS_BUILD));
     }
 
     #[test]
     fn test_debug_flags_global() {
-        // Test that global instance is accessible
-        let flags = DebugFlags::global();
-        assert!(flags.read().is_ok());
+        // Reset to clean state
+        DebugFlags::disable_all();
+
+        // Enable some flags
+        DebugFlags::enable(DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_LAYOUT);
+
+        // Check via is_enabled
+        assert!(DebugFlags::is_enabled(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(DebugFlags::is_enabled(DebugFlags::PRINT_LAYOUT));
+        assert!(!DebugFlags::is_enabled(DebugFlags::PRINT_MARK_NEEDS_BUILD));
+
+        // Disable specific flag
+        DebugFlags::disable(DebugFlags::PRINT_BUILD_SCOPE);
+        assert!(!DebugFlags::is_enabled(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(DebugFlags::is_enabled(DebugFlags::PRINT_LAYOUT));
+
+        // Clean up
+        DebugFlags::disable_all();
     }
 
     #[test]
-    fn test_debug_flags_global_modify() {
-        // Modify global flags
-        {
-            let mut flags = DebugFlags::global().write().unwrap();
-            flags.debug_print_build_scope = true;
-        }
+    fn test_debug_flags_enable_all() {
+        DebugFlags::disable_all();
+        DebugFlags::enable_all();
 
-        // Read back
-        {
-            let flags = DebugFlags::global().read().unwrap();
-            assert!(flags.debug_print_build_scope);
-        }
+        assert!(DebugFlags::is_enabled(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(DebugFlags::is_enabled(DebugFlags::PRINT_LAYOUT));
+        assert!(DebugFlags::is_enabled(DebugFlags::CHECK_ELEMENT_LIFECYCLE));
 
-        // Reset for other tests
-        {
-            let mut flags = DebugFlags::global().write().unwrap();
-            flags.debug_print_build_scope = false;
-        }
+        DebugFlags::disable_all();
     }
 
     #[test]
-    fn test_debug_flags_default() {
-        let flags = DebugFlags::default();
-        assert!(!flags.debug_print_build_scope);
-        assert!(!flags.debug_print_inherited_widget_notify);
+    fn test_debug_flags_set_global() {
+        DebugFlags::disable_all();
+
+        DebugFlags::set_global(DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_LAYOUT);
+
+        assert!(DebugFlags::is_enabled(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(DebugFlags::is_enabled(DebugFlags::PRINT_LAYOUT));
+        assert!(!DebugFlags::is_enabled(DebugFlags::PRINT_MARK_NEEDS_BUILD));
+
+        DebugFlags::disable_all();
+    }
+
+    #[test]
+    fn test_debug_flags_get_global() {
+        DebugFlags::disable_all();
+        DebugFlags::enable(DebugFlags::PRINT_BUILD_SCOPE);
+
+        let flags = DebugFlags::get_global();
+        assert!(flags.contains(DebugFlags::PRINT_BUILD_SCOPE));
+        assert!(!flags.contains(DebugFlags::PRINT_LAYOUT));
+
+        DebugFlags::disable_all();
+    }
+
+    #[test]
+    fn test_debug_flags_bits() {
+        // Test that each flag has a unique bit
+        assert_eq!(DebugFlags::PRINT_BUILD_SCOPE.bits(), 1 << 0);
+        assert_eq!(DebugFlags::PRINT_MARK_NEEDS_BUILD.bits(), 1 << 1);
+        assert_eq!(DebugFlags::PRINT_LAYOUT.bits(), 1 << 2);
+    }
+
+    #[test]
+    fn test_debug_flags_copy() {
+        let flags1 = DebugFlags::PRINT_BUILD_SCOPE;
+        let flags2 = flags1; // Copy
+
+        assert_eq!(flags1, flags2);
     }
 
     #[test]
     fn test_debug_flags_clone() {
-        let flags1 = DebugFlags::all();
+        let flags1 = DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_LAYOUT;
         let flags2 = flags1.clone();
 
-        assert_eq!(flags1.debug_print_build_scope, flags2.debug_print_build_scope);
-        assert_eq!(flags1.debug_check_element_lifecycle, flags2.debug_check_element_lifecycle);
+        assert_eq!(flags1, flags2);
+    }
+
+    #[test]
+    fn test_debug_flags_debug_format() {
+        let flags = DebugFlags::PRINT_BUILD_SCOPE | DebugFlags::PRINT_LAYOUT;
+        let debug_str = format!("{:?}", flags);
+
+        // Should contain both flag names
+        assert!(debug_str.contains("PRINT_BUILD_SCOPE"));
+        assert!(debug_str.contains("PRINT_LAYOUT"));
     }
 }
-
-
-
