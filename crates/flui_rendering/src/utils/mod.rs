@@ -1,6 +1,4 @@
-//! Utility functions and types
-//!
-//! Helper types and functions for rendering.
+//! Utility functions and macros for rendering
 
 #[macro_use]
-pub mod layout_macros;
+pub mod macros;
