@@ -377,11 +377,12 @@ mod tests {
             "Image_w", "Button_w", "TextField_w", "Checkbox_w", "Radio_w"
         ];
 
-        let interned: Vec<_> = widget_types.iter().map(|s| intern(s)).collect();
+        use itertools::Itertools;
+        let interned = widget_types.iter().map(|s| intern(s)).collect_vec();
 
-        // Verify all strings are interned
-        for (i, &s) in widget_types.iter().enumerate() {
-            assert_eq!(interned[i], intern(s));
+        // Verify all strings are interned with zip_eq for equal-length assertion
+        for (&s, &interned_handle) in itertools::zip_eq(&widget_types, &interned) {
+            assert_eq!(interned_handle, intern(s));
         }
     }
 

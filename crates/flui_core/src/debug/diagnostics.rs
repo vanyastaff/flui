@@ -3,6 +3,7 @@
 //! Provides utilities to print element trees in a human-readable format.
 
 use crate::element::DynElement;
+use itertools::Itertools;
 use std::fmt::Write;
 
 /// Print element tree to string with indentation
@@ -51,7 +52,7 @@ fn print_element_recursive(
     };
 
     // Print children
-    let children: Vec<_> = element.children_iter().collect();
+    let children = element.children_iter().collect_vec();
     for (i, child_id) in children.iter().enumerate() {
         // Note: We can't actually get child elements without tree access
         // This is a simplified version

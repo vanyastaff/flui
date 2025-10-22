@@ -469,17 +469,19 @@ mod tests {
 
     #[test]
     fn test_single_child_element_children_iter() {
+        use itertools::Itertools;
+
         let widget = MockPaddingWidget {
             padding: EdgeInsets::all(10.0),
             child: Box::new(MockChildWidget),
         };
         let mut element = SingleChildRenderObjectElement::new(widget);
 
-        assert_eq!(element.children_iter().collect::<Vec<_>>(), Vec::<ElementId>::new());
+        assert_eq!(element.children_iter().collect_vec(), Vec::<ElementId>::new());
 
         let child_id = ElementId::new();
         element.set_child(child_id);
-        assert_eq!(element.children_iter().collect::<Vec<_>>(), vec![child_id]);
+        assert_eq!(element.children_iter().collect_vec(), vec![child_id]);
     }
 
     #[test]

@@ -748,6 +748,8 @@ mod tests {
 
     #[test]
     fn test_multi_child_element_children_iter() {
+        use itertools::Itertools;
+
         let widget = MockColumnWidget {
             children: vec![
                 Box::new(MockChildWidget),
@@ -756,13 +758,13 @@ mod tests {
         };
         let mut element = MultiChildRenderObjectElement::new(widget);
 
-        assert_eq!(element.children_iter().collect::<Vec<_>>(), Vec::<ElementId>::new());
+        assert_eq!(element.children_iter().collect_vec(), Vec::<ElementId>::new());
 
         let child_id1 = ElementId::new();
         let child_id2 = ElementId::new();
         element.set_children(SmallVec::from_vec(vec![child_id1, child_id2]));
 
-        assert_eq!(element.children_iter().collect::<Vec<_>>(), vec![child_id1, child_id2]);
+        assert_eq!(element.children_iter().collect_vec(), vec![child_id1, child_id2]);
     }
 
     #[test]

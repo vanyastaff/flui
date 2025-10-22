@@ -195,7 +195,8 @@ mod tests {
         ];
 
         // Clone the entire vector of trait objects
-        let cloned: Vec<Box<dyn DynWidget>> = widgets.iter().map(|w| dyn_clone::clone_box(&**w)).collect();
+        use itertools::Itertools;
+        let cloned = widgets.iter().map(|w| dyn_clone::clone_box(&**w)).collect_vec();
 
         assert_eq!(cloned.len(), 3);
         for (i, widget) in cloned.iter().enumerate() {
