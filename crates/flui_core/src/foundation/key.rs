@@ -66,17 +66,6 @@ pub trait Key: fmt::Debug {
     #[must_use]
     fn key_eq(&self, other: &dyn Key) -> bool;
 
-    /// Checks if this key equals another key (deprecated, use `key_eq`)
-    ///
-    /// # Deprecated
-    ///
-    /// Use [`key_eq`](Key::key_eq) instead for clearer intent.
-    #[must_use]
-    #[deprecated(since = "0.1.0", note = "use `key_eq` instead")]
-    fn equals(&self, other: &dyn Key) -> bool {
-        self.key_eq(other)
-    }
-
     /// Returns this key as `Any` for downcasting
     #[must_use]
     fn as_any(&self) -> &dyn Any;

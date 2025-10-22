@@ -199,32 +199,14 @@ impl Context {
         self.depend_on_inherited_widget()
     }
 
-    /// Accesses InheritedWidget without dependency (legacy, for macros)
-    ///
-    /// For direct usage, prefer [`read()`](Self::read).
-    ///
-    /// # Deprecation Note
-    ///
-    /// This method uses the `get_*` prefix which violates Rust API Guidelines (C-GETTER).
-    /// It is kept for legacy macro support only. New code should use [`read()`](Self::read).
-    #[deprecated(since = "0.5.0", note = "use `read()` instead; this is for legacy macro support only")]
-    #[must_use]
-    pub fn get_inherited_widget<W>(&self) -> Option<W>
-    where
-        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
-    {
-        self.legacy_inherited_widget_impl::<W>(false)
-    }
-
     /// Accesses InheritedWidget without dependency (legacy alias)
     #[must_use]
     #[inline]
-    #[allow(deprecated)]
     pub fn find_inherited<W>(&self) -> Option<W>
     where
         W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
     {
-        self.get_inherited_widget()
+        self.legacy_inherited_widget_impl::<W>(false)
     }
 }
 
@@ -349,82 +331,6 @@ impl Context {
 }
 
 // =============================================================================
-// Deprecated Aliases (For Migration)
-// =============================================================================
-
-#[allow(deprecated)]
-impl Context {
-    /// Deprecated: use [`inherit()`](Self::inherit) instead
-    #[deprecated(since = "0.2.0", note = "use `inherit()` instead")]
-    #[must_use]
-    #[inline]
-    pub fn depend_on_inherited_widget_of_exact_type<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        self.inherit::<T>()
-    }
-
-    /// Deprecated: use [`read()`](Self::read) instead
-    #[deprecated(since = "0.2.0", note = "use `read()` instead")]
-    #[must_use]
-    #[inline]
-    pub fn get_inherited_widget_of_exact_type<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        self.read::<T>()
-    }
-
-    /// Deprecated: use [`inherit_aspect()`](Self::inherit_aspect) instead
-    #[deprecated(since = "0.2.0", note = "use `inherit_aspect()` instead")]
-    #[must_use]
-    #[inline]
-    pub fn depend_on_inherited_widget_of_exact_type_with_aspect<T>(
-        &self,
-        aspect: Option<Box<dyn std::any::Any + Send + Sync>>,
-    ) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        self.inherit_aspect::<T>(aspect)
-    }
-
-    /// Deprecated: use [`inherited_element()`](Self::inherited_element) instead
-    #[deprecated(since = "0.2.0", note = "use `inherited_element()` instead")]
-    #[must_use]
-    #[inline]
-    pub fn get_element_for_inherited_widget_of_exact_type<W>(&self) -> Option<ElementId>
-    where
-        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
-    {
-        self.inherited_element::<W>()
-    }
-
-    /// Deprecated: use [`inherited_element()`](Self::inherited_element) instead
-    #[deprecated(since = "0.2.0", note = "use `inherited_element()` instead")]
-    #[must_use]
-    #[inline]
-    pub fn find_inherited_element<W>(&self) -> Option<ElementId>
-    where
-        W: InheritedWidget + crate::Widget<Element = crate::widget::InheritedElement<W>> + Clone + 'static,
-    {
-        self.inherited_element::<W>()
-    }
-
-    /// Deprecated: use [`read()`](Self::read) instead
-    #[deprecated(since = "0.2.0", note = "use `read()` instead")]
-    #[must_use]
-    #[inline]
-    pub fn read_inherited<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        self.read::<T>()
-    }
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 
@@ -490,15 +396,5 @@ mod tests {
 
         // With aspect
         let _w = context.inherit_aspect::<DummyWidget>(None);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_deprecated_apis() {
-        let context = Context::empty();
-
-        // These should still work but emit warnings
-        let _w1 = context.depend_on_inherited_widget_of_exact_type::<DummyWidget>();
-        let _w2 = context.get_inherited_widget_of_exact_type::<DummyWidget>();
     }
 }
