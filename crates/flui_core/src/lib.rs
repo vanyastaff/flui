@@ -117,31 +117,10 @@ pub use foundation::string_cache::{capacity, get, intern, is_empty, len, resolve
 
 // ========== Type Aliases for Common Patterns ==========
 
-/// Boxed widget trait object
-///
-/// Commonly used for heterogeneous collections of widgets.
-///
-/// # Example
-///
-/// ```rust
-/// use flui_core::BoxedWidget;
-///
-/// let widgets: Vec<BoxedWidget> = vec![
-///     // Box::new(Text::new("Hello")),
-///     // Box::new(Container::new()),
-/// ];
-/// ```
-pub type BoxedWidget = Box<dyn DynWidget>;
-
-/// Boxed element trait object
-///
-/// Commonly used for heterogeneous collections of elements.
-pub type BoxedElement = Box<dyn DynElement>;
-
-/// Boxed render object trait object
-///
-/// Commonly used for heterogeneous collections of render objects.
-pub type BoxedRenderObject = Box<dyn DynRenderObject>;
+// Re-export boxed types from their respective modules
+pub use widget::dyn_widget::BoxedWidget;
+pub use element::dyn_element::BoxedElement;
+pub use render::dyn_render_object::BoxedRenderObject;
 
 /// Prelude module for convenient imports
 ///

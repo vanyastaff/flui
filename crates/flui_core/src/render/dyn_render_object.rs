@@ -618,3 +618,19 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
 
 // Enable downcasting for DynRenderObject trait objects
 impl_downcast!(sync DynRenderObject);
+
+/// Boxed render object trait object
+///
+/// Commonly used for heterogeneous collections of render objects.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_core::BoxedRenderObject;
+///
+/// let render_objects: Vec<BoxedRenderObject> = vec![
+///     Box::new(RenderText::new("Hello")),
+///     Box::new(RenderImage::new(image)),
+/// ];
+/// ```
+pub type BoxedRenderObject = Box<dyn DynRenderObject>;

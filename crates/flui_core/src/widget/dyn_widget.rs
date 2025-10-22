@@ -97,3 +97,19 @@ dyn_clone::clone_trait_object!(DynWidget);
 
 // Enable downcasting for DynWidget trait objects
 impl_downcast!(DynWidget);
+
+/// Boxed widget trait object
+///
+/// Commonly used for heterogeneous collections of widgets.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_core::BoxedWidget;
+///
+/// let widgets: Vec<BoxedWidget> = vec![
+///     Box::new(Text::new("Hello")),
+///     Box::new(Container::new()),
+/// ];
+/// ```
+pub type BoxedWidget = Box<dyn DynWidget>;

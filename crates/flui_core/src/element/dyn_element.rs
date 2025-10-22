@@ -255,3 +255,19 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
 
 // Enable downcasting for DynElement trait objects
 impl_downcast!(DynElement);
+
+/// Boxed element trait object
+///
+/// Commonly used for heterogeneous collections of elements.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_core::BoxedElement;
+///
+/// let elements: Vec<BoxedElement> = vec![
+///     Box::new(ComponentElement::new(widget1)),
+///     Box::new(StatefulElement::new(widget2)),
+/// ];
+/// ```
+pub type BoxedElement = Box<dyn DynElement>;
