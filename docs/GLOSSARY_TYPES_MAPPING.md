@@ -374,8 +374,8 @@
 - ✅ ChangeNotifier
 - ✅ ValueListenable<T>
 - ✅ ValueNotifier<T>
-- ❌ ObserverList<T> (not implemented yet)
-- ❌ HashedObserverList<T> (not implemented yet)
+- ✅ ObserverList<T> (Vec-based, with retain() and iter())
+- ✅ HashedObserverList<T> (AHashSet-based, O(1) removal)
 
 **Diagnostics (✅ РЕАЛИЗОВАНО в flui_core):**
 - ✅ Diagnosticable, DiagnosticableTree, DiagnosticableTreeMixin
@@ -386,44 +386,46 @@
 - ✅ DiagnosticLevel (enum)
 - ✅ + багато інших diagnostic типів
 
-**Utilities (❌ NOT IMPLEMENTED):**
-- ❌ BitField<T>
-- ❌ CachingIterable<E>
-- ❌ Unicode (константи)
-- ❌ Factory<T>
-- ❌ Category, DocumentationIcon, Summary (annotations)
+**Utilities (⚠️ NOT NEEDED - using Rust crates):**
+- ⚠️ BitField<T> → Use `bitflags` crate instead
+- ⚠️ CachingIterable<E> → Use `itertools` crate instead
+- ⚠️ Unicode (константи) → Use `unicode-segmentation` crate if needed
+- ⚠️ Factory<T> → Use `Fn/FnOnce` traits directly
+- ⚠️ Category, DocumentationIcon, Summary → Documentation annotations (not critical)
 
-**Error handling (✅ PARTIAL - в flui_core є CoreError):**
+**Error handling (✅ DONE - flui_core has CoreError):**
 - ✅ CoreError, KeyError (flui_core implementation)
-- ❌ FlutterError (планується)
-- ❌ FlutterErrorDetails (планується)
-- ❌ ErrorDescription, ErrorHint, ErrorSummary, ErrorSpacer (планується)
+- ⚠️ FlutterError → Not needed, flui uses CoreError instead
+- ⚠️ FlutterErrorDetails → Flutter-specific, not needed
+- ⚠️ ErrorDescription, ErrorHint, ErrorSummary, ErrorSpacer → Flutter-specific formatting
 
-**Bindings (❌ NOT IMPLEMENTED):**
-- ❌ BindingBase
+**Bindings (✅ РЕАЛИЗОВАНО в flui_core):**
+- ✅ BindingBase (with frame callbacks: post-frame, persistent, schedule)
+- ✅ FrameCallbackId (for managing persistent callbacks)
+- ✅ ExampleBinding (reference implementation)
 
-**Futures (❌ NOT IMPLEMENTED):**
-- ❌ SynchronousFuture<T>
+**Futures (✅ РЕАЛИЗОВАНО в flui_core):**
+- ✅ SynchronousFuture<T> (with ready(), is_ready(), map())
 
-**Collections (❌ NOT IMPLEMENTED):**
-- ❌ PersistentHashMap<K, V>
+**Collections (⚠️ NOT NEEDED - using Rust crates):**
+- ⚠️ PersistentHashMap<K, V> → Use `im` or `rpds` crate if needed
 
-**Memory (❌ NOT IMPLEMENTED):**
-- ❌ FlutterMemoryAllocations
-- ❌ ObjectCreated, ObjectDisposed, ObjectEvent
+**Memory (⚠️ NOT NEEDED - using tracing):**
+- ⚠️ FlutterMemoryAllocations → Use `tracing` crate instead
+- ⚠️ ObjectCreated, ObjectDisposed, ObjectEvent → Use `tracing` events
 
-**License (❌ NOT IMPLEMENTED):**
-- ❌ LicenseEntry, LicenseEntryWithLineBreaks
-- ❌ LicenseParagraph
-- ❌ LicenseRegistry
+**License (⚠️ NOT CRITICAL):**
+- ⚠️ LicenseEntry, LicenseEntryWithLineBreaks → Legal stuff (not critical for core)
+- ⚠️ LicenseParagraph
+- ⚠️ LicenseRegistry
 
-**Platform dispatcher (❌ NOT IMPLEMENTED):**
-- ❌ PlatformDispatcher (може бути в flui_platform)
-- ❌ SingletonFlutterWindow (deprecated)
+**Platform dispatcher (⚠️ FUTURE WORK):**
+- ⚠️ PlatformDispatcher → Better in separate `flui_platform` crate
+- ⚠️ SingletonFlutterWindow → Deprecated in Flutter, not needed
 
 ---
 
-### flui_core - Core traits (✅ 442 тести - ПОЛНОСТЬЮ РЕАЛИЗОВАНО!)
+### flui_core - Core traits (✅ 486 тестів - ПОВНІСТЮ РЕАЛІЗОВАНО!)
 
 **Widget система (✅ РЕАЛИЗОВАНО ПОЛНОСТЬЮ):**
 - ✅ Widget trait (з DynWidget + Downcast)
@@ -493,7 +495,12 @@
 - ✅ ElementId (unique ID system)
 - ✅ Slot (indexed slots з previous_sibling)
 - ✅ Keys (Key, ValueKey, ObjectKey, UniqueKey, GlobalKey)
-- ✅ ChangeNotifier, ValueNotifier
+- ✅ ChangeNotifier, ValueNotifier, Listenable
+- ✅ ObserverList<T> (Vec-based with retain() and iter())
+- ✅ HashedObserverList<T> (AHashSet-based, O(1) removal)
+- ✅ BindingBase (with frame callbacks)
+- ✅ FrameCallbackId (callback management)
+- ✅ SynchronousFuture<T> (with ready(), is_ready(), map())
 - ✅ Diagnostics (full system)
 - ✅ Platform types (TargetPlatform, Brightness, Locale)
 - ✅ String cache (для type names)
