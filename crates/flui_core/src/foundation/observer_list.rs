@@ -2,10 +2,16 @@
 //!
 //! This module provides two observer list implementations:
 //! - [`ObserverList`] - Simple Vec-based list, optimized for iteration
-//! - [`HashedObserverList`] - HashSet-based list, optimized for O(1) removal
+//! - [`HashedObserverList`] - AHashSet-based list, optimized for O(1) removal
+//!
+//! # Performance Note
+//!
+//! `HashedObserverList` uses `AHashSet` from the `ahash` crate, which provides
+//! significantly better performance than the standard library's `HashSet`,
+//! especially for small keys and DoS protection.
 
+use ahash::AHashSet;
 use parking_lot::RwLock;
-use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -179,6 +185,65 @@ impl<T> ObserverList<T> {
     {
         self.observers.read().clone()
     }
+
+    /// Retains only the observers that satisfy the predicate
+    ///
+    /// Removes all observers for which the predicate returns `false`.
+    /// This is more efficient than manually removing each observer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_core::foundation::observer_list::ObserverList;
+    ///
+    /// let mut list = ObserverList::new();
+    /// list.add(1);
+    /// list.add(2);
+    /// list.add(3);
+    /// list.add(4);
+    ///
+    /// // Retain only even numbers
+    /// list.retain(|&x| x % 2 == 0);
+    ///
+    /// assert_eq!(list.len(), 2);
+    /// assert!(list.contains(&2));
+    /// assert!(list.contains(&4));
+    /// assert!(!list.contains(&1));
+    /// assert!(!list.contains(&3));
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        T: PartialEq,
+        F: FnMut(&T) -> bool,
+    {
+        self.observers.write().retain(|x| f(x));
+    }
+
+    /// Returns an iterator that yields clones of all observers
+    ///
+    /// Note: This creates a snapshot of the current observers and returns
+    /// an iterator over that snapshot. Changes to the list after calling
+    /// this method won't be reflected in the iterator.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_core::foundation::observer_list::ObserverList;
+    ///
+    /// let mut list = ObserverList::new();
+    /// list.add(1);
+    /// list.add(2);
+    /// list.add(3);
+    ///
+    /// let sum: i32 = list.iter().sum();
+    /// assert_eq!(sum, 6);
+    /// ```
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_
+    where
+        T: Clone,
+    {
+        self.to_vec().into_iter()
+    }
 }
 
 impl<T> Default for ObserverList<T> {
@@ -199,7 +264,7 @@ impl<T> Clone for ObserverList<T> {
 // HashedObserverList - HashSet-based implementation
 // ============================================================================
 
-/// A hashed list of observers stored in a HashSet
+/// A hashed list of observers stored in an AHashSet
 ///
 /// This is optimized for the case where:
 /// - Observers are frequently added and removed
@@ -212,6 +277,13 @@ impl<T> Clone for ObserverList<T> {
 /// - Remove: O(1) average case
 /// - Iterate: O(n) - potentially less cache-friendly than Vec
 /// - Contains: O(1) average case
+///
+/// # Performance Note
+///
+/// Uses `AHashSet` from the `ahash` crate, which provides:
+/// - Faster hashing than the standard library (especially for small keys)
+/// - DoS protection without performance penalty
+/// - Better performance characteristics for typical use cases
 ///
 /// # Thread safety
 /// Uses `RwLock` for interior mutability, allowing multiple concurrent readers.
@@ -240,7 +312,7 @@ impl<T> Clone for ObserverList<T> {
 /// ```
 #[derive(Debug)]
 pub struct HashedObserverList<T> {
-    observers: Arc<RwLock<HashSet<T>>>,
+    observers: Arc<RwLock<AHashSet<T>>>,
 }
 
 impl<T: Hash + Eq> HashedObserverList<T> {
@@ -248,7 +320,7 @@ impl<T: Hash + Eq> HashedObserverList<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            observers: Arc::new(RwLock::new(HashSet::new())),
+            observers: Arc::new(RwLock::new(AHashSet::new())),
         }
     }
 
@@ -256,7 +328,7 @@ impl<T: Hash + Eq> HashedObserverList<T> {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            observers: Arc::new(RwLock::new(HashSet::with_capacity(capacity))),
+            observers: Arc::new(RwLock::new(AHashSet::with_capacity(capacity))),
         }
     }
 
@@ -351,6 +423,66 @@ impl<T: Hash + Eq> HashedObserverList<T> {
         T: Clone,
     {
         self.observers.read().iter().cloned().collect()
+    }
+
+    /// Retains only the observers that satisfy the predicate
+    ///
+    /// Removes all observers for which the predicate returns `false`.
+    /// This is more efficient than manually removing each observer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_core::foundation::observer_list::HashedObserverList;
+    ///
+    /// let mut list = HashedObserverList::new();
+    /// list.add(1);
+    /// list.add(2);
+    /// list.add(3);
+    /// list.add(4);
+    ///
+    /// // Retain only even numbers
+    /// list.retain(|&x| x % 2 == 0);
+    ///
+    /// assert_eq!(list.len(), 2);
+    /// assert!(list.contains(&2));
+    /// assert!(list.contains(&4));
+    /// assert!(!list.contains(&1));
+    /// assert!(!list.contains(&3));
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&T) -> bool,
+    {
+        self.observers.write().retain(|x| f(x));
+    }
+
+    /// Returns an iterator that yields clones of all observers
+    ///
+    /// Note: This creates a snapshot of the current observers and returns
+    /// an iterator over that snapshot. Changes to the list after calling
+    /// this method won't be reflected in the iterator.
+    ///
+    /// The order of iteration is not guaranteed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_core::foundation::observer_list::HashedObserverList;
+    ///
+    /// let mut list = HashedObserverList::new();
+    /// list.add(1);
+    /// list.add(2);
+    /// list.add(3);
+    ///
+    /// let sum: i32 = list.iter().sum();
+    /// assert_eq!(sum, 6);
+    /// ```
+    pub fn iter(&self) -> impl Iterator<Item = T> + '_
+    where
+        T: Clone,
+    {
+        self.to_vec().into_iter()
     }
 }
 
