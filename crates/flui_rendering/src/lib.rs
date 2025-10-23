@@ -58,6 +58,27 @@ pub use core::{
     RenderBoxMixin,
 };
 
+// Re-export all RenderObjects for backward compatibility
+pub use objects::{
+    // Layout objects
+    RenderPadding, RenderConstrainedBox, RenderAspectRatio, RenderLimitedBox,
+    RenderFractionallySizedBox, RenderPositionedBox, RenderFlex, RenderStack,
+    RenderIndexedStack,
+
+    // Effects objects
+    RenderOpacity, RenderDecoratedBox, RenderTransform, RenderClipRect,
+    RenderClipRRect, RenderOffstage,
+
+    // Interaction objects
+    RenderAbsorbPointer, RenderIgnorePointer, RenderMouseRegion, RenderPointerListener,
+
+    // Enums and data types
+    DecorationPosition,
+};
+
+// Re-export stack types
+pub use objects::layout::stack::StackFit;
+
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::core::{
@@ -66,4 +87,6 @@ pub mod prelude {
         RenderState, RenderFlags,
         RenderBoxMixin,
     };
+
+    pub use crate::objects::*;
 }

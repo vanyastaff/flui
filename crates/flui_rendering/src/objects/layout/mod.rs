@@ -49,7 +49,7 @@ pub use positioned_box::RenderPositionedBox;
 pub use rotated_box::RenderRotatedBox;
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
-pub use stack::RenderStack;
+pub use stack::{RenderStack, StackFit};
 pub use wrap::RenderWrap;
 
 
