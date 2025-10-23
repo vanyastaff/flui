@@ -10,9 +10,13 @@ pub mod limited_box;
 pub mod overflow_box;
 pub mod padding;
 pub mod positioned_box;
+pub mod rotated_box;
 pub mod sized_box;
 pub mod sized_overflow_box;
 pub mod stack;
+pub mod wrap;
+
+
 
 
 
@@ -33,9 +37,13 @@ pub use limited_box::RenderLimitedBox;
 pub use overflow_box::RenderOverflowBox;
 pub use padding::RenderPadding;
 pub use positioned_box::RenderPositionedBox;
+pub use rotated_box::RenderRotatedBox;
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
 pub use stack::RenderStack;
+pub use wrap::RenderWrap;
+
+
 
 
 
