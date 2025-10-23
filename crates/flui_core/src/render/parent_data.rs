@@ -341,7 +341,22 @@ impl BoxParentData {
     }
 }
 
-impl ParentData for BoxParentData {}
+impl ParentData for BoxParentData {
+    fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
+        Some(self)
+    }
+}
+
+// Implement ParentDataWithOffset for BoxParentData
+impl ParentDataWithOffset for BoxParentData {
+    fn offset(&self) -> crate::Offset {
+        self.offset
+    }
+
+    fn set_offset(&mut self, offset: crate::Offset) {
+        self.offset = offset;
+    }
+}
 
 /// Container box parent data - combines container and box parent data
 ///
@@ -489,7 +504,26 @@ impl<ChildId> ContainerBoxParentData<ChildId> {
 impl<ChildId> ParentData for ContainerBoxParentData<ChildId>
 where
     ChildId: fmt::Debug + Send + Sync + 'static
-{}
+{
+    fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
+        Some(self)
+    }
+}
+
+// Implement ParentDataWithOffset for ContainerBoxParentData
+// Delegates to the internal BoxParentData
+impl<ChildId> ParentDataWithOffset for ContainerBoxParentData<ChildId>
+where
+    ChildId: fmt::Debug + Send + Sync + 'static
+{
+    fn offset(&self) -> crate::Offset {
+        self.box_data.offset
+    }
+
+    fn set_offset(&mut self, offset: crate::Offset) {
+        self.box_data.offset = offset;
+    }
+}
 
 #[cfg(test)]
 mod tests {
