@@ -1,25 +1,9 @@
 //! RenderStack - layering container
 
 use flui_types::{Offset, Size, constraints::BoxConstraints, Alignment};
+use flui_types::layout::StackFit;
 use flui_core::DynRenderObject;
 use crate::core::{ContainerRenderBox, RenderBoxMixin};
-
-/// How to size the non-positioned children in the stack
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StackFit {
-    /// The constraints passed to the stack from its parent are loosened
-    Loose,
-    /// The constraints passed to the stack from its parent are tightened to the biggest size
-    Expand,
-    /// The non-positioned children are given unconst constraints
-    Passthrough,
-}
-
-impl Default for StackFit {
-    fn default() -> Self {
-        StackFit::Loose
-    }
-}
 
 /// Data for RenderStack
 #[derive(Debug, Clone, PartialEq)]

@@ -76,8 +76,8 @@ pub use objects::{
     DecorationPosition,
 };
 
-// Re-export stack types
-pub use objects::layout::stack::StackFit;
+// Re-export StackFit from flui_types (via objects::layout)
+pub use flui_types::layout::StackFit;
 
 /// Prelude module for convenient imports
 pub mod prelude {

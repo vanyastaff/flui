@@ -49,7 +49,9 @@ pub use positioned_box::RenderPositionedBox;
 pub use rotated_box::RenderRotatedBox;
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
-pub use stack::{RenderStack, StackFit};
+pub use stack::RenderStack;
+// Re-export StackFit from flui_types
+pub use flui_types::layout::StackFit;
 pub use wrap::RenderWrap;
 
 
