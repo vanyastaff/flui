@@ -66,7 +66,7 @@ impl DynRenderObject for RenderOpacity {
 
         // Layout child with same constraints
         let size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child_cached(child_id, constraints, None)
         } else {
             // No child - use smallest size
             constraints.smallest()
@@ -106,6 +106,16 @@ impl DynRenderObject for RenderOpacity {
             // 3. Composite the layer with opacity
             ctx.paint_child(child_id, painter, offset);
         }
+    }
+
+    fn hit_test_children(&self, result: &mut flui_types::events::HitTestResult, position: Offset, ctx: &flui_core::RenderContext) -> bool {
+        // Test hit on child (single child only)
+        if let Some(&child_id) = ctx.children().first() {
+            // No offset for opacity - pass position through unchanged
+            return ctx.hit_test_child(child_id, result, position);
+        }
+
+        false
     }
 
     // Delegate all other methods to RenderBoxMixin

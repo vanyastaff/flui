@@ -129,7 +129,7 @@ impl DynRenderObject for RenderAlign {
         // Layout child with loose constraints to get its natural size
         let child_size = if let Some(&child_id) = children_ids.first() {
             // Let child determine its own size within constraints
-            ctx.layout_child(child_id, constraints.loosen())
+            ctx.layout_child_cached(child_id, constraints.loosen(), None)
         } else {
             Size::ZERO
         };

@@ -70,7 +70,7 @@ impl DynRenderObject for RenderPadding {
             );
 
             // Layout child via RenderContext
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, None);
 
             // Add padding to child size
             Size::new(
@@ -114,6 +114,24 @@ impl DynRenderObject for RenderPadding {
 
             ctx.paint_child(child_id, painter, child_offset);
         }
+    }
+
+    fn hit_test_children(&self, result: &mut flui_types::events::HitTestResult, position: Offset, ctx: &flui_core::RenderContext) -> bool {
+        // Test hit on child (single child only)
+        if let Some(&child_id) = ctx.children().first() {
+            let padding = self.padding;
+
+            // Subtract padding from position to get position relative to child
+            let child_position = Offset::new(
+                position.dx - padding.left,
+                position.dy - padding.top,
+            );
+
+            // Hit test child
+            return ctx.hit_test_child(child_id, result, child_position);
+        }
+
+        false
     }
 
     // All other methods (size, mark_needs_layout, etc.) use default implementations

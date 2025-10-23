@@ -174,6 +174,7 @@ impl RenderListBody {
         let mut total_height = 0.0_f32;
         let mut max_width = 0.0_f32;
         let children_ids = ctx.children();
+        let child_count = children_ids.len();  // CRITICAL: Track child count for cache
 
         // Layout each child
         for &child_id in children_ids {
@@ -185,7 +186,8 @@ impl RenderListBody {
                 f32::INFINITY,
             );
 
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            // Use cached layout with child_count for proper cache invalidation
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, Some(child_count));
 
             total_height += child_size.height;
             max_width = max_width.max(child_size.width);
@@ -205,6 +207,7 @@ impl RenderListBody {
         let mut total_width = 0.0_f32;
         let mut max_height = 0.0_f32;
         let children_ids = ctx.children();
+        let child_count = children_ids.len();  // CRITICAL: Track child count for cache
 
         // Layout each child
         for &child_id in children_ids {
@@ -216,7 +219,8 @@ impl RenderListBody {
                 constraints.max_height,
             );
 
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            // Use cached layout with child_count for proper cache invalidation
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, Some(child_count));
 
             total_width += child_size.width;
             max_height = max_height.max(child_size.height);

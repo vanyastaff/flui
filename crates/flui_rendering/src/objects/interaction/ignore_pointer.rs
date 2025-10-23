@@ -69,7 +69,7 @@ impl DynRenderObject for RenderIgnorePointer {
 
         // Layout child with same constraints
         let size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child_cached(child_id, constraints, None)
         } else {
             // No child - use smallest size
             constraints.smallest()

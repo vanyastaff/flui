@@ -133,7 +133,7 @@ impl DynRenderObject for RenderRotatedBox {
         let children_ids = ctx.children();
         let child_size =
         if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, child_constraints)
+            ctx.layout_child_cached(child_id, child_constraints, None)
         } else {
             child_constraints.smallest()
         };

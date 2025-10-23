@@ -121,7 +121,7 @@ impl DynRenderObject for RenderIntrinsicHeight {
                 f32::INFINITY,
             );
 
-            let child_size = ctx.layout_child(child_id, intrinsic_constraints);
+            let child_size = ctx.layout_child_cached(child_id, intrinsic_constraints, None);
 
             // Apply step width/height if specified
             let width = if let Some(step) = step_width {

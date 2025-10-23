@@ -124,7 +124,7 @@ impl DynRenderObject for RenderSizedBox {
 
         // Layout child with tight constraints
         if let Some(&child_id) = children_ids.first() {
-            let _ = ctx.layout_child(child_id, child_constraints);
+            let _ = ctx.layout_child_cached(child_id, child_constraints, None);
         }
 
         // Our size is the specified size, constrained by parent

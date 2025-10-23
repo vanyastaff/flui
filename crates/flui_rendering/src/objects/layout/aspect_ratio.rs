@@ -90,7 +90,7 @@ impl DynRenderObject for RenderAspectRatio {
         let children_ids = ctx.children();
         if let Some(&child_id) = children_ids.first() {
             let child_constraints = BoxConstraints::tight(final_size);
-            let _ = ctx.layout_child(child_id, child_constraints);
+            let _ = ctx.layout_child_cached(child_id, child_constraints, None);
         }
 
         // Store size and clear needs_layout flag

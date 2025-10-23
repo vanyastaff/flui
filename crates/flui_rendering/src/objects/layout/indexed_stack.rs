@@ -99,6 +99,7 @@ impl DynRenderObject for RenderIndexedStack {
         *state.constraints.lock() = Some(constraints);
 
         let children_ids = ctx.children();
+        let child_count = children_ids.len();
 
         if children_ids.is_empty() {
             let size = constraints.smallest();
@@ -108,11 +109,13 @@ impl DynRenderObject for RenderIndexedStack {
         }
 
         // Layout all children (to maintain their state)
+        // CRITICAL: Pass child_count to enable proper cache invalidation when children change
         let mut max_width: f32 = 0.0;
         let mut max_height: f32 = 0.0;
 
         for &child_id in children_ids {
-            let child_size = ctx.layout_child(child_id, constraints);
+            // Use cached layout with child_count for proper cache invalidation
+            let child_size = ctx.layout_child_cached(child_id, constraints, Some(child_count));
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
         }

@@ -143,7 +143,7 @@ impl DynRenderObject for RenderPositionedBox {
         let children_ids = ctx.children();
         let size =
         if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, child_constraints)
+            ctx.layout_child_cached(child_id, child_constraints, None)
         } else {
             // No child - use the calculated constraints
             child_constraints.smallest()

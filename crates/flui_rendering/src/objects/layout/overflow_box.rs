@@ -153,7 +153,7 @@ impl DynRenderObject for RenderOverflowBox {
         // Layout child with overridden constraints
         let children_ids = ctx.children();
         if let Some(&child_id) = children_ids.first() {
-            let _ = ctx.layout_child(child_id, child_constraints);
+            let _ = ctx.layout_child_cached(child_id, child_constraints, None);
         }
 
         // Our size is determined by parent constraints

@@ -152,7 +152,7 @@ impl DynRenderObject for RenderBackdropFilter {
         let size =
         if let Some(&child_id) = children_ids.first() {
             // Layout child with same constraints
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child_cached(child_id, constraints, None)
         } else {
             // No child - use smallest size
             constraints.smallest()

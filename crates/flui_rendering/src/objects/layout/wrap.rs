@@ -204,6 +204,7 @@ impl RenderWrap {
         let mut max_run_height = 0.0_f32;
         let mut total_width = 0.0_f32;
         let children_ids = ctx.children();
+        let child_count = children_ids.len();  // CRITICAL: Track child count for cache
 
         // Layout each child
         for &child_id in children_ids {
@@ -215,7 +216,8 @@ impl RenderWrap {
                 constraints.max_height,
             );
 
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            // Use cached layout with child_count for proper cache invalidation
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, Some(child_count));
 
             // Check if we need to wrap
             if current_x + child_size.width > max_width && current_x > 0.0 {
@@ -243,6 +245,7 @@ impl RenderWrap {
         let mut max_run_width = 0.0_f32;
         let mut total_height = 0.0_f32;
         let children_ids = ctx.children();
+        let child_count = children_ids.len();  // CRITICAL: Track child count for cache
 
         // Layout each child
         for &child_id in children_ids {
@@ -254,7 +257,8 @@ impl RenderWrap {
                 max_height - current_y,
             );
 
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            // Use cached layout with child_count for proper cache invalidation
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, Some(child_count));
 
             // Check if we need to wrap
             if current_y + child_size.height > max_height && current_y > 0.0 {

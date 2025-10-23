@@ -164,7 +164,7 @@ impl DynRenderObject for RenderSizedOverflowBox {
         // Layout child with override constraints
         let children_ids = ctx.children();
         if let Some(&child_id) = children_ids.first() {
-            let _ = ctx.layout_child(child_id, child_constraints);
+            let _ = ctx.layout_child_cached(child_id, child_constraints, None);
         }
 
         // Our size is the specified size (or constrained by parent)

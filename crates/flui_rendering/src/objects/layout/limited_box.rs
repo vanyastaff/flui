@@ -96,7 +96,7 @@ impl DynRenderObject for RenderLimitedBox {
         let children_ids = ctx.children();
         let size =
         if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, limited_constraints)
+            ctx.layout_child_cached(child_id, limited_constraints, None)
         } else {
             // No child - use smallest size
             limited_constraints.smallest()

@@ -145,7 +145,7 @@ impl DynRenderObject for RenderTransform {
 
         // Layout child with same constraints (transform doesn't affect layout)
         let size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child_cached(child_id, constraints, None)
         } else {
             // No child - use smallest size
             constraints.smallest()
@@ -167,19 +167,47 @@ impl DynRenderObject for RenderTransform {
             let transform = self.data().transform;
             let origin = self.data().origin;
 
-            // Calculate transformed offset
-            // TODO: In a real implementation, we would:
-            // 1. Save painter transform state
-            // 2. Apply translation to origin
-            // 3. Apply scale/rotation around origin
-            // 4. Paint child
-            // 5. Restore painter transform state
+            // TODO: Full rotation and scaling support requires architectural changes
+            //
+            // The challenge: egui's Shape::Transform requires collecting all shapes first,
+            // then wrapping them in Transform. But our current paint architecture calls
+            // ctx.paint_child() which paints directly to the painter.
+            //
+            // Solution path:
+            // 1. Create PainterProxy that implements egui::Painter trait
+            // 2. Have PainterProxy collect shapes instead of painting directly
+            // 3. After paint_child(), wrap collected shapes in Shape::Transform
+            // 4. Add transformed shapes to real painter
+            //
+            // Alternatively:
+            // - Change paint signature to return Vec<Shape> instead of painting directly
+            // - This would require changing all 81 RenderObjects
+            //
+            // For now: TransformPainter infrastructure is ready in flui_painting,
+            // but integration requires the painter proxy approach.
 
-            // For now, just apply simple translation
+            // Calculate transformed offset (apply only translation for now)
             let transformed_offset = Offset::new(
                 offset.dx + transform.translate_x + origin.dx,
                 offset.dy + transform.translate_y + origin.dy,
             );
+
+            // Log a warning if rotation or scaling is requested but not yet supported
+            if transform.rotation.abs() > 1e-6 {
+                tracing::warn!(
+                    "RenderTransform: rotation ({} rad) requested but not yet fully implemented. \
+                    Only translation is currently supported. See transform.rs for implementation roadmap.",
+                    transform.rotation
+                );
+            }
+            if (transform.scale_x - 1.0).abs() > 1e-6 || (transform.scale_y - 1.0).abs() > 1e-6 {
+                tracing::warn!(
+                    "RenderTransform: scaling ({}, {}) requested but not yet fully implemented. \
+                    Only translation is currently supported. See transform.rs for implementation roadmap.",
+                    transform.scale_x,
+                    transform.scale_y
+                );
+            }
 
             ctx.paint_child(child_id, painter, transformed_offset);
         }

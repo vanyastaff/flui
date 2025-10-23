@@ -100,7 +100,7 @@ impl DynRenderObject for RenderBaseline {
         let children_ids = ctx.children();
         let size =
         if let Some(&child_id) = children_ids.first() {
-            let child_size = ctx.layout_child(child_id, constraints);
+            let child_size = ctx.layout_child_cached(child_id, constraints, None);
 
             // Our height includes space above baseline and child height
             // For simplicity, we use child height + baseline offset

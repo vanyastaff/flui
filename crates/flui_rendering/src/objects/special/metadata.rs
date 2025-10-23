@@ -131,7 +131,7 @@ impl DynRenderObject for RenderMetaData {
         let children_ids = ctx.children();
         let size =
         if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child_cached(child_id, constraints, None)
         } else {
             constraints.smallest()
         };

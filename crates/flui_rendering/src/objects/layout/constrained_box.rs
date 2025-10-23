@@ -72,7 +72,7 @@ impl DynRenderObject for RenderConstrainedBox {
             let child_constraints = constraints.enforce(additional);
 
             // Layout child via RenderContext
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, None);
             child_size
         } else {
             // No child - use smallest size that satisfies both constraints

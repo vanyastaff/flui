@@ -183,7 +183,7 @@ impl DynRenderObject for RenderFittedBox {
         let children_ids = ctx.children();
         if let Some(&child_id) = children_ids.first() {
             let child_constraints = BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-            let _child_size = ctx.layout_child(child_id, child_constraints);
+            let _child_size = ctx.layout_child_cached(child_id, child_constraints, None);
         }
 
         // Store size and clear needs_layout flag

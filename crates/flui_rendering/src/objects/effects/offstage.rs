@@ -73,7 +73,7 @@ impl DynRenderObject for RenderOffstage {
 
         // Always layout child to maintain state and get size
         let child_size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child_cached(child_id, constraints, None)
         } else {
             Size::ZERO
         };

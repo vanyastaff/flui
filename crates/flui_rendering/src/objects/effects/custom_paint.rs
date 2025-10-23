@@ -158,7 +158,7 @@ impl DynRenderObject for RenderCustomPaint {
         let children_ids = ctx.children();
         let size =
         if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child(child_id, constraints)
+            ctx.layout_child_cached(child_id, constraints, None)
         } else {
             // No child - use our preferred size
             let preferred_size = self.data().size;
