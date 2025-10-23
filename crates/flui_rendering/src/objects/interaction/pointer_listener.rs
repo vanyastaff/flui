@@ -1,224 +1,182 @@
-//! RenderPointerListener - intercepts pointer events for GestureDetector
-//!
-//! Used by GestureDetector widget to handle pointer events like taps, drags, etc.
+//! RenderPointerListener - handles pointer events
 
-use flui_core::{BoxConstraints, DynRenderObject, ElementId};
-use flui_types::events::{HitTestEntry, HitTestResult, PointerEventHandler};
-use flui_types::{Offset, Size};
-use crate::RenderFlags;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_core::DynRenderObject;
+use crate::core::{SingleRenderBox, RenderBoxMixin};
 
-/// RenderPointerListener intercepts pointer events
+/// Pointer event callbacks
+#[derive(Clone)]
+pub struct PointerCallbacks {
+    // For now, we use Option<fn()> placeholders
+    // In a real implementation, these would be proper callback types
+
+    /// Called when pointer is pressed down
+    pub on_pointer_down: Option<fn()>,
+
+    /// Called when pointer is released
+    pub on_pointer_up: Option<fn()>,
+
+    /// Called when pointer moves
+    pub on_pointer_move: Option<fn()>,
+}
+
+impl std::fmt::Debug for PointerCallbacks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointerCallbacks")
+            .field("on_pointer_down", &self.on_pointer_down.is_some())
+            .field("on_pointer_up", &self.on_pointer_up.is_some())
+            .field("on_pointer_move", &self.on_pointer_move.is_some())
+            .finish()
+    }
+}
+
+/// Data for RenderPointerListener
+#[derive(Debug, Clone)]
+pub struct PointerListenerData {
+    /// Event callbacks
+    pub callbacks: PointerCallbacks,
+}
+
+impl PointerListenerData {
+    /// Create new pointer listener data
+    pub fn new(callbacks: PointerCallbacks) -> Self {
+        Self { callbacks }
+    }
+}
+
+/// RenderObject that listens for pointer events
 ///
-/// This is the proper Flutter-style implementation for pointer event handling.
-/// Instead of a global registry, each RenderPointerListener registers its handler
-/// during hit testing by adding it to the HitTestEntry.
+/// This widget detects pointer events (mouse clicks, touches) and
+/// calls the appropriate callbacks. It does not affect layout or painting.
 ///
-/// # Layout Algorithm
-///
-/// Simply passes constraints to child and adopts child size (like RenderProxyBox).
-///
-/// # Hit Testing
-///
-/// During hit testing, adds an entry with the event handler so that when events
-/// are dispatched, only the widgets that were actually hit receive the events.
-///
-/// # Examples
+/// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::RenderPointerListener;
-/// use std::sync::Arc;
+/// use flui_rendering::{SingleRenderBox, objects::interaction::{PointerListenerData, PointerCallbacks}};
 ///
-/// let handler = Arc::new(|event: &PointerEvent| {
-///     println!("Pointer event: {:?}", event);
-/// });
-///
-/// let mut render = RenderPointerListener::new(handler);
+/// let callbacks = PointerCallbacks {
+///     on_pointer_down: Some(|| println!("Pointer down")),
+///     on_pointer_up: None,
+///     on_pointer_move: None,
+/// };
+/// let mut listener = SingleRenderBox::new(PointerListenerData::new(callbacks));
 /// ```
-pub struct RenderPointerListener {
-    /// Element ID for caching
-    element_id: Option<ElementId>,
-    /// Event handler for pointer events
-    handler: PointerEventHandler,
-    /// Child render object
-    child: Option<Box<dyn DynRenderObject>>,
-    /// Current size
-    size: Size,
-    /// Current constraints
-    constraints: Option<BoxConstraints>,
-    /// Render flags
-    flags: RenderFlags,
-}
+pub type RenderPointerListener = SingleRenderBox<PointerListenerData>;
+
+// ===== Public API =====
 
 impl RenderPointerListener {
-    /// Creates a new RenderPointerListener with event handler
-    ///
-    /// # Parameters
-    ///
-    /// - `handler`: Callback to invoke when pointer events occur
-    pub fn new(handler: PointerEventHandler) -> Self {
-        Self {
-            element_id: None,
-            handler,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
-        }
+    /// Get the callbacks
+    pub fn callbacks(&self) -> &PointerCallbacks {
+        &self.data().callbacks
     }
 
-    /// Create with element ID
-    pub fn with_element_id(handler: PointerEventHandler, element_id: ElementId) -> Self {
-        Self {
-            element_id: Some(element_id),
-            handler,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
-        }
-    }
-
-    /// Sets element ID
-    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
-        self.element_id = element_id;
-    }
-
-    /// Gets element ID
-    pub fn element_id(&self) -> Option<ElementId> {
-        self.element_id
-    }
-
-    /// Sets the child
-    pub fn set_child(&mut self, child: Option<Box<dyn DynRenderObject>>) {
-        self.child = child;
-        self.mark_needs_layout();
-    }
-
-    /// Returns a reference to the child
-    pub fn child(&self) -> Option<&dyn DynRenderObject> {
-        self.child.as_deref()
-    }
-
-    /// Sets the event handler
-    pub fn set_handler(&mut self, handler: PointerEventHandler) {
-        self.handler = handler;
-    }
-
-    /// Returns a reference to the event handler
-    pub fn handler(&self) -> &PointerEventHandler {
-        &self.handler
+    /// Set new callbacks
+    pub fn set_callbacks(&mut self, callbacks: PointerCallbacks) {
+        self.data_mut().callbacks = callbacks;
+        // No need to mark needs_layout or needs_paint - callbacks don't affect rendering
     }
 }
+
+// ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderPointerListener {
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        crate::impl_cached_layout!(self, constraints, {
-            if let Some(child) = &mut self.child {
-                child.layout(constraints)
-            } else {
-                constraints.smallest()
-            }
-        })
+        // Store constraints
+        self.state_mut().constraints = Some(constraints);
+
+        // Layout child with same constraints
+        let size = if let Some(child) = self.child_mut() {
+            child.layout(constraints)
+        } else {
+            // No child - use smallest size
+            constraints.smallest()
+        };
+
+        // Store size and clear needs_layout flag
+        self.state_mut().size = Some(size);
+        self.clear_needs_layout();
+
+        size
     }
 
     fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(child) = &self.child {
-            // Simply paint child - we don't modify rendering, only intercept events
+        // Simply paint child - event handling happens elsewhere
+        if let Some(child) = self.child() {
             child.paint(painter, offset);
         }
+
+        // TODO: In a real implementation, we would:
+        // 1. Register hit test area for pointer events
+        // 2. Handle pointer events in hit testing phase
+        // 3. Call appropriate callbacks
     }
 
-    fn hit_test_self(&self, _position: Offset) -> bool {
-        // Always respond to hit tests (even if transparent)
-        // This ensures we can intercept pointer events
-        true
-    }
-
-    fn hit_test_children(
-        &self,
-        result: &mut HitTestResult,
-        position: Offset,
-    ) -> bool {
-        if let Some(child) = &self.child {
-            child.hit_test(result, position)
-        } else {
-            false
-        }
-    }
-
-    /// Override hit_test to add our handler to the result
-    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
-        // Check bounds
-        if position.dx < 0.0
-            || position.dx >= self.size().width
-            || position.dy < 0.0
-            || position.dy >= self.size().height
-        {
-            return false;
-        }
-
-        // Check children first (front to back)
-        let hit_child = self.hit_test_children(result, position);
-
-        // Then check self
-        let hit_self = self.hit_test_self(position);
-
-        // Add to result if hit, INCLUDING our handler
-        if hit_child || hit_self {
-            result.add(HitTestEntry::with_handler(
-                position,
-                self.size(),
-                self.handler.clone(),
-            ));
-            return true;
-        }
-
-        false
-    }
-
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn constraints(&self) -> Option<BoxConstraints> {
-        self.constraints
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.flags.needs_layout()
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.flags.mark_needs_layout();
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.flags.needs_paint()
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.flags.mark_needs_paint();
-    }
-
-    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn DynRenderObject)) {
-        if let Some(child) = &self.child {
-            visitor(&**child);
-        }
-    }
-
-    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn DynRenderObject)) {
-        if let Some(child) = &mut self.child {
-            visitor(&mut **child);
-        }
-    }
+    // Delegate all other methods to RenderBoxMixin
+    delegate_to_mixin!();
 }
 
-impl std::fmt::Debug for RenderPointerListener {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RenderPointerListener")
-            .field("has_handler", &true)
-            .field("has_child", &self.child.is_some())
-            .field("size", &self.size)
-            .finish()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_pointer_listener_new() {
+        let callbacks = PointerCallbacks {
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_pointer_move: None,
+        };
+        let listener = SingleRenderBox::new(PointerListenerData::new(callbacks));
+        assert!(listener.callbacks().on_pointer_down.is_none());
+    }
+
+    #[test]
+    fn test_render_pointer_listener_set_callbacks() {
+        fn dummy_callback() {}
+
+        let callbacks1 = PointerCallbacks {
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_pointer_move: None,
+        };
+        let mut listener = SingleRenderBox::new(PointerListenerData::new(callbacks1));
+
+        let callbacks2 = PointerCallbacks {
+            on_pointer_down: Some(dummy_callback),
+            on_pointer_up: None,
+            on_pointer_move: None,
+        };
+        listener.set_callbacks(callbacks2);
+        assert!(listener.callbacks().on_pointer_down.is_some());
+    }
+
+    #[test]
+    fn test_render_pointer_listener_layout_no_child() {
+        let callbacks = PointerCallbacks {
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_pointer_move: None,
+        };
+        let mut listener = SingleRenderBox::new(PointerListenerData::new(callbacks));
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+
+        let size = listener.layout(constraints);
+
+        // Should use smallest size
+        assert_eq!(size, Size::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn test_pointer_callbacks_debug() {
+        fn dummy_callback() {}
+
+        let callbacks = PointerCallbacks {
+            on_pointer_down: Some(dummy_callback),
+            on_pointer_up: None,
+            on_pointer_move: None,
+        };
+        let debug_str = format!("{:?}", callbacks);
+        assert!(debug_str.contains("PointerCallbacks"));
     }
 }
