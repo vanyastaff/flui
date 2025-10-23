@@ -1,525 +1,208 @@
-//! RenderClipRRect - clips child to a rounded rectangle
-//!
-//! Used by ClipRRect widget to create rounded corners and clipping effects.
+//! RenderClipRRect - clips child to rounded rectangle
 
-use flui_core::{BoxConstraints, DynRenderObject, ElementId};
-use flui_types::painting::Clip;
-use flui_types::styling::BorderRadius;
-use flui_types::{Offset, Rect, Size};
-use crate::RenderFlags;
+use flui_types::{Offset, Size, Rect, constraints::BoxConstraints, styling::BorderRadius};
+use flui_core::DynRenderObject;
+use crate::core::{SingleRenderBox, RenderBoxMixin};
+use super::clip_rect::Clip;
 
-/// RenderClipRRect clips child rendering to a rounded rectangle
-///
-/// # Parameters
-///
-/// - `border_radius`: Rounded corners radius
-/// - `clip_behavior`: How to perform clipping (None, HardEdge, AntiAlias, AntiAliasWithSaveLayer)
-///
-/// # Layout Algorithm
-///
-/// Simply passes constraints to child and adopts child size.
-///
-/// # Paint Algorithm
-///
-/// In egui, clipping is handled through painter's clip_rect method.
-/// For rounded rectangles, we use egui::Rounding to specify corner radii.
-/// The clip behavior determines whether we use anti-aliasing.
-///
-/// # Hit Testing
-///
-/// Hit tests are clipped to the rounded rectangle bounds.
-/// Points outside the clipping region return false.
-///
-/// # Examples
-///
-/// ```rust
-/// # use flui_rendering::RenderClipRRect;
-/// # use flui_types::styling::BorderRadius;
-/// # use flui_types::painting::Clip;
-/// // Circular corners
-/// let mut render = RenderClipRRect::new(
-///     BorderRadius::circular(10.0),
-///     Clip::AntiAlias,
-/// );
-///
-/// // Different radii for each corner
-/// # use flui_types::styling::Radius;
-/// let border_radius = BorderRadius::only(
-///     Radius::circular(10.0),
-///     Radius::circular(20.0),
-///     Radius::circular(10.0),
-///     Radius::circular(20.0),
-/// );
-/// let mut render = RenderClipRRect::new(border_radius, Clip::HardEdge);
-/// ```
-#[derive(Debug)]
-pub struct RenderClipRRect {
-    /// Element ID for caching
-    element_id: Option<ElementId>,
+/// Data for RenderClipRRect
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipRRectData {
     /// Border radius for rounded corners
-    border_radius: BorderRadius,
-    /// Clip behavior
-    clip_behavior: Clip,
-    /// Child render object
-    child: Option<Box<dyn DynRenderObject>>,
-    /// Current size
-    size: Size,
-    /// Current constraints
-    constraints: Option<BoxConstraints>,
-    /// Render flags (needs_layout, needs_paint, boundaries)
-    flags: RenderFlags,
+    pub border_radius: BorderRadius,
+    /// Clipping behavior
+    pub clip_behavior: Clip,
 }
 
-impl RenderClipRRect {
-    /// Creates a new RenderClipRRect
-    ///
-    /// # Parameters
-    ///
-    /// - `border_radius`: Rounded corners radius
-    /// - `clip_behavior`: How to perform clipping
+impl ClipRRectData {
+    /// Create new clip rounded rect data
     pub fn new(border_radius: BorderRadius, clip_behavior: Clip) -> Self {
         Self {
-            element_id: None,
             border_radius,
             clip_behavior,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
         }
     }
 
-    /// Creates RenderClipRRect with element ID for caching
-    pub fn with_element_id(border_radius: BorderRadius, clip_behavior: Clip, element_id: ElementId) -> Self {
-        Self {
-            element_id: Some(element_id),
-            border_radius,
-            clip_behavior,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
-        }
-    }
-
-    /// Sets element ID for caching
-    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
-        self.element_id = element_id;
-    }
-
-    /// Gets element ID
-    pub fn element_id(&self) -> Option<ElementId> {
-        self.element_id
-    }
-
-    /// Sets the child
-    pub fn set_child(&mut self, child: Option<Box<dyn DynRenderObject>>) {
-        self.child = child;
-        self.mark_needs_layout();
-    }
-
-    /// Returns a reference to the child
-    pub fn child(&self) -> Option<&dyn DynRenderObject> {
-        self.child.as_deref()
-    }
-
-    /// Sets the border radius
-    pub fn set_border_radius(&mut self, border_radius: BorderRadius) {
-        if self.border_radius != border_radius {
-            self.border_radius = border_radius;
-            self.mark_needs_paint();
-        }
-    }
-
-    /// Returns the current border radius
-    pub fn border_radius(&self) -> BorderRadius {
-        self.border_radius
-    }
-
-    /// Sets the clip behavior
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
-        if self.clip_behavior != clip_behavior {
-            self.clip_behavior = clip_behavior;
-            self.mark_needs_paint();
-        }
-    }
-
-    /// Returns the current clip behavior
-    pub fn clip_behavior(&self) -> Clip {
-        self.clip_behavior
-    }
-
-    /// Converts BorderRadius to egui::Rounding (renamed to CornerRadius in newer egui)
-    #[allow(deprecated)]
-    fn to_egui_rounding(&self) -> egui::Rounding {
-        // egui::Rounding uses f32 for each corner
-        // BorderRadius uses Radius (x, y) for each corner
-        // For simplicity, we'll use the x component of each radius
-        egui::Rounding {
-            nw: self.border_radius.top_left.x as u8,
-            ne: self.border_radius.top_right.x as u8,
-            sw: self.border_radius.bottom_left.x as u8,
-            se: self.border_radius.bottom_right.x as u8,
-        }
-    }
-
-    /// Checks if a point is within the clipped region
-    ///
-    /// For rounded rectangles, we check if the point is within the rect
-    /// and not in the "cut off" corner areas.
-    fn is_point_in_clip_region(&self, point: Offset) -> bool {
-        // If no clipping, all points are valid
-        if !self.clip_behavior.clips() {
-            return true;
-        }
-
-        let rect = Rect::from_min_size(Offset::new(0.0, 0.0), self.size);
-
-        // First check if point is in the bounding box
-        if !rect.contains(point.to_point()) {
-            return false;
-        }
-
-        // For rounded rectangles, check if point is in corner radii regions
-        let x = point.dx;
-        let y = point.dy;
-
-        // Top-left corner
-        if x < self.border_radius.top_left.x && y < self.border_radius.top_left.y {
-            let dx = self.border_radius.top_left.x - x;
-            let dy = self.border_radius.top_left.y - y;
-            let distance_sq = dx * dx + dy * dy;
-            let radius_sq = self.border_radius.top_left.x * self.border_radius.top_left.x;
-            if distance_sq > radius_sq {
-                return false;
-            }
-        }
-
-        // Top-right corner
-        let right_edge = self.size.width;
-        if x > right_edge - self.border_radius.top_right.x && y < self.border_radius.top_right.y {
-            let dx = x - (right_edge - self.border_radius.top_right.x);
-            let dy = self.border_radius.top_right.y - y;
-            let distance_sq = dx * dx + dy * dy;
-            let radius_sq = self.border_radius.top_right.x * self.border_radius.top_right.x;
-            if distance_sq > radius_sq {
-                return false;
-            }
-        }
-
-        // Bottom-left corner
-        let bottom_edge = self.size.height;
-        if x < self.border_radius.bottom_left.x && y > bottom_edge - self.border_radius.bottom_left.y
-        {
-            let dx = self.border_radius.bottom_left.x - x;
-            let dy = y - (bottom_edge - self.border_radius.bottom_left.y);
-            let distance_sq = dx * dx + dy * dy;
-            let radius_sq = self.border_radius.bottom_left.x * self.border_radius.bottom_left.x;
-            if distance_sq > radius_sq {
-                return false;
-            }
-        }
-
-        // Bottom-right corner
-        if x > right_edge - self.border_radius.bottom_right.x
-            && y > bottom_edge - self.border_radius.bottom_right.y
-        {
-            let dx = x - (right_edge - self.border_radius.bottom_right.x);
-            let dy = y - (bottom_edge - self.border_radius.bottom_right.y);
-            let distance_sq = dx * dx + dy * dy;
-            let radius_sq = self.border_radius.bottom_right.x * self.border_radius.bottom_right.x;
-            if distance_sq > radius_sq {
-                return false;
-            }
-        }
-
-        true
+    /// Create with circular radius
+    pub fn circular(radius: f32) -> Self {
+        Self::new(BorderRadius::circular(radius), Clip::AntiAlias)
     }
 }
+
+/// RenderObject that clips its child to a rounded rectangle
+///
+/// The child is clipped to the bounds of this RenderObject with rounded corners.
+/// Changing clip behavior or border radius only affects painting, not layout.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::{SingleRenderBox, objects::effects::ClipRRectData};
+/// use flui_types::styling::BorderRadius;
+///
+/// let mut clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
+/// ```
+pub type RenderClipRRect = SingleRenderBox<ClipRRectData>;
+
+// ===== Public API =====
+
+impl RenderClipRRect {
+    /// Get the border radius
+    pub fn border_radius(&self) -> BorderRadius {
+        self.data().border_radius
+    }
+
+    /// Get the clip behavior
+    pub fn clip_behavior(&self) -> Clip {
+        self.data().clip_behavior
+    }
+
+    /// Set new border radius
+    pub fn set_border_radius(&mut self, border_radius: BorderRadius) {
+        if self.data().border_radius != border_radius {
+            self.data_mut().border_radius = border_radius;
+            RenderBoxMixin::mark_needs_paint(self);
+        }
+    }
+
+    /// Set new clip behavior
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
+        if self.data().clip_behavior != clip_behavior {
+            self.data_mut().clip_behavior = clip_behavior;
+            RenderBoxMixin::mark_needs_paint(self);
+        }
+    }
+}
+
+// ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderClipRRect {
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        crate::impl_cached_layout!(self, constraints, {
-            if let Some(child) = &mut self.child {
-                child.layout(constraints)
-            } else {
-                constraints.smallest()
-            }
-        })
+        // Store constraints
+        self.state_mut().constraints = Some(constraints);
+
+        // Layout child with same constraints
+        let size = if let Some(child) = self.child_mut() {
+            child.layout(constraints)
+        } else {
+            // No child - use smallest size
+            constraints.smallest()
+        };
+
+        // Store size and clear needs_layout flag
+        self.state_mut().size = Some(size);
+        self.clear_needs_layout();
+
+        size
     }
 
     fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(child) = &self.child {
-            // Only apply clipping if clip_behavior is not None
-            if !self.clip_behavior.clips() {
-                // No clipping - just paint child
+        // Paint child with clipping
+        if let Some(child) = self.child() {
+            let clip_behavior = self.data().clip_behavior;
+
+            // If no clipping, paint normally
+            if clip_behavior == Clip::None {
                 child.paint(painter, offset);
                 return;
             }
 
-            // Create clipping rect with rounded corners
-            let rect = egui::Rect::from_min_size(
-                egui::pos2(offset.dx, offset.dy),
-                egui::vec2(self.size.width, self.size.height),
+            // Get clip rect
+            let size = self.state().size.unwrap_or(Size::ZERO);
+            let clip_rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+
+            // Get border radius
+            let border_radius = self.data().border_radius;
+
+            // TODO: When egui supports rounded rect clipping, apply it here
+            // For now, we use rectangular clipping
+            // In a real implementation, we would:
+            // 1. Save painter state
+            // 2. Set rounded rect clip path with border_radius
+            // 3. Paint child
+            // 4. Restore painter state
+
+            // Convert to egui rect and apply simple rectangular clipping
+            let egui_rect = egui::Rect::from_min_max(
+                egui::pos2(clip_rect.left(), clip_rect.top()),
+                egui::pos2(clip_rect.right(), clip_rect.bottom()),
             );
 
-            let _rounding = self.to_egui_rounding();
+            // TODO: Apply corner radius from border_radius when egui supports it
+            // For now, just use rectangular clipping
 
-            // In egui, we can set a clip rect with rounding
-            // The painter will automatically clip all subsequent drawing
-            painter.with_clip_rect(rect).set_clip_rect(rect);
-
-            // Note: egui doesn't directly support rounded clip rects in the public API
-            // For a full implementation, we would need to:
-            // 1. Use egui's Shape::Path with rounded rectangle
-            // 2. Add it to a clip layer
-            //
-            // For now, we demonstrate the structure and will use rectangular clipping
-            // which is what egui's clip_rect provides
-
-            // Paint child with clipping applied
-            child.paint(painter, offset);
+            // Create a new painter with clipping
+            let clip_painter = painter.with_clip_rect(egui_rect);
+            child.paint(&clip_painter, offset);
         }
     }
 
-    fn hit_test_self(&self, position: Offset) -> bool {
-        // Check if position is within clipped region
-        self.is_point_in_clip_region(position)
-    }
-
-    fn hit_test_children(
-        &self,
-        result: &mut flui_types::events::HitTestResult,
-        position: Offset,
-    ) -> bool {
-        if let Some(child) = &self.child {
-            // Only hit test child if position is within clipped region
-            if self.is_point_in_clip_region(position) {
-                return child.hit_test(result, position);
-            }
-        }
-        false
-    }
-
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn constraints(&self) -> Option<BoxConstraints> {
-        self.constraints
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.flags.needs_layout()
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.flags.mark_needs_layout();
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.flags.needs_paint()
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.flags.mark_needs_paint();
-    }
-
-    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn DynRenderObject)) {
-        if let Some(child) = &self.child {
-            visitor(&**child);
-        }
-    }
-
-    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn DynRenderObject)) {
-        if let Some(child) = &mut self.child {
-            visitor(&mut **child);
-        }
-    }
+    // Delegate all other methods to RenderBoxMixin
+    delegate_to_mixin!();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::RenderBox;
-    use flui_types::styling::Radius;
+
+    #[test]
+    fn test_clip_rrect_data_new() {
+        let radius = BorderRadius::circular(10.0);
+        let data = ClipRRectData::new(radius, Clip::AntiAlias);
+        assert_eq!(data.border_radius, radius);
+        assert_eq!(data.clip_behavior, Clip::AntiAlias);
+    }
+
+    #[test]
+    fn test_clip_rrect_data_circular() {
+        let data = ClipRRectData::circular(15.0);
+        assert_eq!(data.border_radius, BorderRadius::circular(15.0));
+        assert_eq!(data.clip_behavior, Clip::AntiAlias);
+    }
 
     #[test]
     fn test_render_clip_rrect_new() {
-        let border_radius = BorderRadius::circular(10.0);
-        let render = RenderClipRRect::new(border_radius, Clip::AntiAlias);
-        assert_eq!(render.border_radius(), border_radius);
-        assert_eq!(render.clip_behavior(), Clip::AntiAlias);
-        assert!(render.child().is_none());
+        let clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
+        assert_eq!(clip.border_radius(), BorderRadius::circular(10.0));
+        assert_eq!(clip.clip_behavior(), Clip::AntiAlias);
     }
 
     #[test]
     fn test_render_clip_rrect_set_border_radius() {
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::HardEdge);
-        let new_radius = BorderRadius::circular(20.0);
-        render.set_border_radius(new_radius);
-        assert_eq!(render.border_radius(), new_radius);
-        assert!(render.needs_paint());
+        let mut clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
+
+        // Clear initial needs_layout flag
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+        let _ = clip.layout(constraints);
+
+        clip.set_border_radius(BorderRadius::circular(20.0));
+        assert_eq!(clip.border_radius(), BorderRadius::circular(20.0));
+        assert!(RenderBoxMixin::needs_paint(&clip));
+        assert!(!RenderBoxMixin::needs_layout(&clip));
     }
 
     #[test]
     fn test_render_clip_rrect_set_clip_behavior() {
-        let mut render =
-            RenderClipRRect::new(BorderRadius::circular(10.0), Clip::HardEdge);
-        render.flags.clear_needs_paint();
-        render.set_clip_behavior(Clip::AntiAlias);
-        assert_eq!(render.clip_behavior(), Clip::AntiAlias);
-        assert!(render.needs_paint());
+        let mut clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
+
+        // Clear initial needs_layout flag
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+        let _ = clip.layout(constraints);
+
+        clip.set_clip_behavior(Clip::HardEdge);
+        assert_eq!(clip.clip_behavior(), Clip::HardEdge);
+        assert!(RenderBoxMixin::needs_paint(&clip));
+        assert!(!RenderBoxMixin::needs_layout(&clip));
     }
 
     #[test]
-    fn test_render_clip_rrect_layout_with_child() {
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
+    fn test_render_clip_rrect_layout() {
+        let mut clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-        let size = render.layout(constraints);
+        let size = clip.layout(constraints);
 
-        // Should adopt child size (RenderBox uses biggest())
-        assert_eq!(size, Size::new(200.0, 200.0));
-    }
-
-    #[test]
-    fn test_render_clip_rrect_layout_without_child() {
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
-
-        let constraints = BoxConstraints::new(50.0, 200.0, 50.0, 200.0);
-        let size = render.layout(constraints);
-
-        // Without child, use smallest size
-        assert_eq!(size, Size::new(50.0, 50.0));
-    }
-
-    #[test]
-    fn test_render_clip_rrect_hit_test_inside() {
-        use flui_types::events::HitTestResult;
-
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        // Layout first to set size
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        render.layout(constraints);
-
-        // Test point in center (should be inside)
-        let mut result = HitTestResult::new();
-        assert!(render.hit_test(&mut result, Offset::new(50.0, 50.0)));
-        assert!(!result.is_empty());
-    }
-
-    #[test]
-    fn test_render_clip_rrect_hit_test_outside() {
-        use flui_types::events::HitTestResult;
-
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        // Layout first to set size
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        render.layout(constraints);
-
-        // Test point outside bounds
-        let mut result = HitTestResult::new();
-        assert!(!render.hit_test(&mut result, Offset::new(150.0, 150.0)));
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_render_clip_rrect_hit_test_in_corner() {
-        use flui_types::events::HitTestResult;
-
-        let mut render = RenderClipRRect::new(BorderRadius::circular(20.0), Clip::AntiAlias);
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        // Layout first to set size
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        render.layout(constraints);
-
-        // Test point in top-left corner (should be outside due to rounding)
-        let mut result = HitTestResult::new();
-        assert!(!render.hit_test(&mut result, Offset::new(2.0, 2.0)));
-
-        // Test point near corner but inside radius
-        let mut result = HitTestResult::new();
-        assert!(render.hit_test(&mut result, Offset::new(15.0, 15.0)));
-    }
-
-    #[test]
-    fn test_render_clip_rrect_no_clipping() {
-        use flui_types::events::HitTestResult;
-
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::None);
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        // Layout first to set size
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        render.layout(constraints);
-
-        // With Clip::None, all points should pass through
-        let mut result = HitTestResult::new();
-        assert!(render.hit_test(&mut result, Offset::new(2.0, 2.0)));
-    }
-
-    #[test]
-    fn test_render_clip_rrect_different_corner_radii() {
-        let border_radius = BorderRadius::only(
-            Radius::circular(10.0),
-            Radius::circular(20.0),
-            Radius::circular(5.0),
-            Radius::circular(15.0),
-        );
-        let render = RenderClipRRect::new(border_radius, Clip::AntiAlias);
-        assert_eq!(render.border_radius(), border_radius);
-    }
-
-    #[test]
-    fn test_render_clip_rrect_to_egui_rounding() {
-        let border_radius = BorderRadius::only(
-            Radius::circular(10.0),
-            Radius::circular(20.0),
-            Radius::circular(5.0),
-            Radius::circular(15.0),
-        );
-        let render = RenderClipRRect::new(border_radius, Clip::AntiAlias);
-        let rounding = render.to_egui_rounding();
-
-        assert_eq!(rounding.nw, 10);
-        assert_eq!(rounding.ne, 20);
-        assert_eq!(rounding.sw, 5);
-        assert_eq!(rounding.se, 15);
-    }
-
-    #[test]
-    fn test_render_clip_rrect_visit_children() {
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let mut count = 0;
-        render.visit_children(&mut |_| count += 1);
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_render_clip_rrect_remove_child() {
-        let mut render = RenderClipRRect::new(BorderRadius::circular(10.0), Clip::AntiAlias);
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        assert!(render.child().is_some());
-
-        render.set_child(None);
-        assert!(render.child().is_none());
-        assert!(render.needs_layout());
+        // Should use smallest size
+        assert_eq!(size, Size::new(0.0, 0.0));
     }
 }

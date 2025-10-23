@@ -1,453 +1,274 @@
-//! RenderObject that applies a transformation matrix before painting its child.
-//!
-//! # Examples
-//!
-//! ```
-//! use flui_rendering::{RenderTransform, RenderBox};
-//! use flui_types::{Matrix4, Size, Offset};
-//! use flui_core::{BoxConstraints, RenderObject};
-//!
-//! let mut render = RenderTransform::new(Matrix4::translation(10.0, 20.0, 0.0));
-//! let child = Box::new(RenderBox::new());
-//! render.set_child(Some(child));
-//!
-//! let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
-//! render.layout(constraints);
-//! ```
+//! RenderTransform - applies matrix transformation to child
 
-use flui_core::{BoxConstraints, DynRenderObject, ElementId};
-use flui_types::{Matrix4, Offset, Size};
-use crate::RenderFlags;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_core::DynRenderObject;
+use crate::core::{SingleRenderBox, RenderBoxMixin};
 
-/// A render object that applies a transformation matrix before painting its child.
-///
-/// The transformation affects painting and hit testing. By default, hit tests are
-/// transformed to match the painted position. Set `transform_hit_tests` to false
-/// to perform hit tests in the child's original coordinate space.
-///
-/// # Transformation Order
-///
-/// Transformations are applied from the child's coordinate space outward:
-/// 1. Child is painted at (0, 0) in its own coordinate space
-/// 2. Transformation matrix is applied
-/// 3. Result is painted in parent's coordinate space
-///
-/// # Common Transformations
-///
-/// - **Translation**: Move child by offset
-///   ```
-///   use flui_types::Matrix4;
-///   let transform = Matrix4::translation(10.0, 20.0, 0.0);
-///   ```
-///
-/// - **Scaling**: Scale child size
-///   ```
-///   use flui_types::Matrix4;
-///   let transform = Matrix4::scaling(2.0, 2.0, 1.0); // 2x scale
-///   ```
-///
-/// - **Rotation**: Rotate child around origin
-///   ```
-///   use flui_types::Matrix4;
-///   let transform = Matrix4::rotation_z(std::f32::consts::PI / 4.0); // 45°
-///   ```
-///
-/// - **Combined**: Transformations combine right-to-left
-///   ```
-///   use flui_types::Matrix4;
-///   let translate = Matrix4::translation(100.0, 100.0, 0.0);
-///   let rotate = Matrix4::rotation_z(std::f32::consts::PI / 4.0);
-///   let scale = Matrix4::scaling(2.0, 2.0, 1.0);
-///
-///   // Applied in order: scale -> rotate -> translate
-///   let combined = translate * rotate * scale;
-///   ```
-#[derive(Debug)]
-pub struct RenderTransform {
-    /// Element ID for cache invalidation
-    element_id: Option<ElementId>,
-
-    /// The transformation matrix to apply
-    transform: Matrix4,
-
-    /// Whether to transform hit tests (default: true)
-    transform_hit_tests: bool,
-
-    /// The single child
-    child: Option<Box<dyn DynRenderObject>>,
-
-    /// Cached size after layout
-    size: Size,
-
-    /// Current constraints
-    constraints: Option<BoxConstraints>,
-
-    /// State flags (needs_layout, needs_paint, etc.)
-    flags: RenderFlags,
+/// Simple 2D transformation matrix
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Matrix4 {
+    /// Translation X
+    pub translate_x: f32,
+    /// Translation Y
+    pub translate_y: f32,
+    /// Scale X
+    pub scale_x: f32,
+    /// Scale Y
+    pub scale_y: f32,
+    /// Rotation in radians
+    pub rotation: f32,
 }
 
-impl RenderTransform {
-    /// Creates a new RenderTransform with the given transformation matrix.
-    ///
-    /// Hit tests are transformed by default.
+impl Matrix4 {
+    /// Identity matrix (no transformation)
+    pub fn identity() -> Self {
+        Self {
+            translate_x: 0.0,
+            translate_y: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            rotation: 0.0,
+        }
+    }
+
+    /// Translation matrix
+    pub fn translation(x: f32, y: f32) -> Self {
+        Self {
+            translate_x: x,
+            translate_y: y,
+            ..Self::identity()
+        }
+    }
+
+    /// Scale matrix
+    pub fn scale(x: f32, y: f32) -> Self {
+        Self {
+            scale_x: x,
+            scale_y: y,
+            ..Self::identity()
+        }
+    }
+
+    /// Rotation matrix (radians)
+    pub fn rotation(radians: f32) -> Self {
+        Self {
+            rotation: radians,
+            ..Self::identity()
+        }
+    }
+}
+
+impl Default for Matrix4 {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
+/// Data for RenderTransform
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformData {
+    /// The transformation matrix
+    pub transform: Matrix4,
+    /// Alignment origin for transformation
+    pub origin: Offset,
+}
+
+impl TransformData {
+    /// Create new transform data
     pub fn new(transform: Matrix4) -> Self {
         Self {
-            element_id: None,
             transform,
-            transform_hit_tests: true,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
+            origin: Offset::ZERO,
         }
     }
 
-    /// Creates RenderTransform with element ID for caching
-    pub fn with_element_id(element_id: ElementId, transform: Matrix4) -> Self {
-        Self {
-            element_id: Some(element_id),
-            transform,
-            transform_hit_tests: true,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
-        }
-    }
-
-    /// Get the element ID
-    pub fn element_id(&self) -> Option<ElementId> {
-        self.element_id
-    }
-
-    /// Set the element ID for caching
-    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
-        self.element_id = element_id;
-    }
-
-    /// Sets the transformation matrix.
-    pub fn set_transform(&mut self, transform: Matrix4) {
-        if self.transform != transform {
-            self.transform = transform;
-            self.flags.mark_needs_paint();
-        }
-    }
-
-    /// Returns the transformation matrix.
-    pub fn transform(&self) -> &Matrix4 {
-        &self.transform
-    }
-
-    /// Sets whether hit tests should be transformed.
-    ///
-    /// If true (default), hit tests are performed in the transformed coordinate space.
-    /// If false, hit tests are performed in the child's original coordinate space.
-    pub fn set_transform_hit_tests(&mut self, value: bool) {
-        if self.transform_hit_tests != value {
-            self.transform_hit_tests = value;
-            // Changing hit test behavior doesn't require repaint
-        }
-    }
-
-    /// Returns whether hit tests are transformed.
-    pub fn transform_hit_tests(&self) -> bool {
-        self.transform_hit_tests
-    }
-
-    /// Sets the child.
-    pub fn set_child(&mut self, child: Option<Box<dyn DynRenderObject>>) {
-        self.child = child;
-        self.mark_needs_layout();
-    }
-
-    /// Removes and returns the child.
-    pub fn remove_child(&mut self) -> Option<Box<dyn DynRenderObject>> {
-        let child = self.child.take();
-        self.mark_needs_layout();
-        child
+    /// Create with custom origin
+    pub fn with_origin(transform: Matrix4, origin: Offset) -> Self {
+        Self { transform, origin }
     }
 }
+
+/// RenderObject that applies a transformation to its child
+///
+/// The transformation is applied during painting. It doesn't affect layout,
+/// so the child is laid out as if untransformed.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::{SingleRenderBox, objects::effects::{TransformData, Matrix4}};
+///
+/// let transform = Matrix4::scale(2.0, 2.0);
+/// let mut render_transform = SingleRenderBox::new(TransformData::new(transform));
+/// ```
+pub type RenderTransform = SingleRenderBox<TransformData>;
+
+// ===== Public API =====
+
+impl RenderTransform {
+    /// Get the transformation matrix
+    pub fn transform(&self) -> Matrix4 {
+        self.data().transform
+    }
+
+    /// Get the origin
+    pub fn origin(&self) -> Offset {
+        self.data().origin
+    }
+
+    /// Set new transformation matrix
+    pub fn set_transform(&mut self, transform: Matrix4) {
+        if self.data().transform != transform {
+            self.data_mut().transform = transform;
+            RenderBoxMixin::mark_needs_paint(self);
+        }
+    }
+
+    /// Set new origin
+    pub fn set_origin(&mut self, origin: Offset) {
+        if self.data().origin != origin {
+            self.data_mut().origin = origin;
+            RenderBoxMixin::mark_needs_paint(self);
+        }
+    }
+}
+
+// ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderTransform {
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        crate::impl_cached_layout!(self, constraints, {
-            if let Some(child) = &mut self.child {
-                // Layout child with same constraints
-                let child_size = child.layout(constraints);
-                constraints.constrain(child_size)
-            } else {
-                // No child: use smallest size
-                constraints.smallest()
-            }
-        })
+        // Store constraints
+        self.state_mut().constraints = Some(constraints);
+
+        // Layout child with same constraints (transform doesn't affect layout)
+        let size = if let Some(child) = self.child_mut() {
+            child.layout(constraints)
+        } else {
+            // No child - use smallest size
+            constraints.smallest()
+        };
+
+        // Store size and clear needs_layout flag
+        self.state_mut().size = Some(size);
+        self.clear_needs_layout();
+
+        size
     }
 
     fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(child) = &self.child {
-            // Note: egui doesn't directly support transform matrices in 2D painting.
-            // For now, we'll paint the child at the transformed origin offset.
-            // Full matrix transformation would require egui layers or custom rendering.
+        // Paint child with transformation
+        if let Some(child) = self.child() {
+            let transform = self.data().transform;
+            let origin = self.data().origin;
 
-            // Extract translation from matrix
-            let (tx, ty, _tz) = self.transform.translation_component();
-            let transformed_offset = offset + Offset::new(tx, ty);
+            // Calculate transformed offset
+            // TODO: In a real implementation, we would:
+            // 1. Save painter transform state
+            // 2. Apply translation to origin
+            // 3. Apply scale/rotation around origin
+            // 4. Paint child
+            // 5. Restore painter transform state
+
+            // For now, just apply simple translation
+            let transformed_offset = Offset::new(
+                offset.dx + transform.translate_x + origin.dx,
+                offset.dy + transform.translate_y + origin.dy,
+            );
 
             child.paint(painter, transformed_offset);
         }
     }
 
-    fn hit_test_children(
-        &self,
-        result: &mut flui_types::events::HitTestResult,
-        position: Offset,
-    ) -> bool {
-        if let Some(child) = &self.child {
-            if self.transform_hit_tests {
-                // Transform the hit test position by inverse of transformation
-                if let Some(inverse) = self.transform.try_inverse() {
-                    let (local_x, local_y) = inverse.transform_point(position.dx, position.dy);
-                    let local_position = Offset::new(local_x, local_y);
-                    child.hit_test(result, local_position)
-                } else {
-                    // Singular matrix (non-invertible) - can't hit test
-                    false
-                }
-            } else {
-                // Don't transform hit tests
-                child.hit_test(result, position)
-            }
-        } else {
-            false
-        }
-    }
-
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn constraints(&self) -> Option<BoxConstraints> {
-        self.constraints
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.flags.needs_layout()
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.flags.mark_needs_layout();
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.flags.needs_paint()
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.flags.mark_needs_paint();
-    }
-
-    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn DynRenderObject)) {
-        if let Some(child) = &self.child {
-            visitor(&**child);
-        }
-    }
-
-    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn DynRenderObject)) {
-        if let Some(child) = &mut self.child {
-            visitor(&mut **child);
-        }
-    }
+    // Delegate all other methods to RenderBoxMixin
+    delegate_to_mixin!();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::RenderBox;
+
+    #[test]
+    fn test_matrix4_identity() {
+        let m = Matrix4::identity();
+        assert_eq!(m.translate_x, 0.0);
+        assert_eq!(m.translate_y, 0.0);
+        assert_eq!(m.scale_x, 1.0);
+        assert_eq!(m.scale_y, 1.0);
+        assert_eq!(m.rotation, 0.0);
+    }
+
+    #[test]
+    fn test_matrix4_translation() {
+        let m = Matrix4::translation(10.0, 20.0);
+        assert_eq!(m.translate_x, 10.0);
+        assert_eq!(m.translate_y, 20.0);
+        assert_eq!(m.scale_x, 1.0);
+        assert_eq!(m.scale_y, 1.0);
+    }
+
+    #[test]
+    fn test_matrix4_scale() {
+        let m = Matrix4::scale(2.0, 3.0);
+        assert_eq!(m.scale_x, 2.0);
+        assert_eq!(m.scale_y, 3.0);
+        assert_eq!(m.translate_x, 0.0);
+    }
+
+    #[test]
+    fn test_matrix4_rotation() {
+        let m = Matrix4::rotation(std::f32::consts::PI);
+        assert_eq!(m.rotation, std::f32::consts::PI);
+    }
+
+    #[test]
+    fn test_transform_data_new() {
+        let transform = Matrix4::scale(2.0, 2.0);
+        let data = TransformData::new(transform);
+        assert_eq!(data.transform, transform);
+        assert_eq!(data.origin, Offset::ZERO);
+    }
+
+    #[test]
+    fn test_transform_data_with_origin() {
+        let transform = Matrix4::identity();
+        let origin = Offset::new(10.0, 20.0);
+        let data = TransformData::with_origin(transform, origin);
+        assert_eq!(data.origin, origin);
+    }
 
     #[test]
     fn test_render_transform_new() {
-        let transform = Matrix4::translation(10.0, 20.0, 0.0);
-        let render = RenderTransform::new(transform);
-
-        assert_eq!(render.transform(), &transform);
-        assert!(render.transform_hit_tests());
-        assert!(render.needs_layout());
+        let transform = Matrix4::scale(2.0, 2.0);
+        let render_transform = SingleRenderBox::new(TransformData::new(transform));
+        assert_eq!(render_transform.transform(), transform);
     }
 
     #[test]
     fn test_render_transform_set_transform() {
-        let mut render = RenderTransform::new(Matrix4::identity());
+        let transform1 = Matrix4::scale(1.0, 1.0);
+        let mut render_transform = SingleRenderBox::new(TransformData::new(transform1));
 
-        let new_transform = Matrix4::scaling(2.0, 2.0, 1.0);
-        render.set_transform(new_transform);
+        // Clear initial needs_layout flag
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+        let _ = render_transform.layout(constraints);
 
-        assert_eq!(render.transform(), &new_transform);
-        assert!(render.needs_paint());
+        let transform2 = Matrix4::scale(2.0, 2.0);
+        render_transform.set_transform(transform2);
+
+        assert_eq!(render_transform.transform(), transform2);
+        assert!(RenderBoxMixin::needs_paint(&render_transform));
+        assert!(!RenderBoxMixin::needs_layout(&render_transform));
     }
 
     #[test]
-    fn test_render_transform_set_transform_hit_tests() {
-        let mut render = RenderTransform::new(Matrix4::identity());
+    fn test_render_transform_layout() {
+        let transform = Matrix4::translation(50.0, 50.0);
+        let mut render_transform = SingleRenderBox::new(TransformData::new(transform));
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        assert!(render.transform_hit_tests());
+        let size = render_transform.layout(constraints);
 
-        render.set_transform_hit_tests(false);
-        assert!(!render.transform_hit_tests());
-    }
-
-    #[test]
-    fn test_render_transform_layout_with_child() {
-        let mut render = RenderTransform::new(Matrix4::translation(10.0, 20.0, 0.0));
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let size = render.layout(constraints);
-
-        assert_eq!(size, Size::new(100.0, 100.0));
-        assert!(!render.needs_layout());
-    }
-
-    #[test]
-    fn test_render_transform_layout_without_child() {
-        let mut render = RenderTransform::new(Matrix4::identity());
-
-        let constraints = BoxConstraints::new(10.0, 100.0, 10.0, 100.0);
-        let size = render.layout(constraints);
-
-        // Should use smallest size
-        assert_eq!(size, Size::new(10.0, 10.0));
-    }
-
-    #[test]
-    fn test_render_transform_remove_child() {
-        let mut render = RenderTransform::new(Matrix4::identity());
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let removed = render.remove_child();
-        assert!(removed.is_some());
-        assert!(render.child.is_none());
-        assert!(render.needs_layout());
-    }
-
-    #[test]
-    fn test_render_transform_translation() {
-        let mut render = RenderTransform::new(Matrix4::translation(50.0, 100.0, 0.0));
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        render.layout(constraints);
-
-        // Translation is extracted in paint()
-        let (tx, ty, _) = render.transform().translation_component();
-        assert_eq!(tx, 50.0);
-        assert_eq!(ty, 100.0);
-    }
-
-    #[test]
-    fn test_render_transform_scaling() {
-        let mut render = RenderTransform::new(Matrix4::scaling(2.0, 3.0, 1.0));
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
-        let size = render.layout(constraints);
-
-        // Layout is not affected by scaling (size stays same)
-        assert_eq!(size, Size::new(50.0, 50.0));
-    }
-
-    #[test]
-    fn test_render_transform_rotation() {
-        let mut render = RenderTransform::new(Matrix4::rotation_z(std::f32::consts::PI / 2.0));
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
-        let size = render.layout(constraints);
-
-        // Layout is not affected by rotation
-        assert_eq!(size, Size::new(100.0, 50.0));
-    }
-
-    #[test]
-    fn test_render_transform_hit_test_transformed() {
-        use flui_types::events::HitTestResult;
-
-        let mut render = RenderTransform::new(Matrix4::translation(10.0, 20.0, 0.0));
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
-        render.layout(constraints);
-
-        // Hit test at transformed position (15, 25)
-        // Should transform back to (5, 5) in child space, which is within (50, 50)
-        let mut result = HitTestResult::new();
-        assert!(render.hit_test(&mut result, Offset::new(15.0, 25.0)));
-
-        // Hit test at (5, 5) - within bounds but transforms to (-5, -15) in child space
-        // RenderTransform itself hits (hit_test_self returns true), even though child doesn't
-        let mut result = HitTestResult::new();
-        assert!(render.hit_test(&mut result, Offset::new(5.0, 5.0)));
-    }
-
-    #[test]
-    fn test_render_transform_hit_test_untransformed() {
-        use flui_types::events::HitTestResult;
-
-        let mut render = RenderTransform::new(Matrix4::translation(10.0, 20.0, 0.0));
-        render.set_transform_hit_tests(false);
-
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
-        render.layout(constraints);
-
-        // Hit tests in original child space (not transformed)
-        let mut result = HitTestResult::new();
-        assert!(render.hit_test(&mut result, Offset::new(25.0, 25.0)));
-        let mut result = HitTestResult::new();
-        assert!(!render.hit_test(&mut result, Offset::new(60.0, 60.0)));
-    }
-
-    #[test]
-    fn test_render_transform_visit_children() {
-        let mut render = RenderTransform::new(Matrix4::identity());
-        let child = Box::new(RenderBox::new());
-        render.set_child(Some(child));
-
-        let mut count = 0;
-        render.visit_children(&mut |_| count += 1);
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_render_transform_visit_children_no_child() {
-        let render = RenderTransform::new(Matrix4::identity());
-
-        let mut count = 0;
-        render.visit_children(&mut |_| count += 1);
-        assert_eq!(count, 0);
-    }
-
-    #[test]
-    fn test_render_transform_mark_needs_paint_only() {
-        let mut render = RenderTransform::new(Matrix4::identity());
-
-        // Layout to clear flags
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        render.layout(constraints);
-
-        assert!(!render.needs_layout());
-        assert!(!render.needs_paint());
-
-        // Changing transform should only mark needs_paint
-        render.set_transform(Matrix4::scaling(2.0, 2.0, 1.0));
-
-        assert!(!render.needs_layout());
-        assert!(render.needs_paint());
+        // Transform doesn't affect layout
+        assert_eq!(size, Size::new(0.0, 0.0));
     }
 }
