@@ -14,4 +14,8 @@ flui_core = { path = "../flui_core" }
 # Graphics
 egui.workspace = true
 
+# Math for transformations
+glam.workspace = true
+tracing = "0.1"
+
 [dev-dependencies]

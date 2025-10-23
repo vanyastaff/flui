@@ -174,11 +174,17 @@ impl FluiApp {
         let current_size = Size::new(ui.available_size().x, ui.available_size().y);
         let needs_layout = dirty_count > 0 || self.size_changed(current_size);
 
+        tracing::debug!("Frame {}: needs_layout={} (dirty_count={}, size_changed={})",
+            self.stats.frame_count, needs_layout, dirty_count, self.size_changed(current_size));
+
         if needs_layout {
+            tracing::debug!("Frame {}: Calling flush_layout", self.stats.frame_count);
             let constraints = BoxConstraints::tight(current_size);
             if self.pipeline.flush_layout(constraints).is_some() {
                 self.stats.layout_count += 1;
                 self.last_size = Some(current_size);
+            } else {
+                tracing::warn!("Frame {}: flush_layout returned None!", self.stats.frame_count);
             }
         }
 

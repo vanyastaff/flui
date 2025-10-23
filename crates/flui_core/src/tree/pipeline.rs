@@ -189,14 +189,18 @@ impl PipelineOwner {
     /// a RenderObject. This method traverses children until finding one.
     fn find_root_render_object_element(&self) -> Option<ElementId> {
         let root_id = self.root_element_id?;
+        tracing::debug!("find_root_render_object_element: starting from root {}", root_id);
         let tree_guard = self.tree.read();
 
         let mut current_id = root_id;
+        let mut depth = 0;
         loop {
             let element = tree_guard.get(current_id)?;
+            tracing::debug!("  depth {}: checking element {}, has_render_object={}", depth, current_id, element.render_object().is_some());
 
             // Check if this element has a RenderObject
             if element.render_object().is_some() {
+                tracing::info!("find_root_render_object_element: found render object at element {}", current_id);
                 return Some(current_id);
             }
 
@@ -204,8 +208,10 @@ impl PipelineOwner {
             let mut children = element.children_iter();
             if let Some(child_id) = children.next() {
                 current_id = child_id;
+                depth += 1;
             } else {
                 // No children, no RenderObject found
+                tracing::warn!("find_root_render_object_element: no RenderObject found (reached leaf at depth {})", depth);
                 return None;
             }
         }
@@ -224,6 +230,8 @@ impl PipelineOwner {
     ///
     /// The size of the root render object, or None if no root
     pub fn flush_layout(&mut self, constraints: BoxConstraints) -> Option<Size> {
+        tracing::info!("PipelineOwner::flush_layout: called with constraints {:?}", constraints);
+
         // Process dirty nodes if any
         if !self.nodes_needing_layout.is_empty() {
             let dirty_count = self.nodes_needing_layout.len();
@@ -355,7 +363,10 @@ impl PipelineOwner {
             if let Some(root_elem) = tree_guard.get(root_id) {
                 if let Some(render_object) = root_elem.render_object() {
                     let position = event.position();
-                    let hit = render_object.hit_test(&mut result, position);
+
+                    // Create RenderContext for hit testing
+                    let ctx = crate::render::RenderContext::new(&tree_guard, root_id);
+                    let hit = render_object.hit_test(&mut result, position, &ctx);
 
                     if hit {
                         tracing::debug!(

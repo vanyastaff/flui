@@ -29,18 +29,17 @@ impl StatelessWidget for ContainerApp {
             Column::builder()
                 .cross_axis_alignment(CrossAxisAlignment::Start)  // Left-align to show margin
                 .children(vec![
-                        // Example 1: Simple colored container with padding
+                        // Example 1: Container WITHOUT width - expands to fill parent
                         {
-                            tracing::debug!("    [1/4] Creating Blue container (600x80, padding=16)");
+                            tracing::debug!("    [1/4] Creating Blue container (expand width, height=80, padding=16)");
                             Box::new(Container::builder()
-                                .width(600.0)
-                                .height(80.0)
+                                .height(80.0)  // Only height, no width - should expand!
                                 .color(Color::rgb(100, 150, 255))
                                 .padding(EdgeInsets::all(16.0))
                                 .alignment(Alignment::CENTER)
                                 .child(
                                     Text::builder()
-                                        .data("Simple Container")
+                                        .data("Expanded Container (no width)")
                                         .size(24.0)
                                         .color(Color::rgb(255, 255, 255))
                                         .build()
@@ -48,18 +47,19 @@ impl StatelessWidget for ContainerApp {
                                 .build())
                         },
 
-                        // Example 2: Container with different color
+                        // Example 2: Container with Transform (rotation)
                         {
-                            tracing::debug!("    [2/4] Creating Pink container (600x80, padding=16)");
+                            tracing::debug!("    [2/4] Creating Pink container (400x80, padding=16, rotated ~15 degrees)");
                             Box::new(Container::builder()
-                                .width(600.0)
+                                .width(400.0)
                                 .height(80.0)
                                 .color(Color::rgb(255, 100, 150))
                                 .padding(EdgeInsets::all(16.0))
                                 .alignment(Alignment::CENTER)
+                                .transform(TransformMatrix::rotation(0.26))  // Rotate ~15 degrees (~0.26 radians)
                                 .child(
                                     Text::builder()
-                                        .data("Styled Container")
+                                        .data("Rotated Container")
                                         .size(24.0)
                                         .color(Color::rgb(255, 255, 255))
                                         .build()
@@ -127,8 +127,8 @@ fn main() -> Result<(), eframe::Error> {
     tracing::info!("========================================");
     tracing::info!("");
     tracing::info!("This example demonstrates Container widget with:");
-    tracing::info!("  1. Simple colored container (Blue) - padding + center alignment");
-    tracing::info!("  2. Styled container (Pink) - different color scheme");
+    tracing::info!("  1. Expanded container (Blue) - no width, expands to fill parent");
+    tracing::info!("  2. Rotated container (Pink) - Container.transform rotated 15 degrees");
     tracing::info!("  3. Container with margin (Green) - symmetric margin (20h, 10v)");
     tracing::info!("  4. Left-aligned container (Orange) - Alignment::CENTER_LEFT");
     tracing::info!("");

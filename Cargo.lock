@@ -1161,6 +1161,8 @@ dependencies = [
  "egui 0.33.0",
  "flui_core",
  "flui_types",
+ "glam",
+ "tracing",
 ]
 
 [[package]]

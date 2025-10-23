@@ -80,6 +80,9 @@ pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
 pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
 
+// Re-export simplified 2D transform matrix for Container.transform
+pub use flui_rendering::objects::effects::transform::Matrix4 as TransformMatrix;
+
 /// Prelude module for convenient imports
 ///
 /// Import this module to get access to all commonly used widgets and types:
@@ -100,6 +103,9 @@ pub mod prelude {
     pub use flui_types::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
     pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
     pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
+
+    // Re-export simplified 2D transform matrix for Container.transform
+    pub use flui_rendering::objects::effects::transform::Matrix4 as TransformMatrix;
 }
 
 

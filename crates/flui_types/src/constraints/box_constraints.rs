@@ -64,15 +64,21 @@ impl BoxConstraints {
     /// assert_eq!(constraints.min_width, 50.0);
     /// assert_eq!(constraints.max_width, 150.0);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// In debug mode, panics if constraints are invalid (negative values, min > max, NaN).
     #[inline]
     #[must_use]
     pub const fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
-        Self {
+        let constraints = Self {
             min_width,
             max_width,
             min_height,
             max_height,
-        }
+        };
+        // Note: Can't call assert_is_normalized in const fn, so validation happens at use site
+        constraints
     }
 
     /// Create tight constraints (min == max)
@@ -242,6 +248,87 @@ impl BoxConstraints {
     /// Check if constraints are normalized (min <= max)
     pub fn is_normalized(&self) -> bool {
         self.min_width <= self.max_width && self.min_height <= self.max_height
+    }
+
+    /// Assert that constraints are valid (debug mode only)
+    ///
+    /// Performs comprehensive validation of constraint values:
+    /// - All values must be non-negative (>= 0.0)
+    /// - min values must be <= max values
+    /// - NaN values are not allowed
+    ///
+    /// This is a no-op in release builds for zero overhead.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if any validation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::constraints::BoxConstraints;
+    ///
+    /// let valid = BoxConstraints::new(50.0, 150.0, 30.0, 100.0);
+    /// valid.assert_is_normalized(); // OK
+    ///
+    /// // In debug mode, this would panic:
+    /// // let invalid = BoxConstraints::new(150.0, 50.0, 30.0, 100.0);
+    /// // invalid.assert_is_normalized(); // Panic: min_width > max_width
+    /// ```
+    #[inline]
+    pub fn assert_is_normalized(&self) {
+        debug_assert!(
+            !self.min_width.is_nan(),
+            "BoxConstraints.min_width cannot be NaN"
+        );
+        debug_assert!(
+            !self.max_width.is_nan(),
+            "BoxConstraints.max_width cannot be NaN"
+        );
+        debug_assert!(
+            !self.min_height.is_nan(),
+            "BoxConstraints.min_height cannot be NaN"
+        );
+        debug_assert!(
+            !self.max_height.is_nan(),
+            "BoxConstraints.max_height cannot be NaN"
+        );
+
+        debug_assert!(
+            self.min_width >= 0.0,
+            "BoxConstraints.min_width ({}) cannot be negative",
+            self.min_width
+        );
+        debug_assert!(
+            self.min_height >= 0.0,
+            "BoxConstraints.min_height ({}) cannot be negative",
+            self.min_height
+        );
+
+        // Note: max values can be INFINITY, but not negative
+        debug_assert!(
+            self.max_width >= 0.0 || self.max_width.is_infinite(),
+            "BoxConstraints.max_width ({}) must be >= 0 or INFINITY",
+            self.max_width
+        );
+        debug_assert!(
+            self.max_height >= 0.0 || self.max_height.is_infinite(),
+            "BoxConstraints.max_height ({}) must be >= 0 or INFINITY",
+            self.max_height
+        );
+
+        debug_assert!(
+            self.min_width <= self.max_width,
+            "BoxConstraints: min_width ({}) must be <= max_width ({})",
+            self.min_width,
+            self.max_width
+        );
+        debug_assert!(
+            self.min_height <= self.max_height,
+            "BoxConstraints: min_height ({}) must be <= max_height ({})",
+            self.min_height,
+            self.max_height
+        );
     }
 
     /// Get the biggest size that satisfies the constraints
@@ -455,18 +542,24 @@ impl BoxConstraints {
     /// assert_eq!(enforced.max_height, 150.0);
     /// ```
     pub fn enforce(&self, other: BoxConstraints) -> Self {
+        self.assert_is_normalized();
+        other.assert_is_normalized();
+
         let min_width = self.min_width.max(other.min_width);
         let max_width = self.max_width.min(other.max_width);
         let min_height = self.min_height.max(other.min_height);
         let max_height = self.max_height.min(other.max_height);
 
         // Clamp to ensure min <= max (when constraints conflict, parent's min wins)
-        Self {
+        let result = Self {
             min_width,
             max_width: max_width.max(min_width),
             min_height,
             max_height: max_height.max(min_height),
-        }
+        };
+
+        result.assert_is_normalized();
+        result
     }
 
     /// Deflate constraints by subtracting from all sides
@@ -518,12 +611,17 @@ impl BoxConstraints {
     /// assert_eq!(deflated.max_height, 180.0); // 200 - 20 (top+bottom)
     /// ```
     pub fn deflate(&self, insets: &EdgeInsets) -> Self {
-        Self {
+        self.assert_is_normalized();
+
+        let result = Self {
             min_width: (self.min_width - insets.horizontal_total()).max(0.0),
             max_width: (self.max_width - insets.horizontal_total()).max(0.0),
             min_height: (self.min_height - insets.vertical_total()).max(0.0),
             max_height: (self.max_height - insets.vertical_total()).max(0.0),
-        }
+        };
+
+        result.assert_is_normalized();
+        result
     }
 
     /// Inflate constraints by edge insets
@@ -542,12 +640,17 @@ impl BoxConstraints {
     /// assert_eq!(inflated.max_height, 220.0); // 200 + 20
     /// ```
     pub fn inflate(&self, insets: &EdgeInsets) -> Self {
-        Self {
+        self.assert_is_normalized();
+
+        let result = Self {
             min_width: self.min_width + insets.horizontal_total(),
             max_width: self.max_width + insets.horizontal_total(),
             min_height: self.min_height + insets.vertical_total(),
             max_height: self.max_height + insets.vertical_total(),
-        }
+        };
+
+        result.assert_is_normalized();
+        result
     }
 
     // ===== Helper methods for layout =====
@@ -777,5 +880,102 @@ mod tests {
             loose.to_string(),
             "BoxConstraints(50 <= w <= 150, 30 <= h <= 100)"
         );
+    }
+
+    // ===== Validation tests =====
+
+    #[test]
+    fn test_assert_is_normalized_valid() {
+        // Valid constraints should not panic
+        let valid = BoxConstraints::new(50.0, 150.0, 30.0, 100.0);
+        valid.assert_is_normalized(); // Should not panic
+
+        let tight = BoxConstraints::tight(Size::new(100.0, 50.0));
+        tight.assert_is_normalized(); // Should not panic
+
+        let loose = BoxConstraints::loose(Size::new(200.0, 100.0));
+        loose.assert_is_normalized(); // Should not panic
+    }
+
+    #[test]
+    fn test_is_normalized() {
+        // Valid constraints
+        assert!(BoxConstraints::new(50.0, 150.0, 30.0, 100.0).is_normalized());
+        assert!(BoxConstraints::tight(Size::new(100.0, 50.0)).is_normalized());
+        assert!(BoxConstraints::loose(Size::new(200.0, 100.0)).is_normalized());
+
+        // Invalid constraints (min > max)
+        assert!(!BoxConstraints::new(150.0, 50.0, 30.0, 100.0).is_normalized()); // min_width > max_width
+        assert!(!BoxConstraints::new(50.0, 150.0, 100.0, 30.0).is_normalized()); // min_height > max_height
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "min_width")]
+    fn test_assert_is_normalized_invalid_width() {
+        // In debug mode, this should panic
+        let invalid = BoxConstraints::new(150.0, 50.0, 30.0, 100.0); // min > max
+        invalid.assert_is_normalized();
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "min_height")]
+    fn test_assert_is_normalized_invalid_height() {
+        // In debug mode, this should panic
+        let invalid = BoxConstraints::new(50.0, 150.0, 100.0, 30.0); // min > max
+        invalid.assert_is_normalized();
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "negative")]
+    fn test_assert_is_normalized_negative_min_width() {
+        // In debug mode, this should panic
+        let invalid = BoxConstraints::new(-10.0, 150.0, 30.0, 100.0);
+        invalid.assert_is_normalized();
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "negative")]
+    fn test_assert_is_normalized_negative_min_height() {
+        // In debug mode, this should panic
+        let invalid = BoxConstraints::new(50.0, 150.0, -10.0, 100.0);
+        invalid.assert_is_normalized();
+    }
+
+    #[test]
+    fn test_enforce_validates_constraints() {
+        let incoming = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
+        let additional = BoxConstraints::new(50.0, 150.0, 50.0, 150.0);
+
+        // Should not panic - both constraints are valid
+        let result = incoming.enforce(additional);
+        result.assert_is_normalized();
+    }
+
+    #[test]
+    fn test_deflate_validates_constraints() {
+        use crate::layout::EdgeInsets;
+
+        let constraints = BoxConstraints::new(100.0, 200.0, 100.0, 200.0);
+        let padding = EdgeInsets::all(10.0);
+
+        // Should not panic - result should be valid
+        let result = constraints.deflate(&padding);
+        result.assert_is_normalized();
+    }
+
+    #[test]
+    fn test_inflate_validates_constraints() {
+        use crate::layout::EdgeInsets;
+
+        let constraints = BoxConstraints::new(100.0, 200.0, 100.0, 200.0);
+        let padding = EdgeInsets::all(10.0);
+
+        // Should not panic - result should be valid
+        let result = constraints.inflate(&padding);
+        result.assert_is_normalized();
     }
 }

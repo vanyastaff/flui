@@ -41,6 +41,9 @@ use flui_core::{BoxConstraints, Context, DynWidget, StatelessWidget, Widget};
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
 
+// Use the simplified 2D Matrix4 from rendering for transforms
+type Matrix4 = flui_rendering::objects::effects::transform::Matrix4;
+
 /// A convenience widget that combines common painting, positioning, and sizing widgets.
 ///
 /// Container is one of the most commonly used widgets. It combines several simpler
@@ -135,6 +138,12 @@ pub struct Container {
     /// Width and height constraints override min/max constraints in BoxConstraints.
     pub constraints: Option<BoxConstraints>,
 
+    /// The transformation matrix to apply to the container.
+    ///
+    /// If non-null, the container will be wrapped in a Transform widget.
+    /// The transformation is applied OUTSIDE all other effects (decoration, alignment, etc).
+    pub transform: Option<Matrix4>,
+
     /// The child contained by the container.
     ///
     /// If null, the container will size itself according to other properties.
@@ -164,6 +173,7 @@ impl Container {
             width: None,
             height: None,
             constraints: None,
+            transform: None,
             child: None,
         }
     }
@@ -322,13 +332,24 @@ impl StatelessWidget for Container {
             });
         }
 
-        // Apply width/height constraints LAST
+        // Apply width/height constraints
         // These constraints apply to the TOTAL size (including margin)
         if self.width.is_some() || self.height.is_some() {
             current = Box::new(crate::SizedBox {
                 key: None,
                 width: self.width,
                 height: self.height,
+                child: Some(current),
+            });
+        }
+
+        // Apply transform LAST (outermost)
+        // Transform is applied OUTSIDE all other effects
+        if let Some(transform) = self.transform {
+            current = Box::new(crate::Transform {
+                key: None,
+                transform,
+                transform_hit_tests: true,
                 child: Some(current),
             });
         }

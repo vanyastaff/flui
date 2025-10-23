@@ -34,12 +34,14 @@
 //! 4. **Separation of concerns**: Data (flui_types) vs Logic (flui_painting)
 
 #![warn(missing_docs)]
-
 pub mod border;
 pub mod decoration;
 pub mod gradient;
 pub mod shadow;
 pub mod text;
+pub mod transform_painter;
+
+
 
 
 // Re-export main painting traits
@@ -48,6 +50,7 @@ pub use border::BorderPainter;
 pub use gradient::GradientPainter;
 pub use shadow::ShadowPainter;
 pub use text::TextPainter;
+pub use transform_painter::TransformPainter;
 
 /// Prelude module for convenient imports
 pub mod prelude {
@@ -56,5 +59,9 @@ pub mod prelude {
     pub use crate::gradient::GradientPainter;
     pub use crate::shadow::ShadowPainter;
     pub use crate::text::TextPainter;
+    pub use crate::transform_painter::TransformPainter;
 }
+
+
+
 

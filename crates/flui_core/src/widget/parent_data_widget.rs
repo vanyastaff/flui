@@ -15,16 +15,17 @@ use crate::{
 /// Widget that configures parent data on RenderObject children
 ///
 /// ParentDataWidget is used by layout widgets to attach layout-specific data
-/// to their children's RenderObjects. For example:
+/// to their children in the ElementTree. For example:
 /// - `Positioned` (for Stack) sets offset in StackParentData
 /// - `Flexible` (for Row/Column) sets flex factor in FlexParentData
 ///
-/// The parent data is applied when the child RenderObject is created or updated.
+/// The parent data is created when the child is mounted.
 pub trait ParentDataWidget<T: ParentData>: ProxyWidget {
-    /// Apply parent data to the child's RenderObject
+    /// Create parent data for the child
     ///
-    /// This is called when the RenderObject is created or when this widget updates.
-    fn apply_parent_data(&self, render_object: &mut dyn DynRenderObject);
+    /// This is called when the child is mounted or when this widget updates.
+    /// The returned ParentData will be stored in ElementTree for the child.
+    fn create_parent_data(&self) -> Box<dyn ParentData>;
 
     /// Debug: Typical ancestor widget class that should contain this widget
     ///
@@ -74,37 +75,37 @@ where
 
     /// Apply parent data to all descendant RenderObjects
     ///
-    /// This walks down the tree and applies parent data to the first
-    /// RenderObject it finds.
+    /// This walks down the tree and sets parent data on the first
+    /// RenderObject element it finds.
     fn apply_parent_data_to_descendants(&self) {
         if let Some(child_id) = self.child {
             if let Some(tree) = &self.tree {
-                self.apply_to_render_object(tree, child_id);
+                self.set_parent_data_on_render_object(tree, child_id);
             }
         }
     }
 
-    /// Recursively find and apply to RenderObject
-    fn apply_to_render_object(&self, tree: &Arc<RwLock<ElementTree>>, element_id: ElementId) {
+    /// Recursively find RenderObject element and set parent data
+    fn set_parent_data_on_render_object(&self, tree: &Arc<RwLock<ElementTree>>, element_id: ElementId) {
         let tree_guard = tree.read();
 
         if let Some(element) = tree_guard.get(element_id) {
-            // If this element has a RenderObject, apply parent data
+            // If this element has a RenderObject, set parent data in tree
             if element.render_object().is_some() {
                 drop(tree_guard);
-                let mut tree_guard = tree.write();
-                if let Some(element_mut) = tree_guard.get_mut(element_id) {
-                    if let Some(render_object) = element_mut.render_object_mut() {
-                        self.widget.apply_parent_data(render_object);
-                    }
-                }
+
+                // Create parent data and set it in ElementTree
+                let parent_data = self.widget.create_parent_data();
+                tree.write().set_parent_data(element_id, parent_data);
+
+                tracing::debug!("ParentDataElement: set parent_data for RenderObject element {}", element_id);
             } else {
-                // No RenderObject, recurse into children
+                // No RenderObject, recurse into children to find one
                 let children: Vec<ElementId> = element.children_iter().collect();
                 drop(tree_guard);
 
                 for child_id in children {
-                    self.apply_to_render_object(tree, child_id);
+                    self.set_parent_data_on_render_object(tree, child_id);
                 }
             }
         }
@@ -343,8 +344,8 @@ mod tests {
     }
 
     impl ParentDataWidget<BoxParentData> for TestParentDataWidget {
-        fn apply_parent_data(&self, _render_object: &mut dyn DynRenderObject) {
-            // Test implementation
+        fn create_parent_data(&self) -> Box<dyn ParentData> {
+            Box::new(BoxParentData::default())
         }
 
         fn debug_typical_ancestor_widget_class(&self) -> &'static str {
