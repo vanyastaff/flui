@@ -16,7 +16,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::{MouseRegionCallbacks, RenderMouseRegion};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 
@@ -72,7 +72,7 @@ pub struct MouseRegion {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl MouseRegion {
@@ -88,7 +88,7 @@ impl MouseRegion {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
         self.child = Some(Box::new(child));
     }
 }
@@ -99,9 +99,12 @@ impl Default for MouseRegion {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for MouseRegion {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
@@ -138,8 +141,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl Widget + 'static) -> MouseRegionBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> MouseRegionBuilder<SetChild<S>> {
+        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
     }
 }
 
@@ -196,14 +199,30 @@ impl<S: State> MouseRegionBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
 
     #[derive(Debug, Clone)]
     struct MockWidget;
+
     impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            todo!()
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_mouse_region_new() {
@@ -300,10 +319,40 @@ mod tests {
         assert!(debug_str.contains("MouseRegion"));
         assert!(debug_str.contains("has_on_enter"));
     }
+
+    #[test]
+    fn test_mouse_region_widget_trait() {
+        let widget = MouseRegion::builder()
+            .on_hover(|_| {})
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
+    }
+
+    #[test]
+    fn test_mouse_region_builder_with_child() {
+        let widget = MouseRegion::builder()
+            .on_enter(|_| {})
+            .child(MockWidget)
+            .build();
+
+        assert!(widget.child.is_some());
+        assert!(widget.on_enter.is_some());
+    }
+
+    #[test]
+    fn test_mouse_region_set_child() {
+        let mut widget = MouseRegion::new();
+        widget.set_child(MockWidget);
+        assert!(widget.child.is_some());
+    }
 }
 
+// Implement RenderObjectWidget
 impl RenderObjectWidget for MouseRegion {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         let callbacks = MouseRegionCallbacks {
             on_enter: self.on_enter.clone(),
             on_exit: self.on_exit.clone(),
@@ -312,7 +361,7 @@ impl RenderObjectWidget for MouseRegion {
         Box::new(RenderMouseRegion::new(callbacks))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(mouse_region) = render_object.downcast_mut::<RenderMouseRegion>() {
             let callbacks = MouseRegionCallbacks {
                 on_enter: self.on_enter.clone(),
@@ -321,5 +370,15 @@ impl RenderObjectWidget for MouseRegion {
             };
             mouse_region.set_callbacks(callbacks);
         }
+    }
+}
+
+// Implement SingleChildRenderObjectWidget
+impl SingleChildRenderObjectWidget for MouseRegion {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .unwrap_or_else(|| panic!("MouseRegion requires a child"))
     }
 }
