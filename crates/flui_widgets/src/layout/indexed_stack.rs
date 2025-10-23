@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{MultiChildRenderObjectWidget, RenderObject, Widget};
+use flui_core::{DynRenderObject, DynWidget, MultiChildRenderObjectWidget, MultiChildRenderObjectElement, RenderObjectWidget, Widget};
 use flui_rendering::{RenderIndexedStack, StackFit};
 use flui_types::layout::Alignment;
 
@@ -156,7 +156,7 @@ pub struct IndexedStack {
     /// Only the child at `index` will be visible, but all children
     /// are laid out to compute the correct size and maintain state.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn Widget>>,
+    pub children: Vec<Box<dyn DynWidget>>,
 }
 
 impl IndexedStack {
@@ -211,7 +211,7 @@ impl IndexedStack {
     /// stack.add_child(Container::new());
     /// stack.add_child(Text::new("Page 2"));
     /// ```
-    pub fn add_child(&mut self, child: impl Widget + 'static) {
+    pub fn add_child<W: Widget + 'static>(&mut self, child: W) {
         self.children.push(Box::new(child));
     }
 
@@ -253,20 +253,24 @@ impl Default for IndexedStack {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for IndexedStack {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = MultiChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        MultiChildRenderObjectElement::new(self)
     }
 }
 
-impl flui_core::RenderObjectWidget for IndexedStack {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+// Implement RenderObjectWidget
+impl RenderObjectWidget for IndexedStack {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         let mut render_indexed_stack = RenderIndexedStack::new(self.index, self.alignment);
         render_indexed_stack.set_sizing(self.sizing);
         Box::new(render_indexed_stack)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(indexed_stack_render) = render_object.downcast_mut::<RenderIndexedStack>() {
             indexed_stack_render.set_index(self.index);
             indexed_stack_render.set_alignment(self.alignment);
@@ -275,8 +279,9 @@ impl flui_core::RenderObjectWidget for IndexedStack {
     }
 }
 
+// Implement MultiChildRenderObjectWidget
 impl MultiChildRenderObjectWidget for IndexedStack {
-    fn children(&self) -> &[Box<dyn Widget>] {
+    fn children(&self) -> &[Box<dyn DynWidget>] {
         &self.children
     }
 }
@@ -303,9 +308,9 @@ where
         self,
         children: impl IntoIterator<Item = impl Widget + 'static>,
     ) -> IndexedStackBuilder<SetChildren<S>> {
-        let boxed: Vec<Box<dyn Widget>> = children
+        let boxed: Vec<Box<dyn DynWidget>> = children
             .into_iter()
-            .map(|w| Box::new(w) as Box<dyn Widget>)
+            .map(|w| Box::new(w) as Box<dyn DynWidget>)
             .collect();
         self.children_internal(boxed)
     }
@@ -359,7 +364,9 @@ macro_rules! indexed_stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::RenderObjectWidget;
+    use flui_core::{LeafRenderObjectElement, RenderObjectWidget};
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
@@ -375,10 +382,22 @@ mod tests {
     }
 
     impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            unimplemented!("MockWidget is for testing only")
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_indexed_stack_new() {
@@ -614,5 +633,31 @@ mod tests {
         widget.index = Some(1);
         assert_eq!(widget.index, Some(1));
         assert!(widget.validate().is_ok());
+    }
+
+    #[test]
+    fn test_indexed_stack_widget_trait() {
+        let widget = IndexedStack::builder()
+            .index(Some(0))
+            .children(vec![MockWidget::new("1"), MockWidget::new("2")])
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
+    }
+
+    #[test]
+    fn test_indexed_stack_multi_child() {
+        let widget = IndexedStack::builder()
+            .index(Some(1))
+            .children(vec![
+                MockWidget::new("page1"),
+                MockWidget::new("page2"),
+                MockWidget::new("page3"),
+            ])
+            .build();
+
+        assert_eq!(widget.children.len(), 3);
+        assert_eq!(widget.index, Some(1));
     }
 }
