@@ -100,6 +100,63 @@ impl RenderStack {
             self.mark_needs_layout();
         }
     }
+
+    /// Compute constraints for a positioned child based on its StackParentData
+    ///
+    /// Calculates appropriate BoxConstraints for a child based on its positioning parameters:
+    /// - If left AND right are specified → width is fixed
+    /// - If only width is specified → width is fixed
+    /// - If top AND bottom are specified → height is fixed
+    /// - If only height is specified → height is fixed
+    /// - Otherwise → loose constraints
+    ///
+    /// # Example Scenarios:
+    ///
+    /// ```rust,ignore
+    /// // left: 10, right: 20, parent width: 400
+    /// // → child width must be: 400 - 10 - 20 = 370
+    ///
+    /// // top: 10, height: 50
+    /// // → child height must be: 50
+    ///
+    /// // left: 10 (no right, no width)
+    /// // → child width can be anything (loose)
+    /// ```
+    fn compute_positioned_constraints(
+        stack_data: &crate::parent_data::StackParentData,
+        parent_constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        let parent_width = parent_constraints.max_width;
+        let parent_height = parent_constraints.max_height;
+
+        // Compute width constraints
+        let (min_width, max_width) = if let Some(width) = stack_data.width {
+            // Explicit width
+            (width, width)
+        } else if let (Some(left), Some(right)) = (stack_data.left, stack_data.right) {
+            // Both left and right → width is determined
+            let w = (parent_width - left - right).max(0.0);
+            (w, w)
+        } else {
+            // Width is flexible
+            (0.0, parent_width)
+        };
+
+        // Compute height constraints
+        let (min_height, max_height) = if let Some(height) = stack_data.height {
+            // Explicit height
+            (height, height)
+        } else if let (Some(top), Some(bottom)) = (stack_data.top, stack_data.bottom) {
+            // Both top and bottom → height is determined
+            let h = (parent_height - top - bottom).max(0.0);
+            (h, h)
+        } else {
+            // Height is flexible
+            (0.0, parent_height)
+        };
+
+        BoxConstraints::new(min_width, max_width, min_height, max_height)
+    }
 }
 
 // ===== DynRenderObject Implementation =====
@@ -242,63 +299,6 @@ impl DynRenderObject for RenderStack {
         state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
-    }
-
-    /// Compute constraints for a positioned child based on its StackParentData
-    ///
-    /// Calculates appropriate BoxConstraints for a child based on its positioning parameters:
-    /// - If left AND right are specified → width is fixed
-    /// - If only width is specified → width is fixed
-    /// - If top AND bottom are specified → height is fixed
-    /// - If only height is specified → height is fixed
-    /// - Otherwise → loose constraints
-    ///
-    /// # Example Scenarios:
-    ///
-    /// ```rust,ignore
-    /// // left: 10, right: 20, parent width: 400
-    /// // → child width must be: 400 - 10 - 20 = 370
-    ///
-    /// // top: 10, height: 50
-    /// // → child height must be: 50
-    ///
-    /// // left: 10 (no right, no width)
-    /// // → child width can be anything (loose)
-    /// ```
-    fn compute_positioned_constraints(
-        stack_data: &crate::parent_data::StackParentData,
-        parent_constraints: BoxConstraints,
-    ) -> BoxConstraints {
-        let parent_width = parent_constraints.max_width;
-        let parent_height = parent_constraints.max_height;
-
-        // Compute width constraints
-        let (min_width, max_width) = if let Some(width) = stack_data.width {
-            // Explicit width
-            (width, width)
-        } else if let (Some(left), Some(right)) = (stack_data.left, stack_data.right) {
-            // Both left and right → width is determined
-            let w = (parent_width - left - right).max(0.0);
-            (w, w)
-        } else {
-            // Width is flexible
-            (0.0, parent_width)
-        };
-
-        // Compute height constraints
-        let (min_height, max_height) = if let Some(height) = stack_data.height {
-            // Explicit height
-            (height, height)
-        } else if let (Some(top), Some(bottom)) = (stack_data.top, stack_data.bottom) {
-            // Both top and bottom → height is determined
-            let h = (parent_height - top - bottom).max(0.0);
-            (h, h)
-        } else {
-            // Height is flexible
-            (0.0, parent_height)
-        };
-
-        BoxConstraints::new(min_width, max_width, min_height, max_height)
     }
 
     fn paint(&self, _state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {

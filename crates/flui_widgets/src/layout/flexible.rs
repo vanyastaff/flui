@@ -258,7 +258,8 @@ impl ProxyWidget for Flexible {
     }
 
     fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
-        self.key.as_ref().map(|k| k as &dyn flui_core::foundation::Key)
+        // TODO: Support keys by wrapping String in ValueKey<String>
+        None
     }
 }
 
