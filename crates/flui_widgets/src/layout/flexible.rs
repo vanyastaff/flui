@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynWidget, Widget};
+use flui_core::{DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
@@ -229,10 +229,7 @@ impl Flexible {
     /// Row/Column/Flex layout.
     pub fn create_parent_data(&self) -> FlexParentData {
         if self.flex > 0 {
-            FlexParentData {
-                flex: self.flex,
-                fit: self.fit,
-            }
+            FlexParentData::new(self.flex, self.fit)
         } else {
             // flex: 0 is treated as inflexible
             FlexParentData::new(0, FlexFit::Loose)
@@ -251,11 +248,35 @@ impl Default for Flexible {
     }
 }
 
-// TODO: Implement ParentDataWidget infrastructure first
-// impl Widget for Flexible {
-//     type Element = ...; // Needs ParentDataElement
-//     fn into_element(self) -> Self::Element { ... }
-// }
+// ========== ProxyWidget Implementation ==========
+
+impl ProxyWidget for Flexible {
+    fn child(&self) -> &dyn DynWidget {
+        self.child.as_ref()
+            .map(|child| &**child as &dyn DynWidget)
+            .expect("Flexible must have a child")
+    }
+
+    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
+        self.key.as_ref().map(|k| k as &dyn flui_core::foundation::Key)
+    }
+}
+
+// ========== ParentDataWidget Implementation ==========
+
+impl ParentDataWidget<FlexParentData> for Flexible {
+    fn create_parent_data(&self) -> Box<dyn ParentData> {
+        // Call the method from impl Flexible block (line 230)
+        Box::new(Flexible::create_parent_data(self))
+    }
+
+    fn debug_typical_ancestor_widget_class(&self) -> &'static str {
+        "Flex"
+    }
+}
+
+// Auto-implement Widget using macro
+impl_widget_for_parent_data!(Flexible, FlexParentData);
 
 // bon Builder Extensions
 use flexible_builder::{IsUnset, SetChild, State};

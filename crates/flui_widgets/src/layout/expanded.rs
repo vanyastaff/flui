@@ -17,7 +17,7 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::{DynWidget, Widget};
+use flui_core::{DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
@@ -168,21 +168,37 @@ impl Expanded {
     ///
     /// Always creates FlexParentData with FlexFit::Tight.
     pub fn create_parent_data(&self) -> FlexParentData {
-        FlexParentData {
-            flex: self.flex,
-            fit: FlexFit::Tight,
-        }
+        FlexParentData::expanded_with_flex(self.flex)
     }
 }
 
-// TODO: Implement ParentDataWidget trait and Widget will be auto-implemented
-// For now, Expanded is not usable until ParentDataWidget infrastructure is complete
-/*
-impl Widget for Expanded {
-    // ParentDataWidget needs special Element that attaches parent data to child
-    // This requires ParentDataElement infrastructure in flui_core
+// ========== ProxyWidget Implementation ==========
+
+impl ProxyWidget for Expanded {
+    fn child(&self) -> &dyn DynWidget {
+        &*self.child
+    }
+
+    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
+        None
+    }
 }
-*/
+
+// ========== ParentDataWidget Implementation ==========
+
+impl ParentDataWidget<FlexParentData> for Expanded {
+    fn create_parent_data(&self) -> Box<dyn ParentData> {
+        // Call the method from impl Expanded block (line 171)
+        Box::new(Expanded::create_parent_data(self))
+    }
+
+    fn debug_typical_ancestor_widget_class(&self) -> &'static str {
+        "Flex"
+    }
+}
+
+// Auto-implement Widget using macro
+impl_widget_for_parent_data!(Expanded, FlexParentData);
 
 /// Macro for creating Expanded with declarative syntax.
 ///
