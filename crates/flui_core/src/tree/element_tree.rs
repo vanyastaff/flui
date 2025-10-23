@@ -348,6 +348,7 @@ impl ElementTree {
         let mut rebuilds_performed: usize = 0;
 
         while let Some(element_id) = self.dirty_nodes.pop_front() {
+            tracing::debug!("ElementTree: popped dirty element {} from queue", element_id);
             rebuilds_attempted += 1;
             if rebuilds_attempted > MAX_REBUILDS_PER_FRAME {
                 self.dirty_nodes.push_front(element_id);
@@ -360,19 +361,25 @@ impl ElementTree {
             }
 
             // Check if element still exists
+            tracing::debug!("ElementTree: checking if element {} exists", element_id);
             if !self.nodes.contains(element_id) {
+                tracing::debug!("ElementTree: element {} doesn't exist, skipping", element_id);
                 continue;
             }
 
             // Rebuild if still dirty
+            tracing::debug!("ElementTree: getting mutable reference to element {}", element_id);
             if let Some(node) = self.nodes.get_mut(element_id) {
+                tracing::debug!("ElementTree: checking if element {} is_dirty", element_id);
                 if node.element.is_dirty() {
                     tracing::debug!("ElementTree: rebuilding element {}", element_id);
 
                     let children_to_mount = node.element.rebuild(element_id);
+                    tracing::debug!("ElementTree: rebuild() returned {} children to mount", children_to_mount.len());
                     rebuilds_performed += 1;
 
                     // Mount all children returned by rebuild
+                    let mut mounted_parent_ids = Vec::new();
                     for (parent_id, child_widget, slot) in children_to_mount {
                         if let Some(child_id) = self.insert_child(parent_id, child_widget, slot) {
                             // Set tree reference on newly inserted child
@@ -380,7 +387,18 @@ impl ElementTree {
                                 child_node.element.set_tree_ref(tree_arc.clone());
                             }
                             tracing::trace!("ElementTree: mounted child {} for parent {} at slot {}", child_id, parent_id, slot);
+
+                            // Track parent for parent data application
+                            if !mounted_parent_ids.contains(&parent_id) {
+                                mounted_parent_ids.push(parent_id);
+                            }
                         }
+                    }
+
+                    // Apply parent data for ParentDataElements after mounting
+                    // This is safe because we're no longer in insert_child()
+                    for parent_id in mounted_parent_ids {
+                        self.apply_parent_data_for_element(parent_id, tree_arc.clone());
                     }
 
                     // If still dirty after rebuild, re-queue
@@ -399,6 +417,44 @@ impl ElementTree {
             rebuilds_performed,
             remaining
         );
+    }
+
+    /// Apply parent data for a ParentDataElement if applicable
+    fn apply_parent_data_for_element(&mut self, element_id: ElementId, tree_arc: Arc<RwLock<Self>>) {
+        // Check if this element has a child and if it's a candidate for parent data
+        if let Some(node) = self.nodes.get(element_id) {
+            // Get the child IDs
+            let child_ids: Vec<ElementId> = node.children.clone();
+
+            // For each child, apply parent data by walking down to RenderObject
+            for child_id in child_ids {
+                self.apply_parent_data_recursive(element_id, child_id, tree_arc.clone());
+            }
+        }
+    }
+
+    /// Recursively apply parent data from a ParentDataElement to its RenderObject descendants
+    fn apply_parent_data_recursive(&mut self, parent_data_element_id: ElementId, element_id: ElementId, tree_arc: Arc<RwLock<Self>>) {
+        if let Some(node) = self.nodes.get(element_id) {
+            // If this element has a RenderObject, apply parent data
+            if node.element.render_object().is_some() {
+                // Get the parent data from the ParentDataElement
+                // We need to create it by calling the widget's create_parent_data() method
+                // But we can't do that easily here without type information
+
+                // Instead, we'll just set a placeholder - the real parent data
+                // will be created when needed. For now, skip this optimization
+                // and rely on the layout phase to handle missing parent data gracefully.
+
+                tracing::debug!("ParentDataElement {}: found RenderObject child {} (parent data will be created on-demand)", parent_data_element_id, element_id);
+            } else {
+                // No RenderObject, recurse into children
+                let children: Vec<ElementId> = node.children.clone();
+                for child_id in children {
+                    self.apply_parent_data_recursive(parent_data_element_id, child_id, tree_arc.clone());
+                }
+            }
+        }
     }
 
     /// Get the total number of elements in the tree

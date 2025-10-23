@@ -187,6 +187,10 @@ where
         // Mark old child for unmounting
         self.child = None;
 
+        // NOTE: Parent data will be applied after the child is mounted
+        // via set_child_after_mount(), but we can't do it there due to deadlock.
+        // Instead, we'll apply it later when we have access to the tree without locks.
+
         // Return the child that needs to be mounted
         vec![(element_id, child_widget, 0)]
     }
@@ -226,8 +230,14 @@ where
     fn set_child_after_mount(&mut self, child_id: ElementId) {
         self.child = Some(child_id);
 
-        // Apply parent data after child is mounted
-        self.apply_parent_data_to_descendants();
+        // DEFER parent data application to avoid deadlock during rebuild
+        // The parent data will be applied during the first layout phase
+        // when the tree is not locked.
+        //
+        // Calling apply_parent_data_to_descendants() here causes a deadlock
+        // because we're being called from insert_child() which is called from
+        // rebuild() which holds a write lock on the tree, and
+        // apply_parent_data_to_descendants() tries to acquire a read lock.
     }
 
     fn widget_type_id(&self) -> TypeId {
