@@ -27,14 +27,13 @@ impl StatelessWidget for ContainerApp {
         // Using Start alignment to clearly show margin effect
         let result = Box::new(
             Column::builder()
-                .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
                 .cross_axis_alignment(CrossAxisAlignment::Start)  // Left-align to show margin
                 .children(vec![
                         // Example 1: Simple colored container with padding
                         {
-                            tracing::debug!("    [1/4] Creating Blue container (300x80, padding=16, center aligned)");
+                            tracing::debug!("    [1/4] Creating Blue container (600x80, padding=16)");
                             Box::new(Container::builder()
-                                .width(300.0)
+                                .width(600.0)
                                 .height(80.0)
                                 .color(Color::rgb(100, 150, 255))
                                 .padding(EdgeInsets::all(16.0))
@@ -51,9 +50,9 @@ impl StatelessWidget for ContainerApp {
 
                         // Example 2: Container with different color
                         {
-                            tracing::debug!("    [2/4] Creating Pink container (300x80, padding=16, center aligned)");
+                            tracing::debug!("    [2/4] Creating Pink container (600x80, padding=16)");
                             Box::new(Container::builder()
-                                .width(300.0)
+                                .width(600.0)
                                 .height(80.0)
                                 .color(Color::rgb(255, 100, 150))
                                 .padding(EdgeInsets::all(16.0))
@@ -70,9 +69,9 @@ impl StatelessWidget for ContainerApp {
 
                         // Example 3: Container with margin
                         {
-                            tracing::debug!("    [3/4] Creating Green container (300x80, padding=16, margin=20h/10v)");
+                            tracing::debug!("    [3/4] Creating Green container (600x80, padding=16, margin=20h/10v)");
                             Box::new(Container::builder()
-                                .width(300.0)
+                                .width(600.0)
                                 .height(80.0)
                                 .color(Color::rgb(150, 255, 100))
                                 .padding(EdgeInsets::all(16.0))
@@ -90,9 +89,9 @@ impl StatelessWidget for ContainerApp {
 
                         // Example 4: Container with different alignment (text inside)
                         {
-                            tracing::debug!("    [4/4] Creating Orange container (300x80, padding=16, center-left text)");
+                            tracing::debug!("    [4/4] Creating Orange container (600x80, padding=16, center-left text)");
                             Box::new(Container::builder()
-                                .width(300.0)
+                                .width(600.0)
                                 .height(80.0)
                                 .color(Color::rgb(255, 200, 100))
                                 .padding(EdgeInsets::all(16.0))

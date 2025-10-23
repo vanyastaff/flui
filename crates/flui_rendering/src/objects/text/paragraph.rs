@@ -199,10 +199,16 @@ impl DynRenderObject for RenderParagraph {
             num_lines
         };
 
-        let width = if data.soft_wrap && max_width.is_finite() {
+        // Calculate actual text width (intrinsic size)
+        // Text should only take as much width as needed, not expand to fill
+        let actual_text_width = (text_len as f32 * char_width).min(max_width);
+
+        let width = if data.soft_wrap && max_width.is_finite() && actual_text_width > max_width {
+            // Only expand to max_width if text is too long and needs wrapping
             max_width
         } else {
-            (chars_per_line as f32 * char_width).min(max_width)
+            // Otherwise, use intrinsic width (text's natural size)
+            actual_text_width
         };
 
         let height = actual_lines as f32 * line_height;

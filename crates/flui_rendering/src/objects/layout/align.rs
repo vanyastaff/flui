@@ -135,18 +135,22 @@ impl DynRenderObject for RenderAlign {
         };
 
         // Calculate our size based on factors
+        // Flutter behavior:
+        // - If factor is set: size = child_size * factor
+        // - If no factor: ALWAYS expand to fill constraints (take max)
+        //   This is how Flutter Align works - it always tries to be as big as possible
         let width = if let Some(factor) = width_factor {
-            (child_size.width * factor).min(constraints.max_width)
+            (child_size.width * factor).clamp(constraints.min_width, constraints.max_width)
         } else {
-            // Shrink wrap to child if no factor
-            child_size.width.clamp(constraints.min_width, constraints.max_width)
+            // No factor: expand to fill available width
+            constraints.max_width
         };
 
         let height = if let Some(factor) = height_factor {
-            (child_size.height * factor).min(constraints.max_height)
+            (child_size.height * factor).clamp(constraints.min_height, constraints.max_height)
         } else {
-            // Shrink wrap to child if no factor
-            child_size.height.clamp(constraints.min_height, constraints.max_height)
+            // No factor: expand to fill available height
+            constraints.max_height
         };
 
         let size = Size::new(width, height);
@@ -167,17 +171,14 @@ impl DynRenderObject for RenderAlign {
             let data = self.data();
             let size = state.size.lock().unwrap_or(Size::ZERO);
 
-            // Get child size from context
-            // Get child size from tree
-                let child_size = if let Some(child_elem) = ctx.tree().get(child_id) {
-                    if let Some(child_ro) = child_elem.render_object() {
-                        child_ro.size()
-                    } else {
-                        Size::ZERO
-                    }
-                } else {
-                    Size::ZERO
-                };
+            // Get child size from RenderState in ElementTree
+            // Use ctx.tree().render_state() instead of element.render_object().size()
+            // because size() method returns ZERO by default
+            let child_size = if let Some(child_state) = ctx.tree().render_state(child_id) {
+                child_state.size.lock().unwrap_or(Size::ZERO)
+            } else {
+                Size::ZERO
+            };
 
             // Calculate aligned offset manually
             // Alignment: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
@@ -190,6 +191,11 @@ impl DynRenderObject for RenderAlign {
             let paint_offset = Offset::new(
                 offset.dx + aligned_x,
                 offset.dy + aligned_y,
+            );
+
+            tracing::debug!(
+                "RenderAlign::paint: alignment={:?}, align_size={:?}, child_size={:?}, parent_offset={:?}, child_offset={:?}",
+                data.alignment, size, child_size, offset, paint_offset
             );
 
             ctx.paint_child(child_id, painter, paint_offset);

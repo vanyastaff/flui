@@ -250,15 +250,15 @@ impl Default for Container {
 impl StatelessWidget for Container {
     fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
         // Build widget tree from inside out:
-        // constraints -> margin -> alignment -> decoration -> padding -> child
+        // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
         //
-        // Key insight: Margin must be INSIDE the size constraints!
-        // If width=300 and margin=20 horizontal:
-        // - Total size: 300×height (the outer SizedBox constraint)
-        // - Margin: 20px left + 20px right = 40px
-        // - Visual content: 260px (300 - 40)
+        // Key insight: When alignment is set, decoration must be OUTSIDE alignment
+        // so that decoration receives tight constraints and expands to full size.
         //
-        // This matches Flutter's behavior where margin is "inside" the size.
+        // From Flutter docs:
+        // "If the widget has an alignment, and the parent provides bounded constraints,
+        //  then the Container tries to expand to fit the parent, and then positions
+        //  the child within itself as per the alignment."
 
         let mut current: Box<dyn DynWidget> = if let Some(child) = &self.child {
             child.clone()
@@ -276,7 +276,20 @@ impl StatelessWidget for Container {
             });
         }
 
-        // Apply decoration or color
+        // Apply alignment BEFORE decoration!
+        // This allows decoration to be on the outside and receive tight constraints
+        if let Some(alignment) = self.alignment {
+            current = Box::new(crate::Align {
+                key: None,
+                alignment,
+                width_factor: None,
+                height_factor: None,
+                child: Some(current),
+            });
+        }
+
+        // Apply decoration or color AFTER alignment
+        // Decoration will now receive tight constraints from SizedBox/margin
         if let Some(decoration) = &self.decoration {
             current = Box::new(crate::DecoratedBox {
                 key: None,
@@ -297,19 +310,10 @@ impl StatelessWidget for Container {
             });
         }
 
-        // Apply alignment
-        if let Some(alignment) = self.alignment {
-            current = Box::new(crate::Align {
-                key: None,
-                alignment,
-                width_factor: None,
-                height_factor: None,
-                child: Some(current),
-            });
-        }
-
         // Apply margin BEFORE size constraints!
         // This ensures margin is "inside" the constrained box
+        // Note: margin is implemented using Padding widget (same as Flutter)
+        // The semantic difference (margin vs padding) is maintained by the widget order
         if let Some(margin) = self.margin {
             current = Box::new(crate::Padding {
                 key: None,

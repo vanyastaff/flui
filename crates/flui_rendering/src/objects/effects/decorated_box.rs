@@ -126,6 +126,11 @@ impl DynRenderObject for RenderDecoratedBox {
         let size = state.size.lock().unwrap_or(Size::ZERO);
         let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
 
+        tracing::debug!(
+            "DecoratedBox::paint: size={:?}, offset={:?}, rect={:?}",
+            size, offset, rect
+        );
+
         let decoration = &self.data().decoration;
         let position = self.data().position;
 
