@@ -70,7 +70,7 @@ impl DynRenderObject for RenderOffstage {
 
         // Always layout child to maintain state
         if let Some(child) = self.child_mut() {
-            child.layout(constraints);
+            let _ = child.layout(constraints);
         }
 
         // Report size as zero if offstage, otherwise use child size

@@ -112,7 +112,7 @@ impl DynRenderObject for RenderClipRRect {
             let clip_rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
 
             // Get border radius
-            let border_radius = self.data().border_radius;
+            let _border_radius = self.data().border_radius;
 
             // TODO: When egui supports rounded rect clipping, apply it here
             // For now, we use rectangular clipping
