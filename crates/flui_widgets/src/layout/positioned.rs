@@ -33,7 +33,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynWidget, Widget};
+use flui_core::{DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
+use flui_rendering::StackParentData;
 
 /// A widget that controls where a child of a Stack is positioned.
 ///
@@ -353,6 +354,20 @@ impl Positioned {
             || self.width.is_some()
             || self.height.is_some()
     }
+
+    /// Creates StackParentData for this Positioned.
+    ///
+    /// Converts Positioned positioning values into StackParentData.
+    pub fn create_parent_data(&self) -> StackParentData {
+        StackParentData::positioned(
+            self.left,
+            self.top,
+            self.right,
+            self.bottom,
+            self.width,
+            self.height,
+        )
+    }
 }
 
 impl Default for Positioned {
@@ -361,11 +376,35 @@ impl Default for Positioned {
     }
 }
 
-// TODO: Implement ParentDataWidget infrastructure first
-// impl Widget for Positioned {
-//     type Element = ...; // Needs ParentDataElement
-//     fn into_element(self) -> Self::Element { ... }
-// }
+// ========== ProxyWidget Implementation ==========
+
+impl ProxyWidget for Positioned {
+    fn child(&self) -> &dyn DynWidget {
+        self.child.as_ref()
+            .map(|child| &**child as &dyn DynWidget)
+            .expect("Positioned must have a child")
+    }
+
+    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
+        self.key.as_ref().map(|k| k as &dyn flui_core::foundation::Key)
+    }
+}
+
+// ========== ParentDataWidget Implementation ==========
+
+impl ParentDataWidget<StackParentData> for Positioned {
+    fn create_parent_data(&self) -> Box<dyn ParentData> {
+        // Call the method from impl Positioned block (line 361)
+        Box::new(Positioned::create_parent_data(self))
+    }
+
+    fn debug_typical_ancestor_widget_class(&self) -> &'static str {
+        "Stack"
+    }
+}
+
+// Auto-implement Widget using macro
+impl_widget_for_parent_data!(Positioned, StackParentData);
 
 // bon Builder Extensions
 use positioned_builder::{IsUnset, SetChild, State};

@@ -108,6 +108,7 @@ impl DynRenderObject for RenderStack {
 
         let fit = self.data().fit;
         let children_ids = ctx.children();
+        let child_count = children_ids.len();
 
         if children_ids.is_empty() {
             // No children - use smallest size
@@ -117,25 +118,43 @@ impl DynRenderObject for RenderStack {
             return size;
         }
 
-        // Simplified layout algorithm
-        // TODO: This is a basic implementation. A full implementation would:
+        // Layout algorithm:
         // 1. Separate positioned and non-positioned children via StackParentData
-        // 2. Layout positioned children with their specific constraints
-        // 3. Handle overflow and clipping
-
-        // Calculate child constraints based on fit
-        let child_constraints = match fit {
-            StackFit::Loose => constraints.loosen(),
-            StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
-            StackFit::Passthrough => constraints,
-        };
+        // 2. Layout non-positioned children with fit-based constraints
+        // 3. Layout positioned children with position-based constraints
 
         // Layout all children and track max size
+        // CRITICAL: Pass child_count to enable proper cache invalidation when children change
         let mut max_width: f32 = 0.0;
         let mut max_height: f32 = 0.0;
 
-        for &child_id in children_ids {
-            let child_size = ctx.layout_child(child_id, child_constraints);
+        for &child_id in children_ids.iter() {
+            // Check if child is positioned
+            let is_positioned = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+                if let Some(stack_data) = parent_data.downcast_ref::<crate::parent_data::StackParentData>() {
+                    stack_data.is_positioned()
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            let child_constraints = if is_positioned {
+                // Positioned children get looser constraints
+                // TODO: Calculate tight constraints based on left/right/width or top/bottom/height
+                constraints.loosen()
+            } else {
+                // Non-positioned children use fit-based constraints
+                match fit {
+                    StackFit::Loose => constraints.loosen(),
+                    StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
+                    StackFit::Passthrough => constraints,
+                }
+            };
+
+            // Use cached layout with child_count for proper cache invalidation
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, Some(child_count));
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
         }
@@ -164,19 +183,49 @@ impl DynRenderObject for RenderStack {
         // Paint children in order (first child in back, last child on top)
         for &child_id in children_ids {
             // Get child size
-            let child_size = if let Some(child_elem) = ctx.tree().get(child_id) {
-                if let Some(child_ro) = child_elem.render_object() {
-                    child_ro.size()
+            let child_size = ctx.child_size(child_id);
+
+            // Calculate child offset based on StackParentData (if positioned) or alignment
+            let child_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+                if let Some(stack_data) = parent_data.downcast_ref::<crate::parent_data::StackParentData>() {
+                    if stack_data.is_positioned() {
+                        // Positioned child - calculate position from edges
+                        let mut x = 0.0;
+                        let mut y = 0.0;
+
+                        // Calculate x position
+                        if let Some(left) = stack_data.left {
+                            x = left;
+                        } else if let Some(right) = stack_data.right {
+                            x = size.width - child_size.width - right;
+                        } else {
+                            // Center horizontally if no left/right specified
+                            x = (size.width - child_size.width) / 2.0;
+                        }
+
+                        // Calculate y position
+                        if let Some(top) = stack_data.top {
+                            y = top;
+                        } else if let Some(bottom) = stack_data.bottom {
+                            y = size.height - child_size.height - bottom;
+                        } else {
+                            // Center vertically if no top/bottom specified
+                            y = (size.height - child_size.height) / 2.0;
+                        }
+
+                        Offset::new(x, y)
+                    } else {
+                        // Non-positioned child - use alignment
+                        alignment.calculate_offset(child_size, size)
+                    }
                 } else {
-                    Size::ZERO
+                    // No StackParentData - use alignment
+                    alignment.calculate_offset(child_size, size)
                 }
             } else {
-                Size::ZERO
+                // No parent data - use alignment
+                alignment.calculate_offset(child_size, size)
             };
-
-            // Calculate aligned position
-            // TODO: For positioned children, use their position from StackParentData
-            let child_offset = alignment.calculate_offset(child_size, size);
 
             let paint_offset = Offset::new(
                 offset.dx + child_offset.dx,
