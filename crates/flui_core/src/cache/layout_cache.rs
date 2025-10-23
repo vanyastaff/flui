@@ -1,5 +1,6 @@
 //! High-performance layout result caching
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use moka::sync::Cache;
 use once_cell::sync::Lazy;
@@ -136,13 +137,29 @@ static LAYOUT_CACHE: Lazy<LayoutCache> = Lazy::new(LayoutCache::new);
 /// Thread-safe layout cache (10k entries, 60s TTL)
 pub struct LayoutCache {
     cache: Cache<LayoutCacheKey, LayoutResult>,
+    /// Cache hit counter (for statistics)
+    hits: AtomicU64,
+    /// Cache miss counter (for statistics)
+    misses: AtomicU64,
 }
 
 impl std::fmt::Debug for LayoutCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        let hit_rate = if total > 0 {
+            (hits as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+
         f.debug_struct("LayoutCache")
             .field("entry_count", &self.cache.entry_count())
             .field("weighted_size", &self.cache.weighted_size())
+            .field("hits", &hits)
+            .field("misses", &misses)
+            .field("hit_rate", &format!("{:.1}%", hit_rate))
             .finish()
     }
 }
@@ -155,6 +172,8 @@ impl LayoutCache {
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(60))
                 .build(),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         }
     }
 
@@ -165,6 +184,8 @@ impl LayoutCache {
                 .max_capacity(max_capacity)
                 .time_to_live(Duration::from_secs(ttl_seconds))
                 .build(),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
         }
     }
 
@@ -177,9 +198,20 @@ impl LayoutCache {
     }
 
     /// Get cached result (no computation)
+    ///
+    /// Tracks cache hit/miss statistics for monitoring performance.
     #[inline]
     pub fn get(&self, key: &LayoutCacheKey) -> Option<LayoutResult> {
-        self.cache.get(key)
+        let result = self.cache.get(key);
+
+        // Update statistics
+        if result.is_some() {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+        }
+
+        result
     }
 
     /// Insert result into cache
@@ -198,14 +230,73 @@ impl LayoutCache {
         // No-op: TTL handles cleanup automatically
     }
 
-    /// Clear all cached layouts
+    /// Clear all cached layouts and reset statistics
     pub fn clear(&self) {
         self.cache.invalidate_all();
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
     }
 
-    /// Get stats (entry_count, estimated_size)
+    /// Get basic stats (entry_count, estimated_size)
     pub fn stats(&self) -> (u64, u64) {
         (self.cache.entry_count(), self.cache.weighted_size())
+    }
+
+    /// Get detailed statistics including hit/miss rates
+    ///
+    /// Returns: (hits, misses, total_requests, hit_rate_percent)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let (hits, misses, total, hit_rate) = cache.detailed_stats();
+    /// println!("Cache hit rate: {:.1}% ({}/{} requests)", hit_rate, hits, total);
+    /// ```
+    pub fn detailed_stats(&self) -> (u64, u64, u64, f64) {
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        let hit_rate = if total > 0 {
+            (hits as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        (hits, misses, total, hit_rate)
+    }
+
+    /// Reset statistics (hits/misses) without clearing cache entries
+    ///
+    /// Useful for benchmarking or measuring performance over specific periods.
+    pub fn reset_stats(&self) {
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
+    }
+
+    /// Print statistics to stderr
+    ///
+    /// Useful for debugging and performance monitoring.
+    ///
+    /// # Example Output
+    ///
+    /// ```text
+    /// LayoutCache Statistics:
+    ///   Entries: 1234
+    ///   Hits: 5678
+    ///   Misses: 890
+    ///   Total Requests: 6568
+    ///   Hit Rate: 86.5%
+    /// ```
+    pub fn print_stats(&self) {
+        let (hits, misses, total, hit_rate) = self.detailed_stats();
+        let (entry_count, _) = self.stats();
+
+        eprintln!("LayoutCache Statistics:");
+        eprintln!("  Entries: {}", entry_count);
+        eprintln!("  Hits: {}", hits);
+        eprintln!("  Misses: {}", misses);
+        eprintln!("  Total Requests: {}", total);
+        eprintln!("  Hit Rate: {:.1}%", hit_rate);
     }
 
     /// Run pending maintenance
