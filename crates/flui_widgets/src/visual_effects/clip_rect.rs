@@ -14,7 +14,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderClipRect;
 use flui_types::painting::Clip;
 
@@ -63,7 +63,7 @@ pub struct ClipRect {
 
     /// The child widget to clip
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl ClipRect {
@@ -81,7 +81,7 @@ impl ClipRect {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
         self.child = Some(Box::new(child));
     }
 }
@@ -92,9 +92,12 @@ impl Default for ClipRect {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for ClipRect {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
@@ -107,8 +110,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl Widget + 'static) -> ClipRectBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> ClipRectBuilder<SetChild<S>> {
+        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
     }
 }
 
@@ -120,17 +123,56 @@ impl<S: State> ClipRectBuilder<S> {
     }
 }
 
+// Implement RenderObjectWidget
+impl RenderObjectWidget for ClipRect {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+        Box::new(RenderClipRect::new(self.clip_behavior))
+    }
+
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
+        if let Some(clip) = render_object.downcast_mut::<RenderClipRect>() {
+            clip.set_clip_behavior(self.clip_behavior);
+        }
+    }
+}
+
+// Implement SingleChildRenderObjectWidget
+impl SingleChildRenderObjectWidget for ClipRect {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .unwrap_or_else(|| panic!("ClipRect requires a child"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
 
     #[derive(Debug, Clone)]
     struct MockWidget;
+
     impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            todo!()
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_clip_rect_new() {
@@ -188,16 +230,34 @@ mod tests {
         let widget_save = ClipRect::new(Clip::AntiAliasWithSaveLayer);
         assert_eq!(widget_save.clip_behavior, Clip::AntiAliasWithSaveLayer);
     }
-}
 
-impl RenderObjectWidget for ClipRect {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
-        Box::new(RenderClipRect::new(self.clip_behavior))
+    #[test]
+    fn test_clip_rect_widget_trait() {
+        let widget = ClipRect::builder()
+            .clip_behavior(Clip::HardEdge)
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
-        if let Some(clip) = render_object.downcast_mut::<RenderClipRect>() {
-            clip.set_clip_behavior(self.clip_behavior);
-        }
+    #[test]
+    fn test_clip_rect_render_object_creation() {
+        let widget = ClipRect::new(Clip::AntiAlias);
+        let render_object = widget.create_render_object();
+        assert!(render_object.downcast_ref::<RenderClipRect>().is_some());
+    }
+
+    #[test]
+    fn test_clip_rect_render_object_update() {
+        let widget1 = ClipRect::new(Clip::HardEdge);
+        let mut render_object = widget1.create_render_object();
+
+        let widget2 = ClipRect::new(Clip::AntiAlias);
+        widget2.update_render_object(&mut *render_object);
+
+        let clip_render = render_object.downcast_ref::<RenderClipRect>().unwrap();
+        assert_eq!(clip_render.clip_behavior(), Clip::AntiAlias);
     }
 }
