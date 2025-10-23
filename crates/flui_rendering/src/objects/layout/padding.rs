@@ -103,6 +103,15 @@ impl DynRenderObject for RenderPadding {
                 offset.dx + padding.left,
                 offset.dy + padding.top,
             );
+
+            // Debug log for significant padding (likely margin)
+            if padding.left >= 10.0 || padding.right >= 10.0 {
+                tracing::debug!(
+                    "RenderPadding::paint: padding={:?}, parent_offset={:?}, child_offset={:?}",
+                    padding, offset, child_offset
+                );
+            }
+
             ctx.paint_child(child_id, painter, child_offset);
         }
     }

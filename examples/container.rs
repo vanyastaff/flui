@@ -24,10 +24,11 @@ impl StatelessWidget for ContainerApp {
         tracing::debug!("  Building 4 containers...");
 
         // Create a column showing various container examples
+        // Using Start alignment to clearly show margin effect
         let result = Box::new(
             Column::builder()
                 .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
-                .cross_axis_alignment(CrossAxisAlignment::Center)
+                .cross_axis_alignment(CrossAxisAlignment::Start)  // Left-align to show margin
                 .children(vec![
                         // Example 1: Simple colored container with padding
                         {
@@ -87,18 +88,18 @@ impl StatelessWidget for ContainerApp {
                                 .build())
                         },
 
-                        // Example 4: Container with left alignment
+                        // Example 4: Container with different alignment (text inside)
                         {
-                            tracing::debug!("    [4/4] Creating Orange container (300x80, padding=16, left aligned)");
+                            tracing::debug!("    [4/4] Creating Orange container (300x80, padding=16, center-left text)");
                             Box::new(Container::builder()
                                 .width(300.0)
                                 .height(80.0)
                                 .color(Color::rgb(255, 200, 100))
                                 .padding(EdgeInsets::all(16.0))
-                                .alignment(Alignment::CENTER_LEFT)
+                                .alignment(Alignment::CENTER_LEFT)  // Left-align text inside
                                 .child(
                                     Text::builder()
-                                        .data("Left Aligned")
+                                        .data("Text Left-Aligned")
                                         .size(24.0)
                                         .color(Color::rgb(50, 50, 50))
                                         .build()

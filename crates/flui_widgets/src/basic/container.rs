@@ -250,8 +250,15 @@ impl Default for Container {
 impl StatelessWidget for Container {
     fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
         // Build widget tree from inside out:
-        // child -> padding -> decoration -> alignment -> constraints -> margin
-        // Note: margin is applied AFTER constraints so it's outside the sized box
+        // constraints -> margin -> alignment -> decoration -> padding -> child
+        //
+        // Key insight: Margin must be INSIDE the size constraints!
+        // If width=300 and margin=20 horizontal:
+        // - Total size: 300×height (the outer SizedBox constraint)
+        // - Margin: 20px left + 20px right = 40px
+        // - Visual content: 260px (300 - 40)
+        //
+        // This matches Flutter's behavior where margin is "inside" the size.
 
         let mut current: Box<dyn DynWidget> = if let Some(child) = &self.child {
             child.clone()
@@ -260,7 +267,7 @@ impl StatelessWidget for Container {
             Box::new(crate::SizedBox::new())
         };
 
-        // Apply padding
+        // Apply padding (inner spacing around child)
         if let Some(padding) = self.padding {
             current = Box::new(crate::Padding {
                 key: None,
@@ -301,23 +308,23 @@ impl StatelessWidget for Container {
             });
         }
 
-        // Apply width/height constraints BEFORE margin
-        // This ensures margin is outside the constrained box
+        // Apply margin BEFORE size constraints!
+        // This ensures margin is "inside" the constrained box
+        if let Some(margin) = self.margin {
+            current = Box::new(crate::Padding {
+                key: None,
+                padding: margin,
+                child: Some(current),
+            });
+        }
+
+        // Apply width/height constraints LAST
+        // These constraints apply to the TOTAL size (including margin)
         if self.width.is_some() || self.height.is_some() {
             current = Box::new(crate::SizedBox {
                 key: None,
                 width: self.width,
                 height: self.height,
-                child: Some(current),
-            });
-        }
-
-        // Apply margin (using Padding) AFTER constraints
-        // Margin should be outside the sized box
-        if let Some(margin) = self.margin {
-            current = Box::new(crate::Padding {
-                key: None,
-                padding: margin,
                 child: Some(current),
             });
         }
