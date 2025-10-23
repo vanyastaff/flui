@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderTransform;
 use flui_types::Matrix4;
 
@@ -139,7 +139,7 @@ pub struct Transform {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl Transform {
@@ -240,7 +240,7 @@ impl Transform {
     /// let mut widget = Transform::rotate(PI / 4.0);
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
         self.child = Some(Box::new(child));
     }
 
@@ -275,24 +275,38 @@ impl Default for Transform {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for Transform {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
+// Implement RenderObjectWidget
 impl RenderObjectWidget for Transform {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         let mut render_transform = RenderTransform::new(self.transform);
         render_transform.set_transform_hit_tests(self.transform_hit_tests);
         Box::new(render_transform)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(transform_render) = render_object.downcast_mut::<RenderTransform>() {
             transform_render.set_transform(self.transform);
             transform_render.set_transform_hit_tests(self.transform_hit_tests);
         }
+    }
+}
+
+// Implement SingleChildRenderObjectWidget
+impl SingleChildRenderObjectWidget for Transform {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .unwrap_or_else(|| panic!("Transform requires a child"))
     }
 }
 
@@ -314,8 +328,8 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl Widget + 'static) -> TransformBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> TransformBuilder<SetChild<S>> {
+        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
     }
 }
 
@@ -369,6 +383,30 @@ macro_rules! transform {
 mod tests {
     use super::*;
     use std::f32::consts::PI;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
+
+    #[derive(Debug, Clone)]
+    struct MockWidget;
+
+    impl Widget for MockWidget {
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
+        }
+    }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_transform_new() {
@@ -562,5 +600,34 @@ mod tests {
     fn test_transform_zero_scale() {
         let widget = Transform::scale(0.0, 0.0);
         assert_eq!(widget.transform, Matrix4::scaling(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn test_transform_widget_trait() {
+        let widget = Transform::builder()
+            .transform(Matrix4::rotation_z(PI / 4.0))
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
+    }
+
+    #[test]
+    fn test_transform_builder_with_child() {
+        let widget = Transform::builder()
+            .transform(Matrix4::scaling(2.0, 2.0, 1.0))
+            .child(MockWidget)
+            .build();
+
+        assert!(widget.child.is_some());
+        assert_eq!(widget.transform, Matrix4::scaling(2.0, 2.0, 1.0));
+    }
+
+    #[test]
+    fn test_transform_set_child() {
+        let mut widget = Transform::rotate(PI / 2.0);
+        widget.set_child(MockWidget);
+        assert!(widget.child.is_some());
     }
 }
