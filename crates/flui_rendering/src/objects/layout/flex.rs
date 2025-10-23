@@ -112,6 +112,7 @@ impl DynRenderObject for RenderFlex {
 
         // Get children from ElementTree via RenderContext
         let children_ids = ctx.children();
+        let child_count = children_ids.len();
 
         if children_ids.is_empty() {
             // No children - use smallest size
@@ -131,6 +132,7 @@ impl DynRenderObject for RenderFlex {
         let mut max_cross_size: f32 = 0.0;
 
         // Layout all children with constraints based on cross-axis alignment
+        // CRITICAL: Pass child_count to enable proper cache invalidation when children change
         for (idx, &child_id) in children_ids.iter().enumerate() {
             let child_constraints = match direction {
                 Axis::Horizontal => {
@@ -166,7 +168,8 @@ impl DynRenderObject for RenderFlex {
             };
 
             tracing::debug!("RenderFlex: laying out child #{} (id={}) with constraints {:?}", idx, child_id, child_constraints);
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            // Use cached layout with child_count for proper cache invalidation
+            let child_size = ctx.layout_child_cached(child_id, child_constraints, Some(child_count));
             tracing::debug!("RenderFlex: child #{} size = {:?}", idx, child_size);
 
             match direction {
@@ -201,32 +204,11 @@ impl DynRenderObject for RenderFlex {
             }
         };
 
-        // Store size directly in state and clear needs_layout flag
+        // Store size directly in state
         *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
-        size
-    }
-
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        let direction = self.direction;
-        let size = state.size.lock().expect("Size not set in paint");
-        let main_axis_alignment = self.main_axis_alignment;
-        let cross_axis_alignment = self.cross_axis_alignment;
-
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
-        // Calculate total size of children
-        let mut total_main_size = 0.0;
-        for &child_id in children_ids {
-            // Get child size (traversing to RenderObject if needed)
-            let child_size = ctx.child_size(child_id);
-            match direction {
-                Axis::Horizontal => total_main_size += child_size.width,
-                Axis::Vertical => total_main_size += child_size.height,
-            }
-        }
+        // ========== Calculate and save child offsets in ParentData ==========
+        // This avoids recalculating positions in paint() and hit_test()
 
         // Calculate available space for main axis alignment
         let available_space = match direction {
@@ -235,80 +217,93 @@ impl DynRenderObject for RenderFlex {
         };
 
         // Calculate main axis spacing
-        let (leading_space, between_space) = main_axis_alignment.calculate_spacing(
+        let (leading_space, between_space) = self.main_axis_alignment.calculate_spacing(
             available_space.max(0.0),
             children_ids.len(),
         );
 
-        tracing::debug!(
-            "RenderFlex::paint: direction={:?}, flex_size={:?}, total_main={:.1}, available={:.1}, leading={:.1}, between={:.1}",
-            direction, size, total_main_size, available_space, leading_space, between_space
-        );
+        // Calculate and save offset for each child
+        let mut current_main_pos = leading_space;
 
-        // Paint children
-        let mut current_offset = offset;
-        match direction {
-            Axis::Horizontal => current_offset.dx += leading_space,
-            Axis::Vertical => current_offset.dy += leading_space,
-        }
-
-        for (idx, &child_id) in children_ids.iter().enumerate() {
-            // Get child size for positioning
+        for &child_id in children_ids {
+            // Get child size
             let child_size = ctx.child_size(child_id);
 
             // Calculate cross-axis offset based on alignment
             let child_offset = match direction {
                 Axis::Horizontal => {
-                    // Main axis = horizontal, cross axis = vertical
-                    let cross_offset = match cross_axis_alignment {
+                    let cross_offset = match self.cross_axis_alignment {
                         CrossAxisAlignment::Start => 0.0,
                         CrossAxisAlignment::Center => (size.height - child_size.height) / 2.0,
                         CrossAxisAlignment::End => size.height - child_size.height,
-                        CrossAxisAlignment::Stretch => 0.0, // TODO: Stretch handled in layout
+                        CrossAxisAlignment::Stretch => 0.0,
                         CrossAxisAlignment::Baseline => 0.0, // TODO: Baseline alignment
                     };
-                    Offset::new(current_offset.dx, offset.dy + cross_offset)
+                    Offset::new(current_main_pos, cross_offset)
                 }
                 Axis::Vertical => {
-                    // Main axis = vertical, cross axis = horizontal
-                    let cross_offset = match cross_axis_alignment {
+                    let cross_offset = match self.cross_axis_alignment {
                         CrossAxisAlignment::Start => 0.0,
                         CrossAxisAlignment::Center => (size.width - child_size.width) / 2.0,
                         CrossAxisAlignment::End => size.width - child_size.width,
-                        CrossAxisAlignment::Stretch => 0.0, // TODO: Stretch handled in layout
+                        CrossAxisAlignment::Stretch => 0.0,
                         CrossAxisAlignment::Baseline => 0.0, // TODO: Baseline alignment
                     };
-
-                    if idx == 3 {
-                        tracing::debug!(
-                            "RenderFlex: child #{} cross_offset calculation: flex_width={}, child_width={}, cross_offset={}, base_offset.dx={}",
-                            idx, size.width, child_size.width, cross_offset, offset.dx
-                        );
-                    }
-
-                    Offset::new(offset.dx + cross_offset, current_offset.dy)
+                    Offset::new(cross_offset, current_main_pos)
                 }
             };
 
-            tracing::debug!(
-                "RenderFlex: painting child #{} (id={}) at offset {:?}, size {:?}, cross_align={:?}",
-                idx, child_id, child_offset, child_size, cross_axis_alignment
-            );
-
-            // Paint child with calculated offset
-            ctx.paint_child(child_id, painter, child_offset);
+            // Save offset in FlexParentData
+            if let Some(mut parent_data) = ctx.tree().parent_data_mut(child_id) {
+                if let Some(flex_data) = parent_data.downcast_mut::<crate::parent_data::FlexParentData>() {
+                    flex_data.offset = child_offset;
+                }
+            }
 
             // Advance main axis position
-            match direction {
-                Axis::Horizontal => {
-                    current_offset.dx += child_size.width + between_space;
-                },
-                Axis::Vertical => {
-                    current_offset.dy += child_size.height + between_space;
-                },
-            }
+            current_main_pos += match direction {
+                Axis::Horizontal => child_size.width,
+                Axis::Vertical => child_size.height,
+            } + between_space;
+        }
+
+        // Clear needs_layout flag
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
+
+        size
+    }
+
+    fn paint(&self, _state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        // Paint children using offsets saved in ParentData during layout
+        for &child_id in children_ids {
+            // Read offset from FlexParentData (set during layout)
+            let local_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+                if let Some(flex_data) = parent_data.downcast_ref::<crate::parent_data::FlexParentData>() {
+                    flex_data.offset
+                } else {
+                    Offset::ZERO
+                }
+            } else {
+                Offset::ZERO
+            };
+
+            // Add parent offset to local offset
+            let child_offset = Offset::new(
+                offset.dx + local_offset.dx,
+                offset.dy + local_offset.dy,
+            );
+
+            // Paint child
+            ctx.paint_child(child_id, painter, child_offset);
         }
     }
+
+    // hit_test_children() now uses the default implementation from DynRenderObject,
+    // which automatically reads offsets from FlexParentData via ParentDataWithOffset trait.
+    // This eliminates ~30 lines of duplicate code!
 
     // All other methods (size, mark_needs_layout, etc.) use default implementations
     // from DynRenderObject trait, which delegate to RenderContext/ElementTree.

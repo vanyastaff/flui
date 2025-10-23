@@ -384,12 +384,13 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     ///
     /// - `result`: Hit test result to add entries to
     /// - `position`: Position in local coordinates
+    /// - `ctx`: Render context for accessing children
     ///
     /// # Returns
     ///
     /// `true` if the position hits this render object or its children
     #[must_use]
-    fn hit_test(&self, result: &mut HitTestResult, position: Offset) -> bool {
+    fn hit_test(&self, result: &mut HitTestResult, position: Offset, ctx: &crate::render::RenderContext) -> bool {
         // Check bounds first
         if position.dx < 0.0
             || position.dx >= self.size().width
@@ -400,7 +401,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
         }
 
         // Check children first (front to back)
-        let hit_child = self.hit_test_children(result, position);
+        let hit_child = self.hit_test_children(result, position, ctx);
 
         // Then check self
         let hit_self = self.hit_test_self(position);
@@ -438,18 +439,71 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     /// Hit test children
     ///
     /// Tests if the given position hits any children of this render object.
-    /// Override this to implement child hit testing.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation automatically handles children with `ParentDataWithOffset`:
+    /// - Iterates children in reverse order (front to back for z-ordering)
+    /// - Reads cached offsets from ParentDataWithOffset if available
+    /// - Converts position to child coordinates
+    /// - Delegates to ctx.hit_test_child()
+    ///
+    /// This eliminates the need for custom hit_test_children implementations in
+    /// most multi-child RenderObjects (RenderFlex, RenderStack, etc.).
     ///
     /// # Arguments
     ///
     /// - `result`: Hit test result to add entries to
     /// - `position`: Position in local coordinates
+    /// - `ctx`: Render context for accessing children
     ///
     /// # Returns
     ///
-    /// `true` if the position hits any child (default: false - no children)
+    /// `true` if the position hits any child
+    ///
+    /// # When to Override
+    ///
+    /// Override this only if you need custom hit testing logic:
+    /// - Custom z-ordering (not reverse paint order)
+    /// - Transforms applied to children
+    /// - Hit testing disabled for some children
+    /// - Non-standard coordinate transformations
     #[must_use]
-    fn hit_test_children(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
+    fn hit_test_children(&self, result: &mut HitTestResult, position: Offset, ctx: &crate::render::RenderContext) -> bool {
+        let children = ctx.children();
+        if children.is_empty() {
+            return false;
+        }
+
+        // Test children in reverse order (front to back for z-ordering)
+        for &child_id in children.iter().rev() {
+            // Try to get offset from ParentDataWithOffset
+            let child_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+                // Try to access as ParentDataWithOffset
+                if let Some(offset_data) = parent_data.as_parent_data_with_offset() {
+                    offset_data.offset()
+                } else {
+                    // No ParentDataWithOffset - skip this child
+                    // (RenderObject should override hit_test_children if needed)
+                    continue;
+                }
+            } else {
+                // No parent data - skip this child
+                continue;
+            };
+
+            // Convert position to child coordinates
+            let child_position = Offset::new(
+                position.dx - child_offset.dx,
+                position.dy - child_offset.dy,
+            );
+
+            // Hit test the child
+            if ctx.hit_test_child(child_id, result, child_position) {
+                return true;
+            }
+        }
+
         false
     }
 

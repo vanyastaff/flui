@@ -111,7 +111,7 @@ pub use render::{
     RenderContext,
     RenderFlags,
     RenderState,
-    parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData},
+    parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset},
 };
 pub use render::widget::{
     LeafRenderObjectWidget,

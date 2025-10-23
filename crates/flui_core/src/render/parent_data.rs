@@ -37,6 +37,7 @@
 use std::fmt;
 
 use downcast_rs::{impl_downcast, DowncastSync};
+use flui_types::Offset;
 
 /// ParentData - data that a parent RenderObject can attach to child elements
 ///
@@ -68,10 +69,76 @@ use downcast_rs::{impl_downcast, DowncastSync};
 ///     }
 /// }
 /// ```
-pub trait ParentData: DowncastSync + fmt::Debug {}
+pub trait ParentData: DowncastSync + fmt::Debug {
+    /// Try to access this ParentData as ParentDataWithOffset
+    ///
+    /// Returns Some if this ParentData implements ParentDataWithOffset,
+    /// None otherwise. This enables generic access to offset data.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns None. Override in types that implement ParentDataWithOffset.
+    fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
+        None
+    }
+}
 
 // Enable downcasting for ParentData trait objects
 impl_downcast!(sync ParentData);
+
+/// ParentData with cached offset for efficient hit testing and painting
+///
+/// This trait is implemented by ParentData types that cache the child's offset
+/// (calculated during layout). This allows hit testing and painting to avoid
+/// recalculating positions.
+///
+/// # Implementations
+///
+/// - `FlexParentData`: Stores offset for Row/Column children
+/// - `StackParentData`: Stores offset for Stack children
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn hit_test_children(&self, result: &mut HitTestResult, position: Offset, ctx: &RenderContext) -> bool {
+///     for &child_id in ctx.children().iter().rev() {
+///         // Read cached offset from ParentData
+///         let local_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+///             if let Some(data_with_offset) = parent_data.downcast_ref::<dyn ParentDataWithOffset>() {
+///                 data_with_offset.offset()
+///             } else {
+///                 Offset::ZERO
+///             }
+///         } else {
+///             Offset::ZERO
+///         };
+///
+///         let child_position = Offset::new(
+///             position.dx - local_offset.dx,
+///             position.dy - local_offset.dy,
+///         );
+///
+///         if ctx.hit_test_child(child_id, result, child_position) {
+///             return true;
+///         }
+///     }
+///     false
+/// }
+/// ```
+pub trait ParentDataWithOffset: ParentData {
+    /// Get the cached offset for this child
+    ///
+    /// This offset is calculated during layout and read during paint/hit_test.
+    fn offset(&self) -> Offset;
+
+    /// Set the cached offset for this child
+    ///
+    /// Called by parent RenderObject during layout.
+    fn set_offset(&mut self, offset: Offset);
+}
+
+// Enable downcasting for ParentDataWithOffset trait objects
+impl_downcast!(sync ParentDataWithOffset);
 
 // Implement ParentData for () (unit type) to represent "no parent data"
 //
