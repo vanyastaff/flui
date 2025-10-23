@@ -61,7 +61,7 @@ impl RenderLimitedBox {
     pub fn set_max_width(&mut self, max_width: f32) {
         if (self.data().max_width - max_width).abs() > f32::EPSILON {
             self.data_mut().max_width = max_width;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -69,7 +69,7 @@ impl RenderLimitedBox {
     pub fn set_max_height(&mut self, max_height: f32) {
         if (self.data().max_height - max_height).abs() > f32::EPSILON {
             self.data_mut().max_height = max_height;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -149,7 +149,7 @@ mod tests {
 
         limited.set_max_width(150.0);
         assert_eq!(limited.max_width(), 150.0);
-        assert!(RenderBoxMixin::needs_layout(&limited));
+        assert!(limited.needs_layout());
     }
 
     #[test]

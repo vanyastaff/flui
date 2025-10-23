@@ -1,23 +1,31 @@
 //! Common trait providing shared functionality to all RenderBox types
 
-use flui_types::{Size, constraints::BoxConstraints};
+use flui_types::constraints::BoxConstraints;
 use super::{RenderState, RenderFlags};
 
 /// Trait providing common functionality to all RenderBox generic types
 ///
 /// This trait is implemented by LeafRenderBox<T>, SingleRenderBox<T>, and ContainerRenderBox<T>.
-/// It provides default implementations for common operations that all RenderObjects need.
+/// It provides access to shared state and helper methods.
 ///
 /// # Design Pattern
 ///
-/// Instead of duplicating these methods across 81 RenderObject implementations,
+/// Instead of duplicating state access across 81 RenderObject implementations,
 /// we centralize them in this mixin trait. Each generic type implements the two
-/// required methods (`state()` and `state_mut()`), and gets all other methods for free.
+/// required methods (`state()` and `state_mut()`), and gets helper methods for free.
+///
+/// # Important: DynRenderObject vs RenderBoxMixin
+///
+/// This trait intentionally does NOT duplicate methods from DynRenderObject.
+/// Methods like `size()`, `needs_layout()`, `needs_paint()`, `mark_needs_layout()`,
+/// and `mark_needs_paint()` are defined in DynRenderObject and should be used directly.
+/// This avoids trait ambiguity and maintains a single source of truth.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::{LeafRenderBox, RenderBoxMixin};
+/// use flui_core::DynRenderObject;
 ///
 /// struct MyData {
 ///     color: Color,
@@ -27,12 +35,17 @@ use super::{RenderState, RenderFlags};
 ///
 /// let mut render_obj = RenderMyWidget::new(MyData { color: Color::RED });
 ///
-/// // These methods come from RenderBoxMixin:
+/// // Use DynRenderObject methods directly:
 /// render_obj.mark_needs_layout();
 /// render_obj.mark_needs_paint();
 ///
 /// if render_obj.needs_layout() {
 ///     // Perform layout...
+/// }
+///
+/// // RenderBoxMixin provides helper methods:
+/// if render_obj.has_size() {
+///     // Size is available...
 /// }
 /// ```
 pub trait RenderBoxMixin {
@@ -45,59 +58,23 @@ pub trait RenderBoxMixin {
     fn state_mut(&mut self) -> &mut RenderState;
 
     // ========== Provided Methods (with default implementations) ==========
-
-    /// Get the current size (after layout)
-    ///
-    /// Returns the size determined by the last layout pass.
-    /// Returns `None` if layout hasn't been performed yet.
-    #[inline]
-    fn size(&self) -> Option<Size> {
-        self.state().size
-    }
+    //
+    // NOTE: We intentionally do NOT duplicate methods from DynRenderObject here.
+    // Methods like `size()`, `needs_layout()`, `needs_paint()`, `mark_needs_layout()`,
+    // and `mark_needs_paint()` are defined in DynRenderObject and should be used directly.
+    // This avoids trait ambiguity and maintains a single source of truth.
 
     /// Get the constraints used in the last layout
     ///
     /// Returns the constraints from the last layout pass.
     /// Returns `None` if layout hasn't been performed yet.
+    ///
+    /// NOTE: This is a helper that provides Option<BoxConstraints> return type,
+    /// while DynRenderObject::constraints() also exists. This helper is more
+    /// convenient for checking if layout has occurred.
     #[inline]
     fn constraints(&self) -> Option<BoxConstraints> {
         self.state().constraints
-    }
-
-    /// Check if this render object needs layout
-    ///
-    /// Returns `true` if `mark_needs_layout()` has been called and
-    /// layout hasn't been performed yet.
-    #[inline]
-    fn needs_layout(&self) -> bool {
-        self.state().needs_layout()
-    }
-
-    /// Check if this render object needs paint
-    ///
-    /// Returns `true` if `mark_needs_paint()` has been called and
-    /// painting hasn't been performed yet.
-    #[inline]
-    fn needs_paint(&self) -> bool {
-        self.state().needs_paint()
-    }
-
-    /// Mark this render object as needing layout
-    ///
-    /// This schedules the render object for layout during the next frame.
-    /// The layout will be performed by the Element that owns this RenderObject.
-    #[inline]
-    fn mark_needs_layout(&mut self) {
-        self.state_mut().mark_needs_layout();
-    }
-
-    /// Mark this render object as needing paint
-    ///
-    /// This schedules the render object for painting during the next frame.
-    /// Only affects visual appearance, not size or position.
-    #[inline]
-    fn mark_needs_paint(&mut self) {
-        self.state_mut().mark_needs_paint();
     }
 
     /// Get the dirty state flags
@@ -156,6 +133,7 @@ pub trait RenderBoxMixin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::Size;
 
     // Mock implementation for testing
     struct MockRenderBox {
@@ -178,17 +156,17 @@ mod tests {
             state: RenderState::new(),
         };
 
-        // Initially needs layout
-        assert!(mock.needs_layout());
-        assert!(!mock.needs_paint());
+        // Initially needs layout (use state directly since methods removed)
+        assert!(mock.state().needs_layout());
+        assert!(!mock.state().needs_paint());
 
         // Mark as needing paint
-        mock.mark_needs_paint();
-        assert!(mock.needs_paint());
+        mock.state_mut().mark_needs_paint();
+        assert!(mock.state().needs_paint());
 
         // Clear needs layout
         mock.state_mut().clear_needs_layout();
-        assert!(!mock.needs_layout());
+        assert!(!mock.state().needs_layout());
     }
 
     #[test]
@@ -213,10 +191,10 @@ mod tests {
         };
 
         assert!(!mock.has_size());
-        assert!(mock.size().is_none());
+        assert!(mock.state().size.is_none());
 
         mock.state_mut().size = Some(Size::new(100.0, 100.0));
         assert!(mock.has_size());
-        assert_eq!(mock.size(), Some(Size::new(100.0, 100.0)));
+        assert_eq!(mock.state().size, Some(Size::new(100.0, 100.0)));
     }
 }

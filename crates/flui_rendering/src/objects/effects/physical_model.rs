@@ -121,7 +121,7 @@ impl RenderPhysicalModel {
     pub fn set_shape(&mut self, shape: PhysicalShape) {
         if self.data().shape != shape {
             self.data_mut().shape = shape;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 
@@ -129,7 +129,7 @@ impl RenderPhysicalModel {
     pub fn set_elevation(&mut self, elevation: f32) {
         if self.data().elevation != elevation {
             self.data_mut().elevation = elevation;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 
@@ -137,7 +137,7 @@ impl RenderPhysicalModel {
     pub fn set_color(&mut self, color: Color) {
         if self.data().color != color {
             self.data_mut().color = color;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -287,7 +287,7 @@ mod tests {
 
         model.set_elevation(8.0);
         assert_eq!(model.elevation(), 8.0);
-        assert!(RenderBoxMixin::needs_paint(&model));
+        assert!(model.needs_paint());
     }
 
     #[test]
@@ -296,7 +296,7 @@ mod tests {
 
         model.set_color(Color::RED);
         assert_eq!(model.color(), Color::RED);
-        assert!(RenderBoxMixin::needs_paint(&model));
+        assert!(model.needs_paint());
     }
 
     #[test]

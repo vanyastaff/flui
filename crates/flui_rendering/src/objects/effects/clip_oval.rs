@@ -67,7 +67,7 @@ impl RenderClipOval {
     pub fn set_clip_behavior(&mut self, clip_behavior: ClipBehavior) {
         if self.data().clip_behavior != clip_behavior {
             self.data_mut().clip_behavior = clip_behavior;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -177,7 +177,7 @@ mod tests {
 
         clip_oval.set_clip_behavior(ClipBehavior::AntiAliasWithSaveLayer);
         assert_eq!(clip_oval.clip_behavior(), ClipBehavior::AntiAliasWithSaveLayer);
-        assert!(RenderBoxMixin::needs_paint(&clip_oval));
+        assert!(clip_oval.needs_paint());
     }
 
     #[test]

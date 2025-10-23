@@ -120,7 +120,7 @@ impl RenderTransform {
     pub fn set_transform(&mut self, transform: Matrix4) {
         if self.data().transform != transform {
             self.data_mut().transform = transform;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 
@@ -128,7 +128,7 @@ impl RenderTransform {
     pub fn set_origin(&mut self, origin: Offset) {
         if self.data().origin != origin {
             self.data_mut().origin = origin;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -256,8 +256,8 @@ mod tests {
         render_transform.set_transform(transform2);
 
         assert_eq!(render_transform.transform(), transform2);
-        assert!(RenderBoxMixin::needs_paint(&render_transform));
-        assert!(!RenderBoxMixin::needs_layout(&render_transform));
+        assert!(render_transform.needs_paint());
+        assert!(!render_transform.needs_layout());
     }
 
     #[test]

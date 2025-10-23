@@ -48,7 +48,7 @@ impl RenderPadding {
     pub fn set_padding(&mut self, padding: EdgeInsets) {
         if self.data().padding != padding {
             self.data_mut().padding = padding;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -127,7 +127,7 @@ mod tests {
 
         padding.set_padding(EdgeInsets::all(20.0));
         assert_eq!(padding.padding(), EdgeInsets::all(20.0));
-        assert!(RenderBoxMixin::needs_layout(&padding));
+        assert!(padding.needs_layout());
     }
 
     #[test]

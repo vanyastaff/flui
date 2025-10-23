@@ -81,7 +81,7 @@ impl RenderStack {
     pub fn set_alignment(&mut self, alignment: Alignment) {
         if self.data().alignment != alignment {
             self.data_mut().alignment = alignment;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -94,7 +94,7 @@ impl RenderStack {
     pub fn set_fit(&mut self, fit: StackFit) {
         if self.data().fit != fit {
             self.data_mut().fit = fit;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -211,7 +211,7 @@ mod tests {
 
         stack.set_alignment(Alignment::CENTER);
         assert_eq!(stack.alignment(), Alignment::CENTER);
-        assert!(RenderBoxMixin::needs_layout(&stack));
+        assert!(stack.needs_layout());
     }
 
     #[test]
@@ -220,7 +220,7 @@ mod tests {
 
         stack.set_fit(StackFit::Expand);
         assert_eq!(stack.fit(), StackFit::Expand);
-        assert!(RenderBoxMixin::needs_layout(&stack));
+        assert!(stack.needs_layout());
     }
 
     #[test]

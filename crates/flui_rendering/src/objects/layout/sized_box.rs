@@ -90,7 +90,7 @@ impl RenderSizedBox {
     pub fn set_width(&mut self, width: Option<f32>) {
         if self.data().width != width {
             self.data_mut().width = width;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -98,7 +98,7 @@ impl RenderSizedBox {
     pub fn set_height(&mut self, height: Option<f32>) {
         if self.data().height != height {
             self.data_mut().height = height;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -197,7 +197,7 @@ mod tests {
 
         sized.set_width(Some(150.0));
         assert_eq!(sized.width(), Some(150.0));
-        assert!(RenderBoxMixin::needs_layout(&sized));
+        assert!(sized.needs_layout());
     }
 
     #[test]
@@ -206,7 +206,7 @@ mod tests {
 
         sized.set_height(Some(250.0));
         assert_eq!(sized.height(), Some(250.0));
-        assert!(RenderBoxMixin::needs_layout(&sized));
+        assert!(sized.needs_layout());
     }
 
     #[test]

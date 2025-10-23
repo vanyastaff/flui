@@ -49,7 +49,7 @@ impl RenderConstrainedBox {
     pub fn set_additional_constraints(&mut self, constraints: BoxConstraints) {
         if self.data().additional_constraints != constraints {
             self.data_mut().additional_constraints = constraints;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -113,7 +113,7 @@ mod tests {
         let constraints2 = BoxConstraints::tight(Size::new(200.0, 200.0));
         constrained.set_additional_constraints(constraints2);
         assert_eq!(constrained.additional_constraints(), constraints2);
-        assert!(RenderBoxMixin::needs_layout(&constrained));
+        assert!(constrained.needs_layout());
     }
 
     #[test]

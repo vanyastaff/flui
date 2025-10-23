@@ -61,7 +61,7 @@ impl RenderClipRRect {
     pub fn set_border_radius(&mut self, border_radius: BorderRadius) {
         if self.data().border_radius != border_radius {
             self.data_mut().border_radius = border_radius;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 
@@ -69,7 +69,7 @@ impl RenderClipRRect {
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
         if self.data().clip_behavior != clip_behavior {
             self.data_mut().clip_behavior = clip_behavior;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -177,8 +177,8 @@ mod tests {
 
         clip.set_border_radius(BorderRadius::circular(20.0));
         assert_eq!(clip.border_radius(), BorderRadius::circular(20.0));
-        assert!(RenderBoxMixin::needs_paint(&clip));
-        assert!(!RenderBoxMixin::needs_layout(&clip));
+        assert!(clip.needs_paint());
+        assert!(!clip.needs_layout());
     }
 
     #[test]
@@ -191,8 +191,8 @@ mod tests {
 
         clip.set_clip_behavior(Clip::HardEdge);
         assert_eq!(clip.clip_behavior(), Clip::HardEdge);
-        assert!(RenderBoxMixin::needs_paint(&clip));
-        assert!(!RenderBoxMixin::needs_layout(&clip));
+        assert!(clip.needs_paint());
+        assert!(!clip.needs_layout());
     }
 
     #[test]

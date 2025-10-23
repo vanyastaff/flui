@@ -86,7 +86,7 @@ impl RenderIntrinsicHeight {
     pub fn set_step_width(&mut self, step_width: Option<f32>) {
         if self.data().step_width != step_width {
             self.data_mut().step_width = step_width;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -94,7 +94,7 @@ impl RenderIntrinsicHeight {
     pub fn set_step_height(&mut self, step_height: Option<f32>) {
         if self.data().step_height != step_height {
             self.data_mut().step_height = step_height;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -210,7 +210,7 @@ mod tests {
 
         intrinsic.set_step_width(Some(8.0));
         assert_eq!(intrinsic.step_width(), Some(8.0));
-        assert!(RenderBoxMixin::needs_layout(&intrinsic));
+        assert!(intrinsic.needs_layout());
     }
 
     #[test]
@@ -219,7 +219,7 @@ mod tests {
 
         intrinsic.set_step_height(Some(4.0));
         assert_eq!(intrinsic.step_height(), Some(4.0));
-        assert!(RenderBoxMixin::needs_layout(&intrinsic));
+        assert!(intrinsic.needs_layout());
     }
 
     #[test]

@@ -104,7 +104,7 @@ impl RenderPositionedBox {
     pub fn set_left(&mut self, left: Option<f32>) {
         if self.data().left != left {
             self.data_mut().left = left;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -112,7 +112,7 @@ impl RenderPositionedBox {
     pub fn set_top(&mut self, top: Option<f32>) {
         if self.data().top != top {
             self.data_mut().top = top;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -215,7 +215,7 @@ mod tests {
 
         positioned.set_left(Some(15.0));
         assert_eq!(positioned.left(), Some(15.0));
-        assert!(RenderBoxMixin::needs_layout(&positioned));
+        assert!(positioned.needs_layout());
     }
 
     #[test]

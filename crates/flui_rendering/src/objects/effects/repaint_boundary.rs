@@ -64,7 +64,7 @@ impl RenderRepaintBoundary {
     pub fn set_is_repaint_boundary(&mut self, is_boundary: bool) {
         if self.data().is_repaint_boundary != is_boundary {
             self.data_mut().is_repaint_boundary = is_boundary;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -150,7 +150,7 @@ mod tests {
 
         boundary.set_is_repaint_boundary(false);
         assert!(!boundary.is_repaint_boundary());
-        assert!(RenderBoxMixin::needs_paint(&boundary));
+        assert!(boundary.needs_paint());
     }
 
     #[test]

@@ -112,7 +112,7 @@ impl RenderOverflowBox {
     pub fn set_min_width(&mut self, min_width: Option<f32>) {
         if self.data().min_width != min_width {
             self.data_mut().min_width = min_width;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -120,7 +120,7 @@ impl RenderOverflowBox {
     pub fn set_max_width(&mut self, max_width: Option<f32>) {
         if self.data().max_width != max_width {
             self.data_mut().max_width = max_width;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -128,7 +128,7 @@ impl RenderOverflowBox {
     pub fn set_alignment(&mut self, alignment: Alignment) {
         if self.data().alignment != alignment {
             self.data_mut().alignment = alignment;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -239,7 +239,7 @@ mod tests {
 
         overflow.set_min_width(Some(50.0));
         assert_eq!(overflow.min_width(), Some(50.0));
-        assert!(RenderBoxMixin::needs_layout(&overflow));
+        assert!(overflow.needs_layout());
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod tests {
 
         overflow.set_alignment(Alignment::BOTTOM_RIGHT);
         assert_eq!(overflow.alignment(), Alignment::BOTTOM_RIGHT);
-        assert!(RenderBoxMixin::needs_layout(&overflow));
+        assert!(overflow.needs_layout());
     }
 
     #[test]

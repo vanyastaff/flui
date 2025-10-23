@@ -44,11 +44,9 @@ impl RenderColoredBox {
 
     /// Set color
     pub fn set_color(&mut self, color: Color) {
-        use crate::core::RenderBoxMixin;
-
         if self.data().color != color {
             self.data_mut().color = color;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -76,9 +74,7 @@ impl DynRenderObject for RenderColoredBox {
     }
 
     fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        use crate::core::RenderBoxMixin;
-
-        if let Some(size) = RenderBoxMixin::size(self) {
+        if let Some(size) = self.state().size {
             // Paint background color
             let rect = egui::Rect::from_min_size(
                 egui::pos2(offset.dx, offset.dy),

@@ -49,7 +49,7 @@ impl RenderOpacity {
         let clamped = opacity.clamp(0.0, 1.0);
         if self.data().opacity != clamped {
             self.data_mut().opacity = clamped;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -136,8 +136,8 @@ mod tests {
         // Now set opacity - should only mark needs_paint, not needs_layout
         opacity.set_opacity(0.8);
         assert_eq!(opacity.opacity(), 0.8);
-        assert!(RenderBoxMixin::needs_paint(&opacity));
-        assert!(!RenderBoxMixin::needs_layout(&opacity));
+        assert!(opacity.needs_paint());
+        assert!(!opacity.needs_layout());
     }
 
     #[test]

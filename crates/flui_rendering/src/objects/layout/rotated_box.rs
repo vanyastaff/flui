@@ -103,7 +103,7 @@ impl RenderRotatedBox {
     pub fn set_quarter_turns(&mut self, quarter_turns: QuarterTurns) {
         if self.data().quarter_turns != quarter_turns {
             self.data_mut().quarter_turns = quarter_turns;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -248,7 +248,7 @@ mod tests {
 
         rotated.set_quarter_turns(QuarterTurns::Two);
         assert_eq!(rotated.quarter_turns(), QuarterTurns::Two);
-        assert!(RenderBoxMixin::needs_layout(&rotated));
+        assert!(rotated.needs_layout());
     }
 
     #[test]

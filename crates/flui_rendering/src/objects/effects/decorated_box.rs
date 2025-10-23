@@ -82,7 +82,7 @@ impl RenderDecoratedBox {
     pub fn set_decoration(&mut self, decoration: BoxDecoration) {
         if self.data().decoration != decoration {
             self.data_mut().decoration = decoration;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 
@@ -92,7 +92,7 @@ impl RenderDecoratedBox {
     pub fn set_position(&mut self, position: DecorationPosition) {
         if self.data().position != position {
             self.data_mut().position = position;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -190,8 +190,8 @@ mod tests {
         };
         decorated.set_decoration(decoration2.clone());
         assert_eq!(decorated.decoration(), &decoration2);
-        assert!(RenderBoxMixin::needs_paint(&decorated));
-        assert!(!RenderBoxMixin::needs_layout(&decorated));
+        assert!(decorated.needs_paint());
+        assert!(!decorated.needs_layout());
     }
 
     #[test]
@@ -212,8 +212,8 @@ mod tests {
         // Now set position - should only mark needs_paint, not needs_layout
         decorated.set_position(DecorationPosition::Foreground);
         assert_eq!(decorated.position(), DecorationPosition::Foreground);
-        assert!(RenderBoxMixin::needs_paint(&decorated));
-        assert!(!RenderBoxMixin::needs_layout(&decorated));
+        assert!(decorated.needs_paint());
+        assert!(!decorated.needs_layout());
     }
 
     #[test]

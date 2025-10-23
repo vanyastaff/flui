@@ -74,7 +74,7 @@ impl RenderBaseline {
     pub fn set_baseline(&mut self, baseline: f32) {
         if self.data().baseline != baseline {
             self.data_mut().baseline = baseline;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -82,7 +82,7 @@ impl RenderBaseline {
     pub fn set_baseline_type(&mut self, baseline_type: TextBaseline) {
         if self.data().baseline_type != baseline_type {
             self.data_mut().baseline_type = baseline_type;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -177,7 +177,7 @@ mod tests {
 
         baseline.set_baseline(30.0);
         assert_eq!(baseline.baseline(), 30.0);
-        assert!(RenderBoxMixin::needs_layout(&baseline));
+        assert!(baseline.needs_layout());
     }
 
     #[test]
@@ -186,7 +186,7 @@ mod tests {
 
         baseline.set_baseline_type(TextBaseline::Ideographic);
         assert_eq!(baseline.baseline_type(), TextBaseline::Ideographic);
-        assert!(RenderBoxMixin::needs_layout(&baseline));
+        assert!(baseline.needs_layout());
     }
 
     #[test]

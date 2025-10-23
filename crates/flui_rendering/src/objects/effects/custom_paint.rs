@@ -127,7 +127,7 @@ impl RenderCustomPaint {
     pub fn set_size(&mut self, size: Size) {
         if self.data().size != size {
             self.data_mut().size = size;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -142,7 +142,7 @@ impl RenderCustomPaint {
     pub fn set_will_change(&mut self, will_change: bool) {
         if self.data().will_change != will_change {
             self.data_mut().will_change = will_change;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -257,7 +257,7 @@ mod tests {
 
         custom.set_size(Size::new(200.0, 300.0));
         assert_eq!(custom.size(), Size::new(200.0, 300.0));
-        assert!(RenderBoxMixin::needs_layout(&custom));
+        assert!(custom.needs_layout());
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
 
         custom.set_will_change(true);
         assert!(custom.will_change());
-        assert!(RenderBoxMixin::needs_paint(&custom));
+        assert!(custom.needs_paint());
     }
 
     #[test]

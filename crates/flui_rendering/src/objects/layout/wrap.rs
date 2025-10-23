@@ -127,7 +127,7 @@ impl RenderWrap {
     pub fn set_direction(&mut self, direction: Axis) {
         if self.data.direction != direction {
             self.data.direction = direction;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -135,7 +135,7 @@ impl RenderWrap {
     pub fn set_spacing(&mut self, spacing: f32) {
         if self.data.spacing != spacing {
             self.data.spacing = spacing;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -320,7 +320,7 @@ mod tests {
 
         wrap.set_direction(Axis::Vertical);
         assert_eq!(wrap.direction(), Axis::Vertical);
-        assert!(RenderBoxMixin::needs_layout(&wrap));
+        assert!(wrap.needs_layout());
     }
 
     #[test]
@@ -329,7 +329,7 @@ mod tests {
 
         wrap.set_spacing(8.0);
         assert_eq!(wrap.spacing(), 8.0);
-        assert!(RenderBoxMixin::needs_layout(&wrap));
+        assert!(wrap.needs_layout());
     }
 
     #[test]

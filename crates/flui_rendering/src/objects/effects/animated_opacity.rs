@@ -80,7 +80,7 @@ impl RenderAnimatedOpacity {
         let clamped = opacity.clamp(0.0, 1.0);
         if self.data().opacity != clamped {
             self.data_mut().opacity = clamped;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 
@@ -88,7 +88,7 @@ impl RenderAnimatedOpacity {
     pub fn set_animating(&mut self, animating: bool) {
         if self.data().animating != animating {
             self.data_mut().animating = animating;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -203,20 +203,24 @@ mod tests {
 
     #[test]
     fn test_render_animated_opacity_set_opacity() {
+        use flui_core::DynRenderObject;
+
         let mut animated = SingleRenderBox::new(AnimatedOpacityData::opaque());
 
         animated.set_opacity(0.3);
         assert_eq!(animated.opacity(), 0.3);
-        assert!(RenderBoxMixin::needs_paint(&animated));
+        assert!(DynRenderObject::needs_paint(&animated));
     }
 
     #[test]
     fn test_render_animated_opacity_set_animating() {
+        use flui_core::DynRenderObject;
+
         let mut animated = SingleRenderBox::new(AnimatedOpacityData::new(0.5));
 
         animated.set_animating(true);
         assert!(animated.is_animating());
-        assert!(RenderBoxMixin::needs_paint(&animated));
+        assert!(DynRenderObject::needs_paint(&animated));
     }
 
     #[test]

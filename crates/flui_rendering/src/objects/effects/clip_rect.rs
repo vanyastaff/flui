@@ -59,7 +59,7 @@ impl RenderClipRect {
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
         if self.data().clip_behavior != clip_behavior {
             self.data_mut().clip_behavior = clip_behavior;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 }
@@ -146,8 +146,8 @@ mod tests {
         // Now set clip behavior - should only mark needs_paint, not needs_layout
         clip.set_clip_behavior(Clip::AntiAlias);
         assert_eq!(clip.clip_behavior(), Clip::AntiAlias);
-        assert!(RenderBoxMixin::needs_paint(&clip));
-        assert!(!RenderBoxMixin::needs_layout(&clip));
+        assert!(clip.needs_paint());
+        assert!(!clip.needs_layout());
     }
 
     #[test]

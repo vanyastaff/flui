@@ -80,7 +80,7 @@ impl RenderListBody {
     pub fn set_main_axis(&mut self, main_axis: Axis) {
         if self.data.main_axis != main_axis {
             self.data.main_axis = main_axis;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -88,7 +88,7 @@ impl RenderListBody {
     pub fn set_spacing(&mut self, spacing: f32) {
         if self.data.spacing != spacing {
             self.data.spacing = spacing;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -267,7 +267,7 @@ mod tests {
 
         list.set_main_axis(Axis::Horizontal);
         assert_eq!(list.main_axis(), Axis::Horizontal);
-        assert!(RenderBoxMixin::needs_layout(&list));
+        assert!(list.needs_layout());
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
 
         list.set_spacing(8.0);
         assert_eq!(list.spacing(), 8.0);
-        assert!(RenderBoxMixin::needs_layout(&list));
+        assert!(list.needs_layout());
     }
 
     #[test]

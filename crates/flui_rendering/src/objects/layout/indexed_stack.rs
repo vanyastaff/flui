@@ -78,7 +78,7 @@ impl RenderIndexedStack {
     pub fn set_index(&mut self, index: Option<usize>) {
         if self.data().index != index {
             self.data_mut().index = index;
-            RenderBoxMixin::mark_needs_paint(self);
+            self.mark_needs_paint();
         }
     }
 
@@ -86,7 +86,7 @@ impl RenderIndexedStack {
     pub fn set_alignment(&mut self, alignment: Alignment) {
         if self.data().alignment != alignment {
             self.data_mut().alignment = alignment;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -194,8 +194,8 @@ mod tests {
 
         stack.set_index(Some(1));
         assert_eq!(stack.index(), Some(1));
-        assert!(RenderBoxMixin::needs_paint(&stack));
-        assert!(!RenderBoxMixin::needs_layout(&stack));
+        assert!(stack.needs_paint());
+        assert!(!stack.needs_layout());
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
 
         stack.set_alignment(Alignment::CENTER);
         assert_eq!(stack.alignment(), Alignment::CENTER);
-        assert!(RenderBoxMixin::needs_layout(&stack));
+        assert!(stack.needs_layout());
     }
 
     #[test]

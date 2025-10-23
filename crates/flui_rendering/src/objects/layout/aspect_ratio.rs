@@ -49,7 +49,7 @@ impl RenderAspectRatio {
         assert!(aspect_ratio > 0.0, "Aspect ratio must be positive");
         if (self.data().aspect_ratio - aspect_ratio).abs() > f32::EPSILON {
             self.data_mut().aspect_ratio = aspect_ratio;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -144,7 +144,7 @@ mod tests {
 
         aspect.set_aspect_ratio(4.0 / 3.0);
         assert!((aspect.aspect_ratio() - 4.0 / 3.0).abs() < f32::EPSILON);
-        assert!(RenderBoxMixin::needs_layout(&aspect));
+        assert!(aspect.needs_layout());
     }
 
     #[test]

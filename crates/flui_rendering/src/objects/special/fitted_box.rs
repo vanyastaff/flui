@@ -149,11 +149,9 @@ impl RenderFittedBox {
 
     /// Set fit mode
     pub fn set_fit(&mut self, fit: BoxFit) {
-        use crate::core::RenderBoxMixin;
-
         if self.data().fit != fit {
             self.data_mut().fit = fit;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -164,11 +162,9 @@ impl RenderFittedBox {
 
     /// Set alignment
     pub fn set_alignment(&mut self, alignment: Alignment) {
-        use crate::core::RenderBoxMixin;
-
         if self.data().alignment != alignment {
             self.data_mut().alignment = alignment;
-            RenderBoxMixin::mark_needs_paint(self); // Only repaint needed for alignment change
+            self.mark_needs_paint(); // Only repaint needed for alignment change
         }
     }
 }
@@ -197,25 +193,27 @@ impl DynRenderObject for RenderFittedBox {
     }
 
     fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        use crate::core::RenderBoxMixin;
-        use flui_core::DynRenderObject as DynRenderObjectTrait;
+        use flui_core::DynRenderObject;
 
-        if let (Some(size), Some(child)) = (RenderBoxMixin::size(self), self.child()) {
-            // Get child's size
-            let child_size = DynRenderObjectTrait::size(&**child);
+        // Get our size from state (avoid ambiguity by accessing state directly)
+        if let Some(size) = self.state().size {
+            if let Some(child) = self.child() {
+                // Get child's size
+                let child_size = DynRenderObject::size(&**child);
 
-            // Calculate fitted size and offset
-            let (_fitted_size, child_offset) = self.data().calculate_fit(child_size, size);
+                // Calculate fitted size and offset
+                let (_fitted_size, child_offset) = self.data().calculate_fit(child_size, size);
 
-            // Apply transform for scaling
-            // Note: In a real implementation, we'd use egui's transform system
-            // For now, just paint child at calculated offset
-            let final_offset = Offset::new(
-                offset.dx + child_offset.dx,
-                offset.dy + child_offset.dy,
-            );
+                // Apply transform for scaling
+                // Note: In a real implementation, we'd use egui's transform system
+                // For now, just paint child at calculated offset
+                let final_offset = Offset::new(
+                    offset.dx + child_offset.dx,
+                    offset.dy + child_offset.dy,
+                );
 
-            child.paint(painter, final_offset);
+                child.paint(painter, final_offset);
+            }
         }
     }
 

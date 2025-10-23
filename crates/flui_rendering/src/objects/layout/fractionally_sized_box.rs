@@ -79,7 +79,7 @@ impl RenderFractionallySizedBox {
         }
         if self.data().width_factor != factor {
             self.data_mut().width_factor = factor;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -90,7 +90,7 @@ impl RenderFractionallySizedBox {
         }
         if self.data().height_factor != factor {
             self.data_mut().height_factor = factor;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -203,7 +203,7 @@ mod tests {
 
         fractional.set_width_factor(Some(0.75));
         assert_eq!(fractional.width_factor(), Some(0.75));
-        assert!(RenderBoxMixin::needs_layout(&fractional));
+        assert!(fractional.needs_layout());
     }
 
     #[test]

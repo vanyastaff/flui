@@ -3,6 +3,7 @@
 pub mod effects;
 pub mod interaction;
 pub mod layout;
+/// Special-purpose render objects (semantics, metadata, fitted box, colored box)
 pub mod special;
 
 

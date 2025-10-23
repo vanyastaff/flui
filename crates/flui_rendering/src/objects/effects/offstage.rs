@@ -54,7 +54,7 @@ impl RenderOffstage {
     pub fn set_offstage(&mut self, offstage: bool) {
         if self.data().offstage != offstage {
             self.data_mut().offstage = offstage;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -133,7 +133,7 @@ mod tests {
 
         offstage.set_offstage(false);
         assert!(!offstage.offstage());
-        assert!(RenderBoxMixin::needs_layout(&offstage));
+        assert!(offstage.needs_layout());
     }
 
     #[test]

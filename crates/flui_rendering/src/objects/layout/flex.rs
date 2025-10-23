@@ -80,7 +80,7 @@ impl RenderFlex {
     pub fn set_direction(&mut self, direction: Axis) {
         if self.data().direction != direction {
             self.data_mut().direction = direction;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -93,7 +93,7 @@ impl RenderFlex {
     pub fn set_main_axis_alignment(&mut self, alignment: MainAxisAlignment) {
         if self.data().main_axis_alignment != alignment {
             self.data_mut().main_axis_alignment = alignment;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -261,7 +261,7 @@ mod tests {
 
         flex.set_direction(Axis::Vertical);
         assert_eq!(flex.direction(), Axis::Vertical);
-        assert!(RenderBoxMixin::needs_layout(&flex));
+        assert!(flex.needs_layout());
     }
 
     #[test]
@@ -281,6 +281,6 @@ mod tests {
 
         flex.set_main_axis_alignment(MainAxisAlignment::Center);
         assert_eq!(flex.main_axis_alignment(), MainAxisAlignment::Center);
-        assert!(RenderBoxMixin::needs_layout(&flex));
+        assert!(flex.needs_layout());
     }
 }

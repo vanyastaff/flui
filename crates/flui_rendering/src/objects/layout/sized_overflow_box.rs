@@ -119,7 +119,7 @@ impl RenderSizedOverflowBox {
     pub fn set_width(&mut self, width: Option<f32>) {
         if self.data().width != width {
             self.data_mut().width = width;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -127,7 +127,7 @@ impl RenderSizedOverflowBox {
     pub fn set_height(&mut self, height: Option<f32>) {
         if self.data().height != height {
             self.data_mut().height = height;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 
@@ -135,7 +135,7 @@ impl RenderSizedOverflowBox {
     pub fn set_alignment(&mut self, alignment: Alignment) {
         if self.data().alignment != alignment {
             self.data_mut().alignment = alignment;
-            RenderBoxMixin::mark_needs_layout(self);
+            self.mark_needs_layout();
         }
     }
 }
@@ -251,7 +251,7 @@ mod tests {
 
         sized_overflow.set_width(Some(150.0));
         assert_eq!(sized_overflow.width(), Some(150.0));
-        assert!(RenderBoxMixin::needs_layout(&sized_overflow));
+        assert!(sized_overflow.needs_layout());
     }
 
     #[test]
@@ -260,7 +260,7 @@ mod tests {
 
         sized_overflow.set_alignment(Alignment::BOTTOM_RIGHT);
         assert_eq!(sized_overflow.alignment(), Alignment::BOTTOM_RIGHT);
-        assert!(RenderBoxMixin::needs_layout(&sized_overflow));
+        assert!(sized_overflow.needs_layout());
     }
 
     #[test]
