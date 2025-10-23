@@ -26,7 +26,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderPositionedBox;
 use flui_types::Alignment;
 
@@ -79,7 +79,7 @@ pub struct Center {
 
     /// The child widget to center.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl Center {
@@ -94,7 +94,7 @@ impl Center {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
         self.child = Some(Box::new(child));
     }
 
@@ -128,9 +128,12 @@ impl Default for Center {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for Center {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
@@ -143,8 +146,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl Widget + 'static) -> CenterBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> CenterBuilder<SetChild<S>> {
+        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
     }
 }
 
@@ -173,14 +176,30 @@ macro_rules! center {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
 
     #[derive(Debug, Clone)]
     struct MockWidget;
+
     impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            todo!()
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_center_new() {
@@ -267,10 +286,39 @@ mod tests {
         };
         assert!(center.validate().is_err());
     }
+
+    #[test]
+    fn test_center_widget_trait() {
+        let widget = Center::builder()
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
+    }
+
+    #[test]
+    fn test_center_builder_with_child() {
+        let widget = Center::builder()
+            .width_factor(2.0)
+            .child(MockWidget)
+            .build();
+
+        assert!(widget.child.is_some());
+        assert_eq!(widget.width_factor, Some(2.0));
+    }
+
+    #[test]
+    fn test_center_set_child() {
+        let mut widget = Center::new();
+        widget.set_child(MockWidget);
+        assert!(widget.child.is_some());
+    }
 }
 
+// Implement RenderObjectWidget
 impl RenderObjectWidget for Center {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         Box::new(RenderPositionedBox::new(
             Alignment::CENTER,
             self.width_factor,
@@ -278,11 +326,21 @@ impl RenderObjectWidget for Center {
         ))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(positioned) = render_object.downcast_mut::<RenderPositionedBox>() {
             positioned.set_alignment(Alignment::CENTER);
             positioned.set_width_factor(self.width_factor);
             positioned.set_height_factor(self.height_factor);
         }
+    }
+}
+
+// Implement SingleChildRenderObjectWidget
+impl SingleChildRenderObjectWidget for Center {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .unwrap_or_else(|| panic!("Center requires a child"))
     }
 }
