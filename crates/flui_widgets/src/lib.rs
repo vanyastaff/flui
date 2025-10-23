@@ -74,8 +74,9 @@ pub use gestures::GestureDetector;
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
-pub use flui_core::{BoxConstraints, BuildContext, Widget};
-pub use flui_rendering::{DecorationPosition, FlexFit, RenderBox, RenderObject, StackFit};
+pub use flui_core::{BoxConstraints, Widget, DynWidget};
+pub use flui_rendering::DecorationPosition;
+pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
 pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
 
