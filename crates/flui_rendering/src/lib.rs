@@ -58,7 +58,7 @@ pub use core::{
     RenderBoxMixin,
 };
 
-// Re-export all RenderObjects for backward compatibility
+// Re-export all RenderObjects
 pub use objects::{
     // Layout objects
     RenderPadding, RenderConstrainedBox, RenderAspectRatio, RenderLimitedBox,
@@ -75,9 +75,6 @@ pub use objects::{
     // Enums and data types
     DecorationPosition,
 };
-
-// Re-export StackFit from flui_types (via objects::layout)
-pub use flui_types::layout::StackFit;
 
 /// Prelude module for convenient imports
 pub mod prelude {
