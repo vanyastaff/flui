@@ -1,364 +1,160 @@
-//! RenderOffstage - controls whether child is painted
-//!
-//! Used by Offstage widget to hide widgets without removing them from the tree.
+//! RenderOffstage - hides widget from display
 
-use flui_core::{BoxConstraints, DynRenderObject, ElementId};
-use flui_types::events::HitTestResult;
-use flui_types::{Offset, Size};
-use crate::RenderFlags;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_core::DynRenderObject;
+use crate::core::{SingleRenderBox, RenderBoxMixin};
 
-/// RenderOffstage controls whether its child is painted and hit tested
+/// Data for RenderOffstage
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OffstageData {
+    /// Whether the child is offstage (hidden)
+    pub offstage: bool,
+}
+
+impl OffstageData {
+    /// Create new offstage data
+    pub fn new(offstage: bool) -> Self {
+        Self { offstage }
+    }
+}
+
+impl Default for OffstageData {
+    fn default() -> Self {
+        Self { offstage: true }
+    }
+}
+
+/// RenderObject that hides its child from display
 ///
-/// When `offstage` is true:
-/// - Child is NOT painted (invisible)
-/// - Child is NOT hit tested (doesn't receive pointer events)
-/// - Child IS still laid out (maintains its size)
+/// When offstage is true:
+/// - The child is not painted
+/// - The child is laid out (to maintain its state)
+/// - The size is reported as zero
 ///
-/// This is useful for:
-/// - Keeping a widget in the tree but hiding it
-/// - Preserving widget state while hiding
-/// - Animating visibility without rebuilding
+/// This is different from Opacity(0) - the child doesn't take up space.
 ///
-/// # Layout Algorithm
-///
-/// Simply passes constraints to child and adopts child size (like RenderProxyBox).
-///
-/// # Painting
-///
-/// When `offstage` is true, skips painting the child entirely.
-///
-/// # Hit Testing
-///
-/// When `offstage` is true, always returns false (no hit testing).
-///
-/// # Examples
+/// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::RenderOffstage;
+/// use flui_rendering::{SingleRenderBox, objects::effects::OffstageData};
 ///
-/// // Create and hide child
-/// let mut render = RenderOffstage::new(true);
+/// let mut offstage = SingleRenderBox::new(OffstageData::new(true));
 /// ```
-pub struct RenderOffstage {
-    /// Element ID for caching
-    element_id: Option<ElementId>,
-    /// Whether the child is offstage (hidden)
-    offstage: bool,
-    /// Child render object
-    child: Option<Box<dyn DynRenderObject>>,
-    /// Current size
-    size: Size,
-    /// Current constraints
-    constraints: Option<BoxConstraints>,
-    /// Render flags (needs_layout, needs_paint, boundaries)
-    flags: RenderFlags,
-}
+pub type RenderOffstage = SingleRenderBox<OffstageData>;
+
+// ===== Public API =====
 
 impl RenderOffstage {
-    /// Creates a new RenderOffstage
-    ///
-    /// # Parameters
-    ///
-    /// - `offstage`: If true, child is hidden (not painted or hit tested)
-    pub fn new(offstage: bool) -> Self {
-        Self {
-            element_id: None,
-            offstage,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
-        }
-    }
-
-    /// Creates RenderOffstage with element ID for caching
-    pub fn with_element_id(offstage: bool, element_id: ElementId) -> Self {
-        Self {
-            element_id: Some(element_id),
-            offstage,
-            child: None,
-            size: Size::zero(),
-            constraints: None,
-            flags: RenderFlags::new(),
-        }
-    }
-
-    /// Sets element ID for caching
-    pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
-        self.element_id = element_id;
-    }
-
-    /// Gets element ID
-    pub fn element_id(&self) -> Option<ElementId> {
-        self.element_id
-    }
-
-    /// Sets the child
-    pub fn set_child(&mut self, child: Option<Box<dyn DynRenderObject>>) {
-        self.child = child;
-        self.mark_needs_layout();
-    }
-
-    /// Returns a reference to the child
-    pub fn child(&self) -> Option<&dyn DynRenderObject> {
-        self.child.as_deref()
-    }
-
-    /// Sets whether the child is offstage
-    pub fn set_offstage(&mut self, offstage: bool) {
-        if self.offstage != offstage {
-            self.offstage = offstage;
-            // Only need to repaint, not re-layout
-            self.mark_needs_paint();
-        }
-    }
-
-    /// Returns whether the child is offstage
+    /// Check if child is offstage
     pub fn offstage(&self) -> bool {
-        self.offstage
+        self.data().offstage
+    }
+
+    /// Set whether child is offstage
+    pub fn set_offstage(&mut self, offstage: bool) {
+        if self.data().offstage != offstage {
+            self.data_mut().offstage = offstage;
+            RenderBoxMixin::mark_needs_layout(self);
+        }
     }
 }
+
+// ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderOffstage {
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        crate::impl_cached_layout!(self, constraints, {
-            if let Some(child) = &mut self.child {
-                // Always layout the child, even when offstage
-                // This preserves the child's size and state
-                child.layout(constraints)
-            } else {
-                // Without child, use smallest size
-                constraints.smallest()
-            }
-        })
+        // Store constraints
+        self.state_mut().constraints = Some(constraints);
+
+        let offstage = self.data().offstage;
+
+        // Always layout child to maintain state
+        if let Some(child) = self.child_mut() {
+            child.layout(constraints);
+        }
+
+        // Report size as zero if offstage, otherwise use child size
+        let size = if offstage {
+            Size::ZERO
+        } else if let Some(child) = self.child() {
+            child.size()
+        } else {
+            constraints.smallest()
+        };
+
+        // Store size and clear needs_layout flag
+        self.state_mut().size = Some(size);
+        self.clear_needs_layout();
+
+        size
     }
 
     fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if self.offstage {
-            // Don't paint child when offstage
-            return;
-        }
-
-        if let Some(child) = &self.child {
-            // Paint child normally when not offstage
-            child.paint(painter, offset);
+        // Don't paint if offstage
+        if !self.data().offstage {
+            if let Some(child) = self.child() {
+                child.paint(painter, offset);
+            }
         }
     }
 
-    fn hit_test_self(&self, _position: Offset) -> bool {
-        // Never hit ourselves
-        false
-    }
-
-    fn hit_test_children(
-        &self,
-        result: &mut HitTestResult,
-        position: Offset,
-    ) -> bool {
-        if self.offstage {
-            // Don't hit test children when offstage
-            return false;
-        }
-
-        if let Some(child) = &self.child {
-            // Normal hit testing when not offstage
-            child.hit_test(result, position)
-        } else {
-            false
-        }
-    }
-
-    fn size(&self) -> Size {
-        self.size
-    }
-
-    fn constraints(&self) -> Option<BoxConstraints> {
-        self.constraints
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.flags.needs_layout()
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.flags.mark_needs_layout();
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.flags.needs_paint()
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.flags.mark_needs_paint();
-    }
-
-    fn visit_children(&self, visitor: &mut dyn FnMut(&dyn DynRenderObject)) {
-        if let Some(child) = &self.child {
-            visitor(&**child);
-        }
-    }
-
-    fn visit_children_mut(&mut self, visitor: &mut dyn FnMut(&mut dyn DynRenderObject)) {
-        if let Some(child) = &mut self.child {
-            visitor(&mut **child);
-        }
-    }
-}
-
-impl std::fmt::Debug for RenderOffstage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RenderOffstage")
-            .field("offstage", &self.offstage)
-            .field("has_child", &self.child.is_some())
-            .field("size", &self.size)
-            .finish()
-    }
+    // Delegate all other methods to RenderBoxMixin
+    delegate_to_mixin!();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RenderConstrainedBox;
 
     #[test]
-    fn test_offstage_new() {
-        let render = RenderOffstage::new(true);
-        assert!(render.offstage);
-        assert!(render.child.is_none());
+    fn test_offstage_data_new() {
+        let data = OffstageData::new(true);
+        assert!(data.offstage);
+
+        let data = OffstageData::new(false);
+        assert!(!data.offstage);
     }
 
     #[test]
-    fn test_offstage_layout() {
-        let mut render = RenderOffstage::new(true);
-
-        // Add a child
-        let child = Box::new(RenderConstrainedBox::new(
-            BoxConstraints::tight(Size::new(100.0, 50.0)),
-        ));
-        render.set_child(Some(child));
-
-        // Layout should work even when offstage
-        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
-        let size = render.layout(constraints);
-
-        assert_eq!(size, Size::new(100.0, 50.0));
+    fn test_offstage_data_default() {
+        let data = OffstageData::default();
+        assert!(data.offstage);
     }
 
     #[test]
-    fn test_offstage_hit_test_when_offstage() {
-        let mut render = RenderOffstage::new(true);
-
-        // Add a child
-        let child = Box::new(RenderConstrainedBox::new(
-            BoxConstraints::tight(Size::new(100.0, 50.0)),
-        ));
-        render.set_child(Some(child));
-
-        // Layout first
-        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
-        render.layout(constraints);
-
-        // Hit test should fail when offstage
-        let mut result = HitTestResult::new();
-        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
-
-        assert!(!hit);
-        assert!(result.is_empty());
+    fn test_render_offstage_new() {
+        let offstage = SingleRenderBox::new(OffstageData::new(true));
+        assert!(offstage.offstage());
     }
 
     #[test]
-    fn test_offstage_hit_test_when_not_offstage() {
-        let mut render = RenderOffstage::new(false);
+    fn test_render_offstage_set_offstage() {
+        let mut offstage = SingleRenderBox::new(OffstageData::new(true));
 
-        // Add a child
-        let child = Box::new(RenderConstrainedBox::new(
-            BoxConstraints::tight(Size::new(100.0, 50.0)),
-        ));
-        render.set_child(Some(child));
-
-        // Layout first
-        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
-        render.layout(constraints);
-
-        // Hit test should succeed when not offstage
-        let mut result = HitTestResult::new();
-        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
-
-        assert!(hit);
-        assert!(!result.is_empty());
+        offstage.set_offstage(false);
+        assert!(!offstage.offstage());
+        assert!(RenderBoxMixin::needs_layout(&offstage));
     }
 
     #[test]
-    fn test_offstage_toggle() {
-        let mut render = RenderOffstage::new(false);
+    fn test_render_offstage_layout_offstage() {
+        let mut offstage = SingleRenderBox::new(OffstageData::new(true));
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        // Add a child
-        let child = Box::new(RenderConstrainedBox::new(
-            BoxConstraints::tight(Size::new(100.0, 50.0)),
-        ));
-        render.set_child(Some(child));
+        let size = offstage.layout(constraints);
 
-        // Layout first
-        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
-        render.layout(constraints);
-
-        // Initially not offstage - should hit
-        let mut result = HitTestResult::new();
-        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
-        assert!(hit);
-
-        // Toggle to offstage
-        render.set_offstage(true);
-
-        // Now should not hit
-        let mut result = HitTestResult::new();
-        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
-        assert!(!hit);
-
-        // Toggle back to not offstage
-        render.set_offstage(false);
-
-        // Should hit again
-        let mut result = HitTestResult::new();
-        let hit = render.hit_test(&mut result, Offset::new(50.0, 25.0));
-        assert!(hit);
+        // Should report zero size when offstage
+        assert_eq!(size, Size::ZERO);
     }
 
     #[test]
-    fn test_offstage_preserves_layout() {
-        let mut render = RenderOffstage::new(false);
+    fn test_render_offstage_layout_onstage() {
+        let mut offstage = SingleRenderBox::new(OffstageData::new(false));
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        // Add a child
-        let child = Box::new(RenderConstrainedBox::new(
-            BoxConstraints::tight(Size::new(100.0, 50.0)),
-        ));
-        render.set_child(Some(child));
+        let size = offstage.layout(constraints);
 
-        // Layout
-        let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
-        let size_before = render.layout(constraints);
-
-        // Toggle to offstage
-        render.set_offstage(true);
-
-        // Re-layout should give same size (layout is preserved)
-        let size_after = render.layout(constraints);
-
-        assert_eq!(size_before, size_after);
-        assert_eq!(size_after, Size::new(100.0, 50.0));
-    }
-
-    #[test]
-    fn test_offstage_set_offstage_marks_paint() {
-        let mut render = RenderOffstage::new(false);
-
-        // Clear paint flag
-        render.flags.clear_needs_paint();
-
-        // Toggle offstage
-        render.set_offstage(true);
-
-        // Should mark needs paint
-        assert!(render.needs_paint());
+        // Should use smallest size when onstage (no child)
+        assert_eq!(size, Size::new(0.0, 0.0));
     }
 }
