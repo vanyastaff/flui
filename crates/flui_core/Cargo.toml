@@ -21,6 +21,7 @@ glam.workspace = true
 smallvec = { workspace = true, features = ["union", "const_generics"] }
 bitflags.workspace = true
 itertools.workspace = true
+slab = "0.4"
 
 # Performance optimization dependencies
 once_cell.workspace = true

@@ -46,12 +46,13 @@ pub mod binding;
 pub mod change_notifier;
 pub mod diagnostics;
 pub mod futures;
-pub mod id;
 pub mod key;
 pub mod observer_list;
 pub mod platform;
 pub mod slot;
 pub mod string_cache;
+
+// ElementId is now defined in lib.rs as: pub type ElementId = usize;
 
 
 
@@ -76,7 +77,6 @@ pub mod prelude {
         ChangeNotifier, Listenable, ListenerCallback, ListenerId, ValueNotifier,
     };
     pub use super::diagnostics::{Diagnosticable, DiagnosticLevel};
-    pub use super::id::ElementId;
     pub use super::key::{GlobalKey, Key, KeyId, StringKey, UniqueKey, ValueKey, WidgetKey};
     pub use super::platform::{PlatformBrightness, TargetPlatform};
     pub use super::slot::Slot;
@@ -103,10 +103,6 @@ pub use diagnostics::{
 // Re-exports - Futures
 #[doc(inline)]
 pub use futures::SynchronousFuture;
-
-// Re-exports - IDs
-#[doc(inline)]
-pub use id::ElementId;
 
 // Re-exports - Keys
 #[doc(inline)]
@@ -192,7 +188,8 @@ mod tests {
         let _key = ValueKey::new("test");
         let _notifier = ChangeNotifier::new();
         let _platform = TargetPlatform::current();
-        let _id = ElementId::new();
+        // ElementId is now just usize (Slab index)
+        let _id: crate::ElementId = 0;
         let _slot = Slot::new(0);
     }
 }

@@ -79,8 +79,15 @@ pub use flui_types::{
 // BoxConstraints is also from flui_types
 pub use flui_types::constraints::BoxConstraints;
 
+// Element ID is now a Slab index (clean architecture with arena allocation)
+/// Element identifier (Slab index)
+///
+/// ElementId is now simply an index into the ElementTree's Slab arena.
+/// This provides O(1) direct access and efficient memory usage.
+pub type ElementId = usize;
+
 // Re-export foundation types
-pub use foundation::{ElementId, Slot};
+pub use foundation::Slot;
 pub use element::ElementLifecycle;
 pub use error::{CoreError, Result, KeyError};
 
@@ -90,17 +97,20 @@ pub use context::Context;
 /// Type alias for backwards compatibility
 /// BuildContext is the old name for Context
 pub type BuildContext = Context;
-pub use element::{DynElement, ComponentElement, Element, InactiveElements, RenderObjectElement, StatefulElement};
+pub use element::{DynElement, ComponentElement, Element, RenderObjectElement, StatefulElement};
 pub use element::render::{
     LeafRenderObjectElement,
     MultiChildRenderObjectElement,
     SingleChildRenderObjectElement,
 };
-pub use tree::{BuildOwner, ElementPool, ElementPoolStats, ElementTree, GlobalKeyId, PipelineOwner};
+pub use tree::{BuildOwner, ElementTree, GlobalKeyId, PipelineOwner};
 pub use widget::{DynWidget, InheritedElement, InheritedWidget, InheritedModel, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget, ErrorDetails, ErrorWidgetBuilder};
 pub use render::{
     DynRenderObject,
     RenderObject,
+    RenderContext,
+    RenderFlags,
+    RenderState,
     parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData},
 };
 pub use render::widget::{

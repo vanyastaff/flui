@@ -70,9 +70,6 @@ impl PipelineOwner {
     pub fn new() -> Self {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
 
-        // Set the tree's self-reference so it can pass it to ComponentElements during rebuild
-        tree.write().set_tree_ref(tree.clone());
-
         Self {
             tree,
             root_element_id: None,
@@ -111,7 +108,10 @@ impl PipelineOwner {
         let mut tree_guard = self.tree.write();
         let id = tree_guard.set_root(root_widget);
 
-        tree_guard.set_element_tree_ref(id, self.tree.clone());
+        // Set tree reference on root element
+        if let Some(elem) = tree_guard.get_mut(id) {
+            elem.set_tree_ref(self.tree.clone());
+        }
 
         drop(tree_guard);
         self.root_element_id = Some(id);
@@ -176,10 +176,39 @@ impl PipelineOwner {
             tracing::info!("PipelineOwner::flush_build: rebuilding {} dirty elements", dirty_before);
         }
 
+        let tree_arc = self.tree.clone();
         let mut tree_guard = self.tree.write();
-        tree_guard.rebuild();
+        tree_guard.rebuild(tree_arc);
         let remaining = tree_guard.dirty_element_count();
         tracing::debug!("PipelineOwner::flush_build: remaining dirty after rebuild: {}", remaining);
+    }
+
+    /// Find the first element with a RenderObject, starting from root
+    ///
+    /// Root might be a ComponentElement (StatelessWidget) which doesn't have
+    /// a RenderObject. This method traverses children until finding one.
+    fn find_root_render_object_element(&self) -> Option<ElementId> {
+        let root_id = self.root_element_id?;
+        let tree_guard = self.tree.read();
+
+        let mut current_id = root_id;
+        loop {
+            let element = tree_guard.get(current_id)?;
+
+            // Check if this element has a RenderObject
+            if element.render_object().is_some() {
+                return Some(current_id);
+            }
+
+            // No RenderObject, try first child
+            let mut children = element.children_iter();
+            if let Some(child_id) = children.next() {
+                current_id = child_id;
+            } else {
+                // No children, no RenderObject found
+                return None;
+            }
+        }
     }
 
     /// Flush the layout phase
@@ -222,11 +251,33 @@ impl PipelineOwner {
             drop(tree_guard);
         }
 
-        // Always layout root with constraints (for now)
-        let mut tree_guard = self.tree.write();
-        let render_object = tree_guard.root_render_object_mut()?;
-        let size = render_object.layout(constraints);
-        Some(size)
+        // Find the first element with a RenderObject (might not be root if root is ComponentElement)
+        let render_object_element_id = self.find_root_render_object_element()?;
+
+        tracing::debug!("PipelineOwner::flush_layout: found render object at element {}", render_object_element_id);
+
+        // Get read access to tree - layout() uses interior mutability via Mutex
+        let tree_guard = self.tree.read();
+
+        if let Some(root_elem) = tree_guard.get(render_object_element_id) {
+            if let Some(ro) = root_elem.render_object() {
+                tracing::info!("PipelineOwner::flush_layout: performing layout on element {}", render_object_element_id);
+
+                // Create RenderContext with the real tree so RenderObjects can access children
+                let ctx = crate::render::RenderContext::new(&*tree_guard, render_object_element_id);
+
+                // Ensure render_state exists and get it
+                tree_guard.ensure_render_state(render_object_element_id);
+                let mut state = tree_guard.render_state_mut(render_object_element_id)
+                    .expect("render_state should exist after ensure_render_state");
+
+                let size = ro.layout(&mut *state, constraints, &ctx);
+                tracing::debug!("PipelineOwner::flush_layout: layout complete, size = {:?}", size);
+                return Some(size);
+            }
+        }
+
+        None
     }
 
     /// Flush the paint phase
@@ -262,10 +313,24 @@ impl PipelineOwner {
             drop(tree_guard);
         }
 
-        // Always paint root (for now)
-        let tree_guard = self.tree.read();
-        if let Some(render_object) = tree_guard.root_render_object() {
-            render_object.paint(painter, offset);
+        // Find the first element with a RenderObject and paint it
+        if let Some(render_object_element_id) = self.find_root_render_object_element() {
+            // Get RenderObject and paint it
+            let tree_guard = self.tree.read();
+            let ctx = crate::render::RenderContext::new(&*tree_guard, render_object_element_id);
+
+            if let Some(elem) = tree_guard.get(render_object_element_id) {
+                if let Some(ro) = elem.render_object() {
+                    tracing::debug!("PipelineOwner::flush_paint: painting element {}", render_object_element_id);
+
+                    // Get render_state for painting
+                    if let Some(state) = tree_guard.render_state(render_object_element_id) {
+                        ro.paint(&*state, painter, offset, &ctx);
+                    } else {
+                        tracing::warn!("flush_paint: element {} has no render_state", render_object_element_id);
+                    }
+                }
+            }
         }
     }
 
@@ -285,17 +350,22 @@ impl PipelineOwner {
         let tree_guard = self.tree.read();
         let mut result = HitTestResult::new();
 
-        if let Some(render_object) = tree_guard.root_render_object() {
-            let position = event.position();
-            let hit = render_object.hit_test(&mut result, position);
+        // Get root render object
+        if let Some(root_id) = self.root_element_id {
+            if let Some(root_elem) = tree_guard.get(root_id) {
+                if let Some(render_object) = root_elem.render_object() {
+                    let position = event.position();
+                    let hit = render_object.hit_test(&mut result, position);
 
-            if hit {
-                tracing::debug!(
-                    "Hit test for {:?} at {:?}: {} entries",
-                    event,
-                    position,
-                    result.entries().len()
-                );
+                    if hit {
+                        tracing::debug!(
+                            "Hit test for {:?} at {:?}: {} entries",
+                            event,
+                            position,
+                            result.entries().len()
+                        );
+                    }
+                }
             }
         }
 

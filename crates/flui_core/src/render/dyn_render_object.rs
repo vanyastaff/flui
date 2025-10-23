@@ -93,12 +93,44 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     /// # Arguments
     ///
     /// - `constraints`: The constraints within which to layout
+    /// - `ctx`: Rendering context providing access to children and the element tree
     ///
     /// # Returns
     ///
     /// The size chosen by this render object
+    ///
+    /// # Implementation Notes
+    ///
+    /// For leaf RenderObjects (no children), the `ctx` parameter can be ignored:
+    ///
+    /// ```rust,ignore
+    /// fn layout(&self, state: &mut RenderState, constraints: BoxConstraints, _ctx: &RenderContext) -> Size {
+    ///     // Compute size without needing children
+    ///     // Store size directly in state (no interior mutability needed!)
+    ///     let size = compute_intrinsic_size(constraints);
+    ///     *state.size.lock() = Some(size);
+    ///     state.flags.lock().remove(RenderFlags::NEEDS_LAYOUT);
+    ///     size
+    /// }
+    /// ```
+    ///
+    /// For container RenderObjects, use `ctx` to layout children:
+    ///
+    /// ```rust,ignore
+    /// fn layout(&self, state: &mut RenderState, constraints: BoxConstraints, ctx: &RenderContext) -> Size {
+    ///     let mut total_height = 0.0;
+    ///     for &child_id in ctx.children() {
+    ///         let child_size = ctx.layout_child(child_id, child_constraints);
+    ///         total_height += child_size.height;
+    ///     }
+    ///     let size = Size::new(constraints.max_width, total_height);
+    ///     *state.size.lock() = Some(size);
+    ///     state.flags.lock().remove(RenderFlags::NEEDS_LAYOUT);
+    ///     size
+    /// }
+    /// ```
     #[must_use]
-    fn layout(&mut self, constraints: BoxConstraints) -> Size;
+    fn layout(&self, state: &mut crate::render::RenderState, constraints: BoxConstraints, ctx: &crate::render::RenderContext) -> Size;
 
     /// Paint this render object
     ///
@@ -109,14 +141,44 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     ///
     /// - `painter`: The egui Painter to draw with
     /// - `offset`: Position relative to parent
-    fn paint(&self, painter: &egui::Painter, offset: Offset);
+    /// - `ctx`: Rendering context providing access to children
+    ///
+    /// # Implementation Notes
+    ///
+    /// For leaf RenderObjects, the `ctx` parameter can be ignored:
+    ///
+    /// ```rust,ignore
+    /// fn paint(&self, state: &RenderState, painter: &egui::Painter, offset: Offset, _ctx: &RenderContext) {
+    ///     let size = state.size.lock().expect("Size not set");
+    ///     painter.rect_filled(offset, size, color);
+    /// }
+    /// ```
+    ///
+    /// For container RenderObjects, use `ctx` to paint children:
+    ///
+    /// ```rust,ignore
+    /// fn paint(&self, state: &RenderState, painter: &egui::Painter, offset: Offset, ctx: &RenderContext) {
+    ///     let mut child_offset = offset;
+    ///     for &child_id in ctx.children() {
+    ///         ctx.paint_child(child_id, painter, child_offset);
+    ///         child_offset.y += child_height;
+    ///     }
+    /// }
+    /// ```
+    fn paint(&self, state: &crate::render::RenderState, painter: &egui::Painter, offset: Offset, ctx: &crate::render::RenderContext);
 
     /// Get the current size (after layout)
     ///
     /// Returns the size determined by the last layout pass.
     /// This is only valid after `layout()` has been called.
+    ///
+    /// After architecture refactoring, size is stored in ElementTree's render_state
+    /// and accessed via RenderContext during actual rendering. This default
+    /// implementation is provided for RenderObjects that don't need custom behavior.
     #[must_use]
-    fn size(&self) -> Size;
+    fn size(&self) -> Size {
+        Size::ZERO
+    }
 
     /// Get the constraints used in the last layout
     ///
@@ -142,7 +204,14 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     /// Mark this render object as needing layout
     ///
     /// This schedules the render object for layout during the next frame.
-    fn mark_needs_layout(&mut self);
+    /// Uses interior mutability to modify state through `&self`.
+    ///
+    /// After architecture refactoring, dirty flags are stored in ElementTree's
+    /// render_state and modified via RenderContext. This default implementation
+    /// is a no-op for RenderObjects that don't maintain their own state.
+    fn mark_needs_layout(&self) {
+        // Default: no-op (handled via RenderContext)
+    }
 
     /// Check if this render object needs paint
     ///
@@ -157,7 +226,14 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     /// Mark this render object as needing paint
     ///
     /// This schedules the render object for painting during the next frame.
-    fn mark_needs_paint(&mut self);
+    /// Uses interior mutability to modify state through `&self`.
+    ///
+    /// After architecture refactoring, dirty flags are stored in ElementTree's
+    /// render_state and modified via RenderContext. This default implementation
+    /// is a no-op for RenderObjects that don't maintain their own state.
+    fn mark_needs_paint(&self) {
+        // Default: no-op (handled via RenderContext)
+    }
 
     /// Check if compositing bits need update
     ///
@@ -170,7 +246,8 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
     /// Mark compositing bits as needing update
     ///
     /// This schedules the render object's compositing bits for recalculation.
-    fn mark_needs_compositing_bits_update(&mut self) {
+    /// Uses interior mutability to modify state through `&self`.
+    fn mark_needs_compositing_bits_update(&self) {
         // Default: no-op
     }
 
@@ -523,28 +600,65 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug {
         // Default: no disposal needed
     }
 
-    /// Adopt a child render object
+    /// Adopt a child render object (takes ownership)
     ///
     /// Called when adding a child to this render object.
-    /// Override to maintain a child list.
+    /// Transfers ownership of the child to this render object.
+    ///
+    /// This matches Flutter's adoptChild semantics - the child is moved
+    /// into the parent's ownership.
     ///
     /// # Arguments
     ///
-    /// - `child`: The child to adopt
-    fn adopt_child(&mut self, _child: &mut dyn DynRenderObject) {
-        // Default: no children
+    /// - `child`: The child render object to adopt (ownership transferred)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // For SingleRenderBox:
+    /// fn adopt_child(&mut self, child: Box<dyn DynRenderObject>) {
+    ///     self.setup_parent_data(&mut *child);
+    ///     self.child = Some(child);
+    ///     self.mark_needs_layout();
+    /// }
+    /// ```
+    fn adopt_child(&mut self, _child: Box<dyn DynRenderObject>) {
+        // Default: no children supported
+        // Leaf render objects don't override this
+        panic!("adopt_child() called on a RenderObject that doesn't support children");
     }
 
-    /// Drop a child render object
+    /// Drop a child render object (returns ownership)
     ///
     /// Called when removing a child from this render object.
-    /// Override to maintain a child list.
+    /// Returns ownership of the child back to the caller.
     ///
     /// # Arguments
     ///
-    /// - `child`: The child to drop
-    fn drop_child(&mut self, _child: &mut dyn DynRenderObject) {
+    /// - `child_ref`: Reference to the child to drop (for identification)
+    ///
+    /// # Returns
+    ///
+    /// The child render object if found, or None
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // For SingleRenderBox:
+    /// fn drop_child(&mut self, child_ref: &dyn DynRenderObject) -> Option<Box<dyn DynRenderObject>> {
+    ///     if let Some(child) = &self.child {
+    ///         if std::ptr::eq(child.as_ref(), child_ref) {
+    ///             let dropped = self.child.take();
+    ///             self.mark_needs_layout();
+    ///             return dropped;
+    ///         }
+    ///     }
+    ///     None
+    /// }
+    /// ```
+    fn drop_child(&mut self, _child_ref: &dyn DynRenderObject) -> Option<Box<dyn DynRenderObject>> {
         // Default: no children
+        None
     }
 
     // ========== Layout Optimization ==========

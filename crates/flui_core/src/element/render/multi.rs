@@ -35,9 +35,7 @@ type ChildList = SmallVec<[ElementId; 8]>;
 ///
 /// - [`LeafRenderObjectElement`] - For widgets with no children
 /// - [`SingleChildRenderObjectElement`] - For widgets with one child
-pub struct MultiChildRenderObjectElement<W: MultiChildRenderObjectWidget> {
-    id: ElementId,
-    widget: W,
+pub struct MultiChildRenderObjectElement<W: MultiChildRenderObjectWidget> {    widget: W,
     parent: Option<ElementId>,
     dirty: bool,
     lifecycle: ElementLifecycle,
@@ -50,11 +48,11 @@ pub struct MultiChildRenderObjectElement<W: MultiChildRenderObjectWidget> {
 
 impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     /// Creates a new multi-child render object element
+    ///
+    /// Note: ID is initially 0 and will be set by ElementTree when inserted
     #[must_use]
     pub fn new(widget: W) -> Self {
-        Self {
-            id: ElementId::new(),
-            widget,
+        Self {            widget,
             parent: None,
             dirty: true,
             lifecycle: ElementLifecycle::Initial,
@@ -128,6 +126,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     )]
     fn update_children(
         &mut self,
+        element_id: ElementId,
         mut old_children: ChildList,
         new_widgets: &[Box<dyn DynWidget>],
     ) -> ChildList {
@@ -144,7 +143,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
 
         if old_children.is_empty() {
             // All children are new - mount them all
-            return self.mount_all_children(new_widgets);
+            return self.mount_all_children(element_id, new_widgets);
         }
 
         // Get tree reference (needed for operations)
@@ -220,6 +219,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
         // Handle middle section
         if old_index < old_end || new_index < new_end {
             self.handle_middle_section(
+                element_id,
                 &old_children[old_index..old_end],
                 &new_widgets[new_index..new_end],
                 &mut new_children,
@@ -283,13 +283,13 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     }
 
     /// Mount all new children (when old list is empty)
-    fn mount_all_children(&mut self, new_widgets: &[Box<dyn DynWidget>]) -> ChildList {
+    fn mount_all_children(&mut self, element_id: ElementId, new_widgets: &[Box<dyn DynWidget>]) -> ChildList {
         let mut children = SmallVec::with_capacity(new_widgets.len());
 
         if let Some(tree) = &self.tree {
             for (slot, widget) in new_widgets.iter().enumerate() {
                 let widget_clone = dyn_clone::clone_box(widget.as_ref());
-                if let Some(child_id) = tree.write().insert_child(self.id, widget_clone, slot) {
+                if let Some(child_id) = tree.write().insert_child(element_id, widget_clone, slot) {
                     children.push(child_id);
                 }
             }
@@ -301,6 +301,7 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
     /// Handle the middle section where children don't match on both ends
     fn handle_middle_section(
         &mut self,
+        element_id: ElementId,
         old_middle: &[ElementId],
         new_middle: &[Box<dyn DynWidget>],
         new_children: &mut ChildList,
@@ -367,19 +368,17 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
             } else {
                 // Create new element
                 let widget_clone = dyn_clone::clone_box(new_widget.as_ref());
-                if let Some(element_id) = tree.write().insert_child(self.id, widget_clone, slot_index) {
-                    new_children.push(element_id);
+                if let Some(child_id) = tree.write().insert_child(element_id, widget_clone, slot_index) {
+                    new_children.push(child_id);
                 }
             }
         }
 
-        // Deactivate or remove unused old children
-        // If element has GlobalKey, deactivate it so it can be reactivated later
-        // Otherwise, remove it immediately
+        // Remove unused old children
         let mut tree_guard = tree.write();
         for &old_id in old_middle {
             if !used_old_children.contains(&old_id) {
-                tree_guard.deactivate_child(old_id);
+                tree_guard.remove(old_id);
             }
         }
     }
@@ -390,7 +389,6 @@ impl<W: MultiChildRenderObjectWidget> MultiChildRenderObjectElement<W> {
 impl<W: MultiChildRenderObjectWidget> fmt::Debug for MultiChildRenderObjectElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MultiChildRenderObjectElement")
-            .field("id", &self.id)
             .field("widget_type", &std::any::type_name::<W>())
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
@@ -403,12 +401,7 @@ impl<W: MultiChildRenderObjectWidget> fmt::Debug for MultiChildRenderObjectEleme
 
 // ========== Implement DynElement for MultiChildRenderObjectElement ==========
 
-impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectElement<W> {
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
+impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectElement<W> {    fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
@@ -444,7 +437,7 @@ impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectEleme
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -458,7 +451,7 @@ impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectEleme
         children
             .iter()
             .enumerate()
-            .map(|(slot, child)| (self.id, dyn_clone::clone_box(child.as_ref()), slot))
+            .map(|(slot, child)| (element_id, dyn_clone::clone_box(child.as_ref()), slot))
             .collect()
     }
 
@@ -498,8 +491,18 @@ impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectEleme
         None // Multi-child elements don't use this method
     }
 
-    fn set_child_after_mount(&mut self, _child_id: ElementId) {
-        // Multi-child elements use set_children or add_child instead
+    fn set_child_after_mount(&mut self, child_id: ElementId) {
+        // Add the child to our children list
+        self.children.push(child_id);
+
+        tracing::debug!("MultiChildRenderObjectElement: added child {:?}, now have {} children", child_id, self.children.len());
+
+        // Also sync the RenderObject's child_element_ids
+        // NOTE: We can't directly downcast here due to circular dependency issues
+        // (flui_core can't depend on flui_rendering). Instead, the sync will happen
+        // via a different mechanism or through ElementTree after mounting.
+        // For now, just log that the child was added to Element.
+        tracing::trace!("  → Element child added, RenderObject sync pending");
     }
 
     fn widget_type_id(&self) -> std::any::TypeId {
@@ -516,6 +519,14 @@ impl<W: MultiChildRenderObjectWidget> DynElement for MultiChildRenderObjectEleme
 
     fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         self.render_object.as_mut().map(|ro| ro.as_mut())
+    }
+
+    fn take_render_object(&mut self) -> Option<Box<dyn crate::DynRenderObject>> {
+        self.render_object.take()
+    }
+
+    fn set_render_object(&mut self, render_object: Option<Box<dyn crate::DynRenderObject>>) {
+        self.render_object = render_object;
     }
 
     fn did_change_dependencies(&mut self) {

@@ -1,89 +1,99 @@
-//! Element tree lifecycle management
+//! Element tree lifecycle management with Slab-based arena allocation
 //!
-//! Manages mounting, updating, rebuilding, and unmounting of elements.
+//! Clean architecture using Slab for efficient memory management and O(1) access.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
+use slab::Slab;
 use parking_lot::RwLock;
 
 use crate::{DynWidget, DynElement, ElementId};
-use crate::element::InactiveElements;
-use crate::tree::ElementPool;
+use crate::render::RenderState;
 
 /// Element tree managing lifecycle and dirty tracking
+///
+/// Uses Slab for arena-based allocation - elements are stored contiguously
+/// in memory with direct index-based access.
 #[derive(Debug)]
 pub struct ElementTree {
+    /// Arena storage for all elements
+    nodes: Slab<ElementNode>,
+
+    /// Root element index
     root: Option<ElementId>,
-    elements: HashMap<ElementId, Box<dyn DynElement>>,
-    dirty_elements: VecDeque<ElementId>,
-    /// Inactive elements (deactivated, awaiting reactivation or unmount)
-    inactive_elements: InactiveElements,
-    /// Element pool for reusing elements (optional performance optimization)
-    element_pool: Option<ElementPool>,
+
+    /// Dirty elements that need rebuild (using indices for efficiency)
+    dirty_nodes: VecDeque<ElementId>,
+
+    /// Whether we're currently building
     building: bool,
-    tree_ref: Option<Arc<RwLock<Self>>>,
-    /// Whether we're currently in a build scope
-    /// When true, mark_dirty calls are deferred to avoid infinite rebuild loops
+
+    /// Build scope isolation - prevent infinite rebuild loops
     in_build_scope: bool,
-    /// Elements that tried to mark_dirty during build scope
-    /// These will be processed after the build scope completes
     deferred_dirty: VecDeque<ElementId>,
+}
+
+/// Internal node structure containing element and tree relationships
+#[derive(Debug)]
+struct ElementNode {
+    /// The actual element
+    element: Box<dyn DynElement>,
+
+    /// Parent-child relationships (via Slab indices)
+    parent: Option<ElementId>,
+    children: Vec<ElementId>,
+
+    /// Render state (for RenderObjectElements)
+    ///
+    /// Stores layout/paint state (size, constraints, dirty flags) for elements
+    /// that have a RenderObject. This moves state from RenderObject into the
+    /// tree where it logically belongs (state is per-element, not per-data).
+    ///
+    /// Uses RwLock for interior mutability - allows modifying state through &self
+    /// during layout/paint operations without requiring &mut ElementTree.
+    /// RwLock is thread-safe (unlike RefCell).
+    render_state: parking_lot::RwLock<Option<RenderState>>,
+
+    /// Parent data (type-erased)
+    ///
+    /// This is data that the parent RenderObject attaches to this child.
+    /// For example, Stack attaches StackParentData to position children,
+    /// Flex attaches FlexParentData for flex factors.
+    ///
+    /// Stored as `Box<dyn ParentData>` for type erasure, downcasted when needed.
+    /// Uses the ParentData trait which provides DowncastSync for type-safe downcasting.
+    ///
+    /// **Note**: Stored separately from RenderState because parent_data is about
+    /// parent-child relationship (set once at mount), not layout/paint state
+    /// (changes every frame).
+    ///
+    /// Uses RwLock for interior mutability - allows reading from multiple threads.
+    parent_data: parking_lot::RwLock<Option<Box<dyn crate::ParentData>>>,
 }
 
 impl ElementTree {
     /// Create empty element tree
     pub fn new() -> Self {
         Self {
+            nodes: Slab::new(),
             root: None,
-            elements: HashMap::new(),
-            dirty_elements: VecDeque::new(),
-            inactive_elements: InactiveElements::new(),
-            element_pool: None, // Pooling disabled by default
+            dirty_nodes: VecDeque::new(),
             building: false,
-            tree_ref: None,
             in_build_scope: false,
             deferred_dirty: VecDeque::new(),
         }
     }
 
-    /// Enable element pooling for performance optimization
-    ///
-    /// When enabled, deactivated elements are stored in a pool and can be reused
-    /// instead of being dropped. This significantly reduces allocations for
-    /// dynamic UIs.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_per_type` - Maximum elements to pool per widget type (default: 16)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let mut tree = ElementTree::new();
-    /// tree.enable_pooling(16); // Pool up to 16 of each widget type
-    /// ```
-    pub fn enable_pooling(&mut self, max_per_type: usize) {
-        self.element_pool = Some(ElementPool::new(max_per_type));
-        tracing::info!("ElementTree: element pooling enabled (max_per_type={})", max_per_type);
-    }
-
-    /// Disable element pooling
-    ///
-    /// All pooled elements are dropped immediately.
-    pub fn disable_pooling(&mut self) {
-        if let Some(pool) = self.element_pool.take() {
-            tracing::info!("ElementTree: element pooling disabled (dropped {} elements)", pool.len());
+    /// Create element tree with pre-allocated capacity
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            nodes: Slab::with_capacity(capacity),
+            root: None,
+            dirty_nodes: VecDeque::new(),
+            building: false,
+            in_build_scope: false,
+            deferred_dirty: VecDeque::new(),
         }
-    }
-
-    /// Check if pooling is enabled
-    pub fn is_pooling_enabled(&self) -> bool {
-        self.element_pool.is_some()
-    }
-
-    /// Get pool statistics (if pooling enabled)
-    pub fn pool_stats(&self) -> Option<crate::tree::ElementPoolStats> {
-        self.element_pool.as_ref().map(|pool| pool.stats())
     }
 
     /// Check if tree has root
@@ -93,105 +103,38 @@ impl ElementTree {
     }
 
     /// Get the root element ID
-    ///
-    /// # Returns
-    ///
-    /// The root element ID, or `None` if no root has been mounted.
     #[inline]
     pub fn root(&self) -> Option<ElementId> {
         self.root
     }
 
-    /// Get the root RenderObject by traversing from root element
-    ///
-    /// Walks down the element tree to find the first RenderObject.
-    /// This is useful for getting the root of the render tree for layout/paint.
-    ///
-    /// # Returns
-    ///
-    /// Reference to the root RenderObject, or None if not found
-    ///
-    /// # Note
-    ///
-    /// This is a simplified implementation that only works for simple trees.
-    /// In a full implementation, we'd track the render tree separately.
-    pub fn root_render_object(&self) -> Option<&dyn crate::DynRenderObject> {
-        let root_id = self.root?;
-        self.find_render_object(root_id)
+    /// Get an element by ID (immutable)
+    #[inline]
+    pub fn get(&self, id: ElementId) -> Option<&dyn DynElement> {
+        self.nodes.get(id).map(|node| node.element.as_ref())
     }
 
-    /// Get mutable reference to root RenderObject
-    ///
-    /// # Returns
-    ///
-    /// Mutable reference to the root RenderObject, or None if not found
-    pub fn root_render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
-        let root_id = self.root?;
-        self.find_render_object_mut(root_id)
+    /// Get an element by ID (mutable)
+    #[inline]
+    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn DynElement> {
+        self.nodes.get_mut(id).map(|node| node.element.as_mut())
     }
 
-    /// Find RenderObject starting from given element ID (immutable)
-    fn find_render_object(&self, element_id: ElementId) -> Option<&dyn crate::DynRenderObject> {
-        let element = self.get(element_id)?;
-
-        // Check if this element has a RenderObject
-        if let Some(render_object) = element.render_object() {
-            return Some(render_object);
-        }
-
-        // If not, search in children - get child IDs without locking
-        // Search children recursively
-        for child_id in element.children_iter() {
-            if let Some(render_object) = self.find_render_object(child_id) {
-                return Some(render_object);
-            }
-        }
-
-        None
+    /// Get children of an element
+    #[inline]
+    pub fn children(&self, id: ElementId) -> &[ElementId] {
+        self.nodes.get(id)
+            .map(|node| node.children.as_slice())
+            .unwrap_or(&[])
     }
 
-    /// Find RenderObject starting from given element ID (mutable)
-    ///
-    /// # Note
-    ///
-    /// This is complex to implement correctly due to Rust's borrow checker.
-    /// For now, we use unsafe to achieve the desired behavior.
-    fn find_render_object_mut(&mut self, element_id: ElementId) -> Option<&mut dyn crate::DynRenderObject> {
-        // Check if this element has a RenderObject
-        let has_render_object = self.elements.get(&element_id)?.render_object().is_some();
-
-        if has_render_object {
-            // Get mutable reference
-            return self.elements.get_mut(&element_id)?.render_object_mut();
-        }
-
-        // Collect child IDs without acquiring locks
-        let first_child_id: Option<ElementId> = {
-            let element = self.elements.get(&element_id)?;
-            element.children_iter().next()
-        };
-
-        // Search children - only search first child for now
-        // Full recursive search requires more complex lifetime management
-        if let Some(first_child) = first_child_id {
-            return self.find_render_object_mut(first_child);
-        }
-
-        None
+    /// Get parent of an element
+    #[inline]
+    pub fn parent(&self, id: ElementId) -> Option<ElementId> {
+        self.nodes.get(id).and_then(|node| node.parent)
     }
 
-    /// Mount a widget as the root of the tree
-    ///
-    /// Creates an element from the widget and mounts it as the root.
-    /// If a root already exists, it will be unmounted first.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let mut tree = ElementTree::new();
-    /// let root_id = tree.set_root(Box::new(MyApp::new()));
-    /// assert_eq!(tree.root(), Some(root_id));
-    /// ```
+    /// Set root widget
     pub fn set_root(&mut self, widget: Box<dyn DynWidget>) -> ElementId {
         // Unmount existing root if present
         if let Some(old_root_id) = self.root {
@@ -200,13 +143,19 @@ impl ElementTree {
 
         // Create element from widget
         let mut element = widget.create_element();
-        let element_id = element.id();
 
         // Mount the element (no parent, slot 0)
         element.mount(None, 0);
 
-        // Store in tree
-        self.elements.insert(element_id, element);
+        // Insert into Slab - this generates the ID
+        let element_id = self.nodes.insert(ElementNode {
+            element,
+            parent: None,
+            children: Vec::new(),
+            render_state: parking_lot::RwLock::new(Some(RenderState::new())), // Create state for root
+            parent_data: parking_lot::RwLock::new(None),
+        });
+
         self.root = Some(element_id);
 
         // Mark as dirty for initial build
@@ -215,43 +164,7 @@ impl ElementTree {
         element_id
     }
 
-    /// Set tree reference for an element
-    ///
-    /// This is called internally to give ComponentElements access to the tree
-    /// so they can mount their children.
-    ///
-    /// Set the tree's self-reference
-    ///
-    /// # Parameters
-    ///
-    /// - `tree`: Arc reference to the element tree
-    ///
-    /// This should be called once after the tree is wrapped in Arc<RwLock<>>
-    pub fn set_tree_ref(&mut self, tree: Arc<RwLock<Self>>) {
-        self.tree_ref = Some(tree);
-    }
-
-    pub fn set_element_tree_ref(&mut self, element_id: ElementId, tree: Arc<RwLock<Self>>) {
-        if let Some(element) = self.elements.get_mut(&element_id) {
-            element.set_tree_ref(tree);
-        }
-    }
-
-
-    /// Get an element by ID (immutable)
-    #[inline]
-    pub fn get(&self, id: ElementId) -> Option<&dyn DynElement> {
-        self.elements.get(&id).map(|e| e.as_ref())
-    }
-
-    /// Get an element by ID (mutable)
-    #[inline]
-    pub fn get_mut(&mut self, id: ElementId) -> Option<&mut dyn DynElement> {
-        self.elements.get_mut(&id).map(|e| e.as_mut())
-    }
-
-
-    /// Mount a child element under a parent
+    /// Insert a child element
     pub fn insert_child(
         &mut self,
         parent_id: ElementId,
@@ -259,223 +172,33 @@ impl ElementTree {
         slot: usize,
     ) -> Option<ElementId> {
         // Verify parent exists
-        if !self.elements.contains_key(&parent_id) {
+        if !self.nodes.contains(parent_id) {
             return None;
         }
 
         // Create element from widget
         let mut element = widget.create_element();
-        let element_id = element.id();
 
         // Mount the element
         element.mount(Some(parent_id), slot);
 
-        // Store in tree
-        self.elements.insert(element_id, element);
+        // Insert into Slab - this generates the ID
+        let element_id = self.nodes.insert(ElementNode {
+            element,
+            parent: Some(parent_id),
+            children: Vec::new(),
+            render_state: parking_lot::RwLock::new(Some(RenderState::new())), // Create state for child
+            parent_data: parking_lot::RwLock::new(None),
+        });
 
-        // Mark as dirty for initial build
-        self.mark_dirty(element_id);
-
-        Some(element_id)
-    }
-
-    /// Update an element with a new widget
-    pub fn update(
-        &mut self,
-        element_id: ElementId,
-        new_widget: Box<dyn DynWidget>,
-    ) -> crate::Result<ElementId> {
-        // Check if element exists
-        if !self.elements.contains_key(&element_id) {
-            return Err(crate::CoreError::element_not_found(element_id));
-        }
-
-        // Remove element temporarily for update
-        let mut element = self.elements.remove(&element_id)
-            .ok_or_else(|| crate::CoreError::element_not_found(element_id))?;
-
-        // Update the element
-        element.update_any(new_widget);
-
-        // Mark as dirty
-        element.mark_dirty();
-
-        // Re-insert
-        self.elements.insert(element_id, element);
-
-        // Add to dirty queue
-        self.mark_dirty(element_id);
-
-        Ok(element_id)
-    }
-
-
-    /// Smart child update: Update existing child or create new one
-    ///
-    /// This is the core algorithm for efficient element reuse. It implements
-    /// Flutter's update_child() logic with Key-based matching.
-    ///
-    /// # Algorithm
-    ///
-    /// 1. If `new_widget` is None: unmount `old_child` and return None
-    /// 2. If `old_child` is None: inflate new widget and return new element
-    /// 3. If both exist:
-    ///    - Check if update is possible (same type, compatible keys)
-    ///    - If compatible: update existing element in-place
-    ///    - If incompatible: unmount old, inflate new
-    ///
-    /// # Parameters
-    ///
-    /// - `old_child`: ID of existing child element (or None)
-    /// - `new_widget`: New widget to use (or None to unmount)
-    /// - `parent_id`: ID of parent element
-    /// - `slot`: Slot position for the child
-    ///
-    /// # Returns
-    ///
-    /// ID of the resulting element (updated or newly created), or None if unmounted
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Update child with new widget
-    /// let new_child_id = tree.update_child(
-    ///     old_child_id,
-    ///     Some(new_widget),
-    ///     parent_id,
-    ///     0
-    /// );
-    /// ```
-    #[tracing::instrument(level = "trace", skip(self, new_widget), fields(has_new_widget = new_widget.is_some()))]
-    pub fn update_child(
-        &mut self,
-        old_child: Option<ElementId>,
-        new_widget: Option<Box<dyn DynWidget>>,
-        parent_id: ElementId,
-        slot: usize,
-    ) -> Option<ElementId> {
-        // Case 1: No new widget -> unmount old child
-        if new_widget.is_none() {
-            if let Some(old_id) = old_child {
-                self.remove(old_id);
-            }
-            return None;
-        }
-
-        let new_widget = new_widget.unwrap();
-
-        // Case 2: No old child -> inflate new widget
-        if old_child.is_none() {
-            return self.inflate_widget(new_widget, parent_id, slot);
-        }
-
-        let old_id = old_child.unwrap();
-
-        // Case 3: Both exist -> check if we can update
-        let can_update = self.can_update(old_id, new_widget.as_ref());
-
-        if can_update {
-            // Update existing element in-place
-            tracing::debug!("update_child: updating element {:?} in-place", old_id);
-
-            // Update the element with new widget
-            if let Some(element) = self.elements.get_mut(&old_id) {
-                element.update_any(new_widget);
-                element.mark_dirty();
-
-                // Update slot if needed
-                if let Some(parent_elem) = self.elements.get_mut(&parent_id) {
-                    parent_elem.update_slot_for_child(old_id, slot);
-                }
+        // Add to parent's children list
+        if let Some(parent_node) = self.nodes.get_mut(parent_id) {
+            if !parent_node.children.contains(&element_id) {
+                parent_node.children.push(element_id);
             }
 
-            // Add to dirty queue
-            self.mark_dirty(old_id);
-
-            Some(old_id)
-        } else {
-            // Cannot update -> deactivate old, inflate new
-            tracing::debug!("update_child: replacing element {:?}", old_id);
-
-            // Deactivate old element (may be reactivated by GlobalKey)
-            if let Some(element) = self.elements.get_mut(&old_id) {
-                element.deactivate();
-                // Add to inactive set for potential reactivation
-                self.inactive_elements.add(old_id);
-            }
-
-            // Inflate new widget
-            self.inflate_widget(new_widget, parent_id, slot)
-        }
-    }
-
-    /// Check if an element can be updated with a new widget
-    ///
-    /// Returns true if:
-    /// - Widget type matches element's widget type
-    /// - Keys are compatible (both None, or both Some with same key)
-    ///
-    /// This implements Flutter's Widget.canUpdate() logic.
-    #[inline]
-    fn can_update(&self, element_id: ElementId, new_widget: &dyn DynWidget) -> bool {
-        let element = match self.elements.get(&element_id) {
-            Some(e) => e,
-            None => return false,
-        };
-
-        // Check type match - fast path
-        let widget_type = new_widget.type_id();
-        let element_widget_type = element.widget_type_id();
-
-        if widget_type != element_widget_type {
-            return false;
-        }
-
-        // Check key compatibility
-        let old_key = element.key();
-        let new_key = new_widget.key();
-
-        match (old_key, new_key) {
-            (None, None) => true, // Both have no key - compatible
-            (Some(k1), Some(k2)) => k1.key_eq(k2), // Both have keys - must match
-            _ => false, // One has key, other doesn't - incompatible
-        }
-    }
-
-    /// Inflate a widget into an element and mount it
-    ///
-    /// Creates a new element from the widget, mounts it under the parent,
-    /// and returns its ID.
-    ///
-    /// # Parameters
-    ///
-    /// - `widget`: Widget to inflate
-    /// - `parent_id`: ID of parent element
-    /// - `slot`: Slot position in parent
-    ///
-    /// # Returns
-    ///
-    /// ID of the newly created element
-    #[tracing::instrument(level = "trace", skip(self, widget), fields(widget_type = %widget.type_name()))]
-    fn inflate_widget(
-        &mut self,
-        widget: Box<dyn DynWidget>,
-        parent_id: ElementId,
-        slot: usize,
-    ) -> Option<ElementId> {
-        // Create element from widget
-        let mut element = widget.create_element();
-        let element_id = element.id();
-
-        // Mount the element
-        element.mount(Some(parent_id), slot);
-
-        // Store in tree
-        self.elements.insert(element_id, element);
-
-        // Give element access to tree
-        if let Some(tree_arc) = self.tree_ref.clone() {
-            self.set_element_tree_ref(element_id, tree_arc);
+            // Notify parent element about the new child
+            parent_node.element.set_child_after_mount(element_id);
         }
 
         // Mark as dirty for initial build
@@ -484,38 +207,48 @@ impl ElementTree {
         Some(element_id)
     }
 
-    /// Unmount an element and all its descendants
-    #[tracing::instrument(level = "trace", skip(self))]
+    /// Add child relationship
+    pub fn add_child(&mut self, parent_id: ElementId, child_id: ElementId) {
+        // Add to parent's children
+        if let Some(parent_node) = self.nodes.get_mut(parent_id) {
+            if !parent_node.children.contains(&child_id) {
+                parent_node.children.push(child_id);
+            }
+        }
+
+        // Set child's parent
+        if let Some(child_node) = self.nodes.get_mut(child_id) {
+            child_node.parent = Some(parent_id);
+        }
+    }
+
+    /// Remove child relationship
+    pub fn remove_child(&mut self, parent_id: ElementId, child_id: ElementId) {
+        if let Some(parent_node) = self.nodes.get_mut(parent_id) {
+            parent_node.children.retain(|&id| id != child_id);
+        }
+
+        if let Some(child_node) = self.nodes.get_mut(child_id) {
+            child_node.parent = None;
+        }
+    }
+
+    /// Remove an element and all its descendants
     pub fn remove(&mut self, element_id: ElementId) {
-        // Collect child IDs first (all elements that have this element as parent)
-        let child_ids: Vec<ElementId> = self
-            .elements
-            .iter()
-            .filter(|(_, element)| element.parent() == Some(element_id))
-            .map(|(id, _)| *id)
-            .collect();
+        // Collect child IDs first
+        let child_ids: Vec<ElementId> = self.children(element_id).to_vec();
 
-        // Unmount children first (recursive)
+        // Unmount children recursively
         for child_id in child_ids {
             self.remove(child_id);
         }
 
-        // Now unmount this element
-        if let Some(mut element) = self.elements.remove(&element_id) {
-            // Unmount the element
-            element.unmount();
+        // Unmount this element
+        if let Some(mut node) = self.nodes.try_remove(element_id) {
+            node.element.unmount();
 
-            // Remove from dirty queue if present
-            self.dirty_elements.retain(|&id| id != element_id);
-
-            // Try to pool element if pooling is enabled
-            if let Some(ref mut pool) = self.element_pool {
-                if !pool.store(element) {
-                    // Pool was full, element will be dropped
-                    tracing::trace!("ElementTree: pool full, dropping element {:?}", element_id);
-                }
-            }
-            // Otherwise element is dropped naturally
+            // Remove from dirty queue
+            self.dirty_nodes.retain(|&id| id != element_id);
         }
 
         // Clear root if this was the root element
@@ -524,24 +257,10 @@ impl ElementTree {
         }
     }
 
-
     /// Mark an element as dirty (needs rebuild)
-    ///
-    /// # Build Scope Isolation
-    ///
-    /// If called during a build scope, the dirty marking is deferred to avoid
-    /// infinite rebuild loops. The element will be marked dirty after the
-    /// build scope completes.
     pub fn mark_dirty(&mut self, element_id: ElementId) {
         // If in build scope, defer the dirty marking
         if self.in_build_scope {
-            #[cfg(debug_assertions)]
-            tracing::warn!(
-                "markNeedsBuild() called during build for element {:?}, deferring",
-                element_id
-            );
-
-            // Add to deferred list if not already there
             if !self.deferred_dirty.contains(&element_id) {
                 self.deferred_dirty.push_back(element_id);
             }
@@ -549,128 +268,56 @@ impl ElementTree {
         }
 
         // Normal path: mark dirty immediately
-        if !self.dirty_elements.contains(&element_id) {
-            self.dirty_elements.push_back(element_id);
+        if !self.dirty_nodes.contains(&element_id) {
+            self.dirty_nodes.push_back(element_id);
         }
 
         // Mark the element itself as dirty
-        if let Some(element) = self.elements.get_mut(&element_id) {
-            element.mark_dirty();
+        if let Some(node) = self.nodes.get_mut(element_id) {
+            node.element.mark_dirty();
         }
     }
 
     /// Check if there are any dirty elements
+    #[inline]
     pub fn has_dirty(&self) -> bool {
-        !self.dirty_elements.is_empty()
+        !self.dirty_nodes.is_empty()
     }
 
     /// Get the number of dirty elements
-    ///
-    /// # Returns
-    ///
-    /// The number of elements in the dirty queue
+    #[inline]
     pub fn dirty_element_count(&self) -> usize {
-        self.dirty_elements.len()
+        self.dirty_nodes.len()
     }
 
-    // ========== Build Scope Management ==========
-
-    /// Set build scope state (called by BuildOwner)
-    ///
-    /// When entering a build scope, this should be set to `true`.
-    /// When exiting, set to `false` and call `flush_deferred_dirty()`.
+    /// Set build scope state
     pub(crate) fn set_in_build_scope(&mut self, value: bool) {
         self.in_build_scope = value;
     }
 
     /// Check if currently in build scope
-    ///
-    /// # Returns
-    ///
-    /// `true` if we're currently inside a build scope
+    #[inline]
     pub fn is_in_build_scope(&self) -> bool {
         self.in_build_scope
     }
 
     /// Flush deferred dirty elements
-    ///
-    /// Processes all elements that tried to mark_dirty during the build scope.
-    /// Should be called after exiting the build scope.
     pub(crate) fn flush_deferred_dirty(&mut self) {
         while let Some(element_id) = self.deferred_dirty.pop_front() {
             // Check if element still exists
-            if !self.elements.contains_key(&element_id) {
+            if !self.nodes.contains(element_id) {
                 continue;
             }
 
             // Now safe to mark dirty
-            if !self.dirty_elements.contains(&element_id) {
-                self.dirty_elements.push_back(element_id);
+            if !self.dirty_nodes.contains(&element_id) {
+                self.dirty_nodes.push_back(element_id);
             }
 
-            if let Some(element) = self.elements.get_mut(&element_id) {
-                element.mark_dirty();
+            if let Some(node) = self.nodes.get_mut(element_id) {
+                node.element.mark_dirty();
             }
         }
-    }
-
-
-    /// Rebuild a specific element
-    ///
-    /// This rebuilds a single element by ID, useful for BuildOwner's depth-sorted rebuilding.
-    ///
-    /// # Returns
-    ///
-    /// True if the element was rebuilt, false if it wasn't found or wasn't dirty.
-    pub fn rebuild_element(&mut self, element_id: ElementId) -> bool {
-        // Check if element still exists and is dirty
-        let should_rebuild = if let Some(element) = self.elements.get(&element_id) {
-            element.is_dirty()
-        } else {
-            return false;
-        };
-
-        if !should_rebuild {
-            return false;
-        }
-
-        tracing::debug!("ElementTree: rebuilding single element {:?}", element_id);
-
-        // Get old child before rebuild
-        let old_child_id = if let Some(element) = self.elements.get_mut(&element_id) {
-            element.take_old_child_for_rebuild()
-        } else {
-            None
-        };
-
-        // Rebuild the element
-        let children_to_mount = if let Some(element) = self.elements.get_mut(&element_id) {
-            element.rebuild()
-        } else {
-            Vec::new()
-        };
-
-        // Unmount old child
-        if let Some(old_id) = old_child_id {
-            self.remove(old_id);
-        }
-
-        // Mount new children
-        for (parent_id, child_widget, slot) in children_to_mount {
-            if let Some(new_child_id) = self.insert_child(parent_id, child_widget, slot) {
-                // Set tree reference for the new child
-                if let Some(tree_arc) = self.tree_ref.clone() {
-                    self.set_element_tree_ref(new_child_id, tree_arc);
-                }
-
-                // Set the child ID on the parent ComponentElement
-                if let Some(parent_elem) = self.elements.get_mut(&parent_id) {
-                    parent_elem.set_child_after_mount(new_child_id);
-                }
-            }
-        }
-
-        true
     }
 
     /// Rebuild all dirty elements
@@ -678,16 +325,16 @@ impl ElementTree {
         level = "debug",
         skip(self),
         fields(
-            dirty_count = self.dirty_elements.len(),
-            element_count = self.elements.len()
+            dirty_count = self.dirty_nodes.len(),
+            element_count = self.nodes.len()
         )
     )]
-    pub fn rebuild(&mut self) {
+    pub fn rebuild(&mut self, tree_arc: Arc<RwLock<Self>>) {
         if self.building {
             panic!("ElementTree: Recursive rebuild detected");
         }
 
-        let initial_dirty = self.dirty_elements.len();
+        let initial_dirty = self.dirty_nodes.len();
         if initial_dirty == 0 {
             tracing::debug!("ElementTree::rebuild called: no dirty elements");
         } else {
@@ -696,65 +343,49 @@ impl ElementTree {
 
         self.building = true;
 
-        // Guard against infinite rebuild churn within a single frame
         const MAX_REBUILDS_PER_FRAME: usize = 1024;
         let mut rebuilds_attempted: usize = 0;
         let mut rebuilds_performed: usize = 0;
 
-        // Process dirty queue
-        while let Some(element_id) = self.dirty_elements.pop_front() {
+        while let Some(element_id) = self.dirty_nodes.pop_front() {
             rebuilds_attempted += 1;
             if rebuilds_attempted > MAX_REBUILDS_PER_FRAME {
-                self.dirty_elements.push_front(element_id);
+                self.dirty_nodes.push_front(element_id);
                 tracing::warn!(
-                    "ElementTree: reached MAX_REBUILDS_PER_FRAME ({}). Breaking to avoid infinite build loop. Remaining dirty elements: {}",
+                    "ElementTree: reached MAX_REBUILDS_PER_FRAME ({}). Remaining dirty: {}",
                     MAX_REBUILDS_PER_FRAME,
-                    self.dirty_elements.len()
+                    self.dirty_nodes.len()
                 );
                 break;
             }
 
-            // Check if element still exists (might have been unmounted)
-            let (children_to_mount, old_child_id) = if let Some(element) = self.elements.get_mut(&element_id) {
-                // Only rebuild if still dirty (might have been cleared)
-                if element.is_dirty() {
-                    tracing::debug!("ElementTree: rebuilding element {:?}", element_id);
-
-                    // For ComponentElement, we need to unmount old child first
-                    let old_child_id = element.take_old_child_for_rebuild();
-
-                    let children = element.rebuild();
-                    rebuilds_performed += 1;
-
-                    // If it is still dirty after rebuild, re-queue it to try again later.
-                    if element.is_dirty() {
-                        self.dirty_elements.push_back(element_id);
-                    }
-
-                    (children, old_child_id)
-                } else {
-                    (Vec::new(), None)
-                }
-            } else {
-                (Vec::new(), None)
-            };
-
-            // Now unmount the old child (after dropping the element reference)
-            if let Some(old_id) = old_child_id {
-                self.remove(old_id);
+            // Check if element still exists
+            if !self.nodes.contains(element_id) {
+                continue;
             }
 
-            // Mount children that were returned by rebuild
-            for (parent_id, child_widget, slot) in children_to_mount {
-                if let Some(new_child_id) = self.insert_child(parent_id, child_widget, slot) {
-                    // Set tree reference for the new child
-                    if let Some(tree_arc) = self.tree_ref.clone() {
-                        self.set_element_tree_ref(new_child_id, tree_arc);
+            // Rebuild if still dirty
+            if let Some(node) = self.nodes.get_mut(element_id) {
+                if node.element.is_dirty() {
+                    tracing::debug!("ElementTree: rebuilding element {}", element_id);
+
+                    let children_to_mount = node.element.rebuild(element_id);
+                    rebuilds_performed += 1;
+
+                    // Mount all children returned by rebuild
+                    for (parent_id, child_widget, slot) in children_to_mount {
+                        if let Some(child_id) = self.insert_child(parent_id, child_widget, slot) {
+                            // Set tree reference on newly inserted child
+                            if let Some(child_node) = self.nodes.get_mut(child_id) {
+                                child_node.element.set_tree_ref(tree_arc.clone());
+                            }
+                            tracing::trace!("ElementTree: mounted child {} for parent {} at slot {}", child_id, parent_id, slot);
+                        }
                     }
 
-                    // Set the child ID on the parent ComponentElement
-                    if let Some(parent_elem) = self.elements.get_mut(&parent_id) {
-                        parent_elem.set_child_after_mount(new_child_id);
+                    // If still dirty after rebuild, re-queue
+                    if self.nodes.get(element_id).map_or(false, |n| n.element.is_dirty()) {
+                        self.dirty_nodes.push_back(element_id);
                     }
                 }
             }
@@ -762,259 +393,159 @@ impl ElementTree {
 
         self.building = false;
 
-        let remaining = self.dirty_elements.len();
+        let remaining = self.dirty_nodes.len();
         tracing::debug!(
             "ElementTree::rebuild end: performed {} rebuild(s), remaining dirty: {}",
             rebuilds_performed,
             remaining
         );
-
-        // Clean up inactive elements at end of frame
-        self.finalize_tree();
-    }
-
-    /// Deactivate a child element
-    ///
-    /// If the element has a GlobalKey, it will be deactivated and added to the
-    /// inactive elements set. This allows it to be reactivated later if the same
-    /// GlobalKey appears elsewhere in the tree.
-    ///
-    /// If the element doesn't have a GlobalKey, it will be immediately removed
-    /// since there's no way to reactivate it later.
-    ///
-    /// # Parameters
-    ///
-    /// - `element_id`: ID of element to deactivate
-    ///
-    /// # Returns
-    ///
-    /// true if element was deactivated (has GlobalKey), false if it was removed
-    pub fn deactivate_child(&mut self, element_id: ElementId) -> bool {
-        // Check if element exists and has a GlobalKey
-        // We check by trying to downcast to GlobalKey<()> - any GlobalKey will match
-        let has_global_key = self
-            .elements
-            .get(&element_id)
-            .and_then(|element| element.key())
-            .map(|key| {
-                // Check if it's any kind of GlobalKey by looking at the debug output
-                // GlobalKey types have IDs >= 1_000_000
-                key.id().value() >= 1_000_000
-            })
-            .unwrap_or(false);
-
-        if has_global_key {
-            tracing::debug!(
-                "ElementTree: deactivating element {:?} (has GlobalKey)",
-                element_id
-            );
-
-            // Deactivate the element
-            if let Some(element) = self.elements.get_mut(&element_id) {
-                element.deactivate();
-            }
-
-            // Add to inactive set
-            self.inactive_elements.add(element_id);
-
-            true
-        } else {
-            tracing::debug!(
-                "ElementTree: removing element {:?} (no GlobalKey)",
-                element_id
-            );
-
-            // No GlobalKey, just remove immediately
-            self.remove(element_id);
-
-            false
-        }
-    }
-
-    /// Attempt to reactivate an inactive element
-    ///
-    /// This is used for GlobalKey reparenting. If the element is inactive,
-    /// it will be reactivated and moved to the new parent/slot.
-    ///
-    /// # Parameters
-    ///
-    /// - `element_id`: ID of element to reactivate
-    /// - `new_parent`: New parent element ID
-    /// - `new_slot`: New slot position
-    ///
-    /// # Returns
-    ///
-    /// true if element was reactivated, false if it wasn't inactive
-    pub fn reactivate_element(
-        &mut self,
-        element_id: ElementId,
-        new_parent: ElementId,
-        new_slot: usize,
-    ) -> bool {
-        // Check if element is in inactive set
-        if self.inactive_elements.remove(element_id).is_none() {
-            return false; // Not inactive
-        }
-
-        tracing::debug!(
-            "ElementTree: reactivating element {:?} under parent {:?}",
-            element_id,
-            new_parent
-        );
-
-        // Reactivate the element
-        if let Some(element) = self.elements.get_mut(&element_id) {
-            element.activate();
-            // Mount under new parent
-            element.mount(Some(new_parent), new_slot);
-        }
-
-        // Mark as dirty for rebuild in new location
-        self.mark_dirty(element_id);
-
-        true
-    }
-
-    /// Finalize tree state at end of frame
-    ///
-    /// This unmounts any elements that were deactivated but not reactivated.
-    /// Called automatically at the end of rebuild().
-    fn finalize_tree(&mut self) {
-        if self.inactive_elements.is_empty() {
-            return;
-        }
-
-        let inactive_count = self.inactive_elements.len();
-        tracing::debug!(
-            "ElementTree::finalize_tree: unmounting {} inactive elements",
-            inactive_count
-        );
-
-        // Collect inactive element IDs first (to avoid double borrow)
-        let to_unmount: Vec<ElementId> = self.inactive_elements.drain().collect();
-
-        // Unmount all elements that stayed inactive
-        for element_id in to_unmount {
-            tracing::debug!("  Unmounting inactive element {:?}", element_id);
-            self.remove(element_id);
-        }
     }
 
     /// Get the total number of elements in the tree
-    ///
-    /// # Returns
-    ///
-    /// The number of mounted elements
+    #[inline]
     pub fn element_count(&self) -> usize {
-        self.elements.len()
+        self.nodes.len()
     }
 
     /// Clear the entire tree
-    ///
-    /// Unmounts all elements and resets the tree to an empty state.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// tree.clear();
-    /// assert!(!tree.has_root());
-    /// assert_eq!(tree.element_count(), 0);
-    /// ```
     pub fn clear(&mut self) {
         if let Some(root_id) = self.root {
             self.remove(root_id);
         }
 
-        self.elements.clear();
-        self.dirty_elements.clear();
+        self.nodes.clear();
+        self.dirty_nodes.clear();
         self.root = None;
         self.building = false;
     }
 
     /// Visit all elements in the tree (read-only)
-    ///
-    /// Traverses the entire tree and calls the visitor function for each element.
-    /// The traversal order is depth-first, starting from the root.
-    ///
-    /// # Parameters
-    ///
-    /// - `visitor`: Function to call for each element
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// tree.visit_all_elements(&mut |element| {
-    ///     println!("Element: {:?}", element.id());
-    /// });
-    /// ```
     pub fn visit_all_elements<F>(&self, visitor: &mut F)
     where
-        F: FnMut(&dyn DynElement),
+        F: FnMut(ElementId, &dyn DynElement),
     {
         if let Some(root_id) = self.root {
             self.visit_element_recursive(root_id, visitor);
         }
     }
 
-    /// Visit all elements in the tree (mutable)
-    ///
-    /// Traverses the entire tree and calls the visitor function for each element.
-    /// The traversal order is depth-first, starting from the root.
-    ///
-    /// # Parameters
-    ///
-    /// - `visitor`: Function to call for each element
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// tree.visit_all_elements_mut(&mut |element| {
-    ///     element.mark_dirty();
-    /// });
-    /// ```
-    pub fn visit_all_elements_mut<F>(&mut self, visitor: &mut F)
+    /// Helper for recursive element visitation
+    fn visit_element_recursive<F>(&self, element_id: ElementId, visitor: &mut F)
     where
-        F: FnMut(&mut dyn DynElement),
+        F: FnMut(ElementId, &dyn DynElement),
     {
-        if let Some(root_id) = self.root {
-            // Collect all element IDs first (can't borrow elements while iterating)
-            let mut element_ids = Vec::new();
-            element_ids.push(root_id);
+        if let Some(node) = self.nodes.get(element_id) {
+            visitor(element_id, node.element.as_ref());
 
-            let mut i = 0;
-            while i < element_ids.len() {
-                let current_id = element_ids[i];
-                if let Some(element) = self.elements.get(&current_id) {
-                    for child_id in element.children_iter() {
-                        element_ids.push(child_id);
-                    }
-                }
-                i += 1;
-            }
-
-            // Now visit all elements
-            for element_id in element_ids {
-                if let Some(element) = self.elements.get_mut(&element_id) {
-                    visitor(element.as_mut());
-                }
+            // Visit children
+            let child_ids = node.children.clone();
+            for child_id in child_ids {
+                self.visit_element_recursive(child_id, visitor);
             }
         }
     }
 
-    /// Helper for recursive element visitation (read-only)
-    fn visit_element_recursive<F>(&self, element_id: ElementId, visitor: &mut F)
-    where
-        F: FnMut(&dyn DynElement),
-    {
-        // Visit this element
-        if let Some(element) = self.elements.get(&element_id) {
-            visitor(element.as_ref());
+    // ========== RenderState Management ==========
+    //
+    // These methods provide access to the render_state stored in ElementNode.
+    // This state was previously stored inside RenderBox, but has been moved
+    // to the tree for better memory locality and clearer ownership.
 
-            // Visit children
-            let child_ids: Vec<_> = element.children_iter().collect();
-            for child_id in child_ids {
-                self.visit_element_recursive(child_id, visitor);
+    /// Get immutable reference to render_state for an element
+    ///
+    /// Returns None if element doesn't exist or doesn't have a RenderObject.
+    /// Uses RwLock for interior mutability.
+    #[inline]
+    pub fn render_state(&self, element_id: ElementId) -> Option<parking_lot::MappedRwLockReadGuard<RenderState>> {
+        let node = self.nodes.get(element_id)?;
+        let guard = node.render_state.read();
+        // Use RwLockReadGuard::try_map to extract RenderState from Option
+        parking_lot::RwLockReadGuard::try_map(guard, |opt| opt.as_ref()).ok()
+    }
+
+    /// Get mutable reference to render_state for an element
+    ///
+    /// Returns None if element doesn't exist or doesn't have a RenderObject.
+    /// Uses RwLock for interior mutability - works through &self!
+    #[inline]
+    pub fn render_state_mut(&self, element_id: ElementId) -> Option<parking_lot::MappedRwLockWriteGuard<RenderState>> {
+        let node = self.nodes.get(element_id)?;
+        let guard = node.render_state.write();
+        // Use RwLockWriteGuard::try_map to extract RenderState from Option
+        parking_lot::RwLockWriteGuard::try_map(guard, |opt| opt.as_mut()).ok()
+    }
+
+    /// Ensure element has render_state (create if missing)
+    ///
+    /// Useful for elements that dynamically gain a RenderObject.
+    /// Uses RwLock for interior mutability - works through &self!
+    pub fn ensure_render_state(&self, element_id: ElementId) {
+        if let Some(node) = self.nodes.get(element_id) {
+            let mut state = node.render_state.write();
+            if state.is_none() {
+                *state = Some(RenderState::new());
             }
+        }
+    }
+
+    /// Remove render_state from an element
+    ///
+    /// Useful when an element no longer has a RenderObject.
+    /// Uses RwLock for interior mutability - works through &self!
+    pub fn clear_render_state(&self, element_id: ElementId) {
+        if let Some(node) = self.nodes.get(element_id) {
+            *node.render_state.write() = None;
+        }
+    }
+
+    // ========== ParentData Access Methods ==========
+    //
+    // ParentData is stored separately from RenderState because it represents
+    // the parent-child relationship (set once), not layout/paint state
+    // (changes every frame).
+
+    /// Get parent_data for an element
+    ///
+    /// Returns a read guard to the parent_data if it exists.
+    /// Use downcast to get the actual type:
+    ///
+    /// ```rust,ignore
+    /// if let Some(data) = tree.parent_data(child_id) {
+    ///     if let Some(flex_data) = data.downcast_ref::<FlexParentData>() {
+    ///         println!("flex: {}", flex_data.flex);
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn parent_data(&self, element_id: ElementId) -> Option<parking_lot::MappedRwLockReadGuard<Box<dyn crate::ParentData>>> {
+        let node = self.nodes.get(element_id)?;
+        let guard = node.parent_data.read();
+        parking_lot::RwLockReadGuard::try_map(guard, |opt| opt.as_ref()).ok()
+    }
+
+    /// Get mutable parent_data for an element
+    ///
+    /// Returns a write guard to the parent_data if it exists.
+    #[inline]
+    pub fn parent_data_mut(&self, element_id: ElementId) -> Option<parking_lot::MappedRwLockWriteGuard<Box<dyn crate::ParentData>>> {
+        let node = self.nodes.get(element_id)?;
+        let guard = node.parent_data.write();
+        parking_lot::RwLockWriteGuard::try_map(guard, |opt| opt.as_mut()).ok()
+    }
+
+    /// Set parent_data for an element
+    ///
+    /// Typically called by parent's setup_parent_data() during mount.
+    pub fn set_parent_data(&self, element_id: ElementId, parent_data: Box<dyn crate::ParentData>) {
+        if let Some(node) = self.nodes.get(element_id) {
+            *node.parent_data.write() = Some(parent_data);
+        }
+    }
+
+    /// Clear parent_data for an element
+    pub fn clear_parent_data(&self, element_id: ElementId) {
+        if let Some(node) = self.nodes.get(element_id) {
+            *node.parent_data.write() = None;
         }
     }
 }
@@ -1028,9 +559,9 @@ impl Default for ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DynWidget, Context, StatelessWidget};
+    use crate::{Context, StatelessWidget};
 
-    // Test widget for testing
+    // Test widget
     #[derive(Debug, Clone)]
     struct TestWidget {
         name: String,
@@ -1057,7 +588,13 @@ mod tests {
     }
 
     #[test]
-    fn test_element_tree_mount_root() {
+    fn test_element_tree_with_capacity() {
+        let tree = ElementTree::with_capacity(100);
+        assert_eq!(tree.nodes.capacity(), 100);
+    }
+
+    #[test]
+    fn test_element_tree_set_root() {
         let mut tree = ElementTree::new();
         let widget = TestWidget::new("root");
 
@@ -1066,99 +603,26 @@ mod tests {
         assert!(tree.has_root());
         assert_eq!(tree.root(), Some(root_id));
         assert_eq!(tree.element_count(), 1);
-        assert!(tree.has_dirty()); // Newly mounted elements are dirty
+        assert!(tree.has_dirty());
     }
 
     #[test]
-    fn test_element_tree_get_element() {
+    fn test_element_tree_children() {
         let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(TestWidget::new("root")));
 
-        let root_id = tree.set_root(Box::new(widget));
+        let child_id = tree.insert_child(root_id, Box::new(TestWidget::new("child")), 0).unwrap();
 
-        // Test get_element
-        let element = tree.get(root_id).unwrap();
-        assert_eq!(element.id(), root_id);
-
-        // Test get_element_mut
-        let element_mut = tree.get_mut(root_id).unwrap();
-        assert_eq!(element_mut.id(), root_id);
-    }
-
-    #[test]
-    fn test_element_tree_mount_child() {
-        let mut tree = ElementTree::new();
-        let root_widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(root_widget));
-
-        // Mount a child
-        let child_widget = TestWidget::new("child");
-        let child_id = tree.insert_child(root_id, Box::new(child_widget), 0);
-
-        assert!(child_id.is_some());
-        assert_eq!(tree.element_count(), 2);
-
-        let child = tree.get(child_id.unwrap()).unwrap();
-        assert_eq!(child.parent(), Some(root_id));
-    }
-
-    #[test]
-    fn test_element_tree_mount_child_invalid_parent() {
-        let mut tree = ElementTree::new();
-
-        let invalid_parent = unsafe { ElementId::from_raw(99999) };
-        let child_widget = TestWidget::new("child");
-
-        let result = tree.insert_child(invalid_parent, Box::new(child_widget), 0);
-
-        assert!(result.is_none());
-        assert_eq!(tree.element_count(), 0);
-    }
-
-    #[test]
-    fn test_element_tree_unmount_element() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(widget));
-        assert_eq!(tree.element_count(), 1);
-
-        tree.remove(root_id);
-
-        assert!(!tree.has_root());
-        assert_eq!(tree.element_count(), 0);
-        assert!(tree.get(root_id).is_none());
-    }
-
-    #[test]
-    fn test_element_tree_unmount_with_children() {
-        let mut tree = ElementTree::new();
-        let root_widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(root_widget));
-
-        let child1_id = tree.insert_child(root_id, Box::new(TestWidget::new("child1")), 0);
-        let child2_id = tree.insert_child(root_id, Box::new(TestWidget::new("child2")), 1);
-
-        assert_eq!(tree.element_count(), 3);
-
-        // Unmount root should unmount all children
-        tree.remove(root_id);
-
-        assert_eq!(tree.element_count(), 0);
-        assert!(tree.get(child1_id.unwrap()).is_none());
-        assert!(tree.get(child2_id.unwrap()).is_none());
+        assert_eq!(tree.children(root_id), &[child_id]);
+        assert_eq!(tree.parent(child_id), Some(root_id));
     }
 
     #[test]
     fn test_element_tree_mark_dirty() {
         let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
+        let root_id = tree.set_root(Box::new(TestWidget::new("root")));
 
-        let root_id = tree.set_root(Box::new(widget));
-
-        // Clear dirty queue from initial mount
+        // Clear initial dirty state
         tree.rebuild();
         assert!(!tree.has_dirty());
 
@@ -1167,83 +631,12 @@ mod tests {
 
         assert!(tree.has_dirty());
         assert_eq!(tree.dirty_element_count(), 1);
-
-        let element = tree.get(root_id).unwrap();
-        assert!(element.is_dirty());
-    }
-
-    #[test]
-    fn test_element_tree_mark_dirty_no_duplicates() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(widget));
-        tree.rebuild();
-
-        // Mark dirty multiple times
-        tree.mark_dirty(root_id);
-        tree.mark_dirty(root_id);
-        tree.mark_dirty(root_id);
-
-        // Should only appear once in queue
-        assert_eq!(tree.dirty_element_count(), 1);
-    }
-
-    #[test]
-    fn test_element_tree_rebuild_dirty_elements() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(widget));
-        assert!(tree.has_dirty());
-
-        tree.rebuild();
-
-        assert!(!tree.has_dirty());
-        assert_eq!(tree.dirty_element_count(), 0);
-
-        let element = tree.get(root_id).unwrap();
-        assert!(!element.is_dirty());
-    }
-
-    #[test]
-    fn test_element_tree_rebuild_multiple_dirty() {
-        let mut tree = ElementTree::new();
-        let root_widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(root_widget));
-        let child1_id = tree.insert_child(root_id, Box::new(TestWidget::new("child1")), 0).unwrap();
-        let child2_id = tree.insert_child(root_id, Box::new(TestWidget::new("child2")), 1).unwrap();
-
-        tree.rebuild();
-
-        // Mark all dirty
-        tree.mark_dirty(root_id);
-        tree.mark_dirty(child1_id);
-        tree.mark_dirty(child2_id);
-
-        assert_eq!(tree.dirty_element_count(), 3);
-
-        tree.rebuild();
-
-        assert_eq!(tree.dirty_element_count(), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Recursive rebuild detected")]
-    fn test_element_tree_recursive_rebuild_panic() {
-        let mut tree = ElementTree::new();
-        tree.building = true; // Simulate already building
-
-        tree.rebuild(); // Should panic
     }
 
     #[test]
     fn test_element_tree_clear() {
         let mut tree = ElementTree::new();
-        let root_widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(root_widget));
+        let root_id = tree.set_root(Box::new(TestWidget::new("root")));
         tree.insert_child(root_id, Box::new(TestWidget::new("child")), 0);
 
         assert_eq!(tree.element_count(), 2);
@@ -1253,251 +646,5 @@ mod tests {
         assert!(!tree.has_root());
         assert_eq!(tree.element_count(), 0);
         assert!(!tree.has_dirty());
-    }
-
-    #[test]
-    fn test_element_tree_visit_all_elements() {
-        let mut tree = ElementTree::new();
-        let root_widget = TestWidget::new("root");
-
-        let root_id = tree.set_root(Box::new(root_widget));
-        tree.insert_child(root_id, Box::new(TestWidget::new("child1")), 0);
-        tree.insert_child(root_id, Box::new(TestWidget::new("child2")), 1);
-
-        let mut count = 0;
-        tree.visit_all_elements(&mut |_element| {
-            count += 1;
-        });
-
-        // Should visit root only (children aren't actually added to element's children list
-        // in our simple test - ComponentElement would need full implementation)
-        assert!(count >= 1);
-    }
-
-    #[test]
-    fn test_element_tree_visit_all_elements_mut() {
-        let mut tree = ElementTree::new();
-        let root_widget = TestWidget::new("root");
-
-        tree.set_root(Box::new(root_widget));
-
-        // Mark all elements dirty via visitor
-        tree.visit_all_elements_mut(&mut |element| {
-            element.mark_dirty();
-        });
-
-        // Should have dirty elements
-        assert!(tree.has_dirty());
-    }
-
-    #[test]
-    fn test_element_tree_replace_root() {
-        let mut tree = ElementTree::new();
-        let widget1 = TestWidget::new("root1");
-
-        let root_id1 = tree.set_root(Box::new(widget1));
-        assert_eq!(tree.root(), Some(root_id1));
-
-        // Mount new root (should replace old one)
-        let widget2 = TestWidget::new("root2");
-        let root_id2 = tree.set_root(Box::new(widget2));
-
-        assert_ne!(root_id1, root_id2);
-        assert_eq!(tree.root(), Some(root_id2));
-        assert_eq!(tree.element_count(), 1);
-
-        // Old root should be gone
-        assert!(tree.get(root_id1).is_none());
-    }
-
-    #[test]
-    fn test_element_tree_update_element() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("original");
-
-        let element_id = tree.set_root(Box::new(widget));
-        tree.rebuild();
-
-        // Update with new widget
-        let new_widget = TestWidget::new("updated");
-        let result = tree.update(element_id, Box::new(new_widget));
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), element_id);
-        assert!(tree.has_dirty());
-    }
-
-    #[test]
-    fn test_element_tree_update_invalid_element() {
-        let mut tree = ElementTree::new();
-
-        let invalid_id = unsafe { ElementId::from_raw(99999) };
-        let widget = TestWidget::new("test");
-
-        let result = tree.update(invalid_id, Box::new(widget));
-
-        assert!(result.is_err());
-    }
-
-    // ========== Build Scope Isolation Tests ==========
-
-    #[test]
-    fn test_mark_dirty_outside_build_scope_is_immediate() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-        let root_id = tree.set_root(Box::new(widget));
-
-        // Clear initial dirty state
-        tree.dirty_elements.clear();
-
-        // NOT in build scope
-        assert!(!tree.is_in_build_scope());
-
-        // Mark dirty
-        tree.mark_dirty(root_id);
-
-        // Should be in dirty_elements immediately
-        assert!(tree.dirty_elements.contains(&root_id));
-        assert_eq!(tree.deferred_dirty.len(), 0);
-    }
-
-    #[test]
-    fn test_mark_dirty_during_build_scope_is_deferred() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-        let root_id = tree.set_root(Box::new(widget));
-
-        // Clear initial dirty state
-        tree.dirty_elements.clear();
-
-        // Enter build scope
-        tree.set_in_build_scope(true);
-        assert!(tree.is_in_build_scope());
-
-        // Mark dirty during build scope
-        tree.mark_dirty(root_id);
-
-        // Should NOT be in dirty_elements yet
-        assert!(!tree.dirty_elements.contains(&root_id));
-        // Should be in deferred_dirty
-        assert_eq!(tree.deferred_dirty.len(), 1);
-        assert!(tree.deferred_dirty.contains(&root_id));
-    }
-
-    #[test]
-    fn test_flush_deferred_dirty() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-        let root_id = tree.set_root(Box::new(widget));
-
-        // Clear initial dirty state
-        tree.dirty_elements.clear();
-
-        // Enter build scope and mark dirty
-        tree.set_in_build_scope(true);
-        tree.mark_dirty(root_id);
-
-        assert!(!tree.dirty_elements.contains(&root_id));
-        assert_eq!(tree.deferred_dirty.len(), 1);
-
-        // Exit build scope and flush
-        tree.set_in_build_scope(false);
-        tree.flush_deferred_dirty();
-
-        // Now should be in dirty_elements
-        assert!(tree.dirty_elements.contains(&root_id));
-        assert_eq!(tree.deferred_dirty.len(), 0);
-    }
-
-    #[test]
-    fn test_flush_deferred_dirty_skips_removed_elements() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-        let root_id = tree.set_root(Box::new(widget));
-
-        // Clear initial dirty state
-        tree.dirty_elements.clear();
-
-        // Enter build scope and mark dirty
-        tree.set_in_build_scope(true);
-        tree.mark_dirty(root_id);
-
-        // Remove the element while still in build scope
-        tree.remove(root_id);
-
-        // Exit build scope and flush
-        tree.set_in_build_scope(false);
-        tree.flush_deferred_dirty();
-
-        // Should not be in dirty_elements (element was removed)
-        assert!(!tree.dirty_elements.contains(&root_id));
-        assert_eq!(tree.deferred_dirty.len(), 0);
-    }
-
-    #[test]
-    fn test_deferred_dirty_deduplication() {
-        let mut tree = ElementTree::new();
-        let widget = TestWidget::new("root");
-        let root_id = tree.set_root(Box::new(widget));
-
-        // Clear initial dirty state
-        tree.dirty_elements.clear();
-
-        // Enter build scope
-        tree.set_in_build_scope(true);
-
-        // Mark dirty multiple times
-        tree.mark_dirty(root_id);
-        tree.mark_dirty(root_id);
-        tree.mark_dirty(root_id);
-
-        // Should only be in deferred list once
-        assert_eq!(tree.deferred_dirty.len(), 1);
-
-        // Flush
-        tree.set_in_build_scope(false);
-        tree.flush_deferred_dirty();
-
-        // Should only be in dirty_elements once
-        assert_eq!(tree.dirty_elements.len(), 1);
-        assert!(tree.dirty_elements.contains(&root_id));
-    }
-
-    #[test]
-    fn test_multiple_elements_deferred() {
-        let mut tree = ElementTree::new();
-        let root_widget = TestWidget::new("root");
-        let root_id = tree.set_root(Box::new(root_widget));
-
-        let child1_widget = TestWidget::new("child1");
-        let child1_id = tree.insert_child(root_id, Box::new(child1_widget), 0).unwrap();
-
-        let child2_widget = TestWidget::new("child2");
-        let child2_id = tree.insert_child(root_id, Box::new(child2_widget), 1).unwrap();
-
-        // Clear initial dirty state
-        tree.dirty_elements.clear();
-
-        // Enter build scope
-        tree.set_in_build_scope(true);
-
-        // Mark all three dirty
-        tree.mark_dirty(root_id);
-        tree.mark_dirty(child1_id);
-        tree.mark_dirty(child2_id);
-
-        // All should be deferred
-        assert_eq!(tree.deferred_dirty.len(), 3);
-        assert_eq!(tree.dirty_elements.len(), 0);
-
-        // Flush
-        tree.set_in_build_scope(false);
-        tree.flush_deferred_dirty();
-
-        // All should now be in dirty_elements
-        assert_eq!(tree.dirty_elements.len(), 3);
-        assert!(tree.dirty_elements.contains(&root_id));
-        assert!(tree.dirty_elements.contains(&child1_id));
-        assert!(tree.dirty_elements.contains(&child2_id));
     }
 }
