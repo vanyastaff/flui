@@ -29,7 +29,6 @@ impl StatelessWidget for FlexLayoutExample {
                                 .cross_axis_alignment(CrossAxisAlignment::Start)
                                 .children(vec![
                                     Box::new(Text::new("Example 1: Three Equal Columns (Expanded)")),
-                                    Box::new(SizedBox::builder().height(8.0).build()),
                                     Box::new(
                                         Row::builder()
                                             .children(vec![
@@ -75,7 +74,6 @@ impl StatelessWidget for FlexLayoutExample {
                                 .cross_axis_alignment(CrossAxisAlignment::Start)
                                 .children(vec![
                                     Box::new(Text::new("Example 2: Proportional Columns (1:2:1)")),
-                                    Box::new(SizedBox::builder().height(8.0).build()),
                                     Box::new(
                                         Row::builder()
                                             .children(vec![
@@ -87,7 +85,6 @@ impl StatelessWidget for FlexLayoutExample {
                                                             .build()
                                                     )
                                                 ),
-                                                Box::new(SizedBox::builder().width(8.0).build()),
                                                 Box::new(
                                                     Expanded::with_flex(2,
                                                         Container::builder()
@@ -96,7 +93,6 @@ impl StatelessWidget for FlexLayoutExample {
                                                             .build()
                                                     )
                                                 ),
-                                                Box::new(SizedBox::builder().width(8.0).build()),
                                                 Box::new(
                                                     Expanded::with_flex(1,
                                                         Container::builder()
@@ -123,7 +119,6 @@ impl StatelessWidget for FlexLayoutExample {
                                 .cross_axis_alignment(CrossAxisAlignment::Start)
                                 .children(vec![
                                     Box::new(Text::new("Example 3: Fixed Sidebars + Flexible Content")),
-                                    Box::new(SizedBox::builder().height(8.0).build()),
                                     Box::new(
                                         Row::builder()
                                             .children(vec![
@@ -135,7 +130,6 @@ impl StatelessWidget for FlexLayoutExample {
                                                         .height(60.0)
                                                         .build()
                                                 ),
-                                                Box::new(SizedBox::builder().width(8.0).build()),
                                                 // Flexible content
                                                 Box::new(
                                                     Expanded::new(
@@ -145,7 +139,6 @@ impl StatelessWidget for FlexLayoutExample {
                                                             .build()
                                                     )
                                                 ),
-                                                Box::new(SizedBox::builder().width(8.0).build()),
                                                 // Fixed right sidebar
                                                 Box::new(
                                                     Container::builder()
@@ -172,7 +165,6 @@ impl StatelessWidget for FlexLayoutExample {
                                 .cross_axis_alignment(CrossAxisAlignment::Start)
                                 .children(vec![
                                     Box::new(Text::new("Example 4: Flexible (can be smaller)")),
-                                    Box::new(SizedBox::builder().height(8.0).build()),
                                     Box::new(
                                         Row::builder()
                                             .children(vec![
@@ -185,7 +177,6 @@ impl StatelessWidget for FlexLayoutExample {
                                                             .build()
                                                     )
                                                 ),
-                                                Box::new(SizedBox::builder().width(8.0).build()),
                                                 Box::new(
                                                     Flexible::new(1,
                                                         Container::builder()
@@ -195,7 +186,6 @@ impl StatelessWidget for FlexLayoutExample {
                                                             .build()
                                                     )
                                                 ),
-                                                Box::new(SizedBox::builder().width(8.0).build()),
                                                 Box::new(
                                                     Flexible::new(1,
                                                         Container::builder()
