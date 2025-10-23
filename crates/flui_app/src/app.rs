@@ -208,9 +208,11 @@ impl eframe::App for FluiApp {
     ///
     /// Called by eframe once per frame.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            FluiApp::update(self, ctx, ui);
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none())  // Remove default padding/margin
+            .show(ctx, |ui| {
+                FluiApp::update(self, ctx, ui);
+            });
     }
 }
 
