@@ -19,10 +19,11 @@
 
 use bon::Builder;
 use flui_core::{
-    BoxConstraints, Element, LeafRenderObjectWidget, Offset, RenderObject,
-    RenderObjectWidget, Size, Widget,
+    DynRenderObject, LeafRenderObjectElement, LeafRenderObjectWidget,
+    RenderObjectWidget, Widget,
 };
-use flui_types::Color;
+use flui_types::{Color, typography::{TextAlign, TextDirection, TextOverflow}};
+use flui_rendering::{RenderParagraph, ParagraphData};
 
 /// A widget that displays a string of text with a single style.
 ///
@@ -37,8 +38,8 @@ use flui_types::Color;
 ///
 /// # Implementation
 ///
-/// Text is a LeafRenderObjectWidget that creates a RenderText object for
-/// rendering. The actual text rendering is delegated to egui.
+/// Text is a LeafRenderObjectWidget that creates a RenderParagraph object for
+/// rendering. The actual text rendering is delegated to flui_rendering's RenderParagraph.
 #[derive(Debug, Clone, Builder)]
 pub struct Text {
     /// The text to display
@@ -50,8 +51,27 @@ pub struct Text {
     pub size: f32,
 
     /// Text color
-    #[builder(default = Color::rgb(0, 0, 0))]
+    #[builder(default = Color::BLACK)]
     pub color: Color,
+
+    /// Text alignment
+    #[builder(default = TextAlign::Left)]
+    pub text_align: TextAlign,
+
+    /// Text direction
+    #[builder(default = TextDirection::Ltr)]
+    pub text_direction: TextDirection,
+
+    /// Maximum number of lines
+    pub max_lines: Option<usize>,
+
+    /// Text overflow behavior
+    #[builder(default = TextOverflow::Clip)]
+    pub overflow: TextOverflow,
+
+    /// Whether to wrap text at word boundaries
+    #[builder(default = true)]
+    pub soft_wrap: bool,
 
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -73,7 +93,12 @@ impl Text {
         Self {
             data: data.into(),
             size: 14.0,
-            color: Color::rgb(0, 0, 0),
+            color: Color::BLACK,
+            text_align: TextAlign::Left,
+            text_direction: TextDirection::Ltr,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
             key: None,
         }
     }
@@ -94,7 +119,12 @@ impl Text {
         Self {
             data: data.into(),
             size,
-            color: Color::rgb(0, 0, 0),
+            color: Color::BLACK,
+            text_align: TextAlign::Left,
+            text_direction: TextDirection::Ltr,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
             key: None,
         }
     }
@@ -116,167 +146,62 @@ impl Text {
             data: data.into(),
             size: 14.0,
             color,
+            text_align: TextAlign::Left,
+            text_direction: TextDirection::Ltr,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
             key: None,
         }
     }
 }
 
 impl Widget for Text {
-    fn create_element(&self) -> Box<dyn Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
-    }
+    type Element = LeafRenderObjectElement<Self>;
 
-    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
-        None
+    fn into_element(self) -> Self::Element {
+        LeafRenderObjectElement::new(self)
     }
 }
 
 impl RenderObjectWidget for Text {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
-        Box::new(RenderText::new(
-            self.data.clone(),
-            self.size,
-            self.color,
-        ))
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+        let data = ParagraphData::new(&self.data)
+            .with_font_size(self.size)
+            .with_color(self.color)
+            .with_align(self.text_align)
+            .with_overflow(self.overflow);
+
+        let mut data = if let Some(max_lines) = self.max_lines {
+            data.with_max_lines(max_lines)
+        } else {
+            data
+        };
+
+        data.text_direction = self.text_direction;
+        data.soft_wrap = self.soft_wrap;
+
+        Box::new(RenderParagraph::new(data))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
-        if let Some(render_text) = render_object.downcast_mut::<RenderText>() {
-            render_text.set_text(self.data.clone());
-            render_text.set_size(self.size);
-            render_text.set_color(self.color);
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
+        if let Some(paragraph) = render_object.downcast_mut::<RenderParagraph>() {
+            paragraph.set_text(&self.data);
+            paragraph.set_font_size(self.size);
+            paragraph.set_color(self.color);
+            paragraph.set_text_align(self.text_align);
+
+            // Update data fields directly
+            let data = paragraph.data_mut();
+            data.text_direction = self.text_direction;
+            data.max_lines = self.max_lines;
+            data.overflow = self.overflow;
+            data.soft_wrap = self.soft_wrap;
         }
     }
 }
 
 impl LeafRenderObjectWidget for Text {}
-
-/// RenderObject for Text widget
-///
-/// Handles layout and painting of text using egui's text rendering.
-#[derive(Debug)]
-pub struct RenderText {
-    /// The text to display
-    text: String,
-
-    /// Font size in logical pixels
-    size: f32,
-
-    /// Text color
-    color: Color,
-
-    /// Computed size after layout
-    computed_size: Size,
-
-    /// Whether layout is needed
-    needs_layout_flag: bool,
-
-    /// Whether paint is needed
-    needs_paint_flag: bool,
-}
-
-impl RenderText {
-    /// Create a new RenderText
-    pub fn new(text: String, size: f32, color: Color) -> Self {
-        Self {
-            text,
-            size,
-            color,
-            computed_size: Size::zero(),
-            needs_layout_flag: true,
-            needs_paint_flag: true,
-        }
-    }
-
-    /// Set the text
-    pub fn set_text(&mut self, text: String) {
-        if self.text != text {
-            self.text = text;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Set the font size
-    pub fn set_size(&mut self, size: f32) {
-        if self.size != size {
-            self.size = size;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Set the text color
-    pub fn set_color(&mut self, color: Color) {
-        if self.color != color {
-            self.color = color;
-            self.mark_needs_paint();
-        }
-    }
-
-    /// Calculate text size using egui
-    fn calculate_text_size(&self) -> Size {
-        // For now, use a simple heuristic
-        // In a real implementation, we'd use egui's text measurement
-        let char_count = self.text.chars().count() as f32;
-        let width = char_count * self.size * 0.6; // Rough estimate
-        let height = self.size * 1.2; // Line height
-
-        Size::new(width, height)
-    }
-}
-
-impl RenderObject for RenderText {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        // Calculate text size
-        let text_size = self.calculate_text_size();
-
-        // Constrain to bounds
-        self.computed_size = constraints.constrain(text_size);
-        self.needs_layout_flag = false;
-
-        self.computed_size
-    }
-
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        // Convert Flui color to egui color
-        let egui_color = egui::Color32::from_rgb(
-            self.color.red(),
-            self.color.green(),
-            self.color.blue(),
-        );
-
-        // Create egui text
-        let galley = painter.layout_no_wrap(
-            self.text.clone(),
-            egui::FontId::proportional(self.size),
-            egui_color,
-        );
-
-        // Paint the text
-        let pos = egui::pos2(offset.dx, offset.dy);
-        painter.galley(pos, galley, egui_color);
-    }
-
-    fn size(&self) -> Size {
-        self.computed_size
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.needs_layout_flag
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.needs_layout_flag = true;
-        self.needs_paint_flag = true;
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.needs_paint_flag
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.needs_paint_flag = true;
-    }
-}
 
 /// Declarative macro for creating Text widgets
 ///
@@ -348,53 +273,7 @@ mod tests {
         assert_eq!(text.color, Color::rgb(100, 100, 100));
     }
 
-    #[test]
-    fn test_render_text_set_text() {
-        let mut render_text = RenderText::new("Hello".to_string(), 14.0, Color::rgb(0, 0, 0));
-
-        assert_eq!(render_text.text, "Hello");
-        assert!(render_text.needs_layout());
-
-        render_text.needs_layout_flag = false;
-        render_text.set_text("World".to_string());
-
-        assert_eq!(render_text.text, "World");
-        assert!(render_text.needs_layout());
-    }
-
-    #[test]
-    fn test_render_text_set_size() {
-        let mut render_text = RenderText::new("Test".to_string(), 14.0, Color::rgb(0, 0, 0));
-
-        render_text.needs_layout_flag = false;
-        render_text.set_size(24.0);
-
-        assert_eq!(render_text.size, 24.0);
-        assert!(render_text.needs_layout());
-    }
-
-    #[test]
-    fn test_render_text_set_color() {
-        let mut render_text = RenderText::new("Test".to_string(), 14.0, Color::rgb(0, 0, 0));
-
-        render_text.needs_paint_flag = false;
-        let new_color = Color::rgb(255, 0, 0);
-        render_text.set_color(new_color);
-
-        assert_eq!(render_text.color, new_color);
-        assert!(render_text.needs_paint());
-    }
-
-    #[test]
-    fn test_render_text_layout() {
-        let mut render_text = RenderText::new("Hello".to_string(), 14.0, Color::rgb(0, 0, 0));
-
-        let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
-        let size = render_text.layout(constraints);
-
-        assert!(!render_text.needs_layout());
-        assert_eq!(size, render_text.size());
-    }
+    // RenderParagraph tests are in flui_rendering crate
 
     #[test]
     fn test_text_macro_simple() {

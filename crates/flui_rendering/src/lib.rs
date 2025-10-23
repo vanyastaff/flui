@@ -72,6 +72,9 @@ pub use objects::{
     // Interaction objects
     RenderAbsorbPointer, RenderIgnorePointer, RenderMouseRegion, RenderPointerListener,
 
+    // Text objects
+    RenderParagraph, ParagraphData,
+
     // Enums and data types
     DecorationPosition,
 };
