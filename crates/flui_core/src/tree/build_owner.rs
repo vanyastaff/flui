@@ -177,7 +177,6 @@ impl BuildOwner {
     /// Create a new build owner
     pub fn new() -> Self {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
-        tree.write().set_tree_ref(tree.clone());
 
         Self {
             tree,
@@ -286,7 +285,9 @@ impl BuildOwner {
     pub fn set_root(&mut self, root_widget: Box<dyn DynWidget>) -> ElementId {
         let mut tree_guard = self.tree.write();
         let id = tree_guard.set_root(root_widget);
-        tree_guard.set_element_tree_ref(id, self.tree.clone());
+        if let Some(element) = tree_guard.get_mut(id) {
+            element.set_tree_ref(self.tree.clone());
+        }
         drop(tree_guard);
 
         self.root_element_id = Some(id);
@@ -459,8 +460,9 @@ impl BuildOwner {
 
             let mut tree_guard = self.tree.write();
             // Element might have been removed during previous rebuilds
-            if tree_guard.get(element_id).is_some() {
-                tree_guard.rebuild_element(element_id);
+            if let Some(node) = tree_guard.get_mut(element_id) {
+                let _children = node.rebuild(element_id);
+                // TODO: handle returned children for mounting
             } else {
                 warn!("  Element {:?} was removed before rebuild", element_id);
             }

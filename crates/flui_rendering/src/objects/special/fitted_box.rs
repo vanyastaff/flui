@@ -172,34 +172,43 @@ impl RenderFittedBox {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderFittedBox {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         // Our size is determined by constraints (we try to be as large as possible)
         let size = constraints.biggest();
 
         // Layout child with unbounded constraints to get natural size
-        if let Some(child) = self.child_mut() {
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
             let child_constraints = BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-            let _child_size = child.layout(child_constraints);
+            let _child_size = ctx.layout_child(child_id, child_constraints);
         }
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        use flui_core::DynRenderObject;
-
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Get our size from state (avoid ambiguity by accessing state directly)
-        if let Some(size) = self.state().size {
-            if let Some(child) = self.child() {
+        if let Some(size) = *state.size.lock() {
+            let children_ids = ctx.children();
+            if let Some(&child_id) = children_ids.first() {
                 // Get child's size
-                let child_size = DynRenderObject::size(&**child);
+                // Get child size from tree
+                let child_size = if let Some(child_elem) = ctx.tree().get(child_id) {
+                    if let Some(child_ro) = child_elem.render_object() {
+                        child_ro.size()
+                    } else {
+                        Size::ZERO
+                    }
+                } else {
+                    Size::ZERO
+                };
 
                 // Calculate fitted size and offset
                 let (_fitted_size, child_offset) = self.data().calculate_fit(child_size, size);
@@ -212,7 +221,7 @@ impl DynRenderObject for RenderFittedBox {
                     offset.dy + child_offset.dy,
                 );
 
-                child.paint(painter, final_offset);
+                ctx.paint_child(child_id, painter, final_offset);
             }
         }
     }
@@ -296,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_render_fitted_box_new() {
-        let fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
+        let mut fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
         assert_eq!(fitted.fit(), BoxFit::Contain);
         assert_eq!(fitted.alignment(), Alignment::CENTER);
     }
@@ -314,13 +323,16 @@ mod tests {
 
     #[test]
     fn test_render_fitted_box_set_alignment() {
+        use flui_core::testing::mock_render_context;
+
         use flui_core::DynRenderObject;
 
         let mut fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
 
         // Layout first to clear initial needs_layout flag
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        fitted.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        fitted.layout(constraints, &ctx);
 
         fitted.set_alignment(Alignment::TOP_LEFT);
         assert_eq!(fitted.alignment(), Alignment::TOP_LEFT);
@@ -330,10 +342,13 @@ mod tests {
 
     #[test]
     fn test_render_fitted_box_layout() {
+        use flui_core::testing::mock_render_context;
+
         let mut fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = fitted.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = fitted.layout(constraints, &ctx);
 
         // Should fill available space
         assert_eq!(size, Size::new(100.0, 100.0));

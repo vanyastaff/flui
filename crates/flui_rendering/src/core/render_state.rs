@@ -1,6 +1,7 @@
 //! Shared state structure for all RenderObjects
 
 use std::any::Any;
+use parking_lot::Mutex;
 use flui_types::{Size, constraints::BoxConstraints};
 use super::RenderFlags;
 
@@ -13,14 +14,27 @@ use super::RenderFlags;
 /// 2. Ensure consistent state management
 /// 3. Make the generic architecture possible
 ///
+/// # Interior Mutability
+///
+/// Uses `parking_lot::Mutex<T>` for thread-safe interior mutability.
+/// This enables `layout(&self)` instead of `layout(&mut self)`, which is required
+/// for RenderContext architecture where multiple RenderObjects may need to access
+/// the ElementTree simultaneously.
+///
+/// # Thread Safety
+///
+/// All fields use `Mutex` to allow safe concurrent access while maintaining
+/// interior mutability. `parking_lot::Mutex` is optimized for low-contention
+/// scenarios typical in UI rendering.
+///
 /// # Memory Layout
 ///
 /// ```text
-/// RenderState (24 bytes total on 64-bit):
-/// - size: Option<Size> = 12 bytes (Option<(f32, f32)>)
-/// - constraints: Option<BoxConstraints> = 12 bytes
-/// - flags: RenderFlags = 1 byte
-/// - padding: 7 bytes (alignment)
+/// RenderState (~64 bytes on 64-bit):
+/// - size: Mutex<Option<Size>> ~16 bytes
+/// - constraints: Mutex<Option<BoxConstraints>> ~16 bytes
+/// - flags: Mutex<RenderFlags> ~16 bytes
+/// - parent_data: Mutex<Option<Box<dyn Any>>> ~16 bytes
 /// ```
 ///
 /// # Design Rationale
@@ -38,19 +52,25 @@ pub struct RenderState {
     ///
     /// `None` if layout hasn't been performed yet.
     /// After `layout()` is called, this contains the size chosen by the RenderObject.
-    pub size: Option<Size>,
+    ///
+    /// Uses `Mutex` for thread-safe interior mutability.
+    pub size: Mutex<Option<Size>>,
 
     /// The constraints used in the last layout pass
     ///
     /// `None` if layout hasn't been performed yet.
     /// Stored to enable cache invalidation when constraints change.
-    pub constraints: Option<BoxConstraints>,
+    ///
+    /// Uses `Mutex` for thread-safe interior mutability.
+    pub constraints: Mutex<Option<BoxConstraints>>,
 
     /// Dirty state flags
     ///
     /// Tracks whether this RenderObject needs layout, paint, compositing update, etc.
     /// Uses bitflags for memory efficiency (1 byte vs 4+ bytes for separate bools).
-    pub flags: RenderFlags,
+    ///
+    /// Uses `Mutex` for thread-safe interior mutability.
+    pub flags: Mutex<RenderFlags>,
 
     /// Parent data (type-erased)
     ///
@@ -59,7 +79,9 @@ pub struct RenderState {
     /// Flex attaches FlexParentData for flex factors.
     ///
     /// Stored as `Box<dyn Any + Send + Sync>` for type erasure, downcasted when needed.
-    pub parent_data: Option<Box<dyn Any + Send + Sync>>,
+    ///
+    /// Uses `Mutex` for thread-safe interior mutability.
+    pub parent_data: Mutex<Option<Box<dyn Any + Send + Sync>>>,
 }
 
 impl RenderState {
@@ -73,10 +95,10 @@ impl RenderState {
     /// - `parent_data`: None
     pub fn new() -> Self {
         Self {
-            size: None,
-            constraints: None,
-            flags: RenderFlags::default(), // NEEDS_LAYOUT by default
-            parent_data: None,
+            size: Mutex::new(None),
+            constraints: Mutex::new(None),
+            flags: Mutex::new(RenderFlags::default()), // NEEDS_LAYOUT by default
+            parent_data: Mutex::new(None),
         }
     }
 
@@ -85,7 +107,7 @@ impl RenderState {
     /// Returns `true` if this RenderObject has been laid out at least once.
     #[inline]
     pub fn has_size(&self) -> bool {
-        self.size.is_some()
+        self.size.lock().is_some()
     }
 
     /// Get the size, panicking if not laid out
@@ -95,7 +117,7 @@ impl RenderState {
     /// Panics if `layout()` hasn't been called yet.
     #[inline]
     pub fn size_unchecked(&self) -> Size {
-        self.size.expect("RenderObject not laid out yet")
+        self.size.lock().expect("RenderObject not laid out yet")
     }
 
     /// Mark as needing layout
@@ -103,8 +125,8 @@ impl RenderState {
     /// This sets the NEEDS_LAYOUT flag, indicating that `layout()` should be called
     /// during the next frame.
     #[inline]
-    pub fn mark_needs_layout(&mut self) {
-        self.flags.insert(RenderFlags::NEEDS_LAYOUT);
+    pub fn mark_needs_layout(&self) {
+        self.flags.lock().insert(RenderFlags::NEEDS_LAYOUT);
     }
 
     /// Mark as needing paint
@@ -112,36 +134,36 @@ impl RenderState {
     /// This sets the NEEDS_PAINT flag, indicating that `paint()` should be called
     /// during the next frame.
     #[inline]
-    pub fn mark_needs_paint(&mut self) {
-        self.flags.insert(RenderFlags::NEEDS_PAINT);
+    pub fn mark_needs_paint(&self) {
+        self.flags.lock().insert(RenderFlags::NEEDS_PAINT);
     }
 
     /// Check if this RenderObject needs layout
     #[inline]
     pub fn needs_layout(&self) -> bool {
-        self.flags.contains(RenderFlags::NEEDS_LAYOUT)
+        self.flags.lock().contains(RenderFlags::NEEDS_LAYOUT)
     }
 
     /// Check if this RenderObject needs paint
     #[inline]
     pub fn needs_paint(&self) -> bool {
-        self.flags.contains(RenderFlags::NEEDS_PAINT)
+        self.flags.lock().contains(RenderFlags::NEEDS_PAINT)
     }
 
     /// Clear the needs_layout flag
     ///
     /// Called after layout is performed.
     #[inline]
-    pub fn clear_needs_layout(&mut self) {
-        self.flags.remove(RenderFlags::NEEDS_LAYOUT);
+    pub fn clear_needs_layout(&self) {
+        self.flags.lock().remove(RenderFlags::NEEDS_LAYOUT);
     }
 
     /// Clear the needs_paint flag
     ///
     /// Called after painting is performed.
     #[inline]
-    pub fn clear_needs_paint(&mut self) {
-        self.flags.remove(RenderFlags::NEEDS_PAINT);
+    pub fn clear_needs_paint(&self) {
+        self.flags.lock().remove(RenderFlags::NEEDS_PAINT);
     }
 }
 
@@ -158,24 +180,24 @@ mod tests {
     #[test]
     fn test_render_state_new() {
         let state = RenderState::new();
-        assert!(state.size.is_none());
-        assert!(state.constraints.is_none());
+        assert!(state.size.lock().is_none());
+        assert!(state.constraints.lock().is_none());
         assert!(state.needs_layout());
         assert!(!state.needs_paint());
     }
 
     #[test]
     fn test_render_state_has_size() {
-        let mut state = RenderState::new();
+        let state = RenderState::new();
         assert!(!state.has_size());
 
-        state.size = Some(Size::new(100.0, 100.0));
+        *state.size.lock() = Some(Size::new(100.0, 100.0));
         assert!(state.has_size());
     }
 
     #[test]
     fn test_render_state_flags() {
-        let mut state = RenderState::new();
+        let state = RenderState::new();
 
         state.mark_needs_paint();
         assert!(state.needs_paint());

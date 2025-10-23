@@ -145,24 +145,26 @@ impl RenderBackdropFilter {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderBackdropFilter {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        self.state_mut().constraints = Some(constraints);
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
+        *state.constraints.lock() = Some(constraints);
 
-        let size = if let Some(child) = self.child_mut() {
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
             // Layout child with same constraints
-            child.layout(constraints)
+            ctx.layout_child(child_id, constraints)
         } else {
             // No child - use smallest size
             constraints.smallest()
         };
 
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(size) = self.state().size {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        if let Some(size) = *state.size.lock() {
             // Note: Full backdrop filtering requires compositor support
             // In production, this would:
             // 1. Capture the current paint layer content
@@ -187,8 +189,9 @@ impl DynRenderObject for RenderBackdropFilter {
                 );
             }
 
-            if let Some(child) = self.child() {
-                child.paint(painter, offset);
+            let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
             }
         }
     }
@@ -270,7 +273,7 @@ mod tests {
     #[test]
     fn test_render_backdrop_filter_new() {
         let data = BackdropFilterData::blur(10.0);
-        let filter = SingleRenderBox::new(data);
+        let mut filter = SingleRenderBox::new(data);
 
         match filter.filter() {
             ImageFilter::Blur { radius } => {
@@ -283,12 +286,15 @@ mod tests {
 
     #[test]
     fn test_render_backdrop_filter_set_filter() {
+        use flui_core::testing::mock_render_context;
+
         let data = BackdropFilterData::blur(5.0);
         let mut filter = SingleRenderBox::new(data);
 
         // Do layout first to clear initial needs_paint
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        filter.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        filter.layout(constraints, &ctx);
 
         let new_filter = ImageFilter::brightness(1.5);
         filter.set_filter(new_filter.clone());
@@ -299,12 +305,15 @@ mod tests {
 
     #[test]
     fn test_render_backdrop_filter_set_blend_mode() {
+        use flui_core::testing::mock_render_context;
+
         let data = BackdropFilterData::blur(10.0);
         let mut filter = SingleRenderBox::new(data);
 
         // Do layout first to clear initial needs_paint
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        filter.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        filter.layout(constraints, &ctx);
 
         filter.set_blend_mode(BlendMode::Screen);
         assert_eq!(filter.blend_mode(), BlendMode::Screen);
@@ -313,11 +322,14 @@ mod tests {
 
     #[test]
     fn test_render_backdrop_filter_layout() {
+        use flui_core::testing::mock_render_context;
+
         let data = BackdropFilterData::blur(10.0);
         let mut filter = SingleRenderBox::new(data);
 
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let size = filter.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = filter.layout(constraints, &ctx);
 
         // Without child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

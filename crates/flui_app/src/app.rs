@@ -3,7 +3,7 @@
 //! This module provides the FluiApp struct, which manages the application lifecycle,
 //! element tree, and rendering pipeline integration with egui.
 
-use flui_core::{BoxConstraints, Offset, PipelineOwner, Size, Widget};
+use flui_core::{BoxConstraints, Offset, PipelineOwner, Size, DynWidget};
 use flui_types::events::{PointerEvent, PointerEventData, PointerDeviceKind, PointerButton};
 
 /// Performance statistics for debugging and optimization
@@ -68,7 +68,7 @@ impl FluiApp {
     /// # Parameters
     ///
     /// - `root_widget`: The root widget of the application
-    pub fn new(root_widget: Box<dyn Widget>) -> Self {
+    pub fn new(root_widget: Box<dyn DynWidget>) -> Self {
         let mut pipeline = PipelineOwner::new();
         pipeline.set_root(root_widget);
 
@@ -224,7 +224,7 @@ mod tests {
     struct TestWidget;
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+        fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
             Box::new(Text::new("Test"))
         }
     }

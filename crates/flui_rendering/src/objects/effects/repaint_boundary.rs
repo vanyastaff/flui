@@ -72,25 +72,28 @@ impl RenderRepaintBoundary {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderRepaintBoundary {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
+
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
         // Layout child with same constraints
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let size = if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             constraints.smallest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Paint child
         // In a real implementation with layer support, we would:
         // 1. Create a new paint layer if is_repaint_boundary is true
@@ -101,8 +104,9 @@ impl DynRenderObject for RenderRepaintBoundary {
         // repainting the child if only the parent changes
         //
         // For now, we just paint the child directly
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
 
         // Note: Full repaint boundary support requires:
@@ -155,10 +159,13 @@ mod tests {
 
     #[test]
     fn test_render_repaint_boundary_layout() {
-        let mut boundary = SingleRenderBox::new(RepaintBoundaryData::new());
+        use flui_core::testing::mock_render_context;
+
+        let boundary = SingleRenderBox::new(RepaintBoundaryData::new());
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = boundary.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = boundary.layout(constraints, &ctx);
 
         // No child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

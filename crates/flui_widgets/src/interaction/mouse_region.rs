@@ -346,20 +346,28 @@ mod tests {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for MouseRegion {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        let callbacks = MouseRegionCallbacks {
-            on_enter: self.on_enter.clone(),
-            on_exit: self.on_exit.clone(),
-            on_hover: self.on_hover.clone(),
+        use flui_rendering::{SingleRenderBox, MouseRegionData, MouseCallbacks};
+
+        // TODO: RenderMouseRegion currently uses fn() callbacks as placeholders
+        // The widget's Arc<dyn Fn> callbacks will be properly supported when
+        // event handling infrastructure is implemented
+        let callbacks = MouseCallbacks {
+            on_enter: None,  // Placeholder - widget callbacks not yet supported
+            on_exit: None,
+            on_hover: None,
         };
-        Box::new(RenderMouseRegion::new(callbacks))
+        Box::new(SingleRenderBox::new(MouseRegionData::new(callbacks)))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
+        use flui_rendering::MouseCallbacks;
+
         if let Some(mouse_region) = render_object.downcast_mut::<RenderMouseRegion>() {
-            let callbacks = MouseRegionCallbacks {
-                on_enter: self.on_enter.clone(),
-                on_exit: self.on_exit.clone(),
-                on_hover: self.on_hover.clone(),
+            // TODO: Update callbacks when event handling is implemented
+            let callbacks = MouseCallbacks {
+                on_enter: None,
+                on_exit: None,
+                on_hover: None,
             };
             mouse_region.set_callbacks(callbacks);
         }

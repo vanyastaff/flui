@@ -12,8 +12,9 @@ use super::{Element, DynElement, ElementLifecycle};
 use crate::DynWidget;
 
 /// Element for StatelessWidget (calls build() to create child)
+///
+/// Note: Element ID is its Slab index in ElementTree (not stored here)
 pub struct ComponentElement<W: StatelessWidget> {
-    id: ElementId,
     widget: W,
     parent: Option<ElementId>,
     dirty: bool,
@@ -28,7 +29,6 @@ impl<W: StatelessWidget> ComponentElement<W> {
     /// Create new component element from a widget
     pub fn new(widget: W) -> Self {
         Self {
-            id: ElementId::new(),
             widget,
             parent: None,
             dirty: true,
@@ -41,7 +41,7 @@ impl<W: StatelessWidget> ComponentElement<W> {
     /// Perform rebuild
     ///
     /// Returns list of children to mount: (parent_id, child_widget, slot)
-    fn perform_rebuild(&mut self) -> Vec<(ElementId, Box<dyn crate::DynWidget>, usize)> {
+    fn perform_rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn crate::DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -58,7 +58,7 @@ impl<W: StatelessWidget> ComponentElement<W> {
         };
 
         // Create build context
-        let context = Context::new(tree.clone(), self.id);
+        let context = Context::new(tree.clone(), element_id);
 
         // Call build() on the widget to get child widget
         let child_widget = self.widget.build(&context);
@@ -67,7 +67,7 @@ impl<W: StatelessWidget> ComponentElement<W> {
         self.child = None;
 
         // Return the child that needs to be mounted
-        vec![(self.id, child_widget, 0)]
+        vec![(element_id, child_widget, 0)]
     }
 
     /// Set the child element ID after it's been mounted
@@ -84,10 +84,11 @@ impl<W: StatelessWidget> ComponentElement<W> {
 impl<W: StatelessWidget> fmt::Debug for ComponentElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ComponentElement")
-            .field("id", &self.id)
+            .field("widget_type", &std::any::type_name::<W>())
             .field("widget", &self.widget)
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
+            .field("child", &self.child)
             .finish()
     }
 }
@@ -95,10 +96,6 @@ impl<W: StatelessWidget> fmt::Debug for ComponentElement<W> {
 // ========== Implement DynElement for ComponentElement ==========
 
 impl<W: StatelessWidget> DynElement for ComponentElement<W> {
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
     fn parent(&self) -> Option<ElementId> {
         self.parent
     }
@@ -133,8 +130,8 @@ impl<W: StatelessWidget> DynElement for ComponentElement<W> {
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
-        self.perform_rebuild()
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+        self.perform_rebuild(element_id)
     }
 
     fn is_dirty(&self) -> bool {

@@ -57,19 +57,23 @@ impl RenderConstrainedBox {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderConstrainedBox {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         let additional = self.data().additional_constraints;
 
-        // Layout child with enforced constraints
-        let size = if let Some(child) = self.child_mut() {
-            // Enforce additional constraints
-            let child_constraints = additional.enforce(constraints);
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
-            // Layout child
-            child.layout(child_constraints)
+        // Layout child with enforced constraints
+        let size = if let Some(&child_id) = children_ids.first() {
+            // Enforce additional constraints
+            let child_constraints = constraints.enforce(additional);
+
+            // Layout child via RenderContext
+            let child_size = ctx.layout_child(child_id, child_constraints);
+            child_size
         } else {
             // No child - use smallest size that satisfies both constraints
             let enforced = additional.enforce(constraints);
@@ -77,16 +81,19 @@ impl DynRenderObject for RenderConstrainedBox {
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
         // Simply paint child at offset
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
     }
 
@@ -118,11 +125,14 @@ mod tests {
 
     #[test]
     fn test_render_constrained_box_layout_no_child() {
+        use flui_core::testing::mock_render_context;
+
         let additional = BoxConstraints::new(50.0, 150.0, 50.0, 150.0);
-        let mut constrained = SingleRenderBox::new(ConstrainedBoxData::new(additional));
+        let constrained = SingleRenderBox::new(ConstrainedBoxData::new(additional));
 
         let incoming = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-        let size = constrained.layout(incoming);
+        let (_tree, ctx) = mock_render_context();
+        let size = constrained.layout(incoming, &ctx);
 
         // Should use smallest size that satisfies both constraints
         assert_eq!(size, Size::new(50.0, 50.0));

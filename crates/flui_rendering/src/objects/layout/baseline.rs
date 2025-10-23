@@ -90,15 +90,17 @@ impl RenderBaseline {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderBaseline {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         let baseline = self.data().baseline;
 
         // Layout child with same constraints
-        let size = if let Some(child) = self.child_mut() {
-            let child_size = child.layout(constraints);
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
+            let child_size = ctx.layout_child(child_id, constraints);
 
             // Our height includes space above baseline and child height
             // For simplicity, we use child height + baseline offset
@@ -112,21 +114,22 @@ impl DynRenderObject for RenderBaseline {
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Paint child offset by baseline
-        if let Some(child) = self.child() {
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
             let baseline = self.data().baseline;
 
             // Offset child by baseline distance
             let paint_offset = Offset::new(offset.dx, offset.dy + baseline);
 
-            child.paint(painter, paint_offset);
+            ctx.paint_child(child_id, painter, paint_offset);
         }
     }
 
@@ -191,10 +194,13 @@ mod tests {
 
     #[test]
     fn test_render_baseline_layout() {
-        let mut baseline = SingleRenderBox::new(BaselineData::alphabetic(20.0));
+        use flui_core::testing::mock_render_context;
+
+        let baseline = SingleRenderBox::new(BaselineData::alphabetic(20.0));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = baseline.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = baseline.layout(constraints, &ctx);
 
         // Should use smallest size (no child)
         assert_eq!(size, Size::new(0.0, 0.0));

@@ -27,6 +27,7 @@
 
 use flui_app::*;
 use flui_widgets::prelude::*;
+use flui_widgets::DynWidget;
 
 /// Theme data that will be shared across the widget tree
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,14 +57,25 @@ impl ThemeData {
 /// Theme InheritedWidget
 ///
 /// Provides theme data to all descendant widgets
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Theme {
     data: ThemeData,
-    child: Box<dyn Widget>,
+    child: Box<dyn DynWidget>,
+}
+
+// Manual Clone implementation for Box<dyn DynWidget>
+// DynWidget extends DynClone, so we can call clone() on the trait object
+impl Clone for Theme {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            child: self.child.clone(),
+        }
+    }
 }
 
 impl Theme {
-    fn new(data: ThemeData, child: Box<dyn Widget>) -> Self {
+    fn new(data: ThemeData, child: Box<dyn DynWidget>) -> Self {
         Self { data, child }
     }
 
@@ -103,15 +115,17 @@ impl Theme {
     }
 }
 
+impl ProxyWidget for Theme {
+    fn child(&self) -> &dyn DynWidget {
+        &*self.child
+    }
+}
+
 impl InheritedWidget for Theme {
     type Data = ThemeData;
 
     fn data(&self) -> &Self::Data {
         &self.data
-    }
-
-    fn child(&self) -> &dyn Widget {
-        &*self.child
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
@@ -122,8 +136,10 @@ impl InheritedWidget for Theme {
 
 // Manual Widget implementation for Theme
 impl Widget for Theme {
-    fn create_element(&self) -> Box<dyn Element> {
-        Box::new(InheritedElement::new(self.clone()))
+    type Element = InheritedElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        InheritedElement::new(self)
     }
 }
 
@@ -140,7 +156,7 @@ impl ThemedText {
 }
 
 impl StatelessWidget for ThemedText {
-    fn build(&self, context: &BuildContext) -> Box<dyn Widget> {
+    fn build(&self, context: &BuildContext) -> Box<dyn DynWidget> {
         // Use Theme::maybe_of() for safe access (Flutter-style pattern)
         if let Some(theme) = Theme::maybe_of(context) {
             let theme_data = theme.data();
@@ -188,18 +204,20 @@ impl StatelessWidget for ThemedText {
 struct ThemeApp;
 
 impl StatelessWidget for ThemeApp {
-    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
-        // Wrap the app in a Theme widget
+    fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
+        // Wrap the app in a Theme widget - simplified without depend_on_inherited_widget for now
         Box::new(Theme::new(
             ThemeData::light(),
-            Box::new(ThemedText::new(
-                "Hello from InheritedWidget! This text uses the theme.",
-            )),
+            Box::new(Text::builder()
+                .data("Hello from InheritedWidget!")
+                .size(24.0)
+                .color(Color::rgb(0, 128, 255))
+                .build()),
         ))
     }
 }
 
-fn main() {
+fn main() -> Result<(), eframe::Error> {
     // Initialize tracing for logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -209,5 +227,5 @@ fn main() {
     tracing::info!("This example demonstrates InheritedWidget for theme propagation");
 
     // Run the app
-    run_app(Box::new(ThemeApp));
+    run_app(Box::new(ThemeApp))
 }

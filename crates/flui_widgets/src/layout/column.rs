@@ -155,19 +155,16 @@ impl Widget for Column {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Column {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        let mut flex = RenderFlex::new(Axis::Vertical);
-        flex.set_main_axis_alignment(self.main_axis_alignment);
-        flex.set_cross_axis_alignment(self.cross_axis_alignment);
-        flex.set_main_axis_size(self.main_axis_size);
+        let flex = RenderFlex::column()
+            .with_main_axis_alignment(self.main_axis_alignment)
+            .with_cross_axis_alignment(self.cross_axis_alignment)
+            .with_main_axis_size(self.main_axis_size);
         Box::new(flex)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(flex) = render_object.downcast_mut::<RenderFlex>() {
-            flex.set_main_axis_alignment(self.main_axis_alignment);
-            flex.set_cross_axis_alignment(self.cross_axis_alignment);
-            flex.set_main_axis_size(self.main_axis_size);
-        }
+    fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {
+        // RenderFlex is immutable data - updates are handled by recreating the RenderObject
+        // TODO: Implement proper update strategy once architecture is finalized
     }
 }
 

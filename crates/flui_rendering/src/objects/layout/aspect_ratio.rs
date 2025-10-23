@@ -57,9 +57,9 @@ impl RenderAspectRatio {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderAspectRatio {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         let aspect_ratio = self.data().aspect_ratio;
 
@@ -87,22 +87,26 @@ impl DynRenderObject for RenderAspectRatio {
         let final_size = constraints.constrain(size);
 
         // Layout child with tight constraints if we have one
-        if let Some(child) = self.child_mut() {
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
             let child_constraints = BoxConstraints::tight(final_size);
-            let _ = child.layout(child_constraints);
+            let _ = ctx.layout_child(child_id, child_constraints);
         }
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(final_size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(final_size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         final_size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Simply paint child at offset
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
     }
 
@@ -149,10 +153,13 @@ mod tests {
 
     #[test]
     fn test_render_aspect_ratio_layout_width_constrained() {
-        let mut aspect = SingleRenderBox::new(AspectRatioData::new(2.0)); // 2:1 ratio
+        use flui_core::testing::mock_render_context;
+
+        let aspect = SingleRenderBox::new(AspectRatioData::new(2.0)); // 2:1 ratio
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
 
-        let size = aspect.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = aspect.layout(constraints, &ctx);
 
         // Should use max width and calculate height
         assert_eq!(size.width, 100.0);
@@ -161,10 +168,13 @@ mod tests {
 
     #[test]
     fn test_render_aspect_ratio_layout_height_constrained() {
-        let mut aspect = SingleRenderBox::new(AspectRatioData::new(0.5)); // 1:2 ratio
+        use flui_core::testing::mock_render_context;
+
+        let aspect = SingleRenderBox::new(AspectRatioData::new(0.5)); // 1:2 ratio
         let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
 
-        let size = aspect.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = aspect.layout(constraints, &ctx);
 
         // Should use max height and calculate width
         assert_eq!(size.width, 50.0); // 100 * 0.5
@@ -173,10 +183,13 @@ mod tests {
 
     #[test]
     fn test_render_aspect_ratio_layout_tight_constraints() {
-        let mut aspect = SingleRenderBox::new(AspectRatioData::new(16.0 / 9.0));
+        use flui_core::testing::mock_render_context;
+
+        let aspect = SingleRenderBox::new(AspectRatioData::new(16.0 / 9.0));
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
-        let size = aspect.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = aspect.layout(constraints, &ctx);
 
         // With tight constraints, must use exact size
         assert_eq!(size, Size::new(100.0, 100.0));

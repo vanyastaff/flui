@@ -60,6 +60,15 @@ impl<T> SingleRenderBox<T> {
     pub fn data_mut(&mut self) -> &mut T {
         &mut self.data
     }
+
+    /// Adopt a child (single-child version)
+    ///
+    /// This is the generic implementation for all SingleRenderBox types.
+    /// It replaces the existing child with the new one.
+    pub fn adopt_child(&mut self, child: BoxedRenderObject) {
+        self.child = Some(child);
+        self.state_mut().mark_needs_layout();
+    }
 }
 
 impl<T> RenderBoxMixin for SingleRenderBox<T> {
@@ -71,3 +80,4 @@ impl<T> RenderBoxMixin for SingleRenderBox<T> {
         &mut self.state
     }
 }
+

@@ -30,7 +30,7 @@
 
 use bon::Builder;
 use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
-use flui_rendering::RenderPositionedBox;
+use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
 /// A widget that aligns its child within the available space.
@@ -235,7 +235,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> AlignBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 
@@ -448,18 +448,19 @@ mod tests {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Align {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderPositionedBox::new(
+        use flui_rendering::{SingleRenderBox, AlignData};
+        Box::new(SingleRenderBox::new(AlignData::with_factors(
             self.alignment,
             self.width_factor,
             self.height_factor,
-        ))
+        )))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(positioned) = render_object.downcast_mut::<RenderPositionedBox>() {
-            positioned.set_alignment(self.alignment);
-            positioned.set_width_factor(self.width_factor);
-            positioned.set_height_factor(self.height_factor);
+        if let Some(align) = render_object.downcast_mut::<RenderAlign>() {
+            align.set_alignment(self.alignment);
+            align.set_width_factor(self.width_factor);
+            align.set_height_factor(self.height_factor);
         }
     }
 }

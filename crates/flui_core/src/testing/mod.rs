@@ -29,6 +29,19 @@ use parking_lot::RwLock;
 use crate::foundation::Key;
 use crate::{DynWidget, BuildOwner, ElementId, ElementTree};
 
+pub mod render_testing;
+
+// Re-export render testing helpers for convenience
+pub use render_testing::{
+    mock_render_context,
+    test_layout,
+    assert_layout_size,
+    assert_layout_within_constraints,
+    tight,
+    loose,
+    unbounded,
+};
+
 /// Widget testing harness
 ///
 /// Provides a simple environment for testing widgets without a full application.
@@ -191,9 +204,9 @@ pub fn find_by_type<W: 'static>(tester: &WidgetTester) -> Vec<ElementId> {
     let type_id = std::any::TypeId::of::<W>();
     let mut found = Vec::new();
 
-    tree.visit_all_elements(&mut |element| {
+    tree.visit_all_elements(&mut |id, element| {
         if element.widget_type_id() == type_id {
-            found.push(element.id());
+            found.push(id);
         }
     });
 
@@ -216,9 +229,9 @@ pub fn find_first_by_type<W: 'static>(tester: &WidgetTester) -> Option<ElementId
     let type_id = std::any::TypeId::of::<W>();
     let mut found = None;
 
-    tree.visit_all_elements(&mut |element| {
+    tree.visit_all_elements(&mut |id, element| {
         if found.is_none() && element.widget_type_id() == type_id {
-            found = Some(element.id());
+            found = Some(id);
         }
     });
 
@@ -258,11 +271,11 @@ pub fn find_by_key(tester: &WidgetTester, key: &dyn Key) -> Option<ElementId> {
     let tree = tester.tree().read();
     let mut found = None;
 
-    tree.visit_all_elements(&mut |element| {
+    tree.visit_all_elements(&mut |id, element| {
         if found.is_none() {
             if let Some(element_key) = element.key() {
                 if element_key.key_eq(key) {
-                    found = Some(element.id());
+                    found = Some(id);
                 }
             }
         }
@@ -290,12 +303,12 @@ pub fn find_by_text(tester: &WidgetTester, text: &str) -> Vec<ElementId> {
     let tree = tester.tree().read();
     let mut found = Vec::new();
 
-    tree.visit_all_elements(&mut |element| {
+    tree.visit_all_elements(&mut |id, element| {
         // Use Debug output to search for text
         // This is a simple implementation - production code should use a dedicated trait
         let debug_string = format!("{:?}", element);
         if debug_string.contains(text) {
-            found.push(element.id());
+            found.push(id);
         }
     });
 
@@ -465,3 +478,4 @@ mod tests {
         assert!(found.is_none());
     }
 }
+

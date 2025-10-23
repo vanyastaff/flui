@@ -12,9 +12,7 @@ use crate::DynWidget;
 use crate::foundation::Key;
 
 /// Element for StatefulWidget (holds State that persists across rebuilds)
-pub struct StatefulElement<W: StatefulWidget> {
-    id: ElementId,
-    parent: Option<ElementId>,
+pub struct StatefulElement<W: StatefulWidget> {    parent: Option<ElementId>,
     dirty: bool,
     lifecycle: ElementLifecycle,
     /// State lifecycle tracking
@@ -27,11 +25,11 @@ pub struct StatefulElement<W: StatefulWidget> {
 
 impl<W: StatefulWidget> StatefulElement<W> {
     /// Create new stateful element with widget and state
+    ///
+    /// Note: ID is initially 0 and will be set by ElementTree when inserted
     pub fn new(widget: W) -> Self {
         let state = widget.create_state();
-        Self {
-            id: ElementId::new(),
-            parent: None,
+        Self {            parent: None,
             dirty: true,
             lifecycle: ElementLifecycle::Initial,
             state_lifecycle: StateLifecycle::Created,
@@ -86,10 +84,11 @@ impl<W: StatefulWidget> StatefulElement<W> {
 impl<W: StatefulWidget> fmt::Debug for StatefulElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StatefulElement")
-            .field("id", &self.id)
+            .field("widget_type", &std::any::type_name::<W>())
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
-            .field("widget", &self.widget)
+            .field("lifecycle", &self.lifecycle)
+            .field("state_lifecycle", &self.state_lifecycle)
             .field("child", &self.child)
             .finish()
     }
@@ -100,12 +99,7 @@ impl<W: StatefulWidget> fmt::Debug for StatefulElement<W> {
 impl<W> DynElement for StatefulElement<W>
 where
     W: StatefulWidget + crate::Widget<Element = StatefulElement<W>>,
-{
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
+{    fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
@@ -171,7 +165,7 @@ where
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -186,14 +180,14 @@ where
 
         // Call build() on state
         if let Some(tree) = &self.tree {
-            let context = Context::new(tree.clone(), self.id);
+            let context = Context::new(tree.clone(), element_id);
             let child_widget = self.state.build(&context);
 
             // Mark old child for unmounting
             self.child = None;
 
             // Return child to mount
-            return vec![(self.id, child_widget, 0)];
+            return vec![(element_id, child_widget, 0)];
         }
 
         Vec::new()

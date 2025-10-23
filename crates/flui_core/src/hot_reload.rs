@@ -72,8 +72,8 @@ fn reassemble_all_states(tree: &mut ElementTree) {
 
     // Collect all element IDs first (to avoid mutable borrow issues)
     let mut element_ids = Vec::new();
-    tree.visit_all_elements(&mut |element| {
-        element_ids.push(element.id());
+    tree.visit_all_elements(&mut |id, _element| {
+        element_ids.push(id);
     });
 
     // Call reassemble() on each element
@@ -98,9 +98,9 @@ fn mark_all_dirty(tree: &mut ElementTree, owner: &mut BuildOwner) {
 
     // Collect all element IDs first (to avoid borrow issues)
     let mut element_ids = Vec::new();
-    tree.visit_all_elements(&mut |element| {
+    tree.visit_all_elements(&mut |id, _element| {
         // Note: We use depth 0 for all - BuildOwner will sort by actual depth during flush
-        element_ids.push(element.id());
+        element_ids.push(id);
     });
 
     // Schedule all for rebuild

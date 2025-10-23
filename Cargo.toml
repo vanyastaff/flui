@@ -5,7 +5,7 @@ members = [
     "crates/flui_core",         # Core with foundation utilities
     "crates/flui_rendering",
     "crates/flui_widgets",
-    "crates/flui_app",          # Application framework
+    "crates/flui_app", "crates/flui_painting",          # Application framework
     # "crates/flui_painting",
     # "crates/flui_animation",
     # "crates/flui_gestures",

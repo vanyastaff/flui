@@ -455,11 +455,17 @@ impl BoxConstraints {
     /// assert_eq!(enforced.max_height, 150.0);
     /// ```
     pub fn enforce(&self, other: BoxConstraints) -> Self {
+        let min_width = self.min_width.max(other.min_width);
+        let max_width = self.max_width.min(other.max_width);
+        let min_height = self.min_height.max(other.min_height);
+        let max_height = self.max_height.min(other.max_height);
+
+        // Clamp to ensure min <= max (when constraints conflict, parent's min wins)
         Self {
-            min_width: self.min_width.max(other.min_width),
-            max_width: self.max_width.min(other.max_width),
-            min_height: self.min_height.max(other.min_height),
-            max_height: self.max_height.min(other.max_height),
+            min_width,
+            max_width: max_width.max(min_width),
+            min_height,
+            max_height: max_height.max(min_height),
         }
     }
 

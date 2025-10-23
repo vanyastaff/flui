@@ -5,6 +5,7 @@
 
 use flui_app::*;
 use flui_widgets::prelude::*;
+use flui_widgets::DynWidget;
 
 fn main() {
     tracing_subscriber::fmt()
@@ -21,7 +22,7 @@ fn main() {
 struct InteractiveCounterApp;
 
 impl StatelessWidget for InteractiveCounterApp {
-    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+    fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
         // Just a simple text with tap detection
         Box::new(
             GestureDetector::builder()

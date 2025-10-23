@@ -77,38 +77,44 @@ impl RenderClipRRect {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderClipRRect {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
+
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
         // Layout child with same constraints
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let size = if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             // No child - use smallest size
             constraints.smallest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
         // Paint child with clipping
-        if let Some(child) = self.child() {
+        if let Some(&child_id) = children_ids.first() {
             let clip_behavior = self.data().clip_behavior;
 
             // If no clipping, paint normally
             if clip_behavior == Clip::None {
-                child.paint(painter, offset);
+                ctx.paint_child(child_id, painter, offset);
                 return;
             }
 
             // Get clip rect
-            let size = self.state().size.unwrap_or(Size::ZERO);
+            let size = state.size.lock().unwrap_or(Size::ZERO);
             let clip_rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
 
             // Get border radius
@@ -133,7 +139,7 @@ impl DynRenderObject for RenderClipRRect {
 
             // Create a new painter with clipping
             let clip_painter = painter.with_clip_rect(egui_rect);
-            child.paint(&clip_painter, offset);
+            ctx.paint_child(child_id, &clip_painter, offset);
         }
     }
 
@@ -169,11 +175,14 @@ mod tests {
 
     #[test]
     fn test_render_clip_rrect_set_border_radius() {
+        use flui_core::testing::mock_render_context;
+
         let mut clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
 
         // Clear initial needs_layout flag
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let _ = clip.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let _ = clip.layout(constraints, &ctx);
 
         clip.set_border_radius(BorderRadius::circular(20.0));
         assert_eq!(clip.border_radius(), BorderRadius::circular(20.0));
@@ -183,11 +192,14 @@ mod tests {
 
     #[test]
     fn test_render_clip_rrect_set_clip_behavior() {
+        use flui_core::testing::mock_render_context;
+
         let mut clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
 
         // Clear initial needs_layout flag
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let _ = clip.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let _ = clip.layout(constraints, &ctx);
 
         clip.set_clip_behavior(Clip::HardEdge);
         assert_eq!(clip.clip_behavior(), Clip::HardEdge);
@@ -197,10 +209,13 @@ mod tests {
 
     #[test]
     fn test_render_clip_rrect_layout() {
-        let mut clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
+        use flui_core::testing::mock_render_context;
+
+        let clip = SingleRenderBox::new(ClipRRectData::circular(10.0));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = clip.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = clip.layout(constraints, &ctx);
 
         // Should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

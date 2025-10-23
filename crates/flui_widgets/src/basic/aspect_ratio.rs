@@ -207,7 +207,8 @@ impl Widget for AspectRatio {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for AspectRatio {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderAspectRatio::new(self.aspect_ratio))
+        use flui_rendering::AspectRatioData;
+        Box::new(RenderAspectRatio::new(AspectRatioData::new(self.aspect_ratio)))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
@@ -246,7 +247,7 @@ where
     ///     .build()
     /// ```
     pub fn child<W: Widget + 'static>(self, child: W) -> AspectRatioBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

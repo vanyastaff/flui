@@ -208,14 +208,10 @@ impl Widget for DecoratedBox {
 impl RenderObjectWidget for DecoratedBox {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         // Create RenderDecoratedBox with current decoration
-        let mut render_decorated = if self.position == DecorationPosition::Foreground {
-            RenderDecoratedBox::foreground(self.decoration.clone())
-        } else {
-            RenderDecoratedBox::new(self.decoration.clone())
-        };
+        use flui_rendering::DecoratedBoxData;
 
-        // Set position explicitly in case it's non-default
-        render_decorated.set_position(self.position);
+        let data = DecoratedBoxData::with_position(self.decoration.clone(), self.position);
+        let render_decorated = RenderDecoratedBox::new(data);
 
         Box::new(render_decorated)
     }
@@ -258,7 +254,7 @@ where
     ///     .build()
     /// ```
     pub fn child<W: Widget + 'static>(self, child: W) -> DecoratedBoxBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

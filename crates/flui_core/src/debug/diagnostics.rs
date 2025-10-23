@@ -36,11 +36,10 @@ fn print_element_recursive(
 
     writeln!(
         output,
-        "{}{} {} #{:?}",
+        "{}{} {}",
         prefix,
         connector,
         type_str.split("::").last().unwrap_or(&type_str),
-        element.id()
     )
     .ok();
 
@@ -70,12 +69,11 @@ fn print_element_recursive(
 /// Simple diagnostic info for an element
 pub fn element_info(element: &dyn DynElement) -> String {
     format!(
-        "{} #{:?} (lifecycle: {:?}, dirty: {})",
+        "{} (lifecycle: {:?}, dirty: {})",
         format!("{:?}", element.widget_type_id())
             .split("::")
             .last()
             .unwrap_or("Unknown"),
-        element.id(),
         element.lifecycle(),
         element.is_dirty()
     )

@@ -62,38 +62,46 @@ impl RenderOffstage {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderOffstage {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         let offstage = self.data().offstage;
 
-        // Always layout child to maintain state
-        if let Some(child) = self.child_mut() {
-            let _ = child.layout(constraints);
-        }
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        // Always layout child to maintain state and get size
+        let child_size = if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
+        } else {
+            Size::ZERO
+        };
 
         // Report size as zero if offstage, otherwise use child size
         let size = if offstage {
             Size::ZERO
-        } else if let Some(child) = self.child() {
-            child.size()
+        } else if child_size != Size::ZERO {
+            child_size
         } else {
             constraints.smallest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Don't paint if offstage
         if !self.data().offstage {
-            if let Some(child) = self.child() {
-                child.paint(painter, offset);
+            // Get children from ElementTree via RenderContext
+            let children_ids = ctx.children();
+
+            if let Some(&child_id) = children_ids.first() {
+                ctx.paint_child(child_id, painter, offset);
             }
         }
     }
@@ -138,10 +146,13 @@ mod tests {
 
     #[test]
     fn test_render_offstage_layout_offstage() {
-        let mut offstage = SingleRenderBox::new(OffstageData::new(true));
+        use flui_core::testing::mock_render_context;
+
+        let offstage = SingleRenderBox::new(OffstageData::new(true));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = offstage.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = offstage.layout(constraints, &ctx);
 
         // Should report zero size when offstage
         assert_eq!(size, Size::ZERO);
@@ -149,10 +160,13 @@ mod tests {
 
     #[test]
     fn test_render_offstage_layout_onstage() {
-        let mut offstage = SingleRenderBox::new(OffstageData::new(false));
+        use flui_core::testing::mock_render_context;
+
+        let offstage = SingleRenderBox::new(OffstageData::new(false));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = offstage.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = offstage.layout(constraints, &ctx);
 
         // Should use smallest size when onstage (no child)
         assert_eq!(size, Size::new(0.0, 0.0));

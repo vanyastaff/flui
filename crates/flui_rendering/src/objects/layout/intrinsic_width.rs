@@ -102,15 +102,17 @@ impl RenderIntrinsicWidth {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderIntrinsicWidth {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         let step_width = self.data().step_width;
         let step_height = self.data().step_height;
 
         // Layout child with infinite width to get intrinsic width
-        let size = if let Some(child) = self.child_mut() {
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
             // Get child's intrinsic width by giving it infinite width
             let intrinsic_constraints = BoxConstraints::new(
                 0.0,
@@ -119,7 +121,7 @@ impl DynRenderObject for RenderIntrinsicWidth {
                 constraints.max_height,
             );
 
-            let child_size = child.layout(intrinsic_constraints);
+            let child_size = ctx.layout_child(child_id, intrinsic_constraints);
 
             // Apply step width/height if specified
             let width = if let Some(step) = step_width {
@@ -141,16 +143,19 @@ impl DynRenderObject for RenderIntrinsicWidth {
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Paint child at our position
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
     }
 
@@ -224,10 +229,13 @@ mod tests {
 
     #[test]
     fn test_render_intrinsic_width_layout() {
-        let mut intrinsic = SingleRenderBox::new(IntrinsicWidthData::new());
+        use flui_core::testing::mock_render_context;
+
+        let intrinsic = SingleRenderBox::new(IntrinsicWidthData::new());
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = intrinsic.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = intrinsic.layout(constraints, &ctx);
 
         // No child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

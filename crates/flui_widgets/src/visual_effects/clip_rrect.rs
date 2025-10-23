@@ -31,8 +31,10 @@
 use bon::Builder;
 use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderClipRRect;
-use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
+
+// Use the Clip enum from clip_rect module
+type Clip = flui_rendering::objects::effects::clip_rect::Clip;
 
 /// A widget that clips its child to a rounded rectangle.
 ///
@@ -302,10 +304,11 @@ impl Widget for ClipRRect {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for ClipRRect {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderClipRRect::new(
+        use flui_rendering::{SingleRenderBox, objects::effects::clip_rrect::ClipRRectData};
+        Box::new(SingleRenderBox::new(ClipRRectData::new(
             self.border_radius,
             self.clip_behavior,
-        ))
+        )))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
@@ -345,7 +348,7 @@ where
     ///     .build()
     /// ```
     pub fn child<W: Widget + 'static>(self, child: W) -> ClipRRectBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

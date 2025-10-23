@@ -29,9 +29,7 @@ use crate::foundation::Key;
 ///
 /// - [`LeafRenderObjectElement`] - For widgets with no children
 /// - [`MultiChildRenderObjectElement`] - For widgets with multiple children
-pub struct SingleChildRenderObjectElement<W: SingleChildRenderObjectWidget> {
-    id: ElementId,
-    widget: W,
+pub struct SingleChildRenderObjectElement<W: SingleChildRenderObjectWidget> {    widget: W,
     parent: Option<ElementId>,
     dirty: bool,
     lifecycle: ElementLifecycle,
@@ -44,11 +42,11 @@ pub struct SingleChildRenderObjectElement<W: SingleChildRenderObjectWidget> {
 
 impl<W: SingleChildRenderObjectWidget> SingleChildRenderObjectElement<W> {
     /// Creates a new single child render object element
+    ///
+    /// Note: ID is initially 0 and will be set by ElementTree when inserted
     #[must_use]
     pub fn new(widget: W) -> Self {
-        Self {
-            id: ElementId::new(),
-            widget,
+        Self {            widget,
             parent: None,
             dirty: true,
             lifecycle: ElementLifecycle::Initial,
@@ -92,7 +90,6 @@ impl<W: SingleChildRenderObjectWidget> SingleChildRenderObjectElement<W> {
 impl<W: SingleChildRenderObjectWidget> fmt::Debug for SingleChildRenderObjectElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SingleChildRenderObjectElement")
-            .field("id", &self.id)
             .field("widget_type", &std::any::type_name::<W>())
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
@@ -105,12 +102,7 @@ impl<W: SingleChildRenderObjectWidget> fmt::Debug for SingleChildRenderObjectEle
 
 // ========== Implement DynElement for SingleChildRenderObjectElement ==========
 
-impl<W: SingleChildRenderObjectWidget> DynElement for SingleChildRenderObjectElement<W> {
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
+impl<W: SingleChildRenderObjectWidget> DynElement for SingleChildRenderObjectElement<W> {    fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
@@ -145,7 +137,7 @@ impl<W: SingleChildRenderObjectWidget> DynElement for SingleChildRenderObjectEle
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -157,7 +149,7 @@ impl<W: SingleChildRenderObjectWidget> DynElement for SingleChildRenderObjectEle
         // Return child widget to be mounted/updated by ElementTree
         // Clone the child widget using dyn_clone::clone_box
         let child_widget = self.widget.child();
-        vec![(self.id, dyn_clone::clone_box(child_widget), 0)]
+        vec![(element_id, dyn_clone::clone_box(child_widget), 0)]
     }
 
     fn is_dirty(&self) -> bool {
@@ -214,6 +206,14 @@ impl<W: SingleChildRenderObjectWidget> DynElement for SingleChildRenderObjectEle
 
     fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
         self.render_object.as_mut().map(|ro| ro.as_mut())
+    }
+
+    fn take_render_object(&mut self) -> Option<Box<dyn crate::DynRenderObject>> {
+        self.render_object.take()
+    }
+
+    fn set_render_object(&mut self, render_object: Option<Box<dyn crate::DynRenderObject>>) {
+        self.render_object = render_object;
     }
 
     fn did_change_dependencies(&mut self) {

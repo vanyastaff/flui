@@ -98,9 +98,9 @@ impl RenderFractionallySizedBox {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderFractionallySizedBox {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         let width_factor = self.data().width_factor;
         let height_factor = self.data().height_factor;
@@ -118,8 +118,10 @@ impl DynRenderObject for RenderFractionallySizedBox {
         );
 
         // Layout child
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(child_constraints)
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, child_constraints)
         } else {
             // No child - use target size or smallest
             Size::new(
@@ -129,16 +131,19 @@ impl DynRenderObject for RenderFractionallySizedBox {
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Simply paint child at offset
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
     }
 
@@ -208,10 +213,13 @@ mod tests {
 
     #[test]
     fn test_render_fractionally_sized_box_layout_both_factors() {
-        let mut fractional = SingleRenderBox::new(FractionallySizedBoxData::both(0.5));
+        use flui_core::testing::mock_render_context;
+
+        let fractional = SingleRenderBox::new(FractionallySizedBoxData::both(0.5));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
 
-        let size = fractional.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = fractional.layout(constraints, &ctx);
 
         // Should be 50% of max constraints
         assert_eq!(size, Size::new(50.0, 100.0));
@@ -219,10 +227,13 @@ mod tests {
 
     #[test]
     fn test_render_fractionally_sized_box_layout_width_only() {
-        let mut fractional = SingleRenderBox::new(FractionallySizedBoxData::width(0.25));
+        use flui_core::testing::mock_render_context;
+
+        let fractional = SingleRenderBox::new(FractionallySizedBoxData::width(0.25));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
 
-        let size = fractional.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = fractional.layout(constraints, &ctx);
 
         // Should be 25% width, min height
         assert_eq!(size, Size::new(25.0, 0.0));
@@ -230,10 +241,13 @@ mod tests {
 
     #[test]
     fn test_render_fractionally_sized_box_layout_height_only() {
-        let mut fractional = SingleRenderBox::new(FractionallySizedBoxData::height(0.75));
+        use flui_core::testing::mock_render_context;
+
+        let fractional = SingleRenderBox::new(FractionallySizedBoxData::height(0.75));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
 
-        let size = fractional.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = fractional.layout(constraints, &ctx);
 
         // Should be min width, 75% height
         assert_eq!(size, Size::new(0.0, 150.0));
@@ -241,10 +255,13 @@ mod tests {
 
     #[test]
     fn test_render_fractionally_sized_box_layout_no_factors() {
-        let mut fractional = SingleRenderBox::new(FractionallySizedBoxData::new(None, None));
+        use flui_core::testing::mock_render_context;
+
+        let fractional = SingleRenderBox::new(FractionallySizedBoxData::new(None, None));
         let constraints = BoxConstraints::new(10.0, 100.0, 20.0, 200.0);
 
-        let size = fractional.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = fractional.layout(constraints, &ctx);
 
         // Should use min constraints when no factors
         assert_eq!(size, Size::new(10.0, 20.0));

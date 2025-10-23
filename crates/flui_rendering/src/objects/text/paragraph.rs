@@ -165,8 +165,8 @@ impl RenderParagraph {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderParagraph {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        self.state_mut().constraints = Some(constraints);
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, _ctx: &flui_core::RenderContext) -> Size {
+        *state.constraints.lock() = Some(constraints);
 
         // Calculate text size
         // In production, this would use a proper text layout engine
@@ -208,13 +208,13 @@ impl DynRenderObject for RenderParagraph {
         let height = actual_lines as f32 * line_height;
 
         let size = constraints.constrain(Size::new(width, height));
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(size) = self.state().size {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, _ctx: &flui_core::RenderContext) {
+        if let Some(size) = *state.size.lock() {
             let data = self.data();
 
             // Create rect for text rendering
@@ -307,12 +307,15 @@ mod tests {
 
     #[test]
     fn test_render_paragraph_set_font_size() {
+        use flui_core::testing::mock_render_context;
+
         let data = ParagraphData::new("Text");
         let mut paragraph = LeafRenderBox::new(data);
 
         // Layout first to clear initial needs_layout
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        paragraph.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        paragraph.layout(constraints, &ctx);
 
         paragraph.set_font_size(20.0);
         assert_eq!(paragraph.font_size(), 20.0);
@@ -321,12 +324,15 @@ mod tests {
 
     #[test]
     fn test_render_paragraph_set_color() {
+        use flui_core::testing::mock_render_context;
+
         let data = ParagraphData::new("Text");
         let mut paragraph = LeafRenderBox::new(data);
 
         // Layout first to clear initial needs_paint
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        paragraph.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        paragraph.layout(constraints, &ctx);
 
         paragraph.set_color(Color::BLUE);
         assert_eq!(paragraph.color(), Color::BLUE);
@@ -336,12 +342,15 @@ mod tests {
 
     #[test]
     fn test_render_paragraph_set_text_align() {
+        use flui_core::testing::mock_render_context;
+
         let data = ParagraphData::new("Text");
         let mut paragraph = LeafRenderBox::new(data);
 
         // Layout first
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        paragraph.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        paragraph.layout(constraints, &ctx);
 
         paragraph.set_text_align(TextAlign::Center);
         assert_eq!(paragraph.text_align(), TextAlign::Center);
@@ -351,11 +360,14 @@ mod tests {
 
     #[test]
     fn test_render_paragraph_layout() {
+        use flui_core::testing::mock_render_context;
+
         let data = ParagraphData::new("Hello, World!");
         let mut paragraph = LeafRenderBox::new(data);
 
         let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
-        let size = paragraph.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = paragraph.layout(constraints, &ctx);
 
         // Should have some size based on text
         assert!(size.width > 0.0);
@@ -366,12 +378,15 @@ mod tests {
 
     #[test]
     fn test_render_paragraph_max_lines() {
+        use flui_core::testing::mock_render_context;
+
         let long_text = "This is a very long text that will definitely need multiple lines to display properly";
         let data = ParagraphData::new(long_text).with_max_lines(2);
         let mut paragraph = LeafRenderBox::new(data);
 
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 1000.0);
-        let size = paragraph.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = paragraph.layout(constraints, &ctx);
 
         // Height should be limited by max_lines
         let line_height = 14.0 * 1.2; // font_size * line_height_factor

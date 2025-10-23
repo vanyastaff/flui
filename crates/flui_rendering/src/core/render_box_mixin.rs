@@ -74,7 +74,7 @@ pub trait RenderBoxMixin {
     /// convenient for checking if layout has occurred.
     #[inline]
     fn constraints(&self) -> Option<BoxConstraints> {
-        self.state().constraints
+        *self.state().constraints.lock()
     }
 
     /// Get the dirty state flags
@@ -83,7 +83,7 @@ pub trait RenderBoxMixin {
     /// Use this when you need to check multiple flags at once.
     #[inline]
     fn flags(&self) -> RenderFlags {
-        self.state().flags
+        *self.state().flags.lock()
     }
 
     /// Check if layout has been performed
@@ -99,34 +99,35 @@ pub trait RenderBoxMixin {
     /// A repaint boundary isolates painting - when this object needs repaint,
     /// it doesn't cause ancestors to repaint. Useful for expensive widgets.
     #[inline]
-    fn set_is_repaint_boundary(&mut self, value: bool) {
+    fn set_is_repaint_boundary(&self, value: bool) {
+        let mut flags = self.state().flags.lock();
         if value {
-            self.state_mut().flags.insert(RenderFlags::IS_REPAINT_BOUNDARY);
+            flags.insert(RenderFlags::IS_REPAINT_BOUNDARY);
         } else {
-            self.state_mut().flags.remove(RenderFlags::IS_REPAINT_BOUNDARY);
+            flags.remove(RenderFlags::IS_REPAINT_BOUNDARY);
         }
     }
 
     /// Check if this is a repaint boundary
     #[inline]
     fn is_repaint_boundary(&self) -> bool {
-        self.state().flags.contains(RenderFlags::IS_REPAINT_BOUNDARY)
+        self.state().flags.lock().contains(RenderFlags::IS_REPAINT_BOUNDARY)
     }
 
     /// Clear the needs_layout flag
     ///
     /// Called after layout is performed.
     #[inline]
-    fn clear_needs_layout(&mut self) {
-        self.state_mut().clear_needs_layout();
+    fn clear_needs_layout(&self) {
+        self.state().clear_needs_layout();
     }
 
     /// Clear the needs_paint flag
     ///
     /// Called after painting is performed.
     #[inline]
-    fn clear_needs_paint(&mut self) {
-        self.state_mut().clear_needs_paint();
+    fn clear_needs_paint(&self) {
+        self.state().clear_needs_paint();
     }
 }
 
@@ -171,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_repaint_boundary() {
-        let mut mock = MockRenderBox {
+        let mock = MockRenderBox {
             state: RenderState::new(),
         };
 
@@ -191,10 +192,10 @@ mod tests {
         };
 
         assert!(!mock.has_size());
-        assert!(mock.state().size.is_none());
+        assert!(mock.state().size.lock().is_none());
 
-        mock.state_mut().size = Some(Size::new(100.0, 100.0));
+        *mock.state_mut().size.lock() = Some(Size::new(100.0, 100.0));
         assert!(mock.has_size());
-        assert_eq!(mock.state().size, Some(Size::new(100.0, 100.0)));
+        assert_eq!(*mock.state().size.lock(), Some(Size::new(100.0, 100.0)));
     }
 }

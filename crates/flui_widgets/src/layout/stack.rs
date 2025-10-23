@@ -52,7 +52,7 @@ use flui_types::layout::Alignment;
 /// The stack's size is determined by:
 /// - `StackFit::Loose` - Size to fit non-positioned children
 /// - `StackFit::Expand` - Expand to fill incoming constraints
-/// - `StackFit::PassThrough` - Use incoming constraints as-is
+/// - `StackFit::Passthrough` - Use incoming constraints as-is
 ///
 /// ## Common Use Cases
 ///
@@ -161,7 +161,7 @@ pub struct Stack {
     ///
     /// - `StackFit::Loose` - Size to fit non-positioned children (default)
     /// - `StackFit::Expand` - Expand to fill incoming constraints
-    /// - `StackFit::PassThrough` - Use incoming constraints as-is
+    /// - `StackFit::Passthrough` - Use incoming constraints as-is
     #[builder(default = StackFit::Loose)]
     pub fit: StackFit,
 
@@ -244,10 +244,12 @@ impl Widget for Stack {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Stack {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        let mut render_stack = RenderStack::new();
-        render_stack.set_alignment(self.alignment);
-        render_stack.set_fit(self.fit);
-        Box::new(render_stack)
+        use flui_rendering::{ContainerRenderBox, StackData};
+        let data = StackData {
+            alignment: self.alignment,
+            fit: self.fit,
+        };
+        Box::new(ContainerRenderBox::new(data))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
@@ -433,12 +435,12 @@ mod tests {
     fn test_stack_struct_literal() {
         let widget = Stack {
             alignment: Alignment::BOTTOM_RIGHT,
-            fit: StackFit::PassThrough,
+            fit: StackFit::Passthrough,
             ..Default::default()
         };
 
         assert_eq!(widget.alignment, Alignment::BOTTOM_RIGHT);
-        assert_eq!(widget.fit, StackFit::PassThrough);
+        assert_eq!(widget.fit, StackFit::Passthrough);
     }
 
     #[test]
@@ -497,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_stack_all_fits() {
-        let fits = [StackFit::Loose, StackFit::Expand, StackFit::PassThrough];
+        let fits = [StackFit::Loose, StackFit::Expand, StackFit::Passthrough];
 
         for fit in fits {
             let widget = Stack::builder().fit(fit).build();

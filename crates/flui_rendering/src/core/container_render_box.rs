@@ -50,6 +50,15 @@ impl<T> ContainerRenderBox<T> {
     pub fn children_mut(&mut self) -> &mut Vec<BoxedRenderObject> {
         &mut self.children
     }
+
+    /// Adopt a child (multi-child version)
+    ///
+    /// This is the generic implementation for all ContainerRenderBox types.
+    /// It adds the child to the children vector.
+    pub fn adopt_child(&mut self, child: BoxedRenderObject) {
+        self.children.push(child);
+        self.state_mut().mark_needs_layout();
+    }
 }
 
 impl<T> RenderBoxMixin for ContainerRenderBox<T> {

@@ -2,11 +2,28 @@
 
 use flui_types::{Offset, Size, constraints::BoxConstraints, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize};
 use flui_core::DynRenderObject;
-use crate::core::{ContainerRenderBox, RenderBoxMixin};
 
-/// Data for RenderFlex
+/// RenderObject for flex layout (Row/Column)
+///
+/// After architecture refactoring, RenderObjects now directly implement DynRenderObject
+/// without a RenderBox wrapper. State is stored in ElementTree, accessed via RenderContext.
+///
+/// This is a simplified implementation. A full implementation would include:
+/// - FlexParentData for flex factors
+/// - Flexible/Expanded child support
+/// - Baseline alignment
+/// - TextDirection support
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::objects::layout::RenderFlex;
+/// use flui_types::Axis;
+///
+/// let flex = RenderFlex::row();
+/// ```
 #[derive(Debug, Clone, PartialEq)]
-pub struct FlexData {
+pub struct RenderFlex {
     /// The direction to lay out children (horizontal for Row, vertical for Column)
     pub direction: Axis,
     /// How to align children along the main axis
@@ -17,7 +34,7 @@ pub struct FlexData {
     pub cross_axis_alignment: CrossAxisAlignment,
 }
 
-impl FlexData {
+impl RenderFlex {
     /// Create new flex data
     pub fn new(direction: Axis) -> Self {
         Self {
@@ -37,82 +54,70 @@ impl FlexData {
     pub fn column() -> Self {
         Self::new(Axis::Vertical)
     }
-}
-
-/// RenderObject for flex layout (Row/Column)
-///
-/// This is a simplified implementation that demonstrates the ContainerRenderBox pattern.
-/// A full implementation would include:
-/// - FlexParentData for flex factors
-/// /// - Flexible/Expanded child support
-/// - Baseline alignment
-/// - TextDirection support
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::{ContainerRenderBox, objects::layout::FlexData};
-/// use flui_types::Axis;
-///
-/// let mut flex = ContainerRenderBox::new(FlexData::row());
-/// ```
-pub type RenderFlex = ContainerRenderBox<FlexData>;
-
-// ===== Public API =====
-
-impl RenderFlex {
-    /// Get reference to type-specific data
-    pub fn data(&self) -> &FlexData {
-        &self.data
-    }
-
-    /// Get mutable reference to type-specific data
-    pub fn data_mut(&mut self) -> &mut FlexData {
-        &mut self.data
-    }
 
     /// Get the direction
     pub fn direction(&self) -> Axis {
-        self.data().direction
+        self.direction
     }
 
-    /// Set new direction
-    pub fn set_direction(&mut self, direction: Axis) {
-        if self.data().direction != direction {
-            self.data_mut().direction = direction;
-            self.mark_needs_layout();
-        }
+    /// Set new direction (returns new instance)
+    pub fn with_direction(mut self, direction: Axis) -> Self {
+        self.direction = direction;
+        self
     }
 
     /// Get main axis alignment
     pub fn main_axis_alignment(&self) -> MainAxisAlignment {
-        self.data().main_axis_alignment
+        self.main_axis_alignment
     }
 
-    /// Set main axis alignment
-    pub fn set_main_axis_alignment(&mut self, alignment: MainAxisAlignment) {
-        if self.data().main_axis_alignment != alignment {
-            self.data_mut().main_axis_alignment = alignment;
-            self.mark_needs_layout();
-        }
+    /// Set main axis alignment (returns new instance)
+    pub fn with_main_axis_alignment(mut self, alignment: MainAxisAlignment) -> Self {
+        self.main_axis_alignment = alignment;
+        self
+    }
+
+    /// Get main axis size
+    pub fn main_axis_size(&self) -> MainAxisSize {
+        self.main_axis_size
+    }
+
+    /// Set main axis size (returns new instance)
+    pub fn with_main_axis_size(mut self, size: MainAxisSize) -> Self {
+        self.main_axis_size = size;
+        self
+    }
+
+    /// Get cross axis alignment
+    pub fn cross_axis_alignment(&self) -> CrossAxisAlignment {
+        self.cross_axis_alignment
+    }
+
+    /// Set cross axis alignment (returns new instance)
+    pub fn with_cross_axis_alignment(mut self, alignment: CrossAxisAlignment) -> Self {
+        self.cross_axis_alignment = alignment;
+        self
     }
 }
 
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderFlex {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        // Store constraints
-        self.state_mut().constraints = Some(constraints);
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
+        // Store constraints directly in state
+        *state.constraints.lock() = Some(constraints);
 
-        let direction = self.data().direction;
-        let main_axis_size = self.data().main_axis_size;
+        let direction = self.direction;
+        let main_axis_size = self.main_axis_size;
 
-        if self.children.is_empty() {
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        if children_ids.is_empty() {
             // No children - use smallest size
             let size = constraints.smallest();
-            self.state_mut().size = Some(size);
-            self.clear_needs_layout();
+            *state.size.lock() = Some(size);
+            state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
             return size;
         }
 
@@ -125,24 +130,44 @@ impl DynRenderObject for RenderFlex {
         let mut total_main_size = 0.0;
         let mut max_cross_size: f32 = 0.0;
 
-        // Layout all children with loose constraints
-        for child in &mut self.children {
+        // Layout all children with constraints based on cross-axis alignment
+        for (idx, &child_id) in children_ids.iter().enumerate() {
             let child_constraints = match direction {
-                Axis::Horizontal => BoxConstraints::new(
-                    0.0,
-                    constraints.max_width,
-                    constraints.min_height,
-                    constraints.max_height,
-                ),
-                Axis::Vertical => BoxConstraints::new(
-                    constraints.min_width,
-                    constraints.max_width,
-                    0.0,
-                    constraints.max_height,
-                ),
+                Axis::Horizontal => {
+                    // Main axis = horizontal, cross axis = vertical
+                    // Main axis is loose (0.0 to max), cross axis depends on alignment
+                    let (min_cross, max_cross) = if self.cross_axis_alignment == CrossAxisAlignment::Stretch {
+                        (constraints.min_height, constraints.max_height)
+                    } else {
+                        (0.0, constraints.max_height)
+                    };
+                    BoxConstraints::new(
+                        0.0,
+                        constraints.max_width,
+                        min_cross,
+                        max_cross,
+                    )
+                }
+                Axis::Vertical => {
+                    // Main axis = vertical, cross axis = horizontal
+                    // Main axis is loose (0.0 to max), cross axis depends on alignment
+                    let (min_cross, max_cross) = if self.cross_axis_alignment == CrossAxisAlignment::Stretch {
+                        (constraints.min_width, constraints.max_width)
+                    } else {
+                        (0.0, constraints.max_width)
+                    };
+                    BoxConstraints::new(
+                        min_cross,
+                        max_cross,
+                        0.0,
+                        constraints.max_height,
+                    )
+                }
             };
 
-            let child_size = child.layout(child_constraints);
+            tracing::debug!("RenderFlex: laying out child #{} (id={}) with constraints {:?}", idx, child_id, child_constraints);
+            let child_size = ctx.layout_child(child_id, child_constraints);
+            tracing::debug!("RenderFlex: child #{} size = {:?}", idx, child_size);
 
             match direction {
                 Axis::Horizontal => {
@@ -176,38 +201,48 @@ impl DynRenderObject for RenderFlex {
             }
         };
 
-        // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        // Store size directly in state and clear needs_layout flag
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        let direction = self.data().direction;
-        let size = self.state().size.unwrap_or(Size::ZERO);
-        let main_axis_alignment = self.data().main_axis_alignment;
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        let direction = self.direction;
+        let size = state.size.lock().expect("Size not set in paint");
+        let main_axis_alignment = self.main_axis_alignment;
+        let cross_axis_alignment = self.cross_axis_alignment;
+
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
         // Calculate total size of children
         let mut total_main_size = 0.0;
-        for child in &self.children {
-            let child_size = child.size();
+        for &child_id in children_ids {
+            // Get child size (traversing to RenderObject if needed)
+            let child_size = ctx.child_size(child_id);
             match direction {
                 Axis::Horizontal => total_main_size += child_size.width,
                 Axis::Vertical => total_main_size += child_size.height,
             }
         }
 
-        // Calculate available space for alignment
+        // Calculate available space for main axis alignment
         let available_space = match direction {
             Axis::Horizontal => size.width - total_main_size,
             Axis::Vertical => size.height - total_main_size,
         };
 
-        // Calculate spacing
+        // Calculate main axis spacing
         let (leading_space, between_space) = main_axis_alignment.calculate_spacing(
             available_space.max(0.0),
-            self.children.len(),
+            children_ids.len(),
+        );
+
+        tracing::debug!(
+            "RenderFlex::paint: direction={:?}, flex_size={:?}, total_main={:.1}, available={:.1}, leading={:.1}, between={:.1}",
+            direction, size, total_main_size, available_space, leading_space, between_space
         );
 
         // Paint children
@@ -217,19 +252,66 @@ impl DynRenderObject for RenderFlex {
             Axis::Vertical => current_offset.dy += leading_space,
         }
 
-        for child in &self.children {
-            child.paint(painter, current_offset);
+        for (idx, &child_id) in children_ids.iter().enumerate() {
+            // Get child size for positioning
+            let child_size = ctx.child_size(child_id);
 
-            let child_size = child.size();
+            // Calculate cross-axis offset based on alignment
+            let child_offset = match direction {
+                Axis::Horizontal => {
+                    // Main axis = horizontal, cross axis = vertical
+                    let cross_offset = match cross_axis_alignment {
+                        CrossAxisAlignment::Start => 0.0,
+                        CrossAxisAlignment::Center => (size.height - child_size.height) / 2.0,
+                        CrossAxisAlignment::End => size.height - child_size.height,
+                        CrossAxisAlignment::Stretch => 0.0, // TODO: Stretch handled in layout
+                        CrossAxisAlignment::Baseline => 0.0, // TODO: Baseline alignment
+                    };
+                    Offset::new(current_offset.dx, offset.dy + cross_offset)
+                }
+                Axis::Vertical => {
+                    // Main axis = vertical, cross axis = horizontal
+                    let cross_offset = match cross_axis_alignment {
+                        CrossAxisAlignment::Start => 0.0,
+                        CrossAxisAlignment::Center => (size.width - child_size.width) / 2.0,
+                        CrossAxisAlignment::End => size.width - child_size.width,
+                        CrossAxisAlignment::Stretch => 0.0, // TODO: Stretch handled in layout
+                        CrossAxisAlignment::Baseline => 0.0, // TODO: Baseline alignment
+                    };
+
+                    if idx == 3 {
+                        tracing::debug!(
+                            "RenderFlex: child #{} cross_offset calculation: flex_width={}, child_width={}, cross_offset={}, base_offset.dx={}",
+                            idx, size.width, child_size.width, cross_offset, offset.dx
+                        );
+                    }
+
+                    Offset::new(offset.dx + cross_offset, current_offset.dy)
+                }
+            };
+
+            tracing::debug!(
+                "RenderFlex: painting child #{} (id={}) at offset {:?}, size {:?}, cross_align={:?}",
+                idx, child_id, child_offset, child_size, cross_axis_alignment
+            );
+
+            // Paint child with calculated offset
+            ctx.paint_child(child_id, painter, child_offset);
+
+            // Advance main axis position
             match direction {
-                Axis::Horizontal => current_offset.dx += child_size.width + between_space,
-                Axis::Vertical => current_offset.dy += child_size.height + between_space,
+                Axis::Horizontal => {
+                    current_offset.dx += child_size.width + between_space;
+                },
+                Axis::Vertical => {
+                    current_offset.dy += child_size.height + between_space;
+                },
             }
         }
     }
 
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
+    // All other methods (size, mark_needs_layout, etc.) use default implementations
+    // from DynRenderObject trait, which delegate to RenderContext/ElementTree.
 }
 
 #[cfg(test)]
@@ -238,49 +320,47 @@ mod tests {
 
     #[test]
     fn test_flex_data_row() {
-        let data = FlexData::row();
+        let data = RenderFlex::row();
         assert_eq!(data.direction, Axis::Horizontal);
     }
 
     #[test]
     fn test_flex_data_column() {
-        let data = FlexData::column();
+        let data = RenderFlex::column();
         assert_eq!(data.direction, Axis::Vertical);
     }
 
     #[test]
     fn test_render_flex_new() {
-        let flex = ContainerRenderBox::new(FlexData::row());
+        let flex = RenderFlex::row();
         assert_eq!(flex.direction(), Axis::Horizontal);
-        assert_eq!(flex.children().len(), 0);
     }
 
     #[test]
-    fn test_render_flex_set_direction() {
-        let mut flex = ContainerRenderBox::new(FlexData::row());
-
-        flex.set_direction(Axis::Vertical);
+    fn test_render_flex_with_direction() {
+        let flex = RenderFlex::row();
+        let flex = flex.with_direction(Axis::Vertical);
         assert_eq!(flex.direction(), Axis::Vertical);
-        assert!(flex.needs_layout());
     }
 
     #[test]
     fn test_render_flex_layout_no_children() {
-        let mut flex = ContainerRenderBox::new(FlexData::row());
+        use flui_core::testing::mock_render_context;
+
+        let flex = RenderFlex::row();
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = flex.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = flex.layout(constraints, &ctx);
 
         // Should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));
     }
 
     #[test]
-    fn test_render_flex_set_main_axis_alignment() {
-        let mut flex = ContainerRenderBox::new(FlexData::row());
-
-        flex.set_main_axis_alignment(MainAxisAlignment::Center);
+    fn test_render_flex_with_main_axis_alignment() {
+        let flex = RenderFlex::row();
+        let flex = flex.with_main_axis_alignment(MainAxisAlignment::Center);
         assert_eq!(flex.main_axis_alignment(), MainAxisAlignment::Center);
-        assert!(flex.needs_layout());
     }
 }

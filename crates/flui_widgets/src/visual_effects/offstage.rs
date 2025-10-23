@@ -118,7 +118,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> OffstageBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 
@@ -133,7 +133,8 @@ impl<S: State> OffstageBuilder<S> {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Offstage {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderOffstage::new(self.offstage))
+        use flui_rendering::{SingleRenderBox, objects::effects::offstage::OffstageData};
+        Box::new(SingleRenderBox::new(OffstageData::new(self.offstage)))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {

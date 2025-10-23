@@ -54,27 +54,29 @@ impl RenderColoredBox {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderColoredBox {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         // Layout child with same constraints (pass-through)
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             // No child: fill available space or shrink to zero
             constraints.biggest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(size) = self.state().size {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        if let Some(size) = *state.size.lock() {
             // Paint background color
             let rect = egui::Rect::from_min_size(
                 egui::pos2(offset.dx, offset.dy),
@@ -91,8 +93,11 @@ impl DynRenderObject for RenderColoredBox {
         }
 
         // Paint child on top
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
     }
 
@@ -140,10 +145,13 @@ mod tests {
 
     #[test]
     fn test_render_colored_box_layout_no_child() {
-        let mut colored = SingleRenderBox::new(ColoredBoxData::new(Color::RED));
+        use flui_core::testing::mock_render_context;
+
+        let colored = SingleRenderBox::new(ColoredBoxData::new(Color::RED));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = colored.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = colored.layout(constraints, &ctx);
 
         // No child, should fill available space
         assert_eq!(size, Size::new(100.0, 100.0));
@@ -151,10 +159,13 @@ mod tests {
 
     #[test]
     fn test_render_colored_box_layout_tight_constraints() {
-        let mut colored = SingleRenderBox::new(ColoredBoxData::new(Color::BLUE));
+        use flui_core::testing::mock_render_context;
+
+        let colored = SingleRenderBox::new(ColoredBoxData::new(Color::BLUE));
         let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
 
-        let size = colored.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = colored.layout(constraints, &ctx);
 
         assert_eq!(size, Size::new(50.0, 50.0));
     }

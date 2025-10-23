@@ -47,9 +47,7 @@ pub struct ParentDataElement<W, T>
 where
     W: ParentDataWidget<T>,
     T: ParentData,
-{
-    id: ElementId,
-    widget: W,
+{    widget: W,
     parent: Option<ElementId>,
     dirty: bool,
     lifecycle: ElementLifecycle,
@@ -64,9 +62,7 @@ where
     T: ParentData,
 {
     pub fn new(widget: W) -> Self {
-        Self {
-            id: ElementId::new(),
-            widget,
+        Self {            widget,
             parent: None,
             dirty: true,
             lifecycle: ElementLifecycle::Initial,
@@ -127,11 +123,11 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParentDataElement")
-            .field("id", &self.id)
-            .field("widget", &self.widget)
+            .field("widget_type", &std::any::type_name::<W>())
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
             .field("lifecycle", &self.lifecycle)
+            .field("child", &self.child)
             .finish()
     }
 }
@@ -142,12 +138,7 @@ impl<W, T> DynElement for ParentDataElement<W, T>
 where
     W: ParentDataWidget<T> + crate::Widget<Element = ParentDataElement<W, T>>,
     T: ParentData,
-{
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
+{    fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
@@ -183,7 +174,7 @@ where
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -196,7 +187,7 @@ where
         self.child = None;
 
         // Return the child that needs to be mounted
-        vec![(self.id, child_widget, 0)]
+        vec![(element_id, child_widget, 0)]
     }
 
     fn is_dirty(&self) -> bool {

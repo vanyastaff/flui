@@ -34,8 +34,8 @@ pub use window::run_app;
 
 // Re-export commonly used types from flui_core
 pub use flui_core::{
-    BuildContext, Element, ElementTree, InheritedElement, InheritedWidget, State, StatefulElement,
-    StatefulWidget, StatelessWidget, Widget,
+    BuildContext, Element, ElementTree, InheritedElement, InheritedWidget, ProxyWidget, State,
+    StatefulElement, StatefulWidget, StatelessWidget, Widget,
 };
 
 

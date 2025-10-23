@@ -68,12 +68,18 @@ pub use parent_data::{FlexParentData, StackParentData};
 // Re-export all RenderObjects
 pub use objects::{
     // Layout objects
-    RenderPadding, RenderConstrainedBox, RenderAspectRatio, RenderLimitedBox,
-    RenderFractionallySizedBox, RenderPositionedBox, RenderFlex, RenderStack,
-    RenderIndexedStack,
+    RenderAlign, AlignData,
+    RenderPadding,
+    RenderConstrainedBox,
+    RenderAspectRatio, AspectRatioData,
+    RenderLimitedBox,
+    RenderFractionallySizedBox, RenderPositionedBox, RenderFlex, RenderStack, StackData,
+    RenderIndexedStack, IndexedStackData,
 
     // Effects objects
-    RenderOpacity, RenderDecoratedBox, RenderTransform, RenderClipRect,
+    RenderOpacity,
+    RenderDecoratedBox, DecoratedBoxData, DecorationPosition,
+    RenderTransform, RenderClipRect,
     RenderClipRRect, RenderOffstage,
 
     // Interaction objects
@@ -82,9 +88,6 @@ pub use objects::{
 
     // Text objects
     RenderParagraph, ParagraphData,
-
-    // Enums and data types
-    DecorationPosition,
 };
 
 /// Prelude module for convenient imports

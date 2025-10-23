@@ -3,7 +3,7 @@
 //! This module provides window configuration and the main entry point
 //! for running Flui applications.
 
-use flui_core::Widget;
+use flui_core::DynWidget;
 use crate::app::FluiApp;
 
 /// Run a Flui application
@@ -33,7 +33,7 @@ use crate::app::FluiApp;
 ///     run_app(Box::new(MyApp)).unwrap();
 /// }
 /// ```
-pub fn run_app(root_widget: Box<dyn Widget>) -> Result<(), eframe::Error> {
+pub fn run_app(root_widget: Box<dyn DynWidget>) -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])

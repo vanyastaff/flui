@@ -150,13 +150,15 @@ impl RenderCustomPaint {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderCustomPaint {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         // Layout child if present
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             // No child - use our preferred size
             let preferred_size = self.data().size;
@@ -164,14 +166,14 @@ impl DynRenderObject for RenderCustomPaint {
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        let size = self.state().size.unwrap_or(Size::ZERO);
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        let size = state.size.lock().unwrap_or(Size::ZERO);
 
         // Paint background painter
         if let Some(bg_painter) = &self.data().painter {
@@ -179,8 +181,9 @@ impl DynRenderObject for RenderCustomPaint {
         }
 
         // Paint child
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
 
         // Paint foreground painter (on top of child)
@@ -279,10 +282,13 @@ mod tests {
 
     #[test]
     fn test_render_custom_paint_layout() {
-        let mut custom = SingleRenderBox::new(CustomPaintData::new(Size::new(150.0, 250.0)));
+        use flui_core::testing::mock_render_context;
+
+        let custom = SingleRenderBox::new(CustomPaintData::new(Size::new(150.0, 250.0)));
         let constraints = BoxConstraints::new(0.0, 300.0, 0.0, 400.0);
 
-        let size = custom.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = custom.layout(constraints, &ctx);
 
         // No child, should use preferred size
         assert_eq!(size, Size::new(150.0, 250.0));

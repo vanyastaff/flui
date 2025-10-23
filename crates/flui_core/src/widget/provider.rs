@@ -33,9 +33,7 @@ pub trait InheritedWidget: crate::ProxyWidget {
 }
 
 /// Element for InheritedWidget (tracks dependents)
-pub struct InheritedElement<W: InheritedWidget> {
-    id: crate::ElementId,
-    widget: W,
+pub struct InheritedElement<W: InheritedWidget> {    widget: W,
     parent: Option<crate::ElementId>,
     dirty: bool,
     /// Enhanced dependency tracking with DependencyTracker
@@ -46,9 +44,7 @@ pub struct InheritedElement<W: InheritedWidget> {
 
 impl<W: InheritedWidget> InheritedElement<W> {
     pub fn new(widget: W) -> Self {
-        Self {
-            id: crate::ElementId::new(),
-            widget,
+        Self {            widget,
             parent: None,
             dirty: true,
             dependencies: DependencyTracker::new(),
@@ -68,8 +64,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
     ) {
         self.dependencies.add_dependent(dependent_id, aspect);
         tracing::trace!(
-            "InheritedElement({:?}): Added dependency from {:?}",
-            self.id,
+            "InheritedElement: Added dependency from {:?}",
             dependent_id
         );
     }
@@ -92,8 +87,7 @@ impl<W: InheritedWidget> InheritedElement<W> {
         if let Some(tree) = &self.tree {
             tree.write().mark_dirty(dependent_id);
             tracing::trace!(
-                "InheritedElement({:?}): Notified dependent {:?}",
-                self.id,
+                "InheritedElement: Notified dependent {:?}",
                 dependent_id
             );
         }
@@ -106,16 +100,14 @@ impl<W: InheritedWidget> InheritedElement<W> {
     pub fn notify_clients(&mut self, old_widget: &W) {
         if !self.widget.update_should_notify(old_widget) {
             tracing::trace!(
-                "InheritedElement({:?}): update_should_notify = false, skipping notifications",
-                self.id
+                "InheritedElement: update_should_notify = false, skipping notifications"
             );
             return;
         }
 
         let dependent_count = self.dependencies.len();
         tracing::info!(
-            "InheritedElement({:?}): Notifying {} dependents",
-            self.id,
+            "InheritedElement: Notifying {} dependents",
             dependent_count
         );
 
@@ -164,10 +156,12 @@ impl<W: InheritedWidget> InheritedElement<W> {
 impl<W: InheritedWidget> fmt::Debug for InheritedElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InheritedElement")
-            .field("id", &self.id)
+            .field("widget_type", &std::any::type_name::<W>())
             .field("widget", &self.widget)
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
+            .field("child", &self.child)
+            .field("dependents_count", &self.dependencies.len())
             .finish()
     }
 }
@@ -219,10 +213,6 @@ macro_rules! impl_widget_for_inherited {
 // ========== Implement DynElement for InheritedElement ==========
 
 impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::DynElement for InheritedElement<W> {
-    fn id(&self) -> crate::ElementId {
-        self.id
-    }
-
     fn parent(&self) -> Option<crate::ElementId> {
         self.parent
     }
@@ -264,7 +254,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::DynEleme
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(crate::ElementId, Box<dyn crate::DynWidget>, usize)> {
+    fn rebuild(&mut self, element_id: crate::ElementId) -> Vec<(crate::ElementId, Box<dyn crate::DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -284,7 +274,7 @@ impl<W: InheritedWidget + Widget<Element = InheritedElement<W>>> crate::DynEleme
         self.child = None;
 
         // Return the child that needs to be mounted
-        vec![(self.id, child_widget, 0)]
+        vec![(element_id, child_widget, 0)]
     }
 
     fn is_dirty(&self) -> bool {
@@ -633,7 +623,7 @@ mod tests {
         // Rebuild to trigger build() which calls depend_on_inherited_widget()
         {
             let mut tree_guard = tree.write();
-            tree_guard.rebuild();
+            let tree_arc = tree.clone(); tree_guard.rebuild(tree_arc);
         }
 
         // Success - test validates that the infrastructure for dependency tracking exists
@@ -696,7 +686,7 @@ mod tests {
         // Clear dirty state
         {
             let mut tree_guard = tree.write();
-            tree_guard.rebuild();
+            let tree_arc = tree.clone(); tree_guard.rebuild(tree_arc);
         }
 
         // Verify dependent is not dirty
@@ -758,7 +748,7 @@ mod tests {
         // Rebuild triggers build()
         {
             let mut tree_guard = tree.write();
-            tree_guard.rebuild();
+            let tree_arc = tree.clone(); tree_guard.rebuild(tree_arc);
         }
 
         // Test passed - maybe_of returned None correctly

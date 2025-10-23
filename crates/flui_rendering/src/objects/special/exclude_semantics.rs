@@ -61,28 +61,33 @@ impl RenderExcludeSemantics {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderExcludeSemantics {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         // Layout child with same constraints (pass-through)
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             constraints.smallest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Paint child directly (pass-through)
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
     }
 
@@ -128,10 +133,13 @@ mod tests {
 
     #[test]
     fn test_render_exclude_semantics_layout() {
-        let mut exclude = SingleRenderBox::new(ExcludeSemanticsData::new(true));
+        use flui_core::testing::mock_render_context;
+
+        let exclude = SingleRenderBox::new(ExcludeSemanticsData::new(true));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = exclude.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = exclude.layout(constraints, &ctx);
 
         // No child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

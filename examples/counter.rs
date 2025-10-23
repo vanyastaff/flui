@@ -15,6 +15,7 @@
 
 use flui_app::*;
 use flui_widgets::prelude::*;
+use flui_widgets::DynWidget;
 
 /// Counter widget - a StatefulWidget that maintains a count
 #[derive(Debug, Clone)]
@@ -41,7 +42,7 @@ impl StatefulWidget for Counter {
 }
 
 impl State for CounterState {
-    fn build(&mut self, _context: &BuildContext) -> Box<dyn Widget> {
+    fn build(&mut self, _context: &BuildContext) -> Box<dyn DynWidget> {
         // Build the UI showing the current count
         Box::new(
             Text::builder()
@@ -63,8 +64,10 @@ impl State for CounterState {
 
 // Manual Widget implementation for Counter (required until we have blanket impl)
 impl Widget for Counter {
-    fn create_element(&self) -> Box<dyn Element> {
-        Box::new(StatefulElement::new(self.clone()))
+    type Element = StatefulElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        StatefulElement::new(self)
     }
 }
 
@@ -73,7 +76,7 @@ impl Widget for Counter {
 struct CounterApp;
 
 impl StatelessWidget for CounterApp {
-    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+    fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
         // Create a counter starting at 42
         // This demonstrates that StatefulWidget maintains its own state
         // and can be initialized with different values

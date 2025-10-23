@@ -88,27 +88,32 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 // ===== DynRenderObject Implementation =====
 
 impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> DynRenderObject for RenderAnnotatedRegion<T> {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        self.state_mut().constraints = Some(constraints);
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
+        *state.constraints.lock() = Some(constraints);
 
-        let size = if let Some(child) = self.child_mut() {
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
             // Layout child with same constraints
-            child.layout(constraints)
+            ctx.layout_child(child_id, constraints)
         } else {
             // No child - use smallest size
             constraints.smallest()
         };
 
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // This is a pass-through - just paint child
         // The annotation value is used by ancestors, not painted
-        if let Some(child) = self.child() {
-            child.paint(painter, offset);
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
+        if let Some(&child_id) = children_ids.first() {
+            ctx.paint_child(child_id, painter, offset);
         }
     }
 
@@ -171,11 +176,14 @@ mod tests {
 
     #[test]
     fn test_render_annotated_region_layout() {
+        use flui_core::testing::mock_render_context;
+
         let data = AnnotatedRegionData::new("test");
-        let mut region = SingleRenderBox::new(data);
+        let region = SingleRenderBox::new(data);
 
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let size = region.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = region.layout(constraints, &ctx);
 
         // Without child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

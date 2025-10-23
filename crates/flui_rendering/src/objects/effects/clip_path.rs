@@ -97,41 +97,45 @@ impl RenderClipPath {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderClipPath {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
+
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
         // Layout child with same constraints
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let size = if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             constraints.smallest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(child) = self.child() {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
             let clip_behavior = self.data().clip_behavior;
 
             // Skip clipping if behavior is None
             if matches!(clip_behavior, ClipBehavior::None) {
-                child.paint(painter, offset);
+                ctx.paint_child(child_id, painter, offset);
                 return;
             }
 
             // Get clip path from clipper
-            let size = self.state().size.unwrap_or(Size::ZERO);
+            let size = state.size.lock().unwrap_or(Size::ZERO);
             let _clip_path = if let Some(clipper) = &self.data().clipper {
                 clipper.get_clip(size)
             } else {
                 // No clipper - just paint normally
-                child.paint(painter, offset);
+                ctx.paint_child(child_id, painter, offset);
                 return;
             };
 
@@ -149,7 +153,7 @@ impl DynRenderObject for RenderClipPath {
             // - Use custom egui::Shape implementation
 
             // Paint child (without path clipping for now - TODO)
-            child.paint(painter, offset);
+            ctx.paint_child(child_id, painter, offset);
 
             // Note: Full path clipping requires either:
             // - Custom Shape::Path implementation in egui
@@ -208,10 +212,13 @@ mod tests {
 
     #[test]
     fn test_render_clip_path_layout() {
-        let mut clip_path = SingleRenderBox::new(ClipPathData::default());
+        use flui_core::testing::mock_render_context;
+
+        let clip_path = SingleRenderBox::new(ClipPathData::default());
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = clip_path.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = clip_path.layout(constraints, &ctx);
 
         // No child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

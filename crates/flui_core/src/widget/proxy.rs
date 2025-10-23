@@ -44,9 +44,7 @@ pub trait ProxyWidget: fmt::Debug + Clone + Send + Sync + 'static {
 }
 
 /// Element for ProxyWidget (delegates to single child)
-pub struct ProxyElement<W: ProxyWidget> {
-    id: ElementId,
-    widget: W,
+pub struct ProxyElement<W: ProxyWidget> {    widget: W,
     parent: Option<ElementId>,
     dirty: bool,
     lifecycle: ElementLifecycle,
@@ -56,9 +54,7 @@ pub struct ProxyElement<W: ProxyWidget> {
 
 impl<W: ProxyWidget> ProxyElement<W> {
     pub fn new(widget: W) -> Self {
-        Self {
-            id: ElementId::new(),
-            widget,
+        Self {            widget,
             parent: None,
             dirty: true,
             lifecycle: ElementLifecycle::Initial,
@@ -95,23 +91,19 @@ impl<W: ProxyWidget> ProxyElement<W> {
 impl<W: ProxyWidget> fmt::Debug for ProxyElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProxyElement")
-            .field("id", &self.id)
+            .field("widget_type", &std::any::type_name::<W>())
             .field("widget", &self.widget)
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
             .field("lifecycle", &self.lifecycle)
+            .field("child", &self.child)
             .finish()
     }
 }
 
 // ========== Implement DynElement for ProxyElement ==========
 
-impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for ProxyElement<W> {
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
+impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for ProxyElement<W> {    fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
@@ -144,7 +136,7 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for P
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -157,7 +149,7 @@ impl<W: ProxyWidget + crate::Widget<Element = ProxyElement<W>>> DynElement for P
         self.child = None;
 
         // Return the child that needs to be mounted
-        vec![(self.id, child_widget, 0)]
+        vec![(element_id, child_widget, 0)]
     }
 
     fn is_dirty(&self) -> bool {

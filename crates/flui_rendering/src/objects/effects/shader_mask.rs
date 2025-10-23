@@ -144,30 +144,33 @@ impl RenderShaderMask {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderShaderMask {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        self.state_mut().constraints = Some(constraints);
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
+        *state.constraints.lock() = Some(constraints);
 
-        let size = if let Some(child) = self.child_mut() {
+        let children_ids = ctx.children();
+        let size =
+        if let Some(&child_id) = children_ids.first() {
             // Layout child with same constraints
-            child.layout(constraints)
+            ctx.layout_child(child_id, constraints)
         } else {
             // No child - use smallest size
             constraints.smallest()
         };
 
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(size) = self.state().size {
-            if let Some(child) = self.child() {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        if let Some(size) = *state.size.lock() {
+            let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
                 // Note: Full shader masking requires compositor support
                 // For now, we'll paint child normally and add a visual indicator
                 // In production, this would use egui's shader system or a custom compositor
 
-                child.paint(painter, offset);
+                ctx.paint_child(child_id, painter, offset);
 
                 // Visual debug overlay (in production, this would be the actual shader mask)
                 match &self.data().shader {
@@ -265,7 +268,7 @@ mod tests {
     #[test]
     fn test_render_shader_mask_new() {
         let data = ShaderMaskData::solid(egui::Color32::WHITE);
-        let mask = SingleRenderBox::new(data);
+        let mut mask = SingleRenderBox::new(data);
 
         match mask.shader() {
             ShaderSpec::Solid(color) => {
@@ -295,12 +298,15 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_set_blend_mode() {
+        use flui_core::testing::mock_render_context;
+
         let data = ShaderMaskData::solid(egui::Color32::WHITE);
         let mut mask = SingleRenderBox::new(data);
 
         // Do layout first to clear initial needs_paint
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        mask.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        mask.layout(constraints, &ctx);
 
         mask.set_blend_mode(BlendMode::Multiply);
         assert_eq!(mask.blend_mode(), BlendMode::Multiply);
@@ -309,11 +315,14 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_layout() {
+        use flui_core::testing::mock_render_context;
+
         let data = ShaderMaskData::solid(egui::Color32::WHITE);
         let mut mask = SingleRenderBox::new(data);
 
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let size = mask.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = mask.layout(constraints, &ctx);
 
         // Without child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));

@@ -164,7 +164,7 @@ impl RenderObjectWidget for Padding {
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(padding) = render_object.downcast_mut::<RenderPadding>() {
-            padding.set_padding(self.padding);
+            *padding = RenderPadding::new(self.padding);
         }
     }
 }
@@ -189,7 +189,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> PaddingBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

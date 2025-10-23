@@ -6,13 +6,14 @@
 
 use ::flui_app::*;
 use ::flui_widgets::prelude::*;
+use flui_widgets::DynWidget;
 
 /// The root widget of our application
 #[derive(Debug, Clone)]
 struct HelloWorldApp;
 
 impl StatelessWidget for HelloWorldApp {
-    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+    fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
         // Create a Text widget that displays "Hello, World!"
         Box::new(Text::builder()
             .data("Hello, World!")

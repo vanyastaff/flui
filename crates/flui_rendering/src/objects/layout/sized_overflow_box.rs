@@ -143,9 +143,9 @@ impl RenderSizedOverflowBox {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderSizedOverflowBox {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
 
         // Extract values before mutable borrow
         let (child_constraints, width, height) = {
@@ -162,25 +162,36 @@ impl DynRenderObject for RenderSizedOverflowBox {
         };
 
         // Layout child with override constraints
-        if let Some(child) = self.child_mut() {
-            let _ = child.layout(child_constraints);
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
+            let _ = ctx.layout_child(child_id, child_constraints);
         }
 
         // Our size is the specified size (or constrained by parent)
         let size = constraints.constrain(Size::new(width, height));
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
         // Paint child with alignment offset
-        if let Some(child) = self.child() {
-            let size = self.state().size.unwrap_or(Size::ZERO);
-            let child_size = child.size();
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
+            let size = state.size.lock().unwrap_or(Size::ZERO);
+            // Get child size from tree
+                let child_size = if let Some(child_elem) = ctx.tree().get(child_id) {
+                    if let Some(child_ro) = child_elem.render_object() {
+                        child_ro.size()
+                    } else {
+                        Size::ZERO
+                    }
+                } else {
+                    Size::ZERO
+                };
             let alignment = self.data().alignment;
 
             // Calculate aligned position
@@ -191,7 +202,7 @@ impl DynRenderObject for RenderSizedOverflowBox {
                 offset.dy + child_offset.dy,
             );
 
-            child.paint(painter, paint_offset);
+            ctx.paint_child(child_id, painter, paint_offset);
         }
     }
 
@@ -265,12 +276,15 @@ mod tests {
 
     #[test]
     fn test_render_sized_overflow_box_layout() {
-        let mut sized_overflow = SingleRenderBox::new(
+        use flui_core::testing::mock_render_context;
+
+        let sized_overflow = SingleRenderBox::new(
             SizedOverflowBoxData::new(Some(100.0), Some(200.0))
         );
         let constraints = BoxConstraints::new(0.0, 500.0, 0.0, 500.0);
 
-        let size = sized_overflow.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = sized_overflow.layout(constraints, &ctx);
 
         // Should use specified size
         assert_eq!(size, Size::new(100.0, 200.0));
@@ -278,12 +292,15 @@ mod tests {
 
     #[test]
     fn test_render_sized_overflow_box_layout_constrained() {
-        let mut sized_overflow = SingleRenderBox::new(
+        use flui_core::testing::mock_render_context;
+
+        let sized_overflow = SingleRenderBox::new(
             SizedOverflowBoxData::new(Some(1000.0), Some(2000.0))
         );
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = sized_overflow.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = sized_overflow.layout(constraints, &ctx);
 
         // Should be constrained by parent
         assert_eq!(size, Size::new(100.0, 100.0));

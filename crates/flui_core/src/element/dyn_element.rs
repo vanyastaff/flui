@@ -67,9 +67,10 @@ use super::ElementLifecycle;
 /// ```
 pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
     // ========== Identity & Hierarchy ==========
-
-    /// Get the element's unique ID
-    fn id(&self) -> ElementId;
+    //
+    // Note: Element ID is NOT stored in the element itself.
+    // It's the Slab index in ElementTree. When you need an element's ID,
+    // get it from the context where you're working with the element.
 
     /// Get the parent element ID
     fn parent(&self) -> Option<ElementId>;
@@ -95,7 +96,10 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
     ///
     /// Returns a list of (parent_id, child_widget, slot) tuples for children
     /// that need to be mounted.
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)>;
+    ///
+    /// # Parameters
+    /// * `element_id` - The ID of this element (Slab index)
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)>;
 
     // ========== Dirty State Management ==========
 
@@ -182,6 +186,39 @@ pub trait DynElement: Downcast + fmt::Debug + Send + Sync {
 
     /// Get mutable RenderObject if this element has one
     fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject>;
+
+    /// Take ownership of the render object
+    ///
+    /// Called by ElementTree when transferring ownership to parent RenderObject via adopt_child().
+    /// This removes the RenderObject from this element and returns it.
+    ///
+    /// # Returns
+    ///
+    /// The owned render object, or None if this element has no render object
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // ElementTree transferring child RenderObject to parent
+    /// if let Some(child_ro) = child_element.take_render_object() {
+    ///     parent_ro.adopt_child(child_ro);  // Transfer ownership
+    /// }
+    /// ```
+    fn take_render_object(&mut self) -> Option<Box<dyn crate::DynRenderObject>> {
+        None // Default: no render object
+    }
+
+    /// Set render object (takes ownership)
+    ///
+    /// Used to restore a render object that was previously taken.
+    /// Only RenderObjectElements implement this.
+    ///
+    /// # Arguments
+    ///
+    /// - `render_object`: The render object to set (takes ownership)
+    fn set_render_object(&mut self, _render_object: Option<Box<dyn crate::DynRenderObject>>) {
+        // Default: no-op (only RenderObjectElements implement this)
+    }
 
     // ========== Advanced Lifecycle ==========
 

@@ -78,7 +78,7 @@ impl DependencyInfo {
 
 impl Default for DependencyInfo {
     fn default() -> Self {
-        Self::simple(ElementId::new())
+        Self::simple(0) // Use dummy ID 0 for default
     }
 }
 

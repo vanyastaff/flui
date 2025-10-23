@@ -1,0 +1,17 @@
+[package]
+name = "flui_painting"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Painting infrastructure for Flui - image loading, text painting, decorations (future)"
+repository.workspace = true
+
+[dependencies]
+flui_types = { path = "../flui_types" }
+flui_core = { path = "../flui_core" }
+
+# Graphics
+egui.workspace = true
+
+[dev-dependencies]

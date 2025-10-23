@@ -56,9 +56,7 @@ use crate::DynWidget;
 /// // RenderObjectElement<MyBox> is created automatically
 /// let element = RenderObjectElement::new(MyBox { width: 100.0, height: 50.0 });
 /// ```
-pub struct RenderObjectElement<W: RenderObjectWidget> {
-    id: ElementId,
-    widget: W,
+pub struct RenderObjectElement<W: RenderObjectWidget> {    widget: W,
     parent: Option<ElementId>,
     dirty: bool,
     render_object: Option<Box<dyn crate::DynRenderObject>>,
@@ -66,10 +64,10 @@ pub struct RenderObjectElement<W: RenderObjectWidget> {
 
 impl<W: RenderObjectWidget> RenderObjectElement<W> {
     /// Create new render object element from a widget
+    ///
+    /// Note: ID is initially 0 and will be set by ElementTree when inserted
     pub fn new(widget: W) -> Self {
-        Self {
-            id: ElementId::new(),
-            widget,
+        Self {            widget,
             parent: None,
             dirty: true,
             render_object: None,
@@ -105,7 +103,7 @@ impl<W: RenderObjectWidget> RenderObjectElement<W> {
 impl<W: RenderObjectWidget> fmt::Debug for RenderObjectElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderObjectElement")
-            .field("id", &self.id)
+            .field("widget_type", &std::any::type_name::<W>())
             .field("widget", &self.widget)
             .field("parent", &self.parent)
             .field("dirty", &self.dirty)
@@ -116,12 +114,7 @@ impl<W: RenderObjectWidget> fmt::Debug for RenderObjectElement<W> {
 
 // ========== Implement DynElement for RenderObjectElement ==========
 
-impl<W: RenderObjectWidget> DynElement for RenderObjectElement<W> {
-    fn id(&self) -> ElementId {
-        self.id
-    }
-
-    fn parent(&self) -> Option<ElementId> {
+impl<W: RenderObjectWidget> DynElement for RenderObjectElement<W> {    fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
@@ -148,7 +141,7 @@ impl<W: RenderObjectWidget> DynElement for RenderObjectElement<W> {
         }
     }
 
-    fn rebuild(&mut self) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
+    fn rebuild(&mut self, _element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
         if !self.dirty {
             return Vec::new();
         }

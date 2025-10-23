@@ -136,28 +136,34 @@ impl RenderTransform {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderTransform {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
+
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
         // Layout child with same constraints (transform doesn't affect layout)
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let size = if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             // No child - use smallest size
             constraints.smallest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
         // Paint child with transformation
-        if let Some(child) = self.child() {
+        if let Some(&child_id) = children_ids.first() {
             let transform = self.data().transform;
             let origin = self.data().origin;
 
@@ -175,7 +181,7 @@ impl DynRenderObject for RenderTransform {
                 offset.dy + transform.translate_y + origin.dy,
             );
 
-            child.paint(painter, transformed_offset);
+            ctx.paint_child(child_id, painter, transformed_offset);
         }
     }
 
@@ -239,18 +245,21 @@ mod tests {
     #[test]
     fn test_render_transform_new() {
         let transform = Matrix4::scale(2.0, 2.0);
-        let render_transform = SingleRenderBox::new(TransformData::new(transform));
+        let mut render_transform = SingleRenderBox::new(TransformData::new(transform));
         assert_eq!(render_transform.transform(), transform);
     }
 
     #[test]
     fn test_render_transform_set_transform() {
+        use flui_core::testing::mock_render_context;
+
         let transform1 = Matrix4::scale(1.0, 1.0);
         let mut render_transform = SingleRenderBox::new(TransformData::new(transform1));
 
         // Clear initial needs_layout flag
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let _ = render_transform.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let _ = render_transform.layout(constraints, &ctx);
 
         let transform2 = Matrix4::scale(2.0, 2.0);
         render_transform.set_transform(transform2);
@@ -262,11 +271,14 @@ mod tests {
 
     #[test]
     fn test_render_transform_layout() {
+        use flui_core::testing::mock_render_context;
+
         let transform = Matrix4::translation(50.0, 50.0);
         let mut render_transform = SingleRenderBox::new(TransformData::new(transform));
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = render_transform.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = render_transform.layout(constraints, &ctx);
 
         // Transform doesn't affect layout
         assert_eq!(size, Size::new(0.0, 0.0));

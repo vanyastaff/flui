@@ -75,36 +75,40 @@ impl RenderClipOval {
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderClipOval {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
         // Store constraints
-        self.state_mut().constraints = Some(constraints);
+        *state.constraints.lock() = Some(constraints);
+
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
         // Layout child with same constraints
-        let size = if let Some(child) = self.child_mut() {
-            child.layout(constraints)
+        let size = if let Some(&child_id) = children_ids.first() {
+            ctx.layout_child(child_id, constraints)
         } else {
             constraints.smallest()
         };
 
         // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
-        if let Some(child) = self.child() {
+    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        let children_ids = ctx.children();
+        if let Some(&child_id) = children_ids.first() {
             let clip_behavior = self.data().clip_behavior;
 
             // Skip clipping if behavior is None
             if matches!(clip_behavior, ClipBehavior::None) {
-                child.paint(painter, offset);
+                ctx.paint_child(child_id, painter, offset);
                 return;
             }
 
             // Get clip bounds
-            let size = self.state().size.unwrap_or(Size::ZERO);
+            let size = state.size.lock().unwrap_or(Size::ZERO);
             let _clip_rect = egui::Rect::from_min_size(
                 egui::pos2(offset.dx, offset.dy),
                 egui::vec2(size.width, size.height),
@@ -124,7 +128,7 @@ impl DynRenderObject for RenderClipOval {
             // - Use egui::Shape::circle() for circular clipping
 
             // Paint child (without clipping for now - TODO)
-            child.paint(painter, offset);
+            ctx.paint_child(child_id, painter, offset);
 
             // Note: Full oval clipping requires either:
             // - A mutable context to set clip regions
@@ -182,10 +186,13 @@ mod tests {
 
     #[test]
     fn test_render_clip_oval_layout() {
-        let mut clip_oval = SingleRenderBox::new(ClipOvalData::default());
+        use flui_core::testing::mock_render_context;
+
+        let clip_oval = SingleRenderBox::new(ClipOvalData::default());
         let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
-        let size = clip_oval.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = clip_oval.layout(constraints, &ctx);
 
         // No child, should use smallest size
         assert_eq!(size, Size::new(0.0, 0.0));
@@ -193,10 +200,13 @@ mod tests {
 
     #[test]
     fn test_render_clip_oval_layout_with_constraints() {
-        let mut clip_oval = SingleRenderBox::new(ClipOvalData::default());
+        use flui_core::testing::mock_render_context;
+
+        let clip_oval = SingleRenderBox::new(ClipOvalData::default());
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
-        let size = clip_oval.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = clip_oval.layout(constraints, &ctx);
 
         // No child, should use smallest (which is 100x100 for tight constraints)
         assert_eq!(size, Size::new(100.0, 100.0));

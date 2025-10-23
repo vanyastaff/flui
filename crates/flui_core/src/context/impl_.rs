@@ -50,7 +50,7 @@ impl Context {
     #[must_use]
     pub fn empty() -> Self {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let element_id = ElementId::new();
+        let element_id = 0; // Dummy ID for empty context
         Self { tree, element_id }
     }
 

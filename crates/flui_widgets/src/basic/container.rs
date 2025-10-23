@@ -250,7 +250,8 @@ impl Default for Container {
 impl StatelessWidget for Container {
     fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
         // Build widget tree from inside out:
-        // child -> padding -> decoration -> alignment -> margin -> constraints
+        // child -> padding -> decoration -> alignment -> constraints -> margin
+        // Note: margin is applied AFTER constraints so it's outside the sized box
 
         let mut current: Box<dyn DynWidget> = if let Some(child) = &self.child {
             child.clone()
@@ -300,21 +301,23 @@ impl StatelessWidget for Container {
             });
         }
 
-        // Apply margin (using Padding)
-        if let Some(margin) = self.margin {
-            current = Box::new(crate::Padding {
-                key: None,
-                padding: margin,
-                child: Some(current),
-            });
-        }
-
-        // Apply width/height constraints
+        // Apply width/height constraints BEFORE margin
+        // This ensures margin is outside the constrained box
         if self.width.is_some() || self.height.is_some() {
             current = Box::new(crate::SizedBox {
                 key: None,
                 width: self.width,
                 height: self.height,
+                child: Some(current),
+            });
+        }
+
+        // Apply margin (using Padding) AFTER constraints
+        // Margin should be outside the sized box
+        if let Some(margin) = self.margin {
+            current = Box::new(crate::Padding {
+                key: None,
+                padding: margin,
                 child: Some(current),
             });
         }

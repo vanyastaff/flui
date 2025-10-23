@@ -147,7 +147,7 @@ pub struct IndexedStack {
     ///
     /// - `StackFit::Loose` - Size to fit children (default)
     /// - `StackFit::Expand` - Expand to fill incoming constraints
-    /// - `StackFit::PassThrough` - Use incoming constraints as-is
+    /// - `StackFit::Passthrough` - Use incoming constraints as-is
     #[builder(default = StackFit::Loose)]
     pub sizing: StackFit,
 
@@ -265,16 +265,19 @@ impl Widget for IndexedStack {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for IndexedStack {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        let mut render_indexed_stack = RenderIndexedStack::new(self.index, self.alignment);
-        render_indexed_stack.set_sizing(self.sizing);
-        Box::new(render_indexed_stack)
+        use flui_rendering::{ContainerRenderBox, IndexedStackData};
+        let data = IndexedStackData {
+            index: self.index,
+            alignment: self.alignment,
+        };
+        Box::new(ContainerRenderBox::new(data))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(indexed_stack_render) = render_object.downcast_mut::<RenderIndexedStack>() {
             indexed_stack_render.set_index(self.index);
             indexed_stack_render.set_alignment(self.alignment);
-            indexed_stack_render.set_sizing(self.sizing);
+            // Note: sizing is not used in IndexedStack layout
         }
     }
 }
@@ -477,13 +480,13 @@ mod tests {
         let widget = IndexedStack {
             index: Some(2),
             alignment: Alignment::BOTTOM_RIGHT,
-            sizing: StackFit::PassThrough,
+            sizing: StackFit::Passthrough,
             ..Default::default()
         };
 
         assert_eq!(widget.index, Some(2));
         assert_eq!(widget.alignment, Alignment::BOTTOM_RIGHT);
-        assert_eq!(widget.sizing, StackFit::PassThrough);
+        assert_eq!(widget.sizing, StackFit::Passthrough);
     }
 
     #[test]
@@ -562,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_indexed_stack_all_sizings() {
-        let sizings = [StackFit::Loose, StackFit::Expand, StackFit::PassThrough];
+        let sizings = [StackFit::Loose, StackFit::Expand, StackFit::Passthrough];
 
         for sizing in sizings {
             let widget = IndexedStack::builder().index(0).sizing(sizing).build();

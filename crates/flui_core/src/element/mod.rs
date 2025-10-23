@@ -30,7 +30,7 @@ mod traits;
 
 pub use dyn_element::DynElement;
 pub use traits::Element;
-pub use lifecycle::{ElementLifecycle, InactiveElements};
+pub use lifecycle::ElementLifecycle;
 pub use component::ComponentElement;
 pub use stateful::StatefulElement;
 pub use render_object::RenderObjectElement;

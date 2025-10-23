@@ -2,23 +2,11 @@
 
 use flui_types::{EdgeInsets, Offset, Size, constraints::BoxConstraints};
 use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
-
-/// Data for RenderPadding
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PaddingData {
-    /// The padding to apply
-    pub padding: EdgeInsets,
-}
-
-impl PaddingData {
-    /// Create new padding data
-    pub fn new(padding: EdgeInsets) -> Self {
-        Self { padding }
-    }
-}
 
 /// RenderObject that adds padding around its child
+///
+/// After architecture refactoring, RenderObjects now directly implement DynRenderObject
+/// without a RenderBox wrapper. State is stored in ElementTree, accessed via RenderContext.
 ///
 /// Padding increases the size of the widget by the padding amount.
 /// The child is laid out with constraints deflated by the padding,
@@ -27,43 +15,52 @@ impl PaddingData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::layout::PaddingData};
+/// use flui_rendering::objects::layout::RenderPadding;
 /// use flui_types::EdgeInsets;
 ///
-/// let mut padding = SingleRenderBox::new(PaddingData::new(EdgeInsets::all(10.0)));
+/// let padding = RenderPadding::new(EdgeInsets::all(10.0));
 /// ```
-pub type RenderPadding = SingleRenderBox<PaddingData>;
-
-// ===== Public API =====
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderPadding {
+    /// The padding to apply
+    pub padding: EdgeInsets,
+}
 
 impl RenderPadding {
-    /// Get the padding
-    pub fn padding(&self) -> EdgeInsets {
-        self.data().padding
+    /// Create new padding data
+    pub fn new(padding: EdgeInsets) -> Self {
+        Self { padding }
     }
 
-    /// Set new padding
+    /// Get the padding
+    pub fn padding(&self) -> EdgeInsets {
+        self.padding
+    }
+
+    /// Set new padding (returns new instance)
     ///
-    /// If padding changes, marks as needing layout.
-    pub fn set_padding(&mut self, padding: EdgeInsets) {
-        if self.data().padding != padding {
-            self.data_mut().padding = padding;
-            self.mark_needs_layout();
-        }
+    /// Since we no longer have interior mutability in the data itself,
+    /// this returns a new RenderPadding instance.
+    pub fn with_padding(mut self, padding: EdgeInsets) -> Self {
+        self.padding = padding;
+        self
     }
 }
 
 // ===== DynRenderObject Implementation =====
 
 impl DynRenderObject for RenderPadding {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        // Store constraints
-        self.state_mut().constraints = Some(constraints);
+    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
+        // Store constraints directly in state
+        *state.constraints.lock() = Some(constraints);
 
-        let padding = self.data().padding;
+        let padding = self.padding;
+
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
 
         // Layout child with deflated constraints
-        let size = if let Some(child) = self.child_mut() {
+        let size = if let Some(&child_id) = children_ids.first() {
             // Deflate constraints by padding
             let child_constraints = BoxConstraints::new(
                 (constraints.min_width - padding.horizontal_total()).max(0.0),
@@ -72,8 +69,8 @@ impl DynRenderObject for RenderPadding {
                 constraints.max_height - padding.vertical_total(),
             );
 
-            // Layout child
-            let child_size = child.layout(child_constraints);
+            // Layout child via RenderContext
+            let child_size = ctx.layout_child(child_id, child_constraints);
 
             // Add padding to child size
             Size::new(
@@ -88,27 +85,30 @@ impl DynRenderObject for RenderPadding {
             )
         };
 
-        // Store size and clear needs_layout flag
-        self.state_mut().size = Some(size);
-        self.clear_needs_layout();
+        // Store size directly in state and clear needs_layout flag
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
 
         size
     }
 
-    fn paint(&self, painter: &egui::Painter, offset: Offset) {
+    fn paint(&self, _state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        // Get children from ElementTree via RenderContext
+        let children_ids = ctx.children();
+
         // Paint child with offset adjusted for padding
-        if let Some(child) = self.child() {
-            let padding = self.data().padding;
+        if let Some(&child_id) = children_ids.first() {
+            let padding = self.padding;
             let child_offset = Offset::new(
                 offset.dx + padding.left,
                 offset.dy + padding.top,
             );
-            child.paint(painter, child_offset);
+            ctx.paint_child(child_id, painter, child_offset);
         }
     }
 
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
+    // All other methods (size, mark_needs_layout, etc.) use default implementations
+    // from DynRenderObject trait, which delegate to RenderContext/ElementTree.
 }
 
 #[cfg(test)]
@@ -117,25 +117,26 @@ mod tests {
 
     #[test]
     fn test_render_padding_new() {
-        let padding = SingleRenderBox::new(PaddingData::new(EdgeInsets::all(10.0)));
+        let padding = RenderPadding::new(EdgeInsets::all(10.0));
         assert_eq!(padding.padding(), EdgeInsets::all(10.0));
     }
 
     #[test]
-    fn test_render_padding_set_padding() {
-        let mut padding = SingleRenderBox::new(PaddingData::new(EdgeInsets::all(10.0)));
-
-        padding.set_padding(EdgeInsets::all(20.0));
+    fn test_render_padding_with_padding() {
+        let padding = RenderPadding::new(EdgeInsets::all(10.0));
+        let padding = padding.with_padding(EdgeInsets::all(20.0));
         assert_eq!(padding.padding(), EdgeInsets::all(20.0));
-        assert!(padding.needs_layout());
     }
 
     #[test]
     fn test_render_padding_layout_no_child() {
-        let mut padding = SingleRenderBox::new(PaddingData::new(EdgeInsets::all(10.0)));
+        use flui_core::testing::mock_render_context;
+
+        let padding = RenderPadding::new(EdgeInsets::all(10.0));
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
-        let size = padding.layout(constraints);
+        let (_tree, ctx) = mock_render_context();
+        let size = padding.layout(constraints, &ctx);
 
         // With no child, size should be just the padding
         assert_eq!(size, Size::new(20.0, 20.0));
@@ -145,14 +146,14 @@ mod tests {
     fn test_render_padding_layout_with_child() {
         // This test would require creating a mock child RenderObject
         // For now, we verify the basic structure works
-        let padding = SingleRenderBox::new(PaddingData::new(EdgeInsets::all(10.0)));
+        let padding = RenderPadding::new(EdgeInsets::all(10.0));
         assert_eq!(padding.padding(), EdgeInsets::all(10.0));
     }
 
     #[test]
     fn test_padding_data_debug() {
-        let data = PaddingData::new(EdgeInsets::all(5.0));
+        let data = RenderPadding::new(EdgeInsets::all(5.0));
         let debug_str = format!("{:?}", data);
-        assert!(debug_str.contains("PaddingData"));
+        assert!(debug_str.contains("RenderPadding"));
     }
 }

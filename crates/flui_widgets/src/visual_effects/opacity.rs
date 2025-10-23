@@ -121,12 +121,13 @@ impl Widget for Opacity {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Opacity {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderOpacity::new(self.opacity.clamp(0.0, 1.0)))
+        use flui_rendering::{SingleRenderBox, objects::effects::opacity::OpacityData};
+        Box::new(SingleRenderBox::new(OpacityData::new(self.opacity)))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(opacity_render) = render_object.downcast_mut::<RenderOpacity>() {
-            opacity_render.set_opacity(self.opacity.clamp(0.0, 1.0));
+            opacity_render.set_opacity(self.opacity);
         }
     }
 }
@@ -151,7 +152,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> OpacityBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

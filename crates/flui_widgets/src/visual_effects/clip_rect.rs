@@ -16,7 +16,9 @@
 use bon::Builder;
 use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderClipRect;
-use flui_types::painting::Clip;
+
+// Use the Clip enum from clip_rect module
+type Clip = flui_rendering::objects::effects::clip_rect::Clip;
 
 /// A widget that clips its child using a rectangle.
 ///
@@ -111,7 +113,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> ClipRectBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 
@@ -126,7 +128,8 @@ impl<S: State> ClipRectBuilder<S> {
 // Implement RenderObjectWidget
 impl RenderObjectWidget for ClipRect {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderClipRect::new(self.clip_behavior))
+        use flui_rendering::{SingleRenderBox, objects::effects::clip_rect::ClipRectData};
+        Box::new(SingleRenderBox::new(ClipRectData::new(self.clip_behavior)))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
