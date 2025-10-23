@@ -2,34 +2,9 @@
 //!
 //! A widget that makes its child partially transparent.
 //! Similar to Flutter's Opacity widget.
-//!
-//! # Usage Patterns
-//!
-//! ## 1. Struct Literal
-//! ```rust,ignore
-//! Opacity {
-//!     opacity: 0.5,
-//!     ..Default::default()
-//! }
-//! ```
-//!
-//! ## 2. Builder Pattern
-//! ```rust,ignore
-//! Opacity::builder()
-//!     .opacity(0.5)
-//!     .child(some_widget)
-//!     .build()
-//! ```
-//!
-//! ## 3. Macro
-//! ```rust,ignore
-//! opacity! {
-//!     opacity: 0.5,
-//! }
-//! ```
 
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderOpacity;
 
 /// A widget that makes its child partially transparent.
@@ -54,34 +29,6 @@ use flui_rendering::RenderOpacity;
 /// - Use `opacity: 0.0` to make widget invisible (consider `Visibility` instead)
 /// - Use `opacity: 1.0` when fully opaque (no overhead)
 /// - Avoid animating opacity on complex widget trees
-///
-/// ## Examples
-///
-/// ```rust,ignore
-/// // Semi-transparent image
-/// Opacity::builder()
-///     .opacity(0.5)
-///     .child(Image::network(url))
-///     .build()
-///
-/// // Fade out effect
-/// Opacity::builder()
-///     .opacity(0.2)
-///     .child(Text::new("Faded text"))
-///     .build()
-///
-/// // Fully transparent (invisible)
-/// Opacity::builder()
-///     .opacity(0.0)
-///     .child(widget)
-///     .build()
-/// ```
-///
-/// ## See Also
-///
-/// - AnimatedOpacity: For animated opacity transitions
-/// - Visibility: For hiding widgets without rendering overhead
-/// - FadeTransition: For animation-based fading
 #[derive(Debug, Clone, Builder)]
 #[builder(
     on(String, into),
@@ -104,28 +51,11 @@ pub struct Opacity {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl Opacity {
     /// Creates a new Opacity widget.
-    ///
-    /// # Arguments
-    ///
-    /// * `opacity` - The opacity value (0.0 to 1.0)
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Semi-transparent
-    /// let widget = Opacity::new(0.5);
-    ///
-    /// // Fully opaque
-    /// let widget = Opacity::new(1.0);
-    ///
-    /// // Fully transparent
-    /// let widget = Opacity::new(0.0);
-    /// ```
     pub fn new(opacity: f32) -> Self {
         Self {
             key: None,
@@ -135,41 +65,26 @@ impl Opacity {
     }
 
     /// Creates an Opacity widget that is fully transparent.
-    ///
-    /// Equivalent to `Opacity::new(0.0)`.
     pub fn transparent() -> Self {
         Self::new(0.0)
     }
 
     /// Creates an Opacity widget that is fully opaque.
-    ///
-    /// Equivalent to `Opacity::new(1.0)`.
     pub fn opaque() -> Self {
         Self::new(1.0)
     }
 
     /// Creates an Opacity widget that is semi-transparent (50%).
-    ///
-    /// Equivalent to `Opacity::new(0.5)`.
     pub fn semi_transparent() -> Self {
         Self::new(0.5)
     }
 
     /// Sets the child widget.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut widget = Opacity::new(0.5);
-    /// widget.set_child(Text::new("Hello"));
-    /// ```
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
         self.child = Some(Box::new(child));
     }
 
     /// Validates Opacity configuration.
-    ///
-    /// Returns an error if opacity is not in range [0.0, 1.0] or is NaN.
     pub fn validate(&self) -> Result<(), String> {
         if self.opacity.is_nan() {
             return Err(
@@ -194,21 +109,35 @@ impl Default for Opacity {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for Opacity {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
+// Implement RenderObjectWidget
 impl RenderObjectWidget for Opacity {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         Box::new(RenderOpacity::new(self.opacity.clamp(0.0, 1.0)))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(opacity_render) = render_object.downcast_mut::<RenderOpacity>() {
             opacity_render.set_opacity(self.opacity.clamp(0.0, 1.0));
         }
+    }
+}
+
+// Implement SingleChildRenderObjectWidget
+impl SingleChildRenderObjectWidget for Opacity {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .unwrap_or_else(|| panic!("Opacity requires a child"))
     }
 }
 
@@ -221,45 +150,20 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Opacity::builder()
-    ///     .opacity(0.5)
-    ///     .child(Text::new("Hello"))
-    ///     .build()
-    /// ```
-    pub fn child(self, child: impl Widget + 'static) -> OpacityBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> OpacityBuilder<SetChild<S>> {
+        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
     }
 }
 
 // Public build() wrapper
 impl<S: State> OpacityBuilder<S> {
     /// Builds the Opacity widget.
-    ///
-    /// Equivalent to calling the generated `build_opacity()` finishing function.
     pub fn build(self) -> Opacity {
         self.build_opacity()
     }
 }
 
 /// Macro for creating Opacity with declarative syntax.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Semi-transparent
-/// opacity! {
-///     opacity: 0.5,
-/// }
-///
-/// // Fully transparent
-/// opacity! {
-///     opacity: 0.0,
-/// }
-/// ```
 #[macro_export]
 macro_rules! opacity {
     () => {
@@ -276,6 +180,30 @@ macro_rules! opacity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
+
+    #[derive(Debug, Clone)]
+    struct MockWidget;
+
+    impl Widget for MockWidget {
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
+        }
+    }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_opacity_new() {
@@ -419,5 +347,34 @@ mod tests {
         let widget = Opacity::new(1.0);
         assert_eq!(widget.opacity, 1.0);
         assert!(widget.validate().is_ok());
+    }
+
+    #[test]
+    fn test_opacity_widget_trait() {
+        let widget = Opacity::builder()
+            .opacity(0.5)
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
+    }
+
+    #[test]
+    fn test_opacity_builder_with_child() {
+        let widget = Opacity::builder()
+            .opacity(0.5)
+            .child(MockWidget)
+            .build();
+
+        assert!(widget.child.is_some());
+        assert_eq!(widget.opacity, 0.5);
+    }
+
+    #[test]
+    fn test_opacity_set_child() {
+        let mut widget = Opacity::new(0.7);
+        widget.set_child(MockWidget);
+        assert!(widget.child.is_some());
     }
 }
