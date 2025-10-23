@@ -23,7 +23,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderAbsorbPointer;
 
 /// A widget that absorbs pointer events during hit testing.
@@ -77,7 +77,7 @@ pub struct AbsorbPointer {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl AbsorbPointer {
@@ -95,7 +95,7 @@ impl AbsorbPointer {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
         self.child = Some(Box::new(child));
     }
 }
@@ -106,9 +106,12 @@ impl Default for AbsorbPointer {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for AbsorbPointer {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
@@ -121,8 +124,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl Widget + 'static) -> AbsorbPointerBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> AbsorbPointerBuilder<SetChild<S>> {
+        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
     }
 }
 
@@ -148,14 +151,30 @@ macro_rules! absorb_pointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
 
     #[derive(Debug, Clone)]
     struct MockWidget;
+
     impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            todo!()
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_absorb_pointer_new() {
@@ -213,16 +232,56 @@ mod tests {
         let widget = absorb_pointer!(absorbing: false);
         assert!(!widget.absorbing);
     }
+
+    #[test]
+    fn test_absorb_pointer_widget_trait() {
+        let widget = AbsorbPointer::builder()
+            .absorbing(true)
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
+    }
+
+    #[test]
+    fn test_absorb_pointer_builder_with_child() {
+        let widget = AbsorbPointer::builder()
+            .absorbing(false)
+            .child(MockWidget)
+            .build();
+
+        assert!(widget.child.is_some());
+        assert!(!widget.absorbing);
+    }
+
+    #[test]
+    fn test_absorb_pointer_set_child() {
+        let mut widget = AbsorbPointer::new(true);
+        widget.set_child(MockWidget);
+        assert!(widget.child.is_some());
+    }
 }
 
+// Implement RenderObjectWidget
 impl RenderObjectWidget for AbsorbPointer {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         Box::new(RenderAbsorbPointer::new(self.absorbing))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(absorb) = render_object.downcast_mut::<RenderAbsorbPointer>() {
             absorb.set_absorbing(self.absorbing);
         }
+    }
+}
+
+// Implement SingleChildRenderObjectWidget
+impl SingleChildRenderObjectWidget for AbsorbPointer {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .unwrap_or_else(|| panic!("AbsorbPointer requires a child"))
     }
 }
