@@ -86,6 +86,10 @@ pub use error::{CoreError, Result, KeyError};
 
 // Re-export from modular structure
 pub use context::Context;
+
+/// Type alias for backwards compatibility
+/// BuildContext is the old name for Context
+pub type BuildContext = Context;
 pub use element::{DynElement, ComponentElement, Element, InactiveElements, RenderObjectElement, StatefulElement};
 pub use element::render::{
     LeafRenderObjectElement,

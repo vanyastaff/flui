@@ -7,13 +7,39 @@ use once_cell::sync::Lazy;
 use crate::{BoxConstraints, ElementId};
 use flui_types::Size;
 
-/// Cache key (element_id + constraints)
+/// Cache key (element_id + constraints + optional metadata)
+///
+/// # Design
+///
+/// For single-child RenderObjects (RenderOpacity, RenderPadding):
+/// - Only `element_id` and `constraints` matter
+/// - `child_count` should be None
+///
+/// For multi-child RenderObjects (RenderFlex, RenderStack):
+/// - MUST include `child_count` to detect structural changes
+/// - Without this, adding/removing children won't invalidate cache!
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Single-child: simple key
+/// let key = LayoutCacheKey::new(element_id, constraints);
+///
+/// // Multi-child: include child count
+/// let key = LayoutCacheKey::new(element_id, constraints)
+///     .with_child_count(children.len());
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutCacheKey {
     /// The widget or element ID being laid out
     pub element_id: ElementId,
     /// The box constraints for the layout
     pub constraints: BoxConstraints,
+    /// Number of children (for multi-child widgets like Flex, Stack)
+    ///
+    /// **CRITICAL:** Must be set for multi-child widgets!
+    /// Without this, structural changes (add/remove child) won't invalidate cache.
+    pub child_count: Option<usize>,
 }
 
 impl std::hash::Hash for LayoutCacheKey {
@@ -24,25 +50,54 @@ impl std::hash::Hash for LayoutCacheKey {
         self.constraints.max_width.to_bits().hash(state);
         self.constraints.min_height.to_bits().hash(state);
         self.constraints.max_height.to_bits().hash(state);
+        self.child_count.hash(state);
     }
 }
 
 impl PartialEq for LayoutCacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.element_id == other.element_id && self.constraints == other.constraints
+        self.element_id == other.element_id
+            && self.constraints == other.constraints
+            && self.child_count == other.child_count
     }
 }
 
 impl Eq for LayoutCacheKey {}
 
 impl LayoutCacheKey {
-    /// Create cache key
+    /// Create cache key for single-child or leaf RenderObject
+    ///
+    /// Use this for RenderObjects with 0 or 1 child:
+    /// - RenderBox (leaf)
+    /// - RenderOpacity (single child)
+    /// - RenderPadding (single child)
+    /// - RenderTransform (single child)
+    ///
+    /// For multi-child, use `with_child_count()`.
     #[inline]
     pub fn new(element_id: ElementId, constraints: BoxConstraints) -> Self {
         Self {
             element_id,
             constraints,
+            child_count: None,
         }
+    }
+
+    /// Add child count for multi-child RenderObjects
+    ///
+    /// **CRITICAL:** Always use this for multi-child widgets!
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In RenderFlex::layout()
+    /// let key = LayoutCacheKey::new(element_id, constraints)
+    ///     .with_child_count(self.children.len());
+    /// ```
+    #[inline]
+    pub fn with_child_count(mut self, count: usize) -> Self {
+        self.child_count = Some(count);
+        self
     }
 }
 
@@ -202,6 +257,44 @@ mod tests {
 
         assert_eq!(key1, key2);
         assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_layout_cache_key_with_child_count() {
+        let id = ElementId::new();
+        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
+
+        let key1 = LayoutCacheKey::new(id, constraints);
+        let key2 = LayoutCacheKey::new(id, constraints).with_child_count(2);
+        let key3 = LayoutCacheKey::new(id, constraints).with_child_count(3);
+        let key4 = LayoutCacheKey::new(id, constraints).with_child_count(2);
+
+        // Different child counts should be different keys
+        assert_ne!(key1, key2);
+        assert_ne!(key2, key3);
+        assert_eq!(key2, key4); // Same child count
+
+        // None != Some(0)
+        let key5 = LayoutCacheKey::new(id, constraints).with_child_count(0);
+        assert_ne!(key1, key5);
+    }
+
+    #[test]
+    fn test_multi_child_cache_invalidation() {
+        let cache = LayoutCache::new();
+        let id = ElementId::new();
+        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
+
+        // Cache with 2 children
+        let key_2_children = LayoutCacheKey::new(id, constraints).with_child_count(2);
+        cache.insert(key_2_children, LayoutResult::new(Size::new(100.0, 100.0)));
+
+        // Try to get with 3 children - should be cache miss
+        let key_3_children = LayoutCacheKey::new(id, constraints).with_child_count(3);
+        assert!(cache.get(&key_3_children).is_none());
+
+        // Original key should still be there
+        assert!(cache.get(&key_2_children).is_some());
     }
 
     #[test]

@@ -49,6 +49,7 @@ pub mod utils;
 
 pub mod core;
 pub mod objects;
+pub mod parent_data;
 
 // Re-export core types
 pub use core::{
@@ -57,6 +58,12 @@ pub use core::{
     RenderState, RenderFlags,
     RenderBoxMixin,
 };
+
+// Re-export from flui_types for convenience
+pub use flui_types::layout::{FlexFit, StackFit};
+
+// Re-export parent data types
+pub use parent_data::{FlexParentData, StackParentData};
 
 // Re-export all RenderObjects
 pub use objects::{
@@ -71,6 +78,7 @@ pub use objects::{
 
     // Interaction objects
     RenderAbsorbPointer, RenderIgnorePointer, RenderMouseRegion, RenderPointerListener,
+    MouseCallbacks, MouseRegionCallbacks, MouseRegionData,
 
     // Text objects
     RenderParagraph, ParagraphData,

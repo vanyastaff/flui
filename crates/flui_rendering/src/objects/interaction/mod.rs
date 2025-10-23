@@ -8,8 +8,11 @@ pub mod pointer_listener;
 // Re-exports
 pub use absorb_pointer::RenderAbsorbPointer;
 pub use ignore_pointer::RenderIgnorePointer;
-pub use mouse_region::RenderMouseRegion;
+pub use mouse_region::{RenderMouseRegion, MouseCallbacks, MouseRegionData};
 pub use pointer_listener::RenderPointerListener;
+
+// Alias for backwards compatibility
+pub type MouseRegionCallbacks = MouseCallbacks;
 
 
 
