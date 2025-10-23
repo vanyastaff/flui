@@ -1,6 +1,7 @@
 //! Effect RenderObjects (opacity, transforms, clips, decorations)
 
 pub mod animated_opacity;
+pub mod backdrop_filter;
 pub mod clip_oval;
 pub mod clip_path;
 pub mod clip_rect;
@@ -11,7 +12,10 @@ pub mod offstage;
 pub mod opacity;
 pub mod physical_model;
 pub mod repaint_boundary;
+pub mod shader_mask;
 pub mod transform;
+
+
 
 
 
@@ -24,6 +28,7 @@ pub mod transform;
 
 // Re-exports
 pub use animated_opacity::RenderAnimatedOpacity;
+pub use backdrop_filter::{RenderBackdropFilter, ImageFilter};
 pub use clip_oval::RenderClipOval;
 pub use clip_path::RenderClipPath;
 pub use clip_rect::RenderClipRect;
@@ -34,7 +39,10 @@ pub use offstage::RenderOffstage;
 pub use opacity::RenderOpacity;
 pub use physical_model::RenderPhysicalModel;
 pub use repaint_boundary::RenderRepaintBoundary;
+pub use shader_mask::{RenderShaderMask, ShaderSpec};
 pub use transform::RenderTransform;
+
+
 
 
 
