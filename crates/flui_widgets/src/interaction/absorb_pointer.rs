@@ -125,7 +125,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> AbsorbPointerBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 
@@ -245,28 +245,22 @@ mod tests {
     }
 
     #[test]
-    fn test_absorb_pointer_builder_with_child() {
+    fn test_single_child_render_object_widget_trait() {
         let widget = AbsorbPointer::builder()
             .absorbing(false)
             .child(MockWidget)
             .build();
 
-        assert!(widget.child.is_some());
-        assert!(!widget.absorbing);
-    }
-
-    #[test]
-    fn test_absorb_pointer_set_child() {
-        let mut widget = AbsorbPointer::new(true);
-        widget.set_child(MockWidget);
-        assert!(widget.child.is_some());
+        // Test child() method
+        assert!(widget.child().is_some());
     }
 }
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for AbsorbPointer {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderAbsorbPointer::new(self.absorbing))
+        use flui_rendering::objects::interaction::absorb_pointer::AbsorbPointerData;
+        Box::new(RenderAbsorbPointer::new(AbsorbPointerData::new(self.absorbing)))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {

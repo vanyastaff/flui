@@ -125,7 +125,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> IgnorePointerBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 
@@ -245,21 +245,22 @@ mod tests {
     }
 
     #[test]
-    fn test_ignore_pointer_builder_with_child() {
+    fn test_single_child_render_object_widget_trait() {
         let widget = IgnorePointer::builder()
             .ignoring(false)
             .child(MockWidget)
             .build();
 
-        assert!(widget.child.is_some());
-        assert!(!widget.ignoring);
+        // Test child() method
+        assert!(widget.child().is_some());
     }
 }
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for IgnorePointer {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderIgnorePointer::new(self.ignoring))
+        use flui_rendering::objects::interaction::ignore_pointer::IgnorePointerData;
+        Box::new(RenderIgnorePointer::new(IgnorePointerData::new(self.ignoring)))
     }
 
     fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {

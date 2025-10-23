@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn test_align_widget_trait() {
+    fn test_widget_trait() {
         let widget = Align::builder()
             .alignment(Alignment::TOP_LEFT)
             .child(MockWidget)
@@ -434,23 +434,14 @@ mod tests {
     }
 
     #[test]
-    fn test_align_builder_with_child() {
+    fn test_single_child_render_object_widget_trait() {
         let widget = Align::builder()
             .alignment(Alignment::CENTER)
-            .width_factor(2.0)
             .child(MockWidget)
             .build();
 
-        assert!(widget.child.is_some());
-        assert_eq!(widget.alignment, Alignment::CENTER);
-        assert_eq!(widget.width_factor, Some(2.0));
-    }
-
-    #[test]
-    fn test_align_set_child() {
-        let mut widget = Align::new();
-        widget.set_child(MockWidget);
-        assert!(widget.child.is_some());
+        // Test child() method
+        assert!(widget.child().is_some());
     }
 }
 

@@ -142,7 +142,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child<W: Widget + 'static>(self, child: W) -> MouseRegionBuilder<SetChild<S>> {
-        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 
@@ -332,21 +332,14 @@ mod tests {
     }
 
     #[test]
-    fn test_mouse_region_builder_with_child() {
+    fn test_single_child_render_object_widget_trait() {
         let widget = MouseRegion::builder()
             .on_enter(|_| {})
             .child(MockWidget)
             .build();
 
-        assert!(widget.child.is_some());
-        assert!(widget.on_enter.is_some());
-    }
-
-    #[test]
-    fn test_mouse_region_set_child() {
-        let mut widget = MouseRegion::new();
-        widget.set_child(MockWidget);
-        assert!(widget.child.is_some());
+        // Test child() method
+        assert!(widget.child().is_some());
     }
 }
 

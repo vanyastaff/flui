@@ -29,7 +29,7 @@
 //!     height: 50.0,
 //! }
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement, LeafRenderObjectWidget, LeafRenderObjectElement};
 use flui_rendering::RenderConstrainedBox;
 
 /// A box with a specified size.
@@ -87,7 +87,7 @@ pub struct SizedBox {
     ///
     /// If null, the box will be empty with the specified dimensions.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl SizedBox {
@@ -178,8 +178,10 @@ impl Default for SizedBox {
 }
 
 impl Widget for SizedBox {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
@@ -201,8 +203,8 @@ where
     ///     .child(some_widget)
     ///     .build()
     /// ```
-    pub fn child(self, child: impl Widget + 'static) -> SizedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> SizedBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 
@@ -244,11 +246,26 @@ mod tests {
     // Mock widget for testing
     #[derive(Debug, Clone)]
     struct MockWidget;
+
     impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            todo!()
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            use flui_core::{BoxConstraints, EdgeInsets};
+            use flui_rendering::RenderPadding;
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_sized_box_new() {
@@ -400,22 +417,54 @@ mod tests {
         assert!(sized_box.width.is_none());
         assert_eq!(sized_box.height, Some(50.0));
     }
+
+    #[test]
+    fn test_widget_trait() {
+        let sized_box = SizedBox::builder()
+            .width(100.0)
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = sized_box.into_element();
+    }
+
+    #[test]
+    fn test_single_child_render_object_widget_trait() {
+        let sized_box = SizedBox::builder()
+            .width(100.0)
+            .child(MockWidget)
+            .build();
+
+        // Test child() method
+        let _child = sized_box.child();
+    }
 }
 
 impl RenderObjectWidget for SizedBox {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         use flui_core::BoxConstraints;
+        use flui_rendering::objects::layout::constrained_box::ConstrainedBoxData;
 
         // Create tight constraints for specified dimensions
         let constraints = BoxConstraints::tight_for(self.width, self.height);
-        Box::new(RenderConstrainedBox::new(constraints))
+        Box::new(RenderConstrainedBox::new(ConstrainedBoxData::new(constraints)))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         use flui_core::BoxConstraints;
         if let Some(constrained) = render_object.downcast_mut::<RenderConstrainedBox>() {
             let constraints = BoxConstraints::tight_for(self.width, self.height);
             constrained.set_additional_constraints(constraints);
         }
+    }
+}
+
+impl SingleChildRenderObjectWidget for SizedBox {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .expect("SizedBox requires a child widget")
     }
 }
