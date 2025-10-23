@@ -168,21 +168,12 @@ impl DynRenderObject for RenderStack {
             ),
         };
 
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
+        // ========== Calculate and save child offsets in StackParentData ==========
+        // This avoids recalculating positions in paint() and hit_test()
 
-        size
-    }
-
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        let size = state.size.lock().unwrap_or(Size::ZERO);
         let alignment = self.data().alignment;
-        let children_ids = ctx.children();
 
-        // Paint children in order (first child in back, last child on top)
-        for &child_id in children_ids {
-            // Get child size
+        for &child_id in children_ids.iter() {
             let child_size = ctx.child_size(child_id);
 
             // Calculate child offset based on StackParentData (if positioned) or alignment
@@ -227,9 +218,41 @@ impl DynRenderObject for RenderStack {
                 alignment.calculate_offset(child_size, size)
             };
 
+            // Save offset in StackParentData
+            if let Some(mut parent_data) = ctx.tree().parent_data_mut(child_id) {
+                if let Some(stack_data) = parent_data.downcast_mut::<crate::parent_data::StackParentData>() {
+                    stack_data.offset = child_offset;
+                }
+            }
+        }
+
+        // Store size and clear needs_layout flag
+        *state.size.lock() = Some(size);
+        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
+
+        size
+    }
+
+    fn paint(&self, _state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+        let children_ids = ctx.children();
+
+        // Paint children in order (first child in back, last child on top)
+        for &child_id in children_ids {
+            // Read offset from StackParentData (calculated during layout)
+            let local_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+                if let Some(stack_data) = parent_data.downcast_ref::<crate::parent_data::StackParentData>() {
+                    stack_data.offset
+                } else {
+                    Offset::ZERO
+                }
+            } else {
+                Offset::ZERO
+            };
+
+            // Add parent offset to local offset
             let paint_offset = Offset::new(
-                offset.dx + child_offset.dx,
-                offset.dy + child_offset.dy,
+                offset.dx + local_offset.dx,
+                offset.dy + local_offset.dy,
             );
 
             ctx.paint_child(child_id, painter, paint_offset);
