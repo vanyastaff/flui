@@ -32,7 +32,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{MultiChildRenderObjectWidget, RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, MultiChildRenderObjectWidget, MultiChildRenderObjectElement, RenderObjectWidget, Widget};
 use flui_rendering::RenderFlex;
 use flui_types::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
@@ -96,7 +96,7 @@ pub struct Row {
     ///
     /// Children are laid out horizontally in the order they appear in the vector.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn Widget>>,
+    pub children: Vec<Box<dyn DynWidget>>,
 }
 
 impl Row {
@@ -120,7 +120,7 @@ impl Row {
     /// row.add_child(Text::new("Hello"));
     /// row.add_child(Text::new("World"));
     /// ```
-    pub fn add_child(&mut self, child: impl Widget + 'static) {
+    pub fn add_child<W: Widget + 'static>(&mut self, child: W) {
         self.children.push(Box::new(child));
     }
 
@@ -143,14 +143,18 @@ impl Default for Row {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for Row {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = MultiChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        MultiChildRenderObjectElement::new(self)
     }
 }
 
+// Implement RenderObjectWidget
 impl RenderObjectWidget for Row {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         let mut flex = RenderFlex::new(Axis::Horizontal);
         flex.set_main_axis_alignment(self.main_axis_alignment);
         flex.set_cross_axis_alignment(self.cross_axis_alignment);
@@ -158,7 +162,7 @@ impl RenderObjectWidget for Row {
         Box::new(flex)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(flex) = render_object.downcast_mut::<RenderFlex>() {
             flex.set_main_axis_alignment(self.main_axis_alignment);
             flex.set_cross_axis_alignment(self.cross_axis_alignment);
@@ -167,8 +171,9 @@ impl RenderObjectWidget for Row {
     }
 }
 
+// Implement MultiChildRenderObjectWidget
 impl MultiChildRenderObjectWidget for Row {
-    fn children(&self) -> &[Box<dyn Widget>] {
+    fn children(&self) -> &[Box<dyn DynWidget>] {
         &self.children
     }
 }
@@ -193,7 +198,7 @@ where
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Box<dyn Widget>>) -> RowBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Box<dyn DynWidget>>) -> RowBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }
@@ -231,15 +236,31 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
     struct MockWidget;
+
     impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            todo!()
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
         }
     }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_row_new() {
@@ -375,5 +396,28 @@ mod tests {
                 .build();
             assert_eq!(row.cross_axis_alignment, alignment);
         }
+    }
+
+    #[test]
+    fn test_row_widget_trait() {
+        let row = Row::builder()
+            .children(vec![Box::new(MockWidget), Box::new(MockWidget)])
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = row.into_element();
+    }
+
+    #[test]
+    fn test_row_multi_child() {
+        let row = Row::builder()
+            .children(vec![
+                Box::new(MockWidget) as Box<dyn DynWidget>,
+                Box::new(MockWidget) as Box<dyn DynWidget>,
+                Box::new(MockWidget) as Box<dyn DynWidget>,
+            ])
+            .build();
+
+        assert_eq!(row.children.len(), 3);
     }
 }
