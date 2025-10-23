@@ -37,7 +37,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxConstraints, DynWidget, Widget};
+use flui_core::{BoxConstraints, Context, DynWidget, StatelessWidget, Widget};
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
 
@@ -246,6 +246,82 @@ impl Default for Container {
 // other widgets (Padding, Align, DecoratedBox, ConstrainedBox, etc.) into a tree.
 //
 // Widget trait will be automatically implemented via StatelessWidget trait below
+
+impl StatelessWidget for Container {
+    fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
+        // Build widget tree from inside out:
+        // child -> padding -> decoration -> alignment -> margin -> constraints
+
+        let mut current: Box<dyn DynWidget> = if let Some(child) = &self.child {
+            child.clone()
+        } else {
+            // No child - use empty SizedBox
+            Box::new(crate::SizedBox::new())
+        };
+
+        // Apply padding
+        if let Some(padding) = self.padding {
+            current = Box::new(crate::Padding {
+                key: None,
+                padding,
+                child: Some(current),
+            });
+        }
+
+        // Apply decoration or color
+        if let Some(decoration) = &self.decoration {
+            current = Box::new(crate::DecoratedBox {
+                key: None,
+                decoration: decoration.clone(),
+                position: crate::DecorationPosition::Background,
+                child: Some(current),
+            });
+        } else if let Some(color) = self.color {
+            let decoration = BoxDecoration {
+                color: Some(color),
+                ..Default::default()
+            };
+            current = Box::new(crate::DecoratedBox {
+                key: None,
+                decoration,
+                position: crate::DecorationPosition::Background,
+                child: Some(current),
+            });
+        }
+
+        // Apply alignment
+        if let Some(alignment) = self.alignment {
+            current = Box::new(crate::Align {
+                key: None,
+                alignment,
+                width_factor: None,
+                height_factor: None,
+                child: Some(current),
+            });
+        }
+
+        // Apply margin (using Padding)
+        if let Some(margin) = self.margin {
+            current = Box::new(crate::Padding {
+                key: None,
+                padding: margin,
+                child: Some(current),
+            });
+        }
+
+        // Apply width/height constraints
+        if self.width.is_some() || self.height.is_some() {
+            current = Box::new(crate::SizedBox {
+                key: None,
+                width: self.width,
+                height: self.height,
+                child: Some(current),
+            });
+        }
+
+        current
+    }
+}
 
 // Import bon builder traits for custom setters
 use container_builder::{State, IsUnset, SetChild};
