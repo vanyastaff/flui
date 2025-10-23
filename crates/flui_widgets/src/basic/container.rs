@@ -37,7 +37,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxConstraints, Widget};
+use flui_core::{BoxConstraints, DynWidget, Widget};
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
 
@@ -140,7 +140,7 @@ pub struct Container {
     /// If null, the container will size itself according to other properties.
     /// Use the custom `.child()` setter in the builder.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl Container {
@@ -238,23 +238,14 @@ impl Default for Container {
     }
 }
 
-impl Widget for Container {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        // NOTE: Container is a StatelessWidget (like in Flutter), NOT a RenderObjectWidget!
-        //
-        // Flutter inheritance: Object → Widget → StatelessWidget → Container
-        //
-        // Container should create a ComponentElement that implements build() to compose
-        // other widgets (Padding, Align, DecoratedBox, ConstrainedBox, etc.) into a tree.
-        //
-        // This is different from RenderObjectWidget which directly creates RenderObjects.
-        // Container is a convenience widget that combines multiple simpler widgets.
-        //
-        // When StatelessWidget trait is implemented, this will be:
-        // Box::new(flui_core::ComponentElement::new(self.clone()))
-        todo!("Container::create_element - requires StatelessWidget implementation")
-    }
-}
+// NOTE: Container is a StatelessWidget (like in Flutter), NOT a RenderObjectWidget!
+//
+// Flutter inheritance: Object → Widget → StatelessWidget → Container
+//
+// Container should create a ComponentElement that implements build() to compose
+// other widgets (Padding, Align, DecoratedBox, ConstrainedBox, etc.) into a tree.
+//
+// Widget trait will be automatically implemented via StatelessWidget trait below
 
 // Import bon builder traits for custom setters
 use container_builder::{State, IsUnset, SetChild};
@@ -277,7 +268,7 @@ where
     pub fn child(self, child: impl Widget + 'static) -> ContainerBuilder<SetChild<S>> {
         // bon's generated setter takes Box directly, not Option
         // bon wraps it in Option internally
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use flui_core::{BuildContext, StatelessWidget, Widget};
+use flui_core::{BuildContext, DynWidget, StatelessWidget, Widget};
 use flui_types::{Color, EdgeInsets, events::PointerEventData};
 use flui_types::styling::{BorderRadius, BoxDecoration};
 
@@ -71,7 +71,7 @@ impl Button {
 }
 
 impl StatelessWidget for Button {
-    fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
+    fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
         // Create the visual container
         let container = Container::builder()
             .padding(self.padding)

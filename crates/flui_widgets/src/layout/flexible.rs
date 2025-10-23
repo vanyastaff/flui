@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::Widget;
+use flui_core::{DynWidget, Widget};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
@@ -143,7 +143,7 @@ pub struct Flexible {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl Flexible {
@@ -252,18 +252,18 @@ impl Default for Flexible {
 }
 
 impl Widget for Flexible {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        // Flexible is a ParentDataWidget - it wraps its child and modifies parent data
-        // For now, we just pass through to the child
-        if let Some(child) = &self.child {
-            child.create_element()
-        } else {
-            // No child - create a placeholder element
-            Box::new(flui_core::RenderObjectElement::new(
-                crate::SizedBox::default(),
-            ))
-        }
-    }
+// TODO-DISABLED:     fn create_element(&self) -> Box<dyn flui_core::Element> {
+// TODO-DISABLED:         // Flexible is a ParentDataWidget - it wraps its child and modifies parent data
+// TODO-DISABLED:         // For now, we just pass through to the child
+// TODO-DISABLED:         if let Some(child) = &self.child {
+// TODO-DISABLED:             child.create_element()
+// TODO-DISABLED:         } else {
+// TODO-DISABLED:             // No child - create a placeholder element
+// TODO-DISABLED:             Box::new(flui_core::RenderObjectElement::new(
+// TODO-DISABLED:                 crate::SizedBox::default(),
+// TODO-DISABLED:             ))
+// TODO-DISABLED:         }
+// TODO-DISABLED:     }
 }
 
 // bon Builder Extensions
@@ -285,7 +285,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl Widget + 'static) -> FlexibleBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

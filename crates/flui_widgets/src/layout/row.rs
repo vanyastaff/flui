@@ -125,7 +125,7 @@ impl Row {
     }
 
     /// Sets all children at once.
-    pub fn set_children(&mut self, children: Vec<Box<dyn Widget>>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn DynWidget>>) {
         self.children = children;
     }
 
@@ -315,8 +315,8 @@ mod tests {
     fn test_row_builder_children() {
         let row = Row::builder()
             .children(vec![
-                Box::new(MockWidget) as Box<dyn Widget>,
-                Box::new(MockWidget) as Box<dyn Widget>,
+                Box::new(MockWidget) as Box<dyn DynWidget>,
+                Box::new(MockWidget) as Box<dyn DynWidget>,
             ])
             .build();
 
@@ -336,8 +336,8 @@ mod tests {
     fn test_row_set_children() {
         let mut row = Row::new();
         row.set_children(vec![
-            Box::new(MockWidget) as Box<dyn Widget>,
-            Box::new(MockWidget) as Box<dyn Widget>,
+            Box::new(MockWidget) as Box<dyn DynWidget>,
+            Box::new(MockWidget) as Box<dyn DynWidget>,
         ]);
         assert_eq!(row.children.len(), 2);
     }

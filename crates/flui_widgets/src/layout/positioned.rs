@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::Widget;
+use flui_core::{DynWidget, Widget};
 
 /// A widget that controls where a child of a Stack is positioned.
 ///
@@ -178,7 +178,7 @@ pub struct Positioned {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl Positioned {
@@ -362,19 +362,19 @@ impl Default for Positioned {
 }
 
 impl Widget for Positioned {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        // Positioned is a ParentDataWidget - it doesn't create its own element
-        // Instead, it modifies the parent data of its child's element when mounted in a Stack
-        // For now, we just wrap the child
-        if let Some(child) = &self.child {
-            child.create_element()
-        } else {
-            // No child - create a placeholder element
-            Box::new(flui_core::RenderObjectElement::new(
-                crate::SizedBox::default(),
-            ))
-        }
-    }
+// TODO-DISABLED:     fn create_element(&self) -> Box<dyn flui_core::Element> {
+// TODO-DISABLED:         // Positioned is a ParentDataWidget - it doesn't create its own element
+// TODO-DISABLED:         // Instead, it modifies the parent data of its child's element when mounted in a Stack
+// TODO-DISABLED:         // For now, we just wrap the child
+// TODO-DISABLED:         if let Some(child) = &self.child {
+// TODO-DISABLED:             child.create_element()
+// TODO-DISABLED:         } else {
+// TODO-DISABLED:             // No child - create a placeholder element
+// TODO-DISABLED:             Box::new(flui_core::RenderObjectElement::new(
+// TODO-DISABLED:                 crate::SizedBox::default(),
+// TODO-DISABLED:             ))
+// TODO-DISABLED:         }
+// TODO-DISABLED:     }
 }
 
 // bon Builder Extensions
@@ -397,7 +397,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl Widget + 'static) -> PositionedBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
     }
 }
 

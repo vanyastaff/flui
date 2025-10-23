@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use flui_core::{StatelessWidget, Widget};
+use flui_core::{DynWidget, StatelessWidget, Widget};
 use flui_types::events::{PointerEvent, PointerEventData};
 use parking_lot::RwLock;
 
@@ -94,7 +94,7 @@ pub fn clear_gesture_handlers() {
 #[derive(Clone)]
 pub struct GestureDetector {
     /// Child widget
-    pub child: Box<dyn Widget>,
+    pub child: Box<dyn DynWidget>,
 
     /// On tap callback (pointer up)
     pub on_tap: Option<PointerEventCallback>,
@@ -111,7 +111,7 @@ pub struct GestureDetector {
 
 impl GestureDetector {
     /// Create a new GestureDetector with a child
-    pub fn new(child: Box<dyn Widget>) -> Self {
+    pub fn new(child: Box<dyn DynWidget>) -> Self {
         Self {
             child,
             on_tap: None,
@@ -140,7 +140,7 @@ impl GestureDetector {
 }
 
 impl StatelessWidget for GestureDetector {
-    fn build(&self, _context: &flui_core::BuildContext) -> Box<dyn Widget> {
+    fn build(&self, _context: &flui_core::BuildContext) -> Box<dyn DynWidget> {
         // Register handlers when building
         self.register();
 
@@ -163,7 +163,7 @@ impl std::fmt::Debug for GestureDetector {
 
 /// Builder for GestureDetector
 pub struct GestureDetectorBuilder {
-    child: Option<Box<dyn Widget>>,
+    child: Option<Box<dyn DynWidget>>,
     on_tap: Option<PointerEventCallback>,
     on_tap_down: Option<PointerEventCallback>,
     on_tap_up: Option<PointerEventCallback>,

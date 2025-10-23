@@ -17,7 +17,7 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::Widget;
+use flui_core::{DynWidget, Widget};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
@@ -109,7 +109,7 @@ pub struct Expanded {
     pub flex: i32,
 
     /// The child widget.
-    pub child: Box<dyn Widget>,
+    pub child: Box<dyn DynWidget>,
 }
 
 impl Expanded {
@@ -175,12 +175,14 @@ impl Expanded {
     }
 }
 
+// TODO: Implement ParentDataWidget trait and Widget will be auto-implemented
+// For now, Expanded is not usable until ParentDataWidget infrastructure is complete
+/*
 impl Widget for Expanded {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        // Expanded is a ParentDataWidget - it wraps its child
-        self.child.create_element()
-    }
+    // ParentDataWidget needs special Element that attaches parent data to child
+    // This requires ParentDataElement infrastructure in flui_core
 }
+*/
 
 /// Macro for creating Expanded with declarative syntax.
 ///

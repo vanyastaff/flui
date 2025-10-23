@@ -226,7 +226,7 @@ impl IndexedStack {
     ///     Text::new("Page 2"),
     /// ]);
     /// ```
-    pub fn set_children(&mut self, children: Vec<Box<dyn Widget>>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn DynWidget>>) {
         self.children = children;
     }
 
