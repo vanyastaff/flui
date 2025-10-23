@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{RenderObject, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderAspectRatio;
 
 /// A widget that sizes its child to a specific aspect ratio.
@@ -102,7 +102,7 @@ pub struct AspectRatio {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn Widget>>,
+    pub child: Option<Box<dyn DynWidget>>,
 }
 
 impl AspectRatio {
@@ -163,7 +163,7 @@ impl AspectRatio {
     /// let mut widget = AspectRatio::new(16.0 / 9.0);
     /// widget.set_child(Image::network(url));
     /// ```
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
         self.child = Some(Box::new(child));
     }
 
@@ -195,21 +195,35 @@ impl Default for AspectRatio {
     }
 }
 
+// Implement Widget trait with associated type
 impl Widget for AspectRatio {
-    fn create_element(&self) -> Box<dyn flui_core::Element> {
-        Box::new(flui_core::RenderObjectElement::new(self.clone()))
+    type Element = SingleChildRenderObjectElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        SingleChildRenderObjectElement::new(self)
     }
 }
 
+// Implement RenderObjectWidget
 impl RenderObjectWidget for AspectRatio {
-    fn create_render_object(&self) -> Box<dyn RenderObject> {
+    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
         Box::new(RenderAspectRatio::new(self.aspect_ratio))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn RenderObject) {
+    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
         if let Some(aspect_ratio_render) = render_object.downcast_mut::<RenderAspectRatio>() {
             aspect_ratio_render.set_aspect_ratio(self.aspect_ratio);
         }
+    }
+}
+
+// Implement SingleChildRenderObjectWidget
+impl SingleChildRenderObjectWidget for AspectRatio {
+    fn child(&self) -> &dyn DynWidget {
+        self.child
+            .as_ref()
+            .map(|b| &**b as &dyn DynWidget)
+            .unwrap_or_else(|| panic!("AspectRatio requires a child"))
     }
 }
 
@@ -231,8 +245,8 @@ where
     ///     .child(video_player)
     ///     .build()
     /// ```
-    pub fn child(self, child: impl Widget + 'static) -> AspectRatioBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn Widget>)
+    pub fn child<W: Widget + 'static>(self, child: W) -> AspectRatioBuilder<SetChild<S>> {
+        self.child_internal(Some(Box::new(child) as Box<dyn DynWidget>))
     }
 }
 
@@ -277,6 +291,30 @@ macro_rules! aspect_ratio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::LeafRenderObjectElement;
+    use flui_types::EdgeInsets;
+    use flui_rendering::RenderPadding;
+
+    #[derive(Debug, Clone)]
+    struct MockWidget;
+
+    impl Widget for MockWidget {
+        type Element = LeafRenderObjectElement<Self>;
+
+        fn into_element(self) -> Self::Element {
+            LeafRenderObjectElement::new(self)
+        }
+    }
+
+    impl RenderObjectWidget for MockWidget {
+        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+
+        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+    }
+
+    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_aspect_ratio_new() {
@@ -424,5 +462,34 @@ mod tests {
     fn test_aspect_ratio_portrait() {
         let widget = AspectRatio::new(0.5);
         assert!(widget.aspect_ratio < 1.0); // portrait
+    }
+
+    #[test]
+    fn test_aspect_ratio_widget_trait() {
+        let widget = AspectRatio::builder()
+            .aspect_ratio(16.0 / 9.0)
+            .child(MockWidget)
+            .build();
+
+        // Test that it implements Widget and can create an element
+        let _element = widget.into_element();
+    }
+
+    #[test]
+    fn test_aspect_ratio_builder_with_child() {
+        let widget = AspectRatio::builder()
+            .aspect_ratio(4.0 / 3.0)
+            .child(MockWidget)
+            .build();
+
+        assert!(widget.child.is_some());
+        assert_eq!(widget.aspect_ratio, 4.0 / 3.0);
+    }
+
+    #[test]
+    fn test_aspect_ratio_set_child() {
+        let mut widget = AspectRatio::new(1.0);
+        widget.set_child(MockWidget);
+        assert!(widget.child.is_some());
     }
 }
