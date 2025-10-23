@@ -1,6 +1,7 @@
 //! RenderFlex - flex layout container (Row/Column)
 
 use flui_types::{Offset, Size, constraints::BoxConstraints, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize};
+use flui_types::layout::FlexFit;
 use flui_core::DynRenderObject;
 
 /// RenderObject for flex layout (Row/Column)
@@ -122,67 +123,158 @@ impl DynRenderObject for RenderFlex {
             return size;
         }
 
-        // Simplified layout algorithm
-        // TODO: This is a basic implementation. A full implementation would:
-        // 1. Calculate flex factors from FlexParentData
-        // 2. Distribute space according to flex factors
-        // 3. Handle Flexible/Expanded children properly
+        // ========== FLEX LAYOUT ALGORITHM ==========
+        // Proper flex layout with support for Flexible/Expanded widgets
+        //
+        // Algorithm:
+        // 1. Separate inflexible and flexible children
+        // 2. Layout inflexible children first
+        // 3. Calculate remaining space and total flex
+        // 4. Allocate space to flexible children proportionally
+        // 5. Layout flexible children with FlexFit constraints
 
-        let mut total_main_size = 0.0;
-        let mut max_cross_size: f32 = 0.0;
+        // Step 1: Collect flex information for each child
+        let mut child_info: Vec<(usize, Option<(i32, FlexFit)>)> = Vec::new();
+        let mut total_flex = 0;
 
-        // Layout all children with constraints based on cross-axis alignment
-        // CRITICAL: Pass child_count to enable proper cache invalidation when children change
-        for (idx, &child_id) in children_ids.iter().enumerate() {
-            let child_constraints = match direction {
-                Axis::Horizontal => {
-                    // Main axis = horizontal, cross axis = vertical
-                    // Main axis is loose (0.0 to max), cross axis depends on alignment
-                    let (min_cross, max_cross) = if self.cross_axis_alignment == CrossAxisAlignment::Stretch {
-                        (constraints.min_height, constraints.max_height)
+        for &child_id in children_ids.iter() {
+            // Try to read FlexParentData
+            let flex_info = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+                if let Some(flex_data) = parent_data.downcast_ref::<crate::parent_data::FlexParentData>() {
+                    if flex_data.flex > 0 {
+                        total_flex += flex_data.flex;
+                        Some((flex_data.flex, flex_data.fit))
                     } else {
-                        (0.0, constraints.max_height)
-                    };
-                    BoxConstraints::new(
-                        0.0,
-                        constraints.max_width,
-                        min_cross,
-                        max_cross,
-                    )
+                        None // flex = 0 means inflexible
+                    }
+                } else {
+                    None // No FlexParentData = inflexible
                 }
-                Axis::Vertical => {
-                    // Main axis = vertical, cross axis = horizontal
-                    // Main axis is loose (0.0 to max), cross axis depends on alignment
-                    let (min_cross, max_cross) = if self.cross_axis_alignment == CrossAxisAlignment::Stretch {
-                        (constraints.min_width, constraints.max_width)
-                    } else {
-                        (0.0, constraints.max_width)
-                    };
-                    BoxConstraints::new(
-                        min_cross,
-                        max_cross,
-                        0.0,
-                        constraints.max_height,
-                    )
-                }
+            } else {
+                None // No parent data = inflexible
             };
 
-            tracing::debug!("RenderFlex: laying out child #{} (id={}) with constraints {:?}", idx, child_id, child_constraints);
-            // Use cached layout with child_count for proper cache invalidation
-            let child_size = ctx.layout_child_cached(child_id, child_constraints, Some(child_count));
-            tracing::debug!("RenderFlex: child #{} size = {:?}", idx, child_size);
+            child_info.push((child_id, flex_info));
+        }
 
-            match direction {
-                Axis::Horizontal => {
-                    total_main_size += child_size.width;
-                    max_cross_size = max_cross_size.max(child_size.height);
+        // Cross-axis constraints (same for all children)
+        let cross_constraints = match direction {
+            Axis::Horizontal => {
+                if self.cross_axis_alignment == CrossAxisAlignment::Stretch {
+                    (constraints.min_height, constraints.max_height)
+                } else {
+                    (0.0, constraints.max_height)
                 }
-                Axis::Vertical => {
-                    total_main_size += child_size.height;
-                    max_cross_size = max_cross_size.max(child_size.width);
+            }
+            Axis::Vertical => {
+                if self.cross_axis_alignment == CrossAxisAlignment::Stretch {
+                    (constraints.min_width, constraints.max_width)
+                } else {
+                    (0.0, constraints.max_width)
+                }
+            }
+        };
+
+        // Step 2: Layout inflexible children
+        let mut allocated_main_size = 0.0f32;
+        let mut max_cross_size = 0.0f32;
+
+        for (child_id, flex_info) in &child_info {
+            if flex_info.is_none() {
+                // Inflexible child - give loose main axis constraints
+                let child_constraints = match direction {
+                    Axis::Horizontal => BoxConstraints::new(
+                        0.0,
+                        constraints.max_width,
+                        cross_constraints.0,
+                        cross_constraints.1,
+                    ),
+                    Axis::Vertical => BoxConstraints::new(
+                        cross_constraints.0,
+                        cross_constraints.1,
+                        0.0,
+                        constraints.max_height,
+                    ),
+                };
+
+                let child_size = ctx.layout_child_cached(*child_id, child_constraints, Some(child_count));
+
+                let child_main_size = match direction {
+                    Axis::Horizontal => child_size.width,
+                    Axis::Vertical => child_size.height,
+                };
+                let child_cross_size = match direction {
+                    Axis::Horizontal => child_size.height,
+                    Axis::Vertical => child_size.width,
+                };
+
+                allocated_main_size += child_main_size;
+                max_cross_size = max_cross_size.max(child_cross_size);
+            }
+        }
+
+        // Step 3: Calculate space for flexible children
+        let max_main_size = match direction {
+            Axis::Horizontal => constraints.max_width,
+            Axis::Vertical => constraints.max_height,
+        };
+
+        let remaining_space = (max_main_size - allocated_main_size).max(0.0);
+
+        // Step 4 & 5: Layout flexible children
+        if total_flex > 0 && remaining_space > 0.0 {
+            let space_per_flex = remaining_space / total_flex as f32;
+
+            for (child_id, flex_info) in &child_info {
+                if let Some((flex, fit)) = flex_info {
+                    let allocated_space = space_per_flex * (*flex as f32);
+
+                    // Create constraints based on FlexFit
+                    let child_constraints = match direction {
+                        Axis::Horizontal => {
+                            let (min_main, max_main) = match fit {
+                                FlexFit::Tight => (allocated_space, allocated_space),
+                                FlexFit::Loose => (0.0, allocated_space),
+                            };
+                            BoxConstraints::new(
+                                min_main,
+                                max_main,
+                                cross_constraints.0,
+                                cross_constraints.1,
+                            )
+                        }
+                        Axis::Vertical => {
+                            let (min_main, max_main) = match fit {
+                                FlexFit::Tight => (allocated_space, allocated_space),
+                                FlexFit::Loose => (0.0, allocated_space),
+                            };
+                            BoxConstraints::new(
+                                cross_constraints.0,
+                                cross_constraints.1,
+                                min_main,
+                                max_main,
+                            )
+                        }
+                    };
+
+                    let child_size = ctx.layout_child_cached(*child_id, child_constraints, Some(child_count));
+
+                    let child_main_size = match direction {
+                        Axis::Horizontal => child_size.width,
+                        Axis::Vertical => child_size.height,
+                    };
+                    let child_cross_size = match direction {
+                        Axis::Horizontal => child_size.height,
+                        Axis::Vertical => child_size.width,
+                    };
+
+                    allocated_main_size += child_main_size;
+                    max_cross_size = max_cross_size.max(child_cross_size);
                 }
             }
         }
+
+        let total_main_size = allocated_main_size;
 
         // Calculate final size
         let size = match direction {
