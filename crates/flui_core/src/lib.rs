@@ -60,6 +60,7 @@ pub mod profiling;
 pub mod render;
 pub mod testing;
 pub mod tree;
+pub mod typed;  // Experimental typed RenderObject system
 pub mod widget;
 
 
