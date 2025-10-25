@@ -9,14 +9,21 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    // Parse #[render_object(arity = "...")] attribute if present
-    // For now, we just auto-implement Widget and DynWidget
-
     let expanded = quote! {
         // Auto-implement Widget trait
-        impl #impl_generics ::flui_core::Widget for #name #ty_generics #where_clause {
+        // Note: RenderObjectWidget::Arity is used to determine the Element type
+        impl #impl_generics ::flui_core::Widget for #name #ty_generics #where_clause
+        where
+            Self: ::flui_core::RenderObjectWidget,
+        {
+            type Element = ::flui_core::element::RenderObjectElement<Self, <Self as ::flui_core::RenderObjectWidget>::Arity>;
+
             fn key(&self) -> ::core::option::Option<&str> {
                 ::core::option::Option::None
+            }
+
+            fn into_element(self) -> Self::Element {
+                ::flui_core::element::RenderObjectElement::new(self)
             }
         }
 

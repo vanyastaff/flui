@@ -29,11 +29,13 @@
 
 use proc_macro::TokenStream;
 
-mod stateless;
-mod stateful;
 mod inherited;
 mod render_object;
+mod stateful;
+mod stateless;
 mod utils;
+mod widget_attr;
+
 
 /// Derive StatelessWidget
 ///
@@ -71,4 +73,35 @@ pub fn derive_render_object_widget(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(State)]
 pub fn derive_state(input: TokenStream) -> TokenStream {
     stateful::derive_state(input)
+}
+
+/// Widget attribute macro
+///
+/// Automatically adds Debug, Clone derives and generates Widget/DynWidget implementations.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use flui_core::{StatelessWidget, BoxedWidget};
+///
+/// #[widget]  // or #[widget(stateless)]
+/// struct MyWidget {
+///     value: i32,
+/// }
+///
+/// impl StatelessWidget for MyWidget {
+///     fn build(&self) -> BoxedWidget {
+///         // ...
+///     }
+/// }
+/// ```
+///
+/// Available types:
+/// - `#[widget]` or `#[widget(stateless)]` - StatelessWidget
+/// - `#[widget(stateful)]` - StatefulWidget
+/// - `#[widget(inherited)]` - InheritedWidget
+/// - `#[widget(render_object)]` - RenderObjectWidget
+#[proc_macro_attribute]
+pub fn widget(args: TokenStream, input: TokenStream) -> TokenStream {
+    widget_attr::widget_attribute(args, input)
 }

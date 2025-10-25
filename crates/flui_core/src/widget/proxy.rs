@@ -53,7 +53,7 @@ pub trait ProxyWidget: fmt::Debug + Clone + Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Widget, RenderObjectWidget, RenderObject, LeafArity, LayoutCx, PaintCx, RenderObjectKind};
+    use crate::{Widget, RenderObjectWidget, RenderObject, DynElement, LeafArity, LayoutCx, PaintCx};
     use flui_types::Size;
     use flui_engine::{BoxedLayer, ContainerLayer};
 
@@ -82,7 +82,11 @@ mod tests {
     struct DummyWidget;
 
     impl Widget for DummyWidget {
-        type Kind = RenderObjectKind;
+        type Element = crate::element::RenderObjectElement<Self, LeafArity>;
+
+        fn into_element(self) -> Self::Element {
+            crate::element::RenderObjectElement::new(self)
+        }
     }
 
     impl DynWidget for DummyWidget {

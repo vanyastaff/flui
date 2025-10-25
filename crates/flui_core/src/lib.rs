@@ -93,6 +93,15 @@ pub mod widget;
 
 // Re-exports
 
+// Derive macros and attributes
+pub use flui_derive::{
+    StatelessWidget as DeriveStatelessWidget,
+    StatefulWidget as DeriveStatefulWidget,
+    InheritedWidget as DeriveInheritedWidget,
+    RenderObjectWidget as DeriveRenderObjectWidget,
+    widget,  // Attribute macro: #[widget]
+};
+
 // Universal Arity system (used across Widget/Element/RenderObject)
 pub use arity::{Arity, LeafArity, SingleArity, MultiArity};
 
@@ -128,12 +137,6 @@ pub use widget::{
     Widget,
     DynWidget,
     BoxedWidget,
-    WidgetKind,
-    ComponentKind,
-    StatefulKind,
-    InheritedKind,
-    ParentDataKind,
-    RenderObjectKind,
     StatelessWidget,
     StatefulWidget,
     Stateful,  // Zero-cost wrapper for StatefulWidget

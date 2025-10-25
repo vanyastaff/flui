@@ -11,6 +11,7 @@ repository.workspace = true
 # Internal dependencies
 flui_types = { path = "../flui_types" }
 flui_engine = { path = "../flui_engine" }
+flui_derive = { path = "../flui_derive" }
 
 # Essential dependencies
 parking_lot.workspace = true

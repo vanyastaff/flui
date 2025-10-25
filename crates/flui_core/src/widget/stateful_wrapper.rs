@@ -1,22 +1,26 @@
 //! Zero-cost wrapper for StatefulWidget
 //!
-//! This module provides the `Stateful<W>` wrapper type that enables
-//! `StatefulWidget` types to implement the `Widget` trait without
-//! conflicting with the blanket impl for `StatelessWidget`.
+//! # DEPRECATED
 //!
-//! # The Problem
+//! This wrapper is no longer necessary with the derive macro approach.
+//! Use `#[derive(StatefulWidget)]` instead.
 //!
-//! Without this wrapper, we cannot have both:
-//! - `impl<T: StatelessWidget> Widget for T`
-//! - `impl<T: StatefulWidget> Widget for T`
+//! This module is kept for backward compatibility but will be removed in a future version.
 //!
-//! These would conflict due to Rust's trait coherence rules.
+//! # Migration
 //!
-//! # The Solution
+//! **Old approach (wrapper):**
+//! ```rust,ignore
+//! let widget = Stateful(Counter { initial: 0 });
+//! ```
 //!
-//! We use a transparent wrapper type that implements `Widget` for
-//! `StatefulWidget` types. Thanks to `#[repr(transparent)]`, this
-//! wrapper has **zero runtime cost**.
+//! **New approach (derive macro):**
+//! ```rust,ignore
+//! #[derive(StatefulWidget, Clone, Debug)]
+//! struct Counter { initial: i32 }
+//! // No wrapper needed!
+//! let widget = Counter { initial: 0 };
+//! ```
 //!
 //! # Example
 //!
@@ -53,7 +57,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use super::{StatefulWidget, Widget, DynWidget, sealed};
+use super::{StatefulWidget, Widget, DynWidget};
 use crate::element::StatefulElement;
 
 /// Zero-cost transparent wrapper for `StatefulWidget`
@@ -153,13 +157,10 @@ impl<W: StatefulWidget> DerefMut for Stateful<W> {
     }
 }
 
-// Sealed trait impl - allows Stateful<W> to implement Widget
-impl<W: StatefulWidget> sealed::Sealed for Stateful<W> {
-    type ElementType = StatefulElement<W>;
-}
-
 // Widget impl for Stateful<W>
 impl<W: StatefulWidget> Widget for Stateful<W> {
+    type Element = StatefulElement<W>;
+
     fn key(&self) -> Option<&str> {
         None
     }

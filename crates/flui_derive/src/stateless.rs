@@ -10,10 +10,17 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     let expanded = quote! {
+
         // Auto-implement Widget trait
         impl #impl_generics ::flui_core::Widget for #name #ty_generics #where_clause {
+            type Element = ::flui_core::element::ComponentElement<Self>;
+
             fn key(&self) -> ::core::option::Option<&str> {
                 ::core::option::Option::None
+            }
+
+            fn into_element(self) -> Self::Element {
+                ::flui_core::element::ComponentElement::new(self)
             }
         }
 
