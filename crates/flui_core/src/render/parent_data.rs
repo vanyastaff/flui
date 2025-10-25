@@ -1,36 +1,37 @@
-//! ParentData - data attached to child elements by their parent
+//! ParentData - layout-specific data attached to children by their parent
 //!
-//! ParentData allows parent RenderObjects to attach layout information to their children.
-//! This is a core concept in the rendering pipeline, enabling parents to store per-child
-//! layout data without maintaining separate data structures.
+//! The ParentData system allows parent RenderObjects to attach metadata to their children
+//! without maintaining separate data structures. This is a core concept in the rendering
+//! pipeline, enabling parents to store per-child layout information efficiently.
 //!
 //! # Architecture
 //!
 //! The `ParentData` trait provides:
-//! - Type-safe downcasting via the `downcast-rs` crate
-//! - Debug formatting for all implementations
-//! - Thread-safe trait objects (`DowncastSync`)
+//! - **Type-safe downcasting** via `downcast-rs` for accessing concrete types
+//! - **Debug formatting** for all implementations
+//! - **Thread safety** (`Send + Sync`) for concurrent rendering
 //!
-//! # Common Implementations
+//! # Common Use Cases
 //!
-//! - `BoxParentData`: Stores offset for positioned children
-//! - `ContainerParentData`: Maintains sibling links for linked lists
-//! - `ContainerBoxParentData`: Combines both offset and sibling information
+//! - **Flex Layouts**: Store flex factor and fit mode for each child
+//! - **Stack Layouts**: Store positioning (top, left, width, height) for each child
+//! - **Offset Storage**: Cache calculated child positions for efficient painting/hit-testing
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use parent_data::{ParentData, BoxParentData};
+//! use flui_core::{ParentData, BoxParentData};
+//! use flui_types::Offset;
 //!
-//! // Create parent data
-//! let mut data = BoxParentData::with_offset(Offset::new(10.0, 20.0));
+//! // Create parent data with offset
+//! let data = BoxParentData::with_offset(Offset::new(10.0, 20.0));
 //!
 //! // Store as trait object
 //! let boxed: Box<dyn ParentData> = Box::new(data);
 //!
 //! // Downcast to access concrete type
 //! if let Some(box_data) = boxed.downcast_ref::<BoxParentData>() {
-//!     println!("Offset: {:?}", box_data.offset);
+//!     println!("Offset: {:?}", box_data.offset());
 //! }
 //! ```
 
@@ -39,17 +40,17 @@ use std::fmt;
 use downcast_rs::{impl_downcast, DowncastSync};
 use flui_types::Offset;
 
-/// ParentData - data that a parent RenderObject can attach to child elements
+/// ParentData - metadata that a parent RenderObject attaches to child elements
 ///
 /// This trait enables parents to store layout-specific information about each child
 /// without maintaining separate data structures. The trait provides type-safe
-/// downcasting capabilities, allowing generic code to work with `dyn ParentData`
-/// while concrete implementations can access their specific data.
+/// downcasting, allowing generic code to work with `dyn ParentData` while concrete
+/// implementations access their specific data.
 ///
 /// # Thread Safety
 ///
 /// All ParentData implementations must be `Send + Sync` to enable concurrent
-/// rendering operations.
+/// rendering operations across threads.
 ///
 /// # Example Implementation
 ///
@@ -65,19 +66,20 @@ use flui_types::Offset;
 /// // Use in layout code:
 /// fn layout_child(parent_data: &dyn ParentData) {
 ///     if let Some(flex_data) = parent_data.downcast_ref::<FlexParentData>() {
-///         // Use flex and fit values
+///         let flex_value = flex_data.flex;
 ///     }
 /// }
 /// ```
 pub trait ParentData: DowncastSync + fmt::Debug {
     /// Try to access this ParentData as ParentDataWithOffset
     ///
-    /// Returns Some if this ParentData implements ParentDataWithOffset,
-    /// None otherwise. This enables generic access to offset data.
+    /// Returns `Some` if this ParentData implements ParentDataWithOffset,
+    /// `None` otherwise. This enables generic access to offset data without
+    /// knowing the concrete type.
     ///
     /// # Default Implementation
     ///
-    /// Returns None. Override in types that implement ParentDataWithOffset.
+    /// Returns `None`. Override in types that implement ParentDataWithOffset.
     fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
         None
     }
@@ -89,13 +91,14 @@ impl_downcast!(sync ParentData);
 /// ParentData with cached offset for efficient hit testing and painting
 ///
 /// This trait is implemented by ParentData types that cache the child's offset
-/// (calculated during layout). This allows hit testing and painting to avoid
-/// recalculating positions.
+/// (calculated during layout). This avoids recalculating positions during
+/// painting and hit testing.
 ///
-/// # Implementations
+/// # Common Implementations
 ///
-/// - `FlexParentData`: Stores offset for Row/Column children
-/// - `StackParentData`: Stores offset for Stack children
+/// - `BoxParentData`: Simple offset storage
+/// - `ContainerBoxParentData`: Offset + sibling links
+/// - Custom layout-specific ParentData types
 ///
 /// # Example
 ///
@@ -103,8 +106,8 @@ impl_downcast!(sync ParentData);
 /// fn hit_test_children(&self, result: &mut HitTestResult, position: Offset, ctx: &RenderContext) -> bool {
 ///     for &child_id in ctx.children().iter().rev() {
 ///         // Read cached offset from ParentData
-///         let local_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
-///             if let Some(data_with_offset) = parent_data.downcast_ref::<dyn ParentDataWithOffset>() {
+///         let child_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
+///             if let Some(data_with_offset) = parent_data.as_parent_data_with_offset() {
 ///                 data_with_offset.offset()
 ///             } else {
 ///                 Offset::ZERO
@@ -113,11 +116,7 @@ impl_downcast!(sync ParentData);
 ///             Offset::ZERO
 ///         };
 ///
-///         let child_position = Offset::new(
-///             position.dx - local_offset.dx,
-///             position.dy - local_offset.dy,
-///         );
-///
+///         let child_position = position - child_offset;
 ///         if ctx.hit_test_child(child_id, result, child_position) {
 ///             return true;
 ///         }
@@ -137,29 +136,123 @@ pub trait ParentDataWithOffset: ParentData {
     fn set_offset(&mut self, offset: Offset);
 }
 
-// Enable downcasting for ParentDataWithOffset trait objects
-impl_downcast!(sync ParentDataWithOffset);
-
 // Implement ParentData for () (unit type) to represent "no parent data"
 //
-// This allows render objects that don't need parent data to use `type ParentData = ()`
+// This allows RenderObjects that don't need parent data to use simple APIs
 // without requiring a dedicated NoParentData type.
 impl ParentData for () {}
 
-/// Container parent data mixin
+/// Box parent data - stores offset for positioned children
 ///
-/// Provides linked list functionality for maintaining sibling relationships.
-/// Used by container render objects that need to traverse their children
-/// efficiently in both directions.
+/// The fundamental ParentData type for box-based layouts. Stores the offset
+/// at which a child should be painted relative to the parent's origin.
 ///
-/// # Type Parameters
+/// # Coordinate System
 ///
-/// - `ChildId`: The type used to identify children (e.g., `NodeId`, `u64`, etc.)
+/// - Origin is at parent's top-left corner
+/// - Positive x moves right, positive y moves down
+/// - Offset is applied during painting, not during layout
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let mut data = ContainerParentData::<u64>::new();
+/// let mut data = BoxParentData::with_offset(Offset::new(10.0, 20.0));
+/// data.set_offset(Offset::new(15.0, 25.0));
+///
+/// // In paint code:
+/// painter.translate(data.offset());
+/// child.paint(painter);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxParentData {
+    /// Offset from parent's origin where this child should be painted
+    offset: Offset,
+}
+
+impl Default for BoxParentData {
+    fn default() -> Self {
+        Self {
+            offset: Offset::ZERO,
+        }
+    }
+}
+
+impl BoxParentData {
+    /// Create new box parent data at the origin (0, 0)
+    pub const fn new() -> Self {
+        Self {
+            offset: Offset::ZERO,
+        }
+    }
+
+    /// Create box parent data with a specific offset
+    pub const fn with_offset(offset: Offset) -> Self {
+        Self { offset }
+    }
+
+    /// Create box parent data with x and y coordinates
+    pub fn with_xy(x: f32, y: f32) -> Self {
+        Self {
+            offset: Offset::new(x, y),
+        }
+    }
+
+    /// Set the offset
+    pub fn set_offset(&mut self, offset: Offset) {
+        self.offset = offset;
+    }
+
+    /// Set the offset using x and y coordinates
+    pub fn set_xy(&mut self, x: f32, y: f32) {
+        self.offset = Offset::new(x, y);
+    }
+
+    /// Move the offset by a delta
+    pub fn translate(&mut self, delta: Offset) {
+        self.offset = self.offset + delta;
+    }
+
+    /// Reset the offset to the origin
+    pub fn reset(&mut self) {
+        self.offset = Offset::ZERO;
+    }
+
+    /// Check if this child is at the origin
+    pub fn is_at_origin(&self) -> bool {
+        self.offset == Offset::ZERO
+    }
+}
+
+impl ParentData for BoxParentData {
+    fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
+        Some(self)
+    }
+}
+
+impl ParentDataWithOffset for BoxParentData {
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+
+    fn set_offset(&mut self, offset: Offset) {
+        self.offset = offset;
+    }
+}
+
+/// Container parent data - sibling links for efficient traversal
+///
+/// Provides linked list functionality for maintaining sibling relationships.
+/// Used by container RenderObjects that need to traverse their children
+/// efficiently in both directions.
+///
+/// # Type Parameters
+///
+/// - `ChildId`: The type used to identify children (typically `ElementId`)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let mut data = ContainerParentData::<ElementId>::new();
 /// data.set_previous_sibling(Some(1));
 /// data.set_next_sibling(Some(3));
 ///
@@ -204,19 +297,11 @@ impl<ChildId> ContainerParentData<ChildId> {
     }
 
     /// Set the previous sibling
-    ///
-    /// # Arguments
-    ///
-    /// * `sibling` - The new previous sibling, or `None` if this is the first child
     pub fn set_previous_sibling(&mut self, sibling: Option<ChildId>) {
         self.previous_sibling = sibling;
     }
 
     /// Set the next sibling
-    ///
-    /// # Arguments
-    ///
-    /// * `sibling` - The new next sibling, or `None` if this is the last child
     pub fn set_next_sibling(&mut self, sibling: Option<ChildId>) {
         self.next_sibling = sibling;
     }
@@ -243,156 +328,41 @@ impl<ChildId> ContainerParentData<ChildId> {
     }
 }
 
-/// Box parent data - used by RenderBox children
+/// Container box parent data - combines offset and sibling links
 ///
-/// Stores the offset at which a child should be painted relative to the parent's origin.
-/// This is the fundamental positioning mechanism for box-based layouts.
-///
-/// # Coordinate System
-///
-/// - Origin is at parent's top-left corner
-/// - Positive x moves right, positive y moves down
-/// - Offset is applied during painting, not during layout
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let mut data = BoxParentData::with_offset(Offset::new(10.0, 20.0));
-/// data.set_offset(Offset::new(15.0, 25.0));
-///
-/// // In paint code:
-/// context.translate(data.offset);
-/// child.paint(context);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BoxParentData {
-    /// Offset from parent's origin where this child should be painted
-    pub offset: crate::Offset,
-}
-
-impl Default for BoxParentData {
-    fn default() -> Self {
-        Self {
-            offset: crate::Offset::ZERO,
-        }
-    }
-}
-
-impl BoxParentData {
-    /// Create new box parent data at the origin (0, 0)
-    pub const fn new() -> Self {
-        Self {
-            offset: crate::Offset::ZERO,
-        }
-    }
-
-    /// Create box parent data with a specific offset
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - The offset from the parent's origin
-    pub const fn with_offset(offset: crate::Offset) -> Self {
-        Self { offset }
-    }
-
-    /// Create box parent data with x and y coordinates
-    ///
-    /// # Arguments
-    ///
-    /// * `x` - Horizontal offset from parent's left edge
-    /// * `y` - Vertical offset from parent's top edge
-    pub fn with_xy(x: f32, y: f32) -> Self {
-        Self {
-            offset: crate::Offset::new(x, y),
-        }
-    }
-
-    /// Set the offset
-    ///
-    /// # Arguments
-    ///
-    /// * `offset` - The new offset from the parent's origin
-    pub fn set_offset(&mut self, offset: crate::Offset) {
-        self.offset = offset;
-    }
-
-    /// Set the offset using x and y coordinates
-    pub fn set_xy(&mut self, x: f32, y: f32) {
-        self.offset = crate::Offset::new(x, y);
-    }
-
-    /// Move the offset by a delta
-    ///
-    /// # Arguments
-    ///
-    /// * `delta` - The offset to add to the current offset
-    pub fn translate(&mut self, delta: crate::Offset) {
-        self.offset = self.offset + delta;
-    }
-
-    /// Reset the offset to the origin
-    pub fn reset(&mut self) {
-        self.offset = crate::Offset::ZERO;
-    }
-
-    /// Check if this child is at the origin
-    pub fn is_at_origin(&self) -> bool {
-        self.offset == crate::Offset::ZERO
-    }
-}
-
-impl ParentData for BoxParentData {
-    fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
-        Some(self)
-    }
-}
-
-// Implement ParentDataWithOffset for BoxParentData
-impl ParentDataWithOffset for BoxParentData {
-    fn offset(&self) -> crate::Offset {
-        self.offset
-    }
-
-    fn set_offset(&mut self, offset: crate::Offset) {
-        self.offset = offset;
-    }
-}
-
-/// Container box parent data - combines container and box parent data
-///
-/// This is the most commonly used parent data type, combining both:
+/// The most commonly used ParentData type, combining both:
 /// - Positioning information (from `BoxParentData`)
 /// - Sibling links (from `ContainerParentData`)
 ///
-/// Used by multi-child render objects like Row, Column, Flex, Wrap, etc.
+/// Used by multi-child RenderObjects like Row, Column, Flex, Wrap, etc.
 ///
 /// # Type Parameters
 ///
-/// - `ChildId`: The type used to identify children
+/// - `ChildId`: The type used to identify children (typically `ElementId`)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let mut data = ContainerBoxParentData::<u64>::new();
+/// let mut data = ContainerBoxParentData::<ElementId>::new();
 ///
 /// // Set positioning
 /// data.set_offset(Offset::new(10.0, 20.0));
 ///
 /// // Set up sibling links
-/// data.container_data.set_previous_sibling(Some(1));
-/// data.container_data.set_next_sibling(Some(3));
+/// data.set_previous_sibling(Some(1));
+/// data.set_next_sibling(Some(3));
 ///
 /// // Access combined data
 /// println!("Offset: {:?}", data.offset());
-/// println!("Has siblings: {}", !data.container_data.is_only());
+/// println!("Has siblings: {}", !data.is_only());
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContainerBoxParentData<ChildId> {
     /// Box parent data (offset)
-    pub box_data: BoxParentData,
+    box_data: BoxParentData,
 
     /// Container parent data (siblings)
-    pub container_data: ContainerParentData<ChildId>,
+    container_data: ContainerParentData<ChildId>,
 }
 
 impl<ChildId> Default for ContainerBoxParentData<ChildId> {
@@ -411,7 +381,7 @@ impl<ChildId> ContainerBoxParentData<ChildId> {
     }
 
     /// Create container box parent data with a specific offset
-    pub fn with_offset(offset: crate::Offset) -> Self {
+    pub fn with_offset(offset: Offset) -> Self {
         Self {
             box_data: BoxParentData::with_offset(offset),
             container_data: ContainerParentData::default(),
@@ -420,7 +390,7 @@ impl<ChildId> ContainerBoxParentData<ChildId> {
 
     /// Create container box parent data with offset and siblings
     pub fn with_offset_and_siblings(
-        offset: crate::Offset,
+        offset: Offset,
         previous: Option<ChildId>,
         next: Option<ChildId>,
     ) -> Self {
@@ -431,12 +401,12 @@ impl<ChildId> ContainerBoxParentData<ChildId> {
     }
 
     /// Get the offset
-    pub fn offset(&self) -> crate::Offset {
+    pub fn offset(&self) -> Offset {
         self.box_data.offset
     }
 
     /// Set the offset
-    pub fn set_offset(&mut self, offset: crate::Offset) {
+    pub fn set_offset(&mut self, offset: Offset) {
         self.box_data.set_offset(offset);
     }
 
@@ -446,7 +416,7 @@ impl<ChildId> ContainerBoxParentData<ChildId> {
     }
 
     /// Move the offset by a delta
-    pub fn translate(&mut self, delta: crate::Offset) {
+    pub fn translate(&mut self, delta: Offset) {
         self.box_data.translate(delta);
     }
 
@@ -510,17 +480,15 @@ where
     }
 }
 
-// Implement ParentDataWithOffset for ContainerBoxParentData
-// Delegates to the internal BoxParentData
 impl<ChildId> ParentDataWithOffset for ContainerBoxParentData<ChildId>
 where
     ChildId: fmt::Debug + Send + Sync + 'static
 {
-    fn offset(&self) -> crate::Offset {
+    fn offset(&self) -> Offset {
         self.box_data.offset
     }
 
-    fn set_offset(&mut self, offset: crate::Offset) {
+    fn set_offset(&mut self, offset: Offset) {
         self.box_data.offset = offset;
     }
 }
@@ -530,10 +498,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_box_parent_data_new() {
+        let data = BoxParentData::new();
+        assert_eq!(data.offset(), Offset::ZERO);
+        assert!(data.is_at_origin());
+    }
+
+    #[test]
+    fn test_box_parent_data_with_offset() {
+        let offset = Offset::new(10.0, 20.0);
+        let data = BoxParentData::with_offset(offset);
+        assert_eq!(data.offset(), offset);
+        assert!(!data.is_at_origin());
+    }
+
+    #[test]
+    fn test_box_parent_data_with_xy() {
+        let data = BoxParentData::with_xy(15.0, 25.0);
+        assert_eq!(data.offset(), Offset::new(15.0, 25.0));
+    }
+
+    #[test]
+    fn test_box_parent_data_set_offset() {
+        let mut data = BoxParentData::new();
+        let offset = Offset::new(5.0, 15.0);
+        data.set_offset(offset);
+        assert_eq!(data.offset(), offset);
+    }
+
+    #[test]
+    fn test_box_parent_data_translate() {
+        let mut data = BoxParentData::with_xy(10.0, 20.0);
+        data.translate(Offset::new(5.0, 10.0));
+        assert_eq!(data.offset(), Offset::new(15.0, 30.0));
+    }
+
+    #[test]
+    fn test_box_parent_data_downcast() {
+        let data = BoxParentData::new();
+        let boxed: Box<dyn ParentData> = Box::new(data);
+
+        assert!(boxed.is::<BoxParentData>());
+        let downcasted = boxed.downcast_ref::<BoxParentData>().unwrap();
+        assert_eq!(downcasted.offset(), Offset::ZERO);
+    }
+
+    #[test]
     fn test_container_parent_data_new() {
         let data: ContainerParentData<u64> = ContainerParentData::new();
-        assert_eq!(data.previous_sibling, None);
-        assert_eq!(data.next_sibling, None);
         assert!(data.is_only());
     }
 
@@ -547,149 +559,21 @@ mod tests {
     }
 
     #[test]
-    fn test_container_parent_data_siblings() {
-        let mut data = ContainerParentData::new();
-        data.set_previous_sibling(Some(1u64));
-        data.set_next_sibling(Some(2u64));
-
-        assert_eq!(data.previous_sibling, Some(1));
-        assert_eq!(data.next_sibling, Some(2));
-        assert!(!data.is_only());
-    }
-
-    #[test]
-    fn test_container_parent_data_clear_siblings() {
-        let mut data = ContainerParentData::with_siblings(Some(1u64), Some(2u64));
-        data.clear_siblings();
-
-        assert_eq!(data.previous_sibling, None);
-        assert_eq!(data.next_sibling, None);
-        assert!(data.is_only());
-    }
-
-    #[test]
-    fn test_container_parent_data_is_first() {
-        let mut data = ContainerParentData::new();
-        assert!(data.is_first());
-
-        data.set_previous_sibling(Some(1u64));
-        assert!(!data.is_first());
-    }
-
-    #[test]
-    fn test_container_parent_data_is_last() {
-        let mut data = ContainerParentData::new();
-        assert!(data.is_last());
-
-        data.set_next_sibling(Some(1u64));
-        assert!(!data.is_last());
-    }
-
-    #[test]
-    fn test_box_parent_data_default() {
-        let data = BoxParentData::default();
-        assert_eq!(data.offset, crate::Offset::ZERO);
-        assert!(data.is_at_origin());
-    }
-
-    #[test]
-    fn test_box_parent_data_with_offset() {
-        let offset = crate::Offset::new(10.0, 20.0);
-        let data = BoxParentData::with_offset(offset);
-
-        assert_eq!(data.offset, offset);
-        assert!(!data.is_at_origin());
-    }
-
-    #[test]
-    fn test_box_parent_data_with_xy() {
-        let data = BoxParentData::with_xy(15.0, 25.0);
-        assert_eq!(data.offset, crate::Offset::new(15.0, 25.0));
-    }
-
-    #[test]
-    fn test_box_parent_data_set_offset() {
-        let mut data = BoxParentData::new();
-        let offset = crate::Offset::new(5.0, 15.0);
-
-        data.set_offset(offset);
-        assert_eq!(data.offset, offset);
-    }
-
-    #[test]
-    fn test_box_parent_data_set_xy() {
-        let mut data = BoxParentData::new();
-        data.set_xy(30.0, 40.0);
-        assert_eq!(data.offset, crate::Offset::new(30.0, 40.0));
-    }
-
-    #[test]
-    fn test_box_parent_data_translate() {
-        let mut data = BoxParentData::with_xy(10.0, 20.0);
-        data.translate(crate::Offset::new(5.0, 10.0));
-        assert_eq!(data.offset, crate::Offset::new(15.0, 30.0));
-    }
-
-    #[test]
-    fn test_box_parent_data_reset() {
-        let mut data = BoxParentData::with_xy(10.0, 20.0);
-        data.reset();
-        assert_eq!(data.offset, crate::Offset::ZERO);
-        assert!(data.is_at_origin());
-    }
-
-    #[test]
-    fn test_box_parent_data_downcast() {
-        let data = BoxParentData::new();
-        let boxed: Box<dyn ParentData> = Box::new(data);
-
-        // Test is() check
-        assert!(boxed.is::<BoxParentData>());
-        assert!(!boxed.is::<ContainerParentData<u64>>());
-
-        // Test downcast_ref
-        let downcasted = boxed.downcast_ref::<BoxParentData>().unwrap();
-        assert_eq!(downcasted.offset, crate::Offset::ZERO);
-    }
-
-    #[test]
     fn test_container_box_parent_data_new() {
         let data: ContainerBoxParentData<u64> = ContainerBoxParentData::new();
-        assert_eq!(data.offset(), crate::Offset::ZERO);
-        assert_eq!(data.previous_sibling(), None);
-        assert_eq!(data.next_sibling(), None);
+        assert_eq!(data.offset(), Offset::ZERO);
         assert!(data.is_only());
         assert!(data.is_at_origin());
-    }
-
-    #[test]
-    fn test_container_box_parent_data_with_offset() {
-        let offset = crate::Offset::new(50.0, 100.0);
-        let data: ContainerBoxParentData<u64> = ContainerBoxParentData::with_offset(offset);
-        assert_eq!(data.offset(), offset);
-        assert!(data.is_only());
-    }
-
-    #[test]
-    fn test_container_box_parent_data_with_offset_and_siblings() {
-        let offset = crate::Offset::new(10.0, 20.0);
-        let data = ContainerBoxParentData::with_offset_and_siblings(offset, Some(1u64), Some(2u64));
-
-        assert_eq!(data.offset(), offset);
-        assert_eq!(data.previous_sibling(), Some(&1));
-        assert_eq!(data.next_sibling(), Some(&2));
-        assert!(!data.is_only());
     }
 
     #[test]
     fn test_container_box_parent_data_full() {
         let mut data = ContainerBoxParentData::new();
-
-        data.set_offset(crate::Offset::new(100.0, 200.0));
+        data.set_offset(Offset::new(100.0, 200.0));
         data.set_previous_sibling(Some(10u64));
         data.set_next_sibling(Some(20u64));
 
-        assert_eq!(data.offset(), crate::Offset::new(100.0, 200.0));
+        assert_eq!(data.offset(), Offset::new(100.0, 200.0));
         assert_eq!(data.previous_sibling(), Some(&10));
         assert_eq!(data.next_sibling(), Some(&20));
         assert!(!data.is_first());
@@ -697,105 +581,9 @@ mod tests {
     }
 
     #[test]
-    fn test_container_box_parent_data_translate() {
-        let mut data = ContainerBoxParentData::with_offset(crate::Offset::new(10.0, 20.0));
-        data.translate(crate::Offset::new(5.0, 10.0));
-        assert_eq!(data.offset(), crate::Offset::new(15.0, 30.0));
-    }
-
-    #[test]
-    fn test_container_box_parent_data_reset() {
-        let mut data = ContainerBoxParentData::with_offset(crate::Offset::new(50.0, 75.0));
-        data.reset_offset();
-        assert_eq!(data.offset(), crate::Offset::ZERO);
-        assert!(data.is_at_origin());
-    }
-
-    #[test]
-    fn test_container_box_parent_data_clear_siblings() {
-        let mut data = ContainerBoxParentData::with_offset_and_siblings(
-            crate::Offset::ZERO,
-            Some(1u64),
-            Some(2u64),
-        );
-
-        data.clear_siblings();
-        assert!(data.is_only());
-    }
-
-    #[test]
-    fn test_parent_data_downcast_mut() {
-        let data = BoxParentData::new();
-        let mut boxed: Box<dyn ParentData> = Box::new(data);
-
-        // Test downcast_mut
-        let downcasted = boxed.downcast_mut::<BoxParentData>().unwrap();
-        downcasted.set_offset(crate::Offset::new(50.0, 75.0));
-
-        assert_eq!(
-            boxed.downcast_ref::<BoxParentData>().unwrap().offset,
-            crate::Offset::new(50.0, 75.0)
-        );
-    }
-
-    #[test]
-    fn test_parent_data_downcast_owned() {
-        let mut data = BoxParentData::new();
-        data.set_offset(crate::Offset::new(10.0, 20.0));
-
-        let boxed: Box<dyn ParentData> = Box::new(data);
-
-        // Consume and downcast
-        let owned: Box<BoxParentData> = boxed.downcast().ok().unwrap();
-        assert_eq!(owned.offset, crate::Offset::new(10.0, 20.0));
-    }
-
-    #[test]
     fn test_unit_parent_data() {
         let data = ();
         let boxed: Box<dyn ParentData> = Box::new(data);
         assert!(boxed.is::<()>());
-    }
-
-    #[test]
-    fn test_container_box_parent_data_as_trait_object() {
-        let data = ContainerBoxParentData::<u64>::with_offset(crate::Offset::new(10.0, 20.0));
-        let boxed: Box<dyn ParentData> = Box::new(data);
-
-        assert!(boxed.is::<ContainerBoxParentData<u64>>());
-        let downcasted = boxed.downcast_ref::<ContainerBoxParentData<u64>>().unwrap();
-        assert_eq!(downcasted.offset(), crate::Offset::new(10.0, 20.0));
-    }
-
-    #[test]
-    fn test_container_parent_data_equality() {
-        let data1 = ContainerParentData::with_siblings(Some(1u64), Some(2u64));
-        let data2 = ContainerParentData::with_siblings(Some(1u64), Some(2u64));
-        let data3 = ContainerParentData::with_siblings(Some(2u64), Some(3u64));
-
-        assert_eq!(data1, data2);
-        assert_ne!(data1, data3);
-    }
-
-    #[test]
-    fn test_container_box_parent_data_equality() {
-        let data1 = ContainerBoxParentData::with_offset_and_siblings(
-            crate::Offset::new(10.0, 20.0),
-            Some(1u64),
-            Some(2u64),
-        );
-        let data2 = ContainerBoxParentData::with_offset_and_siblings(
-            crate::Offset::new(10.0, 20.0),
-            Some(1u64),
-            Some(2u64),
-        );
-        let data3 = ContainerBoxParentData::with_offset_and_siblings(
-            crate::Offset::new(15.0, 25.0),
-            Some(1u64),
-            Some(2u64),
-        );
-
-        assert_eq!(data1, data2);
-        assert_ne!(data1, data3);
     }
 }

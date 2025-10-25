@@ -242,8 +242,7 @@ impl DynRenderObject for RenderParagraph {
         }
     }
 
-    // Delegate all other methods to the mixin
-    delegate_to_mixin!();
+
 }
 
 // ===== Tests =====

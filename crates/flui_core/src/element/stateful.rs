@@ -1,83 +1,138 @@
 //! StatefulElement for StatefulWidget
+//!
+//! This element type is created by StatefulWidget and manages a State object
+//! that persists across rebuilds.
 
 use std::fmt;
-use std::sync::Arc;
 
-use parking_lot::RwLock;
+use crate::{ElementId, StatefulWidget, State, DynWidget, BoxedWidget};
+use super::dyn_element::{DynElement, ElementLifecycle};
 
-use crate::{ElementId, StatefulWidget, State, StateLifecycle, Context};
-use crate::tree::ElementTree;
-use super::{DynElement, Element, ElementLifecycle};
-use crate::DynWidget;
-use crate::foundation::Key;
-
-/// Element for StatefulWidget (holds State that persists across rebuilds)
-pub struct StatefulElement<W: StatefulWidget> {    parent: Option<ElementId>,
-    dirty: bool,
-    lifecycle: ElementLifecycle,
-    /// State lifecycle tracking
-    state_lifecycle: StateLifecycle,
+/// Element for StatefulWidget
+///
+/// StatefulElement holds both the widget (immutable config) and a State object
+/// (mutable state). When the widget is updated, the State persists and
+/// `did_update_widget()` is called. When dirty, it rebuilds by calling `build()`
+/// on the State object.
+///
+/// # Architecture
+///
+/// ```text
+/// StatefulElement<StatefulWidget>
+///   ├─ widget: W (immutable config, recreated on update)
+///   ├─ state: W::State (mutable state, persists across rebuilds)
+///   ├─ child: Option<ElementId> (single child from State.build())
+///   └─ lifecycle state
+/// ```
+///
+/// # Lifecycle
+///
+/// 1. **create_state()** - Widget creates State object
+/// 2. **mount()** - Element mounted to tree
+/// 3. **init_state()** - State initialization
+/// 4. **build()** - State builds child widget tree
+/// 5. **did_update_widget()** - Widget config changes
+/// 6. **dispose()** - State cleanup
+pub struct StatefulElement<W: StatefulWidget> {
+    /// The widget this element represents
     widget: W,
-    state: Box<W::State>,
+
+    /// The state object created by the widget
+    state: W::State,
+
+    /// Parent element ID
+    parent: Option<ElementId>,
+
+    /// Child element created by State.build()
     child: Option<ElementId>,
-    tree: Option<Arc<RwLock<ElementTree>>>,
+
+    /// Slot position in parent's child list
+    slot: usize,
+
+    /// Lifecycle state
+    lifecycle: ElementLifecycle,
+
+    /// Dirty flag (needs rebuild)
+    dirty: bool,
+
+    /// Whether init_state has been called
+    initialized: bool,
 }
 
 impl<W: StatefulWidget> StatefulElement<W> {
-    /// Create new stateful element with widget and state
-    ///
-    /// Note: ID is initially 0 and will be set by ElementTree when inserted
+    /// Create a new StatefulElement from a widget
     pub fn new(widget: W) -> Self {
         let state = widget.create_state();
-        Self {            parent: None,
-            dirty: true,
-            lifecycle: ElementLifecycle::Initial,
-            state_lifecycle: StateLifecycle::Created,
+
+        Self {
             widget,
-            state: Box::new(state),
+            state,
+            parent: None,
             child: None,
-            tree: None,
+            slot: 0,
+            lifecycle: ElementLifecycle::Initial,
+            dirty: true,
+            initialized: false,
         }
     }
 
-    /// Get state lifecycle
-    pub fn state_lifecycle(&self) -> StateLifecycle {
-        self.state_lifecycle
+    /// Get reference to the widget
+    pub fn widget(&self) -> &W {
+        &self.widget
     }
 
-    /// Set tree reference (test helper)
-    #[cfg(test)]
-    pub(crate) fn set_tree(&mut self, tree: Arc<RwLock<ElementTree>>) {
-        self.tree = Some(tree);
+    /// Get reference to the state
+    pub fn state(&self) -> &W::State {
+        &self.state
     }
 
-    /// Set child element ID
+    /// Get mutable reference to the state
+    pub fn state_mut(&mut self) -> &mut W::State {
+        &mut self.state
+    }
+
+    /// Update with a new widget
+    pub fn update(&mut self, new_widget: W) {
+        let _old_widget = std::mem::replace(&mut self.widget, new_widget);
+
+        // Call did_update_widget on the state
+        self.state.did_update_widget(&self.widget);
+
+        // Mark as dirty to trigger rebuild
+        self.dirty = true;
+    }
+
+    /// Perform rebuild
+    ///
+    /// Calls build() on the state and returns the child widget that needs
+    /// to be mounted.
+    ///
+    /// Returns: Vec<(parent_id, child_widget, slot)>
+    fn perform_rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+        if !self.dirty {
+            return Vec::new();
+        }
+
+        self.dirty = false;
+
+        // Call build() on the state to get child widget
+        let child_widget = self.state.build();
+
+        // Clear old child (will be unmounted by caller if needed)
+        self.child = None;
+
+        // Return the child that needs to be mounted
+        vec![(element_id, child_widget, 0)]
+    }
+
+    /// Set the child element ID after it's been mounted
     pub(crate) fn set_child(&mut self, child_id: ElementId) {
         self.child = Some(child_id);
     }
 
-    /// Get child element ID (test helper)
-    #[cfg(test)]
-    pub(crate) fn child(&self) -> Option<ElementId> {
+    /// Get child ID
+    pub fn child(&self) -> Option<ElementId> {
         self.child
-    }
-
-    /// Take old child ID
-    pub(crate) fn take_old_child(&mut self) -> Option<ElementId> {
-        self.child.take()
-    }
-
-    /// Reassemble the element (hot reload support)
-    ///
-    /// Called during hot reload to give the state a chance to reinitialize.
-    /// This is a enhancement for development workflows.
-    ///
-    /// 
-    ///
-    /// Enables hot reload support by calling reassemble() on the state.
-    pub fn reassemble(&mut self) {
-        self.state.reassemble();
-        self.dirty = true;
     }
 }
 
@@ -85,112 +140,73 @@ impl<W: StatefulWidget> fmt::Debug for StatefulElement<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StatefulElement")
             .field("widget_type", &std::any::type_name::<W>())
+            .field("state_type", &std::any::type_name::<W::State>())
             .field("parent", &self.parent)
+            .field("child", &self.child)
             .field("dirty", &self.dirty)
             .field("lifecycle", &self.lifecycle)
-            .field("state_lifecycle", &self.state_lifecycle)
-            .field("child", &self.child)
+            .field("initialized", &self.initialized)
             .finish()
     }
 }
 
-// ========== Implement DynElement for StatefulElement ==========
+// ========== Implement DynElement ==========
 
-impl<W> DynElement for StatefulElement<W>
-where
-    W: StatefulWidget + crate::Widget<Element = StatefulElement<W>>,
-{    fn parent(&self) -> Option<ElementId> {
+impl<W: StatefulWidget + DynWidget> DynElement for StatefulElement<W> {
+    fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
-    fn key(&self) -> Option<&dyn Key> {
-        DynWidget::key(&self.widget)
+    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        Box::new(self.child.into_iter())
     }
 
-    fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
+    fn lifecycle(&self) -> ElementLifecycle {
+        self.lifecycle
+    }
+
+    fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
         self.parent = parent;
+        self.slot = slot;
         self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true;
 
-        // Validate state lifecycle
-        assert_eq!(
-            self.state_lifecycle,
-            StateLifecycle::Created,
-            "State must be Created before mount"
-        );
+        // Call init_state on first mount
+        if !self.initialized {
+            self.state.init_state();
+            self.initialized = true;
+        }
 
-        // Call init_state() on first mount
-        self.state.init_state();
-        self.state_lifecycle = StateLifecycle::Initialized;
-
-        // Call did_change_dependencies() after init_state()
-        self.state.did_change_dependencies();
-        self.state_lifecycle = StateLifecycle::Ready;
+        self.dirty = true; // Will rebuild on first frame
     }
 
     fn unmount(&mut self) {
         self.lifecycle = ElementLifecycle::Defunct;
 
-        // Validate state is mounted
-        assert!(
-            self.state_lifecycle.is_mounted(),
-            "State must be mounted before unmount"
-        );
-
-        // Call deactivate() before cleanup
-        self.state.deactivate();
-
-        // Unmount child first
-        if let Some(child_id) = self.child.take() {
-            if let Some(tree) = &self.tree {
-                tree.write().remove(child_id);
-            }
-        }
-
-        // Call dispose() after deactivate()
+        // Call dispose on state
         self.state.dispose();
-        self.state_lifecycle = StateLifecycle::Defunct;
+
+        // Child will be unmounted by ElementTree
+        self.child = None;
+    }
+
+    fn deactivate(&mut self) {
+        self.lifecycle = ElementLifecycle::Inactive;
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = ElementLifecycle::Active;
+        self.dirty = true; // Rebuild when reactivated
+    }
+
+    fn widget(&self) -> &dyn DynWidget {
+        &self.widget
     }
 
     fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
         // Try to downcast to our widget type
         if let Ok(widget) = new_widget.downcast::<W>() {
-            // Store old widget for did_update_widget
-            let old_widget = std::mem::replace(&mut self.widget, *widget);
-
-            // Call did_update_widget() on state
-            self.state.did_update_widget(&old_widget);
-
-            self.dirty = true;
+            self.update(*widget);
         }
-    }
-
-    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
-        if !self.dirty {
-            return Vec::new();
-        }
-
-        // Validate state can build
-        assert!(
-            self.state_lifecycle.can_build(),
-            "State must be Ready to build, current: {:?}",
-            self.state_lifecycle
-        );
-        self.dirty = false;
-
-        // Call build() on state
-        if let Some(tree) = &self.tree {
-            let context = Context::new(tree.clone(), element_id);
-            let child_widget = self.state.build(&context);
-
-            // Mark old child for unmounting
-            self.child = None;
-
-            // Return child to mount
-            return vec![(element_id, child_widget, 0)];
-        }
-
-        Vec::new()
     }
 
     fn is_dirty(&self) -> bool {
@@ -201,72 +217,8 @@ where
         self.dirty = true;
     }
 
-    fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
-        // Call state's deactivate for State lifecycle
-        self.state.deactivate();
-        // Note: child stays attached but inactive
-        // Will be unmounted if not reactivated before frame end
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        // Call state's activate for State lifecycle
-        self.state.activate();
-        // Element is being reinserted into tree (GlobalKey reparenting)
-        self.dirty = true; // Mark for rebuild in new location
-    }
-
-    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
-        Box::new(self.child.into_iter())
-    }
-
-    fn set_tree_ref(&mut self, tree: Arc<RwLock<ElementTree>>) {
-        self.tree = Some(tree);
-    }
-
-    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
-        self.take_old_child()
-    }
-
-    fn set_child_after_mount(&mut self, child_id: ElementId) {
-        self.set_child(child_id)
-    }
-
-    fn widget_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<W>()
-    }
-
-    fn widget(&self) -> &dyn crate::DynWidget {
-        &self.widget
-    }
-
-    fn state(&self) -> Option<&dyn crate::State> {
-        Some(self.state.as_ref())
-    }
-
-    fn state_mut(&mut self) -> Option<&mut dyn crate::State> {
-        Some(self.state.as_mut())
-    }
-
-    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
-        None // StatefulElement doesn't have RenderObject
-    }
-
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
-        None // StatefulElement doesn't have RenderObject
-    }
-
-    fn did_change_dependencies(&mut self) {
-        self.state.did_change_dependencies();
-    }
-
-    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
-        // Default: do nothing (single child)
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+        self.perform_rebuild(element_id)
     }
 
     fn forget_child(&mut self, child_id: ElementId) {
@@ -275,35 +227,125 @@ where
         }
     }
 
-    /// Override reassemble for hot reload support
-    ///
-    /// Calls state.reassemble() and marks element dirty for rebuild.
-    fn reassemble(&mut self) {
-        self.state.reassemble();
-        self.dirty = true;
+    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+        // Single child, slot is always 0
     }
 }
 
-// ========== Implement Element for StatefulElement (with associated types) ==========
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl<W> Element for StatefulElement<W>
-where
-    W: StatefulWidget + crate::Widget<Element = StatefulElement<W>>,
-{
-    type Widget = W;
-
-    fn update(&mut self, new_widget: W) {
-        // Zero-cost! No downcast needed!
-        // Store old widget for did_update_widget
-        let old_widget = std::mem::replace(&mut self.widget, new_widget);
-
-        // Call did_update_widget() on state
-        self.state.did_update_widget(&old_widget);
-
-        self.dirty = true;
+    #[derive(Debug, Clone)]
+    struct CounterWidget {
+        initial: i32,
     }
 
-    fn widget(&self) -> &W {
-        &self.widget
+    impl StatefulWidget for CounterWidget {
+        type State = CounterState;
+
+        fn create_state(&self) -> Self::State {
+            CounterState {
+                count: self.initial,
+                init_called: false,
+                dispose_called: false,
+            }
+        }
+    }
+
+    // Use macro to implement Widget + DynWidget
+    crate::impl_widget_for_stateful!(CounterWidget);
+
+    #[derive(Debug)]
+    struct CounterState {
+        count: i32,
+        init_called: bool,
+        dispose_called: bool,
+    }
+
+    impl State for CounterState {
+        type Widget = CounterWidget;
+
+        fn build(&mut self) -> BoxedWidget {
+            // Return a simple widget for testing
+            Box::new(CounterWidget { initial: self.count + 1 })
+        }
+
+        fn init_state(&mut self) {
+            self.init_called = true;
+        }
+
+        fn did_update_widget(&mut self, new_widget: &CounterWidget) {
+            // Update state based on new widget
+            if new_widget.initial != self.count {
+                self.count = new_widget.initial;
+            }
+        }
+
+        fn dispose(&mut self) {
+            self.dispose_called = true;
+        }
+    }
+
+    #[test]
+    fn test_stateful_element_creation() {
+        let widget = CounterWidget { initial: 42 };
+        let element = StatefulElement::new(widget);
+
+        assert_eq!(element.state().count, 42);
+        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
+        assert!(element.is_dirty());
+        assert!(!element.state().init_called);
+    }
+
+    #[test]
+    fn test_stateful_element_mount() {
+        let widget = CounterWidget { initial: 42 };
+        let mut element = StatefulElement::new(widget);
+
+        element.mount(Some(0), 0);
+
+        assert_eq!(element.parent(), Some(0));
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+        assert!(element.state().init_called); // init_state should be called
+    }
+
+    #[test]
+    fn test_stateful_element_update() {
+        let widget = CounterWidget { initial: 42 };
+        let mut element = StatefulElement::new(widget);
+        element.mount(Some(0), 0);
+
+        // Update with new widget
+        element.update(CounterWidget { initial: 100 });
+
+        assert_eq!(element.widget().initial, 100);
+        assert_eq!(element.state().count, 100); // State should be updated via did_update_widget
+        assert!(element.is_dirty());
+    }
+
+    #[test]
+    fn test_stateful_element_rebuild() {
+        let widget = CounterWidget { initial: 42 };
+        let mut element = StatefulElement::new(widget);
+        element.mount(Some(0), 0);
+
+        let children = element.rebuild(1);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].0, 1); // parent_id
+        assert!(!element.is_dirty()); // Should be clean after rebuild
+    }
+
+    #[test]
+    fn test_stateful_element_dispose() {
+        let widget = CounterWidget { initial: 42 };
+        let mut element = StatefulElement::new(widget);
+        element.mount(Some(0), 0);
+
+        element.unmount();
+
+        assert_eq!(element.lifecycle(), ElementLifecycle::Defunct);
+        assert!(element.state().dispose_called); // dispose should be called
     }
 }

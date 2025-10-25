@@ -1,0 +1,181 @@
+//! StatefulWidget - widgets with mutable state
+//!
+//! The widget itself is immutable, but it creates a State object that can be mutated.
+
+use std::fmt;
+
+use super::BoxedWidget;
+
+/// StatefulWidget - widget with mutable state
+///
+/// The widget itself is immutable, but it creates a State object that can be mutated.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_core::{StatefulWidget, State, BoxedWidget, impl_widget_for_stateful};
+///
+/// #[derive(Debug, Clone)]
+/// struct Counter {
+///     initial_value: i32,
+/// }
+///
+/// impl StatefulWidget for Counter {
+///     type State = CounterState;
+///
+///     fn create_state(&self) -> Self::State {
+///         CounterState {
+///             count: self.initial_value,
+///         }
+///     }
+/// }
+///
+/// // Use macro to implement Widget + DynWidget
+/// impl_widget_for_stateful!(Counter);
+///
+/// #[derive(Debug)]
+/// struct CounterState {
+///     count: i32,
+/// }
+///
+/// impl State for CounterState {
+///     type Widget = Counter;
+///
+///     fn build(&mut self) -> BoxedWidget {
+///         Box::new(Text::new(format!("Count: {}", self.count)))
+///     }
+///
+///     fn init_state(&mut self) {
+///         println!("Counter initialized with: {}", self.count);
+///     }
+/// }
+/// ```
+pub trait StatefulWidget: fmt::Debug + Clone + Send + Sync + 'static {
+    /// Associated State type
+    type State: State<Widget = Self>;
+
+    /// Create the state object
+    ///
+    /// Called once when the element is first mounted.
+    fn create_state(&self) -> Self::State;
+}
+
+/// State - mutable state for StatefulWidget
+///
+/// The state object persists across rebuilds, while the widget is recreated.
+///
+/// # Lifecycle
+///
+/// 1. **create_state()** - State created
+/// 2. **init_state()** - Called once when mounted
+/// 3. **build()** - Called to build widget tree (can be called multiple times)
+/// 4. **did_update_widget()** - Called when widget configuration changes
+/// 5. **dispose()** - Called when state is permanently removed
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_core::{State, BoxedWidget};
+///
+/// #[derive(Debug)]
+/// struct CounterState {
+///     count: i32,
+/// }
+///
+/// impl State for CounterState {
+///     type Widget = Counter;
+///
+///     fn build(&mut self) -> BoxedWidget {
+///         Box::new(Text::new(format!("Count: {}", self.count)))
+///     }
+///
+///     fn init_state(&mut self) {
+///         // Initialize resources, subscribe to streams, etc.
+///         println!("Counter initialized");
+///     }
+///
+///     fn did_update_widget(&mut self, new_widget: &Counter) {
+///         // React to widget configuration changes
+///         if new_widget.initial_value != self.count {
+///             self.count = new_widget.initial_value;
+///         }
+///     }
+///
+///     fn dispose(&mut self) {
+///         // Clean up resources, unsubscribe, etc.
+///         println!("Counter disposed");
+///     }
+/// }
+/// ```
+pub trait State: fmt::Debug + Send + Sync + 'static {
+    /// The widget type this state is for
+    type Widget: StatefulWidget;
+
+    /// Build the widget tree
+    ///
+    /// Called whenever the state needs to rebuild. Should return the root widget
+    /// of the child tree.
+    fn build(&mut self) -> BoxedWidget;
+
+    /// Called when state is first created and mounted
+    ///
+    /// Use this for initialization that depends on being in the tree.
+    /// Examples: subscribing to streams, starting timers, etc.
+    fn init_state(&mut self) {}
+
+    /// Called when widget configuration changes
+    ///
+    /// The new widget is provided for comparison. Use this to update state
+    /// based on new widget properties.
+    fn did_update_widget(&mut self, _new_widget: &Self::Widget) {}
+
+    /// Called when state is permanently removed from tree
+    ///
+    /// Use this for cleanup like canceling timers, unsubscribing from streams,
+    /// closing connections, etc.
+    fn dispose(&mut self) {}
+}
+
+/// Macro to implement Widget + DynWidget for StatefulWidget types
+///
+/// Due to Rust's trait coherence rules, we cannot have overlapping blanket impls
+/// for StatelessWidget and StatefulWidget. Use this macro for StatefulWidget.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// #[derive(Debug, Clone)]
+/// struct Counter { initial: i32 }
+///
+/// impl StatefulWidget for Counter {
+///     type State = CounterState;
+///     fn create_state(&self) -> Self::State {
+///         CounterState { count: self.initial }
+///     }
+/// }
+///
+/// // Use the macro to implement Widget + DynWidget
+/// impl_widget_for_stateful!(Counter);
+/// ```
+#[macro_export]
+macro_rules! impl_widget_for_stateful {
+    ($widget_type:ty) => {
+        impl $crate::Widget for $widget_type {
+            type Kind = $crate::StatefulKind;
+
+            fn key(&self) -> Option<&str> {
+                None
+            }
+        }
+
+        impl $crate::DynWidget for $widget_type {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+    };
+}

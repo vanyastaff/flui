@@ -1,8 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(timeout 2 cargo run:*)",
-      "Bash(git add crates/flui_core/src/element/render/multi.rs crates/flui_core/src/foundation/mod.rs)"
+      "Bash(git commit:*)",
+      "Bash(timeout 10 cargo run:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build)",
+      "Bash(tokei src --type rust)",
+      "Bash(cargo clippy --all-targets)",
+      "Bash(cargo new flui_derive --lib)",
+      "Bash(cargo build -p flui_core --lib)"
     ],
     "deny": [],
     "ask": []

@@ -1,0 +1,25 @@
+[package]
+name = "flui_engine"
+version = "0.1.0"
+edition = "2021"
+authors = ["FLUI Team"]
+description = "Rendering engine for FLUI - Layer, Scene, Painter, Compositor"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["egui"]
+egui = ["dep:egui"]
+wgpu = ["dep:wgpu"]
+skia = ["dep:skia-safe"]
+
+[dependencies]
+# Internal dependencies
+flui_types = { path = "../flui_types" }
+
+# Optional backend implementations
+egui = { version = "0.33", optional = true }
+wgpu = { version = "22", optional = true }
+skia-safe = { version = "0.78", optional = true }
+
+[dev-dependencies]
+eframe = { version = "0.33", optional = false }

@@ -17,6 +17,7 @@ impl StatelessWidget for FlexLayoutExample {
                         Container::builder()
                             .color(Color::rgb(255, 0, 0))
                             .height(100.0)
+                            .child(Text::new("Red"))
                             .build()
                     )
                 ),
@@ -25,6 +26,7 @@ impl StatelessWidget for FlexLayoutExample {
                         Container::builder()
                             .color(Color::rgb(0, 255, 0))
                             .height(100.0)
+                            .child(Text::new("Green"))
                             .build()
                     )
                 ),
@@ -33,6 +35,7 @@ impl StatelessWidget for FlexLayoutExample {
                         Container::builder()
                             .color(Color::rgb(0, 0, 255))
                             .height(100.0)
+                            .child(Text::new("Blue"))
                             .build()
                     )
                 ),

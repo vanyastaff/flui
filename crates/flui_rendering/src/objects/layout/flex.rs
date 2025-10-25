@@ -115,6 +115,8 @@ impl DynRenderObject for RenderFlex {
         let children_ids = ctx.children();
         let child_count = children_ids.len();
 
+        tracing::debug!("RenderFlex::layout start: {} children", child_count);
+
         if children_ids.is_empty() {
             // No children - use smallest size
             let size = constraints.smallest();
@@ -136,6 +138,8 @@ impl DynRenderObject for RenderFlex {
         // Step 1: Collect flex information for each child
         let mut child_info: Vec<(usize, Option<(i32, FlexFit)>)> = Vec::new();
         let mut total_flex = 0;
+
+        tracing::debug!("RenderFlex: Collecting flex info for {} children", children_ids.len());
 
         for &child_id in children_ids.iter() {
             // Try to read FlexParentData
@@ -179,8 +183,11 @@ impl DynRenderObject for RenderFlex {
         let mut allocated_main_size = 0.0f32;
         let mut max_cross_size = 0.0f32;
 
+        tracing::debug!("RenderFlex: Laying out inflexible children, total_flex={}", total_flex);
+
         for (child_id, flex_info) in &child_info {
             if flex_info.is_none() {
+                tracing::debug!("RenderFlex: Laying out inflexible child {}", child_id);
                 // Inflexible child - give loose main axis constraints
                 let child_constraints = match direction {
                     Axis::Horizontal => BoxConstraints::new(
@@ -197,7 +204,9 @@ impl DynRenderObject for RenderFlex {
                     ),
                 };
 
+                tracing::debug!("RenderFlex: About to layout_child_cached {}", child_id);
                 let child_size = ctx.layout_child_cached(*child_id, child_constraints, Some(child_count));
+                tracing::debug!("RenderFlex: Finished layout_child_cached {}, size: {:?}", child_id, child_size);
 
                 let child_main_size = match direction {
                     Axis::Horizontal => child_size.width,

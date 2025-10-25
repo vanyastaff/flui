@@ -1,238 +1,76 @@
-//! Element tree - mutable state holders for widgets
+//! Element system - Widget lifecycle and tree management
 //!
-//! This module provides the Element trait and implementations, which form the middle
-//! layer of the three-tree architecture (Widget → Element → RenderObject).
+//! This module provides the Element layer of the three-tree architecture:
+//! - **Widget** → Immutable configuration (recreated each rebuild)
+//! - **Element** → Mutable state holder (persists across rebuilds)
+//! - **RenderObject** → Layout and painting (optional, for render widgets)
 //!
-//! # Module Structure
+//! # Element Types
 //!
-//! - `traits` - Element trait definition
-//! - `lifecycle` - ElementLifecycle enum and InactiveElements manager
-//! - `component` - ComponentElement for StatelessWidget
-//! - `stateful` - StatefulElement for StatefulWidget
-//! - `render_object` - RenderObjectElement for RenderObjectWidget
-//! - `render` - Specialized render elements (Leaf, Single, Multi)
+//! 1. **ComponentElement** - For StatelessWidget (calls build())
+//! 2. **StatefulElement** - For StatefulWidget (manages State object)
+//! 3. **InheritedElement** - For InheritedWidget (data propagation + dependency tracking)
+//! 4. **ParentDataElement** - For ParentDataWidget (attaches metadata to children)
+//! 5. **RenderObjectElement** - For RenderObjectWidget (owns RenderObject)
+//!
+//! # Architecture
+//!
+//! ```text
+//! Widget → Element → RenderObject (optional)
+//!
+//! StatelessWidget     → ComponentElement     → build() → child widget
+//! StatefulWidget      → StatefulElement      → State.build() → child widget
+//! InheritedWidget     → InheritedElement     → (data + dependents) → child widget
+//! ParentDataWidget    → ParentDataElement    → (attach data) → child widget
+//! RenderObjectWidget  → RenderObjectElement<Arity> → RenderObject<Arity>
+//! ```
+//!
+//! # ElementTree
+//!
+//! The ElementTree currently stores RenderObjects directly (will be refactored to store Elements):
+//! - **RenderObjects** for rendering (temporary, will become part of RenderObjectElement)
+//! - **RenderState** per RenderObject (size, constraints, dirty flags)
+//! - **Tree relationships** (parent/children) via ElementId indices
+//!
+//! # Performance
+//!
+//! - **O(1) access** by ElementId (direct slab indexing)
+//! - **Cache-friendly** layout (contiguous memory in slab)
+//! - **Lock-free reads** for RenderState flags via atomic operations
 
-// ============================================================================
-// Module Declarations
-// ============================================================================
-
+// Modules
+pub mod build_context;
+pub mod component;
 pub mod dyn_element;
-mod component;
-mod lifecycle;
-pub mod render;
-mod render_object;
-mod stateful;
-mod traits;
+pub mod element_tree;
+pub mod inherited;
+pub mod parent_data_element;
+pub mod render_object_element;
+pub mod stateful;
 
-// ============================================================================
-// Public API Re-exports
-// ============================================================================
 
-pub use dyn_element::DynElement;
-pub use traits::Element;
-pub use lifecycle::ElementLifecycle;
+
+
+
+
+// Re-exports
+pub use dyn_element::{DynElement, BoxedElement, ElementLifecycle};
 pub use component::ComponentElement;
 pub use stateful::StatefulElement;
-pub use render_object::RenderObjectElement;
+pub use inherited::InheritedElement;
+pub use parent_data_element::ParentDataElement;
+pub use render_object_element::RenderObjectElement;
+pub use element_tree::ElementTree;
+pub use build_context::BuildContext;
 
-// ============================================================================
-// Tests
-// ============================================================================
+/// Element ID - stable index into the ElementTree slab
+///
+/// This is a handle to an element that remains valid until the element is removed.
+/// ElementIds are reused after removal (slab behavior), so don't store them long-term
+/// without verifying the element still exists.
+pub type ElementId = usize;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{DynWidget, ElementId, StatelessWidget, Context};
 
-    #[test]
-    fn test_element_id_unique() {
-        let id1 = ElementId::new();
-        let id2 = ElementId::new();
-        let id3 = ElementId::new();
 
-        assert_ne!(id1, id2);
-        assert_ne!(id2, id3);
-        assert_ne!(id1, id3);
-    }
 
-    // Test widget for testing
-    #[derive(Debug, Clone)]
-    struct TestStatelessWidget {
-        value: i32,
-    }
 
-    impl StatelessWidget for TestStatelessWidget {
-        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
-            // Return self for testing purposes
-            Box::new(TestStatelessWidget { value: self.value })
-        }
-    }
-
-    #[test]
-    fn test_component_element_creation() {
-        let widget = TestStatelessWidget { value: 42 };
-        let element = ComponentElement::new(widget);
-
-        assert!(element.is_dirty());
-        assert_eq!(element.parent(), None);
-    }
-
-    #[test]
-    fn test_component_element_mount() {
-        let widget = TestStatelessWidget { value: 42 };
-        let mut element = ComponentElement::new(widget);
-
-        element.mount(None, 0);
-        assert_eq!(element.parent(), None);
-        assert!(element.is_dirty());
-    }
-
-    #[test]
-    fn test_component_element_mark_dirty() {
-        let widget = TestStatelessWidget { value: 42 };
-        let element = ComponentElement::new(widget);
-
-        // Element starts dirty
-        assert!(element.is_dirty());
-
-        // Rebuild clears dirty flag (but needs tree reference)
-        // Can't test rebuild without tree setup
-    }
-
-    // Element Lifecycle Tests
-
-    #[test]
-    fn test_element_lifecycle_enum() {
-        assert_eq!(ElementLifecycle::Initial.is_active(), false);
-        assert_eq!(ElementLifecycle::Active.is_active(), true);
-        assert_eq!(ElementLifecycle::Inactive.is_active(), false);
-        assert_eq!(ElementLifecycle::Defunct.is_active(), false);
-    }
-
-    #[test]
-    fn test_element_lifecycle_can_reactivate() {
-        assert_eq!(ElementLifecycle::Initial.can_reactivate(), false);
-        assert_eq!(ElementLifecycle::Active.can_reactivate(), false);
-        assert_eq!(ElementLifecycle::Inactive.can_reactivate(), true);
-        assert_eq!(ElementLifecycle::Defunct.can_reactivate(), false);
-    }
-
-    #[test]
-    fn test_element_lifecycle_is_mounted() {
-        assert_eq!(ElementLifecycle::Initial.is_mounted(), false);
-        assert_eq!(ElementLifecycle::Active.is_mounted(), true);
-        assert_eq!(ElementLifecycle::Inactive.is_mounted(), true);
-        assert_eq!(ElementLifecycle::Defunct.is_mounted(), false);
-    }
-
-    #[test]
-    fn test_inactive_elements_new() {
-        let inactive = InactiveElements::new();
-        assert!(inactive.is_empty());
-        assert_eq!(inactive.len(), 0);
-    }
-
-    #[test]
-    fn test_inactive_elements_add() {
-        let mut inactive = InactiveElements::new();
-        let id1 = ElementId::new();
-        let id2 = ElementId::new();
-
-        inactive.add(id1);
-        assert_eq!(inactive.len(), 1);
-        assert!(inactive.contains(id1));
-        assert!(!inactive.contains(id2));
-
-        inactive.add(id2);
-        assert_eq!(inactive.len(), 2);
-        assert!(inactive.contains(id1));
-        assert!(inactive.contains(id2));
-    }
-
-    #[test]
-    fn test_inactive_elements_remove() {
-        let mut inactive = InactiveElements::new();
-        let id = ElementId::new();
-
-        inactive.add(id);
-        assert!(inactive.contains(id));
-
-        let removed = inactive.remove(id);
-        assert_eq!(removed, Some(id));
-        assert!(!inactive.contains(id));
-        assert_eq!(inactive.len(), 0);
-
-        // Removing again returns None
-        let removed_again = inactive.remove(id);
-        assert_eq!(removed_again, None);
-    }
-
-    #[test]
-    fn test_inactive_elements_drain() {
-        let mut inactive = InactiveElements::new();
-        let id1 = ElementId::new();
-        let id2 = ElementId::new();
-        let id3 = ElementId::new();
-
-        inactive.add(id1);
-        inactive.add(id2);
-        inactive.add(id3);
-        assert_eq!(inactive.len(), 3);
-
-        let drained: Vec<_> = inactive.drain().collect();
-        assert_eq!(drained.len(), 3);
-        assert!(drained.contains(&id1));
-        assert!(drained.contains(&id2));
-        assert!(drained.contains(&id3));
-
-        assert!(inactive.is_empty());
-    }
-
-    #[test]
-    fn test_element_lifecycle_default() {
-        let widget = TestStatelessWidget { value: 42 };
-        let element = ComponentElement::new(widget);
-
-        // Default lifecycle is Initial (before mount)
-        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
-    }
-
-    #[test]
-    fn test_element_deactivate_activate_default() {
-        let widget = TestStatelessWidget { value: 42 };
-        let mut element = ComponentElement::new(widget);
-
-        // Default implementations should not panic
-        element.deactivate();
-        element.activate();
-    }
-
-    #[test]
-    fn test_element_did_change_dependencies_default() {
-        let widget = TestStatelessWidget { value: 42 };
-        let mut element = ComponentElement::new(widget);
-
-        // Default implementation should not panic
-        element.did_change_dependencies();
-    }
-
-    #[test]
-    fn test_element_update_slot_for_child_default() {
-        let widget = TestStatelessWidget { value: 42 };
-        let mut element = ComponentElement::new(widget);
-        let child_id = ElementId::new();
-
-        // Default implementation should not panic
-        element.update_slot_for_child(child_id, 1);
-    }
-
-    #[test]
-    fn test_element_forget_child_default() {
-        let widget = TestStatelessWidget { value: 42 };
-        let mut element = ComponentElement::new(widget);
-        let child_id = ElementId::new();
-
-        // Default implementation should not panic
-        element.forget_child(child_id);
-    }
-}

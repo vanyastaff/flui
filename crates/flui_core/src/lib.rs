@@ -1,231 +1,160 @@
-//! Core traits and types for the Flui framework
+//! # FLUI Core - Typed Render Architecture
 //!
-//! flui_core provides the fundamental building blocks of the Flui widget system:
-//! - Widget: Immutable configuration (what to build)
-//! - Element: Mutable state holder (lifecycle, mounting, updates)
-//! - RenderObject: Layout and painting primitives
-//! - Context: Access to the element tree
+//! Clean, typed implementation of the FLUI rendering system based on idea.md.
 //!
-//! # Three-Tree Architecture
-//!
-//! Flui follows the proven three-tree architecture:
-//!
-//! 1. Widget Tree (immutable) — describes WHAT to show
-//! 2. Element Tree (mutable) — manages lifecycle and state
-//! 3. Render Tree (mutable) — performs layout and painting
+//! ## Architecture (from idea.md Chapters 2-6)
 //!
 //! ```text
-//! Widget → Element → RenderObject
-//! (new)     (reused)   (reused)
+//! Widget<W: RenderObjectWidget>
+//!   ├─ type Render: RenderObject
+//!   ├─ create_render_object() -> Self::Render
+//!   └─ update_render_object(&mut Self::Render)
+//!
+//! RenderObject
+//!   ├─ type Arity: Arity (Leaf/Single/Multi)
+//!   ├─ fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size
+//!   └─ fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer
+//!
+//! LayoutCx<A: Arity>
+//!   ├─ LeafArity: only constraints()
+//!   ├─ SingleArity: constraints() + child() + layout_child()
+//!   └─ MultiArity: constraints() + children() + layout_child()
+//!
+//! PaintCx<A: Arity>
+//!   ├─ LeafArity: only painter(), offset()
+//!   ├─ SingleArity: painter(), offset(), child(), capture_child_layer()
+//!   └─ MultiArity: painter(), offset(), children(), capture_child_layers()
 //! ```
 //!
-//! # Quick start
+//! ## Key Benefits
 //!
-//! Most applications will depend on higher-level crates, but when working directly
-//! with flui_core you can use the prelude for convenience:
+//! ### 1. Compile-Time Safety
 //!
-//! ```rust
-//! use flui_core::prelude::*;
+//! ```rust,ignore
+//! // This works - SingleArity has child()
+//! impl RenderObject for RenderOpacity {
+//!     type Arity = SingleArity;
 //!
-//! // Build a minimal element tree with a dummy widget
-//! struct Hello;
+//!     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+//!         let child = cx.child(); // ✅ Compiles!
+//!         cx.layout_child(child, cx.constraints())
+//!     }
+//! }
 //!
-//! impl Widget for Hello {}
+//! // This fails - LeafArity has no child()
+//! impl RenderObject for RenderParagraph {
+//!     type Arity = LeafArity;
 //!
-//! let mut tree = ElementTree::new();
-//!
-//! // Normally widgets are mounted through framework helpers; this is just a sketch
-//! let _root_id = tree.mount(Hello.into_widget());
-//!
-//! // Iterate over children of the root element via a Context (pseudo-example)
-//! let ctx = Context::empty();
-//! for child in ctx.children() {
-//!     // do something with child ElementId
-//!     let _ = child;
+//!     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+//!         let child = cx.child(); // ❌ Compile error: method not found!
+//!         // ...
+//!     }
 //! }
 //! ```
 //!
-//! See individual modules for details on widgets, elements, rendering and context utilities.
+//! ### 2. Zero-Cost Abstractions
+//!
+//! - No `Box<dyn>` - everything is monomorphized
+//! - No `downcast_mut` - types known at compile time
+//! - Full inline potential for LLVM
+//!
+//! ### 3. Integrated with flui_engine
+//!
+//! ```rust,ignore
+//! fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+//!     let mut picture = PictureLayer::new();
+//!     picture.draw_rect(self.bounds, self.paint);
+//!
+//!     if let Some(child) = cx.capture_child_layer() {
+//!         let mut container = ContainerLayer::new();
+//!         container.add_child(Box::new(picture));
+//!         container.add_child(child);
+//!         Box::new(container)
+//!     } else {
+//!         Box::new(picture)
+//!     }
+//! }
+//! ```
 
-// New modular structure
-pub mod cache;
-pub mod context;
-pub mod debug;
+// Re-export essential types from dependencies
+pub use flui_types::*;
+pub use flui_engine::{
+    Layer, BoxedLayer,
+    Scene, Compositor,
+    Painter, Paint,
+};
+
+// Core modules
+pub mod arity;
 pub mod element;
-pub mod error;
-pub mod foundation;
-pub mod hot_reload;
-pub mod notification;
-pub mod profiling;
 pub mod render;
-pub mod testing;
-pub mod tree;
-pub mod typed;  // Experimental typed RenderObject system
 pub mod widget;
 
 
+// Re-exports
 
+// Universal Arity system (used across Widget/Element/RenderObject)
+pub use arity::{Arity, LeafArity, SingleArity, MultiArity};
 
-
-
-
-
-
-
-// Re-export types from flui_types
-pub use flui_types::{
-    Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
-    MainAxisSize, Offset, Orientation, Point, Rect, Size, VerticalDirection,
-};
-// BoxConstraints is also from flui_types
-pub use flui_types::constraints::BoxConstraints;
-
-// Element ID is now a Slab index (clean architecture with arena allocation)
-/// Element identifier (Slab index)
-///
-/// ElementId is now simply an index into the ElementTree's Slab arena.
-/// This provides O(1) direct access and efficient memory usage.
-pub type ElementId = usize;
-
-// Re-export foundation types
-pub use foundation::Slot;
-pub use element::ElementLifecycle;
-pub use error::{CoreError, Result, KeyError};
-
-// Re-export from modular structure
-pub use context::Context;
-
-/// Type alias for backwards compatibility
-/// BuildContext is the old name for Context
-pub type BuildContext = Context;
-pub use element::{DynElement, ComponentElement, Element, RenderObjectElement, StatefulElement};
-pub use element::render::{
-    LeafRenderObjectElement,
-    MultiChildRenderObjectElement,
-    SingleChildRenderObjectElement,
-};
-pub use tree::{BuildOwner, ElementTree, GlobalKeyId, PipelineOwner};
-pub use widget::{DynWidget, InheritedElement, InheritedWidget, InheritedModel, IntoWidget, ParentDataElement, ParentDataWidget, ProxyElement, ProxyWidget, State, StateLifecycle, StatefulWidget, StatelessWidget, Widget, ErrorWidget, ErrorDetails, ErrorWidgetBuilder};
 pub use render::{
-    DynRenderObject,
+    // RenderObject traits
     RenderObject,
-    RenderContext,
-    RenderFlags,
-    RenderState,
-    parent_data::{BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset},
-};
-pub use render::widget::{
-    LeafRenderObjectWidget,
-    MultiChildRenderObjectWidget,
-    RenderObjectWidget,
-    SingleChildRenderObjectWidget,
-};
+    DynRenderObject,
+    BoxedRenderObject,
 
-// Re-export cache types
-pub use cache::{
+    // Contexts & Pipeline
+    LayoutCx, PaintCx, RenderContext,
+    RenderPipeline,
+
+    // Extension traits for arity-specific methods
+    SingleChild, MultiChild,
+    SingleChildPaint, MultiChildPaint,
+
+    // Cache
     LayoutCache, LayoutCacheKey, LayoutResult,
-    layout_cache, invalidate_layout, clear_layout_cache,
+
+    // State
+    RenderState, RenderFlags,
+
+    // ParentData
+    ParentData,
+    ParentDataWithOffset,
+    BoxParentData,
+    ContainerParentData,
+    ContainerBoxParentData,
 };
 
-// Re-export string cache
-pub use foundation::string_cache::{capacity, get, intern, is_empty, len, resolve, InternedString};
+pub use widget::{
+    Widget,
+    DynWidget,
+    BoxedWidget,
+    WidgetKind,
+    ComponentKind,
+    StatefulKind,
+    InheritedKind,
+    ParentDataKind,
+    RenderObjectKind,
+    StatelessWidget,
+    StatefulWidget,
+    Stateful,  // Zero-cost wrapper for StatefulWidget
+    State,
+    InheritedWidget,
+    ProxyWidget,
+    ParentDataWidget,
+    RenderObjectWidget,
+};
 
-// ========== Type Aliases for Common Patterns ==========
-
-// Re-export boxed types from their respective modules
-pub use widget::dyn_widget::BoxedWidget;
-pub use element::dyn_element::BoxedElement;
-pub use render::dyn_render_object::BoxedRenderObject;
-
-/// Prelude module for convenient imports
-///
-/// This module re-exports the most commonly used types and traits for building UI.
-/// Import everything with:
-///
-/// ```rust
-/// use flui_core::prelude::*;
-/// ```
-pub mod prelude {
-    // Core types
-    pub use crate::{
-        Context, BoxConstraints, Size, ElementId, ElementTree,
-        DynWidget, DynElement, Widget, Element,
-        StatelessWidget, StatefulWidget, State,
-        IntoWidget,
-    };
-
-    // Keys (very commonly used)
-    pub use crate::foundation::{
-        Key, GlobalKey, ValueKey, UniqueKey, ObjectKey, WidgetKey,
-        Slot,
-    };
-
-    // Lifecycle enums
-    pub use crate::{ElementLifecycle, StateLifecycle};
-
-    // Errors and Results
-    pub use crate::{CoreError, Result, KeyError};
-
-    // Common widget types
-    pub use crate::{
-        InheritedWidget, InheritedElement,
-        ParentDataWidget, ParentDataElement,
-        ProxyWidget, ProxyElement,
-        ErrorWidget,
-    };
-
-    // Render types
-    pub use crate::{
-        DynRenderObject, RenderObject,
-        LeafRenderObjectWidget, SingleChildRenderObjectWidget, MultiChildRenderObjectWidget,
-    };
-
-    // Geometry types from flui_types
-    pub use crate::{
-        Offset, Point, Rect, Alignment, EdgeInsets,
-        Axis, AxisDirection, Orientation,
-        MainAxisAlignment, CrossAxisAlignment, MainAxisSize,
-        VerticalDirection,
-    };
-
-    // Utilities
-    pub use crate::cache::layout_cache;
-    pub use crate::foundation::string_cache::intern;
-
-    // Type aliases
-    pub use crate::{BoxedWidget, BoxedElement, BoxedRenderObject};
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+pub use element::{
+    ElementId,
+    ElementTree,
+    DynElement,
+    BoxedElement,
+    ElementLifecycle,
+    ComponentElement,
+    StatefulElement,
+    InheritedElement,
+    ParentDataElement,
+    RenderObjectElement,
+    BuildContext,
+};
 

@@ -5,8 +5,9 @@ members = [
     "crates/flui_core",         # Core with foundation utilities
     "crates/flui_rendering",
     "crates/flui_widgets",
-    "crates/flui_app", "crates/flui_painting",          # Application framework
-    # "crates/flui_painting",
+    "crates/flui_app",
+    "crates/flui_painting",
+    "crates/flui_engine", "crates/flui_derive",       # Rendering engine - Layer/Scene/Painter
     # "crates/flui_animation",
     # "crates/flui_gestures",
     # "crates/flui_scheduler",
@@ -110,8 +111,11 @@ keywords = ["gui", "ui", "egui", "flutter", "reactive"]
 
 [dependencies]
 # Flui crates
-flui_app = { path = "crates/flui_app" }
-flui_widgets = { path = "crates/flui_widgets" }
+flui_types = { path = "crates/flui_types" }
+flui_core = { path = "crates/flui_core" }
+flui_engine = { path = "crates/flui_engine" }
+flui_app = { path = "crates/flui_app", optional = true }
+flui_widgets = { path = "crates/flui_widgets", optional = true }
 
 # Workspace dependencies
 egui.workspace = true
@@ -149,3 +153,15 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# Standalone example using only flui_core + flui_engine
+[[example]]
+name = "standalone_demo"
+path = "examples/standalone_demo.rs"
+required-features = []  # Doesn't need flui_app or flui_widgets
+
+# Window demo - shows actual rendered content in a window!
+[[example]]
+name = "window_demo"
+path = "examples/window_demo.rs"
+required-features = []  # Uses flui_core + flui_engine + eframe

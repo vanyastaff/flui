@@ -1,804 +1,409 @@
-//! DynRenderObject - Object-safe base trait for RenderObject
+//! DynRenderObject - Object-safe trait for heterogeneous RenderObject storage
 //!
-//! This module defines the `DynRenderObject` trait, which is object-safe and allows
-//! render objects to be stored in heterogeneous collections like `Vec<Box<dyn DynRenderObject>>`.
+//! This module provides the `DynRenderObject` trait, which enables storing
+//! different types of RenderObjects in heterogeneous collections.
 //!
-//! # Design Pattern: Two-Trait Approach
+//! # Design Pattern: Typed + Dynamic
 //!
-//! Flui uses a two-trait pattern for render objects (similar to Widget/DynWidget and Element/DynElement):
-//! - **DynRenderObject** (this trait) - Object-safe base trait for `Box<dyn DynRenderObject>` collections
-//! - **RenderObject** - Extended trait with associated types for zero-cost concrete usage
+//! FLUI uses a two-level approach for RenderObjects:
+//!
+//! 1. **RenderObject** (typed trait) - Zero-cost concrete usage with arity constraints
+//! 2. **DynRenderObject** (this trait) - Object-safe for `Box<dyn DynRenderObject>` storage
 //!
 //! This allows:
-//! - Zero-cost parent data access for concrete render object types
-//! - Type-safe child relationships via associated types
-//! - Heterogeneous render object storage in the render tree
+//! - **Compile-time safety** when working with concrete RenderObject types
+//! - **Runtime flexibility** for heterogeneous storage in ElementTree
+//! - **Zero-cost abstractions** where types are known statically
+//! - **Dynamic dispatch** only when necessary (e.g., tree traversal)
 //!
 //! # Why DynRenderObject?
 //!
-//! The `RenderObject` trait has associated types (`ParentData`, `Child`), which makes it not object-safe.
-//! This means you cannot create `Box<dyn RenderObject>` or `Vec<Box<dyn RenderObject>>`.
+//! The `RenderObject` trait has associated types (`Arity`), which makes it not object-safe.
+//! You cannot create `Box<dyn RenderObject>` or store different RenderObject types together.
 //!
 //! `DynRenderObject` solves this by being object-safe - it doesn't have associated types.
-//! All types that implement `RenderObject` automatically implement `DynRenderObject` via a blanket impl.
+//! All types that implement `RenderObject` automatically implement `DynRenderObject` via
+//! a blanket implementation.
+//!
+//! # Usage Pattern
+//!
+//! ```rust,ignore
+//! // Concrete types use RenderObject (zero-cost)
+//! impl RenderObject for RenderParagraph {
+//!     type Arity = LeafArity;
+//!     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size { /* ... */ }
+//! }
+//!
+//! // ElementTree stores heterogeneous RenderObjects via DynRenderObject
+//! struct ElementTree {
+//!     render_objects: Vec<Box<dyn DynRenderObject>>,
+//! }
+//!
+//! // Can downcast back to concrete types when needed
+//! let paragraph = render_object.downcast_ref::<RenderParagraph>().unwrap();
+//! ```
 //!
 //! # Naming Convention
 //!
-//! The `Dyn*` prefix is the idiomatic Rust convention for object-safe versions of traits.
-//! The `Any*` prefix is reserved for `std::any::Any` and related types.
-//!
-//! # Usage
-//!
-//! ```rust,ignore
-//! // For heterogeneous collections
-//! let render_objects: Vec<Box<dyn DynRenderObject>> = vec![
-//!     Box::new(RenderText::new("Hello")),
-//!     Box::new(RenderImage::new(image)),
-//!     Box::new(RenderFlex::new(children)),
-//! ];
-//!
-//! // For concrete types with zero-cost
-//! let padding = RenderPadding::new(child);
-//! let size = padding.layout(constraints);  // Uses RenderObject trait, no boxing!
-//! ```
+//! The `Dyn*` prefix follows Rust convention for object-safe trait variants.
+//! See also: `DynWidget`, `DynElement` in other FLUI modules.
 
 use std::any::Any;
 use std::fmt;
-use std::sync::Arc;
 
 use downcast_rs::{impl_downcast, DowncastSync};
-use flui_types::{events::HitTestResult, Offset, Size};
-use parking_lot::RwLock;
+use flui_types::{Size, Offset};
+use flui_types::constraints::BoxConstraints;
+use flui_engine::BoxedLayer;
 
-use crate::{BoxConstraints, ParentData, PipelineOwner};
+use crate::arity::Arity;
+use crate::{ElementId, ElementTree};
 
-/// Object-safe base trait for all render objects
+/// Object-safe base trait for all RenderObjects
 ///
 /// This trait is automatically implemented for all types that implement `RenderObject`.
-/// It's used when you need trait objects (`Box<dyn DynRenderObject>`) for heterogeneous
-/// render object collections.
+/// It provides the minimal object-safe interface needed for heterogeneous storage.
 ///
-/// # Design Pattern
+/// # Design Principles
 ///
-/// Flui uses a two-trait pattern:
-/// - **DynRenderObject** (this trait) - Object-safe, for `Box<dyn DynRenderObject>` collections
-/// - **RenderObject** - Has associated types, for zero-cost concrete usage
+/// 1. **Object Safety**: No associated types, no generic methods
+/// 2. **Minimal Interface**: Only methods needed for tree operations
+/// 3. **Downcast Support**: Can convert back to concrete types via `downcast_rs`
+/// 4. **State Separation**: RenderState is stored separately in ElementTree
 ///
-/// # When to Use
+/// # When to Use Each Trait
 ///
-/// - Use `Box<dyn DynRenderObject>` when you need to store render objects of different types
-/// - Use `RenderObject` trait bound when working with concrete render object types
+/// - Use `RenderObject` when working with concrete types (layout/paint implementation)
+/// - Use `DynRenderObject` when storing in heterogeneous collections
+/// - Use `downcast_ref/mut` to convert from `DynRenderObject` back to concrete type
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// struct RenderFlex {
-///     children: Vec<Box<dyn DynRenderObject>>,  // Heterogeneous children
-/// }
+/// // Heterogeneous storage in ElementTree
+/// let render_objects: Vec<Box<dyn DynRenderObject>> = vec![
+///     Box::new(RenderParagraph::new("Hello")),
+///     Box::new(RenderImage::new(image)),
+///     Box::new(RenderFlex::new()),
+/// ];
 ///
-/// impl RenderFlex {
-///     fn new(children: Vec<Box<dyn DynRenderObject>>) -> Self {
-///         Self { children }
+/// // Later, downcast to concrete type
+/// for render_obj in &render_objects {
+///     if let Some(paragraph) = render_obj.downcast_ref::<RenderParagraph>() {
+///         println!("Text: {}", paragraph.text);
 ///     }
 /// }
 /// ```
-pub trait DynRenderObject: DowncastSync + fmt::Debug {
-    // ========== Core Layout and Painting ==========
+pub trait DynRenderObject: DowncastSync + fmt::Debug + Send + Sync {
+    // ========== Core Identity ==========
 
-    /// Perform layout with given constraints
+    /// Get the arity (child count constraint) for this RenderObject
     ///
-    /// Returns the size this render object chose within the constraints.
-    /// Must satisfy: `constraints.is_satisfied_by(returned_size)`
+    /// Returns the arity as a runtime value:
+    /// - `Some(0)` for LeafArity (no children)
+    /// - `Some(1)` for SingleArity (exactly one child)
+    /// - `None` for MultiArity (variable count)
     ///
-    /// # Arguments
-    ///
-    /// - `constraints`: The constraints within which to layout
-    /// - `ctx`: Rendering context providing access to children and the element tree
-    ///
-    /// # Returns
-    ///
-    /// The size chosen by this render object
-    ///
-    /// # Implementation Notes
-    ///
-    /// For leaf RenderObjects (no children), the `ctx` parameter can be ignored:
-    ///
-    /// ```rust,ignore
-    /// fn layout(&self, state: &mut RenderState, constraints: BoxConstraints, _ctx: &RenderContext) -> Size {
-    ///     // Compute size without needing children
-    ///     // Store size directly in state (no interior mutability needed!)
-    ///     let size = compute_intrinsic_size(constraints);
-    ///     *state.size.lock() = Some(size);
-    ///     state.flags.lock().remove(RenderFlags::NEEDS_LAYOUT);
-    ///     size
-    /// }
-    /// ```
-    ///
-    /// For container RenderObjects, use `ctx` to layout children:
-    ///
-    /// ```rust,ignore
-    /// fn layout(&self, state: &mut RenderState, constraints: BoxConstraints, ctx: &RenderContext) -> Size {
-    ///     let mut total_height = 0.0;
-    ///     for &child_id in ctx.children() {
-    ///         let child_size = ctx.layout_child(child_id, child_constraints);
-    ///         total_height += child_size.height;
-    ///     }
-    ///     let size = Size::new(constraints.max_width, total_height);
-    ///     *state.size.lock() = Some(size);
-    ///     state.flags.lock().remove(RenderFlags::NEEDS_LAYOUT);
-    ///     size
-    /// }
-    /// ```
-    #[must_use]
-    fn layout(&self, state: &mut crate::render::RenderState, constraints: BoxConstraints, ctx: &crate::render::RenderContext) -> Size;
+    /// This is the runtime equivalent of the compile-time `RenderObject::Arity` type.
+    fn arity(&self) -> Option<usize>;
 
-    /// Paint this render object
+    /// Get the debug name for this RenderObject
     ///
-    /// The painter is positioned at the render object's offset.
-    /// Offset is relative to the parent's coordinate space.
-    ///
-    /// # Arguments
-    ///
-    /// - `painter`: The egui Painter to draw with
-    /// - `offset`: Position relative to parent
-    /// - `ctx`: Rendering context providing access to children
-    ///
-    /// # Implementation Notes
-    ///
-    /// For leaf RenderObjects, the `ctx` parameter can be ignored:
-    ///
-    /// ```rust,ignore
-    /// fn paint(&self, state: &RenderState, painter: &egui::Painter, offset: Offset, _ctx: &RenderContext) {
-    ///     let size = state.size.lock().expect("Size not set");
-    ///     painter.rect_filled(offset, size, color);
-    /// }
-    /// ```
-    ///
-    /// For container RenderObjects, use `ctx` to paint children:
-    ///
-    /// ```rust,ignore
-    /// fn paint(&self, state: &RenderState, painter: &egui::Painter, offset: Offset, ctx: &RenderContext) {
-    ///     let mut child_offset = offset;
-    ///     for &child_id in ctx.children() {
-    ///         ctx.paint_child(child_id, painter, child_offset);
-    ///         child_offset.y += child_height;
-    ///     }
-    /// }
-    /// ```
-    fn paint(&self, state: &crate::render::RenderState, painter: &egui::Painter, offset: Offset, ctx: &crate::render::RenderContext);
-
-    /// Get the current size (after layout)
-    ///
-    /// Returns the size determined by the last layout pass.
-    /// This is only valid after `layout()` has been called.
-    ///
-    /// After architecture refactoring, size is stored in ElementTree's render_state
-    /// and accessed via RenderContext during actual rendering. This default
-    /// implementation is provided for RenderObjects that don't need custom behavior.
-    #[must_use]
-    fn size(&self) -> Size {
-        Size::ZERO
+    /// Returns the type name for debugging and diagnostics.
+    fn debug_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
     }
 
-    /// Get the constraints used in the last layout
-    ///
-    /// Returns the constraints from the last layout pass, or None if
-    ///  the layout hasn't been performed yet.
-    #[must_use]
-    fn constraints(&self) -> Option<BoxConstraints> {
-        None
-    }
+    // ========== Layout ==========
 
-    // ========== Dirty State Management ==========
-
-    /// Check if this render object needs layout
+    /// Compute intrinsic width for a given height
     ///
-    /// Returns `true` if `mark_needs_layout()` has been called and
-    /// layout hasn't been performed yet.
-    #[must_use]
-    #[inline]
-    fn needs_layout(&self) -> bool {
-        false
-    }
-
-    /// Mark this render object as needing layout
-    ///
-    /// This schedules the render object for layout during the next frame.
-    /// Uses interior mutability to modify state through `&self`.
-    ///
-    /// After architecture refactoring, dirty flags are stored in ElementTree's
-    /// render_state and modified via RenderContext. This default implementation
-    /// is a no-op for RenderObjects that don't maintain their own state.
-    fn mark_needs_layout(&self) {
-        // Default: no-op (handled via RenderContext)
-    }
-
-    /// Check if this render object needs paint
-    ///
-    /// Returns `true` if `mark_needs_paint()` has been called and
-    /// painting hasn't been performed yet.
-    #[must_use]
-    #[inline]
-    fn needs_paint(&self) -> bool {
-        false
-    }
-
-    /// Mark this render object as needing paint
-    ///
-    /// This schedules the render object for painting during the next frame.
-    /// Uses interior mutability to modify state through `&self`.
-    ///
-    /// After architecture refactoring, dirty flags are stored in ElementTree's
-    /// render_state and modified via RenderContext. This default implementation
-    /// is a no-op for RenderObjects that don't maintain their own state.
-    fn mark_needs_paint(&self) {
-        // Default: no-op (handled via RenderContext)
-    }
-
-    /// Check if compositing bits need update
-    ///
-    /// Returns `true` if `mark_needs_compositing_bits_update()` has been called.
-    #[must_use]
-    fn needs_compositing_bits_update(&self) -> bool {
-        false
-    }
-
-    /// Mark compositing bits as needing update
-    ///
-    /// This schedules the render object's compositing bits for recalculation.
-    /// Uses interior mutability to modify state through `&self`.
-    fn mark_needs_compositing_bits_update(&self) {
-        // Default: no-op
-    }
-
-    // ========== Boundaries ==========
-
-    /// Is this a relayout boundary?
-    ///
-    /// A relayout boundary prevents layout changes from propagating to ancestors.
-    /// This is an optimization that allows layout to be performed more efficiently.
-    ///
-    /// # Returns
-    ///
-    /// `true` if this render object is a relayout boundary
-    #[must_use]
-    #[inline]
-    fn is_relayout_boundary(&self) -> bool {
-        false
-    }
-
-    /// Is this a repaint boundary?
-    ///
-    /// A repaint boundary prevents paint invalidation from propagating to ancestors.
-    /// This is an optimization that allows painting to be performed more efficiently.
-    ///
-    /// # Returns
-    ///
-    /// `true` if this render object is a repaint boundary
-    #[must_use]
-    #[inline]
-    fn is_repaint_boundary(&self) -> bool {
-        false
-    }
-
-    /// Is size determined only by parent constraints?
-    ///
-    /// Returns `true` if this render object's size is entirely determined by
-    /// its incoming constraints, without needing to query its children.
-    ///
-    /// This is an optimization: when `true`, if the constraints don't change,
-    /// the render object doesn't need to re-lay out.
-    ///
-    /// # Example
-    ///
-    /// `RenderConstrainedBox` with tight constraints returns `true`.
-    #[must_use]
-    #[inline]
-    fn sized_by_parent(&self) -> bool {
-        false
-    }
-
-    // ========== Intrinsic Sizing ==========
-
-    /// Computes minimum intrinsic width for a given height
-    ///
-    /// Returns the smallest width that this render object could be while still
-    /// fitting all of its contents at the given height.
-    ///
-    /// # Naming Convention
-    ///
-    /// This method follows Rust API Guidelines (C-GETTER) by omitting the `get_`
-    /// prefix. The method name directly describes what is being computed.
+    /// Returns the minimum width this RenderObject would prefer at the given height.
+    /// Returns `None` if no intrinsic width is defined.
     ///
     /// # Arguments
     ///
     /// - `height`: The height constraint (may be infinite)
-    ///
-    /// # Returns
-    ///
-    /// The minimum intrinsic width
-    #[must_use]
-    fn min_intrinsic_width(&self, _height: f32) -> f32 {
-        0.0
+    fn intrinsic_width(&self, _height: Option<f32>) -> Option<f32> {
+        None
     }
 
-    /// Computes maximum intrinsic width for a given height
+    /// Compute intrinsic height for a given width
     ///
-    /// Returns the largest width that this render object would prefer to be
-    /// at the given height.
-    ///
-    /// # Arguments
-    ///
-    /// - `height`: The height constraint (may be infinite)
-    ///
-    /// # Returns
-    ///
-    /// The maximum intrinsic width (may be infinite)
-    #[must_use]
-    fn max_intrinsic_width(&self, _height: f32) -> f32 {
-        f32::INFINITY
-    }
-
-    /// Computes minimum intrinsic height for a given width
-    ///
-    /// Returns the smallest height that this render object could be while still
-    /// fitting all of its contents at the given width.
+    /// Returns the minimum height this RenderObject would prefer at the given width.
+    /// Returns `None` if no intrinsic height is defined.
     ///
     /// # Arguments
     ///
     /// - `width`: The width constraint (may be infinite)
-    ///
-    /// # Returns
-    ///
-    /// The minimum intrinsic height
-    #[must_use]
-    fn min_intrinsic_height(&self, _width: f32) -> f32 {
-        0.0
-    }
-
-    /// Computes maximum intrinsic height for a given width
-    ///
-    /// Returns the largest height that this render object would prefer to be
-    /// at the given width.
-    ///
-    /// # Arguments
-    ///
-    /// - `width`: The width constraint (may be infinite)
-    ///
-    /// # Returns
-    ///
-    /// The maximum intrinsic height (may be infinite)
-    #[must_use]
-    fn max_intrinsic_height(&self, _width: f32) -> f32 {
-        f32::INFINITY
-    }
-
-    // ========== Hit Testing ==========
-
-    /// Hit test this render object and its children
-    ///
-    /// Determines if the given position intersects this render object or any of its children.
-    /// Children are tested first (front to back) before testing self.
-    ///
-    /// # Arguments
-    ///
-    /// - `result`: Hit test result to add entries to
-    /// - `position`: Position in local coordinates
-    /// - `ctx`: Render context for accessing children
-    ///
-    /// # Returns
-    ///
-    /// `true` if the position hits this render object or its children
-    #[must_use]
-    fn hit_test(&self, result: &mut HitTestResult, position: Offset, ctx: &crate::render::RenderContext) -> bool {
-        // Check bounds first
-        if position.dx < 0.0
-            || position.dx >= self.size().width
-            || position.dy < 0.0
-            || position.dy >= self.size().height
-        {
-            return false;
-        }
-
-        // Check children first (front to back)
-        let hit_child = self.hit_test_children(result, position, ctx);
-
-        // Then check self
-        let hit_self = self.hit_test_self(position);
-
-        // Add to the result if hit
-        if hit_child || hit_self {
-            result.add(flui_types::events::HitTestEntry::new(
-                position,
-                self.size(),
-            ));
-            return true;
-        }
-
-        false
-    }
-
-    /// Hit test only this render object (not children)
-    ///
-    /// Returns `true` if the given position is within this render object's bounds.
-    /// Override this to implement custom hit testing logic.
-    ///
-    /// # Arguments
-    ///
-    /// - `position`: Position in local coordinates
-    ///
-    /// # Returns
-    ///
-    /// `true` if a position hits this render object (default: always true if in bounds)
-    #[must_use]
-    #[inline]
-    fn hit_test_self(&self, _position: Offset) -> bool {
-        true
-    }
-
-    /// Hit test children
-    ///
-    /// Tests if the given position hits any children of this render object.
-    ///
-    /// # Default Implementation
-    ///
-    /// The default implementation automatically handles children with `ParentDataWithOffset`:
-    /// - Iterates children in reverse order (front to back for z-ordering)
-    /// - Reads cached offsets from ParentDataWithOffset if available
-    /// - Converts position to child coordinates
-    /// - Delegates to ctx.hit_test_child()
-    ///
-    /// This eliminates the need for custom hit_test_children implementations in
-    /// most multi-child RenderObjects (RenderFlex, RenderStack, etc.).
-    ///
-    /// # Arguments
-    ///
-    /// - `result`: Hit test result to add entries to
-    /// - `position`: Position in local coordinates
-    /// - `ctx`: Render context for accessing children
-    ///
-    /// # Returns
-    ///
-    /// `true` if the position hits any child
-    ///
-    /// # When to Override
-    ///
-    /// Override this only if you need custom hit testing logic:
-    /// - Custom z-ordering (not reverse paint order)
-    /// - Transforms applied to children
-    /// - Hit testing disabled for some children
-    /// - Non-standard coordinate transformations
-    #[must_use]
-    fn hit_test_children(&self, result: &mut HitTestResult, position: Offset, ctx: &crate::render::RenderContext) -> bool {
-        let children = ctx.children();
-        if children.is_empty() {
-            return false;
-        }
-
-        // Test children in reverse order (front to back for z-ordering)
-        for &child_id in children.iter().rev() {
-            // Try to get offset from ParentDataWithOffset
-            let child_offset = if let Some(parent_data) = ctx.tree().parent_data(child_id) {
-                // Try to access as ParentDataWithOffset
-                if let Some(offset_data) = parent_data.as_parent_data_with_offset() {
-                    offset_data.offset()
-                } else {
-                    // No ParentDataWithOffset - skip this child
-                    // (RenderObject should override hit_test_children if needed)
-                    continue;
-                }
-            } else {
-                // No parent data - skip this child
-                continue;
-            };
-
-            // Convert position to child coordinates
-            let child_position = Offset::new(
-                position.dx - child_offset.dx,
-                position.dy - child_offset.dy,
-            );
-
-            // Hit test the child
-            if ctx.hit_test_child(child_id, result, child_position) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    // ========== Child Traversal ==========
-
-    /// Visit all children (read-only)
-    ///
-    /// Calls the visitor function for each child render object.
-    /// The default implementation does nothing (no children).
-    ///
-    /// # Arguments
-    ///
-    /// - `visitor`: Function to call for each child
-    fn visit_children(&self, _visitor: &mut dyn FnMut(&dyn DynRenderObject)) {
-        // Default: no children
-    }
-
-    /// Visit all children (mutable)
-    ///
-    /// Calls the visitor function for each child render object (mutable access).
-    /// The default implementation does nothing (no children).
-    ///
-    /// # Arguments
-    ///
-    /// - `visitor`: Function to call for each child
-    fn visit_children_mut(&mut self, _visitor: &mut dyn FnMut(&mut dyn DynRenderObject)) {
-        // Default: no children
-    }
-
-    // ========== ParentData (Type-Erased) ==========
-
-    /// Get parent data (type-erased)
-    ///
-    /// Returns the parent data as `&dyn Any` for downcasting.
-    /// For type-safe access, use `RenderObject::parent_data()` instead.
-    ///
-    /// # Returns
-    ///
-    /// Parent data as Any, or None if no parent data
-    #[must_use]
-    fn parent_data_any(&self) -> Option<&dyn Any> {
+    fn intrinsic_height(&self, _width: Option<f32>) -> Option<f32> {
         None
     }
 
-    /// Get mutable parent data (type-erased)
+    // ========== Dynamic Layout & Paint ==========
+
+    /// Perform layout dynamically (for pipeline use)
     ///
-    /// Returns the parent data as `&mut dyn Any` for downcasting.
-    /// For type-safe access, use `RenderObject::parent_data_mut()` instead.
+    /// This method creates the correctly-typed LayoutCx<Arity> and calls
+    /// the typed `RenderObject::layout()` method.
+    ///
+    /// Used by RenderPipeline for dynamic dispatch during the layout phase.
+    ///
+    /// # Arguments
+    ///
+    /// - `tree`: Reference to the element tree
+    /// - `element_id`: This element's ID
+    /// - `constraints`: Layout constraints from parent
     ///
     /// # Returns
     ///
-    /// Mutable parent data as Any, or None if no parent data
-    #[must_use]
-    fn parent_data_any_mut(&mut self) -> Option<&mut dyn Any> {
-        None
-    }
+    /// The size this RenderObject computed
+    fn dyn_layout(
+        &mut self,
+        tree: &ElementTree,
+        element_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size;
 
-    /// Set parent data (type-erased)
+    /// Perform paint dynamically (for pipeline use)
     ///
-    /// Sets the parent data for this render object.
-    /// Called by the parent when adopting a child.
+    /// This method creates the correctly-typed PaintCx<Arity> and calls
+    /// the typed `RenderObject::paint()` method.
+    ///
+    /// Used by RenderPipeline for dynamic dispatch during the paint phase.
     ///
     /// # Arguments
     ///
-    /// - `parent_data`: The parent data to set
-    fn set_parent_data(&mut self, _parent_data: Box<dyn ParentData>) {
-        // Default: no parent data storage
-    }
-
-    /// Setup parent data for a child
+    /// - `tree`: Reference to the element tree
+    /// - `element_id`: This element's ID
+    /// - `offset`: Painting offset from parent
     ///
-    /// Called when adopting a child to initialize its parent data.
-    /// Override this to create and set appropriate parent data.
+    /// # Returns
     ///
-    /// # Arguments
-    ///
-    /// - `child`: The child has to set up parent data for
-    fn setup_parent_data(&self, _child: &mut dyn DynRenderObject) {
-        // Default: no setup needed
-    }
-
-    // ========== Tree Structure ==========
-
-    /// Get the parent render object
-    ///
-    /// Returns a reference to the parent render object, or None if this is root.
-    #[must_use]
-    fn parent(&self) -> Option<&dyn DynRenderObject> {
-        None
-    }
-
-    /// Get the depth of this render object in the tree
-    ///
-    /// Returns the depth (distance from root). Root has depth 0.
-    #[must_use]
-    #[inline]
-    fn depth(&self) -> usize {
-        0
-    }
-
-    /// Set the depth of this render object in the tree
-    ///
-    /// Called when the render object is moved to a different depth in the tree.
-    ///
-    /// # Arguments
-    ///
-    /// - `depth`: New depth value
-    fn set_depth(&mut self, _depth: usize) {
-        // Default: no-op
-    }
-
-    /// Update depth of a child
-    ///
-    /// Called to recursively update a child's depth after reparenting.
-    ///
-    /// # Arguments
-    ///
-    /// - `child`: The child to update
-    fn redepth_child(&mut self, _child: &mut dyn DynRenderObject) {
-        // Default: no-op
-    }
+    /// The layer tree produced by this RenderObject
+    fn dyn_paint(
+        &self,
+        tree: &ElementTree,
+        element_id: ElementId,
+        offset: Offset,
+    ) -> BoxedLayer;
 
     // ========== Lifecycle ==========
 
-    /// Attach this render object to a PipelineOwner
+    /// Called when this RenderObject is attached to the tree
     ///
-    /// Called when the render object is inserted into the render tree.
-    ///
-    /// # Arguments
-    ///
-    /// - `owner`: The PipelineOwner managing this render tree
-    fn attach(&mut self, _owner: Arc<RwLock<PipelineOwner>>) {
-        // Default: no attachment needed
+    /// Override to perform initialization when added to the ElementTree.
+    fn attach(&mut self) {
+        // Default: no-op
     }
 
-    /// Detach this render object from its PipelineOwner
+    /// Called when this RenderObject is detached from the tree
     ///
-    /// Called when the render object is removed from the render tree.
+    /// Override to perform cleanup when removed from the ElementTree.
     fn detach(&mut self) {
-        // Default: no detachment needed
+        // Default: no-op
     }
 
-    /// Dispose of this render object
+    /// Dispose of this RenderObject
     ///
-    /// Called when the render object is permanently removed.
-    /// Override to clean up resources.
+    /// Called when the RenderObject is permanently removed.
+    /// Override to clean up resources (textures, handles, etc.).
     fn dispose(&mut self) {
-        // Default: no disposal needed
+        // Default: no-op
     }
 
-    /// Adopt a child render object (takes ownership)
-    ///
-    /// Called when adding a child to this render object.
-    /// Transfers ownership of the child to this render object.
-    ///
-    /// This matches Flutter's adoptChild semantics - the child is moved
-    /// into the parent's ownership.
-    ///
-    /// # Arguments
-    ///
-    /// - `child`: The child render object to adopt (ownership transferred)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // For SingleRenderBox:
-    /// fn adopt_child(&mut self, child: Box<dyn DynRenderObject>) {
-    ///     self.setup_parent_data(&mut *child);
-    ///     self.child = Some(child);
-    ///     self.mark_needs_layout();
-    /// }
-    /// ```
-    fn adopt_child(&mut self, _child: Box<dyn DynRenderObject>) {
-        // Default: no children supported
-        // Leaf render objects don't override this
-        panic!("adopt_child() called on a RenderObject that doesn't support children");
-    }
+    // ========== Downcasting ==========
 
-    /// Drop a child render object (returns ownership)
+    /// Get as Any for downcasting
     ///
-    /// Called when removing a child from this render object.
-    /// Returns ownership of the child back to the caller.
-    ///
-    /// # Arguments
-    ///
-    /// - `child_ref`: Reference to the child to drop (for identification)
-    ///
-    /// # Returns
-    ///
-    /// The child render object if found, or None
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // For SingleRenderBox:
-    /// fn drop_child(&mut self, child_ref: &dyn DynRenderObject) -> Option<Box<dyn DynRenderObject>> {
-    ///     if let Some(child) = &self.child {
-    ///         if std::ptr::eq(child.as_ref(), child_ref) {
-    ///             let dropped = self.child.take();
-    ///             self.mark_needs_layout();
-    ///             return dropped;
-    ///         }
-    ///     }
-    ///     None
-    /// }
-    /// ```
-    fn drop_child(&mut self, _child_ref: &dyn DynRenderObject) -> Option<Box<dyn DynRenderObject>> {
-        // Default: no children
-        None
-    }
+    /// This enables `downcast_ref`/`downcast_mut` via the `DowncastSync` trait.
+    fn as_any(&self) -> &dyn Any;
 
-    // ========== Layout Optimization ==========
-
-    /// Whether the size depends only on the constraints
-    ///
-    /// Returns `true` if this render object's size is entirely determined
-    /// by its constraints (identical to `sized_by_parent()`).
-    ///
-    /// # Note
-    ///
-    /// This is very similar to `sized_by_parent()`. The difference is subtle:
-    /// - `sized_by_parent()`: optimization flag
-    /// - `sizes_are_determined_by_constraints()`: General query method
-    ///
-    /// In practice, they usually return the same value.
-    #[must_use]
-    #[inline]
-    fn sizes_are_determined_by_constraints(&self) -> bool {
-        false
-    }
-
-    /// Perform resize (optimization for constraint-only sizing)
-    ///
-    /// Called when `sized_by_parent()` is true and constraints change.
-    /// Sets the size without laying out children.
-    fn perform_resize(&mut self) {
-        // Default: no resize optimization
-    }
-
-    /// Perform layout (main layout logic)
-    ///
-    /// Called to compute the size and position of children.
-    /// Override this to implement layout logic.
-    fn perform_layout(&mut self) {
-        // Default: no layout logic
-    }
-
-    // ========== Clipping ==========
-
-    /// Paint bounds for clipping
-    ///
-    /// Returns the bounds that should be used for clipping children.
-    /// Default is the size of this render object.
-    ///
-    /// # Returns
-    ///
-    /// Rectangle defining the paint bounds
-    #[must_use]
-    fn paint_bounds(&self) -> flui_types::Rect {
-        flui_types::Rect::from_xywh(0.0, 0.0, self.size().width, self.size().height)
-    }
-
-    /// Apply the paint transform to descendants
-    ///
-    /// Returns the transform matrix to apply to a child during painting.
-    /// Override this to implement transforms (e.g., rotation, scaling).
-    ///
-    /// # Arguments
-    ///
-    /// - `child`: The child to get transform for
-    ///
-    /// # Returns
-    ///
-    /// Transform matrix (default: identity)
-    #[must_use]
-    fn apply_paint_transform(&self, _child: &dyn DynRenderObject) -> glam::Mat4 {
-        glam::Mat4::IDENTITY
-    }
+    /// Get as Any (mutable) for downcasting
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 // Enable downcasting for DynRenderObject trait objects
 impl_downcast!(sync DynRenderObject);
 
-/// Boxed render object trait object
+/// Boxed RenderObject trait object
 ///
-/// Commonly used for heterogeneous collections of render objects.
+/// Commonly used for heterogeneous collections of RenderObjects.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_core::BoxedRenderObject;
 ///
-/// let render_objects: Vec<BoxedRenderObject> = vec![
-///     Box::new(RenderText::new("Hello")),
+/// let children: Vec<BoxedRenderObject> = vec![
+///     Box::new(RenderParagraph::new("Hello")),
 ///     Box::new(RenderImage::new(image)),
 /// ];
 /// ```
 pub type BoxedRenderObject = Box<dyn DynRenderObject>;
+
+// ========== Blanket Implementation ==========
+
+/// Blanket implementation: all RenderObject types are also DynRenderObject
+///
+/// This automatically provides DynRenderObject for any type implementing RenderObject.
+/// The implementation bridges between the typed RenderObject API and the dynamic
+/// DynRenderObject API.
+impl<T> DynRenderObject for T
+where
+    T: crate::RenderObject + fmt::Debug,
+{
+    fn arity(&self) -> Option<usize> {
+        <T as crate::RenderObject>::Arity::CHILD_COUNT
+    }
+
+    fn debug_name(&self) -> &'static str {
+        <T as crate::RenderObject>::debug_name(self)
+    }
+
+    fn intrinsic_width(&self, height: Option<f32>) -> Option<f32> {
+        <T as crate::RenderObject>::intrinsic_width(self, height)
+    }
+
+    fn intrinsic_height(&self, width: Option<f32>) -> Option<f32> {
+        <T as crate::RenderObject>::intrinsic_height(self, width)
+    }
+
+    fn dyn_layout(
+        &mut self,
+        tree: &ElementTree,
+        element_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        use crate::LayoutCx;
+        let mut cx = LayoutCx::<T::Arity>::new(tree, element_id, constraints);
+        <T as crate::RenderObject>::layout(self, &mut cx)
+    }
+
+    fn dyn_paint(
+        &self,
+        tree: &ElementTree,
+        element_id: ElementId,
+        offset: Offset,
+    ) -> BoxedLayer {
+        use crate::PaintCx;
+        let cx = PaintCx::<T::Arity>::new(tree, element_id, offset);
+        <T as crate::RenderObject>::paint(self, &cx)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RenderObject, LeafArity, SingleArity, MultiArity, LayoutCx, PaintCx};
+    use flui_types::Size;
+    use flui_engine::{BoxedLayer, ContainerLayer};
+
+    // Test RenderObjects
+    #[derive(Debug)]
+    struct TestLeaf;
+
+    impl RenderObject for TestLeaf {
+        type Arity = LeafArity;
+
+        fn layout(&mut self, _cx: &mut LayoutCx<Self::Arity>) -> Size {
+            Size::new(100.0, 100.0)
+        }
+
+        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+            Box::new(ContainerLayer::new())
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestSingle;
+
+    impl RenderObject for TestSingle {
+        type Arity = SingleArity;
+
+        fn layout(&mut self, _cx: &mut LayoutCx<Self::Arity>) -> Size {
+            Size::new(200.0, 200.0)
+        }
+
+        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+            Box::new(ContainerLayer::new())
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestMulti;
+
+    impl RenderObject for TestMulti {
+        type Arity = MultiArity;
+
+        fn layout(&mut self, _cx: &mut LayoutCx<Self::Arity>) -> Size {
+            Size::new(300.0, 300.0)
+        }
+
+        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+            Box::new(ContainerLayer::new())
+        }
+    }
+
+    #[test]
+    fn test_arity_runtime_values() {
+        let leaf: Box<dyn DynRenderObject> = Box::new(TestLeaf);
+        let single: Box<dyn DynRenderObject> = Box::new(TestSingle);
+        let multi: Box<dyn DynRenderObject> = Box::new(TestMulti);
+
+        assert_eq!(leaf.arity(), Some(0));
+        assert_eq!(single.arity(), Some(1));
+        assert_eq!(multi.arity(), None);
+    }
+
+    #[test]
+    fn test_heterogeneous_storage() {
+        let render_objects: Vec<Box<dyn DynRenderObject>> = vec![
+            Box::new(TestLeaf),
+            Box::new(TestSingle),
+            Box::new(TestMulti),
+        ];
+
+        assert_eq!(render_objects.len(), 3);
+        assert_eq!(render_objects[0].arity(), Some(0));
+        assert_eq!(render_objects[1].arity(), Some(1));
+        assert_eq!(render_objects[2].arity(), None);
+    }
+
+    #[test]
+    fn test_downcast() {
+        let render_obj: Box<dyn DynRenderObject> = Box::new(TestLeaf);
+
+        // Successful downcast
+        assert!(render_obj.downcast_ref::<TestLeaf>().is_some());
+
+        // Failed downcast
+        assert!(render_obj.downcast_ref::<TestSingle>().is_none());
+    }
+
+    #[test]
+    fn test_debug_names() {
+        let leaf: Box<dyn DynRenderObject> = Box::new(TestLeaf);
+
+        let name = leaf.debug_name();
+        assert!(name.contains("TestLeaf"));
+    }
+
+    #[test]
+    fn test_lifecycle_methods() {
+        let mut render_obj: Box<dyn DynRenderObject> = Box::new(TestLeaf);
+
+        // These should not panic (default no-op implementations)
+        render_obj.attach();
+        render_obj.detach();
+        render_obj.dispose();
+    }
+}

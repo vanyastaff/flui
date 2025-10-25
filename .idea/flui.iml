@@ -14,6 +14,9 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_painting/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_widgets/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_derive/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_engine/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_engine/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

@@ -1,306 +1,30 @@
 //! ParentDataWidget - Configures parent data on RenderObject children
+//!
+//! ParentDataWidget is used by layout widgets to attach layout-specific data
+//! to their children in the element tree.
 
-use std::any::TypeId;
-use std::fmt;
-use std::marker::PhantomData;
-use std::sync::Arc;
-
-use parking_lot::RwLock;
-
-use crate::{
-    DynElement, DynRenderObject, DynWidget, Element, ElementId, ElementLifecycle, ElementTree,
-    ParentData, ProxyWidget,
-};
+use super::{Widget, DynWidget, ProxyWidget, sealed};
+use crate::render::ParentData;
+use crate::element::ParentDataElement;
 
 /// Widget that configures parent data on RenderObject children
 ///
 /// ParentDataWidget is used by layout widgets to attach layout-specific data
-/// to their children in the ElementTree. For example:
-/// - `Positioned` (for Stack) sets offset in StackParentData
+/// to their children. For example:
 /// - `Flexible` (for Row/Column) sets flex factor in FlexParentData
+/// - `Positioned` (for Stack) sets offset in StackParentData
 ///
 /// The parent data is created when the child is mounted.
-pub trait ParentDataWidget<T: ParentData>: ProxyWidget {
-    /// Create parent data for the child
-    ///
-    /// This is called when the child is mounted or when this widget updates.
-    /// The returned ParentData will be stored in ElementTree for the child.
-    fn create_parent_data(&self) -> Box<dyn ParentData>;
-
-    /// Debug: Typical ancestor widget class that should contain this widget
-    ///
-    /// For example, `Flexible` returns "Flex" (Row/Column)
-    fn debug_typical_ancestor_widget_class(&self) -> &'static str;
-
-    /// Can this widget apply parent data out of turn?
-    ///
-    /// Some parent data widgets can apply their data even if they're not
-    /// direct children of the RenderObject widget. This is an optimization.
-    fn debug_can_apply_out_of_turn(&self) -> bool {
-        false
-    }
-}
-
-/// Element for ParentDataWidget
-///
-/// Manages a single child and applies parent data to descendant RenderObjects.
-pub struct ParentDataElement<W, T>
-where
-    W: ParentDataWidget<T>,
-    T: ParentData,
-{    widget: W,
-    parent: Option<ElementId>,
-    dirty: bool,
-    lifecycle: ElementLifecycle,
-    tree: Option<Arc<RwLock<ElementTree>>>,
-    child: Option<ElementId>,
-    _phantom: PhantomData<T>,
-}
-
-impl<W, T> ParentDataElement<W, T>
-where
-    W: ParentDataWidget<T>,
-    T: ParentData,
-{
-    pub fn new(widget: W) -> Self {
-        Self {            widget,
-            parent: None,
-            dirty: true,
-            lifecycle: ElementLifecycle::Initial,
-            tree: None,
-            child: None,
-            _phantom: PhantomData,
-        }
-    }
-
-    /// Apply parent data to all descendant RenderObjects
-    ///
-    /// This walks down the tree and sets parent data on the first
-    /// RenderObject element it finds.
-    fn apply_parent_data_to_descendants(&self) {
-        if let Some(child_id) = self.child {
-            if let Some(tree) = &self.tree {
-                self.set_parent_data_on_render_object(tree, child_id);
-            }
-        }
-    }
-
-    /// Recursively find RenderObject element and set parent data
-    fn set_parent_data_on_render_object(&self, tree: &Arc<RwLock<ElementTree>>, element_id: ElementId) {
-        let tree_guard = tree.read();
-
-        if let Some(element) = tree_guard.get(element_id) {
-            // If this element has a RenderObject, set parent data in tree
-            if element.render_object().is_some() {
-                drop(tree_guard);
-
-                // Create parent data and set it in ElementTree
-                let parent_data = self.widget.create_parent_data();
-                tree.write().set_parent_data(element_id, parent_data);
-
-                tracing::debug!("ParentDataElement: set parent_data for RenderObject element {}", element_id);
-            } else {
-                // No RenderObject, recurse into children to find one
-                let children: Vec<ElementId> = element.children_iter().collect();
-                drop(tree_guard);
-
-                for child_id in children {
-                    self.set_parent_data_on_render_object(tree, child_id);
-                }
-            }
-        }
-    }
-
-    /// Get the widget
-    pub fn widget(&self) -> &W {
-        &self.widget
-    }
-}
-
-impl<W, T> fmt::Debug for ParentDataElement<W, T>
-where
-    W: ParentDataWidget<T>,
-    T: ParentData,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ParentDataElement")
-            .field("widget_type", &std::any::type_name::<W>())
-            .field("parent", &self.parent)
-            .field("dirty", &self.dirty)
-            .field("lifecycle", &self.lifecycle)
-            .field("child", &self.child)
-            .finish()
-    }
-}
-
-// ========== Implement DynElement for ParentDataElement ==========
-
-impl<W, T> DynElement for ParentDataElement<W, T>
-where
-    W: ParentDataWidget<T> + crate::Widget<Element = ParentDataElement<W, T>>,
-    T: ParentData,
-{    fn parent(&self) -> Option<ElementId> {
-        self.parent
-    }
-
-    fn key(&self) -> Option<&dyn crate::foundation::Key> {
-        ProxyWidget::key(&self.widget)
-    }
-
-    fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
-        self.parent = parent;
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true;
-    }
-
-    fn unmount(&mut self) {
-        // Unmount child first
-        if let Some(child_id) = self.child.take() {
-            if let Some(tree) = &self.tree {
-                tree.write().remove(child_id);
-            }
-        }
-
-        self.lifecycle = ElementLifecycle::Defunct;
-    }
-
-    fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
-        // Try to downcast to our widget type
-        if let Ok(new_widget_typed) = new_widget.downcast::<W>() {
-            self.widget = *new_widget_typed;
-            self.mark_dirty();
-
-            // Re-apply parent data after update
-            self.apply_parent_data_to_descendants();
-        }
-    }
-
-    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
-        if !self.dirty {
-            return Vec::new();
-        }
-        self.dirty = false;
-
-        // ParentDataWidget just wraps its child widget
-        let child_widget: Box<dyn DynWidget> = dyn_clone::clone_box(self.widget.child());
-
-        // Mark old child for unmounting
-        self.child = None;
-
-        // NOTE: Parent data will be applied after the child is mounted
-        // via set_child_after_mount(), but we can't do it there due to deadlock.
-        // Instead, we'll apply it later when we have access to the tree without locks.
-
-        // Return the child that needs to be mounted
-        vec![(element_id, child_widget, 0)]
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.dirty
-    }
-
-    fn mark_dirty(&mut self) {
-        self.dirty = true;
-    }
-
-    fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-    }
-
-    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
-        Box::new(self.child.into_iter())
-    }
-
-    fn set_tree_ref(&mut self, tree: Arc<RwLock<ElementTree>>) {
-        self.tree = Some(tree);
-    }
-
-    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
-        self.child.take()
-    }
-
-    fn set_child_after_mount(&mut self, child_id: ElementId) {
-        self.child = Some(child_id);
-
-        // DEFER parent data application to avoid deadlock during rebuild
-        // The parent data will be applied during the first layout phase
-        // when the tree is not locked.
-        //
-        // Calling apply_parent_data_to_descendants() here causes a deadlock
-        // because we're being called from insert_child() which is called from
-        // rebuild() which holds a write lock on the tree, and
-        // apply_parent_data_to_descendants() tries to acquire a read lock.
-    }
-
-    fn widget_type_id(&self) -> TypeId {
-        TypeId::of::<W>()
-    }
-
-    fn widget(&self) -> &dyn crate::DynWidget {
-        &self.widget
-    }
-
-    fn render_object(&self) -> Option<&dyn DynRenderObject> {
-        None // ParentDataElement doesn't have RenderObject
-    }
-
-    fn render_object_mut(&mut self) -> Option<&mut dyn DynRenderObject> {
-        None // ParentDataElement doesn't have RenderObject
-    }
-
-    fn did_change_dependencies(&mut self) {
-        // Default: do nothing
-    }
-
-    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
-        // Default: do nothing (single child)
-    }
-
-    fn forget_child(&mut self, child_id: ElementId) {
-        if self.child == Some(child_id) {
-            self.child = None;
-        }
-    }
-}
-
-// ========== Implement Element for ParentDataElement ==========
-
-impl<W, T> Element for ParentDataElement<W, T>
-where
-    W: ParentDataWidget<T> + crate::Widget<Element = ParentDataElement<W, T>>,
-    T: ParentData,
-{
-    type Widget = W;
-
-    fn update(&mut self, new_widget: W) {
-        self.widget = new_widget;
-        self.mark_dirty();
-
-        // Re-apply parent data after update
-        self.apply_parent_data_to_descendants();
-    }
-
-    fn widget(&self) -> &W {
-        &self.widget
-    }
-}
-
-/// Macro to implement Widget for ParentDataWidget types
 ///
 /// # Example
 ///
 /// ```rust,ignore
+/// use flui_core::{ParentDataWidget, ProxyWidget, ParentData};
+/// use flui_rendering::FlexParentData;
+///
 /// #[derive(Debug, Clone)]
 /// struct Flexible {
-///     flex: u32,
+///     flex: i32,
 ///     child: Box<dyn DynWidget>,
 /// }
 ///
@@ -311,40 +35,132 @@ where
 /// }
 ///
 /// impl ParentDataWidget<FlexParentData> for Flexible {
-///     fn apply_parent_data(&self, render_object: &mut dyn DynRenderObject) {
-///         // Apply flex data
+///     fn create_parent_data(&self) -> Box<dyn ParentData> {
+///         Box::new(FlexParentData::new(self.flex, FlexFit::Loose))
 ///     }
 ///
 ///     fn debug_typical_ancestor_widget_class(&self) -> &'static str {
 ///         "Flex"
 ///     }
 /// }
-///
-/// impl_widget_for_parent_data!(Flexible, FlexParentData);
 /// ```
-#[macro_export]
-macro_rules! impl_widget_for_parent_data {
-    ($widget_type:ty, $parent_data_type:ty) => {
-        impl $crate::Widget for $widget_type {
-            type Element = $crate::ParentDataElement<$widget_type, $parent_data_type>;
+///
+/// # Automatic Widget Implementation
+///
+/// ParentDataWidget automatically implements `Widget` and `DynWidget` via blanket impl:
+/// ```rust,ignore
+/// impl<W, T> Widget for W where W: ParentDataWidget<T>, T: ParentData {
+///     type Kind = ParentDataKind;
+/// }
+/// ```
+pub trait ParentDataWidget<T: ParentData>: ProxyWidget {
+    /// Create parent data for the child
+    ///
+    /// This is called when the child is mounted or when this widget updates.
+    /// The returned ParentData will be stored in ElementTree for the child.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn create_parent_data(&self) -> Box<dyn ParentData> {
+    ///     Box::new(FlexParentData::new(self.flex, self.fit))
+    /// }
+    /// ```
+    fn create_parent_data(&self) -> Box<dyn ParentData>;
 
-            fn into_element(self) -> Self::Element {
-                $crate::ParentDataElement::new(self)
-            }
-        }
-    };
+    /// Debug: Typical ancestor widget class that should contain this widget
+    ///
+    /// For example, `Flexible` returns "Flex" (Row/Column).
+    /// This is used for debug assertions and error messages.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn debug_typical_ancestor_widget_class(&self) -> &'static str {
+    ///     "Flex"  // Flexible should be inside Row/Column
+    /// }
+    /// ```
+    fn debug_typical_ancestor_widget_class(&self) -> &'static str;
+
+    /// Can this widget apply parent data out of turn?
+    ///
+    /// Some parent data widgets can apply their data even if they're not
+    /// direct children of the RenderObject widget. This is an optimization.
+    ///
+    /// Default is `false` - most parent data widgets must be direct children.
+    fn debug_can_apply_out_of_turn(&self) -> bool {
+        false
+    }
+}
+
+// ========== Automatic Implementations ==========
+
+/// Automatically implement sealed::Sealed for all ParentDataWidgets
+///
+/// This makes ParentDataWidget types eligible for the Widget trait.
+/// The ElementType is set to ParentDataElement<W, T>.
+impl<W, T> sealed::Sealed for W
+where
+    W: ParentDataWidget<T>,
+    T: ParentData,
+{
+    type ElementType = ParentDataElement<W, T>;
+}
+
+/// Automatically implement Widget for all ParentDataWidgets
+///
+/// Thanks to the sealed trait pattern, this blanket impl doesn't conflict
+/// with other widget type implementations.
+impl<W, T> Widget for W
+where
+    W: ParentDataWidget<T>,
+    T: ParentData,
+{
+    fn key(&self) -> Option<&str> {
+        None
+    }
+
+    fn into_element(self) -> ParentDataElement<W, T> {
+        ParentDataElement::new(self)
+    }
+}
+
+/// Automatically implement DynWidget for all ParentDataWidgets
+impl<W, T> DynWidget for W
+where
+    W: ParentDataWidget<T>,
+    T: ParentData,
+{
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BoxParentData, Context, StatelessWidget};
+    use crate::{BoxParentData, RenderObjectWidget, RenderObject, LeafArity, LayoutCx, PaintCx, RenderObjectKind};
+    use flui_types::Size;
+    use flui_engine::{BoxedLayer, ContainerLayer};
 
     // Test parent data widget
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     struct TestParentDataWidget {
         value: i32,
         child: Box<dyn DynWidget>,
+    }
+
+    impl Clone for TestParentDataWidget {
+        fn clone(&self) -> Self {
+            Self {
+                value: self.value,
+                child: self.child.clone(),
+            }
+        }
     }
 
     impl ProxyWidget for TestParentDataWidget {
@@ -363,62 +179,67 @@ mod tests {
         }
     }
 
-    impl_widget_for_parent_data!(TestParentDataWidget, BoxParentData);
+    // Widget and DynWidget are automatically implemented via blanket impl!
 
     // Dummy child widget
     #[derive(Debug, Clone)]
     struct ChildWidget;
 
-    impl StatelessWidget for ChildWidget {
-        fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
-            Box::new(ChildWidget)
+    impl Widget for ChildWidget {
+        type Kind = RenderObjectKind;
+    }
+
+    impl DynWidget for ChildWidget {
+        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    }
+
+    impl RenderObjectWidget for ChildWidget {
+        type Arity = LeafArity;
+        type Render = ChildRender;
+
+        fn create_render_object(&self) -> Self::Render {
+            ChildRender
+        }
+
+        fn update_render_object(&self, _render: &mut Self::Render) {}
+    }
+
+    #[derive(Debug)]
+    struct ChildRender;
+
+    impl RenderObject for ChildRender {
+        type Arity = LeafArity;
+
+        fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+            cx.constraints().constrain(Size::ZERO)
+        }
+
+        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+            Box::new(ContainerLayer::new())
         }
     }
 
     #[test]
-    fn test_parent_data_widget_create_element() {
+    fn test_parent_data_widget_creation() {
         let widget = TestParentDataWidget {
             value: 42,
             child: Box::new(ChildWidget),
         };
-        let element = widget.create_element();
 
-        assert!(element.is_dirty());
-        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
+        assert_eq!(widget.value, 42);
+        let _child = widget.child();
     }
 
     #[test]
-    fn test_parent_data_element_mount() {
+    fn test_parent_data_widget_create_parent_data() {
         let widget = TestParentDataWidget {
             value: 42,
             child: Box::new(ChildWidget),
         };
-        let mut element = ParentDataElement::new(widget);
 
-        let parent_id = unsafe { ElementId::from_raw(100) };
-        element.mount(Some(parent_id), 0);
-
-        assert_eq!(element.parent(), Some(parent_id));
-        assert!(element.is_dirty());
-        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
-    }
-
-    #[test]
-    fn test_parent_data_element_update() {
-        let widget1 = TestParentDataWidget {
-            value: 1,
-            child: Box::new(ChildWidget),
-        };
-        let mut element = ParentDataElement::new(widget1);
-
-        let widget2 = TestParentDataWidget {
-            value: 2,
-            child: Box::new(ChildWidget),
-        };
-        element.update(widget2);
-
-        assert_eq!(element.widget().value, 2);
-        assert!(element.is_dirty());
+        let parent_data = widget.create_parent_data();
+        assert!(parent_data.is::<BoxParentData>());
     }
 
     #[test]
@@ -427,10 +248,9 @@ mod tests {
             value: 42,
             child: Box::new(ChildWidget),
         };
-        let element = ParentDataElement::new(widget);
 
         assert_eq!(
-            element.widget().debug_typical_ancestor_widget_class(),
+            widget.debug_typical_ancestor_widget_class(),
             "TestContainer"
         );
     }
@@ -444,5 +264,27 @@ mod tests {
 
         // Default implementation returns false
         assert!(!widget.debug_can_apply_out_of_turn());
+    }
+
+    #[test]
+    fn test_parent_data_widget_clone() {
+        let widget = TestParentDataWidget {
+            value: 42,
+            child: Box::new(ChildWidget),
+        };
+
+        let cloned = widget.clone();
+        assert_eq!(cloned.value, 42);
+    }
+
+    #[test]
+    fn test_parent_data_widget_implements_widget() {
+        let widget = TestParentDataWidget {
+            value: 42,
+            child: Box::new(ChildWidget),
+        };
+
+        // Should compile - Widget is automatically implemented
+        let _key: Option<&str> = widget.key();
     }
 }

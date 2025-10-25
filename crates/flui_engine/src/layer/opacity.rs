@@ -1,0 +1,85 @@
+//! Opacity layer - applies opacity to child layer
+
+use flui_types::Rect;
+use crate::layer::{Layer, BoxedLayer};
+use crate::painter::Painter;
+
+/// Layer that applies opacity to its child
+///
+/// Opacity is applied multiplicatively - if this layer has opacity 0.5
+/// and the parent also has opacity 0.5, the effective opacity is 0.25.
+///
+/// # Example
+///
+/// ```text
+/// OpacityLayer (opacity: 0.5)
+///   └─ PictureLayer (draws red box)
+/// Result: Semi-transparent red box
+/// ```
+pub struct OpacityLayer {
+    /// The child layer to apply opacity to
+    child: BoxedLayer,
+
+    /// Opacity value (0.0 = transparent, 1.0 = opaque)
+    opacity: f32,
+}
+
+impl OpacityLayer {
+    /// Create a new opacity layer
+    ///
+    /// # Arguments
+    /// * `child` - The child layer to apply opacity to
+    /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque)
+    pub fn new(child: BoxedLayer, opacity: f32) -> Self {
+        debug_assert!(opacity >= 0.0 && opacity <= 1.0, "Opacity must be between 0.0 and 1.0");
+
+        Self {
+            child,
+            opacity: opacity.clamp(0.0, 1.0),
+        }
+    }
+
+    /// Get the opacity value
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    /// Set the opacity value
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.0, 1.0);
+    }
+
+    /// Get the child layer
+    pub fn child(&self) -> &BoxedLayer {
+        &self.child
+    }
+}
+
+impl Layer for OpacityLayer {
+    fn paint(&self, painter: &mut dyn Painter) {
+        if self.opacity <= 0.0 {
+            // Fully transparent - skip painting
+            return;
+        }
+
+        if self.opacity >= 1.0 {
+            // Fully opaque - just paint child directly
+            self.child.paint(painter);
+            return;
+        }
+
+        // Apply opacity and paint child
+        painter.save();
+        painter.set_opacity(self.opacity);
+        self.child.paint(painter);
+        painter.restore();
+    }
+
+    fn bounds(&self) -> Rect {
+        self.child.bounds()
+    }
+
+    fn is_visible(&self) -> bool {
+        self.opacity > 0.0 && self.child.is_visible()
+    }
+}

@@ -1,69 +1,88 @@
 //! ComponentElement for StatelessWidget
+//!
+//! This element type is created by StatelessWidget and calls build() to create
+//! its child widget tree.
 
 use std::fmt;
-use std::sync::Arc;
 
-use parking_lot::RwLock;
-use crate::foundation::Key;
+use crate::{ElementId, StatelessWidget, DynWidget, BoxedWidget};
+use super::dyn_element::{DynElement, ElementLifecycle};
 
-use crate::{ElementId, StatelessWidget, Context};
-use crate::tree::ElementTree;
-use super::{Element, DynElement, ElementLifecycle};
-use crate::DynWidget;
-
-/// Element for StatelessWidget (calls build() to create child)
+/// Element for StatelessWidget
 ///
-/// Note: Element ID is its Slab index in ElementTree (not stored here)
+/// ComponentElement holds a StatelessWidget and calls its build() method
+/// to create a child widget. When the widget is updated or marked dirty,
+/// it rebuilds by calling build() again.
+///
+/// # Architecture
+///
+/// ```text
+/// ComponentElement<StatelessWidget>
+///   ├─ widget: W (immutable config)
+///   ├─ child: Option<ElementId> (single child from build())
+///   └─ lifecycle state
+/// ```
 pub struct ComponentElement<W: StatelessWidget> {
+    /// The widget this element represents
     widget: W,
+
+    /// Parent element ID
     parent: Option<ElementId>,
-    dirty: bool,
-    lifecycle: ElementLifecycle,
+
     /// Child element created by build()
     child: Option<ElementId>,
-    /// Reference to element tree for building children
-    tree: Option<Arc<RwLock<ElementTree>>>,
+
+    /// Slot position in parent's child list
+    slot: usize,
+
+    /// Lifecycle state
+    lifecycle: ElementLifecycle,
+
+    /// Dirty flag (needs rebuild)
+    dirty: bool,
 }
 
 impl<W: StatelessWidget> ComponentElement<W> {
-    /// Create new component element from a widget
+    /// Create a new ComponentElement from a widget
     pub fn new(widget: W) -> Self {
         Self {
             widget,
             parent: None,
-            dirty: true,
-            lifecycle: ElementLifecycle::Initial,
             child: None,
-            tree: None,
+            slot: 0,
+            lifecycle: ElementLifecycle::Initial,
+            dirty: true,
         }
+    }
+
+    /// Get reference to the widget
+    pub fn widget(&self) -> &W {
+        &self.widget
+    }
+
+    /// Update with a new widget
+    pub fn update(&mut self, new_widget: W) {
+        self.widget = new_widget;
+        self.dirty = true;
     }
 
     /// Perform rebuild
     ///
-    /// Returns list of children to mount: (parent_id, child_widget, slot)
-    fn perform_rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn crate::DynWidget>, usize)> {
+    /// Calls build() on the widget and returns the child widget that needs
+    /// to be mounted.
+    ///
+    /// Returns: Vec<(parent_id, child_widget, slot)>
+    fn perform_rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
 
         self.dirty = false;
 
-        let tree = match &self.tree {
-            Some(t) => t.clone(),
-            None => {
-                // No tree reference yet - this happens during initial mount
-                // The tree will be set later via set_tree()
-                return Vec::new();
-            }
-        };
-
-        // Create build context
-        let context = Context::new(tree.clone(), element_id);
-
         // Call build() on the widget to get child widget
-        let child_widget = self.widget.build(&context);
+        let child_widget = self.widget.build();
 
-        // Mark old child for unmounting (will be handled by caller)
+        // Clear old child (will be unmounted by caller if needed)
         self.child = None;
 
         // Return the child that needs to be mounted
@@ -75,9 +94,9 @@ impl<W: StatelessWidget> ComponentElement<W> {
         self.child = Some(child_id);
     }
 
-    /// Get old child ID and clear it (for unmounting before rebuild)
-    pub(crate) fn take_old_child(&mut self) -> Option<ElementId> {
-        self.child.take()
+    /// Get child ID
+    pub fn child(&self) -> Option<ElementId> {
+        self.child
     }
 }
 
@@ -87,39 +106,52 @@ impl<W: StatelessWidget> fmt::Debug for ComponentElement<W> {
             .field("widget_type", &std::any::type_name::<W>())
             .field("widget", &self.widget)
             .field("parent", &self.parent)
-            .field("dirty", &self.dirty)
             .field("child", &self.child)
+            .field("dirty", &self.dirty)
+            .field("lifecycle", &self.lifecycle)
             .finish()
     }
 }
 
-// ========== Implement DynElement for ComponentElement ==========
+// ========== Implement DynElement ==========
 
 impl<W: StatelessWidget> DynElement for ComponentElement<W> {
     fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
-    fn key(&self) -> Option<&dyn Key> {
-        DynWidget::key(&self.widget)
+    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        Box::new(self.child.into_iter())
     }
 
-    fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
+    fn lifecycle(&self) -> ElementLifecycle {
+        self.lifecycle
+    }
+
+    fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
         self.parent = parent;
+        self.slot = slot;
         self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true;
+        self.dirty = true; // Will rebuild on first frame
     }
 
     fn unmount(&mut self) {
         self.lifecycle = ElementLifecycle::Defunct;
+        // Child will be unmounted by ElementTree
+        self.child = None;
+    }
 
-        // Unmount child if exists
-        if let Some(child_id) = self.child.take() {
-            if let Some(tree) = &self.tree {
-                let mut tree_guard = tree.write();
-                tree_guard.remove(child_id);
-            }
-        }
+    fn deactivate(&mut self) {
+        self.lifecycle = ElementLifecycle::Inactive;
+    }
+
+    fn activate(&mut self) {
+        self.lifecycle = ElementLifecycle::Active;
+        self.dirty = true; // Rebuild when reactivated
+    }
+
+    fn widget(&self) -> &dyn DynWidget {
+        &self.widget
     }
 
     fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
@@ -130,10 +162,6 @@ impl<W: StatelessWidget> DynElement for ComponentElement<W> {
         }
     }
 
-    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)> {
-        self.perform_rebuild(element_id)
-    }
-
     fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -142,60 +170,8 @@ impl<W: StatelessWidget> DynElement for ComponentElement<W> {
         self.dirty = true;
     }
 
-    fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
-        // Note: child stays attached but inactive
-        // Will be unmounted if not reactivated before frame end
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        // Element is being reinserted into tree (GlobalKey reparenting)
-        self.dirty = true; // Mark for rebuild in new location
-    }
-
-    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
-        Box::new(self.child.into_iter())
-    }
-
-    fn set_tree_ref(&mut self, tree: Arc<RwLock<ElementTree>>) {
-        self.tree = Some(tree);
-    }
-
-    fn take_old_child_for_rebuild(&mut self) -> Option<ElementId> {
-        self.take_old_child()
-    }
-
-    fn set_child_after_mount(&mut self, child_id: ElementId) {
-        self.set_child(child_id)
-    }
-
-    fn widget_type_id(&self) -> std::any::TypeId {
-        std::any::TypeId::of::<W>()
-    }
-
-    fn widget(&self) -> &dyn crate::DynWidget {
-        &self.widget
-    }
-
-    fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
-        None // ComponentElement doesn't have RenderObject
-    }
-
-    fn render_object_mut(&mut self) -> Option<&mut dyn crate::DynRenderObject> {
-        None // ComponentElement doesn't have RenderObject
-    }
-
-    fn did_change_dependencies(&mut self) {
-        // Default: do nothing for StatelessWidget
-    }
-
-    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
-        // Default: do nothing (single child)
+    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+        self.perform_rebuild(element_id)
     }
 
     fn forget_child(&mut self, child_id: ElementId) {
@@ -203,20 +179,70 @@ impl<W: StatelessWidget> DynElement for ComponentElement<W> {
             self.child = None;
         }
     }
+
+    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+        // Single child, slot is always 0
+    }
 }
 
-// ========== Implement Element for ComponentElement (with associated types) ==========
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl<W: StatelessWidget> Element for ComponentElement<W> {
-    type Widget = W;
-
-    fn update(&mut self, new_widget: W) {
-        // Zero-cost! No downcast needed!
-        self.widget = new_widget;
-        self.dirty = true;
+    #[derive(Debug, Clone)]
+    struct TestWidget {
+        value: i32,
     }
 
-    fn widget(&self) -> &W {
-        &self.widget
+    impl StatelessWidget for TestWidget {
+        fn build(&self) -> BoxedWidget {
+            // Return another TestWidget with different value for testing
+            Box::new(TestWidget { value: self.value + 1 })
+        }
+    }
+
+    #[test]
+    fn test_component_element_creation() {
+        let widget = TestWidget { value: 42 };
+        let element = ComponentElement::new(widget.clone());
+
+        assert_eq!(element.widget().value, 42);
+        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
+        assert!(element.is_dirty());
+    }
+
+    #[test]
+    fn test_component_element_mount() {
+        let widget = TestWidget { value: 42 };
+        let mut element = ComponentElement::new(widget);
+
+        element.mount(Some(0), 0);
+
+        assert_eq!(element.parent(), Some(0));
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+    }
+
+    #[test]
+    fn test_component_element_update() {
+        let widget = TestWidget { value: 42 };
+        let mut element = ComponentElement::new(widget);
+
+        element.update(TestWidget { value: 100 });
+
+        assert_eq!(element.widget().value, 100);
+        assert!(element.is_dirty());
+    }
+
+    #[test]
+    fn test_component_element_rebuild() {
+        let widget = TestWidget { value: 42 };
+        let mut element = ComponentElement::new(widget);
+        element.mount(Some(0), 0);
+
+        let children = element.rebuild(1);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].0, 1); // parent_id
+        assert!(!element.is_dirty()); // Should be clean after rebuild
     }
 }

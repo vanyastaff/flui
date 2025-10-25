@@ -2,46 +2,44 @@
 name = "flui_core"
 version.workspace = true
 edition.workspace = true
-authors.workspace = true
+authors = ["FLUI Team"]
 license.workspace = true
-description = "Core traits and types for Flui framework"
+description = "Typed core for FLUI - RenderObject with compile-time arity constraints"
 repository.workspace = true
 
 [dependencies]
+# Internal dependencies
 flui_types = { path = "../flui_types" }
+flui_engine = { path = "../flui_engine" }
+
+# Essential dependencies
 parking_lot.workspace = true
-serde = { workspace = true, optional = true }
 thiserror.workspace = true
-dyn-clone.workspace = true
-downcast-rs.workspace = true
-egui.workspace = true
 tracing.workspace = true
-ahash.workspace = true
-glam.workspace = true
-smallvec = { workspace = true, features = ["union", "const_generics"] }
+smallvec.workspace = true
 bitflags.workspace = true
-itertools.workspace = true
+downcast-rs.workspace = true
+dyn-clone.workspace = true
+
+# Cache and performance
+moka = { workspace = true, features = ["sync"] }
+ahash.workspace = true
+
+# For element tree
 slab = "0.4"
 
-# Performance optimization dependencies
-once_cell.workspace = true
-moka = { workspace = true, features = ["sync"] }
-lasso.workspace = true
-
-# Profiling dependencies (optional)
+# Optional features
+serde = { workspace = true, optional = true }
 puffin = { version = "0.19", optional = true }
-puffin_http = { workspace = true, optional = true }
-tracy-client = { version = "0.17", optional = true, default-features = false }
-rand = "0.10.0-rc.0"
-serde_json = "1.0.145"
 
 [dev-dependencies]
 criterion.workspace = true
-futures = "0.3"
 
 [features]
 default = []
 serde = ["dep:serde"]
-profiling = ["dep:puffin", "dep:puffin_http"]
-tracy = ["dep:tracy-client"]
-full-profiling = ["profiling", "tracy"]
+profiling = ["dep:puffin"]
+
+[lib]
+name = "flui_core"
+path = "src/lib.rs"
