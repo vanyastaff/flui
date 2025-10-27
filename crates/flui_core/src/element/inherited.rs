@@ -209,6 +209,14 @@ impl InheritedElement {
             self.child_id = None;
         }
     }
+
+    /// Update slot for child
+    ///
+    /// InheritedElement always has slot 0 for its single child, so this is a no-op.
+    pub(crate) fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+        // InheritedElement always has exactly one child at slot 0
+        // Nothing to update
+    }
 }
 
 #[cfg(test)]

@@ -596,6 +596,67 @@ impl Element {
             Self::ParentData(_) => "ParentData",
         }
     }
+
+    // ========== Child Management ==========
+
+    /// Forget a child (called when child is unmounted)
+    ///
+    /// Removes child from internal child list without unmounting it.
+    #[inline]
+    pub fn forget_child(&mut self, child_id: ElementId) {
+        match self {
+            Self::Component(c) => c.forget_child(child_id),
+            Self::Stateful(s) => s.forget_child(child_id),
+            Self::Inherited(i) => i.forget_child(child_id),
+            Self::Render(r) => r.forget_child(child_id),
+            Self::ParentData(p) => p.forget_child(child_id),
+        }
+    }
+
+    /// Update slot for a child
+    ///
+    /// Updates the slot index for a child element.
+    #[inline]
+    pub fn update_slot_for_child(&mut self, child_id: ElementId, new_slot: usize) {
+        match self {
+            Self::Component(c) => c.update_slot_for_child(child_id, new_slot),
+            Self::Stateful(s) => s.update_slot_for_child(child_id, new_slot),
+            Self::Inherited(i) => i.update_slot_for_child(child_id, new_slot),
+            Self::Render(r) => r.update_slot_for_child(child_id, new_slot),
+            Self::ParentData(p) => p.update_slot_for_child(child_id, new_slot),
+        }
+    }
+
+    /// Rebuild element (produces new child widgets)
+    ///
+    /// Returns list of child widgets that need to be mounted:
+    /// (parent_id, child_widget, slot)
+    #[inline]
+    pub fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, crate::widget::BoxedWidget, usize)> {
+        match self {
+            Self::Component(c) => c.rebuild(element_id),
+            Self::Stateful(s) => s.rebuild(element_id),
+            Self::Inherited(i) => i.rebuild(element_id),
+            Self::Render(r) => r.rebuild(element_id),
+            Self::ParentData(p) => p.rebuild(element_id),
+        }
+    }
+
+    /// Get raw pointer to RenderState if this is a RenderObjectElement
+    ///
+    /// Returns None for ComponentElement, StatefulElement, etc.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure pointer is used safely and respects RwLock semantics.
+    #[inline]
+    #[must_use]
+    pub fn render_state_ptr(&self) -> Option<*const parking_lot::RwLock<crate::render::RenderState>> {
+        match self {
+            Self::Render(r) => Some(r.render_state()),
+            _ => None,
+        }
+    }
 }
 
 // ========== Display Implementation ==========

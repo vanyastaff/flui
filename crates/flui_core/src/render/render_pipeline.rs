@@ -173,7 +173,7 @@ impl RenderPipeline {
         let render_boxed: Box<dyn crate::render::DynRenderObject> = Box::new(render);
         let render_element = RenderElement::new(widget_boxed, render_boxed);
         let element = crate::element::Element::Render(render_element);
-        let id = self.tree.insert(Box::new(element));
+        let id = self.tree.insert(element);
         self.root_id = Some(id);
 
         // Mark root as needing layout and paint
