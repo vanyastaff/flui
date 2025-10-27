@@ -6,8 +6,8 @@ use std::marker::PhantomData;
 use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
 
-use crate::{ElementId, ElementTree};
-use crate::arity::{Arity, SingleArity, MultiArity};
+use crate::element::{ElementId, ElementTree};
+use crate::render::arity::{Arity, SingleArity, MultiArity};
 use super::cache::{layout_cache, LayoutCacheKey, LayoutResult};
 
 /// Typed layout context

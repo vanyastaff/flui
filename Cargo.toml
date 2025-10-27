@@ -67,6 +67,16 @@ image = { version = "0.25", features = ["png", "jpeg", "gif", "webp"] }
 resvg = "0.45"
 usvg = "0.45"
 
+# GPU RENDERING (WGPU BACKEND)
+wgpu = { version = "22" }
+winit = "0.30"
+bytemuck = { version = "1.17", features = ["derive"] }
+glyphon = "0.6"  # GPU text rendering
+cosmic-text = "0.12"  # Text shaping (via glyphon)
+guillotiere = "0.6"  # Texture atlas bin packing
+lyon = "1.0"  # Path tesselation
+pollster = "0.3"  # Block on async for examples
+
 # MEMORY & CACHING
 lru = "0.16"  # Simple LRU (keep for compatibility)
 moka = { version = "0.12", features = ["future"] }  # High-performance cache
@@ -117,6 +127,12 @@ flui_engine = { path = "crates/flui_engine" }
 flui_app = { path = "crates/flui_app", optional = true }
 flui_widgets = { path = "crates/flui_widgets", optional = true }
 
+# For wgpu_demo example
+parking_lot = { workspace = true }
+pollster = { workspace = true }
+env_logger = "0.11"
+winit = { workspace = true }
+
 # Workspace dependencies
 egui.workspace = true
 eframe.workspace = true
@@ -165,3 +181,21 @@ required-features = []  # Doesn't need flui_app or flui_widgets
 name = "window_demo"
 path = "examples/window_demo.rs"
 required-features = []  # Uses flui_core + flui_engine + eframe
+
+# WGPU demo - GPU-accelerated rendering with standalone wgpu backend
+[[example]]
+name = "wgpu_demo"
+path = "examples/wgpu_demo.rs"
+required-features = []  # Standalone wgpu + winit
+
+# Egui demo - CPU rendering with egui backend (for comparison)
+[[example]]
+name = "egui_demo"
+path = "examples/egui_demo.rs"
+required-features = []  # Uses flui_engine/egui + eframe
+
+# Unified App - Backend-agnostic API (automatically selects backend)
+[[example]]
+name = "unified_app"
+path = "examples/unified_app.rs"
+required-features = []  # Auto-selects backend based on features

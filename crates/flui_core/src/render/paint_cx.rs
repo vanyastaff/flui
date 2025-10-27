@@ -6,8 +6,8 @@ use std::marker::PhantomData;
 use flui_types::Offset;
 use flui_engine::BoxedLayer;
 
-use crate::{ElementId, ElementTree};
-use crate::arity::{Arity, SingleArity, MultiArity};
+use crate::element::{ElementId, ElementTree};
+use crate::render::arity::{Arity, SingleArity, MultiArity};
 
 /// Typed paint context
 ///

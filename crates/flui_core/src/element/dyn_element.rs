@@ -4,7 +4,9 @@ use std::fmt;
 
 use parking_lot::RwLock;
 
-use crate::{ElementId, DynWidget, DynRenderObject, RenderState};
+use crate::element::ElementId;
+use crate::widget::DynWidget;
+use crate::render::{DynRenderObject, RenderState};
 
 /// Element lifecycle states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -119,9 +119,9 @@ impl<'a> BuildContext<'a> {
                 // Check if this element's widget is InheritedWidget of type T
                 let widget = element.widget();
 
-                if widget.type_id() == target_type_id {
+                if DynWidget::type_id(widget) == target_type_id {
                     // Found it! Try to downcast
-                    if let Some(inherited_widget) = DynWidget::as_any(widget).downcast_ref::<T>() {
+                    if let Some(inherited_widget) = (widget as &dyn std::any::Any).downcast_ref::<T>() {
                         // TODO: Register dependency if requested
                         // For now just return the widget
                         // Later we'll add: self.tree.add_dependent(parent_id, self.element_id)

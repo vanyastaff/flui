@@ -1,163 +1,427 @@
-//! # FLUI Core - Typed Render Architecture
+//! FLUI Core - Reactive UI framework for Rust
 //!
-//! Clean, typed implementation of the FLUI rendering system based on idea.md.
+//! FLUI is a declarative UI framework inspired by Flutter, built for Rust.
+//! It provides a powerful widget system with efficient reactivity and
+//! high-performance rendering.
 //!
-//! ## Architecture (from idea.md Chapters 2-6)
+//! # Architecture
+//!
+//! FLUI uses a three-tree architecture:
 //!
 //! ```text
-//! Widget<W: RenderObjectWidget>
-//!   ├─ type Render: RenderObject
-//!   ├─ create_render_object() -> Self::Render
-//!   └─ update_render_object(&mut Self::Render)
-//!
-//! RenderObject
-//!   ├─ type Arity: Arity (Leaf/Single/Multi)
-//!   ├─ fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size
-//!   └─ fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer
-//!
-//! LayoutCx<A: Arity>
-//!   ├─ LeafArity: only constraints()
-//!   ├─ SingleArity: constraints() + child() + layout_child()
-//!   └─ MultiArity: constraints() + children() + layout_child()
-//!
-//! PaintCx<A: Arity>
-//!   ├─ LeafArity: only painter(), offset()
-//!   ├─ SingleArity: painter(), offset(), child(), capture_child_layer()
-//!   └─ MultiArity: painter(), offset(), children(), capture_child_layers()
+//! Widget Tree          Element Tree         Render Tree
+//! (immutable)          (mutable state)      (layout/paint)
+//!     ↓                      ↓                    ↓
+//! Configuration  ←→  State Management  ←→  Visual Output
 //! ```
 //!
-//! ## Key Benefits
+//! ## Widget Tree (Immutable)
 //!
-//! ### 1. Compile-Time Safety
+//! Widgets are lightweight, immutable configuration objects that describe
+//! what the UI should look like. When configuration changes, you create
+//! new widget instances.
 //!
-//! ```rust,ignore
-//! // This works - SingleArity has child()
-//! impl RenderObject for RenderOpacity {
-//!     type Arity = SingleArity;
+//! ```rust
+//! use flui_core::{StatelessWidget, BoxedWidget, BuildContext};
 //!
-//!     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-//!         let child = cx.child(); // ✅ Compiles!
-//!         cx.layout_child(child, cx.constraints())
-//!     }
+//! #[derive(Debug)]
+//! struct Greeting {
+//!     name: String,
 //! }
 //!
-//! // This fails - LeafArity has no child()
-//! impl RenderObject for RenderParagraph {
-//!     type Arity = LeafArity;
-//!
-//!     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-//!         let child = cx.child(); // ❌ Compile error: method not found!
-//!         // ...
+//! impl StatelessWidget for Greeting {
+//!     fn build(&self, context: &BuildContext) -> BoxedWidget {
+//!         Box::new(Text::new(format!("Hello, {}!", self.name)))
 //!     }
 //! }
 //! ```
 //!
-//! ### 2. Zero-Cost Abstractions
+//! ## Element Tree (Mutable State)
 //!
-//! - No `Box<dyn>` - everything is monomorphized
-//! - No `downcast_mut` - types known at compile time
-//! - Full inline potential for LLVM
+//! Elements hold the mutable state and lifecycle of widgets. They persist
+//! across rebuilds and manage the widget-to-render-object relationship.
 //!
-//! ### 3. Integrated with flui_engine
+//! ## Render Tree (Layout & Paint)
 //!
-//! ```rust,ignore
-//! fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-//!     let mut picture = PictureLayer::new();
-//!     picture.draw_rect(self.bounds, self.paint);
+//! RenderObjects perform layout calculations and painting. They form the
+//! actual visual representation that gets displayed.
 //!
-//!     if let Some(child) = cx.capture_child_layer() {
-//!         let mut container = ContainerLayer::new();
-//!         container.add_child(Box::new(picture));
-//!         container.add_child(child);
-//!         Box::new(container)
-//!     } else {
-//!         Box::new(picture)
+//! # Widget Types
+//!
+//! FLUI provides five core widget types:
+//!
+//! ## StatelessWidget
+//!
+//! Pure functional widgets without mutable state.
+//!
+//! ```rust
+//! # use flui_core::{StatelessWidget, BoxedWidget, BuildContext};
+//! #[derive(Debug)]
+//! struct HelloWorld;
+//!
+//! impl StatelessWidget for HelloWorld {
+//!     fn build(&self, context: &BuildContext) -> BoxedWidget {
+//!         Box::new(Text::new("Hello, World!"))
 //!     }
 //! }
+//! ```
+//!
+//! ## StatefulWidget
+//!
+//! Widgets with persistent mutable state.
+//!
+//! ```rust
+//! # use flui_core::{StatefulWidget, State, BoxedWidget, BuildContext};
+//! #[derive(Debug)]
+//! struct Counter {
+//!     initial: i32,
+//! }
+//!
+//! struct CounterState {
+//!     count: i32,
+//! }
+//!
+//! impl StatefulWidget for Counter {
+//!     type State = CounterState;
+//!
+//!     fn create_state(&self) -> Self::State {
+//!         CounterState { count: self.initial }
+//!     }
+//! }
+//!
+//! impl State<Counter> for CounterState {
+//!     fn build(&mut self, widget: &Counter) -> BoxedWidget {
+//!         Box::new(Text::new(format!("Count: {}", self.count)))
+//!     }
+//! }
+//! ```
+//!
+//! ## InheritedWidget
+//!
+//! Efficient data propagation down the widget tree.
+//!
+//! ```rust
+//! # use flui_core::{InheritedWidget, BoxedWidget};
+//! # use std::sync::Arc;
+//! #[derive(Debug)]
+//! struct Theme {
+//!     colors: Arc<ColorScheme>,
+//!     child: BoxedWidget,
+//! }
+//!
+//! impl InheritedWidget for Theme {
+//!     fn update_should_notify(&self, old: &Self) -> bool {
+//!         !Arc::ptr_eq(&self.colors, &old.colors)
+//!     }
+//!
+//!     fn child(&self) -> BoxedWidget {
+//!         self.child.clone()
+//!     }
+//! }
+//! ```
+//!
+//! ## RenderObjectWidget
+//!
+//! Widgets that create render objects for custom layout/paint.
+//!
+//! ```rust
+//! # use flui_core::{RenderObjectWidget, RenderObject};
+//! #[derive(Debug)]
+//! struct Container {
+//!     width: f64,
+//!     height: f64,
+//! }
+//!
+//! impl RenderObjectWidget for Container {
+//!     type RenderObject = RenderContainer;
+//!
+//!     fn create_render_object(&self) -> Self::RenderObject {
+//!         RenderContainer {
+//!             width: self.width,
+//!             height: self.height,
+//!         }
+//!     }
+//!
+//!     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+//!         render_object.width = self.width;
+//!         render_object.height = self.height;
+//!     }
+//! }
+//! ```
+//!
+//! ## ParentDataWidget
+//!
+//! Widgets that attach layout metadata to descendants.
+//!
+//! ```rust
+//! # use flui_core::{ParentDataWidget, BoxedWidget, RenderObject};
+//! #[derive(Debug)]
+//! struct Flexible {
+//!     flex: i32,
+//!     child: BoxedWidget,
+//! }
+//!
+//! impl ParentDataWidget for Flexible {
+//!     type ParentDataType = FlexParentData;
+//!
+//!     fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+//!         // Apply flex data to child's render object
+//!     }
+//!
+//!     fn child(&self) -> &BoxedWidget {
+//!         &self.child
+//!     }
+//! }
+//! ```
+//!
+//! # Key Features
+//!
+//! ## Automatic DynWidget
+//!
+//! All widgets automatically get object-safe `DynWidget` trait via blanket impl:
+//!
+//! ```rust
+//! # use flui_core::{StatelessWidget, BoxedWidget, DynWidget, BuildContext};
+//! #[derive(Debug)]
+//! struct MyWidget;
+//!
+//! impl StatelessWidget for MyWidget {
+//!     fn build(&self, context: &BuildContext) -> BoxedWidget {
+//!         Box::new(Text::new("Test"))
+//!     }
+//! }
+//!
+//! // DynWidget is automatic!
+//! let widget: Box<dyn DynWidget> = Box::new(MyWidget);
+//! ```
+//!
+//! ## No Forced Clone
+//!
+//! Widgets don't require Clone, enabling use of closures and non-Clone types:
+//!
+//! ```rust
+//! # use flui_core::{Widget, BoxedWidget};
+//! #[derive(Debug)]
+//! struct Button<F> {
+//!     label: String,
+//!     on_click: F,  // FnMut - not Clone!
+//! }
+//!
+//! // Works without Clone!
+//! ```
+//!
+//! ## Compile-Time Keys
+//!
+//! Widget keys can be compile-time constants:
+//!
+//! ```rust
+//! use flui_core::Key;
+//!
+//! const HEADER_KEY: Key = Key::from_str("app_header");
+//! const FOOTER_KEY: Key = Key::from_str("app_footer");
+//! ```
+//!
+//! ## Memory Optimization
+//!
+//! `Option<Key>` is only 8 bytes thanks to niche optimization:
+//!
+//! ```rust
+//! use flui_core::Key;
+//! use std::mem::size_of;
+//!
+//! assert_eq!(size_of::<Option<Key>>(), 8);  // Not 16!
 //! ```
 
-// Re-export essential types from dependencies
-pub use flui_types::*;
-pub use flui_engine::{
-    Layer, BoxedLayer,
-    Scene, Compositor,
-    Painter, Paint,
+#![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
+#![deny(unsafe_op_in_unsafe_fn)]
+
+// Re-export external types
+pub use flui_types::{Size, Offset};
+pub use flui_engine::BoxedLayer;
+// ============================================================================
+// Foundation
+// ============================================================================
+
+pub mod foundation;
+
+// Re-export foundation types
+pub use foundation::{
+    Key,
+    KeyRef,
 };
 
-// Core modules
-pub mod arity;
-pub mod element;
-pub mod render;
+// ============================================================================
+// Widget System
+// ============================================================================
+
 pub mod widget;
 
-
-// Re-exports
-
-// Derive macros and attributes
-pub use flui_derive::{
-    StatelessWidget as DeriveStatelessWidget,
-    StatefulWidget as DeriveStatefulWidget,
-    InheritedWidget as DeriveInheritedWidget,
-    RenderObjectWidget as DeriveRenderObjectWidget,
-    widget,  // Attribute macro: #[widget]
-};
-
-// Universal Arity system (used across Widget/Element/RenderObject)
-pub use arity::{Arity, LeafArity, SingleArity, MultiArity};
-
-pub use render::{
-    // RenderObject traits
-    RenderObject,
-    DynRenderObject,
-    BoxedRenderObject,
-
-    // Contexts & Pipeline
-    LayoutCx, PaintCx, RenderContext,
-    RenderPipeline,
-
-    // Extension traits for arity-specific methods
-    SingleChild, MultiChild,
-    SingleChildPaint, MultiChildPaint,
-
-    // Cache
-    LayoutCache, LayoutCacheKey, LayoutResult,
-
-    // State
-    RenderState, RenderFlags,
-
-    // ParentData
-    ParentData,
-    ParentDataWithOffset,
-    BoxParentData,
-    ContainerParentData,
-    ContainerBoxParentData,
-};
-
+// Re-export widget types
 pub use widget::{
+    // Core traits
     Widget,
+    WidgetState,
     DynWidget,
+
+    // Type aliases
     BoxedWidget,
+    SharedWidget,
+
+    // Widget types
     StatelessWidget,
     StatefulWidget,
-    Stateful,  // Zero-cost wrapper for StatefulWidget
     State,
     InheritedWidget,
-    ProxyWidget,
-    ParentDataWidget,
+    InheritedModel,
     RenderObjectWidget,
+    ParentDataWidget,
+
+    // Helper types
+    KeyedStatelessWidget,
+    SingleChildRenderObjectWidget,
+    MultiChildRenderObjectWidget,
+    ParentData,
+
+    // Helper functions
+    with_key,
+    boxed,
+    shared,
 };
 
+// ============================================================================
+// Element System
+// ============================================================================
+
+pub mod element;
+
+// Re-export element types
 pub use element::{
-    ElementId,
-    ElementTree,
+    // Core traits
+    Element,
     DynElement,
-    BoxedElement,
-    ElementLifecycle,
+
+    // Element types
     ComponentElement,
     StatefulElement,
     InheritedElement,
-    ParentDataElement,
     RenderObjectElement,
+    ParentDataElement,
+
+    // Type aliases
+    BoxedElement,
+    ElementTree,
+
+    // Context types
     BuildContext,
+    ElementId,
 };
 
+// ============================================================================
+// Render System
+// ============================================================================
+
+pub mod render;
+
+// Re-export render types
+pub use render::{
+    RenderObject,
+    DynRenderObject,
+    BoxedRenderObject,
+    RenderState,
+    LayoutCx,
+    PaintCx,
+
+    // Arity types
+    Arity,
+    LeafArity,
+    SingleArity,
+    MultiArity,
+};
+
+// ============================================================================
+// Macros
+// ============================================================================
+
+// impl_parent_data macro is defined in widget::parent_data_widget module and re-exported
+
+// ============================================================================
+// Prelude
+// ============================================================================
+
+/// Prelude module for convenient imports
+///
+/// Import everything you need with:
+///
+/// ```rust
+/// use flui_core::prelude::*;
+/// ```
+pub mod prelude {
+    pub use crate::foundation::{Key, KeyRef};
+
+    pub use crate::widget::{
+        Widget,
+        DynWidget,
+        BoxedWidget,
+        SharedWidget,
+        StatelessWidget,
+        StatefulWidget,
+        State,
+        InheritedWidget,
+        RenderObjectWidget,
+        ParentDataWidget,
+        with_key,
+        boxed,
+        shared,
+    };
+
+    pub use crate::element::{
+        Element,
+        BuildContext,
+    };
+
+    pub use crate::render::{
+        RenderObject,
+        LeafArity,
+        SingleArity,
+        MultiArity,
+    };
+}
+
+// ============================================================================
+// Version Information
+// ============================================================================
+
+/// FLUI version string
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// FLUI major version
+pub const VERSION_MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");
+
+/// FLUI minor version
+pub const VERSION_MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
+
+/// FLUI patch version
+pub const VERSION_PATCH: &str = env!("CARGO_PKG_VERSION_PATCH");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_constants() {
+        assert!(!VERSION.is_empty());
+        assert!(!VERSION_MAJOR.is_empty());
+        assert!(!VERSION_MINOR.is_empty());
+        assert!(!VERSION_PATCH.is_empty());
+    }
+
+    #[test]
+    fn test_prelude_imports() {
+        use crate::prelude::*;
+
+        // Test that all major types are available
+        let _key: Option<Key> = None;
+        let _widget: Option<BoxedWidget> = None;
+    }
+}

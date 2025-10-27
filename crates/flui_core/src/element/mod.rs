@@ -42,6 +42,7 @@
 pub mod build_context;
 pub mod component;
 pub mod dyn_element;
+pub mod element;
 pub mod element_tree;
 pub mod inherited;
 pub mod parent_data_element;
@@ -53,7 +54,9 @@ pub mod stateful;
 
 
 
+
 // Re-exports
+pub use element::Element;
 pub use dyn_element::{DynElement, BoxedElement, ElementLifecycle};
 pub use component::ComponentElement;
 pub use stateful::StatefulElement;
@@ -69,6 +72,7 @@ pub use build_context::BuildContext;
 /// ElementIds are reused after removal (slab behavior), so don't store them long-term
 /// without verifying the element still exists.
 pub type ElementId = usize;
+
 
 
 

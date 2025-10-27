@@ -17,24 +17,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
             Self: ::flui_core::RenderObjectWidget,
         {
             type Element = ::flui_core::element::RenderObjectElement<Self, <Self as ::flui_core::RenderObjectWidget>::Arity>;
+            type Arity = <Self as ::flui_core::RenderObjectWidget>::Arity;
 
-            fn key(&self) -> ::core::option::Option<&str> {
+            fn key(&self) -> ::core::option::Option<::flui_core::foundation::Key> {
                 ::core::option::Option::None
-            }
-
-            fn into_element(self) -> Self::Element {
-                ::flui_core::element::RenderObjectElement::new(self)
-            }
-        }
-
-        // Auto-implement DynWidget trait
-        impl #impl_generics ::flui_core::DynWidget for #name #ty_generics #where_clause {
-            fn as_any(&self) -> &dyn ::core::any::Any {
-                self
-            }
-
-            fn as_any_mut(&mut self) -> &mut dyn ::core::any::Any {
-                self
             }
         }
     };

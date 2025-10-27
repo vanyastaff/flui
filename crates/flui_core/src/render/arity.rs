@@ -1,169 +1,170 @@
-//! Universal Arity System - Compile-time child count constraints
+//! Arity - compile-time child count specification
 //!
-//! This module provides a universal arity system that can be used across
-//! all three trees in the FLUI architecture:
-//! - **Widget Tree**: Widgets with LeafArity, SingleArity, or MultiArity
-//! - **Element Tree**: Elements inheriting arity from their widgets
-//! - **RenderObject Tree**: RenderObjects with typed child access
+//! Arity types encode the number of children a widget can have at the type level.
+//! This enables compile-time validation and optimization.
 //!
-//! This avoids duplicating arity systems (WidgetArity, ElementArity, RenderArity)
-//! and provides a single, consistent type-level constraint mechanism.
+//! # Three Arity Types
 //!
-//! # Design
+//! - **LeafArity** - No children (e.g., Text, Image)
+//! - **SingleArity** - Exactly one child (e.g., Padding, Center)
+//! - **MultiArity** - Multiple children (e.g., Row, Column, Stack)
 //!
-//! The `Arity` trait encodes child count constraints at compile time:
-//! - `LeafArity`: No children allowed (arity = 0)
-//! - `SingleArity`: Exactly one child required (arity = 1)
-//! - `MultiArity`: Zero or more children allowed (arity = 0..N)
+//! # Why Arity?
 //!
-//! # Benefits
+//! 1. **Compile-time validation** - Catches errors at compile time
+//! 2. **Type safety** - Prevents invalid widget trees
+//! 3. **Optimization** - Enables specialized implementations
+//! 4. **Documentation** - Makes child count explicit
 //!
-//! 1. **Compile-Time Safety**: Wrong child counts caught at compile time
-//! 2. **Zero Runtime Cost**: Arity is a zero-sized type, optimized away
-//! 3. **Type-Driven API**: Context types provide different methods based on arity
-//! 4. **Universal**: Same arity system across Widget/Element/RenderObject
+//! # Examples
 //!
-//! # Example
+//! ```rust
+//! use flui_core::{Widget, LeafArity, SingleArity, MultiArity};
 //!
-//! ```rust,ignore
-//! // Universal across all tree types
-//!
-//! // Widget with single child
-//! impl Widget for Opacity {
-//!     type Arity = SingleArity;
+//! // Leaf widget - no children
+//! impl Widget for Text {
+//!     type Element = TextElement;
+//!     type Arity = LeafArity;  // No children allowed
 //! }
 //!
-//! // RenderObject with multiple children
-//! impl RenderObject for RenderFlex {
-//!     type Arity = MultiArity;
-//!
-//!     fn layout(&mut self, cx: &mut LayoutCx<MultiArity>) -> Size {
-//!         // MultiArity enables .children() method
-//!         for child in cx.children() {
-//!             cx.layout_child(child, constraints);
-//!         }
-//!     }
+//! // Single child widget
+//! impl Widget for Padding {
+//!     type Element = PaddingElement;
+//!     type Arity = SingleArity;  // Exactly one child
 //! }
 //!
-//! // Element with no children
-//! impl Element for ImageElement {
-//!     type Arity = LeafArity;
+//! // Multi child widget
+//! impl Widget for Column {
+//!     type Element = ColumnElement;
+//!     type Arity = MultiArity;  // Multiple children
 //! }
 //! ```
 
-/// Universal marker trait for child count constraints
-///
-/// This trait encodes arity (child count) at the type level, enabling
-/// compile-time verification of child relationships across all three trees.
-///
-/// # Implementations
-///
-/// - `LeafArity`: No children (e.g., Text, Image, ColoredBox)
-/// - `SingleArity`: Exactly one child (e.g., Opacity, Padding, Transform)
-/// - `MultiArity`: Zero or more children (e.g., Flex, Stack, Wrap)
-///
-/// # Type-Driven API
-///
-/// The arity type parameter enables different methods on context types:
-///
-/// ```rust,ignore
-/// // LeafArity - no child access
-/// fn layout(&mut self, cx: &mut LayoutCx<LeafArity>) -> Size {
-///     // cx.child()     ❌ Not available
-///     // cx.children()  ❌ Not available
-/// }
-///
-/// // SingleArity - single child access
-/// fn layout(&mut self, cx: &mut LayoutCx<SingleArity>) -> Size {
-///     let child = cx.child();           // ✅ Available
-///     cx.layout_child(child, constraints);
-/// }
-///
-/// // MultiArity - multiple children access
-/// fn layout(&mut self, cx: &mut LayoutCx<MultiArity>) -> Size {
-///     for child in cx.children() {      // ✅ Available
-///         cx.layout_child(child, constraints);
-///     }
-/// }
-/// ```
-pub trait Arity: Send + Sync + 'static {
-    /// Human-readable name for debugging and error messages
-    fn name() -> &'static str;
+use std::fmt;
 
-    /// Compile-time child count constraint
-    ///
-    /// - `Some(0)` for `LeafArity` (no children)
-    /// - `Some(1)` for `SingleArity` (exactly one child)
-    /// - `None` for `MultiArity` (variable count, 0..N children)
-    const CHILD_COUNT: Option<usize>;
+/// Arity - trait for compile-time child count specification
+///
+/// This trait is sealed and can only be implemented by the three
+/// types in this module: `LeafArity`, `SingleArity`, `MultiArity`.
+///
+/// # Purpose
+///
+/// Arity types enable the type system to enforce child count constraints:
+/// - Prevents accidentally adding children to leaf widgets
+/// - Ensures single-child widgets don't get multiple children
+/// - Makes child count explicit in widget definitions
+///
+/// # Type-Level Computation
+///
+/// Arity is a zero-sized type that exists only at compile time.
+/// It has no runtime cost - all validation happens during compilation.
+///
+/// # Examples
+///
+/// ```rust
+/// use flui_core::{Widget, LeafArity};
+///
+/// // Text widget has no children
+/// impl Widget for Text {
+///     type Arity = LeafArity;
+/// }
+///
+/// // Compiler prevents this:
+/// // let text = Text::new("hello");
+/// // text.add_child(other);  // ← Compile error!
+/// ```
+pub trait Arity: private::Sealed + fmt::Debug + Send + Sync + 'static {
+    /// Human-readable name for debugging
+    const NAME: &'static str;
 }
 
-/// Leaf arity - no children allowed
+/// LeafArity - widget with no children
 ///
-/// Used for nodes that cannot have children, such as:
-/// - Text/Paragraph rendering
-/// - Image rendering
-/// - Colored boxes
-/// - Icons
+/// Used by widgets that are leaf nodes in the widget tree and
+/// cannot have any children.
 ///
-/// # Context Methods
+/// # Examples
 ///
-/// - `LayoutCx<LeafArity>`: NO child access methods
-/// - `PaintCx<LeafArity>`: NO child painting methods
-/// - `BuildCx<LeafArity>`: NO child building methods
+/// - **Text** - Displays text
+/// - **Image** - Displays image
+/// - **Icon** - Displays icon
+/// - **Placeholder** - Empty space
 ///
-/// # Example
+/// # Usage
 ///
-/// ```rust,ignore
-/// impl RenderObject for RenderParagraph {
-///     type Arity = LeafArity;
+/// ```rust
+/// use flui_core::{Widget, RenderObjectWidget, LeafArity};
 ///
-///     fn layout(&mut self, cx: &mut LayoutCx<LeafArity>) -> Size {
-///         // No children to layout
-///         self.text_layout.size()
-///     }
+/// #[derive(Debug)]
+/// struct Text {
+///     content: String,
+/// }
+///
+/// impl Widget for Text {
+///     type Element = TextElement;
+///     type Arity = LeafArity;  // ← No children
+/// }
+///
+/// impl RenderObjectWidget for Text {
+///     type RenderObject = RenderParagraph;
+///     type Arity = LeafArity;  // ← Consistent
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LeafArity;
 
 impl Arity for LeafArity {
-    fn name() -> &'static str {
-        "Leaf"
-    }
-
-    const CHILD_COUNT: Option<usize> = Some(0);
+    const NAME: &'static str = "LeafArity";
 }
 
-/// Single arity - exactly one child required
+/// SingleArity - widget with exactly one child
 ///
-/// Used for wrapper nodes that modify a single child, such as:
-/// - Opacity/transparency
-/// - Padding/margins
-/// - Transforms (rotation, scale, translation)
-/// - Clipping
-/// - Alignment
+/// Used by widgets that wrap a single child widget and provide
+/// some service or transformation.
 ///
-/// # Context Methods
+/// # Examples
 ///
-/// - `LayoutCx<SingleArity>`: `.child()` and `.layout_child()`
-/// - `PaintCx<SingleArity>`: `.child()` and `.capture_child_layer()`
-/// - `BuildCx<SingleArity>`: `.child()` and `.build_child()`
+/// - **Padding** - Adds padding around child
+/// - **Center** - Centers child
+/// - **SizedBox** - Constrains child size
+/// - **Opacity** - Makes child transparent
+/// - **Transform** - Transforms child
 ///
-/// # Example
+/// # Usage
 ///
-/// ```rust,ignore
-/// impl RenderObject for RenderOpacity {
-///     type Arity = SingleArity;
+/// ```rust
+/// use flui_core::{Widget, RenderObjectWidget, SingleArity, BoxedWidget};
 ///
-///     fn layout(&mut self, cx: &mut LayoutCx<SingleArity>) -> Size {
-///         let child = cx.child();
-///         cx.layout_child(child, constraints)
-///     }
+/// #[derive(Debug)]
+/// struct Padding {
+///     padding: EdgeInsets,
+///     child: BoxedWidget,
+/// }
 ///
-///     fn paint(&self, cx: &PaintCx<SingleArity>) -> BoxedLayer {
-///         let child_layer = cx.capture_child_layer(cx.child());
-///         Box::new(OpacityLayer::new(child_layer, self.opacity))
+/// impl Widget for Padding {
+///     type Element = RenderObjectElement<Self>;
+///     type Arity = SingleArity;  // ← One child
+/// }
+///
+/// impl RenderObjectWidget for Padding {
+///     type RenderObject = RenderPadding;
+///     type Arity = SingleArity;  // ← Consistent
+/// }
+/// ```
+///
+/// # Getting the Child
+///
+/// Single-child widgets typically store the child as a field:
+///
+/// ```rust
+/// #[derive(Debug)]
+/// struct Container {
+///     child: BoxedWidget,  // ← Store child
+/// }
+///
+/// impl SingleChildRenderObjectWidget for Container {
+///     fn child(&self) -> &BoxedWidget {
+///         &self.child
 ///     }
 /// }
 /// ```
@@ -171,58 +172,80 @@ impl Arity for LeafArity {
 pub struct SingleArity;
 
 impl Arity for SingleArity {
-    fn name() -> &'static str {
-        "Single"
-    }
-
-    const CHILD_COUNT: Option<usize> = Some(1);
+    const NAME: &'static str = "SingleArity";
 }
 
-/// Multi arity - zero or more children allowed
+/// MultiArity - widget with multiple children
 ///
-/// Used for container nodes that can have multiple children, such as:
-/// - Flex layouts (Row, Column)
-/// - Stack layouts (z-ordering)
-/// - Wrap layouts
-/// - Grid layouts
-/// - Custom multi-child layouts
+/// Used by layout widgets that arrange multiple child widgets
+/// according to some layout algorithm.
 ///
-/// # Context Methods
+/// # Examples
 ///
-/// - `LayoutCx<MultiArity>`: `.children()` and `.layout_child()`
-/// - `PaintCx<MultiArity>`: `.children()` and `.capture_child_layers()`
-/// - `BuildCx<MultiArity>`: `.children()` and `.build_children()`
+/// - **Row** - Horizontal layout
+/// - **Column** - Vertical layout
+/// - **Stack** - Layered layout
+/// - **Wrap** - Wrapping layout
+/// - **ListView** - Scrollable list
 ///
-/// # Example
+/// # Usage
 ///
-/// ```rust,ignore
-/// impl RenderObject for RenderFlex {
-///     type Arity = MultiArity;
+/// ```rust
+/// use flui_core::{Widget, RenderObjectWidget, MultiArity, BoxedWidget};
 ///
-///     fn layout(&mut self, cx: &mut LayoutCx<MultiArity>) -> Size {
-///         let mut total_size = 0.0;
-///         for &child in cx.children() {
-///             let child_size = cx.layout_child(child, constraints);
-///             total_size += child_size.width;
-///         }
-///         Size::new(total_size, constraints.max_height)
-///     }
+/// #[derive(Debug)]
+/// struct Column {
+///     children: Vec<BoxedWidget>,
+/// }
 ///
-///     fn paint(&self, cx: &PaintCx<MultiArity>) -> BoxedLayer {
-///         let layers = cx.capture_child_layers();
-///         Box::new(ContainerLayer::new_with_children(layers))
+/// impl Widget for Column {
+///     type Element = RenderObjectElement<Self>;
+///     type Arity = MultiArity;  // ← Multiple children
+/// }
+///
+/// impl RenderObjectWidget for Column {
+///     type RenderObject = RenderFlex;
+///     type Arity = MultiArity;  // ← Consistent
+/// }
+/// ```
+///
+/// # Getting the Children
+///
+/// Multi-child widgets typically store children as a Vec:
+///
+/// ```rust
+/// #[derive(Debug)]
+/// struct Row {
+///     children: Vec<BoxedWidget>,  // ← Store children
+/// }
+///
+/// impl MultiChildRenderObjectWidget for Row {
+///     fn children(&self) -> &[BoxedWidget] {
+///         &self.children
 ///     }
 /// }
 /// ```
+///
+/// # Performance
+///
+/// Multi-child widgets should use `Vec<BoxedWidget>` for storage:
+/// - Efficient iteration
+/// - Cache-friendly memory layout
+/// - Easy to add/remove children
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MultiArity;
 
 impl Arity for MultiArity {
-    fn name() -> &'static str {
-        "Multi"
-    }
+    const NAME: &'static str = "MultiArity";
+}
 
-    const CHILD_COUNT: Option<usize> = None; // Variable count (0..N)
+/// Sealed trait pattern - prevents external implementations
+mod private {
+    pub trait Sealed {}
+
+    impl Sealed for super::LeafArity {}
+    impl Sealed for super::SingleArity {}
+    impl Sealed for super::MultiArity {}
 }
 
 #[cfg(test)]
@@ -231,25 +254,125 @@ mod tests {
 
     #[test]
     fn test_arity_names() {
-        assert_eq!(LeafArity::name(), "Leaf");
-        assert_eq!(SingleArity::name(), "Single");
-        assert_eq!(MultiArity::name(), "Multi");
+        assert_eq!(LeafArity::NAME, "LeafArity");
+        assert_eq!(SingleArity::NAME, "SingleArity");
+        assert_eq!(MultiArity::NAME, "MultiArity");
     }
 
     #[test]
-    fn test_child_counts() {
-        assert_eq!(LeafArity::CHILD_COUNT, Some(0));
-        assert_eq!(SingleArity::CHILD_COUNT, Some(1));
-        assert_eq!(MultiArity::CHILD_COUNT, None);
-    }
-
-    #[test]
-    fn test_arity_is_zero_sized() {
+    fn test_arity_zero_sized() {
         use std::mem::size_of;
 
-        // Arity types should be zero-sized (no runtime overhead)
+        // All arity types are zero-sized
         assert_eq!(size_of::<LeafArity>(), 0);
         assert_eq!(size_of::<SingleArity>(), 0);
         assert_eq!(size_of::<MultiArity>(), 0);
+    }
+
+    #[test]
+    fn test_arity_equality() {
+        // Arity types are always equal to themselves
+        assert_eq!(LeafArity, LeafArity);
+        assert_eq!(SingleArity, SingleArity);
+        assert_eq!(MultiArity, MultiArity);
+
+        // Different arity types are not equal
+        assert_ne!(LeafArity, SingleArity);
+        assert_ne!(SingleArity, MultiArity);
+        assert_ne!(LeafArity, MultiArity);
+    }
+
+    #[test]
+    fn test_arity_clone() {
+        let leaf = LeafArity;
+        let _cloned = leaf.clone();
+
+        let single = SingleArity;
+        let _cloned = single.clone();
+
+        let multi = MultiArity;
+        let _cloned = multi.clone();
+    }
+
+    #[test]
+    fn test_arity_debug() {
+        let leaf = LeafArity;
+        assert_eq!(format!("{:?}", leaf), "LeafArity");
+
+        let single = SingleArity;
+        assert_eq!(format!("{:?}", single), "SingleArity");
+
+        let multi = MultiArity;
+        assert_eq!(format!("{:?}", multi), "MultiArity");
+    }
+
+    #[test]
+    fn test_arity_hash() {
+        use std::collections::HashSet;
+
+        let mut set = HashSet::new();
+        set.insert(LeafArity);
+        set.insert(SingleArity);
+        set.insert(MultiArity);
+
+        assert_eq!(set.len(), 3);
+        assert!(set.contains(&LeafArity));
+        assert!(set.contains(&SingleArity));
+        assert!(set.contains(&MultiArity));
+    }
+
+    // Test that Arity is used correctly in widget definitions
+    #[test]
+    fn test_arity_in_widget() {
+        use crate::{Widget, Element};
+
+        // Mock leaf widget
+        #[derive(Debug)]
+        struct LeafWidget;
+
+        impl Widget for LeafWidget {
+            type Element = MockElement;
+            type Arity = LeafArity;  // ← Leaf widget
+        }
+
+        // Mock single-child widget
+        #[derive(Debug)]
+        struct SingleWidget {
+            _child: crate::BoxedWidget,
+        }
+
+        impl Widget for SingleWidget {
+            type Element = MockElement;
+            type Arity = SingleArity;  // ← Single child
+        }
+
+        // Mock multi-child widget
+        #[derive(Debug)]
+        struct MultiWidget {
+            _children: Vec<crate::BoxedWidget>,
+        }
+
+        impl Widget for MultiWidget {
+            type Element = MockElement;
+            type Arity = MultiArity;  // ← Multiple children
+        }
+
+        // Verify arity types are correct
+        fn assert_arity<W: Widget>() where W::Arity: Arity {
+            // Just a compile-time check
+        }
+
+        assert_arity::<LeafWidget>();
+        assert_arity::<SingleWidget>();
+        assert_arity::<MultiWidget>();
+
+        #[derive(Debug)]
+        struct MockElement;
+
+        impl<W: Widget> Element<W> for MockElement {
+            fn new(_: W) -> Self {
+                Self
+            }
+        }
     }
 }

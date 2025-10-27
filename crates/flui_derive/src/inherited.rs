@@ -13,24 +13,10 @@ pub fn derive(input: TokenStream) -> TokenStream {
         // Auto-implement Widget trait
         impl #impl_generics ::flui_core::Widget for #name #ty_generics #where_clause {
             type Element = ::flui_core::element::InheritedElement<Self>;
+            type Arity = ::flui_core::render::arity::SingleArity;
 
-            fn key(&self) -> ::core::option::Option<&str> {
+            fn key(&self) -> ::core::option::Option<::flui_core::foundation::Key> {
                 ::core::option::Option::None
-            }
-
-            fn into_element(self) -> Self::Element {
-                ::flui_core::element::InheritedElement::new(self)
-            }
-        }
-
-        // Auto-implement DynWidget trait
-        impl #impl_generics ::flui_core::DynWidget for #name #ty_generics #where_clause {
-            fn as_any(&self) -> &dyn ::core::any::Any {
-                self
-            }
-
-            fn as_any_mut(&mut self) -> &mut dyn ::core::any::Any {
-                self
             }
         }
     };

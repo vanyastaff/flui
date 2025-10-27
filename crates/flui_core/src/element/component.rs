@@ -79,14 +79,16 @@ impl<W: StatelessWidget> ComponentElement<W> {
 
         self.dirty = false;
 
-        // Call build() on the widget to get child widget
-        let child_widget = self.widget.build();
+        // TODO: Create proper BuildContext with tree access
+        // For now, this is unimplemented because ComponentElement needs refactoring
+        // to work with ElementTree properly
+        todo!("ComponentElement::rebuild needs BuildContext - requires ElementTree integration");
 
         // Clear old child (will be unmounted by caller if needed)
-        self.child = None;
+        // self.child = None;
 
         // Return the child that needs to be mounted
-        vec![(element_id, child_widget, 0)]
+        // vec![(element_id, child_widget, 0)]
     }
 
     /// Set the child element ID after it's been mounted
@@ -115,7 +117,11 @@ impl<W: StatelessWidget> fmt::Debug for ComponentElement<W> {
 
 // ========== Implement DynElement ==========
 
-impl<W: StatelessWidget> DynElement for ComponentElement<W> {
+impl<W> DynElement for ComponentElement<W>
+where
+    W: StatelessWidget + crate::Widget,
+    W::Element: DynElement,
+{
     fn parent(&self) -> Option<ElementId> {
         self.parent
     }
@@ -155,9 +161,10 @@ impl<W: StatelessWidget> DynElement for ComponentElement<W> {
     }
 
     fn update_any(&mut self, new_widget: Box<dyn DynWidget>) {
+        use crate::DynWidget;
         // Try to downcast to our widget type
-        if let Ok(widget) = new_widget.downcast::<W>() {
-            self.widget = *widget;
+        if let Some(widget) = (&*new_widget as &dyn std::any::Any).downcast_ref::<W>() {
+            self.widget = widget.clone();
             self.dirty = true;
         }
     }

@@ -4,7 +4,8 @@
 //! during layout and paint. Most typed operations are in LayoutCx/PaintCx,
 //! but RenderContext provides untyped helpers for advanced use cases.
 
-use crate::{ElementId, ElementTree, RenderState};
+use crate::element::{ElementId, ElementTree};
+use crate::render::RenderState;
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
 /// Context for rendering operations

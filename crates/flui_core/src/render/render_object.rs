@@ -5,7 +5,7 @@
 use flui_types::Size;
 use flui_engine::BoxedLayer;
 
-use crate::arity::Arity;
+use crate::render::arity::Arity;
 use super::layout_cx::LayoutCx;
 use super::paint_cx::PaintCx;
 

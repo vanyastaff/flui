@@ -35,10 +35,9 @@ use crate::element::{DynElement, ElementLifecycle as PublicLifecycle};
 /// 2. **rebuild()** - Build child widget
 /// 3. **apply_parent_data()** - Set parent data on descendant RenderObject
 /// 4. **unmount()** - Remove from tree
-pub struct ParentDataElement<W, T>
+pub struct ParentDataElement<W>
 where
-    W: ParentDataWidget<T>,
-    T: ParentData,
+    W: ParentDataWidget,
 {
     /// The parent data widget
     widget: W,
@@ -55,8 +54,6 @@ where
     /// Current lifecycle state
     lifecycle: ElementLifecycle,
 
-    /// PhantomData for the parent data type
-    _phantom: PhantomData<T>,
 }
 
 /// Lifecycle states for an element
@@ -70,10 +67,9 @@ enum ElementLifecycle {
     Defunct,
 }
 
-impl<W, T> ParentDataElement<W, T>
+impl<W> ParentDataElement<W>
 where
-    W: ParentDataWidget<T>,
-    T: ParentData,
+    W: ParentDataWidget,
 {
     /// Create a new ParentDataElement
     ///
@@ -96,7 +92,6 @@ where
             child: None,
             dirty: true,
             lifecycle: ElementLifecycle::Initial,
-            _phantom: PhantomData,
         }
     }
 
@@ -157,10 +152,9 @@ where
     }
 }
 
-impl<W, T> fmt::Debug for ParentDataElement<W, T>
+impl<W> fmt::Debug for ParentDataElement<W>
 where
-    W: ParentDataWidget<T>,
-    T: ParentData,
+    W: ParentDataWidget,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParentDataElement")
@@ -175,10 +169,10 @@ where
 
 // ========== DynElement Implementation ==========
 
-impl<W, T> DynElement for ParentDataElement<W, T>
+impl<W> DynElement for ParentDataElement<W>
 where
-    W: ParentDataWidget<T>,
-    T: ParentData,
+    W: ParentDataWidget + crate::Widget,
+    W::Element: DynElement,
 {
     fn parent(&self) -> Option<ElementId> {
         self.parent
@@ -222,8 +216,8 @@ where
     fn update_any(&mut self, new_widget: Box<dyn crate::DynWidget>) {
         use crate::DynWidget;
         // Try to downcast to our widget type
-        if let Some(new_widget) = DynWidget::as_any(&*new_widget).downcast_ref::<W>() {
-            self.update(new_widget.clone());
+        if let Some(new_widget) = (&*new_widget as &dyn std::any::Any).downcast_ref::<W>() {
+            self.update(Clone::clone(new_widget));
         }
     }
 

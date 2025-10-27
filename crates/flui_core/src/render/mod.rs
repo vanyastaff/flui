@@ -2,6 +2,7 @@
 //!
 //! This module implements the core rendering architecture from idea.md Chapters 2-4.
 
+pub mod arity;
 pub mod cache;
 pub mod dyn_render_object;
 pub mod layout_cx;
@@ -18,8 +19,13 @@ pub mod render_state;
 
 
 
-// Re-export universal Arity system from parent module
-pub use crate::arity::{Arity, LeafArity, SingleArity, MultiArity};
+
+pub use arity::{
+    Arity,
+    LeafArity,
+    SingleArity,
+    MultiArity,
+};
 
 // Re-exports
 pub use render_object::RenderObject;
@@ -38,6 +44,7 @@ pub use parent_data::{
     ContainerParentData,
     ContainerBoxParentData,
 };
+
 
 
 

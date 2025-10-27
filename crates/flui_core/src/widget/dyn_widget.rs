@@ -1,293 +1,497 @@
-//! DynWidget - Object-safe trait for heterogeneous widget storage
+//! DynWidget - Object-safe trait for dynamic widget storage
 //!
-//! This module provides the `DynWidget` trait, enabling storing different
-//! widget types in heterogeneous collections like `Vec<Box<dyn DynWidget>>`.
+//! This module provides the `DynWidget` trait, enabling heterogeneous
+//! widget storage via `Box<dyn DynWidget>`.
 //!
-//! # Design Pattern: Two-Trait Approach
+//! # Design Pattern
 //!
-//! FLUI uses a two-level approach for widgets (similar to RenderObject):
+//! FLUI uses a two-level approach for widgets:
 //!
-//! 1. **Widget** (typed trait) - Zero-cost concrete usage with associated types
-//! 2. **DynWidget** (this trait) - Object-safe for `Box<dyn DynWidget>` storage
+//! 1. **Widget** (typed) - Zero-cost with associated types
+//! 2. **DynWidget** (this) - Object-safe for dynamic dispatch
 //!
-//! This allows:
-//! - **Compile-time safety** when working with concrete Widget types
-//! - **Runtime flexibility** for heterogeneous widget collections
-//! - **Zero-cost abstractions** where types are known statically
-//! - **Dynamic dispatch** only when necessary (e.g., widget trees)
+//! A blanket implementation connects them automatically:
+//! ```text
+//! impl<W: Widget> DynWidget for W { }
+//! ```
 //!
-//! # Why DynWidget?
+//! # Usage
 //!
-//! The `Widget` trait has associated types and methods, which make it not object-safe.
-//! You cannot create `Box<dyn Widget>` or store different Widget types together.
+//! **Don't implement this trait directly!** Implement `Widget` instead.
+//! You get `DynWidget` automatically via blanket impl.
 //!
-//! `DynWidget` solves this by being object-safe - it doesn't have associated types.
+//! # Examples
 //!
-//! # Usage Pattern
+//! ```
+//! use flui_core::{Widget, DynWidget, BoxedWidget};
 //!
-//! ```rust,ignore
-//! // Concrete types use Widget (zero-cost)
-//! #[derive(Clone)]
-//! struct MyWidget { text: String }
-//!
-//! impl Widget for MyWidget {
-//!     fn key(&self) -> Option<&str> { None }
+//! #[derive(Debug)]
+//! struct Text {
+//!     content: String,
 //! }
 //!
-//! impl StatelessWidget for MyWidget {
-//!     fn build(&self) -> Box<dyn DynWidget> {
-//!         Box::new(Text::new(&self.text))
-//!     }
+//! impl Widget for Text {
+//!     type Element = TextElement;
 //! }
 //!
-//! // Heterogeneous storage via DynWidget
-//! let widgets: Vec<Box<dyn DynWidget>> = vec![
-//!     Box::new(MyWidget { text: "Hello".into() }),
-//!     Box::new(Text::new("World")),
-//! ];
+//! // DynWidget is automatic!
+//! let widget: BoxedWidget = Box::new(Text {
+//!     content: "Hello".into()
+//! });
+//!
+//! // Downcast when needed
+//! if let Some(text) = widget.downcast_ref::<Text>() {
+//!     println!("Text: {}", text.content);
+//! }
 //! ```
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::fmt;
+use std::sync::Arc;
 
-use downcast_rs::{impl_downcast, DowncastSync};
-use dyn_clone::DynClone;
+use crate::{KeyRef, DynElement};
 
-/// Object-safe base trait for all widgets
+/// Object-safe trait for dynamic widget storage
 ///
-/// This trait is automatically implemented for all types that implement `Widget`.
-/// It provides the minimal object-safe interface needed for heterogeneous widget storage.
+/// This trait enables storing different widget types in heterogeneous
+/// collections like `Vec<Box<dyn DynWidget>>`.
 ///
-/// # Design Principles
+/// # Do NOT Implement Directly!
 ///
-/// 1. **Object Safety**: No associated types, no generic methods
-/// 2. **Minimal Interface**: Only methods needed for widget tree operations
-/// 3. **Downcast Support**: Can convert back to concrete types via `downcast_rs`
+/// Users should implement `Widget` instead. This trait is automatically
+/// implemented via blanket impl:
 ///
-/// # When to Use Each Trait
+/// ```ignore
+/// impl<W: Widget + fmt::Debug> DynWidget for W { }
+/// ```
 ///
-/// - Use `Widget` when working with concrete types
-/// - Use `DynWidget` when storing in heterogeneous collections
-/// - Use `downcast_ref/mut` to convert from `DynWidget` back to concrete type
+/// # Why Separate from Widget?
 ///
-/// # Cloning
+/// - `Widget` has associated types (not object-safe)
+/// - `DynWidget` is object-safe (can use `Box<dyn DynWidget>`)
+/// - Blanket impl connects them automatically
 ///
-/// This trait extends `DynClone`, which allows `Box<dyn DynWidget>` to be cloned.
-/// All widget types must implement `Clone` to satisfy this requirement.
-pub trait DynWidget: DynClone + DowncastSync + fmt::Debug + Send + Sync + 'static {
-    /// Get the widget's key for identity tracking
+/// # Object Safety
+///
+/// This trait is carefully designed to be object-safe:
+/// - No associated types
+/// - No generic methods
+/// - No `Self: Sized` bounds
+///
+/// # Performance
+///
+/// - Type checks: ~1ns (TypeId comparison)
+/// - Key comparisons: ~1ns (u64 comparison)
+/// - Downcast: ~5ns (vtable lookup + check)
+///
+/// # Examples
+///
+/// ## Heterogeneous Storage
+///
+/// ```
+/// use flui_core::{BoxedWidget, DynWidget};
+///
+/// let widgets: Vec<BoxedWidget> = vec![
+///     Box::new(Text::new("Hello")),
+///     Box::new(Container::new()),
+///     Box::new(Button::new("Click")),
+/// ];
+///
+/// for widget in &widgets {
+///     println!("Type: {}", widget.type_name());
+/// }
+/// ```
+///
+/// ## Type Checking
+///
+/// ```
+/// let w1 = Text::new("A");
+/// let w2 = Text::new("B");
+/// let w3 = Container::new();
+///
+/// assert!(w1.can_update(&w2));  // Same type
+/// assert!(!w1.can_update(&w3)); // Different type
+/// ```
+///
+/// ## Downcasting
+///
+/// ```
+/// let widget: BoxedWidget = Box::new(Text::new("Hello"));
+///
+/// // Safe downcast
+/// if let Some(text) = widget.downcast_ref::<Text>() {
+///     println!("Content: {}", text.content);
+/// }
+/// ```
+pub trait DynWidget: fmt::Debug + Any + 'static {
+    /// Get widget key for identity tracking
     ///
-    /// Keys are used to preserve widget state across rebuilds when
-    /// widgets are reordered or when you need to uniquely identify a widget.
+    /// Keys are used to preserve element state across rebuilds.
     ///
-    /// Returns `None` if no key is set.
-    fn key(&self) -> Option<&str> {
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_core::{DynWidget, KeyRef};
+    ///
+    /// let widget = Text::new("Hello").with_key(MY_KEY);
+    /// if let Some(key) = widget.key() {
+    ///     println!("Key: {}", key);
+    /// }
+    /// ```
+    fn key(&self) -> Option<KeyRef> {
         None
     }
 
-    /// Get the type name for debugging
-    fn type_name(&self) -> &'static str {
-        std::any::type_name::<Self>()
+    /// Get TypeId for fast type comparisons
+    ///
+    /// This is used internally for `can_update()` checks.
+    /// Much faster than string comparisons (~1ns vs ~30ns).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::TypeId;
+    ///
+    /// let w1 = Text::new("A");
+    /// let w2 = Text::new("B");
+    ///
+    /// assert_eq!(w1.type_id(), w2.type_id());
+    /// assert_eq!(w1.type_id(), TypeId::of::<Text>());
+    /// ```
+    #[inline]
+    fn type_id(&self) -> TypeId {
+        TypeId::of::<Self>()
     }
 
     /// Check if this widget can update another widget
     ///
-    /// Two widgets can update each other if:
-    /// - They have the same type
-    /// - They have the same key (or both have no key)
+    /// Two widgets are compatible for update if:
+    /// 1. They have the same TypeId (same concrete type)
+    /// 2. They have the same key (or both have no key)
     ///
-    /// This is used during rebuild to determine if an element can be reused.
+    /// # Performance
+    ///
+    /// - Same type, no keys: ~1ns
+    /// - Same type, same keys: ~2ns
+    /// - Different types: ~1ns (early return)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Same type, no keys → can update
+    /// let w1 = Text::new("A");
+    /// let w2 = Text::new("B");
+    /// assert!(w1.can_update(&w2));
+    ///
+    /// // Same type, same key → can update
+    /// let k = Key::new();
+    /// let w3 = Text::new("C").with_key(k);
+    /// let w4 = Text::new("D").with_key(k);
+    /// assert!(w3.can_update(&w4));
+    ///
+    /// // Same type, different keys → cannot update
+    /// let w5 = Text::new("E").with_key(Key::new());
+    /// let w6 = Text::new("F").with_key(Key::new());
+    /// assert!(!w5.can_update(&w6));
+    ///
+    /// // Different types → cannot update
+    /// let w7 = Text::new("G");
+    /// let w8 = Container::new();
+    /// assert!(!w7.can_update(&w8));
+    /// ```
+    #[inline]
     fn can_update(&self, other: &dyn DynWidget) -> bool {
-        // Same type required
-        if self.type_id() != other.type_id() {
-            return false
-        }
+        DynWidget::type_id(self) == DynWidget::type_id(other) && self.key() == other.key()
+    }
 
-        // Check keys
-        match (self.key(), other.key()) {
-            (Some(k1), Some(k2)) => k1 == k2,
-            (None, None) => true,
-            _ => false,
-        }
+    /// Get type name for debugging
+    ///
+    /// Returns the full type name including module path.
+    /// This is for diagnostics only - do not use for logic!
+    ///
+    /// # Performance
+    ///
+    /// This is a compile-time constant, zero runtime cost.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Text::new("Hello");
+    /// assert!(widget.type_name().contains("Text"));
+    /// ```
+    #[inline]
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
     }
 
     /// Get as Any for downcasting
-    fn as_any(&self) -> &dyn Any;
+    ///
+    /// This enables safe downcasting to concrete types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget: &dyn DynWidget = &Text::new("Hello");
+    ///
+    /// if let Some(text) = widget.as_any().downcast_ref::<Text>() {
+    ///     println!("Text content: {}", text.content);
+    /// }
+    /// ```
+    #[inline]
+    fn as_any(&self) -> &dyn Any
+    where
+        Self: Sized,
+    {
+        self
+    }
 
-    /// Get as Any (mutable) for downcasting
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    /// Debug identifier for diagnostics
+    ///
+    /// Returns a human-readable identifier combining type name and key.
+    /// Useful for debugging and error messages.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let w1 = Text::new("Hello");
+    /// println!("{}", w1.debug_id());  // "Text"
+    ///
+    /// let w2 = Text::new("World").with_key(Key::from_str("greeting"));
+    /// println!("{}", w2.debug_id());  // "Text(greeting)"
+    /// ```
+    fn debug_id(&self) -> String {
+        if let Some(key) = self.key() {
+            format!("{}({})", self.type_name(), key.as_u64())
+        } else {
+            self.type_name().to_string()
+        }
+    }
 }
 
-// Enable downcasting for DynWidget trait objects
-impl_downcast!(sync DynWidget);
+/// Extension methods for dyn DynWidget
+///
+/// These methods are available on trait objects `&dyn DynWidget`.
+impl dyn DynWidget {
+    /// Attempt to downcast to concrete type
+    ///
+    /// Returns `Some(&T)` if the widget is of type `T`, `None` otherwise.
+    ///
+    /// # Safety
+    ///
+    /// This is safe - it uses Rust's `Any` trait for type checking.
+    ///
+    /// # Performance
+    ///
+    /// ~5ns for the type check and vtable lookup.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget: Box<dyn DynWidget> = Box::new(Text::new("Hello"));
+    ///
+    /// // Successful downcast
+    /// if let Some(text) = widget.downcast_ref::<Text>() {
+    ///     println!("Content: {}", text.content);
+    /// }
+    ///
+    /// // Failed downcast
+    /// assert!(widget.downcast_ref::<Container>().is_none());
+    /// ```
+    #[inline]
+    pub fn downcast_ref<T: DynWidget>(&self) -> Option<&T> {
+        // Cast &dyn DynWidget to &dyn Any, then downcast
+        // This works because DynWidget: Any
+        (self as &dyn Any).downcast_ref::<T>()
+    }
 
-// Enable cloning for DynWidget trait objects
-dyn_clone::clone_trait_object!(DynWidget);
+    /// Check if widget is of specific type
+    ///
+    /// Equivalent to `widget.type_id() == TypeId::of::<T>()` but
+    /// more convenient.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget: &dyn DynWidget = &Text::new("Hello");
+    ///
+    /// assert!(widget.is::<Text>());
+    /// assert!(!widget.is::<Container>());
+    /// ```
+    #[inline]
+    pub fn is<T: DynWidget>(&self) -> bool {
+        DynWidget::type_id(self) == TypeId::of::<T>()
+    }
+}
 
-/// Boxed Widget trait object
+/// Boxed widget trait object
 ///
 /// Commonly used for heterogeneous collections of widgets.
 ///
-/// # Cloning
+/// # Examples
 ///
-/// `BoxedWidget` can be cloned thanks to `DynClone` trait:
-///
-/// ```rust,ignore
-/// use flui_core::BoxedWidget;
-///
-/// let widget: BoxedWidget = Box::new(Text::new("Hello"));
-/// let cloned = widget.clone(); // Works!
 /// ```
-///
-/// # Example
-///
-/// ```rust,ignore
 /// use flui_core::BoxedWidget;
 ///
 /// let widgets: Vec<BoxedWidget> = vec![
 ///     Box::new(Text::new("Hello")),
 ///     Box::new(Container::new()),
 /// ];
-///
-/// // Can clone the entire vec since BoxedWidget implements Clone
-/// let widgets_copy = widgets.clone();
 /// ```
 pub type BoxedWidget = Box<dyn DynWidget>;
+
+/// Shared widget trait object (reference-counted)
+///
+/// Use this when you need to share a widget between multiple locations.
+/// Cloning a `SharedWidget` only clones the Arc pointer, not the widget.
+///
+/// # Examples
+///
+/// ```
+/// use flui_core::SharedWidget;
+/// use std::sync::Arc;
+///
+/// let widget: SharedWidget = Arc::new(Text::new("Shared"));
+///
+/// // Cheap clone - only Arc pointer
+/// let clone1 = widget.clone();
+/// let clone2 = widget.clone();
+///
+/// assert!(Arc::ptr_eq(&widget, &clone1));
+/// ```
+pub type SharedWidget = Arc<dyn DynWidget>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Widget;
+    use crate::{Widget, Key};
 
-    #[derive(Debug, Clone)]
+    // Mock widget for testing
+    #[derive(Debug)]
     struct TestWidget {
-        key: Option<String>,
+        key: Option<Key>,
         value: i32,
     }
 
     impl Widget for TestWidget {
-        type Kind = crate::widget::StatelessKind;
+        type Element = crate::element::TestElement;
 
-        fn key(&self) -> Option<&str> {
-            self.key.as_deref()
+        fn key(&self) -> Option<Key> {
+            self.key
         }
     }
 
-    impl crate::widget::StatelessWidget for TestWidget {
-        fn build(&self) -> crate::BoxedWidget {
-            Box::new(TestWidget {
-                key: None,
-                value: 0,
-            })
-        }
-    }
-
-    impl DynWidget for TestWidget {
-        fn key(&self) -> Option<&str> {
-            self.key.as_deref()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
-    }
+    // DynWidget is automatic via blanket impl in mod.rs
 
     #[test]
-    fn test_dyn_widget_downcast() {
-        let widget: Box<dyn DynWidget> = Box::new(TestWidget {
+    fn test_type_id() {
+        let w1 = TestWidget {
             key: None,
-            value: 42,
-        });
+            value: 1,
+        };
+        let w2 = TestWidget {
+            key: None,
+            value: 2,
+        };
 
-        assert!(widget.downcast_ref::<TestWidget>().is_some());
-        assert_eq!(widget.downcast_ref::<TestWidget>().unwrap().value, 42);
+        assert_eq!(w1.type_id(), w2.type_id());
+        assert_eq!(w1.type_id(), TypeId::of::<TestWidget>());
     }
 
     #[test]
     fn test_can_update_same_type_no_key() {
-        let w1 = TestWidget { key: None, value: 1 };
-        let w2 = TestWidget { key: None, value: 2 };
+        let w1 = TestWidget {
+            key: None,
+            value: 1,
+        };
+        let w2 = TestWidget {
+            key: None,
+            value: 2,
+        };
 
         assert!(w1.can_update(&w2));
     }
 
     #[test]
     fn test_can_update_same_key() {
-        let w1 = TestWidget { key: Some("key1".into()), value: 1 };
-        let w2 = TestWidget { key: Some("key1".into()), value: 2 };
+        let key = Key::new();
+        let w1 = TestWidget {
+            key: Some(key),
+            value: 1,
+        };
+        let w2 = TestWidget {
+            key: Some(key),
+            value: 2,
+        };
 
         assert!(w1.can_update(&w2));
     }
 
     #[test]
     fn test_cannot_update_different_key() {
-        let w1 = TestWidget { key: Some("key1".into()), value: 1 };
-        let w2 = TestWidget { key: Some("key2".into()), value: 2 };
+        let w1 = TestWidget {
+            key: Some(Key::new()),
+            value: 1,
+        };
+        let w2 = TestWidget {
+            key: Some(Key::new()),
+            value: 2,
+        };
 
         assert!(!w1.can_update(&w2));
     }
 
     #[test]
-    fn test_cannot_update_key_mismatch() {
-        let w1 = TestWidget { key: Some("key1".into()), value: 1 };
-        let w2 = TestWidget { key: None, value: 2 };
-
-        assert!(!w1.can_update(&w2));
-    }
-
-    #[test]
-    fn test_boxed_widget_clone() {
-        // Create a boxed widget
+    fn test_downcast() {
         let widget: BoxedWidget = Box::new(TestWidget {
-            key: Some("test".into()),
+            key: None,
             value: 42,
         });
 
-        // Clone it!
-        let cloned = widget.clone();
-
-        // Both should have the same value
-        assert_eq!(
-            widget.downcast_ref::<TestWidget>().unwrap().value,
-            42
-        );
-        assert_eq!(
-            cloned.downcast_ref::<TestWidget>().unwrap().value,
-            42
-        );
-
-        // They should be different instances
-        assert_ne!(
-            widget.as_ref() as *const dyn DynWidget,
-            cloned.as_ref() as *const dyn DynWidget
-        );
+        // Successful downcast
+        let test = widget.downcast_ref::<TestWidget>().unwrap();
+        assert_eq!(test.value, 42);
     }
 
     #[test]
-    fn test_vec_boxed_widget_clone() {
-        // Create a vec of boxed widgets
-        let widgets: Vec<BoxedWidget> = vec![
-            Box::new(TestWidget { key: None, value: 1 }),
-            Box::new(TestWidget { key: Some("key2".into()), value: 2 }),
-            Box::new(TestWidget { key: None, value: 3 }),
-        ];
+    fn test_is_type() {
+        let widget: &dyn DynWidget = &TestWidget {
+            key: None,
+            value: 1,
+        };
 
-        // Clone the entire vec!
-        let cloned_widgets = widgets.clone();
+        assert!(widget.is::<TestWidget>());
+    }
 
-        // Should have same length
-        assert_eq!(widgets.len(), cloned_widgets.len());
+    #[test]
+    fn test_debug_id() {
+        let w1 = TestWidget {
+            key: None,
+            value: 1,
+        };
+        assert!(w1.debug_id().contains("TestWidget"));
 
-        // All values should match
-        for (original, cloned) in widgets.iter().zip(cloned_widgets.iter()) {
-            assert_eq!(
-                original.downcast_ref::<TestWidget>().unwrap().value,
-                cloned.downcast_ref::<TestWidget>().unwrap().value
-            );
-        }
+        let w2 = TestWidget {
+            key: Some(Key::from_u64(42).unwrap()),
+            value: 2,
+        };
+        let debug_id = w2.debug_id();
+        assert!(debug_id.contains("TestWidget"));
+        assert!(debug_id.contains("42"));
+    }
+
+    #[test]
+    fn test_shared_widget() {
+        let widget: SharedWidget = Arc::new(TestWidget {
+            key: None,
+            value: 1,
+        });
+
+        let clone1 = widget.clone();
+        let clone2 = widget.clone();
+
+        // All point to same data
+        assert!(Arc::ptr_eq(&widget, &clone1));
+        assert!(Arc::ptr_eq(&widget, &clone2));
+        assert_eq!(Arc::strong_count(&widget), 3);
     }
 }

@@ -46,7 +46,8 @@ use flui_types::{Size, Offset};
 use flui_types::constraints::BoxConstraints;
 use flui_engine::{BoxedLayer, ContainerLayer};
 
-use crate::{ElementId, ElementTree, RenderObjectElement, RenderObjectWidget};
+use crate::element::{ElementId, ElementTree, RenderObjectElement, DynElement};
+use crate::widget::RenderObjectWidget;
 
 /// RenderPipeline - orchestrates the rendering pipeline
 ///
@@ -164,8 +165,9 @@ impl RenderPipeline {
     /// ```
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where
-        W: RenderObjectWidget + 'static,
-        W::Render: std::fmt::Debug,
+        W: RenderObjectWidget + crate::Widget + 'static,
+        W::Element: DynElement,
+        W::RenderObject: std::fmt::Debug,
     {
         let element = RenderObjectElement::new(widget);
         let id = self.tree.insert(Box::new(element));

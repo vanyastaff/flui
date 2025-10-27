@@ -56,8 +56,8 @@ use flui_types::{Size, Offset};
 use flui_types::constraints::BoxConstraints;
 use flui_engine::BoxedLayer;
 
-use crate::arity::Arity;
-use crate::{ElementId, ElementTree};
+use crate::render::arity::Arity;
+use crate::element::{ElementId, ElementTree};
 
 /// Object-safe base trait for all RenderObjects
 ///
@@ -254,7 +254,9 @@ where
     T: crate::RenderObject + fmt::Debug,
 {
     fn arity(&self) -> Option<usize> {
-        <T as crate::RenderObject>::Arity::CHILD_COUNT
+        // Arity no longer has CHILD_COUNT constant
+        // Return None for now - this needs refactoring
+        None
     }
 
     fn debug_name(&self) -> &'static str {
@@ -275,7 +277,7 @@ where
         element_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-        use crate::LayoutCx;
+        use crate::render::LayoutCx;
         let mut cx = LayoutCx::<T::Arity>::new(tree, element_id, constraints);
         <T as crate::RenderObject>::layout(self, &mut cx)
     }
@@ -286,7 +288,7 @@ where
         element_id: ElementId,
         offset: Offset,
     ) -> BoxedLayer {
-        use crate::PaintCx;
+        use crate::render::PaintCx;
         let cx = PaintCx::<T::Arity>::new(tree, element_id, offset);
         <T as crate::RenderObject>::paint(self, &cx)
     }

@@ -8,7 +8,7 @@ use std::fmt;
 use crate::ElementId;
 use crate::widget::{InheritedWidget, BoxedWidget};
 use crate::element::{DynElement, ElementLifecycle as PublicLifecycle};
-use crate::DynRenderObject;
+use crate::render::DynRenderObject;
 
 /// Element for InheritedWidget
 ///
@@ -215,7 +215,11 @@ impl<W: InheritedWidget> fmt::Display for InheritedElement<W> {
 
 // ========== DynElement Implementation ==========
 
-impl<W: InheritedWidget + crate::DynWidget> DynElement for InheritedElement<W> {
+impl<W> DynElement for InheritedElement<W>
+where
+    W: InheritedWidget + crate::Widget + crate::DynWidget,
+    W::Element: DynElement,
+{
     fn parent(&self) -> Option<ElementId> {
         self.parent
     }
@@ -258,8 +262,8 @@ impl<W: InheritedWidget + crate::DynWidget> DynElement for InheritedElement<W> {
     fn update_any(&mut self, new_widget: Box<dyn crate::DynWidget>) {
         use crate::DynWidget;
         // Try to downcast to our widget type
-        if let Some(new_widget) = DynWidget::as_any(&*new_widget).downcast_ref::<W>() {
-            self.update(new_widget.clone());
+        if let Some(new_widget) = (&*new_widget as &dyn std::any::Any).downcast_ref::<W>() {
+            self.update(Clone::clone(new_widget));
         }
     }
 
