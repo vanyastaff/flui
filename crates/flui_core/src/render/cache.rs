@@ -1,10 +1,11 @@
 //! Layout caching system
 //!
-//! Simple LRU cache for layout results
+//! LRU cache for layout results with statistics tracking
 
 use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
 use moka::sync::Cache;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Layout cache key
@@ -83,22 +84,125 @@ impl LayoutResult {
     }
 }
 
-/// Global layout cache
+/// Layout cache with statistics tracking
 ///
-/// Uses moka for thread-safe LRU caching with TTL.
-pub type LayoutCache = Cache<LayoutCacheKey, LayoutResult>;
+/// Uses moka for thread-safe LRU caching with TTL, plus lock-free
+/// statistics tracking for cache hits and misses.
+///
+/// # Performance
+///
+/// - Cache operations: O(1) amortized (LRU + hash map)
+/// - Statistics: Lock-free atomic operations
+/// - Max capacity: 10,000 entries
+/// - TTL: 60 seconds
+pub struct LayoutCache {
+    cache: Cache<LayoutCacheKey, LayoutResult>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+}
+
+impl LayoutCache {
+    /// Create a new layout cache
+    fn new() -> Self {
+        Self {
+            cache: Cache::builder()
+                .max_capacity(10_000)
+                .time_to_live(Duration::from_secs(60))
+                .build(),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
+    }
+
+    /// Get a layout result from cache
+    ///
+    /// Tracks cache hits and misses for statistics.
+    pub fn get(&self, key: &LayoutCacheKey) -> Option<LayoutResult> {
+        let result = self.cache.get(key);
+        if result.is_some() {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.misses.fetch_add(1, Ordering::Relaxed);
+        }
+        result
+    }
+
+    /// Insert a layout result into cache
+    pub fn insert(&self, key: LayoutCacheKey, value: LayoutResult) {
+        self.cache.insert(key, value);
+    }
+
+    /// Invalidate a specific cache entry
+    pub fn invalidate(&self, key: &LayoutCacheKey) {
+        self.cache.invalidate(key);
+    }
+
+    /// Clear all cache entries
+    pub fn clear(&self) {
+        self.cache.invalidate_all();
+    }
+
+    /// Get number of entries in cache
+    pub fn entry_count(&self) -> u64 {
+        self.cache.entry_count()
+    }
+
+    /// Get detailed cache statistics
+    ///
+    /// Returns (hits, misses, total_requests, hit_rate_percent)
+    pub fn detailed_stats(&self) -> (u64, u64, u64, f64) {
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let total = hits + misses;
+        let hit_rate = if total > 0 {
+            (hits as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        (hits, misses, total, hit_rate)
+    }
+
+    /// Print cache statistics to stderr
+    ///
+    /// Useful for debugging and performance analysis.
+    pub fn print_stats(&self) {
+        let (hits, misses, total, hit_rate) = self.detailed_stats();
+        eprintln!("LayoutCache Statistics:");
+        eprintln!("  Entries: {}", self.entry_count());
+        eprintln!("  Total requests: {}", total);
+        eprintln!("  Hits: {}", hits);
+        eprintln!("  Misses: {}", misses);
+        eprintln!("  Hit rate: {:.1}%", hit_rate);
+    }
+
+    /// Reset statistics counters
+    ///
+    /// Useful for benchmarking specific code sections.
+    pub fn reset_stats(&self) {
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
+    }
+}
+
+impl std::fmt::Debug for LayoutCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (hits, misses, total, hit_rate) = self.detailed_stats();
+        f.debug_struct("LayoutCache")
+            .field("entries", &self.entry_count())
+            .field("hits", &hits)
+            .field("misses", &misses)
+            .field("total_requests", &total)
+            .field("hit_rate", &format!("{:.1}%", hit_rate))
+            .finish()
+    }
+}
 
 /// Get the global layout cache
 pub fn layout_cache() -> &'static LayoutCache {
     use std::sync::OnceLock;
     static CACHE: OnceLock<LayoutCache> = OnceLock::new();
 
-    CACHE.get_or_init(|| {
-        Cache::builder()
-            .max_capacity(10_000)
-            .time_to_live(Duration::from_secs(60))
-            .build()
-    })
+    CACHE.get_or_init(|| LayoutCache::new())
 }
 
 #[cfg(test)]
@@ -124,6 +228,7 @@ mod tests {
     #[test]
     fn test_cache_operations() {
         let cache = layout_cache();
+        cache.reset_stats(); // Clear any previous stats
 
         let key = LayoutCacheKey::new(42, BoxConstraints::tight(Size::new(100.0, 100.0)));
         let result = LayoutResult::new(Size::new(50.0, 50.0));
@@ -132,5 +237,112 @@ mod tests {
 
         let cached = cache.get(&key).unwrap();
         assert_eq!(cached.size, Size::new(50.0, 50.0));
+    }
+
+    #[test]
+    fn test_cache_statistics() {
+        let cache = LayoutCache::new();
+
+        // Initially no requests
+        let (hits, misses, total, hit_rate) = cache.detailed_stats();
+        assert_eq!(hits, 0);
+        assert_eq!(misses, 0);
+        assert_eq!(total, 0);
+        assert_eq!(hit_rate, 0.0);
+
+        // Insert and get (hit)
+        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        cache.insert(key, LayoutResult::new(Size::new(10.0, 10.0)));
+
+        assert!(cache.get(&key).is_some());
+        let (hits, misses, total, hit_rate) = cache.detailed_stats();
+        assert_eq!(hits, 1);
+        assert_eq!(misses, 0);
+        assert_eq!(total, 1);
+        assert_eq!(hit_rate, 100.0);
+
+        // Get non-existent (miss)
+        let key2 = LayoutCacheKey::new(2, BoxConstraints::tight(Size::ZERO));
+        assert!(cache.get(&key2).is_none());
+
+        let (hits, misses, total, hit_rate) = cache.detailed_stats();
+        assert_eq!(hits, 1);
+        assert_eq!(misses, 1);
+        assert_eq!(total, 2);
+        assert_eq!(hit_rate, 50.0);
+    }
+
+    #[test]
+    fn test_cache_reset_stats() {
+        let cache = LayoutCache::new();
+
+        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        cache.insert(key, LayoutResult::new(Size::ZERO));
+        cache.get(&key);
+
+        let (hits, _, _, _) = cache.detailed_stats();
+        assert_eq!(hits, 1);
+
+        cache.reset_stats();
+
+        let (hits, misses, total, hit_rate) = cache.detailed_stats();
+        assert_eq!(hits, 0);
+        assert_eq!(misses, 0);
+        assert_eq!(total, 0);
+        assert_eq!(hit_rate, 0.0);
+    }
+
+    #[test]
+    fn test_cache_invalidate() {
+        let cache = LayoutCache::new();
+
+        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        cache.insert(key, LayoutResult::new(Size::ZERO));
+
+        assert!(cache.get(&key).is_some());
+
+        cache.invalidate(&key);
+
+        assert!(cache.get(&key).is_none());
+
+        // Should count as miss after invalidation
+        let (hits, misses, _, _) = cache.detailed_stats();
+        assert_eq!(hits, 1); // First get
+        assert_eq!(misses, 1); // Second get after invalidate
+    }
+
+    #[test]
+    fn test_cache_clear() {
+        let cache = LayoutCache::new();
+
+        let key1 = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        let key2 = LayoutCacheKey::new(2, BoxConstraints::tight(Size::ZERO));
+
+        cache.insert(key1, LayoutResult::new(Size::ZERO));
+        cache.insert(key2, LayoutResult::new(Size::ZERO));
+
+        assert_eq!(cache.entry_count(), 2);
+
+        cache.clear();
+
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_cache_debug_format() {
+        let cache = LayoutCache::new();
+        cache.reset_stats();
+
+        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        cache.insert(key, LayoutResult::new(Size::ZERO));
+        cache.get(&key);
+
+        let debug_str = format!("{:?}", cache);
+
+        // Should contain statistics
+        assert!(debug_str.contains("LayoutCache"));
+        assert!(debug_str.contains("hits"));
+        assert!(debug_str.contains("misses"));
+        assert!(debug_str.contains("hit_rate"));
     }
 }

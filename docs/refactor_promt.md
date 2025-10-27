@@ -12,12 +12,6 @@
 - **snake_case** для функций, методов, переменных, модулей
 - **SCREAMING_SNAKE_CASE** для констант и статических переменных
 
-#### Префиксы для trait objects:
-- ❌ `AnyWidget`, `AnyElement` - НЕ используй `Any*` (зарезервировано для `std::any::Any`)
-- ✅ `DynWidget`, `DynElement` - используй `Dyn*` для object-safe версий
-- ✅ `WidgetBase` - или описательные базовые имена
-- Пример: `trait DynWidget` (для `Box<dyn DynWidget>`), не `AnyWidget`
-
 #### Методы конверсии (C-CONV):
 - `into_*()` - consuming conversion (забирает ownership)
 ```rust

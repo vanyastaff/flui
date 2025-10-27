@@ -373,7 +373,7 @@ mod tests {
     }
 
     impl Widget for TestWidget {
-        type Element = crate::element::TestElement;
+        // Element type determined at runtime by framework
 
         fn key(&self) -> Option<Key> {
             self.key

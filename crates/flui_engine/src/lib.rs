@@ -59,12 +59,14 @@
 //! - `wgpu`: Enable wgpu backend (future)
 //! - `skia`: Enable skia backend (future)
 
+pub mod app;
 pub mod backend;
 pub mod compositor;
 pub mod layer;
 pub mod painter;
 pub mod scene;
 pub mod surface;
+
 
 
 
@@ -81,9 +83,20 @@ pub use compositor::{Compositor, CompositorOptions, CompositionStats};
 pub use surface::{Surface, Frame};
 pub use backend::{RenderBackend, BackendCapabilities, BackendInfo};
 
+// Re-export unified app API
+pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
+
 // Re-export egui painter when feature is enabled
 #[cfg(feature = "egui")]
 pub use painter::egui::EguiPainter;
+
+// Re-export wgpu painter and renderer when feature is enabled
+#[cfg(feature = "wgpu")]
+pub use painter::wgpu::{
+    WgpuPainter, WgpuRenderer, RenderError,
+    TextRenderer, TextCommand, TextAlign, TextRenderError,
+};
+
 
 
 

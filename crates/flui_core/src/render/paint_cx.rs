@@ -165,7 +165,7 @@ impl<'a> PaintCx<'a, MultiArity> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arity::LeafArity;
+    use crate::render::arity::LeafArity;
     use crate::{RenderObject, LayoutCx};
     use flui_types::Size;
     use flui_engine::{BoxedLayer, ContainerLayer};

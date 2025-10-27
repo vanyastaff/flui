@@ -3,26 +3,30 @@
 //! Manages a single child and applies parent data to descendant RenderObjects.
 
 use std::fmt;
-use std::marker::PhantomData;
 
 use crate::ElementId;
-use crate::widget::ParentDataWidget;
-use crate::render::ParentData;
-use crate::element::{DynElement, ElementLifecycle as PublicLifecycle};
+use crate::widget::{DynWidget, BoxedWidget};
+use crate::element::ElementLifecycle;
 
 /// Element for ParentDataWidget
 ///
-/// Manages a single child and applies parent data to descendant RenderObjects.
+/// ParentDataElement holds a ParentDataWidget (type-erased as DynWidget) and manages
+/// a single child. It applies parent data to descendant RenderObjects by walking
+/// down the tree to find the first RenderObjectElement.
 ///
 /// # Architecture
 ///
 /// ```text
-/// ParentDataElement<Flexible, FlexParentData>
-///   ├─ widget: Flexible
-///   ├─ parent: Option<ElementId>
-///   ├─ child: Option<ElementId>
-///   └─ lifecycle: ElementLifecycle
+/// ParentDataElement
+///   ├─ widget: Box<dyn DynWidget> (type-erased ParentDataWidget)
+///   ├─ child: Option<ElementId> (single child)
+///   └─ lifecycle state
 /// ```
+///
+/// # Type Erasure
+///
+/// Like other element types, ParentDataElement uses type erasure to enable storage
+/// in `enum Element`. The widget is stored as `Box<dyn DynWidget>`.
 ///
 /// # Parent Data Application
 ///
@@ -35,12 +39,10 @@ use crate::element::{DynElement, ElementLifecycle as PublicLifecycle};
 /// 2. **rebuild()** - Build child widget
 /// 3. **apply_parent_data()** - Set parent data on descendant RenderObject
 /// 4. **unmount()** - Remove from tree
-pub struct ParentDataElement<W>
-where
-    W: ParentDataWidget,
-{
-    /// The parent data widget
-    widget: W,
+#[derive(Debug)]
+pub struct ParentDataElement {
+    /// The parent data widget (type-erased)
+    widget: BoxedWidget,
 
     /// Parent element ID
     parent: Option<ElementId>,
@@ -48,365 +50,339 @@ where
     /// Child element ID
     child: Option<ElementId>,
 
-    /// Dirty flag
-    dirty: bool,
+    /// Slot position in parent's child list
+    slot: usize,
 
     /// Current lifecycle state
     lifecycle: ElementLifecycle,
 
+    /// Dirty flag (needs rebuild)
+    dirty: bool,
 }
 
-/// Lifecycle states for an element
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ElementLifecycle {
-    /// Element is created but not yet in tree
-    Initial,
-    /// Element is active in the tree
-    Active,
-    /// Element has been removed from tree
-    Defunct,
-}
-
-impl<W> ParentDataElement<W>
-where
-    W: ParentDataWidget,
-{
-    /// Create a new ParentDataElement
+impl ParentDataElement {
+    /// Create a new ParentDataElement from a widget
     ///
-    /// # Arguments
+    /// # Parameters
     ///
-    /// - `widget`: The ParentDataWidget
+    /// - `widget` - Any widget implementing DynWidget (ParentDataWidget)
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```rust,ignore
-    /// let element = ParentDataElement::new(Flexible {
+    /// let element = ParentDataElement::new(Box::new(Flexible {
     ///     flex: 1,
     ///     child: Box::new(Container::new()),
-    /// });
+    /// }));
     /// ```
-    pub fn new(widget: W) -> Self {
+    pub fn new(widget: BoxedWidget) -> Self {
         Self {
             widget,
             parent: None,
             child: None,
-            dirty: true,
+            slot: 0,
             lifecycle: ElementLifecycle::Initial,
+            dirty: true,
         }
     }
 
-    /// Get reference to the widget
-    pub fn widget(&self) -> &W {
-        &self.widget
+    /// Get reference to the widget (as DynWidget trait object)
+    ///
+    /// Following Rust API Guidelines - no `get_` prefix for getters.
+    #[inline]
+    #[must_use]
+    pub fn widget(&self) -> &dyn DynWidget {
+        &*self.widget
     }
 
-    /// Update the widget
+    /// Update with a new widget
     ///
-    /// # Arguments
-    ///
-    /// - `new_widget`: The new widget to replace the current one
-    pub fn update(&mut self, new_widget: W) {
+    /// The new widget must be compatible (same type and key) with the current widget.
+    pub fn update(&mut self, new_widget: BoxedWidget) {
         self.widget = new_widget;
         self.dirty = true;
     }
 
-    /// Get the child element ID
+    /// Get child element ID
+    #[inline]
+    #[must_use]
     pub fn child(&self) -> Option<ElementId> {
         self.child
     }
 
-    /// Set the child element ID
+    /// Set the child element ID after it's been mounted
+    ///
+    /// This is called by ElementTree after mounting the child widget.
     pub(crate) fn set_child(&mut self, child_id: ElementId) {
         self.child = Some(child_id);
     }
 
-    /// Remove the child element
+    /// Forget child element
+    ///
+    /// Called by ElementTree when child is being removed.
     pub(crate) fn forget_child(&mut self, child_id: ElementId) {
         if self.child == Some(child_id) {
             self.child = None;
         }
     }
 
-    /// Get the parent element ID
+    // ========== DynElement-like Interface ==========
+    //
+    // These methods match the DynElement trait and are called by Element enum.
+    // Following API Guidelines: is_* for predicates, no get_* prefix.
+
+    /// Get parent element ID
+    #[inline]
+    #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
         self.parent
     }
 
-    /// Set the parent element ID
-    pub(crate) fn set_parent(&mut self, parent_id: Option<ElementId>) {
-        self.parent = parent_id;
-    }
-
-    /// Check if element is active
-    pub fn is_active(&self) -> bool {
-        self.lifecycle == ElementLifecycle::Active
-    }
-
-    /// Build the child widget
-    ///
-    /// Gets the child widget from the ParentDataWidget for building the child element.
-    pub fn build(&self) -> crate::BoxedWidget {
-        // TODO: Implement proper widget cloning
-        // For now, create a stub - this element type is rarely used
-        todo!("ParentDataElement::build() needs proper widget cloning")
-    }
-}
-
-impl<W> fmt::Debug for ParentDataElement<W>
-where
-    W: ParentDataWidget,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ParentDataElement")
-            .field("widget_type", &std::any::type_name::<W>())
-            .field("parent", &self.parent)
-            .field("dirty", &self.dirty)
-            .field("lifecycle", &self.lifecycle)
-            .field("child", &self.child)
-            .finish()
-    }
-}
-
-// ========== DynElement Implementation ==========
-
-impl<W> DynElement for ParentDataElement<W>
-where
-    W: ParentDataWidget + crate::Widget,
-    W::Element: DynElement,
-{
-    fn parent(&self) -> Option<ElementId> {
-        self.parent
-    }
-
-    fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
+    /// Get iterator over child element IDs
+    #[inline]
+    pub fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
         Box::new(self.child.into_iter())
     }
 
-    fn lifecycle(&self) -> PublicLifecycle {
-        match self.lifecycle {
-            ElementLifecycle::Initial => PublicLifecycle::Initial,
-            ElementLifecycle::Active => PublicLifecycle::Active,
-            ElementLifecycle::Defunct => PublicLifecycle::Defunct,
-        }
+    /// Get current lifecycle state
+    #[inline]
+    #[must_use]
+    pub fn lifecycle(&self) -> ElementLifecycle {
+        self.lifecycle
     }
 
-    fn mount(&mut self, parent: Option<ElementId>, _slot: usize) {
+    /// Mount element to tree
+    ///
+    /// Sets parent, slot, and transitions to Active lifecycle state.
+    /// Marks element as dirty to trigger initial build.
+    pub fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
         self.parent = parent;
+        self.slot = slot;
         self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true;
+        self.dirty = true; // Will rebuild on first frame
     }
 
-    fn unmount(&mut self) {
+    /// Unmount element from tree
+    ///
+    /// Transitions to Defunct lifecycle state and clears child reference.
+    /// The child element will be unmounted by ElementTree separately.
+    pub fn unmount(&mut self) {
         self.lifecycle = ElementLifecycle::Defunct;
+        // Child will be unmounted by ElementTree
+        self.child = None;
     }
 
-    fn deactivate(&mut self) {
-        // ParentDataElements don't support deactivation - unmount instead
-        self.unmount();
+    /// Deactivate element
+    ///
+    /// Called when element is temporarily deactivated (e.g., moved to cache).
+    pub fn deactivate(&mut self) {
+        self.lifecycle = ElementLifecycle::Inactive;
     }
 
-    fn activate(&mut self) {
+    /// Activate element
+    ///
+    /// Called when element is reactivated. Marks dirty to trigger rebuild.
+    pub fn activate(&mut self) {
         self.lifecycle = ElementLifecycle::Active;
+        self.dirty = true; // Rebuild when reactivated
     }
 
-    fn widget(&self) -> &dyn crate::DynWidget {
-        &self.widget
-    }
-
-    fn update_any(&mut self, new_widget: Box<dyn crate::DynWidget>) {
-        use crate::DynWidget;
-        // Try to downcast to our widget type
-        if let Some(new_widget) = (&*new_widget as &dyn std::any::Any).downcast_ref::<W>() {
-            self.update(Clone::clone(new_widget));
-        }
-    }
-
-    fn is_dirty(&self) -> bool {
+    /// Check if element needs rebuild
+    ///
+    /// Following API Guidelines: is_* prefix for boolean predicates.
+    #[inline]
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
         self.dirty
     }
 
-    fn mark_dirty(&mut self) {
+    /// Mark element as needing rebuild
+    #[inline]
+    pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
-    fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn crate::DynWidget>, usize)> {
+    /// Perform rebuild
+    ///
+    /// ParentDataWidget wraps its child widget. Returns the child that needs
+    /// to be mounted.
+    ///
+    /// # Returns
+    ///
+    /// Vec<(parent_id, child_widget, slot)> - Children to be inflated
+    ///
+    /// # Implementation Note
+    ///
+    /// Currently returns empty vec because full ElementTree integration
+    /// is pending. Will be implemented when ProxyWidget child access is available.
+    pub fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
+
         self.dirty = false;
 
-        // ParentDataWidget just wraps its child widget
-        let child_widget = self.build();
+        // TODO: Get child widget from ParentDataWidget
+        // For now, this is unimplemented because ParentDataElement needs
+        // ProxyWidget child access which requires full ElementTree integration
+
+        // Will return:
+        // let child_widget = self.widget.child(); // via ProxyWidget trait
+        // vec![(element_id, child_widget, 0)]
 
         // Mark old child for unmounting
         self.child = None;
 
-        // Return the child that needs to be mounted
-        vec![(element_id, child_widget, 0)]
+        Vec::new()
     }
 
-    fn forget_child(&mut self, child_id: ElementId) {
-        if self.child == Some(child_id) {
-            self.child = None;
-        }
-    }
-
-    fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+    /// Update slot for child
+    ///
+    /// ParentDataElement only has one child, slot is always 0.
+    pub(crate) fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
         // ParentDataElement only has one child, slot is always 0
     }
-
-    // ParentDataElement doesn't have RenderObject - use defaults
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Widget, DynWidget, RenderObjectWidget, RenderObject, BoxParentData, ProxyWidget, ParentDataWidget, LeafArity, LayoutCx, PaintCx, RenderObjectKind};
-    use flui_types::Size;
-    use flui_engine::{BoxedLayer, ContainerLayer};
 
-    // Test parent data widget
-    #[derive(Debug)]
-    struct TestParentDataWidget {
-        value: i32,
-        child: Box<dyn DynWidget>,
-    }
-
-    impl Clone for TestParentDataWidget {
-        fn clone(&self) -> Self {
-            Self {
-                value: self.value,
-                child: self.child.clone(),
-            }
-        }
-    }
-
-    impl ProxyWidget for TestParentDataWidget {
-        fn child(&self) -> &dyn DynWidget {
-            &*self.child
-        }
-    }
-
-    impl ParentDataWidget<BoxParentData> for TestParentDataWidget {
-        fn create_parent_data(&self) -> Box<dyn ParentData> {
-            Box::new(BoxParentData::default())
-        }
-
-        fn debug_typical_ancestor_widget_class(&self) -> &'static str {
-            "TestContainer"
-        }
-    }
-
-    // Use macro to implement Widget + DynWidget
-    crate::impl_widget_for_parent_data!(TestParentDataWidget);
-
-    // Dummy child widget
+    // Mock widget for testing
     #[derive(Debug, Clone)]
-    struct ChildWidget;
-
-    impl Widget for ChildWidget {
-        type Kind = RenderObjectKind;
+    struct TestWidget {
+        value: i32,
     }
 
-    impl DynWidget for ChildWidget {
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    }
-
-    impl RenderObjectWidget for ChildWidget {
-        type Arity = LeafArity;
-        type Render = ChildRender;
-
-        fn create_render_object(&self) -> Self::Render {
-            ChildRender
-        }
-
-        fn update_render_object(&self, _render: &mut Self::Render) {}
-    }
-
-    #[derive(Debug)]
-    struct ChildRender;
-
-    impl RenderObject for ChildRender {
-        type Arity = LeafArity;
-
-        fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-            cx.constraints().constrain(Size::ZERO)
-        }
-
-        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
-        }
+    impl crate::DynWidget for TestWidget {
+        // Minimal implementation for testing
     }
 
     #[test]
     fn test_parent_data_element_creation() {
-        let widget = TestParentDataWidget {
-            value: 42,
-            child: Box::new(ChildWidget),
-        };
+        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
         let element = ParentDataElement::new(widget);
 
+        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
         assert!(element.is_dirty());
-        assert_eq!(element.lifecycle(), PublicLifecycle::Initial);
         assert_eq!(element.child(), None);
     }
 
     #[test]
     fn test_parent_data_element_mount() {
-        let widget = TestParentDataWidget {
-            value: 42,
-            child: Box::new(ChildWidget),
-        };
+        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
 
         element.mount(Some(100), 0);
 
         assert_eq!(element.parent(), Some(100));
         assert!(element.is_dirty());
-        assert_eq!(element.lifecycle(), PublicLifecycle::Active);
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
     }
 
     #[test]
     fn test_parent_data_element_update() {
-        let widget1 = TestParentDataWidget {
-            value: 1,
-            child: Box::new(ChildWidget),
-        };
+        let widget1: BoxedWidget = Box::new(TestWidget { value: 1 });
         let mut element = ParentDataElement::new(widget1);
 
-        let widget2 = TestParentDataWidget {
-            value: 2,
-            child: Box::new(ChildWidget),
-        };
+        let widget2: BoxedWidget = Box::new(TestWidget { value: 2 });
         element.update(widget2);
 
-        assert_eq!(element.widget().value, 2);
         assert!(element.is_dirty());
     }
 
     #[test]
     fn test_parent_data_element_unmount() {
-        let widget = TestParentDataWidget {
-            value: 42,
-            child: Box::new(ChildWidget),
-        };
+        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
         element.mount(None, 0);
 
         element.unmount();
 
-        assert_eq!(element.lifecycle(), PublicLifecycle::Defunct);
+        assert_eq!(element.lifecycle(), ElementLifecycle::Defunct);
+        assert_eq!(element.child(), None);
     }
 
     #[test]
-    fn test_parent_data_element_build() {
-        let widget = TestParentDataWidget {
-            value: 42,
-            child: Box::new(ChildWidget),
-        };
-        let element = ParentDataElement::new(widget);
+    fn test_parent_data_element_lifecycle() {
+        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let mut element = ParentDataElement::new(widget);
 
-        let _child = element.build();
+        // Initial
+        assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
+
+        // Mount → Active
+        element.mount(Some(0), 0);
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+
+        // Deactivate → Inactive
+        element.deactivate();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Inactive);
+
+        // Activate → Active
+        element.activate();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Active);
+        assert!(element.is_dirty()); // Should mark dirty on activate
+
+        // Unmount → Defunct
+        element.unmount();
+        assert_eq!(element.lifecycle(), ElementLifecycle::Defunct);
+    }
+
+    #[test]
+    fn test_parent_data_element_dirty_flag() {
+        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let mut element = ParentDataElement::new(widget);
+
+        // Initially dirty
+        assert!(element.is_dirty());
+
+        // Rebuild clears dirty
+        element.rebuild(1);
+        assert!(!element.is_dirty());
+
+        // Mark dirty
+        element.mark_dirty();
+        assert!(element.is_dirty());
+    }
+
+    #[test]
+    fn test_parent_data_element_child_management() {
+        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let mut element = ParentDataElement::new(widget);
+
+        // No child initially
+        assert_eq!(element.child(), None);
+
+        // Set child
+        element.set_child(5);
+        assert_eq!(element.child(), Some(5));
+
+        // Forget child
+        element.forget_child(5);
+        assert_eq!(element.child(), None);
+
+        // Forget non-existent child (should be no-op)
+        element.set_child(10);
+        element.forget_child(999);
+        assert_eq!(element.child(), Some(10));
+    }
+
+    #[test]
+    fn test_parent_data_element_rebuild() {
+        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let mut element = ParentDataElement::new(widget);
+        element.mount(Some(0), 0);
+
+        // Rebuild when dirty
+        let children = element.rebuild(1);
+
+        // Currently returns empty vec (TODO implementation)
+        assert_eq!(children.len(), 0);
+        assert!(!element.is_dirty()); // Should be clean after rebuild
+
+        // Rebuild when not dirty should be no-op
+        let children = element.rebuild(1);
+        assert_eq!(children.len(), 0);
     }
 }

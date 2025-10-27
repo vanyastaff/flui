@@ -207,7 +207,7 @@ pub trait RenderObject: Send + Sync + Sized + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arity::{LeafArity, SingleArity};
+    use crate::render::arity::{LeafArity, SingleArity};
     use crate::render::layout_cx::SingleChild;
     use crate::render::paint_cx::SingleChildPaint;
     use flui_types::constraints::BoxConstraints;

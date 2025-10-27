@@ -54,7 +54,7 @@
 //! ```
 
 use std::fmt;
-use crate::{Widget, RenderObject, RenderObjectElement, SingleArity, MultiArity};
+use crate::{Widget, RenderObject, RenderElement, SingleArity, MultiArity};
 
 /// RenderObjectWidget - widget that creates a render object
 ///
@@ -571,8 +571,7 @@ mod tests {
         }
 
         impl Widget for PaddingWidget {
-            type Element = RenderObjectElement<Self>;
-            type Arity = SingleArity;  // Override for single child
+            // Element type and Arity determined by RenderObjectWidget impl
         }
 
         impl SingleChildRenderObjectWidget for PaddingWidget {
@@ -593,7 +592,7 @@ mod tests {
     struct MockWidget;
 
     impl Widget for MockWidget {
-        type Element = MockElement;
+        // Element type determined by framework
     }
 
     impl crate::DynWidget for MockWidget {}

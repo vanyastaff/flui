@@ -524,7 +524,7 @@ mod tests {
     struct MockWidget;
 
     impl Widget for MockWidget {
-        type Element = MockElement;
+        // Element type determined by framework
     }
 
     impl crate::DynWidget for MockWidget {}

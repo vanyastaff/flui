@@ -309,7 +309,7 @@ mod tests {
     // Mock BuildContext for testing
     struct MockBuildContext;
     impl MockBuildContext {
-        fn new() -> BuildContext {
+        fn new() -> BuildContext<'static> {
             // In real code, this would be properly constructed
             unsafe { std::mem::zeroed() }
         }
@@ -418,7 +418,7 @@ mod tests {
     struct MockWidget;
 
     impl Widget for MockWidget {
-        type Element = MockElement;
+        // Element type determined by framework
     }
 
     impl crate::DynWidget for MockWidget {}

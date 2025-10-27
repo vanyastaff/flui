@@ -4,6 +4,7 @@
 
 use crate::painter::{Painter, Paint, RRect};
 use flui_types::{Point, Rect, Offset};
+use glam::{Mat4, Vec3};
 
 /// Stack-based state for painter operations
 #[derive(Debug, Clone)]
@@ -13,6 +14,9 @@ struct PainterState {
 
     /// Current clip rect
     clip_rect: Option<Rect>,
+
+    /// Current transformation matrix
+    transform: Mat4,
 }
 
 impl Default for PainterState {
@@ -20,6 +24,7 @@ impl Default for PainterState {
         Self {
             opacity: 1.0,
             clip_rect: None,
+            transform: Mat4::IDENTITY,
         }
     }
 }
@@ -93,6 +98,31 @@ impl<'a> EguiPainter<'a> {
             true
         }
     }
+
+    /// Apply current transformation to a point
+    fn transform_point(&self, point: Point) -> Point {
+        let vec = Vec3::new(point.x, point.y, 1.0);
+        let transformed = self.current_state.transform.project_point3(vec);
+        Point::new(transformed.x, transformed.y)
+    }
+
+    /// Apply current transformation to a rect (approximation)
+    /// Returns bounding box of transformed corners
+    fn transform_rect(&self, rect: Rect) -> Rect {
+        let corners = [
+            self.transform_point(Point::new(rect.min.x, rect.min.y)),
+            self.transform_point(Point::new(rect.max.x, rect.min.y)),
+            self.transform_point(Point::new(rect.min.x, rect.max.y)),
+            self.transform_point(Point::new(rect.max.x, rect.max.y)),
+        ];
+
+        let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+        let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let max_x = corners.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+        let max_y = corners.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+
+        Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
+    }
 }
 
 impl<'a> Painter for EguiPainter<'a> {
@@ -101,8 +131,10 @@ impl<'a> Painter for EguiPainter<'a> {
             return;
         }
 
+        // Apply transformation
+        let transformed_rect = self.transform_rect(rect);
         let color = self.paint_to_color(paint);
-        let egui_rect = Self::to_egui_rect(rect);
+        let egui_rect = Self::to_egui_rect(transformed_rect);
 
         if paint.stroke_width > 0.0 {
             // Stroked rect
@@ -119,8 +151,10 @@ impl<'a> Painter for EguiPainter<'a> {
             return;
         }
 
+        // Apply transformation
+        let transformed_rect = self.transform_rect(rrect.rect);
         let color = self.paint_to_color(paint);
-        let egui_rect = Self::to_egui_rect(rrect.rect);
+        let egui_rect = Self::to_egui_rect(transformed_rect);
         let rounding = egui::CornerRadius::same(rrect.corner_radius.min(255.0) as u8);
 
         if paint.stroke_width > 0.0 {
@@ -143,16 +177,23 @@ impl<'a> Painter for EguiPainter<'a> {
             return;
         }
 
+        // Apply transformation to center
+        let transformed_center = self.transform_point(center);
         let color = self.paint_to_color(paint);
-        let egui_center = Self::to_egui_pos(center);
+        let egui_center = Self::to_egui_pos(transformed_center);
+
+        // Note: scaling the radius is approximate, assumes uniform scale
+        // For proper handling, we'd need to convert to an ellipse
+        let scale = self.current_state.transform.to_scale_rotation_translation().0;
+        let scaled_radius = radius * scale.x.max(scale.y);
 
         if paint.stroke_width > 0.0 {
             // Stroked circle
             let stroke = egui::Stroke::new(paint.stroke_width, color);
-            self.painter.circle_stroke(egui_center, radius, stroke);
+            self.painter.circle_stroke(egui_center, scaled_radius, stroke);
         } else {
             // Filled circle
-            self.painter.circle_filled(egui_center, radius, color);
+            self.painter.circle_filled(egui_center, scaled_radius, color);
         }
     }
 
@@ -171,13 +212,30 @@ impl<'a> Painter for EguiPainter<'a> {
             return;
         }
 
+        // Apply transformation to line endpoints
+        let transformed_p1 = self.transform_point(p1);
+        let transformed_p2 = self.transform_point(p2);
+
         let color = self.paint_to_color(paint);
         let stroke = egui::Stroke::new(paint.stroke_width.max(1.0), color);
 
         self.painter.line_segment(
-            [Self::to_egui_pos(p1), Self::to_egui_pos(p2)],
+            [Self::to_egui_pos(transformed_p1), Self::to_egui_pos(transformed_p2)],
             stroke,
         );
+    }
+
+    fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {
+        // Apply transformation to position
+        let transformed_pos = self.transform_point(position);
+        let color = self.paint_to_color(paint);
+        let pos = Self::to_egui_pos(transformed_pos);
+
+        // Note: text rotation/scale not supported properly, only translation
+        let font_id = egui::FontId::proportional(font_size);
+        let galley = self.painter.layout_no_wrap(text.to_string(), font_id, color);
+
+        self.painter.galley(pos, galley, color);
     }
 
     fn save(&mut self) {
@@ -193,24 +251,21 @@ impl<'a> Painter for EguiPainter<'a> {
     }
 
     fn translate(&mut self, offset: Offset) {
-        // Note: Egui doesn't have a transform stack, so we would need to
-        // manually adjust all coordinates. For now, this is a no-op.
-        // A full implementation would require maintaining a transform matrix
-        // and applying it to all coordinates.
-        let _ = offset;
+        // Apply translation to transform matrix
+        self.current_state.transform = self.current_state.transform *
+            Mat4::from_translation(Vec3::new(offset.dx, offset.dy, 0.0));
     }
 
     fn rotate(&mut self, angle: f32) {
-        // Note: Egui doesn't natively support rotation.
-        // A full implementation would require maintaining a transform matrix
-        // and converting shapes to paths.
-        let _ = angle;
+        // Apply rotation to transform matrix
+        self.current_state.transform = self.current_state.transform *
+            Mat4::from_rotation_z(angle);
     }
 
     fn scale(&mut self, sx: f32, sy: f32) {
-        // Note: Egui doesn't natively support scaling transforms.
-        // A full implementation would require maintaining a transform matrix.
-        let _ = (sx, sy);
+        // Apply scale to transform matrix
+        self.current_state.transform = self.current_state.transform *
+            Mat4::from_scale(Vec3::new(sx, sy, 1.0));
     }
 
     fn clip_rect(&mut self, rect: Rect) {

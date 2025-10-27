@@ -9,7 +9,22 @@
       "Bash(tokei src --type rust)",
       "Bash(cargo clippy --all-targets)",
       "Bash(cargo new flui_derive --lib)",
-      "Bash(cargo build -p flui_core --lib)"
+      "Bash(cargo build -p flui_core --lib)",
+      "Bash(cargo build -p flui_derive)",
+      "Bash(cat crates/flui_core/src/foundation/mod.rs)",
+      "Bash(cargo build -p flui_core)",
+      "WebSearch",
+      "Bash(grep \"cannot find type \\`T\\`\" -B 5)",
+      "Bash(cargo clippy --all-targets 2)",
+      "Bash(1)",
+      "Bash(cargo build:*)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(git add crates/flui_core/ crates/flui_derive/ Cargo.toml Cargo.lock)",
+      "Bash(git push)",
+      "Bash(cargo check:*)",
+      "Bash(tokei:*)",
+      "Bash(cat:*)",
+      "Bash(git add -u)"
     ],
     "deny": [],
     "ask": []

@@ -46,7 +46,7 @@ use flui_types::{Size, Offset};
 use flui_types::constraints::BoxConstraints;
 use flui_engine::{BoxedLayer, ContainerLayer};
 
-use crate::element::{ElementId, ElementTree, RenderObjectElement, DynElement};
+use crate::element::{ElementId, ElementTree, RenderElement, DynElement};
 use crate::widget::RenderObjectWidget;
 
 /// RenderPipeline - orchestrates the rendering pipeline
@@ -166,10 +166,13 @@ impl RenderPipeline {
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where
         W: RenderObjectWidget + crate::Widget + 'static,
-        W::Element: DynElement,
         W::RenderObject: std::fmt::Debug,
     {
-        let element = RenderObjectElement::new(widget);
+        let render = widget.create_render_object();
+        let widget_boxed: crate::widget::BoxedWidget = Box::new(widget);
+        let render_boxed: Box<dyn crate::render::DynRenderObject> = Box::new(render);
+        let render_element = RenderElement::new(widget_boxed, render_boxed);
+        let element = crate::element::Element::Render(render_element);
         let id = self.tree.insert(Box::new(element));
         self.root_id = Some(id);
 
@@ -388,13 +391,13 @@ mod tests {
 
     impl RenderObjectWidget for TestContainerWidget {
         type Arity = SingleArity;
-        type Render = TestContainerRender;
+        type RenderObject = TestContainerRender;
 
-        fn create_render_object(&self) -> Self::Render {
+        fn create_render_object(&self) -> Self::RenderObject {
             TestContainerRender
         }
 
-        fn update_render_object(&self, _render: &mut Self::Render) {}
+        fn update_render_object(&self, _render: &mut Self::RenderObject) {}
     }
 
     #[derive(Debug)]

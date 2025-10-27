@@ -240,22 +240,64 @@
 pub use flui_types::{Size, Offset};
 pub use flui_engine::BoxedLayer;
 // ============================================================================
-// Foundation
+// Debug Infrastructure
 // ============================================================================
 
+/// Debug flags, diagnostics, and validation
+pub mod debug;
+pub mod element;
+pub mod error;
 pub mod foundation;
+pub mod render;
+pub mod widget;
+
+// Re-export debug types
+pub use debug::DebugFlags;
+
+// ============================================================================
+// Error Types
+// ============================================================================
+
+// Re-export error types
+pub use error::{CoreError, Result};
+
+// ============================================================================
+// Foundation
+// ============================================================================
 
 // Re-export foundation types
 pub use foundation::{
     Key,
     KeyRef,
+    Slot,
+    // Diagnostics
+    DiagnosticLevel,
+    DiagnosticsTreeStyle,
+    DiagnosticsProperty,
+    DiagnosticsNode,
+    Diagnosticable,
+    DiagnosticsBuilder,
+    // Change notification
+    Listenable,
+    ListenerId,
+    ListenerCallback,
+    ChangeNotifier,
+    ValueNotifier,
+    MergedListenable,
+    // Notifications (bubbling events)
+    Notification,
+    DynNotification,
+    ScrollNotification,
+    LayoutChangedNotification,
+    SizeChangedNotification,
+    KeepAliveNotification,
+    FocusChangedNotification,
 };
 
 // ============================================================================
 // Widget System
 // ============================================================================
 
-pub mod widget;
 
 // Re-export widget types
 pub use widget::{
@@ -276,6 +318,7 @@ pub use widget::{
     InheritedModel,
     RenderObjectWidget,
     ParentDataWidget,
+    NotificationListener,
 
     // Helper types
     KeyedStatelessWidget,
@@ -293,7 +336,6 @@ pub use widget::{
 // Element System
 // ============================================================================
 
-pub mod element;
 
 // Re-export element types
 pub use element::{
@@ -305,7 +347,7 @@ pub use element::{
     ComponentElement,
     StatefulElement,
     InheritedElement,
-    RenderObjectElement,
+    RenderElement,
     ParentDataElement,
 
     // Type aliases
@@ -314,14 +356,19 @@ pub use element::{
 
     // Context types
     BuildContext,
+    PipelineOwner,
     ElementId,
+
+    // Dependency tracking
+    DependencyInfo,
+    DependencyTracker,
 };
 
 // ============================================================================
 // Render System
 // ============================================================================
 
-pub mod render;
+
 
 // Re-export render types
 pub use render::{

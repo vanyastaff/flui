@@ -155,49 +155,9 @@ use crate::render::arity::{Arity, LeafArity};
 /// }
 /// ```
 pub trait Widget: 'static {
-    /// Element type created by this widget
-    ///
-    /// Each widget type has a corresponding Element type that holds
-    /// the widget's runtime state in the element tree.
-    ///
-    /// # Element Lifecycle
-    ///
-    /// ```text
-    /// Widget::new() → Element::new(widget)
-    ///       ↓               ↓
-    ///   Immutable      Mutable State
-    ///   (recreated)    (persists)
-    /// ```
-    type Element: Element<Self>;
-
-    /// Arity (number of children)
-    ///
-    /// Used for compile-time validation and optimization.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_core::{Widget, LeafArity, SingleArity, MultiArity};
-    ///
-    /// // No children (default)
-    /// impl Widget for Text {
-    ///     type Element = TextElement;
-    ///     // type Arity = LeafArity; (default)
-    /// }
-    ///
-    /// // One child
-    /// impl Widget for Padding {
-    ///     type Element = RenderObjectElement<Padding>;
-    ///     type Arity = SingleArity;
-    /// }
-    ///
-    /// // Multiple children
-    /// impl Widget for Column {
-    ///     type Element = RenderObjectElement<Column>;
-    ///     type Arity = MultiArity;
-    /// }
-    /// ```
-    type Arity: Arity;
+    // Note: type Element and type Arity removed during enum Element migration
+    // Element creation is now handled by DynWidget trait
+    // Arity is now part of RenderObject trait only
 
     /// Optional widget key for identity tracking
     ///
@@ -302,8 +262,7 @@ mod tests {
         struct SimpleWidget;
 
         impl Widget for SimpleWidget {
-            type Element = TestElement;
-            // State and Arity use defaults
+            // Element type determined by DynWidget impl
         }
 
         let widget = SimpleWidget;
@@ -321,8 +280,6 @@ mod tests {
         struct KeyedWidget;
 
         impl Widget for KeyedWidget {
-            type Element = TestElement;
-
             fn key(&self) -> Option<Key> {
                 Some(TEST_KEY)
             }
@@ -340,7 +297,7 @@ mod tests {
         }
 
         impl Widget for NonCloneWidget {
-            type Element = TestElement;
+            // Element type determined by DynWidget impl
         }
 
         let widget = NonCloneWidget {
@@ -381,8 +338,7 @@ mod tests {
         }
 
         impl Widget for StatefulWidget {
-            type Element = TestElement;
-            type State = MyState;
+            // Element type determined by DynWidget impl
         }
 
         let widget = StatefulWidget { initial: 42 };

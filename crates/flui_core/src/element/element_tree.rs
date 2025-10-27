@@ -163,7 +163,7 @@ impl ElementTree {
 
         // Get children from element (before removing)
         let children: Vec<ElementId> = if let Some(node) = self.nodes.get(element_id) {
-            node.element.children_iter().collect()
+            node.element.children()
         } else {
             Vec::new()
         };
@@ -215,7 +215,7 @@ impl ElementTree {
     /// ```
     #[inline]
     pub fn get(&self, element_id: ElementId) -> Option<&dyn DynElement> {
-        self.nodes.get(element_id).map(|node| node.element.as_ref())
+        self.nodes.get(element_id).map(|node| node.element.as_ref() as &dyn DynElement)
     }
 
     /// Get a mutable reference to an element
@@ -225,7 +225,7 @@ impl ElementTree {
     /// `Some(&mut dyn DynElement)` if the element exists, `None` otherwise
     #[inline]
     pub fn get_mut(&mut self, element_id: ElementId) -> Option<&mut (dyn DynElement + '_)> {
-        self.nodes.get_mut(element_id).map(|node| node.element.as_mut() as &mut (dyn DynElement + '_))
+        self.nodes.get_mut(element_id).map(|node| node.element.as_mut())
     }
 
     /// Get the parent of an element
@@ -476,7 +476,8 @@ impl ElementTree {
         for (element_id, node) in &self.nodes {
             // Only visit elements with RenderObjects
             if let Some(render_obj) = node.element.render_object() {
-                if let Some(state_ptr) = node.element.render_state_ptr() {
+                if let Some(render_elem) = node.element.as_render() {
+                    let state_ptr = render_elem.render_state() as *const _;
                     let state = unsafe { (*state_ptr).read() };
                     visitor(element_id, render_obj, state);
                 }
@@ -500,7 +501,7 @@ impl ElementTree {
         F: FnMut(ElementId, &dyn DynElement),
     {
         for (element_id, node) in &self.nodes {
-            visitor(element_id, node.element.as_ref());
+            visitor(element_id, node.element.as_ref() as &dyn DynElement);
         }
     }
 

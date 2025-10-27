@@ -8,18 +8,51 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["egui"]
-egui = ["dep:egui"]
-wgpu = ["dep:wgpu"]
+egui = ["dep:egui", "dep:eframe"]
+wgpu = [
+    "dep:wgpu",
+    "dep:winit",
+    "dep:bytemuck",
+    "dep:glyphon",
+    "dep:cosmic-text",
+    "dep:guillotiere",
+    "dep:lyon",
+    "dep:pollster",
+]
 skia = ["dep:skia-safe"]
 
 [dependencies]
 # Internal dependencies
 flui_types = { path = "../flui_types" }
 
+# Math
+glam = { workspace = true }
+
 # Optional backend implementations
-egui = { version = "0.33", optional = true }
-wgpu = { version = "22", optional = true }
-skia-safe = { version = "0.78", optional = true }
+egui = { workspace = true, optional = true }
+eframe = { workspace = true, optional = true }
+
+# WGPU backend dependencies
+wgpu = { workspace = true, optional = true }
+winit = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
+glyphon = { workspace = true, optional = true }
+cosmic-text = { workspace = true, optional = true }
+guillotiere = { workspace = true, optional = true }
+lyon = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+
+# Skia backend (future)
+skia-safe = { version = "0.89.1", optional = true }
+
+# Utilities
+parking_lot = { workspace = true }
+ahash = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 eframe = { version = "0.33", optional = false }
+pollster = { workspace = true }
+env_logger = "0.11"

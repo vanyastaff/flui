@@ -123,4 +123,4 @@ pub trait DynElement: fmt::Debug + Send + Sync {
 }
 
 /// Boxed Element trait object
-pub type BoxedElement = Box<dyn DynElement>;
+pub type BoxedElement = Box<crate::element::Element>;

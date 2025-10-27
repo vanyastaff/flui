@@ -98,13 +98,15 @@
 //! ```
 
 // Submodules
-pub mod widget;
 pub mod dyn_widget;
-pub mod stateless;
-pub mod stateful;
 pub mod inherited;
-pub mod render_object_widget;
+pub mod notification_listener;
 pub mod parent_data_widget;
+pub mod render_object_widget;
+pub mod stateful;
+pub mod stateless;
+pub mod widget;
+
 
 // Re-exports
 pub use widget::{Widget, WidgetState};
@@ -118,6 +120,7 @@ pub use render_object_widget::{
     MultiChildRenderObjectWidget,
 };
 pub use parent_data_widget::{ParentDataWidget, ParentData};
+pub use notification_listener::NotificationListener;
 
 use std::fmt;
 use crate::{KeyRef, DynElement};
@@ -174,7 +177,6 @@ use crate::{KeyRef, DynElement};
 impl<W> DynWidget for W
 where
     W: Widget + fmt::Debug + 'static,
-    W::Element: DynElement,
 {
     #[inline]
     fn key(&self) -> Option<KeyRef> {
@@ -249,7 +251,7 @@ mod tests {
         }
 
         impl Widget for TestWidget {
-            type Element = MockElement;
+            // Element type determined by framework
         }
 
         let widget = TestWidget { value: 42 };
@@ -270,7 +272,7 @@ mod tests {
         }
 
         impl Widget for KeyedWidget {
-            type Element = MockElement;
+            // Element type determined by framework
 
             fn key(&self) -> Option<Key> {
                 Some(self.key)
@@ -293,7 +295,7 @@ mod tests {
         struct SimpleWidget;
 
         impl Widget for SimpleWidget {
-            type Element = MockElement;
+            // Element type determined by framework
         }
 
         let widget = boxed(SimpleWidget);
@@ -308,7 +310,7 @@ mod tests {
         }
 
         impl Widget for SharedTestWidget {
-            type Element = MockElement;
+            // Element type determined by framework
         }
 
         let widget = shared(SharedTestWidget {
@@ -332,7 +334,7 @@ mod tests {
         }
 
         impl Widget for NonCloneWidget {
-            type Element = MockElement;
+            // Element type determined by framework
         }
 
         let widget = NonCloneWidget {
@@ -353,11 +355,11 @@ mod tests {
         struct WidgetB;
 
         impl Widget for WidgetA {
-            type Element = MockElement;
+            // Element type determined by framework
         }
 
         impl Widget for WidgetB {
-            type Element = MockElement;
+            // Element type determined by framework
         }
 
         // Different widget types in same vec!
