@@ -60,7 +60,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # MATH & GEOMETRY
 glam = { version = "0.29", features = ["serde", "bytemuck"] }
-ordered-float = "5.1"
+ordered-float = "5.1.0"
 
 # IMAGE PROCESSING
 image = { version = "0.25", features = ["png", "jpeg", "gif", "webp"] }
@@ -68,17 +68,17 @@ resvg = "0.45"
 usvg = "0.45"
 
 # GPU RENDERING (WGPU BACKEND)
-wgpu = { version = "22" }
+wgpu = { version = "27.0.1" }
 winit = "0.30"
 bytemuck = { version = "1.17", features = ["derive"] }
-glyphon = "0.6"  # GPU text rendering
-cosmic-text = "0.12"  # Text shaping (via glyphon)
+glyphon = "0.9"  # GPU text rendering
+cosmic-text = "0.14"  # Text shaping (via glyphon)
 guillotiere = "0.6"  # Texture atlas bin packing
 lyon = "1.0"  # Path tesselation
 pollster = "0.3"  # Block on async for examples
 
 # MEMORY & CACHING
-lru = "0.16"  # Simple LRU (keep for compatibility)
+lru = "0.16.2"  # Simple LRU (keep for compatibility)
 moka = { version = "0.12", features = ["future"] }  # High-performance cache
 bumpalo = "3.16"  # Bump allocator for frame-temp data
 typed-arena = "2.0"  # Type-safe arena allocator
@@ -91,7 +91,7 @@ url = { version = "2.5", features = ["serde"] }
 itertools = "0.14.0"
 ahash = "0.8"
 rustc-hash = "2.0"  # FxHash - faster for small keys
-bitflags = "2.9"
+bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 fastrand = "2.0"  # Fast RNG for widget IDs, jitter

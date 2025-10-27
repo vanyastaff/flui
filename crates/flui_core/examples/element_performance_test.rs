@@ -87,12 +87,13 @@ fn main() {
         Element::Inherited(InheritedElement::new(Box::new(TestWidget { id: 2 }))),
     ];
 
-    // Pattern matching dispatch
-    let iterations = 100_000;
+    // Pattern matching dispatch - many iterations to get measurable time
+    let iterations = 10_000_000;
     let start = Instant::now();
+    let mut sum = 0u64;
     for _ in 0..iterations {
         for element in &elements {
-            let _result = match element {
+            sum += match element {
                 Element::Component(_) => 1,
                 Element::Stateful(_) => 2,
                 Element::Inherited(_) => 3,
@@ -105,7 +106,7 @@ fn main() {
     let total_ops = iterations * elements.len();
     let per_op = duration.as_nanos() / total_ops as u128;
 
-    println!("  {} match operations: {:?} ({} ns/op)", total_ops, duration, per_op);
+    println!("  {} match operations: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
 
     println!();
 
@@ -122,38 +123,53 @@ fn main() {
         })
         .collect();
 
-    // parent() calls
+    // parent() calls - repeat many times for accurate measurement
+    let iterations = 10_000;
     let start = Instant::now();
-    for &id in &ids {
-        if let Some(element) = tree.get(id) {
-            let _ = element.parent();
+    let mut sum = 0usize;
+    for _ in 0..iterations {
+        for &id in &ids {
+            if let Some(element) = tree.get(id) {
+                sum += element.parent().is_some() as usize;
+            }
         }
     }
     let duration = start.elapsed();
-    let per_op = duration.as_nanos() / ids.len() as u128;
-    println!("  parent() × {}: {:?} ({} ns/op)", ids.len(), duration, per_op);
+    let total_ops = iterations * ids.len();
+    let per_op = duration.as_nanos() / total_ops as u128;
+    println!("  parent() × {}: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
 
     // lifecycle() calls
+    let iterations = 10_000;
     let start = Instant::now();
-    for &id in &ids {
-        if let Some(element) = tree.get(id) {
-            let _ = element.lifecycle();
+    let mut sum = 0usize;
+    for _ in 0..iterations {
+        for &id in &ids {
+            if let Some(element) = tree.get(id) {
+                sum += element.lifecycle() as usize;
+            }
         }
     }
     let duration = start.elapsed();
-    let per_op = duration.as_nanos() / ids.len() as u128;
-    println!("  lifecycle() × {}: {:?} ({} ns/op)", ids.len(), duration, per_op);
+    let total_ops = iterations * ids.len();
+    let per_op = duration.as_nanos() / total_ops as u128;
+    println!("  lifecycle() × {}: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
 
     // is_dirty() calls
+    let iterations = 10_000;
     let start = Instant::now();
-    for &id in &ids {
-        if let Some(element) = tree.get(id) {
-            let _ = element.is_dirty();
+    let mut sum = 0usize;
+    for _ in 0..iterations {
+        for &id in &ids {
+            if let Some(element) = tree.get(id) {
+                sum += element.is_dirty() as usize;
+            }
         }
     }
     let duration = start.elapsed();
-    let per_op = duration.as_nanos() / ids.len() as u128;
-    println!("  is_dirty() × {}: {:?} ({} ns/op)", ids.len(), duration, per_op);
+    let total_ops = iterations * ids.len();
+    let per_op = duration.as_nanos() / total_ops as u128;
+    println!("  is_dirty() × {}: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
 
     println!();
 
