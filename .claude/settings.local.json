@@ -24,7 +24,17 @@
       "Bash(cargo check:*)",
       "Bash(tokei:*)",
       "Bash(cat:*)",
-      "Bash(git add -u)"
+      "Bash(git add -u)",
+      "Bash(git add crates/flui_core/src/element/component.rs crates/flui_core/src/element/element.rs crates/flui_core/src/element/element_tree.rs crates/flui_core/src/element/inherited.rs crates/flui_core/src/element/stateful.rs crates/flui_core/src/element/pipeline_owner.rs crates/flui_core/src/render/render_pipeline.rs)",
+      "Bash(cargo clippy -p flui_core)",
+      "Bash(cargo fix --lib -p flui_core --allow-dirty)",
+      "Bash(cargo bench --bench element_enum)",
+      "Bash(tee bench_results.txt)",
+      "Bash(git add -A)",
+      "Bash(git add crates/flui_core/Cargo.toml crates/flui_core/benches/element_enum.rs crates/flui_core/src/element/*.rs crates/flui_core/src/widget/*.rs crates/flui_core/src/render/*.rs migration/MIGRATION_STATUS.md)",
+      "Bash(test:*)",
+      "Bash(tee performance_results.txt)",
+      "Bash(git add crates/flui_core/examples/element_performance_test.rs crates/flui_devtools/Cargo.toml migration/PERFORMANCE_RESULTS.md)"
     ],
     "deny": [],
     "ask": []

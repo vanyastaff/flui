@@ -319,6 +319,7 @@ Now that Element is this fast, we can:
 - **Compiler:** rustc 1.x (stable)
 - **Optimization:** --release (-O3)
 - **Architecture:** x86_64
+- **Framework:** Custom performance test (criterion unavailable due to fdeflate issue)
 
 ### Measurement Methodology
 
@@ -326,6 +327,8 @@ Now that Element is this fast, we can:
 - Multiple iterations to warm up caches
 - Results represent typical performance
 - Variance is minimal (<5%)
+- **Note:** Criterion benchmarks unavailable due to fdeflate dependency issue (unrelated to our changes)
+- Simple performance test provides accurate measurements for our purposes
 
 ### Benchmark Code
 

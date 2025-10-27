@@ -73,3 +73,5 @@ criterion = "0.5"
 # [[bench]]
 # name = "profiler_bench"
 # harness = false
+
+flui_engine = { path = "../flui_engine" }

@@ -7,7 +7,7 @@ members = [
     "crates/flui_widgets",
     "crates/flui_app",
     "crates/flui_painting",
-    "crates/flui_engine", "crates/flui_derive",       # Rendering engine - Layer/Scene/Painter
+    "crates/flui_engine", "crates/flui_derive", "crates/flui_devtools",       # Rendering engine - Layer/Scene/Painter
     # "crates/flui_animation",
     # "crates/flui_gestures",
     # "crates/flui_scheduler",
