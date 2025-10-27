@@ -266,6 +266,30 @@ pub trait DynWidget: fmt::Debug + Any + 'static {
             self.type_name().to_string()
         }
     }
+
+    /// Build the widget tree (for StatelessWidget and StatefulWidget only)
+    ///
+    /// This method is called by ComponentElement and StatefulElement to build
+    /// the child widget tree. It's only implemented by widgets that have a build phase.
+    ///
+    /// RenderObjectWidgets return `None` since they don't build - they create render objects.
+    ///
+    /// # Arguments
+    ///
+    /// - `context`: BuildContext providing access to inherited widgets and tree structure
+    ///
+    /// # Returns
+    ///
+    /// - `Some(BoxedWidget)` for StatelessWidget/StatefulWidget with the built child tree
+    /// - `None` for RenderObjectWidget (not applicable)
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation returns `None`. StatelessWidget and StatefulWidget
+    /// override this to call their `build()` method.
+    fn build(&self, _context: &crate::element::BuildContext) -> Option<crate::BoxedWidget> {
+        None
+    }
 }
 
 /// Extension methods for dyn DynWidget

@@ -197,30 +197,41 @@ impl ComponentElement {
     /// Calls build() on the widget and returns the child widget that needs
     /// to be mounted.
     ///
+    /// # Arguments
+    ///
+    /// - `element_id`: The ElementId of this element
+    /// - `tree`: Shared reference to the ElementTree for creating BuildContext
+    ///
     /// # Returns
     ///
     /// Vec<(parent_id, child_widget, slot)> - Children to be inflated
     ///
     /// # Implementation Note
     ///
-    /// Currently returns empty vec because full ElementTree integration
-    /// is pending. Will be implemented when BuildContext is available.
-    pub fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+    /// Takes Arc<RwLock<ElementTree>> to create BuildContext with proper tree access
+    /// for dependency tracking during the build phase.
+    pub fn rebuild(
+        &mut self,
+        element_id: ElementId,
+        tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+    ) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
 
         self.dirty = false;
 
-        // TODO: Create proper BuildContext with tree access
-        // For now, this is unimplemented because ComponentElement needs BuildContext
-        // which requires full ElementTree integration
+        // Create BuildContext for the build phase
+        let context = crate::element::BuildContext::new(tree, element_id);
 
-        // Will return:
-        // let child_widget = self.widget.build(&context);
-        // vec![(element_id, child_widget, 0)]
-
-        Vec::new()
+        // Call build() on the widget (if it's a StatelessWidget)
+        if let Some(child_widget) = self.widget.build(&context) {
+            // Return child to be mounted at slot 0
+            vec![(element_id, child_widget, 0)]
+        } else {
+            // Widget doesn't support building (shouldn't happen for ComponentElement)
+            Vec::new()
+        }
     }
 
     /// Forget child element

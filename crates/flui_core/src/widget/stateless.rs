@@ -29,7 +29,7 @@
 //! ```
 
 use std::fmt;
-use crate::{Widget, BoxedWidget, BuildContext};
+use crate::{Widget, DynWidget, BoxedWidget, BuildContext};
 
 /// StatelessWidget - pure functional widget
 ///
@@ -300,6 +300,17 @@ impl<W: StatelessWidget> StatelessWidget for KeyedStatelessWidget<W> {
 }
 
 // Widget comes from blanket impl for StatelessWidget
+
+// Implement Widget::build() for all StatelessWidget types
+impl<W> Widget for W
+where
+    W: StatelessWidget,
+{
+    // Override build() method to call StatelessWidget::build()
+    fn build(&self, context: &BuildContext) -> Option<BoxedWidget> {
+        Some(StatelessWidget::build(self, context))
+    }
+}
 
 #[cfg(test)]
 mod tests {

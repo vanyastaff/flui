@@ -214,7 +214,11 @@ impl ParentDataElement {
     ///
     /// Currently returns empty vec because full ElementTree integration
     /// is pending. Will be implemented when ProxyWidget child access is available.
-    pub fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+    pub fn rebuild(
+        &mut self,
+        element_id: ElementId,
+        _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+    ) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
             return Vec::new();
         }

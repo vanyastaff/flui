@@ -1,0 +1,307 @@
+   Compiling owned_ttf_parser v0.25.1
+   Compiling fdeflate v0.3.7 (https://github.com/image-rs/fdeflate.git?branch=main#aa74a06d)
+   Compiling serde_core v1.0.228
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling crossbeam-utils v0.8.21
+   Compiling getrandom v0.3.4
+   Compiling icu_normalizer_data v2.0.0
+   Compiling crc32fast v1.5.0
+   Compiling cursor-icon v1.2.0
+   Compiling smol_str v0.2.2
+   Compiling dpi v0.1.2
+   Compiling error-code v3.3.2
+   Compiling byteorder-lite v0.1.0
+   Compiling libloading v0.8.9
+   Compiling parking v2.2.1
+   Compiling num-traits v0.2.19
+   Compiling windows-targets v0.53.5
+   Compiling either v1.15.0
+   Compiling glow v0.16.0
+   Compiling web-time v1.1.0
+   Compiling winapi-util v0.1.11
+   Compiling plotters-backend v0.3.7
+   Compiling zerocopy v0.8.27
+   Compiling bytemuck v1.24.0
+   Compiling tracing v0.1.41
+   Compiling memoffset v0.9.1
+   Compiling zerofrom v0.1.6
+   Compiling glutin_wgl_sys v0.6.1
+   Compiling itoa v1.0.15
+   Compiling anstyle v1.0.13
+   Compiling static_assertions v1.1.0
+   Compiling clap_lex v0.7.6
+   Compiling windows-targets v0.52.6
+   Compiling ab_glyph v0.2.32
+   Compiling windows-sys v0.52.0
+   Compiling flate2 v1.1.4
+   Compiling yoke v0.8.0
+   Compiling clipboard-win v5.4.1
+   Compiling crossbeam-epoch v0.9.18
+   Compiling concurrent-queue v2.5.0
+   Compiling pxfm v0.1.25
+   Compiling windows-sys v0.60.2
+   Compiling windows-sys v0.59.0
+   Compiling futures-core v0.3.31
+   Compiling pin-utils v0.1.0
+   Compiling ciborium-io v0.2.2
+   Compiling memchr v2.7.6
+   Compiling futures-task v0.3.31
+   Compiling regex-syntax v0.8.8
+   Compiling ryu v1.0.20
+   Compiling slab v0.4.11
+   Compiling crossbeam-channel v0.5.15
+   Compiling clap_builder v4.5.49
+   Compiling plotters-svg v0.3.7
+   Compiling itertools v0.13.0
+   Compiling same-file v1.0.6
+   Compiling uuid v1.18.1
+   Compiling thiserror v2.0.17
+   Compiling portable-atomic v1.11.1
+   Compiling equivalent v1.0.2
+   Compiling flui_types v0.1.0 (C:\Users\vanya\RustroverProjects\flui\crates\flui_types)
+   Compiling cast v0.3.0
+   Compiling zerovec v0.11.4
+   Compiling zerotrie v0.2.2
+   Compiling event-listener v5.4.1
+   Compiling futures-util v0.3.31
+   Compiling tagptr v0.2.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling plotters v0.3.7
+   Compiling walkdir v2.5.0
+warning: function `get_type_name` is never used
+ --> crates\flui_derive\src\utils.rs:6:8
+  |
+6 | pub fn get_type_name(input: &DeriveInput) -> &syn::Ident {
+  |        ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: function `split_generics` is never used
+  --> crates\flui_derive\src\utils.rs:11:8
+   |
+11 | pub fn split_generics(input: &DeriveInput) -> (
+   |        ^^^^^^^^^^^^^^
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> crates\flui_derive\src\utils.rs:11:30
+   |
+11 | pub fn split_generics(input: &DeriveInput) -> (
+   |                              ^^^^^^^^^^^^ the lifetime is elided here
+12 |     syn::ImplGenerics,
+   |     ----------------- the same lifetime is hidden here
+13 |     syn::TypeGenerics,
+   |     ----------------- the same lifetime is hidden here
+14 |     Option<&syn::WhereClause>,
+   |            ----------------- the same lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+   = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+   |
+12 ~     syn::ImplGenerics<'_>,
+13 ~     syn::TypeGenerics<'_>,
+   |
+
+warning: `flui_derive` (lib) generated 3 warnings
+   Compiling dyn-clone v1.0.20
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling downcast-rs v2.0.2
+   Compiling event-listener-strategy v0.5.4
+   Compiling rayon-core v1.13.0
+   Compiling async-lock v3.4.1
+   Compiling rayon v1.11.0
+   Compiling half v2.7.1
+   Compiling home v0.5.11
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.3
+   Compiling regex-automata v0.4.13
+   Compiling serde v1.0.228
+   Compiling bitflags v2.10.0
+   Compiling serde_json v1.0.145
+   Compiling icu_collections v2.0.0
+   Compiling ciborium-ll v0.2.2
+   Compiling icu_locale_core v2.0.0
+error[E0080]: scalar size mismatch: expected 0 bytes but got 8 bytes instead
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:14:35
+     |
+  14 |         const OUTPUT_LEN: usize = $crate::core::utf16_len(INPUT) + 1;
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `Win32::UI::Controls::VSCLASS_EDITSTYLE::OUTPUT_LEN` failed inside this call
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\Windows\Win32\UI\Controls\mod.rs:4228:60
+     |
+4228 | pub const VSCLASS_EDITSTYLE: ::windows_sys::core::PCWSTR = ::windows_sys::core::w!("EDITSTYLE");
+     |                                                            ------------------------------------ in this macro invocation
+     |
+note: inside `literals::utf16_len`
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:109:45
+     |
+ 109 |     while let Some((code_point, new_pos)) = decode_utf8_char(bytes, pos) {
+     |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `literals::decode_utf8_char`
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:43:8
+     |
+  43 |     if bytes.len() == pos {
+     |        ^^^^^^^^^^^^^^^^^^ the failure occurred here
+     = note: this error originates in the macro `::windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:15:30
+     |
+  15 |         const OUTPUT: &[u16; OUTPUT_LEN] = {
+     |                              ^^^^^^^^^^
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\Windows\Win32\UI\Controls\mod.rs:4228:60
+     |
+4228 | pub const VSCLASS_EDITSTYLE: ::windows_sys::core::PCWSTR = ::windows_sys::core::w!("EDITSTYLE");
+     |                                                            ------------------------------------ in this macro invocation
+     |
+     = note: this note originates in the macro `::windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0080]: scalar size mismatch: expected 0 bytes but got 8 bytes instead
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:14:35
+     |
+  14 |         const OUTPUT_LEN: usize = $crate::core::utf16_len(INPUT) + 1;
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `Win32::UI::Controls::VSCLASS_FLYOUTSTYLE::OUTPUT_LEN` failed inside this call
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\Windows\Win32\UI\Controls\mod.rs:4233:62
+     |
+4233 | pub const VSCLASS_FLYOUTSTYLE: ::windows_sys::core::PCWSTR = ::windows_sys::core::w!("FLYOUTSTYLE");
+     |                                                              -------------------------------------- in this macro invocation
+     |
+note: inside `literals::utf16_len`
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:109:45
+     |
+ 109 |     while let Some((code_point, new_pos)) = decode_utf8_char(bytes, pos) {
+     |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `literals::decode_utf8_char`
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:47:5
+     |
+  47 |     pos += 1;
+     |     ^^^^^^^^ the failure occurred here
+     = note: this error originates in the macro `::windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:15:30
+     |
+  15 |         const OUTPUT: &[u16; OUTPUT_LEN] = {
+     |                              ^^^^^^^^^^
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\Windows\Win32\UI\Controls\mod.rs:4233:62
+     |
+4233 | pub const VSCLASS_FLYOUTSTYLE: ::windows_sys::core::PCWSTR = ::windows_sys::core::w!("FLYOUTSTYLE");
+     |                                                              -------------------------------------- in this macro invocation
+     |
+     = note: this note originates in the macro `::windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+   Compiling png v0.18.0
+error[E0080]: scalar size mismatch: expected 819265011712011 bytes but got 8 bytes instead
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.60.2\src\core\literals.rs:23:21
+     |
+  23 |                     output_pos += 1;
+     |                     ^^^^^^^^^^^^^^^ evaluation of `Win32::UI::Shell::STR_GPS_HANDLERPROPERTIESONLY::OUTPUT` failed here
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.60.2\src\Windows\Win32\UI\Shell\mod.rs:6672:70
+     |
+6672 | pub const STR_GPS_HANDLERPROPERTIESONLY: windows_sys::core::PCWSTR = windows_sys::core::w!("GPS_HANDLERPROPERTIESONLY");
+     |                                                                      -------------------------------------------------- in this macro invocation
+     |
+     = note: this error originates in the macro `windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.60.2\src\core\literals.rs:34:9
+     |
+  34 |         OUTPUT.as_ptr()
+     |         ^^^^^^
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.60.2\src\Windows\Win32\UI\Shell\mod.rs:6672:70
+     |
+6672 | pub const STR_GPS_HANDLERPROPERTIESONLY: windows_sys::core::PCWSTR = windows_sys::core::w!("GPS_HANDLERPROPERTIESONLY");
+     |                                                                      -------------------------------------------------- in this macro invocation
+     |
+     = note: this note originates in the macro `windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `StoredOnlyCompressor` in `fdeflate`
+   --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\png-0.18.0\src\encoder.rs:778:31
+    |
+778 |                     fdeflate::StoredOnlyCompressor::new(std::io::Cursor::new(Vec::new()))?;
+    |                               ^^^^^^^^^^^^^^^^^^^^ could not find `StoredOnlyCompressor` in `fdeflate`
+
+error[E0433]: failed to resolve: could not find `StoredOnlyCompressor` in `fdeflate`
+   --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\png-0.18.0\src\encoder.rs:799:33
+    |
+799 |                     > fdeflate::StoredOnlyCompressor::<()>::compressed_size((in_len + 1) * height)
+    |                                 ^^^^^^^^^^^^^^^^^^^^ could not find `StoredOnlyCompressor` in `fdeflate`
+
+error[E0433]: failed to resolve: could not find `StoredOnlyCompressor` in `fdeflate`
+   --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\png-0.18.0\src\encoder.rs:806:35
+    |
+806 |                         fdeflate::StoredOnlyCompressor::new(std::io::Cursor::new(Vec::new()))?;
+    |                                   ^^^^^^^^^^^^^^^^^^^^ could not find `StoredOnlyCompressor` in `fdeflate`
+
+   Compiling criterion-plot v0.6.0
+For more information about this error, try `rustc --explain E0080`.
+error: could not compile `windows-sys` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0061]: this function takes 3 arguments but 1 argument was supplied
+   --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\png-0.18.0\src\encoder.rs:786:38
+    |
+786 |                 let mut compressor = fdeflate::Compressor::new(std::io::Cursor::new(Vec::new()))?;
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^---------------------------------- two arguments of type `u8` and `bool` are missing
+    |
+note: associated function defined here
+   --> C:\Users\vanya\.cargo\git\checkouts\fdeflate-09fe09136f41a1d2\aa74a06\src\compress\mod.rs:66:12
+    |
+ 66 |     pub fn new(mut writer: W, level: u8, zlib: bool) -> io::Result<Self> {
+    |            ^^^
+help: provide the arguments
+    |
+786 |                 let mut compressor = fdeflate::Compressor::new(std::io::Cursor::new(Vec::new()), /* u8 */, /* bool */)?;
+    |                                                                                                ++++++++++++++++++++++
+
+error[E0061]: this function takes 3 arguments but 1 argument was supplied
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\png-0.18.0\src\encoder.rs:1352:35
+     |
+1352 |                 Wrapper::FDeflate(fdeflate::Compressor::new(writer)?)
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^-------- two arguments of type `u8` and `bool` are missing
+     |
+note: associated function defined here
+    --> C:\Users\vanya\.cargo\git\checkouts\fdeflate-09fe09136f41a1d2\aa74a06\src\compress\mod.rs:66:12
+     |
+  66 |     pub fn new(mut writer: W, level: u8, zlib: bool) -> io::Result<Self> {
+     |            ^^^
+help: provide the arguments
+     |
+1352 |                 Wrapper::FDeflate(fdeflate::Compressor::new(writer, /* u8 */, /* bool */)?)
+     |                                                                   ++++++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0433.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `png` (lib) due to 5 previous errors
+note: erroneous constant encountered
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:16:34
+     |
+  16 |             let mut buffer = [0; OUTPUT_LEN];
+     |                                  ^^^^^^^^^^
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\Windows\Win32\UI\Controls\mod.rs:4228:60
+     |
+4228 | pub const VSCLASS_EDITSTYLE: ::windows_sys::core::PCWSTR = ::windows_sys::core::w!("EDITSTYLE");
+     |                                                            ------------------------------------ in this macro invocation
+     |
+     = note: this note originates in the macro `::windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+    --> C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\core\literals.rs:16:34
+     |
+  16 |             let mut buffer = [0; OUTPUT_LEN];
+     |                                  ^^^^^^^^^^
+     |
+    ::: C:\Users\vanya\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\windows-sys-0.52.0\src\Windows\Win32\UI\Controls\mod.rs:4233:62
+     |
+4233 | pub const VSCLASS_FLYOUTSTYLE: ::windows_sys::core::PCWSTR = ::windows_sys::core::w!("FLYOUTSTYLE");
+     |                                                              -------------------------------------- in this macro invocation
+     |
+     = note: this note originates in the macro `::windows_sys::core::w` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `windows-sys` (lib) due to 2 previous errors

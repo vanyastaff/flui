@@ -190,7 +190,11 @@ impl InheritedElement {
     ///
     /// InheritedElement doesn't rebuild itself, it just passes through to child.
     /// Returns empty vec as child is managed separately.
-    pub fn rebuild(&mut self, _element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+    pub fn rebuild(
+        &mut self,
+        _element_id: ElementId,
+        _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+    ) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
             return Vec::new();
         }

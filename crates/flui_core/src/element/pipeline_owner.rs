@@ -498,32 +498,78 @@ impl PipelineOwner {
             #[cfg(debug_assertions)]
             debug_println!(PRINT_BUILD_SCOPE, "  Rebuilding element {:?} at depth {}", element_id, depth);
 
+            // Clone the Arc for passing to rebuild()
+            let tree_ref = std::sync::Arc::clone(&self.tree);
+
             let mut tree_guard = self.tree.write();
 
             // Element might have been removed during previous rebuilds
-            if let Some(element) = tree_guard.get_mut(element_id) {
-                // TODO: Call rebuild on element
-                // The Element enum doesn't expose a unified rebuild() method yet.
-                // Each element type (Component, Stateful, etc.) has its own rebuild(),
-                // but Element enum needs a wrapper method like:
-                //
-                // pub fn rebuild(&mut self, id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
-                //     match self {
-                //         Element::Component(c) => c.rebuild(id),
-                //         Element::Stateful(s) => s.rebuild(id),
-                //         // ... etc
-                //     }
-                // }
-                //
-                // For now, just mark as not dirty to prevent infinite loop
-                // element.mark_not_dirty(); // This method doesn't exist yet either
+            let children_to_mount = if let Some(element) = tree_guard.get_mut(element_id) {
+                // Call rebuild on element - it will create BuildContext internally
+                let children = element.rebuild(element_id, std::sync::Arc::clone(&tree_ref));
 
-                let _ = element; // Suppress unused warning
+                #[cfg(debug_assertions)]
+                if !children.is_empty() {
+                    debug_println!(
+                        PRINT_BUILD_SCOPE,
+                        "    Element {:?} produced {} child widgets to mount",
+                        element_id,
+                        children.len()
+                    );
+                }
+
+                children
             } else {
                 #[cfg(debug_assertions)]
                 eprintln!("  Warning: Element {:?} was removed before rebuild", element_id);
-            }
+                Vec::new()
+            };
+
+            // Drop the guard before mounting children (to avoid deadlock)
             drop(tree_guard);
+
+            // Mount the returned children
+            // Each tuple is: (parent_id, child_widget, slot)
+            for (parent_id, child_widget, slot) in children_to_mount {
+                #[cfg(debug_assertions)]
+                debug_println!(
+                    PRINT_BUILD_SCOPE,
+                    "      Mounting child widget at slot {} for parent {:?}",
+                    slot,
+                    parent_id
+                );
+
+                // Inflate widget into element
+                let mut child_element = self.inflate_widget(child_widget);
+
+                // Mount the element (sets parent, slot, lifecycle = Active)
+                child_element.mount(Some(parent_id), slot);
+
+                // Insert into tree
+                let mut tree_guard = self.tree.write();
+                let child_id = tree_guard.insert(child_element);
+
+                #[cfg(debug_assertions)]
+                debug_println!(
+                    PRINT_BUILD_SCOPE,
+                    "      Created element {:?} for child at slot {}",
+                    child_id,
+                    slot
+                );
+
+                // Update parent's child reference
+                // For ComponentElement, it has a single child
+                if let Some(Element::Component(parent_component)) = tree_guard.get_mut(parent_id) {
+                    parent_component.set_child(child_id);
+                }
+                // TODO: Handle other element types (Stateful, Inherited, Render, ParentData)
+
+                drop(tree_guard);
+
+                // Schedule the new child for building if it's dirty
+                // (All newly created elements are dirty and need initial build)
+                self.schedule_build_for(child_id, depth + 1);
+            }
         }
 
         // Put back the (now empty) vector
@@ -621,6 +667,40 @@ impl PipelineOwner {
         // 1. Paint dirty nodes
         // 2. Composite layers
         // 3. Send to backend
+    }
+
+    // =========================================================================
+    // Widget Inflation
+    // =========================================================================
+
+    /// Inflate a widget into an element
+    ///
+    /// This creates the appropriate Element type based on the widget's type:
+    /// - StatelessWidget → ComponentElement
+    /// - StatefulWidget → StatefulElement
+    /// - InheritedWidget → InheritedElement
+    /// - RenderObjectWidget → RenderElement
+    /// - ParentDataWidget → ParentDataElement
+    ///
+    /// # Arguments
+    ///
+    /// - `widget`: The boxed widget to inflate
+    ///
+    /// # Returns
+    ///
+    /// An Element enum variant ready to be inserted into the tree
+    fn inflate_widget(&self, widget: crate::BoxedWidget) -> Element {
+        use crate::widget::{StatelessWidget, StatefulWidget, InheritedWidget, RenderObjectWidget, ParentDataWidget};
+        use crate::element::{ComponentElement, StatefulElement, InheritedElement, RenderElement, ParentDataElement};
+
+        // Try each widget type in order
+        // Note: We can't directly check traits, so we use a heuristic:
+        // - If widget.build() returns Some, it's a buildable widget (Stateless/Stateful/Inherited)
+        // - Otherwise it's a RenderObjectWidget or ParentDataWidget
+
+        // For now, assume all widgets coming through rebuild() are StatelessWidget
+        // TODO: Add proper type detection when we support all widget types
+        Element::Component(ComponentElement::new(widget))
     }
 }
 

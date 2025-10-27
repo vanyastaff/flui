@@ -3,6 +3,8 @@
 //! Provides access to the element tree and InheritedWidgets during build phase.
 
 use std::any::TypeId;
+use std::sync::Arc;
+use parking_lot::RwLock;
 use crate::ElementId;
 use crate::element::ElementTree;
 use crate::widget::{InheritedWidget, DynWidget};
@@ -27,22 +29,22 @@ use crate::widget::{InheritedWidget, DynWidget};
 ///     }
 /// }
 /// ```
-pub struct BuildContext<'a> {
-    /// Reference to the element tree
-    tree: &'a ElementTree,
+pub struct BuildContext {
+    /// Shared reference to the element tree (with interior mutability for dependency tracking)
+    tree: Arc<RwLock<ElementTree>>,
 
     /// ID of the current element being built
     element_id: ElementId,
 }
 
-impl<'a> BuildContext<'a> {
+impl BuildContext {
     /// Create a new BuildContext
     ///
     /// # Arguments
     ///
-    /// - `tree`: Reference to the element tree
+    /// - `tree`: Shared reference to the element tree
     /// - `element_id`: ID of the element being built
-    pub fn new(tree: &'a ElementTree, element_id: ElementId) -> Self {
+    pub fn new(tree: Arc<RwLock<ElementTree>>, element_id: ElementId) -> Self {
         Self { tree, element_id }
     }
 
@@ -113,26 +115,30 @@ impl<'a> BuildContext<'a> {
         // Walk up the parent chain
         let mut current_id = self.element_id;
 
-        while let Some(parent_id) = self.tree.parent(current_id) {
+        // Acquire read lock for traversal
+        let tree = self.tree.read();
+
+        while let Some(parent_id) = tree.parent(current_id) {
             // Get the element
-            if let Some(element) = self.tree.get(parent_id) {
+            if let Some(element) = tree.get(parent_id) {
                 // Check if this element's widget is InheritedWidget of type T
                 let widget = element.widget();
 
                 if DynWidget::type_id(widget) == target_type_id {
                     // Found it! Try to downcast
                     if let Some(inherited_widget) = (widget as &dyn std::any::Any).downcast_ref::<T>() {
-                        // TODO: Register dependency if requested
-                        // For now just return the widget
-                        // Later we'll add: self.tree.add_dependent(parent_id, self.element_id)
+                        let result = inherited_widget.clone();
 
+                        // Drop read lock before acquiring write lock (to avoid deadlock)
+                        drop(tree);
+
+                        // Register dependency if requested
                         if register_dependency {
-                            // TODO: Add to InheritedElement's dependents set
-                            // This requires mutable access to tree, which we don't have here
-                            // Will need to refactor BuildContext or use interior mutability
+                            let mut tree_mut = self.tree.write();
+                            tree_mut.add_dependent(parent_id, self.element_id);
                         }
 
-                        return Some(inherited_widget.clone());
+                        return Some(result);
                     }
                 }
             }
@@ -148,9 +154,12 @@ impl<'a> BuildContext<'a> {
         self.element_id
     }
 
-    /// Get reference to the element tree
-    pub fn tree(&self) -> &ElementTree {
-        self.tree
+    /// Get shared reference to the element tree
+    ///
+    /// Returns the Arc<RwLock<ElementTree>> for more complex operations.
+    /// Most methods should use the convenience methods on BuildContext instead.
+    pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
+        Arc::clone(&self.tree)
     }
 
     // ========== Tree Traversal ==========
@@ -159,7 +168,8 @@ impl<'a> BuildContext<'a> {
     ///
     /// Returns `None` if this is the root element
     pub fn parent(&self) -> Option<ElementId> {
-        self.tree.parent(self.element_id)
+        let tree = self.tree.read();
+        tree.parent(self.element_id)
     }
 
     /// Check if this is the root element
@@ -171,9 +181,10 @@ impl<'a> BuildContext<'a> {
     ///
     /// Root element has depth 0
     pub fn depth(&self) -> usize {
+        let tree = self.tree.read();
         let mut depth = 0;
         let mut current = self.element_id;
-        while let Some(parent) = self.tree.parent(current) {
+        while let Some(parent) = tree.parent(current) {
             depth += 1;
             current = parent;
         }
@@ -196,13 +207,14 @@ impl<'a> BuildContext<'a> {
     where
         F: FnMut(ElementId) -> bool,
     {
-        let mut current_id = self.parent();
+        let tree = self.tree.read();
+        let mut current_id = tree.parent(self.element_id);
 
         while let Some(id) = current_id {
             if !visitor(id) {
                 break;
             }
-            current_id = self.tree.parent(id);
+            current_id = tree.parent(id);
         }
     }
 
@@ -212,8 +224,10 @@ impl<'a> BuildContext<'a> {
     ///
     /// Returns the ElementId of the RenderObject if found
     pub fn find_render_object(&self) -> Option<ElementId> {
+        let tree = self.tree.read();
+
         // Check self first
-        if let Some(element) = self.tree.get(self.element_id) {
+        if let Some(element) = tree.get(self.element_id) {
             // Check if this element has a render object
             // This depends on element type - RenderElements have render objects
             // For now, we return self.element_id if it's a render element
@@ -221,14 +235,14 @@ impl<'a> BuildContext<'a> {
         }
 
         // Search ancestors
-        let mut current_id = self.parent();
+        let mut current_id = tree.parent(self.element_id);
         while let Some(id) = current_id {
-            if let Some(_element) = self.tree.get(id) {
+            if let Some(_element) = tree.get(id) {
                 // TODO: Check if element has render object
                 // For now, return the first ancestor
                 // This is a placeholder until Element enum has proper API
             }
-            current_id = self.tree.parent(id);
+            current_id = tree.parent(id);
         }
 
         None
@@ -277,6 +291,8 @@ impl<'a> BuildContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use parking_lot::RwLock;
     use crate::widget::{Widget, DynWidget, RenderObjectWidget};
     use crate::element::{RenderElement, InheritedElement};
     use crate::{RenderObject, LeafArity, LayoutCx, PaintCx};
@@ -340,35 +356,43 @@ mod tests {
 
     #[test]
     fn test_build_context_creation() {
-        let tree = ElementTree::new();
-        let context = BuildContext::new(&tree, 0);
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let context = BuildContext::new(tree, 0);
 
         assert_eq!(context.element_id(), 0);
     }
 
     #[test]
     fn test_build_context_find_inherited() {
-        let mut tree = ElementTree::new();
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
 
         // Insert InheritedElement
         let theme = TestTheme { color: 0xFF0000 };
-        let inherited_elem = InheritedElement::new(theme.clone());
-        let theme_id = tree.insert(Box::new(inherited_elem));
+        let inherited_elem = InheritedElement::new(Box::new(theme.clone()));
+        let theme_id = {
+            let mut tree_guard = tree.write();
+            tree_guard.insert(crate::element::Element::Inherited(inherited_elem))
+        };
 
         // Insert child RenderObjectElement
-        let widget = Box::new(DummyWidget);
-        let render = Box::new(DummyRender);
-        let child_elem = RenderElement::new(widget, render);
-        let child_id = tree.insert(Box::new(child_elem));
+        let widget: crate::BoxedWidget = Box::new(DummyWidget);
+        let child_elem = crate::element::ComponentElement::new(widget);
+        let child_id = {
+            let mut tree_guard = tree.write();
+            tree_guard.insert(crate::element::Element::Component(child_elem))
+        };
 
         // Manually set up parent-child relationship
         // (In real code, this would be done by build system)
-        if let Some(theme_element) = tree.get_mut(theme_id) {
-            // Can't easily test this without more infrastructure
-            // This test verifies compilation for now
+        {
+            let mut tree_guard = tree.write();
+            if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(child_id) {
+                // Set up parent relationship would be done here
+                // For now, this is just a compilation test
+            }
         }
 
-        let context = BuildContext::new(&tree, child_id);
+        let context = BuildContext::new(Arc::clone(&tree), child_id);
 
         // Try to find theme (won't work without proper parent setup)
         // This is just a compilation test

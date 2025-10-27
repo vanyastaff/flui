@@ -264,7 +264,11 @@ impl RenderElement {
     /// # Returns
     ///
     /// Always returns empty vec as RenderObjectWidget doesn't have widget children.
-    pub fn rebuild(&mut self, _element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+    pub fn rebuild(
+        &mut self,
+        _element_id: ElementId,
+        _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+    ) -> Vec<(ElementId, BoxedWidget, usize)> {
         self.dirty = false;
         Vec::new()
     }

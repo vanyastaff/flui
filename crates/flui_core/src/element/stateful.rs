@@ -237,14 +237,19 @@ impl StatefulElement {
     ///
     /// Calls build() on the state and returns the child widget that needs
     /// to be mounted.
-    pub fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, BoxedWidget, usize)> {
+    pub fn rebuild(
+        &mut self,
+        element_id: ElementId,
+        _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+    ) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
 
         self.dirty = false;
 
-        // Call build() on the state to get child widget
+        // TODO: Create BuildContext and pass to state.build()
+        // For now, call build() without context (old API)
         let child_widget = self.state.build(&*self.widget);
 
         // Clear old child (will be unmounted by caller if needed)

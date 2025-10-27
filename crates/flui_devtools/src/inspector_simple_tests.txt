@@ -1,0 +1,40 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inspector_creation() {
+        let inspector = Inspector::new();
+        assert!(inspector.selected_widget().is_none());
+        assert!(inspector.highlighted_widget().is_none());
+    }
+
+    #[test]
+    fn test_attach_to_tree() {
+        let inspector = Inspector::new();
+        let tree = ElementTree::new();
+
+        inspector.attach_to_tree(&tree);
+        // Tree is now attached (though it's empty)
+    }
+
+    #[test]
+    fn test_highlight_widget() {
+        let inspector = Inspector::new();
+
+        inspector.highlight_widget(42);
+        assert_eq!(inspector.highlighted_widget(), Some(42));
+
+        inspector.clear_highlight();
+        assert!(inspector.highlighted_widget().is_none());
+    }
+
+    #[test]
+    fn test_clone_inspector() {
+        let inspector = Inspector::new();
+        inspector.highlight_widget(123);
+
+        let cloned = inspector.clone();
+        assert_eq!(cloned.highlighted_widget(), Some(123));
+    }
+}

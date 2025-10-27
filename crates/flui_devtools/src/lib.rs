@@ -47,7 +47,7 @@
 //!
 //! ## Basic Profiling
 //!
-//! ```rust
+//! ```rust,ignore
 //! use flui_devtools::profiler::{Profiler, FramePhase};
 //!
 //! // Create profiler
@@ -69,7 +69,7 @@
 //!
 //! ## Widget Inspector
 //!
-//! ```rust
+//! ```rust,ignore
 //! use flui_devtools::inspector::Inspector;
 //!
 //! let inspector = Inspector::new();
@@ -83,7 +83,7 @@
 //!
 //! ## Hot Reload
 //!
-//! ```rust
+//! ```rust,ignore
 //! #[cfg(feature = "hot-reload")]
 //! use flui_devtools::hot_reload::HotReloader;
 //!

@@ -530,6 +530,80 @@ impl ElementTree {
             }
         }
     }
+
+    // ========== Dependency Tracking ==========
+
+    /// Register a dependent element on an InheritedElement
+    ///
+    /// This is called by BuildContext when a descendant element accesses
+    /// inherited data via `context.depend_on::<T>()`.
+    ///
+    /// # Arguments
+    ///
+    /// - `inherited_id`: The ElementId of the InheritedElement being depended upon
+    /// - `dependent_id`: The ElementId of the element that depends on the inherited data
+    ///
+    /// # Returns
+    ///
+    /// `true` if the dependency was registered successfully, `false` if the inherited_id
+    /// doesn't exist or isn't an InheritedElement.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Called internally by BuildContext::depend_on()
+    /// tree.add_dependent(theme_element_id, widget_element_id);
+    /// ```
+    pub fn add_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
+        if let Some(element) = self.get_mut(inherited_id) {
+            if let Element::Inherited(inherited) = element {
+                inherited.add_dependent(dependent_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Remove a dependent element from an InheritedElement
+    ///
+    /// This is called when a dependent element is unmounted or no longer needs
+    /// to track the inherited data.
+    ///
+    /// # Arguments
+    ///
+    /// - `inherited_id`: The ElementId of the InheritedElement
+    /// - `dependent_id`: The ElementId of the element to remove from dependents
+    ///
+    /// # Returns
+    ///
+    /// `true` if the dependency was removed successfully, `false` if the inherited_id
+    /// doesn't exist or isn't an InheritedElement.
+    pub fn remove_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
+        if let Some(element) = self.get_mut(inherited_id) {
+            if let Element::Inherited(inherited) = element {
+                inherited.remove_dependent(dependent_id);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get all dependents of an InheritedElement
+    ///
+    /// Returns the set of ElementIds that have registered a dependency on
+    /// the specified InheritedElement.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&HashSet<ElementId>)` if the element exists and is an InheritedElement,
+    /// `None` otherwise.
+    pub fn get_dependents(&self, inherited_id: ElementId) -> Option<&std::collections::HashSet<ElementId>> {
+        if let Some(Element::Inherited(inherited)) = self.get(inherited_id) {
+            Some(inherited.dependents())
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for ElementTree {

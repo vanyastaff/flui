@@ -631,14 +631,23 @@ impl Element {
     ///
     /// Returns list of child widgets that need to be mounted:
     /// (parent_id, child_widget, slot)
+    ///
+    /// # Arguments
+    ///
+    /// - `element_id`: The ElementId of this element
+    /// - `tree`: Shared reference to the ElementTree for creating BuildContext
     #[inline]
-    pub fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, crate::widget::BoxedWidget, usize)> {
+    pub fn rebuild(
+        &mut self,
+        element_id: ElementId,
+        tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+    ) -> Vec<(ElementId, crate::widget::BoxedWidget, usize)> {
         match self {
-            Self::Component(c) => c.rebuild(element_id),
-            Self::Stateful(s) => s.rebuild(element_id),
-            Self::Inherited(i) => i.rebuild(element_id),
-            Self::Render(r) => r.rebuild(element_id),
-            Self::ParentData(p) => p.rebuild(element_id),
+            Self::Component(c) => c.rebuild(element_id, tree),
+            Self::Stateful(s) => s.rebuild(element_id, tree),
+            Self::Inherited(i) => i.rebuild(element_id, tree),
+            Self::Render(r) => r.rebuild(element_id, tree),
+            Self::ParentData(p) => p.rebuild(element_id, tree),
         }
     }
 

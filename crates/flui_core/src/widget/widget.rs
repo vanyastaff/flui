@@ -220,6 +220,29 @@ pub trait Widget: 'static {
     fn key(&self) -> Option<Key> {
         None
     }
+
+    /// Build the widget tree (for StatelessWidget and StatefulWidget only)
+    ///
+    /// This method is called by ComponentElement and StatefulElement to build
+    /// the child widget tree. It's only implemented by widgets that have a build phase.
+    ///
+    /// RenderObjectWidgets return `None` since they don't build - they create render objects.
+    ///
+    /// # Arguments
+    ///
+    /// - `context`: BuildContext providing access to inherited widgets and tree structure
+    ///
+    /// # Returns
+    ///
+    /// - `Some(BoxedWidget)` for StatelessWidget/StatefulWidget with the built child tree
+    /// - `None` for RenderObjectWidget (not applicable)
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation returns `None`. StatelessWidget overrides this.
+    fn build(&self, _context: &crate::element::BuildContext) -> Option<crate::BoxedWidget> {
+        None
+    }
 }
 
 /// Widget state trait
