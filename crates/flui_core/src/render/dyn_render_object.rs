@@ -56,7 +56,6 @@ use flui_types::{Size, Offset};
 use flui_types::constraints::BoxConstraints;
 use flui_engine::BoxedLayer;
 
-use crate::render::arity::Arity;
 use crate::element::{ElementId, ElementTree};
 
 /// Object-safe base trait for all RenderObjects

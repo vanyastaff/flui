@@ -3,7 +3,6 @@
 //! This element type is created by StatelessWidget and calls build() to create
 //! its child widget tree.
 
-use std::fmt;
 
 use crate::{ElementId, DynWidget, BoxedWidget};
 use super::dyn_element::ElementLifecycle;

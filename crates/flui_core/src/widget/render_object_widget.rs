@@ -54,7 +54,7 @@
 //! ```
 
 use std::fmt;
-use crate::{Widget, RenderObject, RenderElement, SingleArity, MultiArity};
+use crate::RenderObject;
 
 /// RenderObjectWidget - widget that creates a render object
 ///

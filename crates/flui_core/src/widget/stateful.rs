@@ -52,7 +52,7 @@
 //! ```
 
 use std::fmt;
-use crate::{Widget, BoxedWidget, BuildContext, StatefulElement, WidgetState};
+use crate::BoxedWidget;
 
 /// StatefulWidget - widget that creates a State object
 ///

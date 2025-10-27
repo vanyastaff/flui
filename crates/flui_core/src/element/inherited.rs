@@ -3,7 +3,6 @@
 //! Manages data propagation down the tree with efficient dependency tracking.
 
 use std::collections::HashSet;
-use std::fmt;
 
 use crate::ElementId;
 use crate::widget::{DynWidget, BoxedWidget};

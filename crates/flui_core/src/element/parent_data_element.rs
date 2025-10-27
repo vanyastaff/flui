@@ -2,7 +2,6 @@
 //!
 //! Manages a single child and applies parent data to descendant RenderObjects.
 
-use std::fmt;
 
 use crate::ElementId;
 use crate::widget::{DynWidget, BoxedWidget};

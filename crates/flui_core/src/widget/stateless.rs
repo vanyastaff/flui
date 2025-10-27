@@ -29,7 +29,7 @@
 //! ```
 
 use std::fmt;
-use crate::{Widget, BoxedWidget, BuildContext, ComponentElement};
+use crate::{Widget, BoxedWidget, BuildContext};
 
 /// StatelessWidget - pure functional widget
 ///

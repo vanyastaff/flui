@@ -44,3 +44,7 @@ profiling = ["dep:puffin"]
 [lib]
 name = "flui_core"
 path = "src/lib.rs"
+
+[[bench]]
+name = "element_enum"
+harness = false

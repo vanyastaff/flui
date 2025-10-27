@@ -49,7 +49,7 @@ use std::any::{Any, TypeId};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::{KeyRef, DynElement};
+use crate::KeyRef;
 
 /// Object-safe trait for dynamic widget storage
 ///

@@ -38,10 +38,7 @@
 
 use std::fmt;
 use std::any::Any;
-use crate::widget::Widget;
 use crate::widget::BoxedWidget;
-use crate::element::ParentDataElement;
-use crate::render::{RenderObject, arity::SingleArity};
 
 /// ParentDataWidget - widget that attaches parent data to descendants
 ///

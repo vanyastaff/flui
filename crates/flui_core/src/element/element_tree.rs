@@ -5,7 +5,7 @@
 use slab::Slab;
 use flui_types::constraints::BoxConstraints;
 
-use crate::element::{Element, BoxedElement, ElementId};
+use crate::element::{Element, ElementId};
 use crate::render::RenderState;
 
 /// Element tree managing Element instances with efficient slab allocation

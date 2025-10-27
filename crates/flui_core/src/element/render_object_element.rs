@@ -3,7 +3,6 @@
 //! This element type is created by RenderObjectWidget and owns a RenderObject.
 //! It bridges the Widget tree to the RenderObject tree.
 
-use std::fmt;
 
 use parking_lot::RwLock;
 

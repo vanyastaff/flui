@@ -32,8 +32,6 @@
 //! ```
 
 use crate::foundation::Key;
-use crate::element::Element;
-use crate::render::arity::{Arity, LeafArity};
 
 /// Core Widget trait - typed widget abstraction
 ///

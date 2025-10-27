@@ -77,7 +77,7 @@
 //! ```
 
 use std::fmt;
-use crate::{Widget, BoxedWidget};
+use crate::BoxedWidget;
 
 /// InheritedWidget - widget that provides data to descendants
 ///

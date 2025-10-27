@@ -123,7 +123,7 @@ pub use parent_data_widget::{ParentDataWidget, ParentData};
 pub use notification_listener::NotificationListener;
 
 use std::fmt;
-use crate::{KeyRef, DynElement};
+use crate::KeyRef;
 
 // ========== Blanket Implementation: Widget → DynWidget ==========
 
