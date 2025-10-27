@@ -1,0 +1,75 @@
+[package]
+name = "flui_devtools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Developer tools for FLUI - profiling, debugging, hot reload, and inspection"
+
+[dependencies]
+# Core flui
+flui_core = { path = "../flui_core" }
+flui_types = { path = "../flui_types" }
+
+# Timing and performance
+instant = "0.1"
+
+# Serialization (for devtools protocol)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime (for devtools server)
+tokio = { version = "1.0", features = ["full"], optional = true }
+
+# WebSocket server (for remote debugging)
+tokio-tungstenite = { version = "0.24", optional = true }
+
+# Hot reload support
+notify = { version = "7.0", optional = true }
+
+# Memory profiling
+dhat = { version = "0.3", optional = true }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", optional = true }
+
+# Data structures
+parking_lot = "0.12"
+dashmap = "6.1"
+
+[features]
+default = ["profiling", "inspector"]
+
+# Core features
+profiling = []
+inspector = []
+timeline = []
+
+# Advanced features
+hot-reload = ["notify"]
+network-monitor = ["tokio", "tokio-tungstenite"]
+memory-profiler = ["dhat"]
+remote-debug = ["tokio", "tokio-tungstenite"]
+tracing-support = ["tracing-subscriber"]
+
+# All features
+full = [
+    "profiling",
+    "inspector",
+    "timeline",
+    "hot-reload",
+    "network-monitor",
+    "memory-profiler",
+    "remote-debug",
+    "tracing-support",
+]
+
+[dev-dependencies]
+criterion = "0.5"
+
+# [[bench]]
+# name = "profiler_bench"
+# harness = false
