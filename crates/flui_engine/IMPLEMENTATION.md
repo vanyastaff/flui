@@ -212,15 +212,17 @@ impl RenderObject for ColoredBoxRender {
 
 - ✅ **Full Pipeline Example**: `examples/full_render_pipeline.rs`
 - ✅ **Interactive Example**: `crates/flui_engine/examples/interactive_button.rs`
+- ✅ **Profiled Compositor**: `crates/flui_engine/examples/profiled_compositor.rs`
 
 ## 📊 Code Statistics
 
-- **Total lines**: ~2500+
-- **Modules**: 8 (layer, painter, scene, compositor, surface, backend, event_router, examples)
-- **Layer types**: 5 (Container, Opacity, Transform, ClipRect, ClipRRect, Picture)
+- **Total lines**: ~3000+
+- **Modules**: 9 (layer, painter, scene, compositor, surface, backend, event_router, devtools, examples)
+- **Layer types**: 5 (Container, Opacity, Transform, ClipRectLayer, ClipRRectLayer, Picture)
 - **Tests**: 15+ unit tests
-- **Examples**: 3 integration examples
+- **Examples**: 4 integration examples
 - **Event System**: ✅ Hit testing, pointer events, keyboard events
+- **DevTools**: ✅ ProfiledCompositor, PerformanceOverlay, FPS tracking
 
 ## 🚀 Next Steps
 
@@ -241,6 +243,7 @@ To further enhance the pipeline:
    - ⏳ Blur/filter effects
    - ⏳ Image/texture support
    - ✅ Event system (hit testing, pointer, keyboard, window events)
+   - ✅ DevTools integration (performance profiling, FPS tracking, jank detection)
 
 4. **Optimizations**
    - ⏳ Layer caching across frames
@@ -253,3 +256,14 @@ To further enhance the pipeline:
 This implementation follows the architecture laid out in idea.md chapters 5.5 and 6, providing the "Engine Layer" that sits between the RenderObject system and the platform backends. The design is backend-agnostic, type-safe, and optimized for performance.
 
 The egui backend is fully functional and demonstrates the complete pipeline from Scene → Compositor → Painter → Screen.
+
+### DevTools Integration
+
+The devtools integration follows Flutter's architecture:
+- **No circular dependencies**: flui_devtools does NOT depend on flui_core
+- **Standalone profiling**: Performance tracking works independently
+- **Optional feature**: Enable with `--features devtools`
+- **ProfiledCompositor**: Wraps Compositor with automatic frame profiling
+- **PerformanceOverlay**: Visual overlay for FPS/frame time (basic implementation)
+
+This architecture allows flui_engine to use flui_devtools without creating circular dependency loops.
