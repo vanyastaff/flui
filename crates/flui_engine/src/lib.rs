@@ -102,6 +102,9 @@ pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
 #[cfg(feature = "devtools")]
 pub use devtools::{ProfiledCompositor, PerformanceOverlay, FrameTimelineGraph, FramePhase, FrameStats};
 
+#[cfg(all(feature = "devtools", feature = "memory-profiler"))]
+pub use devtools::MemoryGraph;
+
 // Re-export backend implementations when features are enabled
 #[cfg(feature = "egui")]
 pub use backends::egui::EguiPainter;

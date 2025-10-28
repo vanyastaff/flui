@@ -21,6 +21,7 @@ wgpu = [
 ]
 # DevTools integration
 devtools = ["dep:flui_devtools"]
+memory-profiler = ["devtools", "flui_devtools/memory-profiler"]
 
 [dependencies]
 # Internal dependencies
