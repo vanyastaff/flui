@@ -157,7 +157,7 @@ pub struct WgpuRenderer {
 
 impl WgpuRenderer {
     pub async fn new(window: Option<Arc<winit::window::Window>>) -> Result<Self, RenderError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(), ..Default::default()
         });
         let surface = if let Some(w) = window.as_ref() {
@@ -168,14 +168,14 @@ impl WgpuRenderer {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: surface.as_ref(),
-        }).await.ok_or(RenderError::AdapterNotFound)?;
+        }).await.map_err(|e| RenderError::AdapterRequest(e.to_string()))?;
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("Flui WGPU Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
-                memory_hints: Default::default(),
-            }, None,
+                ..Default::default()
+            },
         ).await.map_err(|e| RenderError::DeviceCreation(e.to_string()))?;
         let surface_config = if let (Some(s), Some(w)) = (surface.as_ref(), window) {
             let size = w.inner_size();
@@ -370,6 +370,7 @@ impl WgpuRenderer {
 pub enum RenderError {
     #[error("Failed to create surface: {0}")] SurfaceCreation(String),
     #[error("No suitable GPU adapter found")] AdapterNotFound,
+    #[error("Failed to request adapter: {0}")] AdapterRequest(String),
     #[error("Failed to create device: {0}")] DeviceCreation(String),
     #[error("Surface error: {0}")] SurfaceError(#[from] wgpu::SurfaceError),
     #[error("Text rendering failed: {0}")] TextRenderingFailed(String),

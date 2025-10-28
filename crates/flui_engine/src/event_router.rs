@@ -4,7 +4,6 @@
 //! gesture and pointer routing system. Events are dispatched through hit testing,
 //! allowing layers to handle events based on their position in the scene graph.
 
-use crate::layer::BoxedLayer;
 use flui_types::{Event, HitTestResult, Offset, PointerEvent};
 
 /// Event router for dispatching events through the layer tree

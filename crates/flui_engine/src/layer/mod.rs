@@ -87,10 +87,7 @@ pub use container::ContainerLayer;
 pub use opacity::OpacityLayer;
 pub use transform::TransformLayer;
 
-// Clip layers - prefer ClipRectLayer/ClipRRectLayer over legacy ClipLayer
-#[allow(deprecated)]
-pub use clip::ClipLayer; // Deprecated - use ClipRectLayer or ClipRRectLayer
-
+// Clip layers
 pub use clip::{ClipRectLayer, ClipRRectLayer};
 pub use picture::{PictureLayer, DrawCommand};
 

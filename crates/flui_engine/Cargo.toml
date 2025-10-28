@@ -19,7 +19,6 @@ wgpu = [
     "dep:lyon",
     "dep:pollster",
 ]
-skia = ["dep:skia-safe"]
 
 [dependencies]
 # Internal dependencies

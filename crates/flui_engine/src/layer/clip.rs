@@ -7,87 +7,8 @@ use flui_types::{Rect, Offset, Event, HitTestResult};
 use crate::layer::{Layer, BoxedLayer};
 use crate::painter::{Painter, RRect};
 
-/// Type of clipping to apply (legacy)
-#[derive(Debug, Clone)]
-pub enum ClipBehavior {
-    /// Clip to rectangle
-    Rect(Rect),
-
-    /// Clip to rounded rectangle
-    RRect(RRect),
-}
-
-/// Legacy clip layer - applies clipping to child layer
-///
-/// **Deprecated**: Use `ClipRectLayer` or `ClipRRectLayer` instead for proper
-/// lifecycle management and better performance.
-#[deprecated(
-    since = "0.1.0",
-    note = "Use ClipRectLayer or ClipRRectLayer instead. Will be removed in 0.2.0."
-)]
-pub struct ClipLayer {
-    /// The child layer to clip
-    child: BoxedLayer,
-
-    /// The clipping behavior
-    clip: ClipBehavior,
-}
-
-impl ClipLayer {
-    /// Create a new clip layer
-    pub fn new(child: BoxedLayer, clip: ClipBehavior) -> Self {
-        Self { child, clip }
-    }
-
-    /// Create a rectangular clip layer
-    pub fn rect(child: BoxedLayer, rect: Rect) -> Self {
-        Self::new(child, ClipBehavior::Rect(rect))
-    }
-
-    /// Create a rounded rectangular clip layer
-    pub fn rrect(child: BoxedLayer, rrect: RRect) -> Self {
-        Self::new(child, ClipBehavior::RRect(rrect))
-    }
-}
-
-impl Layer for ClipLayer {
-    fn paint(&self, painter: &mut dyn Painter) {
-        painter.save();
-
-        match &self.clip {
-            ClipBehavior::Rect(rect) => painter.clip_rect(*rect),
-            ClipBehavior::RRect(rrect) => painter.clip_rrect(*rrect),
-        }
-
-        self.child.paint(painter);
-        painter.restore();
-    }
-
-    fn bounds(&self) -> Rect {
-        let child_bounds = self.child.bounds();
-        match &self.clip {
-            ClipBehavior::Rect(rect) => {
-                child_bounds.intersection(rect).unwrap_or(Rect::ZERO)
-            }
-            ClipBehavior::RRect(rrect) => {
-                child_bounds.intersection(&rrect.rect).unwrap_or(Rect::ZERO)
-            }
-        }
-    }
-
-    fn is_visible(&self) -> bool {
-        let has_area = match &self.clip {
-            ClipBehavior::Rect(rect) => rect.width() > 0.0 && rect.height() > 0.0,
-            ClipBehavior::RRect(rrect) => {
-                rrect.rect.width() > 0.0 && rrect.rect.height() > 0.0
-            }
-        };
-        has_area && self.child.is_visible()
-    }
-}
-
 // ============================================================================
-// New Architecture: ClipRectLayer
+// ClipRectLayer
 // ============================================================================
 
 /// A composited layer that clips its children to a rectangle

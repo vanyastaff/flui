@@ -3,10 +3,6 @@
 //! This module provides a backend-agnostic API for creating applications.
 //! The backend (WGPU, Egui, etc.) is selected automatically based on configuration.
 
-#[cfg(feature = "wgpu")]
-use std::sync::Arc;
-#[cfg(feature = "wgpu")]
-use parking_lot::Mutex;
 
 /// Backend type for rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

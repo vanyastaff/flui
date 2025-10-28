@@ -202,7 +202,6 @@ impl Tesselator {
 
         if len < 0.001 {
             // Degenerate line - draw a point as small rect
-            let half_width = width * 0.5;
             self.tesselate_rect(
                 Rect::from_center_size(
                     p1,

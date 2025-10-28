@@ -129,7 +129,7 @@ impl TextRenderer {
             buffer.set_text(
                 &mut self.font_system,
                 &cmd.text,
-                attrs,
+                &attrs,
                 Shaping::Advanced,
             );
 

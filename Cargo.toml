@@ -18,7 +18,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
 repository = "https://github.com/yourusername/flui"
@@ -68,8 +68,8 @@ image = { version = "0.25", features = ["png", "jpeg", "gif", "webp"] }
 resvg = "0.45"
 usvg = "0.45"
 
-# GPU RENDERING (WGPU BACKEND - Stable versions compatible with Rust 1.89)
-wgpu = { version = "27.0", features = ["wgsl"] }  # Latest: 27.0.1 (Oct 2025)
+# GPU RENDERING (WGPU BACKEND - Compatible with eframe 0.33)
+wgpu = { version = "25.0", features = ["wgsl"] }  # Compatible with eframe 0.33
 winit = "0.30.10"  # Stable: 0.30.10 (April 2025)
 bytemuck = { version = "1.18", features = ["derive"] }  # Stable compatible
 glyphon = "0.9"  # GPU text rendering (Latest: 0.9.0)

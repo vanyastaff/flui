@@ -7,6 +7,7 @@ use crate::{Offset, Size};
 
 /// Device type that generated the pointer event
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
 pub enum PointerDeviceKind {
     /// Mouse pointer
     Mouse,
@@ -22,6 +23,7 @@ pub enum PointerDeviceKind {
 
 /// Mouse button that was pressed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
 pub enum PointerButton {
     /// Primary button (usually left mouse button)
     Primary,
@@ -74,6 +76,7 @@ impl PointerEventData {
 
 /// Pointer event types
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub enum PointerEvent {
     /// Pointer pressed down
     Down(PointerEventData),
@@ -242,6 +245,7 @@ impl HitTestResult {
 
 /// Physical key on the keyboard
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
 pub enum PhysicalKey {
     /// Letter keys
     KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ,
@@ -278,6 +282,7 @@ pub enum PhysicalKey {
 
 /// Logical key - the meaning of the key press
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
 pub enum LogicalKey {
     /// Character input (e.g., 'a', 'A', '1', '!')
     Character(String),
@@ -357,6 +362,7 @@ impl KeyEventData {
 
 /// Keyboard event types
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub enum KeyEvent {
     /// Key was pressed down
     Down(KeyEventData),
@@ -400,6 +406,7 @@ impl KeyEvent {
 
 /// Scroll delta
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(missing_docs)]
 pub enum ScrollDelta {
     /// Scroll by lines (e.g., mouse wheel clicks)
     Lines { x: f32, y: f32 },
@@ -434,6 +441,7 @@ impl ScrollEventData {
 
 /// Window event types
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(missing_docs)]
 pub enum WindowEvent {
     /// Window was resized
     Resized { width: u32, height: u32 },
@@ -453,6 +461,7 @@ pub enum WindowEvent {
 
 /// Unified event type
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub enum Event {
     /// Pointer event (mouse, touch, etc.)
     Pointer(PointerEvent),

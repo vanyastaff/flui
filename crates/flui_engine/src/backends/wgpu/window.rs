@@ -43,6 +43,7 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
         window_attributes = window_attributes.with_maximized(true);
     }
 
+    #[allow(deprecated)]
     let window = Arc::new(
         event_loop.create_window(window_attributes)
             .map_err(|e| format!("Failed to create window: {}", e))?
@@ -69,6 +70,7 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
     let mut last_cursor_position = Offset::ZERO;
 
     // Run event loop
+    #[allow(deprecated)]
     event_loop.run(move |event, target| {
         match event {
             Event::WindowEvent { event, .. } => {

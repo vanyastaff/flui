@@ -11,6 +11,7 @@ pub struct SolidPipeline {
     pipeline: wgpu::RenderPipeline,
 
     /// Bind group layout
+    #[allow(dead_code)]
     bind_group_layout: wgpu::BindGroupLayout,
 
     /// Uniform buffer for viewport
@@ -27,6 +28,7 @@ impl SolidPipeline {
     /// * `device` - WGPU device
     /// * `surface_format` - Surface texture format
     /// * `viewport_size` - Initial viewport size
+    #[allow(dead_code)]
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
@@ -51,7 +53,7 @@ impl SolidPipeline {
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Solid Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/solid.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/solid.wgsl").into()),
         });
 
         // Create uniform buffer
@@ -100,13 +102,13 @@ impl SolidPipeline {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[SolidVertex::desc()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),

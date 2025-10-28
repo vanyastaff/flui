@@ -4,7 +4,7 @@
 //! Shows how to use the event system with Scene and custom layer event handling.
 
 use flui_engine::{
-    App, AppConfig, AppLogic, Backend, EventRouter, Layer, PictureLayer, Scene, SceneBuilder,
+    App, AppConfig, AppLogic, Backend, PictureLayer, Scene,
     Paint,
 };
 use flui_types::{Event, Offset, PointerEvent, Rect, Size};

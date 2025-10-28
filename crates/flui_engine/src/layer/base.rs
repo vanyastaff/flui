@@ -58,10 +58,10 @@ pub enum LayerState {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::layer::{Layer, LayerHandle, ClipLayer};
+/// use flui_engine::layer::{Layer, LayerHandle, ClipRectLayer};
 ///
 /// struct ClippingRenderObject {
-///     clip_layer_handle: LayerHandle<ClipLayer>,
+///     clip_layer_handle: LayerHandle<ClipRectLayer>,
 /// }
 ///
 /// impl ClippingRenderObject {
@@ -165,7 +165,7 @@ pub trait Layer: Send + Sync {
     ///     result.dispatch(&event);
     /// }
     /// ```
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+    fn hit_test(&self, position: Offset, _result: &mut HitTestResult) -> bool {
         // Default implementation: check if position is within bounds
         let bounds = self.bounds();
         bounds.contains(position)
