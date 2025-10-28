@@ -290,6 +290,20 @@ pub trait StatefulWidget: Clone + fmt::Debug + Send + Sync + 'static {
     /// }
     /// ```
     fn create_state(&self) -> Self::State;
+
+    /// Create boxed state wrapped for DynState
+    ///
+    /// This is a helper that creates the state and wraps it in StateWrapper
+    /// so it can be used as Box<dyn DynState>.
+    ///
+    /// You don't need to override this - the default implementation is correct.
+    fn create_boxed_state(&self) -> crate::element::stateful::BoxedState
+    where
+        Self: Sized + 'static,
+        Self::State: fmt::Debug,
+    {
+        Box::new(StateWrapper::<Self>::new(self.create_state()))
+    }
 }
 
 /// State - mutable state for StatefulWidget
@@ -389,6 +403,7 @@ pub trait State<W: StatefulWidget>: Send + Sync + 'static {
     /// # Parameters
     ///
     /// - `widget` - Current widget configuration
+    /// - `context` - BuildContext for accessing inherited widgets
     ///
     /// # Returns
     ///
@@ -397,14 +412,17 @@ pub trait State<W: StatefulWidget>: Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// fn build(&mut self, widget: &Counter) -> BoxedWidget {
+    /// fn build(&mut self, widget: &Counter, context: &BuildContext) -> BoxedWidget {
+    ///     // Access theme via BuildContext
+    ///     let theme = context.depend_on::<Theme>().unwrap();
+    ///
     ///     Box::new(Column::new(vec![
     ///         Box::new(Text::new(format!("Count: {}", self.count))),
     ///         Box::new(Button::new("Increment", || self.increment())),
     ///     ]))
     /// }
     /// ```
-    fn build(&mut self, widget: &W) -> BoxedWidget;
+    fn build(&mut self, widget: &W, context: &crate::element::BuildContext) -> BoxedWidget;
 
     /// Called when widget configuration changes
     ///
@@ -479,6 +497,72 @@ pub trait State<W: StatefulWidget>: Send + Sync + 'static {
 
 // DynWidget comes automatically via blanket impl in mod.rs!
 
+// Wrapper to make State → DynState conversion explicit
+// This holds the concrete State<W> and knows the widget type W
+struct StateWrapper<W: StatefulWidget> {
+    state: W::State,
+    _phantom: std::marker::PhantomData<W>,
+}
+
+impl<W: StatefulWidget> StateWrapper<W> {
+    fn new(state: W::State) -> Self {
+        Self {
+            state,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<W> crate::element::stateful::DynState for StateWrapper<W>
+where
+    W: StatefulWidget + 'static,
+    W::State: fmt::Debug,
+{
+    fn build(&mut self, widget: &dyn crate::DynWidget, context: &crate::element::BuildContext) -> crate::BoxedWidget {
+        // Downcast widget to concrete type W
+        if let Some(concrete_widget) = (widget as &dyn std::any::Any).downcast_ref::<W>() {
+            // Call the concrete State::build()
+            State::build(&mut self.state, concrete_widget, context)
+        } else {
+            // This shouldn't happen - widget type mismatch
+            panic!("Widget type mismatch in DynState::build()");
+        }
+    }
+
+    fn did_update_widget(&mut self, old_widget: &dyn crate::DynWidget, new_widget: &dyn crate::DynWidget) {
+        if let (Some(old), Some(new)) = (
+            (old_widget as &dyn std::any::Any).downcast_ref::<W>(),
+            (new_widget as &dyn std::any::Any).downcast_ref::<W>(),
+        ) {
+            State::did_update_widget(&mut self.state, old, new);
+        }
+    }
+
+    fn dispose(&mut self) {
+        State::dispose(&mut self.state);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        &self.state
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        &mut self.state
+    }
+}
+
+impl<W> fmt::Debug for StateWrapper<W>
+where
+    W: StatefulWidget,
+    W::State: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StateWrapper")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,7 +590,7 @@ mod tests {
         }
 
         impl State<TestWidget> for TestState {
-            fn build(&mut self, widget: &TestWidget) -> BoxedWidget {
+            fn build(&mut self, widget: &TestWidget, _context: &BuildContext) -> BoxedWidget {
                 Box::new(MockWidget)
             }
         }
@@ -552,7 +636,7 @@ mod tests {
                 self.init_called = true;
             }
 
-            fn build(&mut self, _widget: &LifecycleWidget) -> BoxedWidget {
+            fn build(&mut self, _widget: &LifecycleWidget, _context: &BuildContext) -> BoxedWidget {
                 Box::new(MockWidget)
             }
 

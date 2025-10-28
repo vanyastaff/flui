@@ -18,7 +18,12 @@ pub trait DynState: fmt::Debug + Send + Sync + 'static {
     ///
     /// Called when element needs rebuild. The state can access
     /// the current widget configuration via the widget parameter.
-    fn build(&mut self, widget: &dyn DynWidget) -> BoxedWidget;
+    ///
+    /// # Parameters
+    ///
+    /// - `widget`: The current widget configuration
+    /// - `context`: BuildContext for accessing inherited widgets and tree
+    fn build(&mut self, widget: &dyn DynWidget, context: &crate::element::BuildContext) -> BoxedWidget;
 
     /// Called when widget configuration changes
     ///
@@ -240,7 +245,7 @@ impl StatefulElement {
     pub fn rebuild(
         &mut self,
         element_id: ElementId,
-        _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+        tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
             return Vec::new();
@@ -248,9 +253,11 @@ impl StatefulElement {
 
         self.dirty = false;
 
-        // TODO: Create BuildContext and pass to state.build()
-        // For now, call build() without context (old API)
-        let child_widget = self.state.build(&*self.widget);
+        // Create BuildContext for the build phase
+        let context = crate::element::BuildContext::new(tree, element_id);
+
+        // Call build() on the state with BuildContext
+        let child_widget = self.state.build(&*self.widget, &context);
 
         // Clear old child (will be unmounted by caller if needed)
         self.child = None;
@@ -296,7 +303,7 @@ mod tests {
     }
 
     impl DynState for TestState {
-        fn build(&mut self, _widget: &dyn DynWidget) -> BoxedWidget {
+        fn build(&mut self, _widget: &dyn DynWidget, _context: &crate::element::BuildContext) -> BoxedWidget {
             Box::new(TestWidget { value: self.count })
         }
 
