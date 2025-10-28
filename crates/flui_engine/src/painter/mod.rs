@@ -174,6 +174,44 @@ pub trait Painter {
         let _ = (text, position, font_size, paint);
     }
 
+    /// Draw text with full style information
+    ///
+    /// # Parameters
+    /// - `text`: The text string to draw
+    /// - `position`: Top-left position of the text
+    /// - `style`: Text style (font, size, color, etc.)
+    fn text_styled(&mut self, text: &str, position: Point, style: &flui_types::typography::TextStyle) {
+        // Default: extract font size and delegate to simple text()
+        let font_size = style.font_size.unwrap_or(14.0) as f32;
+        let paint = Paint {
+            color: style.color.map(|c| [
+                c.red() as f32 / 255.0,
+                c.green() as f32 / 255.0,
+                c.blue() as f32 / 255.0,
+                c.alpha() as f32 / 255.0,
+            ]).unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            ..Default::default()
+        };
+        self.text(text, position, font_size, &paint);
+    }
+
+    /// Draw an image
+    ///
+    /// # Parameters
+    /// - `image`: The image to draw
+    /// - `src_rect`: Source rectangle in image coordinates
+    /// - `dst_rect`: Destination rectangle on canvas
+    /// - `paint`: Paint settings (opacity, blend mode, etc.)
+    fn image(
+        &mut self,
+        _image: &flui_types::painting::Image,
+        _src_rect: Rect,
+        _dst_rect: Rect,
+        _paint: &Paint,
+    ) {
+        // Default implementation is no-op (for backends that don't support images yet)
+    }
+
     // ========== Transform Stack ==========
 
     /// Save current transform state
