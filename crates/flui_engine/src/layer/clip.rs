@@ -6,8 +6,6 @@
 use flui_types::Rect;
 use crate::layer::{Layer, BoxedLayer};
 use crate::painter::{Painter, RRect};
-use std::sync::Arc;
-use parking_lot::RwLock;
 
 /// Type of clipping to apply (legacy)
 #[derive(Debug, Clone)]
@@ -132,7 +130,7 @@ pub struct ClipRectLayer {
     clip_rect: Rect,
 
     /// Child layers
-    children: Vec<Arc<RwLock<dyn Layer>>>,
+    children: Vec<BoxedLayer>,
 
     /// Whether this layer has been disposed
     disposed: bool,
@@ -147,25 +145,13 @@ impl ClipRectLayer {
     /// # Arguments
     ///
     /// * `clip_rect` - The rectangle to clip to
-    /// * `old_layer` - Optional old layer to reuse resources from
-    pub fn new(clip_rect: Rect, old_layer: Option<Arc<RwLock<Self>>>) -> Arc<RwLock<Self>> {
-        // Try to reuse old layer
-        if let Some(old) = old_layer {
-            let mut layer = old.write();
-            layer.clip_rect = clip_rect;
-            layer.cached_bounds = None;
-            layer.mark_needs_paint();
-            drop(layer);
-            return old;
-        }
-
-        // Create new layer
-        Arc::new(RwLock::new(Self {
+    pub fn new(clip_rect: Rect) -> Self {
+        Self {
             clip_rect,
             children: Vec::new(),
             disposed: false,
             cached_bounds: None,
-        }))
+        }
     }
 
     /// Set the clip rectangle
@@ -183,7 +169,7 @@ impl ClipRectLayer {
     }
 
     /// Add a child layer
-    pub fn add_child(&mut self, child: Arc<RwLock<dyn Layer>>) {
+    pub fn add_child(&mut self, child: BoxedLayer) {
         self.children.push(child);
         self.cached_bounds = None;
     }
@@ -208,9 +194,8 @@ impl Layer for ClipRectLayer {
 
         // Paint all children
         for child in &self.children {
-            let child_layer = child.read();
-            if child_layer.is_visible() {
-                child_layer.paint(painter);
+            if child.is_visible() {
+                child.paint(painter);
             }
         }
 
@@ -229,7 +214,7 @@ impl Layer for ClipRectLayer {
         // Union of all children bounds, clipped to clip_rect
         let mut bounds = Rect::ZERO;
         for (i, child) in self.children.iter().enumerate() {
-            let child_bounds = child.read().bounds();
+            let child_bounds = child.bounds();
             if i == 0 {
                 bounds = child_bounds;
             } else {
@@ -245,7 +230,7 @@ impl Layer for ClipRectLayer {
         !self.disposed
             && self.clip_rect.width() > 0.0
             && self.clip_rect.height() > 0.0
-            && self.children.iter().any(|c| c.read().is_visible())
+            && self.children.iter().any(|c| c.is_visible())
     }
 
     fn mark_needs_paint(&mut self) {
@@ -279,7 +264,7 @@ pub struct ClipRRectLayer {
     clip_rrect: RRect,
 
     /// Child layers
-    children: Vec<Arc<RwLock<dyn Layer>>>,
+    children: Vec<BoxedLayer>,
 
     /// Whether this layer has been disposed
     disposed: bool,
@@ -290,22 +275,13 @@ pub struct ClipRRectLayer {
 
 impl ClipRRectLayer {
     /// Create a new clip rrect layer
-    pub fn new(clip_rrect: RRect, old_layer: Option<Arc<RwLock<Self>>>) -> Arc<RwLock<Self>> {
-        if let Some(old) = old_layer {
-            let mut layer = old.write();
-            layer.clip_rrect = clip_rrect;
-            layer.cached_bounds = None;
-            layer.mark_needs_paint();
-            drop(layer);
-            return old;
-        }
-
-        Arc::new(RwLock::new(Self {
+    pub fn new(clip_rrect: RRect) -> Self {
+        Self {
             clip_rrect,
             children: Vec::new(),
             disposed: false,
             cached_bounds: None,
-        }))
+        }
     }
 
     /// Set the clip rounded rectangle
@@ -323,7 +299,7 @@ impl ClipRRectLayer {
     }
 
     /// Add a child layer
-    pub fn add_child(&mut self, child: Arc<RwLock<dyn Layer>>) {
+    pub fn add_child(&mut self, child: BoxedLayer) {
         self.children.push(child);
         self.cached_bounds = None;
     }
@@ -342,9 +318,8 @@ impl Layer for ClipRRectLayer {
 
         // Paint all children
         for child in &self.children {
-            let child_layer = child.read();
-            if child_layer.is_visible() {
-                child_layer.paint(painter);
+            if child.is_visible() {
+                child.paint(painter);
             }
         }
 
@@ -362,7 +337,7 @@ impl Layer for ClipRRectLayer {
 
         let mut bounds = Rect::ZERO;
         for (i, child) in self.children.iter().enumerate() {
-            let child_bounds = child.read().bounds();
+            let child_bounds = child.bounds();
             if i == 0 {
                 bounds = child_bounds;
             } else {
@@ -377,7 +352,7 @@ impl Layer for ClipRRectLayer {
         !self.disposed
             && self.clip_rrect.rect.width() > 0.0
             && self.clip_rrect.rect.height() > 0.0
-            && self.children.iter().any(|c| c.read().is_visible())
+            && self.children.iter().any(|c| c.is_visible())
     }
 
     fn mark_needs_paint(&mut self) {
@@ -405,45 +380,49 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_lifecycle() {
-        let layer = ClipRectLayer::new(
+        let mut layer = ClipRectLayer::new(
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            None,
         );
 
-        {
-            let l = layer.read();
-            assert!(!l.is_disposed());
-            assert_eq!(l.clip_rect(), Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
-        }
+        assert!(!layer.is_disposed());
+        assert_eq!(layer.clip_rect(), Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
 
-        {
-            let mut l = layer.write();
-            l.dispose();
-        }
-
-        {
-            let l = layer.read();
-            assert!(l.is_disposed());
-        }
+        layer.dispose();
+        assert!(layer.is_disposed());
     }
 
     #[test]
-    fn test_clip_rect_layer_reuse() {
-        let layer1 = ClipRectLayer::new(
+    fn test_clip_rect_layer_children() {
+        let mut layer = ClipRectLayer::new(
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+        );
+
+        // Add child layers with actual content (so they're visible)
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        let mut picture1 = PictureLayer::new();
+        picture1.draw_rect(Rect::from_xywh(10.0, 10.0, 20.0, 20.0), Paint::default());
+
+        let mut picture2 = PictureLayer::new();
+        picture2.draw_rect(Rect::from_xywh(50.0, 50.0, 30.0, 30.0), Paint::default());
+
+        layer.add_child(Box::new(picture1));
+        layer.add_child(Box::new(picture2));
+
+        // Verify clipping and visibility (now has visible children)
+        assert!(layer.is_visible());
+        assert_eq!(layer.clip_rect(), Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn test_clip_rect_layer_update() {
+        let mut layer = ClipRectLayer::new(
             Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
-            None,
         );
 
-        // Reuse layer with different clip rect
-        let layer2 = ClipRectLayer::new(
-            Rect::from_xywh(10.0, 10.0, 100.0, 100.0),
-            Some(layer1.clone()),
-        );
-
-        // Should be same Arc
-        assert!(Arc::ptr_eq(&layer1, &layer2));
-
-        let l = layer2.read();
-        assert_eq!(l.clip_rect(), Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
+        // Update clip rect
+        layer.set_clip_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
+        assert_eq!(layer.clip_rect(), Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
     }
 }

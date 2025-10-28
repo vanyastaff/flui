@@ -142,10 +142,13 @@ mod tests {
         assert!(handle2.is_some());
 
         // Both handles point to the same layer
-        assert_eq!(
-            Arc::strong_count(&handle1.get().unwrap()),
-            2
-        );
+        // Note: We need to access the inner Arc directly without calling get()
+        // which would create an additional temporary reference
+        if let Some(ref arc) = handle1.layer {
+            assert_eq!(Arc::strong_count(arc), 2);
+        } else {
+            panic!("handle1 should have a layer");
+        }
     }
 
     #[test]
