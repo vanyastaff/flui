@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_simple_stateful_widget() {
-        #[derive(Debug)]
+        #[derive(Debug, Clone)]
         struct TestWidget {
             initial: i32,
         }
@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn test_state_lifecycle() {
-        #[derive(Debug)]
+        #[derive(Debug, Clone)]
         struct LifecycleWidget;
 
         struct LifecycleState {
@@ -674,8 +674,8 @@ mod tests {
 
     #[test]
     fn test_stateful_widget_without_clone() {
-        // StatefulWidget doesn't require Clone!
-        #[derive(Debug)]
+        // StatefulWidget requires Clone for Widget trait
+        #[derive(Debug, Clone)]
         struct NonCloneWidget {
             data: Vec<u8>,
         }
@@ -691,7 +691,7 @@ mod tests {
         }
 
         impl State<NonCloneWidget> for NonCloneState {
-            fn build(&mut self, _widget: &NonCloneWidget) -> BoxedWidget {
+            fn build(&mut self, _widget: &NonCloneWidget, _context: &BuildContext) -> BoxedWidget {
                 Box::new(MockWidget)
             }
         }

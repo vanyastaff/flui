@@ -343,22 +343,18 @@ mod tests {
     }
 
     impl Widget for TestLeafWidget {}
-    impl DynWidget for TestLeafWidget {
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    }
 
     impl RenderObjectWidget for TestLeafWidget {
+        type RenderObject = TestLeafRender;
         type Arity = LeafArity;
-        type Render = TestLeafRender;
 
-        fn create_render_object(&self) -> Self::Render {
+        fn create_render_object(&self) -> Self::RenderObject {
             TestLeafRender {
                 size: Size::new(self.width, self.height),
             }
         }
 
-        fn update_render_object(&self, render: &mut Self::Render) {
+        fn update_render_object(&self, render: &mut Self::RenderObject) {
             render.size = Size::new(self.width, self.height);
         }
     }
@@ -384,10 +380,6 @@ mod tests {
     struct TestContainerWidget;
 
     impl Widget for TestContainerWidget {}
-    impl DynWidget for TestContainerWidget {
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    }
 
     impl RenderObjectWidget for TestContainerWidget {
         type Arity = SingleArity;

@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_simple_stateless_widget() {
-        #[derive(Debug)]
+        #[derive(Debug, Clone)]
         struct SimpleWidget;
 
         impl StatelessWidget for SimpleWidget {
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_stateless_widget_with_config() {
-        #[derive(Debug)]
+        #[derive(Debug, Clone)]
         struct ConfigWidget {
             value: i32,
             label: String,
@@ -379,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_keyed_stateless_widget() {
-        #[derive(Debug)]
+        #[derive(Debug, Clone)]
         struct TestWidget;
 
         impl StatelessWidget for TestWidget {
@@ -403,8 +403,8 @@ mod tests {
 
     #[test]
     fn test_stateless_widget_without_clone() {
-        // Important: StatelessWidget doesn't require Clone!
-        #[derive(Debug)]
+        // StatelessWidget requires Clone for Widget trait
+        #[derive(Debug, Clone)]
         struct NonCloneWidget {
             data: Vec<u8>,
         }
@@ -431,8 +431,6 @@ mod tests {
     impl Widget for MockWidget {
         // Element type determined by framework
     }
-
-    impl crate::DynWidget for MockWidget {}
 
     #[derive(Debug)]
     struct MockElement;

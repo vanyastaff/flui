@@ -315,28 +315,22 @@ mod tests {
         }
     }
 
-    impl_widget_for_inherited!(TestTheme);
+    impl Widget for TestTheme {}
 
     #[derive(Debug, Clone)]
     struct DummyWidget;
 
-    impl Widget for DummyWidget {
-        type Kind = RenderObjectKind;
-    }
-    impl DynWidget for DummyWidget {
-        fn as_any(&self) -> &dyn std::any::Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
-    }
+    impl Widget for DummyWidget {}
 
     impl RenderObjectWidget for DummyWidget {
+        type RenderObject = DummyRender;
         type Arity = LeafArity;
-        type Render = DummyRender;
 
-        fn create_render_object(&self) -> Self::Render {
+        fn create_render_object(&self) -> Self::RenderObject {
             DummyRender
         }
 
-        fn update_render_object(&self, _render: &mut Self::Render) {}
+        fn update_render_object(&self, _render: &mut Self::RenderObject) {}
     }
 
     #[derive(Debug)]

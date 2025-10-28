@@ -183,6 +183,7 @@ mod tests {
     use super::*;
     use crate::foundation::notification::{ScrollNotification, FocusChangedNotification};
     use crate::widget::StatelessWidget;
+    use crate::BuildContext;
 
     // Test notification type
     #[derive(Debug, Clone)]
