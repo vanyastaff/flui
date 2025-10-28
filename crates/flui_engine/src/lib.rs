@@ -79,7 +79,7 @@ pub mod surface;
 // Re-export commonly used types
 pub use layer::{
     Layer, BoxedLayer,
-    ContainerLayer, OpacityLayer, TransformLayer, ClipLayer, PictureLayer,
+    ContainerLayer, OpacityLayer, TransformLayer, ClipLayer, ClipRectLayer, ClipRRectLayer, PictureLayer,
 };
 pub use painter::{Painter, Paint, RRect};
 pub use paint_context::PaintContext;

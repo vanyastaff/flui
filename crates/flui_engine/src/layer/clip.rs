@@ -303,6 +303,12 @@ impl ClipRRectLayer {
         self.children.push(child);
         self.cached_bounds = None;
     }
+
+    /// Remove all children
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+        self.cached_bounds = None;
+    }
 }
 
 impl Layer for ClipRRectLayer {

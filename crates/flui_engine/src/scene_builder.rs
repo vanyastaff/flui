@@ -4,7 +4,7 @@
 //! incrementally. This matches Flutter's SceneBuilder pattern.
 
 use crate::layer::{
-    Layer, BoxedLayer, ContainerLayer, TransformLayer, OpacityLayer, ClipLayer,
+    Layer, BoxedLayer, ContainerLayer, TransformLayer, OpacityLayer, ClipRectLayer, ClipRRectLayer,
 };
 use crate::scene::Scene;
 use crate::painter::RRect;
@@ -74,18 +74,18 @@ impl StackEntry {
                 Box::new(OpacityLayer::new(Box::new(container), opacity))
             }
             StackEntry::ClipRect { rect, children } => {
-                let mut container = ContainerLayer::new();
+                let mut clip_layer = ClipRectLayer::new(rect);
                 for child in children {
-                    container.add_child(child);
+                    clip_layer.add_child(child);
                 }
-                Box::new(ClipLayer::rect(Box::new(container), rect))
+                Box::new(clip_layer)
             }
             StackEntry::ClipRRect { rrect, children } => {
-                let mut container = ContainerLayer::new();
+                let mut clip_layer = ClipRRectLayer::new(rrect);
                 for child in children {
-                    container.add_child(child);
+                    clip_layer.add_child(child);
                 }
-                Box::new(ClipLayer::rrect(Box::new(container), rrect))
+                Box::new(clip_layer)
             }
         }
     }

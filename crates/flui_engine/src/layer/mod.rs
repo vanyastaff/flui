@@ -86,7 +86,7 @@ pub use handle::LayerHandle;
 pub use container::ContainerLayer;
 pub use opacity::OpacityLayer;
 pub use transform::TransformLayer;
-pub use clip::ClipLayer;
+pub use clip::{ClipLayer, ClipRectLayer, ClipRRectLayer};
 pub use picture::{PictureLayer, DrawCommand};
 
 /// Type-erased layer (for dynamic dispatch)

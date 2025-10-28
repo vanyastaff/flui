@@ -3,7 +3,7 @@
 //! This example shows how layers compose to build a scene graph.
 
 use flui_engine::{
-    PictureLayer, OpacityLayer, TransformLayer, ClipLayer, ContainerLayer,
+    PictureLayer, OpacityLayer, TransformLayer, ClipRectLayer, ContainerLayer,
     Paint, Painter, Layer,
 };
 use flui_types::{Rect, Point, Offset};
@@ -60,11 +60,9 @@ fn main() {
     println!("   Bounds: {:?}\n", picture2.bounds());
 
     // Clip the blue rect
-    let clip = ClipLayer::rect(
-        Box::new(picture2),
-        Rect::from_xywh(150.0, 0.0, 80.0, 60.0)  // Clip to half height
-    );
-    println!("5. Wrapped in ClipLayer (clip to half height)");
+    let mut clip = ClipRectLayer::new(Rect::from_xywh(150.0, 0.0, 80.0, 60.0));  // Clip to half height
+    clip.add_child(Box::new(picture2));
+    println!("5. Wrapped in ClipRectLayer (clip to half height)");
     println!("   Bounds: {:?}\n", clip.bounds());
 
     // Combine in container
@@ -80,7 +78,7 @@ fn main() {
     println!("  ├─ TransformLayer (translate +50, +30)");
     println!("  │   └─ OpacityLayer (0.7)");
     println!("  │       └─ PictureLayer (red rect + white circle)");
-    println!("  └─ ClipLayer (clip to half height)");
+    println!("  └─ ClipRectLayer (clip to half height)");
     println!("      └─ PictureLayer (blue stroked rect)");
 
     println!("\n=== Scene Composition Complete ===");
