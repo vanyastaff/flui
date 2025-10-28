@@ -63,6 +63,7 @@ pub mod app;
 pub mod backend;
 pub mod backends;
 pub mod compositor;
+pub mod devtools;
 pub mod event_router;
 pub mod layer;
 pub mod paint_context;
@@ -70,6 +71,7 @@ pub mod painter;
 pub mod scene;
 pub mod scene_builder;
 pub mod surface;
+
 
 
 
@@ -96,6 +98,10 @@ pub use event_router::EventRouter;
 // Re-export unified app API
 pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
 
+// Re-export devtools integration (when feature enabled)
+#[cfg(feature = "devtools")]
+pub use devtools::{ProfiledCompositor, PerformanceOverlay, FramePhase, FrameStats};
+
 // Re-export backend implementations when features are enabled
 #[cfg(feature = "egui")]
 pub use backends::egui::EguiPainter;
@@ -105,6 +111,7 @@ pub use backends::wgpu::{
     WgpuPainter, WgpuRenderer,
     TextRenderer, TextCommand, TextAlign, TextRenderError,
 };
+
 
 
 

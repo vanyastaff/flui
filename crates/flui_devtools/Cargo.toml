@@ -9,8 +9,8 @@ repository.workspace = true
 description = "Developer tools for FLUI - profiling, debugging, hot reload, and inspection"
 
 [dependencies]
-# Core flui
-flui_core = { path = "../flui_core" }
+# NO dependencies on flui_core to avoid circular dependency
+# flui_types is fine - it's a leaf dependency
 flui_types = { path = "../flui_types" }
 
 # Timing and performance
@@ -41,11 +41,10 @@ parking_lot = "0.12"
 dashmap = "6.1"
 
 [features]
-default = ["profiling", "inspector"]
+default = ["profiling"]
 
-# Core features
+# Core features (all standalone, no flui_core dependency)
 profiling = []
-inspector = []
 timeline = []
 
 # Advanced features
@@ -55,10 +54,9 @@ memory-profiler = ["dhat"]
 remote-debug = ["tokio", "tokio-tungstenite"]
 tracing-support = ["tracing-subscriber"]
 
-# All features
+# All features (no inspector - moved to separate crate)
 full = [
     "profiling",
-    "inspector",
     "timeline",
     "hot-reload",
     "network-monitor",

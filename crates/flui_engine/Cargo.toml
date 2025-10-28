@@ -19,10 +19,13 @@ wgpu = [
     "dep:lyon",
     "dep:pollster",
 ]
+# DevTools integration
+devtools = ["dep:flui_devtools"]
 
 [dependencies]
 # Internal dependencies
 flui_types = { path = "../flui_types" }
+flui_devtools = { path = "../flui_devtools", optional = true }
 
 # Math
 glam = { workspace = true }

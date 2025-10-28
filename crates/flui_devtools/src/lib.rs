@@ -12,12 +12,6 @@
 //! - CPU usage tracking
 //! - Performance timeline with markers
 //!
-//! ## 🔍 Widget Inspector (default)
-//! - Widget tree visualization
-//! - Property inspection
-//! - Layout debugging
-//! - Select widget from screen
-//!
 //! ## ⏱️ Timeline View
 //! - Event timeline visualization
 //! - Frame boundaries
@@ -67,20 +61,6 @@
 //! println!("Frame time: {:.2}ms", stats.total_time_ms());
 //! ```
 //!
-//! ## Widget Inspector
-//!
-//! ```rust,ignore
-//! use flui_devtools::inspector::Inspector;
-//!
-//! let inspector = Inspector::new();
-//! inspector.attach_to_tree(element_tree);
-//!
-//! // Select widget
-//! let widget_info = inspector.select_widget(element_id);
-//! println!("Widget: {:?}", widget_info.widget_type());
-//! println!("Size: {:?}", widget_info.size());
-//! ```
-//!
 //! ## Hot Reload
 //!
 //! ```rust,ignore
@@ -100,9 +80,8 @@
 //!
 //! # Feature Flags
 //!
-//! - `default`: Enables `profiling` and `inspector`
-//! - `profiling`: Performance profiling tools
-//! - `inspector`: Widget tree inspection
+//! - `default`: Enables `profiling` only
+//! - `profiling`: Performance profiling tools (no external dependencies)
 //! - `timeline`: Timeline view for events
 //! - `hot-reload`: File watching and hot reload
 //! - `network-monitor`: HTTP request monitoring
@@ -110,14 +89,15 @@
 //! - `remote-debug`: WebSocket debugging server
 //! - `tracing-support`: Integration with `tracing` crate
 //! - `full`: All features enabled
+//!
+//! **Note**: This crate has NO dependency on `flui_core` to avoid circular dependencies.
+//! Widget inspection is available through separate tools.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 mod common;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
-#[cfg(feature = "inspector")]
-pub mod inspector;
 #[cfg(feature = "memory-profiler")]
 pub mod memory;
 #[cfg(feature = "network-monitor")]
@@ -143,9 +123,6 @@ pub use common::*;
 #[cfg(feature = "profiling")]
 pub use profiler::Profiler;
 
-#[cfg(feature = "inspector")]
-pub use inspector::Inspector;
-
 /// DevTools version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -157,9 +134,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod prelude {
     #[cfg(feature = "profiling")]
     pub use crate::profiler::{Profiler, FramePhase, FrameStats};
-
-    #[cfg(feature = "inspector")]
-    pub use crate::inspector::{Inspector, WidgetInfo};
 
     #[cfg(feature = "timeline")]
     pub use crate::timeline::{Timeline, TimelineEvent};
@@ -177,5 +151,6 @@ mod tests {
         assert!(!VERSION.is_empty());
     }
 }
+
 
 
