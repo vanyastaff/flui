@@ -140,6 +140,9 @@ pub mod prelude {
 
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::HotReloader;
+
+    #[cfg(feature = "memory-profiler")]
+    pub use crate::memory::{MemoryProfiler, MemorySnapshot};
 }
 
 #[cfg(test)]

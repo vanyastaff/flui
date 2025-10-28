@@ -418,3 +418,126 @@ impl Default for FrameTimelineGraph {
         Self::new()
     }
 }
+
+/// Memory usage graph - visual representation of memory consumption
+///
+/// Renders a line graph showing memory usage over time,
+/// making it easy to spot memory leaks and usage patterns.
+#[cfg(all(feature = "devtools", feature = "memory-profiler"))]
+pub struct MemoryGraph {
+    /// Graph position (0.0-1.0, relative to viewport)
+    pub position: (f32, f32),
+
+    /// Graph dimensions in pixels
+    pub width: f32,
+    pub height: f32,
+
+    /// Maximum memory to display (in MB)
+    pub max_memory_mb: f32,
+}
+
+#[cfg(all(feature = "devtools", feature = "memory-profiler"))]
+impl MemoryGraph {
+    /// Create a new memory graph
+    pub fn new() -> Self {
+        Self {
+            position: (0.75, 0.02),
+            width: 200.0,
+            height: 100.0,
+            max_memory_mb: 100.0, // 100MB max
+        }
+    }
+
+    /// Render the memory graph
+    pub fn render(
+        &self,
+        memory_profiler: &flui_devtools::memory::MemoryProfiler,
+        painter: &mut dyn crate::Painter,
+        viewport_size: flui_types::Size,
+    ) {
+        use crate::Paint;
+        use flui_types::{Point, Rect};
+
+        // Get memory history
+        let history = memory_profiler.history();
+        if history.is_empty() {
+            return;
+        }
+
+        // Position in pixels
+        let x = viewport_size.width * self.position.0;
+        let y = viewport_size.height * self.position.1;
+
+        // Draw background
+        let bg_rect = Rect::from_xywh(x, y, self.width, self.height);
+        let bg_paint = Paint {
+            color: [0.0, 0.0, 0.0, 0.75],
+            ..Default::default()
+        };
+        painter.save();
+        painter.rect(bg_rect, &bg_paint);
+
+        // Draw memory line
+        if history.len() > 1 {
+            let line_paint = Paint {
+                color: [0.3, 0.7, 1.0, 0.9], // Blue line
+                stroke_width: 2.0,
+                ..Default::default()
+            };
+
+            let point_width = self.width / (history.len() - 1) as f32;
+
+            for i in 0..history.len() - 1 {
+                let mem1 = history[i].total_mb() as f32;
+                let mem2 = history[i + 1].total_mb() as f32;
+
+                // Normalize to graph height
+                let y1 = y + self.height - (mem1 / self.max_memory_mb * self.height).min(self.height);
+                let y2 = y + self.height - (mem2 / self.max_memory_mb * self.height).min(self.height);
+
+                let x1 = x + i as f32 * point_width;
+                let x2 = x + (i + 1) as f32 * point_width;
+
+                painter.line(Point::new(x1, y1), Point::new(x2, y2), &line_paint);
+            }
+        }
+
+        // Draw current memory value
+        let text_paint = Paint {
+            color: [0.9, 0.9, 0.9, 1.0],
+            ..Default::default()
+        };
+
+        let current_mb = memory_profiler.current_stats().total_mb();
+        let mem_text = format!("Mem: {:.1} MB", current_mb);
+        painter.text(&mem_text, Point::new(x + 5.0, y + 15.0), 11.0, &text_paint);
+
+        // Show peak memory
+        if let Some(peak) = memory_profiler.peak_memory() {
+            let peak_text = format!("Peak: {:.1} MB", peak.total_mb());
+            painter.text(&peak_text, Point::new(x + 5.0, y + 30.0), 10.0, &text_paint);
+        }
+
+        // Show average
+        let avg_text = format!("Avg: {:.1} MB", memory_profiler.average_memory_mb());
+        painter.text(&avg_text, Point::new(x + 5.0, y + 45.0), 10.0, &text_paint);
+
+        // Leak warning
+        if memory_profiler.is_leaking() {
+            let warning_paint = Paint {
+                color: [1.0, 0.3, 0.3, 1.0],
+                ..Default::default()
+            };
+            painter.text("⚠ LEAK?", Point::new(x + 5.0, y + 60.0), 11.0, &warning_paint);
+        }
+
+        painter.restore();
+    }
+}
+
+#[cfg(all(feature = "devtools", feature = "memory-profiler"))]
+impl Default for MemoryGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
