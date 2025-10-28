@@ -5,7 +5,8 @@
 
 use crate::layer::{Layer, ContainerLayer, BoxedLayer};
 use crate::painter::Painter;
-use flui_types::{Rect, Size};
+use crate::event_router::EventRouter;
+use flui_types::{Rect, Size, Event};
 
 /// A complete rendering scene
 ///
@@ -35,6 +36,9 @@ pub struct Scene {
 
     /// Scene metadata (for debugging and optimization)
     metadata: SceneMetadata,
+
+    /// Event router for handling user input
+    event_router: EventRouter,
 }
 
 /// Metadata about the scene
@@ -63,6 +67,7 @@ impl Scene {
             root: ContainerLayer::new(),
             viewport_size,
             metadata: SceneMetadata::default(),
+            event_router: EventRouter::new(),
         }
     }
 
@@ -79,6 +84,7 @@ impl Scene {
             root,
             viewport_size,
             metadata: SceneMetadata::default(),
+            event_router: EventRouter::new(),
         };
         scene.update_metadata();
         scene
@@ -165,6 +171,44 @@ impl Scene {
     /// Get the number of top-level layers
     pub fn layer_count(&self) -> usize {
         self.root.children().len()
+    }
+
+    /// Handle an event in the scene
+    ///
+    /// Routes the event through the layer tree using hit testing for pointer events.
+    ///
+    /// # Arguments
+    /// * `event` - The event to handle
+    ///
+    /// # Returns
+    /// `true` if the event was handled by any layer
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::{Event, PointerEvent, PointerEventData, PointerDeviceKind, Offset};
+    ///
+    /// let data = PointerEventData::new(Offset::new(100.0, 200.0), PointerDeviceKind::Mouse);
+    /// let event = Event::pointer(PointerEvent::Down(data));
+    ///
+    /// if scene.handle_event(&event) {
+    ///     println!("Event was handled!");
+    /// }
+    /// ```
+    pub fn handle_event(&mut self, event: &Event) -> bool {
+        self.event_router.route_event(&mut self.root, event)
+    }
+
+    /// Get the event router
+    ///
+    /// Provides access to event routing state like last pointer position.
+    pub fn event_router(&self) -> &EventRouter {
+        &self.event_router
+    }
+
+    /// Get mutable access to the event router
+    pub fn event_router_mut(&mut self) -> &mut EventRouter {
+        &mut self.event_router
     }
 }
 

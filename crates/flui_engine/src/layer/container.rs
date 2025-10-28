@@ -1,6 +1,6 @@
 //! Container layer - holds multiple child layers
 
-use flui_types::Rect;
+use flui_types::{Rect, Offset, Event, HitTestResult};
 use crate::layer::{Layer, BoxedLayer};
 use crate::painter::Painter;
 
@@ -73,5 +73,33 @@ impl Layer for ContainerLayer {
     fn is_visible(&self) -> bool {
         // Container is visible if any child is visible
         self.children.iter().any(|child| child.is_visible())
+    }
+
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // Test children in reverse order (front to back)
+        // This ensures that topmost layers are hit first
+        let mut hit = false;
+
+        for child in self.children.iter().rev() {
+            if child.is_visible() && child.hit_test(position, result) {
+                hit = true;
+                // Continue testing other children (don't break)
+                // This allows multiple overlapping layers to receive events
+            }
+        }
+
+        hit
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Dispatch to children in reverse order (front to back)
+        // Stop if any child handles the event
+        for child in self.children.iter_mut().rev() {
+            if child.handle_event(event) {
+                return true; // Event handled, stop propagation
+            }
+        }
+
+        false // No child handled the event
     }
 }

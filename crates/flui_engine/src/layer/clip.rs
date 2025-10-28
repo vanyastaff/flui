@@ -3,7 +3,7 @@
 //! This module provides layers that clip their children to specific regions,
 //! following Flutter's ClipRectLayer and ClipRRectLayer architecture.
 
-use flui_types::Rect;
+use flui_types::{Rect, Offset, Event, HitTestResult};
 use crate::layer::{Layer, BoxedLayer};
 use crate::painter::{Painter, RRect};
 
@@ -250,6 +250,33 @@ impl Layer for ClipRectLayer {
     fn debug_description(&self) -> String {
         format!("ClipRectLayer(clip_rect: {:?}, children: {})", self.clip_rect, self.children.len())
     }
+
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // First check if position is within clip rect
+        if !self.clip_rect.contains(position) {
+            return false; // Outside clip region, no hit
+        }
+
+        // Test children in reverse order (front to back)
+        let mut hit = false;
+        for child in self.children.iter().rev() {
+            if child.is_visible() && child.hit_test(position, result) {
+                hit = true;
+            }
+        }
+
+        hit
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Dispatch to children in reverse order (front to back)
+        for child in self.children.iter_mut().rev() {
+            if child.handle_event(event) {
+                return true; // Event handled
+            }
+        }
+        false
+    }
 }
 
 // ============================================================================
@@ -377,6 +404,34 @@ impl Layer for ClipRRectLayer {
 
     fn debug_description(&self) -> String {
         format!("ClipRRectLayer(clip_rrect: {:?}, children: {})", self.clip_rrect, self.children.len())
+    }
+
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // First check if position is within clip rrect
+        // For now, use rectangular hit test (TODO: proper rounded rect hit testing)
+        if !self.clip_rrect.rect.contains(position) {
+            return false; // Outside clip region, no hit
+        }
+
+        // Test children in reverse order (front to back)
+        let mut hit = false;
+        for child in self.children.iter().rev() {
+            if child.is_visible() && child.hit_test(position, result) {
+                hit = true;
+            }
+        }
+
+        hit
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Dispatch to children in reverse order (front to back)
+        for child in self.children.iter_mut().rev() {
+            if child.handle_event(event) {
+                return true; // Event handled
+            }
+        }
+        false
     }
 }
 

@@ -1,6 +1,6 @@
 //! Opacity layer - applies opacity to child layer
 
-use flui_types::Rect;
+use flui_types::{Rect, Offset, Event, HitTestResult};
 use crate::layer::{Layer, BoxedLayer};
 use crate::painter::Painter;
 
@@ -81,5 +81,20 @@ impl Layer for OpacityLayer {
 
     fn is_visible(&self) -> bool {
         self.opacity > 0.0 && self.child.is_visible()
+    }
+
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // Opacity doesn't affect hit testing geometry
+        // Just forward to child
+        if self.opacity > 0.0 {
+            self.child.hit_test(position, result)
+        } else {
+            false // Fully transparent layers don't receive hits
+        }
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Forward event to child
+        self.child.handle_event(event)
     }
 }

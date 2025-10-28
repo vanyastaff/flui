@@ -1,6 +1,6 @@
 //! Transform layer - applies matrix transform to child layer
 
-use flui_types::{Rect, Offset};
+use flui_types::{Rect, Offset, Event, HitTestResult};
 use crate::layer::{Layer, BoxedLayer};
 use crate::painter::Painter;
 
@@ -121,5 +121,46 @@ impl Layer for TransformLayer {
 
     fn is_visible(&self) -> bool {
         self.child.is_visible()
+    }
+
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // Transform the position to child's coordinate space
+        let local_position = match self.transform {
+            Transform::Translate(offset) => {
+                // Inverse translation: subtract offset
+                Offset::new(position.dx - offset.dx, position.dy - offset.dy)
+            }
+            Transform::Rotate(angle) => {
+                // Inverse rotation: rotate by -angle around origin
+                let cos = (-angle).cos();
+                let sin = (-angle).sin();
+                Offset::new(
+                    position.dx * cos - position.dy * sin,
+                    position.dx * sin + position.dy * cos,
+                )
+            }
+            Transform::Scale(scale) => {
+                // Inverse scale: divide by scale
+                if scale.abs() < 0.001 {
+                    return false; // Degenerate scale, no hit
+                }
+                Offset::new(position.dx / scale, position.dy / scale)
+            }
+            Transform::ScaleXY { sx, sy } => {
+                // Inverse non-uniform scale
+                if sx.abs() < 0.001 || sy.abs() < 0.001 {
+                    return false; // Degenerate scale, no hit
+                }
+                Offset::new(position.dx / sx, position.dy / sy)
+            }
+        };
+
+        // Test child with transformed position
+        self.child.hit_test(local_position, result)
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Forward event to child
+        self.child.handle_event(event)
     }
 }
