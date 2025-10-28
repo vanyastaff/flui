@@ -63,9 +63,11 @@ pub mod app;
 pub mod backend;
 pub mod compositor;
 pub mod layer;
+pub mod paint_context;
 pub mod painter;
 pub mod scene;
 pub mod surface;
+
 
 
 
@@ -78,6 +80,7 @@ pub use layer::{
     ContainerLayer, OpacityLayer, TransformLayer, ClipLayer, PictureLayer,
 };
 pub use painter::{Painter, Paint, RRect};
+pub use paint_context::PaintContext;
 pub use scene::{Scene, SceneMetadata};
 pub use compositor::{Compositor, CompositorOptions, CompositionStats};
 pub use surface::{Surface, Frame};
@@ -96,6 +99,7 @@ pub use painter::wgpu::{
     WgpuPainter, WgpuRenderer, RenderError,
     TextRenderer, TextCommand, TextAlign, TextRenderError,
 };
+
 
 
 

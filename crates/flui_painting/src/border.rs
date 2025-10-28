@@ -1,6 +1,7 @@
 //! Border painting implementation
 
-use flui_types::{Rect, styling::{Border, BorderRadius}};
+use flui_types::{Rect, Point, styling::{Border, BorderRadius}};
+use flui_engine::{Painter, Paint, RRect};
 
 /// Painter for borders
 pub struct BorderPainter;
@@ -10,12 +11,12 @@ impl BorderPainter {
     ///
     /// # Arguments
     ///
-    /// * `painter` - The egui painter to draw with
+    /// * `painter` - The backend-agnostic painter to draw with
     /// * `rect` - The rectangle to paint the border around
     /// * `border` - The border to paint
     /// * `border_radius` - Optional border radius for rounded corners
     pub fn paint(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         border: &Border,
         border_radius: Option<BorderRadius>,
@@ -36,62 +37,65 @@ impl BorderPainter {
 
     /// Paint a uniform border (all sides the same)
     fn paint_uniform(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         border: &Border,
         border_radius: Option<BorderRadius>,
     ) {
         let Some(side) = border.top else { return };
 
-        let color = egui::Color32::from_rgba_unmultiplied(
-            side.color.red(),
-            side.color.green(),
-            side.color.blue(),
-            side.color.alpha(),
-        );
+        let color = [
+            side.color.red() as f32 / 255.0,
+            side.color.green() as f32 / 255.0,
+            side.color.blue() as f32 / 255.0,
+            side.color.alpha() as f32 / 255.0,
+        ];
 
-        let stroke = egui::Stroke::new(side.width, color);
-
-        let egui_rect = egui::Rect::from_min_max(
-            egui::pos2(rect.left(), rect.top()),
-            egui::pos2(rect.right(), rect.bottom()),
-        );
-
-        let rounding = if let Some(radius) = border_radius {
-            egui::CornerRadius {
-                nw: radius.top_left.x as u8,
-                ne: radius.top_right.x as u8,
-                sw: radius.bottom_left.x as u8,
-                se: radius.bottom_right.x as u8,
-            }
-        } else {
-            egui::CornerRadius::ZERO
+        let paint = Paint {
+            color,
+            stroke_width: side.width,
+            anti_alias: true,
         };
 
         // Adjust rect for stroke alignment
         let adjusted_rect = if side.stroke_align == 0.0 {
             // Inside stroke - shrink rect by half width
-            egui_rect.shrink(side.width / 2.0)
+            Rect::from_xywh(
+                rect.left() + side.width / 2.0,
+                rect.top() + side.width / 2.0,
+                rect.width() - side.width,
+                rect.height() - side.width,
+            )
         } else if side.stroke_align == 1.0 {
             // Outside stroke - expand rect by half width
-            egui_rect.expand(side.width / 2.0)
+            Rect::from_xywh(
+                rect.left() - side.width / 2.0,
+                rect.top() - side.width / 2.0,
+                rect.width() + side.width,
+                rect.height() + side.width,
+            )
         } else {
             // Center stroke (0.5) or custom - no adjustment needed
-            egui_rect
+            rect
         };
 
-        painter.rect(
-            adjusted_rect,
-            rounding,
-            egui::Color32::TRANSPARENT,
-            stroke,
-            egui::StrokeKind::Middle,
-        );
+        // Draw border based on whether it has rounded corners
+        if let Some(radius) = border_radius {
+            // Use the first corner radius (assuming uniform for now)
+            let corner_radius = radius.top_left.x;
+            let rrect = RRect {
+                rect: adjusted_rect,
+                corner_radius,
+            };
+            painter.rrect(rrect, &paint);
+        } else {
+            painter.rect(adjusted_rect, &paint);
+        }
     }
 
     /// Paint border sides separately (when they differ)
     fn paint_sides(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         border: &Border,
         _border_radius: Option<BorderRadius>,
@@ -103,19 +107,23 @@ impl BorderPainter {
         // Top
         if let Some(top) = border.top {
             if top.is_visible() {
-                let color = egui::Color32::from_rgba_unmultiplied(
-                    top.color.red(),
-                    top.color.green(),
-                    top.color.blue(),
-                    top.color.alpha(),
-                );
+                let color = [
+                    top.color.red() as f32 / 255.0,
+                    top.color.green() as f32 / 255.0,
+                    top.color.blue() as f32 / 255.0,
+                    top.color.alpha() as f32 / 255.0,
+                ];
 
-                painter.line_segment(
-                    [
-                        egui::pos2(rect.left(), rect.top()),
-                        egui::pos2(rect.right(), rect.top()),
-                    ],
-                    egui::Stroke::new(top.width, color),
+                let paint = Paint {
+                    color,
+                    stroke_width: top.width,
+                    anti_alias: true,
+                };
+
+                painter.line(
+                    Point::new(rect.left(), rect.top()),
+                    Point::new(rect.right(), rect.top()),
+                    &paint,
                 );
             }
         }
@@ -123,19 +131,23 @@ impl BorderPainter {
         // Right
         if let Some(right) = border.right {
             if right.is_visible() {
-                let color = egui::Color32::from_rgba_unmultiplied(
-                    right.color.red(),
-                    right.color.green(),
-                    right.color.blue(),
-                    right.color.alpha(),
-                );
+                let color = [
+                    right.color.red() as f32 / 255.0,
+                    right.color.green() as f32 / 255.0,
+                    right.color.blue() as f32 / 255.0,
+                    right.color.alpha() as f32 / 255.0,
+                ];
 
-                painter.line_segment(
-                    [
-                        egui::pos2(rect.right(), rect.top()),
-                        egui::pos2(rect.right(), rect.bottom()),
-                    ],
-                    egui::Stroke::new(right.width, color),
+                let paint = Paint {
+                    color,
+                    stroke_width: right.width,
+                    anti_alias: true,
+                };
+
+                painter.line(
+                    Point::new(rect.right(), rect.top()),
+                    Point::new(rect.right(), rect.bottom()),
+                    &paint,
                 );
             }
         }
@@ -143,19 +155,23 @@ impl BorderPainter {
         // Bottom
         if let Some(bottom) = border.bottom {
             if bottom.is_visible() {
-                let color = egui::Color32::from_rgba_unmultiplied(
-                    bottom.color.red(),
-                    bottom.color.green(),
-                    bottom.color.blue(),
-                    bottom.color.alpha(),
-                );
+                let color = [
+                    bottom.color.red() as f32 / 255.0,
+                    bottom.color.green() as f32 / 255.0,
+                    bottom.color.blue() as f32 / 255.0,
+                    bottom.color.alpha() as f32 / 255.0,
+                ];
 
-                painter.line_segment(
-                    [
-                        egui::pos2(rect.right(), rect.bottom()),
-                        egui::pos2(rect.left(), rect.bottom()),
-                    ],
-                    egui::Stroke::new(bottom.width, color),
+                let paint = Paint {
+                    color,
+                    stroke_width: bottom.width,
+                    anti_alias: true,
+                };
+
+                painter.line(
+                    Point::new(rect.right(), rect.bottom()),
+                    Point::new(rect.left(), rect.bottom()),
+                    &paint,
                 );
             }
         }
@@ -163,19 +179,23 @@ impl BorderPainter {
         // Left
         if let Some(left) = border.left {
             if left.is_visible() {
-                let color = egui::Color32::from_rgba_unmultiplied(
-                    left.color.red(),
-                    left.color.green(),
-                    left.color.blue(),
-                    left.color.alpha(),
-                );
+                let color = [
+                    left.color.red() as f32 / 255.0,
+                    left.color.green() as f32 / 255.0,
+                    left.color.blue() as f32 / 255.0,
+                    left.color.alpha() as f32 / 255.0,
+                ];
 
-                painter.line_segment(
-                    [
-                        egui::pos2(rect.left(), rect.bottom()),
-                        egui::pos2(rect.left(), rect.top()),
-                    ],
-                    egui::Stroke::new(left.width, color),
+                let paint = Paint {
+                    color,
+                    stroke_width: left.width,
+                    anti_alias: true,
+                };
+
+                painter.line(
+                    Point::new(rect.left(), rect.bottom()),
+                    Point::new(rect.left(), rect.top()),
+                    &paint,
                 );
             }
         }

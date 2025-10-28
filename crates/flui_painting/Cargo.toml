@@ -9,10 +9,7 @@ repository.workspace = true
 
 [dependencies]
 flui_types = { path = "../flui_types" }
-flui_core = { path = "../flui_core" }
-
-# Graphics
-egui.workspace = true
+flui_engine = { path = "../flui_engine" }
 
 # Math for transformations
 glam.workspace = true

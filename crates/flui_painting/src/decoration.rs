@@ -1,6 +1,7 @@
 //! BoxDecoration painting implementation
 
 use flui_types::{Rect, styling::BoxDecoration};
+use flui_engine::{Painter, Paint, RRect};
 use crate::{BorderPainter, GradientPainter, ShadowPainter};
 
 /// Painter for BoxDecoration
@@ -17,7 +18,7 @@ impl BoxDecorationPainter {
     ///
     /// # Arguments
     ///
-    /// * `painter` - The egui painter to draw with
+    /// * `painter` - The backend-agnostic painter to draw with
     /// * `rect` - The rectangle to paint the decoration in
     /// * `decoration` - The box decoration to paint
     ///
@@ -27,7 +28,7 @@ impl BoxDecorationPainter {
     /// 2. Background color or gradient
     /// 3. Border (on top)
     pub fn paint(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         decoration: &BoxDecoration,
     ) {
@@ -44,31 +45,30 @@ impl BoxDecorationPainter {
             GradientPainter::paint(painter, rect, gradient);
         } else if let Some(color) = decoration.color {
             // Solid color background
-            let egui_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.right(), rect.bottom()),
-            );
+            let paint_color = [
+                color.red() as f32 / 255.0,
+                color.green() as f32 / 255.0,
+                color.blue() as f32 / 255.0,
+                color.alpha() as f32 / 255.0,
+            ];
 
-            let rounding = if let Some(radius) = border_radius {
-                egui::CornerRadius::same(radius as u8)
-            } else {
-                egui::CornerRadius::ZERO
+            let paint = Paint {
+                color: paint_color,
+                stroke_width: 0.0,
+                anti_alias: true,
             };
 
-            let egui_color = egui::Color32::from_rgba_unmultiplied(
-                color.red(),
-                color.green(),
-                color.blue(),
-                color.alpha(),
-            );
-
-            painter.rect(
-                egui_rect,
-                rounding,
-                egui_color,
-                egui::Stroke::NONE,
-                egui::StrokeKind::Outside,
-            );
+            if let Some(radius) = border_radius {
+                // Rounded rectangle
+                let rrect = RRect {
+                    rect,
+                    corner_radius: radius,
+                };
+                painter.rrect(rrect, &paint);
+            } else {
+                // Sharp rectangle
+                painter.rect(rect, &paint);
+            }
         }
 
         // 3. Paint border (if any)
@@ -81,7 +81,7 @@ impl BoxDecorationPainter {
     ///
     /// Useful for optimizations when shadows/border are not needed
     pub fn paint_background(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         decoration: &BoxDecoration,
     ) {
@@ -90,31 +90,28 @@ impl BoxDecorationPainter {
         if let Some(ref gradient) = decoration.gradient {
             GradientPainter::paint(painter, rect, gradient);
         } else if let Some(color) = decoration.color {
-            let egui_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.right(), rect.bottom()),
-            );
+            let paint_color = [
+                color.red() as f32 / 255.0,
+                color.green() as f32 / 255.0,
+                color.blue() as f32 / 255.0,
+                color.alpha() as f32 / 255.0,
+            ];
 
-            let rounding = if let Some(radius) = border_radius {
-                egui::CornerRadius::same(radius as u8)
-            } else {
-                egui::CornerRadius::ZERO
+            let paint = Paint {
+                color: paint_color,
+                stroke_width: 0.0,
+                anti_alias: true,
             };
 
-            let egui_color = egui::Color32::from_rgba_unmultiplied(
-                color.red(),
-                color.green(),
-                color.blue(),
-                color.alpha(),
-            );
-
-            painter.rect(
-                egui_rect,
-                rounding,
-                egui_color,
-                egui::Stroke::NONE,
-                egui::StrokeKind::Outside,
-            );
+            if let Some(radius) = border_radius {
+                let rrect = RRect {
+                    rect,
+                    corner_radius: radius,
+                };
+                painter.rrect(rrect, &paint);
+            } else {
+                painter.rect(rect, &paint);
+            }
         }
     }
 
@@ -122,7 +119,7 @@ impl BoxDecorationPainter {
     ///
     /// Useful for optimizations when only border is needed
     pub fn paint_border(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         decoration: &BoxDecoration,
     ) {
@@ -135,7 +132,7 @@ impl BoxDecorationPainter {
     ///
     /// Useful for optimizations when only shadows are needed
     pub fn paint_shadows(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         decoration: &BoxDecoration,
     ) {

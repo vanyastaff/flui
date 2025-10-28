@@ -1,10 +1,107 @@
 //! Decoration types for styling
 
 use crate::geometry::Rect;
+use crate::layout::Alignment;
+use crate::painting::Image;
 use crate::styling::{Border, BorderRadius, BoxShadow, Color, Gradient};
 
 // Re-export painting types that are commonly used with decorations
 pub use crate::painting::{BlendMode, BoxFit, ColorFilter, ImageRepeat};
+
+/// An image that is part of a [BoxDecoration].
+///
+/// Similar to Flutter's `DecorationImage`.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_types::styling::DecorationImage;
+/// use flui_types::painting::{Image, BoxFit, ImageRepeat};
+/// use flui_types::layout::Alignment;
+///
+/// let decoration_image = DecorationImage {
+///     image,
+///     fit: Some(BoxFit::Cover),
+///     alignment: Alignment::CENTER,
+///     repeat: ImageRepeat::NoRepeat,
+///     opacity: 1.0,
+///     color_filter: None,
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DecorationImage {
+    /// The image to be painted.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub image: Image,
+
+    /// How to inscribe the image into the space allocated during layout.
+    pub fit: Option<BoxFit>,
+
+    /// How to align the image within its bounds.
+    pub alignment: Alignment,
+
+    /// How to repeat the image.
+    pub repeat: ImageRepeat,
+
+    /// The opacity to apply to the image.
+    ///
+    /// 0.0 = fully transparent, 1.0 = fully opaque.
+    pub opacity: f32,
+
+    /// A color filter to apply to the image before painting it.
+    pub color_filter: Option<ColorFilter>,
+}
+
+impl DecorationImage {
+    /// Creates a new decoration image.
+    #[must_use]
+    pub fn new(image: Image) -> Self {
+        Self {
+            image,
+            fit: None,
+            alignment: Alignment::CENTER,
+            repeat: ImageRepeat::NoRepeat,
+            opacity: 1.0,
+            color_filter: None,
+        }
+    }
+
+    /// Sets the fit mode for the image.
+    #[must_use]
+    pub fn with_fit(mut self, fit: BoxFit) -> Self {
+        self.fit = Some(fit);
+        self
+    }
+
+    /// Sets the alignment for the image.
+    #[must_use]
+    pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Sets the repeat mode for the image.
+    #[must_use]
+    pub const fn with_repeat(mut self, repeat: ImageRepeat) -> Self {
+        self.repeat = repeat;
+        self
+    }
+
+    /// Sets the opacity for the image.
+    #[must_use]
+    pub const fn with_opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
+    }
+
+    /// Sets a color filter for the image.
+    #[must_use]
+    pub const fn with_color_filter(mut self, color_filter: ColorFilter) -> Self {
+        self.color_filter = Some(color_filter);
+        self
+    }
+}
 
 /// Base trait for decorations.
 ///
@@ -37,6 +134,7 @@ pub trait Decoration: std::fmt::Debug {
 ///     border_radius: Some(BorderRadius::circular(10.0)),
 ///     box_shadow: None,
 ///     gradient: None,
+///     image: None,
 /// };
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +142,9 @@ pub trait Decoration: std::fmt::Debug {
 pub struct BoxDecoration {
     /// The color to fill the box with.
     pub color: Option<Color>,
+
+    /// An image to paint above the background color or gradient.
+    pub image: Option<DecorationImage>,
 
     /// A border to draw above the background.
     pub border: Option<Border>,
@@ -65,6 +166,7 @@ impl BoxDecoration {
     pub const fn new() -> Self {
         Self {
             color: None,
+            image: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -76,6 +178,7 @@ impl BoxDecoration {
     pub const fn with_color(color: Color) -> Self {
         Self {
             color: Some(color),
+            image: None,
             border: None,
             border_radius: None,
             box_shadow: None,
@@ -87,10 +190,23 @@ impl BoxDecoration {
     pub fn with_gradient(gradient: Gradient) -> Self {
         Self {
             color: None,
+            image: None,
             border: None,
             border_radius: None,
             box_shadow: None,
             gradient: Some(gradient),
+        }
+    }
+
+    /// Creates a box decoration with an image.
+    pub fn with_image(image: DecorationImage) -> Self {
+        Self {
+            color: None,
+            image: Some(image),
+            border: None,
+            border_radius: None,
+            box_shadow: None,
+            gradient: None,
         }
     }
 
@@ -164,6 +280,7 @@ impl BoxDecoration {
 
         Self {
             color,
+            image: None, // TODO: interpolate images
             border,
             border_radius,
             box_shadow,
@@ -191,70 +308,6 @@ impl Decoration for BoxDecoration {
 /// An image for a decoration.
 ///
 /// Similar to Flutter's `DecorationImage`.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DecorationImage {
-    /// How the image should be inscribed into the box.
-    pub fit: BoxFit,
-
-    /// How to align the image within its bounds.
-    pub alignment: crate::layout::Alignment,
-
-    /// The center slice for 9-slice scaling.
-    ///
-    /// If specified, the image will be scaled using 9-slice scaling,
-    /// where the center rectangle is stretched while the edges and
-    /// corners maintain their original dimensions.
-    pub center_slice: Option<Rect>,
-
-    /// Whether to repeat the image to fill the box.
-    pub repeat: ImageRepeat,
-
-    /// The opacity to apply to the image.
-    pub opacity: f32,
-
-    /// A color filter to apply to the image.
-    pub color_filter: Option<ColorFilter>,
-
-    /// Whether to invert the colors of the image.
-    pub invert_colors: bool,
-
-    /// Whether the image should be flipped horizontally in right-to-left contexts.
-    pub match_text_direction: bool,
-}
-
-impl DecorationImage {
-    /// Creates a new decoration image.
-    pub fn new(fit: BoxFit, alignment: crate::layout::Alignment) -> Self {
-        Self {
-            fit,
-            alignment,
-            center_slice: None,
-            repeat: ImageRepeat::NoRepeat,
-            opacity: 1.0,
-            color_filter: None,
-            invert_colors: false,
-            match_text_direction: false,
-        }
-    }
-}
-
-impl Default for DecorationImage {
-    fn default() -> Self {
-        Self {
-            fit: BoxFit::Contain,
-            alignment: crate::layout::Alignment::CENTER,
-            center_slice: None,
-            repeat: ImageRepeat::NoRepeat,
-            opacity: 1.0,
-            color_filter: None,
-            invert_colors: false,
-            match_text_direction: false,
-        }
-    }
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

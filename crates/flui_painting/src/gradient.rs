@@ -1,6 +1,7 @@
 //! Gradient painting implementation
 
-use flui_types::{Rect, styling::{Gradient, LinearGradient, RadialGradient, SweepGradient}};
+use flui_types::{Rect, Point, styling::{Gradient, LinearGradient, RadialGradient, SweepGradient}};
+use flui_engine::Painter;
 
 /// Painter for gradients
 pub struct GradientPainter;
@@ -10,11 +11,11 @@ impl GradientPainter {
     ///
     /// # Arguments
     ///
-    /// * `painter` - The egui painter to draw with
+    /// * `painter` - The backend-agnostic painter to draw with
     /// * `rect` - The rectangle to paint the gradient in
     /// * `gradient` - The gradient to paint
     pub fn paint(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         gradient: &Gradient,
     ) {
@@ -25,51 +26,38 @@ impl GradientPainter {
         }
     }
 
-    /// Paint a linear gradient using colored mesh
+    /// Convert flui Color to RGBA f32 array
+    fn color_to_rgba(color: &flui_types::styling::Color) -> [f32; 4] {
+        [
+            color.red() as f32 / 255.0,
+            color.green() as f32 / 255.0,
+            color.blue() as f32 / 255.0,
+            color.alpha() as f32 / 255.0,
+        ]
+    }
+
+    /// Paint a linear gradient
     fn paint_linear(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         gradient: &LinearGradient,
     ) {
-        // Convert colors to egui
-        let colors: Vec<egui::Color32> = gradient
-            .colors
-            .iter()
-            .map(|c| egui::Color32::from_rgba_unmultiplied(
-                c.red(),
-                c.green(),
-                c.blue(),
-                c.alpha(),
-            ))
-            .collect();
-
-        if colors.is_empty() {
+        if gradient.colors.is_empty() {
             return;
         }
 
-        // Single color - just fill with solid color
-        if colors.len() == 1 {
-            let egui_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.right(), rect.bottom()),
-            );
-            painter.rect(
-                egui_rect,
-                egui::CornerRadius::ZERO,
-                colors[0],
-                egui::Stroke::NONE,
-                egui::StrokeKind::Outside,
-            );
+        if gradient.colors.len() == 1 {
+            // Single color - just fill
+            let paint = flui_engine::Paint {
+                color: Self::color_to_rgba(&gradient.colors[0]),
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
+            painter.rect(rect, &paint);
             return;
         }
 
-        // Build mesh with colored vertices for multi-stop gradient
-        let egui_rect = egui::Rect::from_min_max(
-            egui::pos2(rect.left(), rect.top()),
-            egui::pos2(rect.right(), rect.bottom()),
-        );
-
-        // Determine gradient direction
+        // Check if it's horizontal or vertical gradient
         let is_horizontal = (gradient.begin.x - 0.0).abs() < 0.01
             && (gradient.end.x - 1.0).abs() < 0.01
             && (gradient.begin.y - gradient.end.y).abs() < 0.01;
@@ -78,427 +66,75 @@ impl GradientPainter {
             && (gradient.end.y - 1.0).abs() < 0.01
             && (gradient.begin.x - gradient.end.x).abs() < 0.01;
 
-        // Number of segments for smooth gradient
-        let num_segments = (colors.len() - 1).max(1) * 8; // 8 segments per color stop
-
-        let mut mesh = egui::Mesh::default();
-        mesh.reserve_triangles(num_segments * 2); // 2 triangles per segment
-        mesh.reserve_vertices(num_segments * 2 + 2); // vertices along the gradient
+        // For now, only support 2-color gradients through Painter trait methods
+        // TODO: Support multi-stop gradients with custom mesh rendering
+        let start_color = Self::color_to_rgba(&gradient.colors[0]);
+        let end_color = Self::color_to_rgba(gradient.colors.last().unwrap());
 
         if is_horizontal {
-            // Horizontal gradient
-            Self::build_horizontal_gradient_mesh(
-                &mut mesh,
-                egui_rect,
-                &colors,
-                gradient.stops.as_deref(),
-                num_segments,
-            );
+            painter.horizontal_gradient(rect, start_color, end_color);
         } else if is_vertical {
-            // Vertical gradient
-            Self::build_vertical_gradient_mesh(
-                &mut mesh,
-                egui_rect,
-                &colors,
-                gradient.stops.as_deref(),
-                num_segments,
-            );
+            painter.vertical_gradient(rect, start_color, end_color);
         } else {
-            // Diagonal or custom angle gradient
-            Self::build_angled_gradient_mesh(
-                &mut mesh,
-                egui_rect,
-                &colors,
-                gradient.stops.as_deref(),
-                gradient.begin,
-                gradient.end,
-                num_segments,
-            );
-        }
-
-        painter.add(egui::Shape::mesh(mesh));
-    }
-
-    /// Build horizontal gradient mesh
-    fn build_horizontal_gradient_mesh(
-        mesh: &mut egui::Mesh,
-        rect: egui::Rect,
-        colors: &[egui::Color32],
-        stops: Option<&[f32]>,
-        num_segments: usize,
-    ) {
-        let y_top = rect.top();
-        let y_bottom = rect.bottom();
-        let x_start = rect.left();
-        let width = rect.width();
-
-        for i in 0..=num_segments {
-            let t = i as f32 / num_segments as f32;
-            let x = x_start + width * t;
-
-            // Interpolate color at position t
-            let color = Self::interpolate_color(colors, stops, t);
-
-            // Add two vertices (top and bottom)
-            let idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(egui::pos2(x, y_top), color);
-            mesh.colored_vertex(egui::pos2(x, y_bottom), color);
-
-            // Add triangles (except for first column)
-            if i > 0 {
-                // Triangle 1: (prev_top, curr_top, prev_bottom)
-                mesh.add_triangle(idx - 2, idx, idx - 1);
-                // Triangle 2: (curr_top, curr_bottom, prev_bottom)
-                mesh.add_triangle(idx, idx + 1, idx - 1);
-            }
+            // Diagonal - approximate with vertical for now
+            // TODO: Implement angled gradients
+            painter.vertical_gradient(rect, start_color, end_color);
         }
     }
 
-    /// Build vertical gradient mesh
-    fn build_vertical_gradient_mesh(
-        mesh: &mut egui::Mesh,
-        rect: egui::Rect,
-        colors: &[egui::Color32],
-        stops: Option<&[f32]>,
-        num_segments: usize,
-    ) {
-        let x_left = rect.left();
-        let x_right = rect.right();
-        let y_start = rect.top();
-        let height = rect.height();
-
-        for i in 0..=num_segments {
-            let t = i as f32 / num_segments as f32;
-            let y = y_start + height * t;
-
-            // Interpolate color at position t
-            let color = Self::interpolate_color(colors, stops, t);
-
-            // Add two vertices (left and right)
-            let idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(egui::pos2(x_left, y), color);
-            mesh.colored_vertex(egui::pos2(x_right, y), color);
-
-            // Add triangles (except for first row)
-            if i > 0 {
-                // Triangle 1: (prev_left, curr_left, prev_right)
-                mesh.add_triangle(idx - 2, idx, idx - 1);
-                // Triangle 2: (curr_left, curr_right, prev_right)
-                mesh.add_triangle(idx, idx + 1, idx - 1);
-            }
-        }
-    }
-
-    /// Build angled gradient mesh
-    fn build_angled_gradient_mesh(
-        mesh: &mut egui::Mesh,
-        rect: egui::Rect,
-        colors: &[egui::Color32],
-        stops: Option<&[f32]>,
-        begin: flui_types::layout::Alignment,
-        end: flui_types::layout::Alignment,
-        num_segments: usize,
-    ) {
-        // Calculate gradient direction vector
-        let start_x = rect.left() + rect.width() * begin.x;
-        let start_y = rect.top() + rect.height() * begin.y;
-        let end_x = rect.left() + rect.width() * end.x;
-        let end_y = rect.top() + rect.height() * end.y;
-
-        let dx = end_x - start_x;
-        let dy = end_y - start_y;
-        let length = (dx * dx + dy * dy).sqrt();
-
-        if length < 0.001 {
-            // Degenerate gradient - just fill with first color
-            Self::build_horizontal_gradient_mesh(mesh, rect, &colors[0..1], None, 1);
-            return;
-        }
-
-        // Perpendicular vector for gradient strips
-        let perp_x = -dy / length;
-        let perp_y = dx / length;
-
-        // Use rect diagonal as perpendicular extent
-        let perp_extent = (rect.width() * rect.width() + rect.height() * rect.height()).sqrt();
-
-        for i in 0..=num_segments {
-            let t = i as f32 / num_segments as f32;
-
-            // Position along gradient direction
-            let px = start_x + dx * t;
-            let py = start_y + dy * t;
-
-            // Interpolate color
-            let color = Self::interpolate_color(colors, stops, t);
-
-            // Create vertices perpendicular to gradient direction
-            let idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(
-                egui::pos2(px - perp_x * perp_extent, py - perp_y * perp_extent),
-                color,
-            );
-            mesh.colored_vertex(
-                egui::pos2(px + perp_x * perp_extent, py + perp_y * perp_extent),
-                color,
-            );
-
-            // Add triangles
-            if i > 0 {
-                mesh.add_triangle(idx - 2, idx, idx - 1);
-                mesh.add_triangle(idx, idx + 1, idx - 1);
-            }
-        }
-    }
-
-    /// Interpolate color at position t using gradient stops
-    fn interpolate_color(
-        colors: &[egui::Color32],
-        stops: Option<&[f32]>,
-        t: f32,
-    ) -> egui::Color32 {
-        if colors.is_empty() {
-            return egui::Color32::TRANSPARENT;
-        }
-
-        if colors.len() == 1 {
-            return colors[0];
-        }
-
-        // Use custom stops if provided, otherwise evenly distribute
-        let stops_vec: Vec<f32> = if let Some(s) = stops {
-            s.to_vec()
-        } else {
-            (0..colors.len())
-                .map(|i| i as f32 / (colors.len() - 1) as f32)
-                .collect()
-        };
-
-        // Find which color segment we're in
-        for i in 0..colors.len() - 1 {
-            let stop_start = stops_vec[i];
-            let stop_end = stops_vec[i + 1];
-
-            if t >= stop_start && t <= stop_end {
-                // Interpolate between colors[i] and colors[i+1]
-                let segment_t = if (stop_end - stop_start).abs() < 0.001 {
-                    0.0
-                } else {
-                    (t - stop_start) / (stop_end - stop_start)
-                };
-
-                return Self::lerp_color32(colors[i], colors[i + 1], segment_t);
-            }
-        }
-
-        // If t is beyond last stop, use last color
-        *colors.last().unwrap()
-    }
-
-    /// Linear interpolation between two colors
-    fn lerp_color32(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
-        let t = t.clamp(0.0, 1.0);
-        egui::Color32::from_rgba_unmultiplied(
-            (a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8,
-            (a.g() as f32 + (b.g() as f32 - a.g() as f32) * t) as u8,
-            (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
-            (a.a() as f32 + (b.a() as f32 - a.a() as f32) * t) as u8,
-        )
-    }
-
-    /// Paint a radial gradient using colored mesh
+    /// Paint a radial gradient
     fn paint_radial(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         gradient: &RadialGradient,
     ) {
-        // Convert colors to egui
-        let colors: Vec<egui::Color32> = gradient
-            .colors
-            .iter()
-            .map(|c| egui::Color32::from_rgba_unmultiplied(
-                c.red(),
-                c.green(),
-                c.blue(),
-                c.alpha(),
-            ))
-            .collect();
-
-        if colors.is_empty() {
+        if gradient.colors.is_empty() {
             return;
         }
 
-        // Single color - just fill
-        if colors.len() == 1 {
-            let egui_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.right(), rect.bottom()),
-            );
-            painter.rect(
-                egui_rect,
-                egui::CornerRadius::ZERO,
-                colors[0],
-                egui::Stroke::NONE,
-                egui::StrokeKind::Outside,
-            );
+        if gradient.colors.len() == 1 {
+            // Single color - just fill
+            let paint = flui_engine::Paint {
+                color: Self::color_to_rgba(&gradient.colors[0]),
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
+            painter.rect(rect, &paint);
             return;
         }
 
         // Calculate center position
         let center_x = rect.left() + rect.width() * gradient.center.x;
         let center_y = rect.top() + rect.height() * gradient.center.y;
+        let center = Point::new(center_x, center_y);
 
-        // Calculate radius (normalized to rect size)
+        // Calculate radius
         let max_dim = rect.width().max(rect.height());
-        let radius = gradient.radius * max_dim;
+        let inner_radius = 0.0;
+        let outer_radius = gradient.radius * max_dim;
 
-        // Number of radial segments and angular segments
-        let num_radial = (colors.len() - 1).max(1) * 8; // 8 segments per color stop
-        let num_angular = 32; // 32 segments around the circle
+        let start_color = Self::color_to_rgba(&gradient.colors[0]);
+        let end_color = Self::color_to_rgba(gradient.colors.last().unwrap());
 
-        let mut mesh = egui::Mesh::default();
-        mesh.reserve_triangles(num_radial * num_angular * 2);
-        mesh.reserve_vertices((num_radial + 1) * num_angular + 1);
-
-        // Center vertex
-        let center_color = Self::interpolate_color(&colors, gradient.stops.as_deref(), 0.0);
-        mesh.colored_vertex(egui::pos2(center_x, center_y), center_color);
-        let center_idx = 0u32;
-
-        // Build concentric circles
-        for ring in 0..=num_radial {
-            let t = ring as f32 / num_radial as f32;
-            let r = radius * t;
-            let color = Self::interpolate_color(&colors, gradient.stops.as_deref(), t);
-
-            // Add vertices around this ring
-            for seg in 0..num_angular {
-                let angle = (seg as f32 / num_angular as f32) * std::f32::consts::TAU;
-                let x = center_x + r * angle.cos();
-                let y = center_y + r * angle.sin();
-
-                mesh.colored_vertex(egui::pos2(x, y), color);
-            }
-        }
-
-        // Create triangles
-        // First ring connects to center
-        for seg in 0..num_angular {
-            let next_seg = (seg + 1) % num_angular;
-            let v1 = center_idx;
-            let v2 = 1 + seg as u32;
-            let v3 = 1 + next_seg as u32;
-            mesh.add_triangle(v1, v2, v3);
-        }
-
-        // Remaining rings connect to previous ring
-        for ring in 1..=num_radial {
-            let prev_ring_start = (1 + (ring - 1) * num_angular) as u32;
-            let curr_ring_start = (1 + ring * num_angular) as u32;
-
-            for seg in 0..num_angular {
-                let next_seg = (seg + 1) % num_angular;
-
-                let prev_v1 = prev_ring_start + seg as u32;
-                let prev_v2 = prev_ring_start + next_seg as u32;
-                let curr_v1 = curr_ring_start + seg as u32;
-                let curr_v2 = curr_ring_start + next_seg as u32;
-
-                // Two triangles per segment
-                mesh.add_triangle(prev_v1, curr_v1, prev_v2);
-                mesh.add_triangle(curr_v1, curr_v2, prev_v2);
-            }
-        }
-
-        painter.add(egui::Shape::mesh(mesh));
+        painter.radial_gradient(center, inner_radius, outer_radius, start_color, end_color);
     }
 
-    /// Paint a sweep gradient (conical gradient) using colored mesh
+    /// Paint a sweep gradient (conical gradient)
     fn paint_sweep(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
-        gradient: &SweepGradient,
+        _gradient: &SweepGradient,
     ) {
-        // Convert colors to egui
-        let colors: Vec<egui::Color32> = gradient
-            .colors
-            .iter()
-            .map(|c| egui::Color32::from_rgba_unmultiplied(
-                c.red(),
-                c.green(),
-                c.blue(),
-                c.alpha(),
-            ))
-            .collect();
-
-        if colors.is_empty() {
-            return;
+        // TODO: Implement sweep gradients
+        // For now, just fill with first color as a fallback
+        if let Some(first_color) = _gradient.colors.first() {
+            let paint = flui_engine::Paint {
+                color: Self::color_to_rgba(first_color),
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
+            painter.rect(rect, &paint);
         }
-
-        // Single color - just fill
-        if colors.len() == 1 {
-            let egui_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.right(), rect.bottom()),
-            );
-            painter.rect(
-                egui_rect,
-                egui::CornerRadius::ZERO,
-                colors[0],
-                egui::Stroke::NONE,
-                egui::StrokeKind::Outside,
-            );
-            return;
-        }
-
-        // Calculate center position
-        let center_x = rect.left() + rect.width() * gradient.center.x;
-        let center_y = rect.top() + rect.height() * gradient.center.y;
-
-        // Calculate radius to cover the whole rect
-        let radius = ((rect.width() * rect.width() + rect.height() * rect.height()) / 4.0).sqrt()
-            * 2.0; // Ensure it covers corners
-
-        // Number of angular segments
-        let num_segments = (colors.len() - 1).max(1) * 16; // 16 segments per color stop
-
-        let mut mesh = egui::Mesh::default();
-        mesh.reserve_triangles(num_segments);
-        mesh.reserve_vertices(num_segments + 1);
-
-        // Center vertex (use average color)
-        let center_color = Self::interpolate_color(&colors, gradient.stops.as_deref(), 0.5);
-        mesh.colored_vertex(egui::pos2(center_x, center_y), center_color);
-        let center_idx = 0u32;
-
-        // Create vertices around the circle
-        let start_angle = gradient.start_angle;
-        let end_angle = gradient.end_angle;
-        let angle_range = end_angle - start_angle;
-
-        for seg in 0..=num_segments {
-            let t = seg as f32 / num_segments as f32;
-            let angle = start_angle + angle_range * t;
-
-            // Wrap t for color interpolation (sweep gradients typically wrap)
-            let color_t = t % 1.0;
-            let color = Self::interpolate_color(&colors, gradient.stops.as_deref(), color_t);
-
-            let x = center_x + radius * angle.cos();
-            let y = center_y + radius * angle.sin();
-
-            mesh.colored_vertex(egui::pos2(x, y), color);
-        }
-
-        // Create triangles connecting center to edge
-        for seg in 0..num_segments {
-            let v1 = center_idx;
-            let v2 = 1 + seg as u32;
-            let v3 = 1 + (seg + 1) as u32;
-            mesh.add_triangle(v1, v2, v3);
-        }
-
-        painter.add(egui::Shape::mesh(mesh));
     }
 }
 

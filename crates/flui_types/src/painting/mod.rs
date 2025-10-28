@@ -16,5 +16,5 @@ pub use canvas::{
     TileMode, VertexMode,
 };
 pub use clipping::{AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape};
-pub use image::{BoxFit, ColorFilter, FittedSizes, ImageConfiguration, ImageRepeat};
+pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
 pub use shader::{ImageShader, MaskFilter, Shader};

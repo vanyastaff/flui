@@ -3,6 +3,135 @@
 use crate::geometry::Size;
 use crate::painting::BlendMode;
 use crate::styling::Color;
+use std::sync::Arc;
+
+/// A handle to an image resource.
+///
+/// Similar to Flutter's `ui.Image`.
+///
+/// This is an opaque handle that represents an image loaded into memory.
+/// The actual image data is managed by the rendering backend.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_types::painting::Image;
+///
+/// // Images are typically created by image providers
+/// let image = Image::from_rgba8(100, 100, vec![255; 100 * 100 * 4]);
+/// println!("Image size: {}x{}", image.width(), image.height());
+/// ```
+#[derive(Clone, Debug)]
+pub struct Image {
+    /// The width of the image in pixels.
+    width: u32,
+
+    /// The height of the image in pixels.
+    height: u32,
+
+    /// The image data (RGBA8 format).
+    /// Wrapped in Arc for cheap cloning.
+    data: Arc<Vec<u8>>,
+}
+
+impl Image {
+    /// Creates a new image from RGBA8 pixel data.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - The width of the image in pixels
+    /// * `height` - The height of the image in pixels
+    /// * `data` - The pixel data in RGBA8 format (4 bytes per pixel)
+    ///
+    /// # Panics
+    ///
+    /// Panics if the data length doesn't match `width * height * 4`.
+    #[must_use]
+    pub fn from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Self {
+        assert_eq!(
+            data.len(),
+            (width * height * 4) as usize,
+            "Image data length must be width * height * 4"
+        );
+
+        Self {
+            width,
+            height,
+            data: Arc::new(data),
+        }
+    }
+
+    /// Creates a new image from RGBA8 pixel data without validation.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the data length matches `width * height * 4`.
+    #[must_use]
+    pub fn from_rgba8_unchecked(width: u32, height: u32, data: Vec<u8>) -> Self {
+        Self {
+            width,
+            height,
+            data: Arc::new(data),
+        }
+    }
+
+    /// Returns the width of the image in pixels.
+    #[inline]
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns the height of the image in pixels.
+    #[inline]
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Returns the size of the image.
+    #[inline]
+    #[must_use]
+    pub fn size(&self) -> Size {
+        Size::new(self.width as f32, self.height as f32)
+    }
+
+    /// Returns a reference to the pixel data.
+    ///
+    /// The data is in RGBA8 format (4 bytes per pixel, row-major order).
+    #[inline]
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Returns the number of bytes used by this image.
+    #[inline]
+    #[must_use]
+    pub fn byte_count(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Creates a clone of the image that shares the underlying data.
+    ///
+    /// This is a cheap operation because the data is reference-counted.
+    #[inline]
+    #[must_use]
+    pub fn clone_handle(&self) -> Self {
+        self.clone()
+    }
+}
+
+impl PartialEq for Image {
+    /// Images are equal if they have the same dimensions and point to the same data.
+    ///
+    /// Note: This uses Arc pointer equality, not pixel-by-pixel comparison.
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width
+            && self.height == other.height
+            && Arc::ptr_eq(&self.data, &other.data)
+    }
+}
 
 /// How an image should be inscribed into a box.
 ///

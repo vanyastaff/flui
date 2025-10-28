@@ -40,7 +40,7 @@ impl Default for Paint {
 }
 
 /// Rounded rectangle
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RRect {
     pub rect: Rect,
     pub corner_radius: f32,

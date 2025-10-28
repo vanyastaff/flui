@@ -1,6 +1,7 @@
 //! Shadow painting implementation
 
-use flui_types::{Rect, styling::BoxShadow};
+use flui_types::{ Rect, styling::BoxShadow};
+use flui_engine::{Painter, Paint, RRect};
 
 /// Painter for box shadows
 pub struct ShadowPainter;
@@ -10,12 +11,12 @@ impl ShadowPainter {
     ///
     /// # Arguments
     ///
-    /// * `painter` - The egui painter to draw with
+    /// * `painter` - The backend-agnostic painter to draw with
     /// * `rect` - The rectangle to paint shadows around
     /// * `shadows` - The list of box shadows to paint
     /// * `border_radius` - Optional border radius for rounded shadows
     pub fn paint(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         shadows: &[BoxShadow],
         border_radius: Option<f32>,
@@ -27,105 +28,71 @@ impl ShadowPainter {
 
     /// Paint a single box shadow
     fn paint_single(
-        painter: &egui::Painter,
+        painter: &mut dyn Painter,
         rect: Rect,
         shadow: &BoxShadow,
         border_radius: Option<f32>,
     ) {
-        // Convert Flui types to egui types
-        let shadow_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                rect.left() + shadow.offset.dx,
-                rect.top() + shadow.offset.dy,
-            ),
-            egui::vec2(rect.width(), rect.height()),
+        // Calculate shadow rect with offset
+        let shadow_rect = Rect::from_xywh(
+            rect.left() + shadow.offset.dx,
+            rect.top() + shadow.offset.dy,
+            rect.width(),
+            rect.height(),
         );
 
-        // Expand rect by spread radius
+        // Adjust for spread radius
         let shadow_rect = if shadow.spread_radius > 0.0 {
-            shadow_rect.expand(shadow.spread_radius)
+            Rect::from_xywh(
+                shadow_rect.left() - shadow.spread_radius,
+                shadow_rect.top() - shadow.spread_radius,
+                shadow_rect.width() + shadow.spread_radius * 2.0,
+                shadow_rect.height() + shadow.spread_radius * 2.0,
+            )
         } else if shadow.spread_radius < 0.0 {
-            shadow_rect.shrink(-shadow.spread_radius)
+            Rect::from_xywh(
+                shadow_rect.left() + shadow.spread_radius.abs(),
+                shadow_rect.top() + shadow.spread_radius.abs(),
+                shadow_rect.width() - shadow.spread_radius.abs() * 2.0,
+                shadow_rect.height() - shadow.spread_radius.abs() * 2.0,
+            )
         } else {
             shadow_rect
         };
 
-        let color = egui::Color32::from_rgba_unmultiplied(
-            shadow.color.red(),
-            shadow.color.green(),
-            shadow.color.blue(),
-            shadow.color.alpha(),
-        );
+        let base_color = [
+            shadow.color.red() as f32 / 255.0,
+            shadow.color.green() as f32 / 255.0,
+            shadow.color.blue() as f32 / 255.0,
+            shadow.color.alpha() as f32 / 255.0,
+        ];
 
-        // Paint the shadow
+        // Paint using the built-in shadow methods from Painter trait
         if let Some(radius) = border_radius {
             // Rounded rectangle shadow
-            let rounding = egui::CornerRadius::same(radius as u8);
-            painter.rect(
-                shadow_rect,
-                rounding,
-                color,
-                egui::Stroke::NONE,
-                egui::StrokeKind::Outside,
-            );
+            let rrect = RRect {
+                rect: shadow_rect,
+                corner_radius: radius,
+            };
 
-            // TODO: Implement proper blur effect
-            // For now, this is a simple approximation
-            // In the future, we should use egui's blur shader or custom blur implementation
-            if shadow.blur_radius > 0.0 {
-                // Draw multiple offset rectangles with decreasing opacity to simulate blur
-                let blur_steps = (shadow.blur_radius / 2.0).ceil() as usize;
-                for i in 1..=blur_steps {
-                    let blur_offset = i as f32 * 2.0;
-                    let opacity_factor = 1.0 - (i as f32 / blur_steps as f32);
-                    let blur_color = egui::Color32::from_rgba_unmultiplied(
-                        shadow.color.red(),
-                        shadow.color.green(),
-                        shadow.color.blue(),
-                        (shadow.color.alpha() as f32 * opacity_factor * 0.3) as u8,
-                    );
+            let paint = Paint {
+                color: base_color,
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
 
-                    painter.rect(
-                        shadow_rect.expand(blur_offset),
-                        rounding,
-                        blur_color,
-                        egui::Stroke::NONE,
-                        egui::StrokeKind::Outside,
-                    );
-                }
-            }
+            let offset = flui_types::Offset::new(0.0, 0.0);
+            painter.rrect_with_shadow(rrect, &paint, offset, shadow.blur_radius, base_color);
         } else {
             // Sharp rectangle shadow
-            painter.rect(
-                shadow_rect,
-                egui::CornerRadius::ZERO,
-                color,
-                egui::Stroke::NONE,
-                egui::StrokeKind::Outside,
-            );
+            let paint = Paint {
+                color: base_color,
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
 
-            // Simple blur approximation for sharp rectangles
-            if shadow.blur_radius > 0.0 {
-                let blur_steps = (shadow.blur_radius / 2.0).ceil() as usize;
-                for i in 1..=blur_steps {
-                    let blur_offset = i as f32 * 2.0;
-                    let opacity_factor = 1.0 - (i as f32 / blur_steps as f32);
-                    let blur_color = egui::Color32::from_rgba_unmultiplied(
-                        shadow.color.red(),
-                        shadow.color.green(),
-                        shadow.color.blue(),
-                        (shadow.color.alpha() as f32 * opacity_factor * 0.3) as u8,
-                    );
-
-                    painter.rect(
-                        shadow_rect.expand(blur_offset),
-                        egui::CornerRadius::ZERO,
-                        blur_color,
-                        egui::Stroke::NONE,
-                        egui::StrokeKind::Outside,
-                    );
-                }
-            }
+            let offset = flui_types::Offset::new(0.0, 0.0);
+            painter.rect_with_shadow(shadow_rect, &paint, offset, shadow.blur_radius, base_color);
         }
     }
 }

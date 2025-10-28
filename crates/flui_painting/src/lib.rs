@@ -37,9 +37,10 @@
 pub mod border;
 pub mod decoration;
 pub mod gradient;
+pub mod image;
 pub mod shadow;
 pub mod text;
-pub mod transform_painter;
+
 
 
 
@@ -50,7 +51,7 @@ pub use border::BorderPainter;
 pub use gradient::GradientPainter;
 pub use shadow::ShadowPainter;
 pub use text::TextPainter;
-pub use transform_painter::TransformPainter;
+pub use image::ImagePainter;
 
 /// Prelude module for convenient imports
 pub mod prelude {
@@ -59,8 +60,9 @@ pub mod prelude {
     pub use crate::gradient::GradientPainter;
     pub use crate::shadow::ShadowPainter;
     pub use crate::text::TextPainter;
-    pub use crate::transform_painter::TransformPainter;
+    pub use crate::image::ImagePainter;
 }
+
 
 
 
