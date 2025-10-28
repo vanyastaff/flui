@@ -24,12 +24,13 @@ use parking_lot::Mutex;
 ///
 /// let mut compositor = ProfiledCompositor::new();
 ///
-/// // Composite with automatic profiling
+/// // In your render loop:
+/// compositor.begin_frame();
 /// compositor.composite(&scene, &mut painter);
 ///
-/// // Get profiler stats
-/// if let Some(stats) = compositor.frame_stats() {
+/// if let Some(stats) = compositor.end_frame() {
 ///     println!("Frame time: {:.2}ms", stats.total_time_ms());
+///     println!("FPS: {:.1}", compositor.fps());
 /// }
 /// ```
 #[cfg(feature = "devtools")]
@@ -74,28 +75,35 @@ impl ProfiledCompositor {
         Arc::clone(&self.profiler)
     }
 
+    /// Begin a new frame for profiling
+    ///
+    /// Call this at the start of each frame, before any rendering work.
+    pub fn begin_frame(&self) {
+        self.profiler.lock().begin_frame();
+    }
+
     /// Composite a scene with automatic profiling
     ///
     /// This wraps the standard composite() call with profiling markers
     /// for the Paint phase.
     ///
+    /// Note: You must call begin_frame() before calling this method.
+    ///
     /// # Arguments
     /// * `scene` - The scene to composite
     /// * `painter` - The painter to render with
     pub fn composite(&mut self, scene: &crate::Scene, painter: &mut dyn crate::Painter) {
-        let profiler = self.profiler.lock();
-
-        // Begin frame
-        profiler.begin_frame();
-
         // Profile the paint phase
-        {
-            let _guard = profiler.profile_phase(flui_devtools::profiler::FramePhase::Paint);
-            drop(profiler); // Release lock before calling composite
-            self.compositor.composite(scene, painter);
-        }
+        let _guard = {
+            let profiler = self.profiler.lock();
+            profiler.profile_phase(flui_devtools::profiler::FramePhase::Paint)
+            // MutexGuard is dropped here, but PhaseGuard is returned and kept alive
+        };
 
-        // Note: Frame is ended externally by calling end_frame()
+        // Composite (guard will be dropped automatically after this)
+        self.compositor.composite(scene, painter);
+
+        // PhaseGuard is dropped here, recording the paint phase duration
     }
 
     /// End the current frame and get statistics

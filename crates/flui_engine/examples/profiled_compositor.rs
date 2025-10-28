@@ -65,6 +65,9 @@ struct ProfiledApp {
 #[cfg(feature = "egui")]
 impl eframe::App for ProfiledApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Begin profiling frame
+        self.compositor.begin_frame();
+
         egui::CentralPanel::default().show(ctx, |ui| {
             // Get the egui painter from ui
             let egui_painter = ui.painter();
