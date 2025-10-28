@@ -86,7 +86,12 @@ pub use handle::LayerHandle;
 pub use container::ContainerLayer;
 pub use opacity::OpacityLayer;
 pub use transform::TransformLayer;
-pub use clip::{ClipLayer, ClipRectLayer, ClipRRectLayer};
+
+// Clip layers - prefer ClipRectLayer/ClipRRectLayer over legacy ClipLayer
+#[allow(deprecated)]
+pub use clip::ClipLayer; // Deprecated - use ClipRectLayer or ClipRRectLayer
+
+pub use clip::{ClipRectLayer, ClipRRectLayer};
 pub use picture::{PictureLayer, DrawCommand};
 
 /// Type-erased layer (for dynamic dispatch)
