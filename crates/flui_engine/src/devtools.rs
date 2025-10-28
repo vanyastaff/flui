@@ -206,35 +206,83 @@ impl PerformanceOverlay {
     /// * `viewport_size` - The size of the viewport
     pub fn render(
         &self,
-        _profiler: &Profiler,
+        profiler: &Profiler,
         painter: &mut dyn crate::Painter,
         viewport_size: flui_types::Size,
     ) {
-        use crate::layer::Layer;
-        use crate::{Paint, PictureLayer};
-        use flui_types::Rect;
+        use crate::Paint;
+        use flui_types::{Point, Rect};
 
-        // Create a picture layer for overlay
-        let mut picture = PictureLayer::new();
+        // Get profiler stats
+        let stats = profiler.frame_stats();
+        let avg_fps = profiler.average_fps();
+        let jank_pct = profiler.jank_percentage();
 
         // Position in pixels
         let x = viewport_size.width * self.position.0;
         let y = viewport_size.height * self.position.1;
 
-        // Background box
-        let bg_rect = Rect::from_xywh(x, y, 200.0, 100.0);
+        // Background dimensions
+        let width = 180.0;
+        let height = if stats.is_some() { 90.0 } else { 40.0 };
+
+        // Draw background
+        let bg_rect = Rect::from_xywh(x, y, width, height);
         let bg_paint = Paint {
-            color: [0.0, 0.0, 0.0, 0.7], // Semi-transparent black
+            color: [0.0, 0.0, 0.0, 0.75], // Semi-transparent black
             ..Default::default()
         };
-        picture.draw_rect(bg_rect, bg_paint);
-
-        // TODO: Add text rendering for FPS, frame time, etc.
-        // This requires text support in PictureLayer or Painter
-
-        // For now, just paint the background
         painter.save();
-        picture.paint(painter);
+        painter.rect(bg_rect, &bg_paint);
+
+        // Text paint (white)
+        let text_paint = Paint {
+            color: [1.0, 1.0, 1.0, 1.0],
+            ..Default::default()
+        };
+
+        let mut current_y = y + 15.0;
+        let line_height = 18.0;
+        let padding_x = x + 10.0;
+        let font_size = 13.0;
+
+        // Draw FPS
+        if self.show_fps {
+            let fps_text = format!("FPS: {:.1}", avg_fps);
+            painter.text(&fps_text, Point::new(padding_x, current_y), font_size, &text_paint);
+            current_y += line_height;
+        }
+
+        // Draw frame stats if available
+        if let Some(stats) = stats {
+            if self.show_frame_time {
+                let time_text = format!("Frame: {:.2}ms", stats.total_time_ms());
+                painter.text(&time_text, Point::new(padding_x, current_y), font_size, &text_paint);
+                current_y += line_height;
+
+                // Draw paint phase time if available
+                if let Some(paint_phase) = stats.phase(FramePhase::Paint) {
+                    let paint_text = format!("Paint: {:.2}ms", paint_phase.duration_ms());
+                    painter.text(&paint_text, Point::new(padding_x, current_y), font_size, &text_paint);
+                    current_y += line_height;
+                }
+            }
+
+            // Draw jank indicator
+            if self.show_jank {
+                if stats.is_jank() {
+                    let jank_paint = Paint {
+                        color: [1.0, 0.3, 0.3, 1.0], // Red for jank
+                        ..Default::default()
+                    };
+                    painter.text("⚠ JANK", Point::new(padding_x, current_y), font_size, &jank_paint);
+                } else {
+                    let jank_text = format!("Jank: {:.1}%", jank_pct);
+                    painter.text(&jank_text, Point::new(padding_x, current_y), font_size, &text_paint);
+                }
+            }
+        }
+
         painter.restore();
     }
 }
