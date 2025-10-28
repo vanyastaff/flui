@@ -79,9 +79,8 @@ impl RenderObject for RenderColoredBox {
         // SingleArity always has exactly one child
         let child_layer = cx.capture_child_layer(child);
 
-        // Use ContainerLayer to stack background + child
-        use flui_engine::ContainerLayer;
-        let mut container = ContainerLayer::new();
+        // Use ContainerLayer to stack background + child - use pool for efficiency
+        let mut container = flui_engine::layer::pool::acquire_container();
         container.add_child(Box::new(picture));
         container.add_child(child_layer);
 

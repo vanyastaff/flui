@@ -1,8 +1,24 @@
 //! RenderClipRect - clips child to a rectangle
 
-use flui_types::{Rect, Size, painting::Clip};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_types::{Rect, Offset, Size, painting::Clip};
 use flui_engine::{ClipRectLayer, BoxedLayer};
+
+use super::clip_base::{ClipShape, RenderClip};
+
+/// Shape implementation for rectangular clipping
+#[derive(Debug, Clone, Copy)]
+pub struct RectShape;
+
+impl ClipShape for RectShape {
+    fn create_clip_layer(&self, child_layer: BoxedLayer, size: Size) -> BoxedLayer {
+        let clip_rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+        // Use pool for allocation efficiency
+        let mut clip_layer = flui_engine::layer::pool::acquire_clip_rect();
+        clip_layer.set_clip_rect(clip_rect);
+        clip_layer.add_child(child_layer);
+        Box::new(clip_layer)
+    }
+}
 
 /// RenderObject that clips its child to a rectangle
 ///
@@ -17,35 +33,22 @@ use flui_engine::{ClipRectLayer, BoxedLayer};
 ///
 /// let clip_rect = RenderClipRect::new(Clip::AntiAlias);
 /// ```
-#[derive(Debug)]
-pub struct RenderClipRect {
-    /// The clipping behavior (None, HardEdge, AntiAlias, etc.)
-    pub clip_behavior: Clip,
-}
+pub type RenderClipRect = RenderClip<RectShape>;
 
 impl RenderClipRect {
-    /// Create new RenderClipRect with specified clip behavior
-    pub fn new(clip_behavior: Clip) -> Self {
-        Self { clip_behavior }
+    /// Create with specified clip behavior
+    pub fn with_clip(clip_behavior: Clip) -> Self {
+        RenderClip::new(RectShape, clip_behavior)
     }
 
     /// Create with hard edge clipping (default)
     pub fn hard_edge() -> Self {
-        Self {
-            clip_behavior: Clip::HardEdge,
-        }
+        Self::with_clip(Clip::HardEdge)
     }
 
     /// Create with anti-aliased clipping
     pub fn anti_alias() -> Self {
-        Self {
-            clip_behavior: Clip::AntiAlias,
-        }
-    }
-
-    /// Set new clip behavior
-    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
-        self.clip_behavior = clip_behavior;
+        Self::with_clip(Clip::AntiAlias)
     }
 }
 
@@ -55,46 +58,13 @@ impl Default for RenderClipRect {
     }
 }
 
-impl RenderObject for RenderClipRect {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        // Layout child with same constraints
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
-    }
-
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // If no clipping needed, just return child layer
-        if !self.clip_behavior.clips() {
-            let child = cx.child();
-            return cx.capture_child_layer(child);
-        }
-
-        // Get child layer
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
-        
-
-        // TODO: Get actual size from layout context instead of using placeholder
-        // The PaintCx should provide access to the laid-out size from the layout phase
-        let clip_rect = Rect::from_xywh(0.0, 0.0, 1000.0, 1000.0);
-
-        // Wrap in ClipRectLayer
-        let mut clip_layer = ClipRectLayer::new(clip_rect);
-        clip_layer.add_child(child_layer);
-
-        Box::new(clip_layer)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_render_clip_rect_new() {
-        let clip = RenderClipRect::new(Clip::AntiAlias);
+    fn test_render_clip_rect_with_clip() {
+        let clip = RenderClipRect::with_clip(Clip::AntiAlias);
         assert_eq!(clip.clip_behavior, Clip::AntiAlias);
     }
 

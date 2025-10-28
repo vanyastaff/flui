@@ -78,8 +78,8 @@ impl RenderObject for RenderAnimatedOpacity {
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         // Skip painting if fully transparent
         if self.opacity <= 0.0 {
-            // Return empty layer
-            return Box::new(OpacityLayer::new(Box::new(flui_engine::ContainerLayer::new()), 0.0));
+            // Return empty layer - use pool for efficiency even in error case
+            return Box::new(OpacityLayer::new(Box::new(flui_engine::layer::pool::acquire_container()), 0.0));
         }
 
         // Capture child layer

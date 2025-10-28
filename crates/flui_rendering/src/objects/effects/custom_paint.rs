@@ -250,8 +250,8 @@ impl RenderObject for RenderCustomPaint {
             layers.push(Box::new(picture));
         }
 
-        // Wrap all layers in a container
-        let mut container = ContainerLayer::new();
+        // Wrap all layers in a container - use pool for efficiency
+        let mut container = flui_engine::layer::pool::acquire_container();
         for layer in layers {
             container.add_child(layer);
         }

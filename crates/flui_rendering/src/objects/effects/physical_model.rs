@@ -126,7 +126,8 @@ impl RenderObject for RenderPhysicalModel {
     }
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let mut container = ContainerLayer::new();
+        // Use pool for allocation efficiency
+        let mut container = flui_engine::layer::pool::acquire_container();
 
         // TODO: Add shadow layer when BoxShadow layer is implemented
         // For now, skip shadow painting

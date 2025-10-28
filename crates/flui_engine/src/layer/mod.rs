@@ -69,14 +69,16 @@
 
 // Core layer infrastructure
 pub mod base;
+pub mod clip;
+pub mod container;
 pub mod handle;
+pub mod opacity;
+pub mod picture;
+pub mod pool;
+pub mod transform;
 
 // Layer implementations
-pub mod container;
-pub mod opacity;
-pub mod transform;
-pub mod clip;
-pub mod picture;
+
 
 // Re-export core types - Layer is now the main trait
 pub use base::{Layer, AnyLayer, LayerState};
@@ -88,7 +90,7 @@ pub use opacity::OpacityLayer;
 pub use transform::{TransformLayer, Transform};
 
 // Clip layers
-pub use clip::{ClipRectLayer, ClipRRectLayer};
+pub use clip::{ClipRectLayer, ClipRRectLayer, ClipOvalLayer, ClipPathLayer};
 pub use picture::{PictureLayer, DrawCommand};
 
 /// Type-erased layer (for dynamic dispatch)
@@ -96,3 +98,4 @@ pub use picture::{PictureLayer, DrawCommand};
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
