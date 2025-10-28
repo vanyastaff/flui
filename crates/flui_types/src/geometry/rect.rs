@@ -71,6 +71,14 @@ impl Rect {
         }
     }
 
+    /// Create a rectangle from left, top, width, height.
+    ///
+    /// This is an alias for `from_xywh` with more explicit parameter names.
+    #[inline]
+    pub fn from_ltwh(left: f32, top: f32, width: f32, height: f32) -> Self {
+        Self::from_xywh(left, top, width, height)
+    }
+
     /// Get the width of the rectangle.
     pub fn width(&self) -> f32 {
         self.max.x - self.min.x
