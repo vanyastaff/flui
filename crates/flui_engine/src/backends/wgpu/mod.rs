@@ -2,11 +2,13 @@
 //!
 //! GPU-accelerated rendering with wgpu
 
+pub mod event_translator;
 mod pipeline;
 mod tesselator;
 pub mod text;
 mod vertex;
 pub mod window;
+
 
 
 
@@ -372,6 +374,7 @@ pub enum RenderError {
     #[error("Surface error: {0}")] SurfaceError(#[from] wgpu::SurfaceError),
     #[error("Text rendering failed: {0}")] TextRenderingFailed(String),
 }
+
 
 
 

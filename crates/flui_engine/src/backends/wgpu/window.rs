@@ -4,12 +4,15 @@
 
 use crate::app::{AppLogic, WindowConfig};
 use crate::backends::wgpu::{WgpuRenderer, WgpuPainter};
+use crate::backends::wgpu::event_translator;
+use flui_types::Offset;
 use std::sync::Arc;
 use parking_lot::Mutex;
 use std::time::Instant;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::EventLoop,
+    keyboard::ModifiersState,
 };
 
 /// Run the application with wgpu backend
@@ -59,42 +62,76 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
     // Timing
     let mut last_frame_time = Instant::now();
 
+    // Track modifiers state for event translation
+    let mut modifiers = ModifiersState::empty();
+
+    // Track cursor position for events that don't include it
+    let mut last_cursor_position = Offset::ZERO;
+
     // Run event loop
     event_loop.run(move |event, target| {
         match event {
-            Event::WindowEvent { event, .. } => match event {
-                WindowEvent::CloseRequested => {
-                    target.exit();
-                }
-                WindowEvent::Resized(size) => {
-                    renderer.lock().resize(size.width, size.height);
-                    window.request_redraw();
-                }
-                WindowEvent::RedrawRequested => {
-                    // Calculate delta time
-                    let now = Instant::now();
-                    let delta_time = now.duration_since(last_frame_time).as_secs_f32();
-                    last_frame_time = now;
-
-                    // Update logic
-                    logic.update(delta_time);
-
-                    // Render
-                    painter.begin_frame();
-                    logic.render(&mut painter);
-
-                    if let Err(e) = painter.end_frame() {
-                        eprintln!("Render error: {:?}", e);
+            Event::WindowEvent { event, .. } => {
+                // Translate and dispatch event to application logic
+                if let Some(mut flui_event) = event_translator::translate_window_event(&event, &modifiers) {
+                    // Update cursor position for pointer events
+                    if let flui_types::Event::Pointer(ref mut pointer_event) = flui_event {
+                        match pointer_event {
+                            flui_types::PointerEvent::Move(data) => {
+                                last_cursor_position = data.position;
+                            }
+                            flui_types::PointerEvent::Down(data) |
+                            flui_types::PointerEvent::Up(data) => {
+                                // Use last cursor position for click events
+                                data.position = last_cursor_position;
+                                data.local_position = last_cursor_position;
+                            }
+                            _ => {}
+                        }
                     }
 
-                    window.request_redraw();
+                    // Update cursor position for scroll events
+                    if let flui_types::Event::Scroll(ref mut scroll_data) = flui_event {
+                        scroll_data.position = last_cursor_position;
+                    }
+
+                    // Dispatch to application logic
+                    logic.on_event(&flui_event);
                 }
-                WindowEvent::KeyboardInput { event, .. } => {
-                    if event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) {
+
+                // Handle window-specific events
+                match event {
+                    WindowEvent::CloseRequested => {
                         target.exit();
                     }
+                    WindowEvent::Resized(size) => {
+                        renderer.lock().resize(size.width, size.height);
+                        window.request_redraw();
+                    }
+                    WindowEvent::RedrawRequested => {
+                        // Calculate delta time
+                        let now = Instant::now();
+                        let delta_time = now.duration_since(last_frame_time).as_secs_f32();
+                        last_frame_time = now;
+
+                        // Update logic
+                        logic.update(delta_time);
+
+                        // Render
+                        painter.begin_frame();
+                        logic.render(&mut painter);
+
+                        if let Err(e) = painter.end_frame() {
+                            eprintln!("Render error: {:?}", e);
+                        }
+
+                        window.request_redraw();
+                    }
+                    WindowEvent::ModifiersChanged(new_modifiers) => {
+                        modifiers = new_modifiers.state();
+                    }
+                    _ => {}
                 }
-                _ => {}
             },
             _ => {}
         }

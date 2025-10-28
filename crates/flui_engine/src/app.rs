@@ -157,6 +157,18 @@ pub trait AppLogic: Send + 'static {
         let _ = delta_time;
     }
 
+    /// Called when an event occurs
+    ///
+    /// # Parameters
+    /// - `event`: The event that occurred
+    ///
+    /// # Returns
+    /// `true` if the event was handled, `false` otherwise
+    fn on_event(&mut self, event: &flui_types::Event) -> bool {
+        let _ = event;
+        false // Default: event not handled
+    }
+
     /// Called every frame to render the application
     ///
     /// # Parameters
