@@ -18,7 +18,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
 repository = "https://github.com/yourusername/flui"
@@ -27,6 +27,7 @@ repository = "https://github.com/yourusername/flui"
 # CORE EGUI & PLATFORM (v0.33 - latest)
 egui = { version = "0.33", features = ["default", "serde"] }
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
+egui-winit = { version = "0.33", default-features = false, features = ["accesskit", "links", "wayland", "x11"] }
 egui_extras = { version = "0.33", features = ["image", "svg", "file"] }
 
 # ASYNC RUNTIME (Stable: 1.43 LTS - March 2026, compatible with current Rust)

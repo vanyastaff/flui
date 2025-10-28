@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["egui"]
-egui = ["dep:egui", "dep:eframe"]
+egui = ["dep:egui", "dep:eframe", "dep:egui-winit"]
 wgpu = [
     "dep:wgpu",
     "dep:winit",
@@ -31,6 +31,7 @@ glam = { workspace = true }
 # Optional backend implementations
 egui = { workspace = true, optional = true }
 eframe = { workspace = true, optional = true }
+egui-winit = { workspace = true, optional = true }
 
 # WGPU backend dependencies
 wgpu = { workspace = true, optional = true }
