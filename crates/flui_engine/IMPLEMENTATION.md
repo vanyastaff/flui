@@ -165,67 +165,88 @@ This document describes what has been implemented in `flui_engine` based on the 
 
 ## 🔄 Integration with Typed RenderObject
 
-The engine is ready for integration with the typed RenderObject system from idea.md:
+✅ **COMPLETED** - The engine is fully integrated with the RenderPipeline system!
+
+### Integration Flow
 
 ```rust
-// From idea.md Chapter 6.5
-impl RenderObject for RenderPadding {
-    type Layer = dyn Layer;
+// 1. Widget Tree → RenderObject Tree (via RenderPipeline)
+let mut pipeline = RenderPipeline::new();
+let root_id = pipeline.insert_root(ColoredBox::new(...));
 
-    fn paint(&self, cx: &mut PaintCx<Self>) -> Box<Self::Layer> {
-        let mut container = ContainerLayer::new();
+// 2. Layout Phase (RenderObject.layout())
+let constraints = BoxConstraints::tight(800.0, 600.0);
+let size = pipeline.flush_layout(constraints);
 
-        // Background
-        if let Some(bg) = cx.style().background_color {
-            container.add_child(Box::new(RectLayer {
-                rect: cx.bounds(),
-                color: bg,
-                radius: cx.style().border_radius,
-            }));
-        }
+// 3. Paint Phase (RenderObject.paint() → Layer Tree)
+let layer = pipeline.flush_paint(); // Returns BoxedLayer
 
-        // Child
-        if let Some(child_id) = cx.single_child() {
-            let child_layer = cx.capture_child_layer(child_id);
-            container.add_child(child_layer);
-        }
+// 4. Scene Building (Layer → Scene)
+let scene = Scene::from_layer(layer, size);
 
-        Box::new(container)
+// 5. Compositor (Scene → Screen)
+let compositor = Compositor::new();
+compositor.composite(&scene, painter);
+```
+
+### Example RenderObject Implementation
+
+```rust
+impl RenderObject for ColoredBoxRender {
+    type Arity = LeafArity;
+
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        cx.constraints().constrain(self.size)
+    }
+
+    fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        let mut picture = PictureLayer::new();
+        let rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
+        picture.draw_rect(rect, Paint { color: self.color, ..Default::default() });
+        Box::new(picture)
     }
 }
 ```
 
+### See It In Action
+
+- ✅ **Full Pipeline Example**: `examples/full_render_pipeline.rs`
+- ✅ **Interactive Example**: `crates/flui_engine/examples/interactive_button.rs`
+
 ## 📊 Code Statistics
 
-- **Total lines**: ~2500
-- **Modules**: 7 (layer, painter, scene, compositor, surface, backend, examples)
-- **Layer types**: 5 (Container, Opacity, Transform, Clip, Picture)
-- **Tests**: 15 unit tests
-- **Examples**: 2 integration examples
+- **Total lines**: ~2500+
+- **Modules**: 8 (layer, painter, scene, compositor, surface, backend, event_router, examples)
+- **Layer types**: 5 (Container, Opacity, Transform, ClipRect, ClipRRect, Picture)
+- **Tests**: 15+ unit tests
+- **Examples**: 3 integration examples
+- **Event System**: ✅ Hit testing, pointer events, keyboard events
 
 ## 🚀 Next Steps
 
-To complete the full pipeline from idea.md:
+To further enhance the pipeline:
 
-1. **RenderPipeline Integration** (Chapter 6.4)
-   - Connect RenderObject.paint() to Scene building
-   - Integrate LayoutCache with Scene
+1. ~~**RenderPipeline Integration** (Chapter 6.4)~~ ✅ **DONE**
+   - ✅ Connected RenderObject.paint() to Scene building via `Scene::from_layer()`
+   - ✅ Full pipeline example demonstrating Widget → RenderObject → Layer → Scene
 
 2. **Additional Painter Backends**
-   - WgpuPainter for GPU rendering
-   - SkiaPainter for high-quality rendering
+   - ✅ EguiPainter - fully functional
+   - ✅ WgpuPainter - base implementation done, needs texture/image support
+   - ⏳ SkiaPainter - future enhancement
 
 3. **Advanced Features**
-   - Path clipping (beyond rect/rrect)
-   - Custom shaders
-   - Blur/filter effects
-   - Image/texture support
+   - ⏳ Path clipping (beyond rect/rrect)
+   - ⏳ Custom shaders
+   - ⏳ Blur/filter effects
+   - ⏳ Image/texture support
+   - ✅ Event system (hit testing, pointer, keyboard, window events)
 
 4. **Optimizations**
-   - Layer caching across frames
-   - Dirty region tracking
-   - Parallel composition
-   - GPU offloading
+   - ⏳ Layer caching across frames
+   - ⏳ Dirty region tracking
+   - ⏳ Parallel composition
+   - ⏳ GPU offloading
 
 ## 📝 Notes
 

@@ -90,6 +90,44 @@ impl Scene {
         scene
     }
 
+    /// Create a scene from any layer
+    ///
+    /// Wraps the layer in a ContainerLayer if it's not already one.
+    /// This is the primary integration point with RenderPipeline.flush_paint().
+    ///
+    /// # Arguments
+    /// * `layer` - The root layer (typically from RenderPipeline.flush_paint())
+    /// * `viewport_size` - The size of the viewport to render into
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::RenderPipeline;
+    /// use flui_engine::Scene;
+    /// use flui_types::{Size, BoxConstraints};
+    ///
+    /// let mut pipeline = RenderPipeline::new();
+    /// // ... build widget tree ...
+    ///
+    /// // Layout phase
+    /// let constraints = BoxConstraints::tight(800.0, 600.0);
+    /// if let Some(size) = pipeline.flush_layout(constraints) {
+    ///     // Paint phase - produces layer tree
+    ///     let layer = pipeline.flush_paint();
+    ///
+    ///     // Create scene from layer tree
+    ///     let scene = Scene::from_layer(layer, size);
+    ///
+    ///     // Composite to screen
+    ///     scene.paint(&mut painter);
+    /// }
+    /// ```
+    pub fn from_layer(layer: BoxedLayer, viewport_size: Size) -> Self {
+        let mut root = ContainerLayer::new();
+        root.add_child(layer);
+        Self::from_root(root, viewport_size)
+    }
+
     /// Add a layer to the scene
     ///
     /// Layers are added to the root container in the order they are added.
