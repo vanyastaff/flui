@@ -293,3 +293,128 @@ impl Default for PerformanceOverlay {
         Self::new()
     }
 }
+
+/// Frame timeline graph - visual representation of frame history
+///
+/// Renders a mini-graph showing frame times over the last N frames,
+/// making it easy to spot performance issues at a glance.
+#[cfg(feature = "devtools")]
+pub struct FrameTimelineGraph {
+    /// Graph position (0.0-1.0, relative to viewport)
+    pub position: (f32, f32),
+
+    /// Graph dimensions in pixels
+    pub width: f32,
+    pub height: f32,
+
+    /// Target frame time in ms (for 60fps = 16.67ms)
+    pub target_frame_time_ms: f32,
+
+    /// Maximum frames to display
+    pub max_frames: usize,
+}
+
+#[cfg(feature = "devtools")]
+impl FrameTimelineGraph {
+    /// Create a new frame timeline graph
+    pub fn new() -> Self {
+        Self {
+            position: (0.02, 0.85),
+            width: 200.0,
+            height: 60.0,
+            target_frame_time_ms: 16.67, // 60 FPS
+            max_frames: 60,
+        }
+    }
+
+    /// Render the timeline graph
+    pub fn render(
+        &self,
+        profiler: &Profiler,
+        painter: &mut dyn crate::Painter,
+        viewport_size: flui_types::Size,
+    ) {
+        use crate::Paint;
+        use flui_types::{Point, Rect};
+
+        // Get frame history
+        let history = profiler.frame_history();
+        if history.is_empty() {
+            return;
+        }
+
+        // Position in pixels
+        let x = viewport_size.width * self.position.0;
+        let y = viewport_size.height * self.position.1;
+
+        // Draw background
+        let bg_rect = Rect::from_xywh(x, y, self.width, self.height);
+        let bg_paint = Paint {
+            color: [0.0, 0.0, 0.0, 0.75],
+            ..Default::default()
+        };
+        painter.save();
+        painter.rect(bg_rect, &bg_paint);
+
+        // Draw target line (60fps = 16.67ms)
+        let target_y = y + self.height - (self.target_frame_time_ms / 33.33 * self.height);
+        let target_paint = Paint {
+            color: [0.4, 0.4, 0.4, 0.8], // Gray line
+            stroke_width: 1.0,
+            ..Default::default()
+        };
+        painter.line(
+            Point::new(x, target_y),
+            Point::new(x + self.width, target_y),
+            &target_paint,
+        );
+
+        // Draw frame time bars
+        let frames_to_show = history.len().min(self.max_frames);
+        let bar_width = self.width / frames_to_show as f32;
+
+        for (i, stats) in history.iter().rev().take(frames_to_show).enumerate() {
+            let frame_time_ms = stats.total_time_ms() as f32;
+
+            // Clamp to reasonable max (33ms = ~30fps)
+            let clamped_time = frame_time_ms.min(33.33);
+            let bar_height = clamped_time / 33.33 * self.height;
+
+            let bar_x = x + i as f32 * bar_width;
+            let bar_y = y + self.height - bar_height;
+
+            // Color based on performance (green = good, yellow = ok, red = bad)
+            let color = if stats.is_jank() {
+                [1.0, 0.3, 0.3, 0.9] // Red for jank
+            } else if frame_time_ms > self.target_frame_time_ms {
+                [1.0, 0.8, 0.2, 0.9] // Yellow for slight slowdown
+            } else {
+                [0.2, 0.8, 0.4, 0.9] // Green for good
+            };
+
+            let bar_paint = Paint {
+                color,
+                ..Default::default()
+            };
+
+            let bar_rect = Rect::from_xywh(bar_x, bar_y, bar_width - 1.0, bar_height);
+            painter.rect(bar_rect, &bar_paint);
+        }
+
+        // Draw label
+        let text_paint = Paint {
+            color: [0.8, 0.8, 0.8, 1.0],
+            ..Default::default()
+        };
+        painter.text("Frame Time", Point::new(x + 5.0, y + 12.0), 10.0, &text_paint);
+
+        painter.restore();
+    }
+}
+
+#[cfg(feature = "devtools")]
+impl Default for FrameTimelineGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -100,7 +100,7 @@ pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
 
 // Re-export devtools integration (when feature enabled)
 #[cfg(feature = "devtools")]
-pub use devtools::{ProfiledCompositor, PerformanceOverlay, FramePhase, FrameStats};
+pub use devtools::{ProfiledCompositor, PerformanceOverlay, FrameTimelineGraph, FramePhase, FrameStats};
 
 // Re-export backend implementations when features are enabled
 #[cfg(feature = "egui")]

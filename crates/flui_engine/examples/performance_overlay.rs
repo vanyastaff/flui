@@ -13,6 +13,9 @@ fn main() {
     // Create performance overlay
     let overlay = PerformanceOverlay::new();
 
+    // Create frame timeline graph
+    let timeline_graph = FrameTimelineGraph::new();
+
     // Create a more complex scene with multiple layers
     let mut scene = Scene::new(Size::new(800.0, 600.0));
 
@@ -53,6 +56,7 @@ fn main() {
                 Ok(Box::new(OverlayApp {
                     compositor,
                     overlay,
+                    timeline_graph,
                     scene,
                     frame_started: false,
                 }))
@@ -94,6 +98,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 4] {
 struct OverlayApp {
     compositor: ProfiledCompositor,
     overlay: PerformanceOverlay,
+    timeline_graph: FrameTimelineGraph,
     scene: Scene,
     frame_started: bool,
 }
@@ -123,6 +128,9 @@ impl eframe::App for OverlayApp {
             let profiler = self.compositor.profiler();
             let profiler_guard = profiler.lock();
             self.overlay.render(&profiler_guard, &mut painter, viewport_size);
+
+            // Draw frame timeline graph
+            self.timeline_graph.render(&profiler_guard, &mut painter, viewport_size);
         });
 
         // Request repaint for continuous rendering
