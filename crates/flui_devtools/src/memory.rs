@@ -207,10 +207,26 @@ impl MemoryProfiler {
 
     #[cfg(target_os = "windows")]
     fn get_memory_usage() -> usize {
-        // On Windows, we could use GetProcessMemoryInfo
-        // For now, return 0 as placeholder
-        // TODO: Implement using windows-sys crate
-        0
+        use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        unsafe {
+            let mut pmc: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+
+            let result = GetProcessMemoryInfo(
+                GetCurrentProcess(),
+                &mut pmc,
+                std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            );
+
+            if result != 0 {
+                // Return working set size (physical memory in use)
+                pmc.WorkingSetSize
+            } else {
+                0
+            }
+        }
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

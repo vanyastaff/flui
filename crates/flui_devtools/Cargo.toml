@@ -40,6 +40,10 @@ tracing-subscriber = { version = "0.3", optional = true }
 parking_lot = "0.12"
 dashmap = "6.1"
 
+# Platform-specific (Windows memory info)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
 [features]
 default = ["profiling"]
 
