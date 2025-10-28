@@ -4,12 +4,13 @@
 ///
 /// Stack widgets can contain both positioned and non-positioned children.
 /// This enum controls how the non-positioned children are sized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StackFit {
     /// The constraints passed to the stack from its parent are loosened
     ///
     /// This allows the non-positioned children to be smaller than the stack's parent constraints.
+    #[default]
     Loose,
 
     /// The constraints passed to the stack from its parent are tightened to the biggest size
@@ -21,12 +22,6 @@ pub enum StackFit {
     ///
     /// This allows them to be any size they want.
     Passthrough,
-}
-
-impl Default for StackFit {
-    fn default() -> Self {
-        StackFit::Loose
-    }
 }
 
 #[cfg(test)]

@@ -252,20 +252,17 @@ impl<'a> Painter for EguiPainter<'a> {
 
     fn translate(&mut self, offset: Offset) {
         // Apply translation to transform matrix
-        self.current_state.transform = self.current_state.transform *
-            Mat4::from_translation(Vec3::new(offset.dx, offset.dy, 0.0));
+        self.current_state.transform *= Mat4::from_translation(Vec3::new(offset.dx, offset.dy, 0.0));
     }
 
     fn rotate(&mut self, angle: f32) {
         // Apply rotation to transform matrix
-        self.current_state.transform = self.current_state.transform *
-            Mat4::from_rotation_z(angle);
+        self.current_state.transform *= Mat4::from_rotation_z(angle);
     }
 
     fn scale(&mut self, sx: f32, sy: f32) {
         // Apply scale to transform matrix
-        self.current_state.transform = self.current_state.transform *
-            Mat4::from_scale(Vec3::new(sx, sy, 1.0));
+        self.current_state.transform *= Mat4::from_scale(Vec3::new(sx, sy, 1.0));
     }
 
     fn clip_rect(&mut self, rect: Rect) {

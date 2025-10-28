@@ -9,7 +9,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 /// Backend type for rendering
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Backend {
     /// GPU-accelerated rendering with WGPU
     #[cfg(feature = "wgpu")]
@@ -20,13 +20,8 @@ pub enum Backend {
     Egui,
 
     /// Automatically select the best available backend
+    #[default]
     Auto,
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        Backend::Auto
-    }
 }
 
 /// Window configuration

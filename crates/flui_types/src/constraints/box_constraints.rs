@@ -71,14 +71,13 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub const fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
-        let constraints = Self {
+        // Note: Can't call assert_is_normalized in const fn, so validation happens at use site
+        Self {
             min_width,
             max_width,
             min_height,
             max_height,
-        };
-        // Note: Can't call assert_is_normalized in const fn, so validation happens at use site
-        constraints
+        }
     }
 
     /// Create tight constraints (min == max)
