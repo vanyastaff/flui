@@ -9,6 +9,8 @@ use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::pin::Pin;
+use std::future::Future;
 
 /// Error type for image loading operations.
 #[derive(Debug, Clone)]
@@ -76,7 +78,7 @@ pub trait ImageProvider: Send + Sync {
     /// to load (e.g., for different device pixel ratios).
     ///
     /// This is typically called by the framework when an image needs to be displayed.
-    fn load(&self, configuration: &ImageConfiguration) -> impl std::future::Future<Output = ImageResult<Image>> + Send;
+    fn load(&self, configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>>;
 
     /// Returns a key that uniquely identifies this provider.
     ///
@@ -93,9 +95,12 @@ pub trait ImageProvider: Send + Sync {
     /// Resolves this image provider using the given configuration.
     ///
     /// This is a convenience method that creates a resolved provider.
-    fn resolve(&self, configuration: ImageConfiguration) -> ResolvedImageProvider {
+    fn resolve(self: Arc<Self>, configuration: ImageConfiguration) -> ResolvedImageProvider
+    where
+        Self: Sized + 'static,
+    {
         ResolvedImageProvider {
-            provider: Arc::new(self) as Arc<dyn ImageProvider>,
+            provider: self as Arc<dyn ImageProvider>,
             configuration,
         }
     }
@@ -207,8 +212,14 @@ impl MemoryImage {
 }
 
 impl ImageProvider for MemoryImage {
-    async fn load(&self, _configuration: &ImageConfiguration) -> ImageResult<Image> {
-        Ok(Image::from_rgba8(self.width, self.height, (*self.bytes).clone()))
+    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+        let width = self.width;
+        let height = self.height;
+        let bytes = self.bytes.clone();
+
+        Box::pin(async move {
+            Ok(Image::from_rgba8(width, height, (*bytes).clone()))
+        })
     }
 
     fn key(&self) -> String {
@@ -228,7 +239,7 @@ impl ImageProvider for MemoryImage {
 /// let provider = AssetImage::new("icons/logo.png");
 /// let provider_with_scale = AssetImage::new("icons/logo.png").with_scale(2.0);
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AssetImage {
     /// The path to the asset.
     asset_name: String,
@@ -287,12 +298,85 @@ impl AssetImage {
 }
 
 impl ImageProvider for AssetImage {
-    async fn load(&self, _configuration: &ImageConfiguration) -> ImageResult<Image> {
-        // TODO: Implement actual asset loading
-        // This would typically involve reading from a file system or embedded assets
-        Err(ImageError::LoadFailed(
-            "AssetImage loading not yet implemented".to_string(),
-        ))
+    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+        #[cfg(feature = "image-loading")]
+        {
+            let asset_name = self.asset_name.clone();
+            let package = self.package.clone();
+            let scale = self.scale;
+
+            Box::pin(async move {
+            use tokio::fs::File;
+            use tokio::io::AsyncReadExt;
+            use std::path::PathBuf;
+
+            // Construct asset path
+            // In a real application, this would use an asset bundle system
+            // For now, we assume assets are in an "assets" directory
+            let mut asset_path = PathBuf::from("assets");
+
+            if let Some(ref pkg) = package {
+                asset_path.push("packages");
+                asset_path.push(pkg);
+            }
+
+            asset_path.push(&asset_name);
+
+            // Try to find scaled variant (e.g., 2.0x, 3.0x)
+            // Flutter convention: image.png, image@2x.png, image@3x.png
+            let mut found_path = None;
+
+            if scale != 1.0 {
+                // Try scaled version
+                let base_name = asset_path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                let extension = asset_path.extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+
+                let scaled_name = format!("{}@{}x.{}", base_name, scale, extension);
+                let scaled_path = asset_path.with_file_name(scaled_name);
+
+                if tokio::fs::metadata(&scaled_path).await.is_ok() {
+                    found_path = Some(scaled_path);
+                }
+            }
+
+            // Fall back to base asset
+            let final_path = found_path.unwrap_or(asset_path);
+
+            // Read file
+            let mut file = File::open(&final_path)
+                .await
+                .map_err(|e| ImageError::NotFound(format!("Asset not found: {} ({})", final_path.display(), e)))?;
+
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer)
+                .await
+                .map_err(|e| ImageError::LoadFailed(format!("Failed to read asset: {}", e)))?;
+
+            // Decode image
+            let img = image::load_from_memory(&buffer)
+                .map_err(|e| ImageError::DecodeFailed(format!("Failed to decode asset: {}", e)))?;
+
+            // Convert to RGBA8
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            let data = rgba.into_raw();
+
+            Ok(Image::from_rgba8(width, height, data))
+            })
+        }
+
+        #[cfg(not(feature = "image-loading"))]
+        {
+            Box::pin(async {
+                Err(ImageError::LoadFailed(
+                    "AssetImage loading requires 'image-loading' feature".to_string(),
+                ))
+            })
+        }
     }
 
     fn key(&self) -> String {
@@ -314,7 +398,7 @@ impl ImageProvider for AssetImage {
 /// let provider = FileImage::new("/path/to/image.png");
 /// let provider_with_scale = FileImage::new("image.png").with_scale(2.0);
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FileImage {
     /// The path to the file.
     path: PathBuf,
@@ -357,12 +441,46 @@ impl FileImage {
 }
 
 impl ImageProvider for FileImage {
-    async fn load(&self, _configuration: &ImageConfiguration) -> ImageResult<Image> {
-        // TODO: Implement actual file loading
-        // This would typically involve reading from the file system and decoding
-        Err(ImageError::LoadFailed(
-            "FileImage loading not yet implemented".to_string(),
-        ))
+    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+        #[cfg(feature = "image-loading")]
+        {
+            let path = self.path.clone();
+
+            Box::pin(async move {
+            use tokio::fs::File;
+            use tokio::io::AsyncReadExt;
+
+            // Read file
+            let mut file = File::open(&path)
+                .await
+                .map_err(|e| ImageError::NotFound(format!("File not found: {}", e)))?;
+
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer)
+                .await
+                .map_err(|e| ImageError::LoadFailed(format!("Failed to read file: {}", e)))?;
+
+            // Decode image
+            let img = image::load_from_memory(&buffer)
+                .map_err(|e| ImageError::DecodeFailed(format!("Failed to decode image: {}", e)))?;
+
+            // Convert to RGBA8
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            let data = rgba.into_raw();
+
+            Ok(Image::from_rgba8(width, height, data))
+            })
+        }
+
+        #[cfg(not(feature = "image-loading"))]
+        {
+            Box::pin(async {
+                Err(ImageError::LoadFailed(
+                    "FileImage loading requires 'image-loading' feature".to_string(),
+                ))
+            })
+        }
     }
 
     fn key(&self) -> String {
@@ -383,7 +501,7 @@ impl ImageProvider for FileImage {
 /// let provider_with_scale = NetworkImage::new("https://example.com/image.png")
 ///     .with_scale(2.0);
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NetworkImage {
     /// The URL to fetch the image from.
     url: String,
@@ -442,12 +560,74 @@ impl NetworkImage {
 }
 
 impl ImageProvider for NetworkImage {
-    async fn load(&self, _configuration: &ImageConfiguration) -> ImageResult<Image> {
-        // TODO: Implement actual network loading
-        // This would typically involve using reqwest or similar to fetch the image
-        Err(ImageError::LoadFailed(
-            "NetworkImage loading not yet implemented".to_string(),
-        ))
+    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+        #[cfg(feature = "network-images")]
+        {
+            let url = self.url.clone();
+            let headers = self.headers.clone();
+
+            Box::pin(async move {
+            // Build HTTP client
+            let mut client_builder = reqwest::Client::builder();
+
+            // Set default user agent
+            client_builder = client_builder.user_agent("FLUI/1.0");
+
+            let client = client_builder
+                .build()
+                .map_err(|e| ImageError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+
+            // Build request
+            let mut request = client.get(&url);
+
+            // Add custom headers
+            if let Some(ref hdrs) = headers {
+                for (key, value) in hdrs {
+                    request = request.header(key, value);
+                }
+            }
+
+            // Fetch image
+            let response = request
+                .send()
+                .await
+                .map_err(|e| ImageError::NetworkError(format!("Failed to fetch image: {}", e)))?;
+
+            // Check status
+            if !response.status().is_success() {
+                return Err(ImageError::NetworkError(format!(
+                    "HTTP error: {}",
+                    response.status()
+                )));
+            }
+
+            // Read bytes
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| ImageError::NetworkError(format!("Failed to read response: {}", e)))?;
+
+            // Decode image
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| ImageError::DecodeFailed(format!("Failed to decode image: {}", e)))?;
+
+            // Convert to RGBA8
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            let data = rgba.into_raw();
+
+            Ok(Image::from_rgba8(width, height, data))
+            })
+        }
+
+        #[cfg(not(feature = "network-images"))]
+        {
+            Box::pin(async {
+                Err(ImageError::LoadFailed(
+                    "NetworkImage loading requires 'network-images' feature".to_string(),
+                ))
+            })
+        }
     }
 
     fn key(&self) -> String {
@@ -506,9 +686,14 @@ impl<F> ImageProvider for TransformedImageProvider<F>
 where
     F: Fn(Image) -> ImageResult<Image> + Send + Sync,
 {
-    async fn load(&self, configuration: &ImageConfiguration) -> ImageResult<Image> {
-        let base_image = self.base.load(configuration).await?;
-        (self.transform)(base_image)
+    fn load(&self, configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+        let base_future = self.base.load(configuration);
+        let transform = &self.transform;
+
+        Box::pin(async move {
+            let base_image = base_future.await?;
+            transform(base_image)
+        })
     }
 
     fn key(&self) -> String {

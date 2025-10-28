@@ -11,6 +11,15 @@ repository.workspace = true
 # No dependencies on other flui crates - this is the base!
 serde = { workspace = true, optional = true }
 
+# Image decoding support (optional)
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
+
+# Async HTTP for NetworkImage (optional)
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls"] }
+
+# Async runtime
+tokio = { version = "1", optional = true, features = ["fs", "io-util"] }
+
 [dev-dependencies]
 criterion.workspace = true
 tokio = { version = "1", features = ["macros", "rt"] }
@@ -18,3 +27,10 @@ tokio = { version = "1", features = ["macros", "rt"] }
 [features]
 default = []
 serde = ["dep:serde"]
+
+# Image loading features
+image-loading = ["dep:image", "dep:tokio"]
+network-images = ["dep:reqwest", "dep:tokio", "image-loading"]
+
+# All features enabled
+full = ["serde", "image-loading", "network-images"]

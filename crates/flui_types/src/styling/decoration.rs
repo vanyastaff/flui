@@ -1,6 +1,5 @@
 //! Decoration types for styling
 
-use crate::geometry::Rect;
 use crate::layout::Alignment;
 use crate::painting::Image;
 use crate::styling::{Border, BorderRadius, BoxShadow, Color, Gradient};
