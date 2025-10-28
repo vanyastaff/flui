@@ -2,7 +2,7 @@
 //!
 //! A composited layer that represents a visual element in the scene graph.
 
-use flui_types::{Rect, Offset};
+use flui_types::Rect;
 use crate::painter::Painter;
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -18,6 +18,9 @@ pub enum LayerState {
 
 /// Abstract base for all composited layers
 ///
+/// This is the main Layer trait that all layer types must implement.
+/// It provides the core functionality for the composited layer system.
+///
 /// # Layer Tree
 ///
 /// During painting, the render tree generates a tree of composited layers that
@@ -31,6 +34,12 @@ pub enum LayerState {
 ///   └─ ClipRectLayer
 ///       └─ PictureLayer
 /// ```
+///
+/// # Paint vs Add to Scene
+///
+/// This trait provides `paint()` for immediate rendering and will later include
+/// `add_to_scene()` when SceneBuilder is implemented. For now, all layers must
+/// implement `paint()` which is used by the current Compositor.
 ///
 /// # Mutability
 ///
@@ -49,26 +58,18 @@ pub enum LayerState {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_engine::layer::{Layer, LayerHandle, ClipRectLayer};
+/// use flui_engine::layer::{Layer, LayerHandle, ClipLayer};
 ///
 /// struct ClippingRenderObject {
-///     clip_layer_handle: LayerHandle<ClipRectLayer>,
+///     clip_layer_handle: LayerHandle<ClipLayer>,
 /// }
 ///
 /// impl ClippingRenderObject {
-///     fn is_repaint_boundary(&self) -> bool {
-///         true // The layer property will be used
-///     }
-///
 ///     fn paint(&mut self, context: &mut PaintingContext, offset: Offset) {
-///         let clip_layer = context.push_clip_rect(
-///             self.needs_compositing,
-///             offset,
-///             Offset::ZERO & self.size,
-///             |painter| self.paint_children(painter, offset),
-///             old_layer: self.clip_layer_handle.take(),
-///         );
-///         self.clip_layer_handle.set(Some(clip_layer));
+///         // Create or reuse layer
+///         let old_layer = self.clip_layer_handle.take();
+///         // ... paint logic ...
+///         self.clip_layer_handle.set(Some(new_layer));
 ///     }
 ///
 ///     fn dispose(&mut self) {
@@ -77,16 +78,16 @@ pub enum LayerState {
 /// }
 /// ```
 pub trait Layer: Send + Sync {
-    /// Add this layer to the scene
+    /// Paint this layer using the given painter
     ///
-    /// This method is called during scene composition to add the layer's
-    /// visual representation to the scene.
+    /// This is the current method used by the Compositor to render layers.
+    /// In the future, this will be supplemented by `add_to_scene()` when
+    /// SceneBuilder is implemented.
     ///
     /// # Arguments
     ///
     /// * `painter` - The painter to render with
-    /// * `offset` - The offset to apply to this layer's content
-    fn add_to_scene(&self, painter: &mut dyn Painter, offset: Offset);
+    fn paint(&self, painter: &mut dyn Painter);
 
     /// Get the bounding rectangle of this layer
     ///

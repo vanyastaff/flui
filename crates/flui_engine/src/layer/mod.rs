@@ -67,9 +67,6 @@
 //! }
 //! ```
 
-use flui_types::Rect;
-use crate::painter::Painter;
-
 // Core layer infrastructure
 pub mod base;
 pub mod handle;
@@ -81,8 +78,8 @@ pub mod transform;
 pub mod clip;
 pub mod picture;
 
-// Re-export core types
-pub use base::{Layer as AbstractLayer, AnyLayer, LayerState};
+// Re-export core types - Layer is now the main trait
+pub use base::{Layer, AnyLayer, LayerState};
 pub use handle::LayerHandle;
 
 // Re-export layer implementations
@@ -92,28 +89,8 @@ pub use transform::TransformLayer;
 pub use clip::ClipLayer;
 pub use picture::{PictureLayer, DrawCommand};
 
-// Legacy trait for backward compatibility
-/// Backend-agnostic layer trait (legacy)
-///
-/// **Note**: This is the old trait. New code should use `AbstractLayer` from `base.rs`
-/// which includes proper lifecycle management.
-///
-/// Layers are the building blocks of the scene graph. They represent
-/// visual elements that can be composed, transformed, and rendered.
-pub trait Layer: Send + Sync {
-    /// Paint this layer using the given painter
-    fn paint(&self, painter: &mut dyn Painter);
-
-    /// Get the bounding box of this layer
-    fn bounds(&self) -> Rect;
-
-    /// Check if this layer is visible
-    fn is_visible(&self) -> bool {
-        true
-    }
-}
-
 /// Type-erased layer (for dynamic dispatch)
 ///
-/// **Deprecated**: Use `AnyLayer` or `LayerHandle<T>` instead for better resource management.
+/// Use `Box<dyn Layer>` when you need to store layers of different types together.
+/// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;

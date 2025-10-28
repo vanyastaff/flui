@@ -3,7 +3,7 @@
 //! This module provides layers that clip their children to specific regions,
 //! following Flutter's ClipRectLayer and ClipRRectLayer architecture.
 
-use flui_types::{Rect, Offset};
+use flui_types::Rect;
 use crate::layer::{Layer as LegacyLayer, BoxedLayer};
 use crate::layer::base::Layer;
 use crate::painter::{Painter, RRect};
@@ -192,25 +192,21 @@ impl ClipRectLayer {
 }
 
 impl Layer for ClipRectLayer {
-    fn add_to_scene(&self, painter: &mut dyn Painter, offset: Offset) {
+    fn paint(&self, painter: &mut dyn Painter) {
         if self.disposed {
             panic!("Cannot use disposed ClipRectLayer");
         }
 
         painter.save();
 
-        // Apply offset to clip rect
-        let clip = Rect::from_min_max(
-            self.clip_rect.min + offset.into(),
-            self.clip_rect.max + offset.into(),
-        );
-        painter.clip_rect(clip);
+        // Apply clip rect
+        painter.clip_rect(self.clip_rect);
 
         // Paint all children
         for child in &self.children {
             let child_layer = child.read();
             if child_layer.is_visible() {
-                child_layer.add_to_scene(painter, offset);
+                child_layer.paint(painter);
             }
         }
 
@@ -330,28 +326,21 @@ impl ClipRRectLayer {
 }
 
 impl Layer for ClipRRectLayer {
-    fn add_to_scene(&self, painter: &mut dyn Painter, offset: Offset) {
+    fn paint(&self, painter: &mut dyn Painter) {
         if self.disposed {
             panic!("Cannot use disposed ClipRRectLayer");
         }
 
         painter.save();
 
-        // Apply offset to clip rrect
-        let clip = RRect {
-            rect: Rect::from_min_max(
-                self.clip_rrect.rect.min + offset.into(),
-                self.clip_rrect.rect.max + offset.into(),
-            ),
-            corner_radius: self.clip_rrect.corner_radius,
-        };
-        painter.clip_rrect(clip);
+        // Apply clip rrect
+        painter.clip_rrect(self.clip_rrect);
 
         // Paint all children
         for child in &self.children {
             let child_layer = child.read();
             if child_layer.is_visible() {
-                child_layer.add_to_scene(painter, offset);
+                child_layer.paint(painter);
             }
         }
 

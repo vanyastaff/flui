@@ -66,6 +66,24 @@ impl Scene {
         }
     }
 
+    /// Create a scene from an existing root layer
+    ///
+    /// This is primarily used by SceneBuilder to construct a scene
+    /// from a built layer tree.
+    ///
+    /// # Arguments
+    /// * `root` - The root container layer
+    /// * `viewport_size` - The size of the viewport to render into
+    pub fn from_root(root: ContainerLayer, viewport_size: Size) -> Self {
+        let mut scene = Self {
+            root,
+            viewport_size,
+            metadata: SceneMetadata::default(),
+        };
+        scene.update_metadata();
+        scene
+    }
+
     /// Add a layer to the scene
     ///
     /// Layers are added to the root container in the order they are added.

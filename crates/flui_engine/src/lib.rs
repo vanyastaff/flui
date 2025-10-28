@@ -66,7 +66,9 @@ pub mod layer;
 pub mod paint_context;
 pub mod painter;
 pub mod scene;
+pub mod scene_builder;
 pub mod surface;
+
 
 
 
@@ -99,6 +101,7 @@ pub use painter::wgpu::{
     WgpuPainter, WgpuRenderer, RenderError,
     TextRenderer, TextCommand, TextAlign, TextRenderError,
 };
+
 
 
 
