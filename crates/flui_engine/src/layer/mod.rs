@@ -85,7 +85,7 @@ pub use handle::LayerHandle;
 // Re-export layer implementations
 pub use container::ContainerLayer;
 pub use opacity::OpacityLayer;
-pub use transform::TransformLayer;
+pub use transform::{TransformLayer, Transform};
 
 // Clip layers
 pub use clip::{ClipRectLayer, ClipRRectLayer};

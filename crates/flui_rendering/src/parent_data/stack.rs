@@ -96,14 +96,14 @@ impl Default for StackParentData {
 }
 
 // Implement ParentData trait from flui_core
-impl flui_core::ParentData for StackParentData {
-    fn as_parent_data_with_offset(&self) -> Option<&dyn flui_core::ParentDataWithOffset> {
+impl flui_core::render::ParentData for StackParentData {
+    fn as_parent_data_with_offset(&self) -> Option<&dyn flui_core::render::ParentDataWithOffset> {
         Some(self)
     }
 }
 
 // Implement ParentDataWithOffset trait from flui_core
-impl flui_core::ParentDataWithOffset for StackParentData {
+impl flui_core::render::ParentDataWithOffset for StackParentData {
     fn offset(&self) -> flui_types::Offset {
         self.offset
     }

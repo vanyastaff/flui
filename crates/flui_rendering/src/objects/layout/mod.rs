@@ -34,13 +34,13 @@ pub mod wrap;
 
 
 // Re-exports
-pub use align::{RenderAlign, AlignData};
-pub use aspect_ratio::{RenderAspectRatio, AspectRatioData};
-pub use baseline::{RenderBaseline, BaselineData};
+pub use align::RenderAlign;
+pub use aspect_ratio::RenderAspectRatio;
+pub use baseline::RenderBaseline;
 pub use constrained_box::RenderConstrainedBox;
 pub use flex::RenderFlex;
 pub use fractionally_sized_box::RenderFractionallySizedBox;
-pub use indexed_stack::{RenderIndexedStack, IndexedStackData};
+pub use indexed_stack::RenderIndexedStack;
 pub use intrinsic_height::RenderIntrinsicHeight;
 pub use intrinsic_width::RenderIntrinsicWidth;
 pub use limited_box::RenderLimitedBox;
@@ -51,7 +51,7 @@ pub use positioned_box::RenderPositionedBox;
 pub use rotated_box::RenderRotatedBox;
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
-pub use stack::{RenderStack, StackData};
+pub use stack::RenderStack;
 pub use wrap::RenderWrap;
 
 

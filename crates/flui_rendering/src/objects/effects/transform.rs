@@ -1,92 +1,8 @@
 //! RenderTransform - applies matrix transformation to child
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
-
-/// Simple 2D transformation matrix
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Matrix4 {
-    /// Translation X
-    pub translate_x: f32,
-    /// Translation Y
-    pub translate_y: f32,
-    /// Scale X
-    pub scale_x: f32,
-    /// Scale Y
-    pub scale_y: f32,
-    /// Rotation in radians
-    pub rotation: f32,
-}
-
-impl Matrix4 {
-    /// Identity matrix (no transformation)
-    pub fn identity() -> Self {
-        Self {
-            translate_x: 0.0,
-            translate_y: 0.0,
-            scale_x: 1.0,
-            scale_y: 1.0,
-            rotation: 0.0,
-        }
-    }
-
-    /// Translation matrix
-    pub fn translation(x: f32, y: f32) -> Self {
-        Self {
-            translate_x: x,
-            translate_y: y,
-            ..Self::identity()
-        }
-    }
-
-    /// Scale matrix
-    pub fn scale(x: f32, y: f32) -> Self {
-        Self {
-            scale_x: x,
-            scale_y: y,
-            ..Self::identity()
-        }
-    }
-
-    /// Rotation matrix (radians)
-    pub fn rotation(radians: f32) -> Self {
-        Self {
-            rotation: radians,
-            ..Self::identity()
-        }
-    }
-}
-
-impl Default for Matrix4 {
-    fn default() -> Self {
-        Self::identity()
-    }
-}
-
-/// Data for RenderTransform
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TransformData {
-    /// The transformation matrix
-    pub transform: Matrix4,
-    /// Alignment origin for transformation
-    pub origin: Offset,
-}
-
-impl TransformData {
-    /// Create new transform data
-    pub fn new(transform: Matrix4) -> Self {
-        Self {
-            transform,
-            origin: Offset::ZERO,
-        }
-    }
-
-    /// Create with custom origin
-    pub fn with_origin(transform: Matrix4, origin: Offset) -> Self {
-        Self { transform, origin }
-    }
-}
+use flui_types::{Size, Offset};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::{TransformLayer, Transform, BoxedLayer};
 
 /// RenderObject that applies a transformation to its child
 ///
@@ -96,125 +12,65 @@ impl TransformData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::effects::{TransformData, Matrix4}};
+/// use flui_rendering::RenderTransform;
+/// use flui_engine::Transform;
 ///
-/// let transform = Matrix4::scale(2.0, 2.0);
-/// let mut render_transform = SingleRenderBox::new(TransformData::new(transform));
+/// let transform = RenderTransform::new(Transform::Rotate(std::f32::consts::PI / 4.0));
 /// ```
-pub type RenderTransform = SingleRenderBox<TransformData>;
+#[derive(Debug)]
+pub struct RenderTransform {
+    /// The transformation to apply
+    pub transform: Transform,
 
-// ===== Public API =====
+    /// Origin point for rotation/scale (relative to child size)
+    pub alignment: Offset,
+}
 
 impl RenderTransform {
-    /// Get the transformation matrix
-    pub fn transform(&self) -> Matrix4 {
-        self.data().transform
-    }
-
-    /// Get the origin
-    pub fn origin(&self) -> Offset {
-        self.data().origin
-    }
-
-    /// Set new transformation matrix
-    pub fn set_transform(&mut self, transform: Matrix4) {
-        if self.data().transform != transform {
-            self.data_mut().transform = transform;
-            self.mark_needs_paint();
+    /// Create new RenderTransform
+    pub fn new(transform: Transform) -> Self {
+        Self {
+            transform,
+            alignment: Offset::ZERO,
         }
     }
 
-    /// Set new origin
-    pub fn set_origin(&mut self, origin: Offset) {
-        if self.data().origin != origin {
-            self.data_mut().origin = origin;
-            self.mark_needs_paint();
+    /// Create with custom alignment/origin
+    pub fn with_alignment(transform: Transform, alignment: Offset) -> Self {
+        Self {
+            transform,
+            alignment,
         }
+    }
+
+    /// Set new transformation
+    pub fn set_transform(&mut self, transform: Transform) {
+        self.transform = transform;
+    }
+
+    /// Set alignment/origin
+    pub fn set_alignment(&mut self, alignment: Offset) {
+        self.alignment = alignment;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+impl RenderObject for RenderTransform {
+    type Arity = SingleArity;
 
-impl DynRenderObject for RenderTransform {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
-
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
         // Layout child with same constraints (transform doesn't affect layout)
-        let size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child_cached(child_id, constraints, None)
-        } else {
-            // No child - use smallest size
-            constraints.smallest()
-        };
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
-        size
+        let child = cx.child();
+        cx.layout_child(child, cx.constraints())
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        // Capture child layer
+        let child = cx.child();
+        let child_layer = cx.capture_child_layer(child);
 
-        // Paint child with transformation
-        if let Some(&child_id) = children_ids.first() {
-            let transform = self.data().transform;
-            let origin = self.data().origin;
-
-            // TODO: Full rotation and scaling support requires architectural changes
-            //
-            // The challenge: egui's Shape::Transform requires collecting all shapes first,
-            // then wrapping them in Transform. But our current paint architecture calls
-            // ctx.paint_child() which paints directly to the painter.
-            //
-            // Solution path:
-            // 1. Create PainterProxy that implements egui::Painter trait
-            // 2. Have PainterProxy collect shapes instead of painting directly
-            // 3. After paint_child(), wrap collected shapes in Shape::Transform
-            // 4. Add transformed shapes to real painter
-            //
-            // Alternatively:
-            // - Change paint signature to return Vec<Shape> instead of painting directly
-            // - This would require changing all 81 RenderObjects
-            //
-            // For now: TransformPainter infrastructure is ready in flui_painting,
-            // but integration requires the painter proxy approach.
-
-            // Calculate transformed offset (apply only translation for now)
-            let transformed_offset = Offset::new(
-                offset.dx + transform.translate_x + origin.dx,
-                offset.dy + transform.translate_y + origin.dy,
-            );
-
-            // Log a warning if rotation or scaling is requested but not yet supported
-            if transform.rotation.abs() > 1e-6 {
-                tracing::warn!(
-                    "RenderTransform: rotation ({} rad) requested but not yet fully implemented. \
-                    Only translation is currently supported. See transform.rs for implementation roadmap.",
-                    transform.rotation
-                );
-            }
-            if (transform.scale_x - 1.0).abs() > 1e-6 || (transform.scale_y - 1.0).abs() > 1e-6 {
-                tracing::warn!(
-                    "RenderTransform: scaling ({}, {}) requested but not yet fully implemented. \
-                    Only translation is currently supported. See transform.rs for implementation roadmap.",
-                    transform.scale_x,
-                    transform.scale_y
-                );
-            }
-
-            ctx.paint_child(child_id, painter, transformed_offset);
-        }
+        // Wrap in TransformLayer
+        Box::new(TransformLayer::new(child_layer, self.transform))
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -222,93 +78,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_matrix4_identity() {
-        let m = Matrix4::identity();
-        assert_eq!(m.translate_x, 0.0);
-        assert_eq!(m.translate_y, 0.0);
-        assert_eq!(m.scale_x, 1.0);
-        assert_eq!(m.scale_y, 1.0);
-        assert_eq!(m.rotation, 0.0);
-    }
-
-    #[test]
-    fn test_matrix4_translation() {
-        let m = Matrix4::translation(10.0, 20.0);
-        assert_eq!(m.translate_x, 10.0);
-        assert_eq!(m.translate_y, 20.0);
-        assert_eq!(m.scale_x, 1.0);
-        assert_eq!(m.scale_y, 1.0);
-    }
-
-    #[test]
-    fn test_matrix4_scale() {
-        let m = Matrix4::scale(2.0, 3.0);
-        assert_eq!(m.scale_x, 2.0);
-        assert_eq!(m.scale_y, 3.0);
-        assert_eq!(m.translate_x, 0.0);
-    }
-
-    #[test]
-    fn test_matrix4_rotation() {
-        let m = Matrix4::rotation(std::f32::consts::PI);
-        assert_eq!(m.rotation, std::f32::consts::PI);
-    }
-
-    #[test]
-    fn test_transform_data_new() {
-        let transform = Matrix4::scale(2.0, 2.0);
-        let data = TransformData::new(transform);
-        assert_eq!(data.transform, transform);
-        assert_eq!(data.origin, Offset::ZERO);
-    }
-
-    #[test]
-    fn test_transform_data_with_origin() {
-        let transform = Matrix4::identity();
-        let origin = Offset::new(10.0, 20.0);
-        let data = TransformData::with_origin(transform, origin);
-        assert_eq!(data.origin, origin);
-    }
-
-    #[test]
     fn test_render_transform_new() {
-        let transform = Matrix4::scale(2.0, 2.0);
-        let mut render_transform = SingleRenderBox::new(TransformData::new(transform));
-        assert_eq!(render_transform.transform(), transform);
+        let transform = RenderTransform::new(Transform::Rotate(1.0));
+        assert!(matches!(transform.transform, Transform::Rotate(_)));
+    }
+
+    #[test]
+    fn test_render_transform_with_alignment() {
+        let transform = RenderTransform::with_alignment(
+            Transform::Scale(2.0),
+            Offset::new(0.5, 0.5)
+        );
+        assert!(matches!(transform.transform, Transform::Scale(_)));
+        assert_eq!(transform.alignment, Offset::new(0.5, 0.5));
     }
 
     #[test]
     fn test_render_transform_set_transform() {
-        use flui_core::testing::mock_render_context;
-
-        let transform1 = Matrix4::scale(1.0, 1.0);
-        let mut render_transform = SingleRenderBox::new(TransformData::new(transform1));
-
-        // Clear initial needs_layout flag
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let (_tree, ctx) = mock_render_context();
-        let _ = render_transform.layout(constraints, &ctx);
-
-        let transform2 = Matrix4::scale(2.0, 2.0);
-        render_transform.set_transform(transform2);
-
-        assert_eq!(render_transform.transform(), transform2);
-        assert!(render_transform.needs_paint());
-        assert!(!render_transform.needs_layout());
-    }
-
-    #[test]
-    fn test_render_transform_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let transform = Matrix4::translation(50.0, 50.0);
-        let mut render_transform = SingleRenderBox::new(TransformData::new(transform));
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = render_transform.layout(constraints, &ctx);
-
-        // Transform doesn't affect layout
-        assert_eq!(size, Size::new(0.0, 0.0));
+        let mut transform = RenderTransform::new(Transform::Translate(Offset::ZERO));
+        transform.set_transform(Transform::Rotate(1.5));
+        assert!(matches!(transform.transform, Transform::Rotate(_)));
     }
 }

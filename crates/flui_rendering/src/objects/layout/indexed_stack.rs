@@ -1,38 +1,8 @@
 //! RenderIndexedStack - shows only one child by index
 
-use flui_types::{Offset, Size, constraints::BoxConstraints, Alignment};
-use flui_core::DynRenderObject;
-use crate::core::{ContainerRenderBox, RenderBoxMixin};
-
-/// Data for RenderIndexedStack
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct IndexedStackData {
-    /// Index of child to display (None = show nothing)
-    pub index: Option<usize>,
-    /// How to align the selected child
-    pub alignment: Alignment,
-}
-
-impl IndexedStackData {
-    /// Create new indexed stack data
-    pub fn new(index: Option<usize>) -> Self {
-        Self {
-            index,
-            alignment: Alignment::TOP_LEFT,
-        }
-    }
-
-    /// Create with specific alignment
-    pub fn with_alignment(index: Option<usize>, alignment: Alignment) -> Self {
-        Self { index, alignment }
-    }
-}
-
-impl Default for IndexedStackData {
-    fn default() -> Self {
-        Self::new(None)
-    }
-}
+use flui_types::{Offset, Size, Alignment};
+use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
+use flui_engine::{BoxedLayer, ContainerLayer, TransformLayer};
 
 /// RenderObject that shows only one child from a list
 ///
@@ -45,129 +15,115 @@ impl Default for IndexedStackData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{ContainerRenderBox, objects::layout::IndexedStackData};
+/// use flui_rendering::objects::layout::RenderIndexedStack;
 ///
-/// let mut indexed_stack = ContainerRenderBox::new(IndexedStackData::new(Some(0)));
+/// let mut indexed_stack = RenderIndexedStack::new(Some(0));
 /// ```
-pub type RenderIndexedStack = ContainerRenderBox<IndexedStackData>;
+#[derive(Debug)]
+pub struct RenderIndexedStack {
+    /// Index of child to display (None = show nothing)
+    pub index: Option<usize>,
+    /// How to align the selected child
+    pub alignment: Alignment,
 
-// ===== Public API =====
+    // Cache for paint
+    child_sizes: Vec<Size>,
+    size: Size,
+}
 
 impl RenderIndexedStack {
-    /// Get reference to type-specific data
-    pub fn data(&self) -> &IndexedStackData {
-        &self.data
+    /// Create new indexed stack
+    pub fn new(index: Option<usize>) -> Self {
+        Self {
+            index,
+            alignment: Alignment::TOP_LEFT,
+            child_sizes: Vec::new(),
+            size: Size::ZERO,
+        }
     }
 
-    /// Get mutable reference to type-specific data
-    pub fn data_mut(&mut self) -> &mut IndexedStackData {
-        &mut self.data
-    }
-
-    /// Get the current index
-    pub fn index(&self) -> Option<usize> {
-        self.data().index
-    }
-
-    /// Get the alignment
-    pub fn alignment(&self) -> Alignment {
-        self.data().alignment
+    /// Create with specific alignment
+    pub fn with_alignment(index: Option<usize>, alignment: Alignment) -> Self {
+        Self {
+            index,
+            alignment,
+            child_sizes: Vec::new(),
+            size: Size::ZERO,
+        }
     }
 
     /// Set new index
     pub fn set_index(&mut self, index: Option<usize>) {
-        if self.data().index != index {
-            self.data_mut().index = index;
-            self.mark_needs_paint();
-        }
+        self.index = index;
     }
 
     /// Set new alignment
     pub fn set_alignment(&mut self, alignment: Alignment) {
-        if self.data().alignment != alignment {
-            self.data_mut().alignment = alignment;
-            self.mark_needs_layout();
-        }
+        self.alignment = alignment;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+impl Default for RenderIndexedStack {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
 
-impl DynRenderObject for RenderIndexedStack {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+impl RenderObject for RenderIndexedStack {
+    type Arity = MultiArity;
 
-        let children_ids = ctx.children();
-        let child_count = children_ids.len();
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        let children = cx.children();
+        let constraints = cx.constraints();
 
-        if children_ids.is_empty() {
-            let size = constraints.smallest();
-            *state.size.lock() = Some(size);
-            state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-            return size;
+        if children.is_empty() {
+            self.child_sizes.clear();
+            return constraints.smallest();
         }
 
         // Layout all children (to maintain their state)
-        // CRITICAL: Pass child_count to enable proper cache invalidation when children change
         let mut max_width: f32 = 0.0;
         let mut max_height: f32 = 0.0;
+        self.child_sizes.clear();
 
-        for &child_id in children_ids {
-            // Use cached layout with child_count for proper cache invalidation
-            let child_size = ctx.layout_child_cached(child_id, constraints, Some(child_count));
+        for child in children.iter().copied() {
+            let child_size = cx.layout_child(child, constraints);
+            self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
         }
 
         // Size is the max of all children
-        let size = Size::new(
+        self.size = Size::new(
             max_width.clamp(constraints.min_width, constraints.max_width),
             max_height.clamp(constraints.min_height, constraints.max_height),
         );
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
-        size
+        self.size
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        let children_ids = ctx.children();
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        let children = cx.children();
+        let mut container = ContainerLayer::new();
 
         // Only paint the selected child
-        if let Some(index) = self.data().index {
-            if let Some(&child_id) = children_ids.get(index) {
-                let size = state.size.lock().unwrap_or(Size::ZERO);
-                let alignment = self.data().alignment;
-
-                // Get child size
-                let child_size = if let Some(child_elem) = ctx.tree().get(child_id) {
-                    if let Some(child_ro) = child_elem.render_object() {
-                        child_ro.size()
-                    } else {
-                        Size::ZERO
-                    }
-                } else {
-                    Size::ZERO
-                };
-
+        if let Some(index) = self.index
+            && let (Some(&child), Some(&child_size)) = (children.get(index), self.child_sizes.get(index)) {
                 // Calculate aligned position
-                let child_offset = alignment.calculate_offset(child_size, size);
+                let child_offset = self.alignment.calculate_offset(child_size, self.size);
 
-                let paint_offset = Offset::new(
-                    offset.dx + child_offset.dx,
-                    offset.dy + child_offset.dy,
-                );
+                // Capture child layer and apply offset transform
+                let child_layer = cx.capture_child_layer(child);
 
-                ctx.paint_child(child_id, painter, paint_offset);
+                if child_offset != Offset::ZERO {
+                    let transform_layer = TransformLayer::translate(child_layer, child_offset);
+                    container.add_child(Box::new(transform_layer));
+                } else {
+                    container.add_child(child_layer);
+                }
             }
-        }
-    }
 
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
+        Box::new(container)
+    }
 }
 
 #[cfg(test)]
@@ -175,65 +131,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_indexed_stack_data_new() {
-        let data = IndexedStackData::new(Some(0));
-        assert_eq!(data.index, Some(0));
-        assert_eq!(data.alignment, Alignment::TOP_LEFT);
-    }
-
-    #[test]
-    fn test_indexed_stack_data_with_alignment() {
-        let data = IndexedStackData::with_alignment(Some(1), Alignment::CENTER);
-        assert_eq!(data.index, Some(1));
-        assert_eq!(data.alignment, Alignment::CENTER);
-    }
-
-    #[test]
-    fn test_indexed_stack_data_default() {
-        let data = IndexedStackData::default();
-        assert_eq!(data.index, None);
-    }
-
-    #[test]
     fn test_render_indexed_stack_new() {
-        let stack = ContainerRenderBox::new(IndexedStackData::new(Some(0)));
-        assert_eq!(stack.index(), Some(0));
-        assert_eq!(stack.alignment(), Alignment::TOP_LEFT);
+        let stack = RenderIndexedStack::new(Some(0));
+        assert_eq!(stack.index, Some(0));
+        assert_eq!(stack.alignment, Alignment::TOP_LEFT);
     }
 
     #[test]
-    #[cfg(disabled_test)] // TODO: Update test to use RenderContext
+    fn test_render_indexed_stack_with_alignment() {
+        let stack = RenderIndexedStack::with_alignment(Some(1), Alignment::CENTER);
+        assert_eq!(stack.index, Some(1));
+        assert_eq!(stack.alignment, Alignment::CENTER);
+    }
+
+    #[test]
+    fn test_render_indexed_stack_default() {
+        let stack = RenderIndexedStack::default();
+        assert_eq!(stack.index, None);
+    }
+
+    #[test]
     fn test_render_indexed_stack_set_index() {
-        let mut stack = ContainerRenderBox::new(IndexedStackData::new(Some(0)));
-
-        // Clear initial needs_layout flag
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let _ = stack.layout(constraints);
-
+        let mut stack = RenderIndexedStack::new(Some(0));
         stack.set_index(Some(1));
-        assert_eq!(stack.index(), Some(1));
-        assert!(stack.needs_paint());
-        assert!(!stack.needs_layout());
+        assert_eq!(stack.index, Some(1));
     }
 
     #[test]
     fn test_render_indexed_stack_set_alignment() {
-        let mut stack = ContainerRenderBox::new(IndexedStackData::new(Some(0)));
-
+        let mut stack = RenderIndexedStack::new(Some(0));
         stack.set_alignment(Alignment::CENTER);
-        assert_eq!(stack.alignment(), Alignment::CENTER);
-        assert!(stack.needs_layout());
-    }
-
-    #[test]
-    #[cfg(disabled_test)] // TODO: Update test to use RenderContext
-    fn test_render_indexed_stack_layout_no_children() {
-        let mut stack = ContainerRenderBox::new(IndexedStackData::new(Some(0)));
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let size = stack.layout(constraints);
-
-        // Should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
+        assert_eq!(stack.alignment, Alignment::CENTER);
     }
 }

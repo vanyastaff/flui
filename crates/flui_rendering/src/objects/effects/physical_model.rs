@@ -1,8 +1,8 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
-use flui_types::{Offset, Size, constraints::BoxConstraints, Color};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::{Color, Size};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::{BoxedLayer, ContainerLayer, PictureLayer, Paint};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,9 +15,22 @@ pub enum PhysicalShape {
     Circle,
 }
 
-/// Data for RenderPhysicalModel
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PhysicalModelData {
+/// RenderObject that renders Material Design elevation with shadow
+///
+/// Creates a physical layer effect with shadow based on elevation.
+/// Higher elevation values create larger, softer shadows.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderPhysicalModel;
+/// use flui_types::Color;
+///
+/// // Create elevated card with rounded corners
+/// let card = RenderPhysicalModel::rounded_rectangle(4.0, 8.0, Color::WHITE);
+/// ```
+#[derive(Debug)]
+pub struct RenderPhysicalModel {
     /// Shape of the physical model
     pub shape: PhysicalShape,
     /// Border radius (for rounded rectangle)
@@ -28,10 +41,13 @@ pub struct PhysicalModelData {
     pub color: Color,
     /// Shadow color
     pub shadow_color: Color,
+
+    // Cache for paint
+    size: Size,
 }
 
-impl PhysicalModelData {
-    /// Create new physical model data
+impl RenderPhysicalModel {
+    /// Create new RenderPhysicalModel
     pub fn new(shape: PhysicalShape, elevation: f32, color: Color) -> Self {
         Self {
             shape,
@@ -39,6 +55,7 @@ impl PhysicalModelData {
             elevation,
             color,
             shadow_color: Color::rgba(0, 0, 0, 128),
+            size: Size::ZERO,
         }
     }
 
@@ -55,6 +72,7 @@ impl PhysicalModelData {
             elevation,
             color,
             shadow_color: Color::rgba(0, 0, 0, 128),
+            size: Size::ZERO,
         }
     }
 
@@ -68,164 +86,99 @@ impl PhysicalModelData {
         self.shadow_color = shadow_color;
         self
     }
+
+    /// Set shape
+    pub fn set_shape(&mut self, shape: PhysicalShape) {
+        self.shape = shape;
+    }
+
+    /// Set elevation
+    pub fn set_elevation(&mut self, elevation: f32) {
+        self.elevation = elevation;
+    }
+
+    /// Set color
+    pub fn set_color(&mut self, color: Color) {
+        self.color = color;
+    }
 }
 
-impl Default for PhysicalModelData {
+impl Default for RenderPhysicalModel {
     fn default() -> Self {
         Self::rectangle(0.0, Color::WHITE)
     }
 }
 
-/// RenderObject that renders Material Design elevation with shadow
-///
-/// Creates a physical layer effect with shadow based on elevation.
-/// Higher elevation values create larger, softer shadows.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::effects::PhysicalModelData};
-/// use flui_types::Color;
-///
-/// // Create elevated card with rounded corners
-/// let mut card = SingleRenderBox::new(
-///     PhysicalModelData::rounded_rectangle(4.0, 8.0, Color::WHITE)
-/// );
-/// ```
-pub type RenderPhysicalModel = SingleRenderBox<PhysicalModelData>;
+impl RenderObject for RenderPhysicalModel {
+    type Arity = SingleArity;
 
-// ===== Public API =====
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        let constraints = cx.constraints();
 
-impl RenderPhysicalModel {
-    /// Get shape
-    pub fn shape(&self) -> PhysicalShape {
-        self.data().shape
-    }
+        // SingleArity always has exactly one child
+        let child = cx.child();
+        let size = cx.layout_child(child, constraints);
 
-    /// Get elevation
-    pub fn elevation(&self) -> f32 {
-        self.data().elevation
-    }
-
-    /// Get color
-    pub fn color(&self) -> Color {
-        self.data().color
-    }
-
-    /// Get shadow color
-    pub fn shadow_color(&self) -> Color {
-        self.data().shadow_color
-    }
-
-    /// Set shape
-    pub fn set_shape(&mut self, shape: PhysicalShape) {
-        if self.data().shape != shape {
-            self.data_mut().shape = shape;
-            self.mark_needs_paint();
-        }
-    }
-
-    /// Set elevation
-    pub fn set_elevation(&mut self, elevation: f32) {
-        if self.data().elevation != elevation {
-            self.data_mut().elevation = elevation;
-            self.mark_needs_paint();
-        }
-    }
-
-    /// Set color
-    pub fn set_color(&mut self, color: Color) {
-        if self.data().color != color {
-            self.data_mut().color = color;
-            self.mark_needs_paint();
-        }
-    }
-}
-
-// ===== DynRenderObject Implementation =====
-
-impl DynRenderObject for RenderPhysicalModel {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
-
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
-        // Layout child with same constraints
-        let size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child_cached(child_id, constraints, None)
-        } else {
-            constraints.smallest()
-        };
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
+        // Store size for paint
+        self.size = size;
 
         size
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        let size = state.size.lock().unwrap_or(Size::ZERO);
-        let elevation = self.data().elevation;
-        let color = self.data().color;
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        let mut container = ContainerLayer::new();
 
-        // Create rect for background
-        let rect = egui::Rect::from_min_size(
-            egui::pos2(offset.dx, offset.dy),
-            egui::vec2(size.width, size.height),
-        );
-
-        // Paint shadow if elevation > 0
-        if elevation > 0.0 {
-            // TODO: Paint Material Design shadow
-            // Shadow properties based on elevation:
-            // - blur_radius = elevation * 0.5
-            // - spread_radius = elevation * 0.25
-            // - offset = (0, elevation * 0.5)
-            //
-            // For now, we skip shadow painting
-            // A real implementation would:
-            // 1. Calculate shadow parameters from elevation
-            // 2. Paint shadow using BoxShadow or custom shape
-            // 3. Support different shadow styles (key light, ambient)
-        }
+        // TODO: Add shadow layer when BoxShadow layer is implemented
+        // For now, skip shadow painting
+        // A full implementation would:
+        // 1. Calculate shadow parameters from elevation
+        // 2. Create a BoxShadowLayer with appropriate blur and offset
+        // 3. Add it before the background shape
 
         // Paint background shape
-        let egui_color = egui::Color32::from_rgba_unmultiplied(
-            color.red(),
-            color.green(),
-            color.blue(),
-            color.alpha(),
-        );
+        let mut picture = PictureLayer::new();
+        let size = self.size;
 
-        match self.data().shape {
+        let paint = Paint {
+            color: [
+                self.color.red() as f32 / 255.0,
+                self.color.green() as f32 / 255.0,
+                self.color.blue() as f32 / 255.0,
+                self.color.alpha() as f32 / 255.0,
+            ],
+            ..Default::default()
+        };
+
+        match self.shape {
             PhysicalShape::Rectangle => {
-                painter.rect_filled(rect, 0.0, egui_color);
+                picture.draw_rect(
+                    flui_types::Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                    paint,
+                );
             }
             PhysicalShape::RoundedRectangle => {
-                let radius = self.data().border_radius;
-                painter.rect_filled(rect, radius, egui_color);
+                let rrect = flui_engine::painter::RRect {
+                    rect: flui_types::Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                    corner_radius: self.border_radius,
+                };
+                picture.draw_rrect(rrect, paint);
             }
             PhysicalShape::Circle => {
-                let center = rect.center();
                 let radius = size.width.min(size.height) / 2.0;
-                painter.circle_filled(center, radius, egui_color);
+                let center = flui_types::Point::new(size.width / 2.0, size.height / 2.0);
+                picture.draw_circle(center, radius, paint);
             }
         }
 
+        container.add_child(Box::new(picture));
+
         // Paint child on top
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
+        let child = cx.child();
+        let child_layer = cx.capture_child_layer(child);
+        container.add_child(child_layer);
 
-        if let Some(&child_id) = children_ids.first() {
-            ctx.paint_child(child_id, painter, offset);
-        }
+        Box::new(container)
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -239,83 +192,57 @@ mod tests {
     }
 
     #[test]
-    fn test_physical_model_data_new() {
-        let data = PhysicalModelData::new(
+    fn test_render_physical_model_new() {
+        let model = RenderPhysicalModel::new(
             PhysicalShape::Rectangle,
             4.0,
             Color::WHITE,
         );
-        assert_eq!(data.shape, PhysicalShape::Rectangle);
-        assert_eq!(data.elevation, 4.0);
-        assert_eq!(data.color, Color::WHITE);
+        assert_eq!(model.shape, PhysicalShape::Rectangle);
+        assert_eq!(model.elevation, 4.0);
+        assert_eq!(model.color, Color::WHITE);
     }
 
     #[test]
-    fn test_physical_model_data_rectangle() {
-        let data = PhysicalModelData::rectangle(2.0, Color::rgb(255, 0, 0));
-        assert_eq!(data.shape, PhysicalShape::Rectangle);
-        assert_eq!(data.elevation, 2.0);
+    fn test_render_physical_model_rectangle() {
+        let model = RenderPhysicalModel::rectangle(2.0, Color::rgb(255, 0, 0));
+        assert_eq!(model.shape, PhysicalShape::Rectangle);
+        assert_eq!(model.elevation, 2.0);
     }
 
     #[test]
-    fn test_physical_model_data_rounded_rectangle() {
-        let data = PhysicalModelData::rounded_rectangle(4.0, 8.0, Color::WHITE);
-        assert_eq!(data.shape, PhysicalShape::RoundedRectangle);
-        assert_eq!(data.border_radius, 8.0);
-        assert_eq!(data.elevation, 4.0);
+    fn test_render_physical_model_rounded_rectangle() {
+        let model = RenderPhysicalModel::rounded_rectangle(4.0, 8.0, Color::WHITE);
+        assert_eq!(model.shape, PhysicalShape::RoundedRectangle);
+        assert_eq!(model.border_radius, 8.0);
+        assert_eq!(model.elevation, 4.0);
     }
 
     #[test]
-    fn test_physical_model_data_circle() {
-        let data = PhysicalModelData::circle(6.0, Color::BLUE);
-        assert_eq!(data.shape, PhysicalShape::Circle);
-        assert_eq!(data.elevation, 6.0);
+    fn test_render_physical_model_circle() {
+        let model = RenderPhysicalModel::circle(6.0, Color::BLUE);
+        assert_eq!(model.shape, PhysicalShape::Circle);
+        assert_eq!(model.elevation, 6.0);
     }
 
     #[test]
-    fn test_physical_model_data_with_shadow_color() {
-        let data = PhysicalModelData::rectangle(4.0, Color::WHITE)
+    fn test_render_physical_model_with_shadow_color() {
+        let model = RenderPhysicalModel::rectangle(4.0, Color::WHITE)
             .with_shadow_color(Color::rgba(0, 0, 0, 64));
-        assert_eq!(data.shadow_color, Color::rgba(0, 0, 0, 64));
-    }
-
-    #[test]
-    fn test_render_physical_model_new() {
-        let model = SingleRenderBox::new(PhysicalModelData::rectangle(4.0, Color::WHITE));
-        assert_eq!(model.shape(), PhysicalShape::Rectangle);
-        assert_eq!(model.elevation(), 4.0);
-        assert_eq!(model.color(), Color::WHITE);
+        assert_eq!(model.shadow_color, Color::rgba(0, 0, 0, 64));
     }
 
     #[test]
     fn test_render_physical_model_set_elevation() {
-        let mut model = SingleRenderBox::new(PhysicalModelData::rectangle(2.0, Color::WHITE));
-
+        let mut model = RenderPhysicalModel::rectangle(2.0, Color::WHITE);
         model.set_elevation(8.0);
-        assert_eq!(model.elevation(), 8.0);
-        assert!(model.needs_paint());
+        assert_eq!(model.elevation, 8.0);
     }
 
     #[test]
     fn test_render_physical_model_set_color() {
-        let mut model = SingleRenderBox::new(PhysicalModelData::rectangle(4.0, Color::WHITE));
-
+        let mut model = RenderPhysicalModel::rectangle(4.0, Color::WHITE);
         model.set_color(Color::RED);
-        assert_eq!(model.color(), Color::RED);
-        assert!(model.needs_paint());
-    }
-
-    #[test]
-    fn test_render_physical_model_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let model = SingleRenderBox::new(PhysicalModelData::rectangle(4.0, Color::WHITE));
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = model.layout(constraints, &ctx);
-
-        // No child, should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
+        assert_eq!(model.color, Color::RED);
     }
 }

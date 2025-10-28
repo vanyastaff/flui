@@ -1,29 +1,48 @@
 //! RenderAlign - aligns child within available space
 
-use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::{Alignment, Offset, Size};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::{BoxedLayer, TransformLayer};
 
-/// Data for RenderAlign
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AlignData {
+/// RenderObject that aligns its child within the available space
+///
+/// This widget positions its child according to the alignment parameter.
+/// If width_factor or height_factor are specified, the RenderAlign will
+/// size itself to be that factor times the child's size in that dimension.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderAlign;
+/// use flui_types::Alignment;
+///
+/// let align = RenderAlign::new(Alignment::TOP_LEFT);
+/// ```
+#[derive(Debug)]
+pub struct RenderAlign {
     /// The alignment within the available space
     pub alignment: Alignment,
     /// Width factor - if Some, the width is child_width * width_factor
-    /// Otherwise, shrink wraps to child
+    /// Otherwise, expands to fill available space
     pub width_factor: Option<f32>,
     /// Height factor - if Some, the height is child_height * height_factor
-    /// Otherwise, shrink wraps to child
+    /// Otherwise, expands to fill available space
     pub height_factor: Option<f32>,
+
+    // Cache for paint
+    child_size: Size,
+    size: Size,
 }
 
-impl AlignData {
-    /// Create new align data with default alignment (center)
+impl RenderAlign {
+    /// Create new RenderAlign with specified alignment
     pub fn new(alignment: Alignment) -> Self {
         Self {
             alignment,
             width_factor: None,
             height_factor: None,
+            child_size: Size::ZERO,
+            size: Size::ZERO,
         }
     }
 
@@ -37,116 +56,59 @@ impl AlignData {
             alignment,
             width_factor,
             height_factor,
+            child_size: Size::ZERO,
+            size: Size::ZERO,
         }
-    }
-}
-
-impl Default for AlignData {
-    fn default() -> Self {
-        Self {
-            alignment: Alignment::CENTER,
-            width_factor: None,
-            height_factor: None,
-        }
-    }
-}
-
-/// RenderObject that aligns its child within the available space
-///
-/// This widget positions its child according to the alignment parameter.
-/// If width_factor or height_factor are specified, the RenderAlign will
-/// size itself to be that factor times the child's size in that dimension.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::layout::AlignData};
-/// use flui_types::Alignment;
-///
-/// let mut align = SingleRenderBox::new(AlignData::new(Alignment::TOP_LEFT));
-/// ```
-pub type RenderAlign = SingleRenderBox<AlignData>;
-
-// ===== Public API =====
-
-impl RenderAlign {
-    /// Get the alignment
-    pub fn alignment(&self) -> Alignment {
-        self.data().alignment
     }
 
     /// Set new alignment
-    ///
-    /// If alignment changes, marks as needing layout.
     pub fn set_alignment(&mut self, alignment: Alignment) {
-        if self.data().alignment != alignment {
-            self.data_mut().alignment = alignment;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Get width factor
-    pub fn width_factor(&self) -> Option<f32> {
-        self.data().width_factor
+        self.alignment = alignment;
     }
 
     /// Set width factor
     pub fn set_width_factor(&mut self, width_factor: Option<f32>) {
-        if self.data().width_factor != width_factor {
-            self.data_mut().width_factor = width_factor;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Get height factor
-    pub fn height_factor(&self) -> Option<f32> {
-        self.data().height_factor
+        self.width_factor = width_factor;
     }
 
     /// Set height factor
     pub fn set_height_factor(&mut self, height_factor: Option<f32>) {
-        if self.data().height_factor != height_factor {
-            self.data_mut().height_factor = height_factor;
-            self.mark_needs_layout();
-        }
+        self.height_factor = height_factor;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+impl Default for RenderAlign {
+    fn default() -> Self {
+        Self::new(Alignment::CENTER)
+    }
+}
 
-impl DynRenderObject for RenderAlign {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+impl RenderObject for RenderAlign {
+    type Arity = SingleArity;
 
-        // Clone data to avoid borrow checker issues
-        let width_factor = self.data().width_factor;
-        let height_factor = self.data().height_factor;
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        let child = cx.child();
+        let constraints = cx.constraints();
 
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
+        // SingleArity always has exactly one child
         // Layout child with loose constraints to get its natural size
-        let child_size = if let Some(&child_id) = children_ids.first() {
-            // Let child determine its own size within constraints
-            ctx.layout_child_cached(child_id, constraints.loosen(), None)
-        } else {
-            Size::ZERO
-        };
+        let child_size = cx.layout_child(child, constraints.loosen());
+
+        // Store child size for paint
+        self.child_size = child_size;
 
         // Calculate our size based on factors
         // Flutter behavior:
         // - If factor is set: size = child_size * factor
-        // - If no factor: ALWAYS expand to fill constraints (take max)
-        //   This is how Flutter Align works - it always tries to be as big as possible
-        let width = if let Some(factor) = width_factor {
+        // - If no factor: expand to fill constraints (take max)
+        let width = if let Some(factor) = self.width_factor {
             (child_size.width * factor).clamp(constraints.min_width, constraints.max_width)
         } else {
             // No factor: expand to fill available width
             constraints.max_width
         };
 
-        let height = if let Some(factor) = height_factor {
+        let height = if let Some(factor) = self.height_factor {
             (child_size.height * factor).clamp(constraints.min_height, constraints.max_height)
         } else {
             // No factor: expand to fill available height
@@ -154,56 +116,35 @@ impl DynRenderObject for RenderAlign {
         };
 
         let size = Size::new(width, height);
-
-        // Store child size for paint offset calculation
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
+        // Store our size for paint
+        self.size = size;
         size
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        let child = cx.child();
 
-        // Paint child at aligned position
-        if let Some(&child_id) = children_ids.first() {
-            let data = self.data();
-            let size = state.size.lock().unwrap_or(Size::ZERO);
+        // SingleArity always has exactly one child
+        // Get child layer
+        let child_layer = cx.capture_child_layer(child);
 
-            // Get child size from RenderState in ElementTree
-            // Use ctx.tree().render_state() instead of element.render_object().size()
-            // because size() method returns ZERO by default
-            let child_size = if let Some(child_state) = ctx.tree().render_state(child_id) {
-                child_state.size.lock().unwrap_or(Size::ZERO)
-            } else {
-                Size::ZERO
-            };
+        // Use the size from layout phase
+        let size = self.size;
+        let child_size = self.child_size;
 
-            // Calculate aligned offset manually
-            // Alignment: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
-            let available_width = size.width - child_size.width;
-            let available_height = size.height - child_size.height;
+        // Calculate aligned offset
+        // Alignment: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
+        let available_width = size.width - child_size.width;
+        let available_height = size.height - child_size.height;
 
-            let aligned_x = (available_width * (data.alignment.x + 1.0)) / 2.0;
-            let aligned_y = (available_height * (data.alignment.y + 1.0)) / 2.0;
+        let aligned_x = (available_width * (self.alignment.x + 1.0)) / 2.0;
+        let aligned_y = (available_height * (self.alignment.y + 1.0)) / 2.0;
 
-            let paint_offset = Offset::new(
-                offset.dx + aligned_x,
-                offset.dy + aligned_y,
-            );
+        let offset = Offset::new(aligned_x, aligned_y);
 
-            tracing::debug!(
-                "RenderAlign::paint: alignment={:?}, align_size={:?}, child_size={:?}, parent_offset={:?}, child_offset={:?}",
-                data.alignment, size, child_size, offset, paint_offset
-            );
-
-            ctx.paint_child(child_id, painter, paint_offset);
-        }
+        // Use TransformLayer to position child at aligned offset
+        Box::new(TransformLayer::translate(child_layer, offset))
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -211,77 +152,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_align_data_new() {
-        let data = AlignData::new(Alignment::TOP_LEFT);
-        assert_eq!(data.alignment, Alignment::TOP_LEFT);
-        assert_eq!(data.width_factor, None);
-        assert_eq!(data.height_factor, None);
-    }
-
-    #[test]
-    fn test_align_data_with_factors() {
-        let data = AlignData::with_factors(Alignment::CENTER, Some(2.0), Some(3.0));
-        assert_eq!(data.alignment, Alignment::CENTER);
-        assert_eq!(data.width_factor, Some(2.0));
-        assert_eq!(data.height_factor, Some(3.0));
-    }
-
-    #[test]
     fn test_render_align_new() {
-        let align = SingleRenderBox::new(AlignData::new(Alignment::BOTTOM_RIGHT));
-        assert_eq!(align.alignment(), Alignment::BOTTOM_RIGHT);
+        let align = RenderAlign::new(Alignment::TOP_LEFT);
+        assert_eq!(align.alignment, Alignment::TOP_LEFT);
+        assert_eq!(align.width_factor, None);
+        assert_eq!(align.height_factor, None);
+    }
+
+    #[test]
+    fn test_render_align_default() {
+        let align = RenderAlign::default();
+        assert_eq!(align.alignment, Alignment::CENTER);
+    }
+
+    #[test]
+    fn test_render_align_with_factors() {
+        let align = RenderAlign::with_factors(Alignment::CENTER, Some(2.0), Some(1.5));
+        assert_eq!(align.alignment, Alignment::CENTER);
+        assert_eq!(align.width_factor, Some(2.0));
+        assert_eq!(align.height_factor, Some(1.5));
     }
 
     #[test]
     fn test_render_align_set_alignment() {
-        let mut align = SingleRenderBox::new(AlignData::default());
-
-        align.set_alignment(Alignment::TOP_CENTER);
-        assert_eq!(align.alignment(), Alignment::TOP_CENTER);
-        assert!(align.needs_layout());
+        let mut align = RenderAlign::new(Alignment::TOP_LEFT);
+        align.set_alignment(Alignment::BOTTOM_RIGHT);
+        assert_eq!(align.alignment, Alignment::BOTTOM_RIGHT);
     }
 
     #[test]
-    fn test_render_align_set_width_factor() {
-        let mut align = SingleRenderBox::new(AlignData::default());
-
+    fn test_render_align_set_factors() {
+        let mut align = RenderAlign::new(Alignment::CENTER);
         align.set_width_factor(Some(2.0));
-        assert_eq!(align.width_factor(), Some(2.0));
-        assert!(align.needs_layout());
-    }
-
-    #[test]
-    fn test_render_align_set_height_factor() {
-        let mut align = SingleRenderBox::new(AlignData::default());
-
         align.set_height_factor(Some(1.5));
-        assert_eq!(align.height_factor(), Some(1.5));
-        assert!(align.needs_layout());
-    }
-
-    #[test]
-    fn test_render_align_layout_no_child() {
-        use flui_core::testing::mock_render_context;
-
-        let align = SingleRenderBox::new(AlignData::new(Alignment::CENTER));
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = align.layout(constraints, &ctx);
-
-        // No child - should be minimum size
-        assert_eq!(size, Size::ZERO);
-    }
-
-    #[test]
-    fn test_render_align_layout_with_factors() {
-        // We can't easily test with a real child here without creating a mock,
-        // but we can verify that the alignment is stored correctly
-        let mut align = SingleRenderBox::new(
-            AlignData::with_factors(Alignment::CENTER, Some(2.0), Some(3.0))
-        );
-
-        assert_eq!(align.width_factor(), Some(2.0));
-        assert_eq!(align.height_factor(), Some(3.0));
+        assert_eq!(align.width_factor, Some(2.0));
+        assert_eq!(align.height_factor, Some(1.5));
     }
 }

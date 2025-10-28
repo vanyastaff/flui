@@ -1,8 +1,8 @@
 //! RenderMouseRegion - handles mouse hover events
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::Size;
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 
 /// Mouse hover event callbacks
 #[derive(Clone)]
@@ -30,25 +30,6 @@ impl std::fmt::Debug for MouseCallbacks {
     }
 }
 
-/// Data for RenderMouseRegion
-#[derive(Debug, Clone)]
-pub struct MouseRegionData {
-    /// Event callbacks
-    pub callbacks: MouseCallbacks,
-    /// Whether the mouse is currently hovering
-    pub is_hovering: bool,
-}
-
-impl MouseRegionData {
-    /// Create new mouse region data
-    pub fn new(callbacks: MouseCallbacks) -> Self {
-        Self {
-            callbacks,
-            is_hovering: false,
-        }
-    }
-}
-
 /// RenderObject that tracks mouse hover state
 ///
 /// This widget detects when the mouse enters, hovers over, or exits its bounds.
@@ -57,82 +38,73 @@ impl MouseRegionData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::interaction::{MouseRegionData, MouseCallbacks}};
+/// use flui_rendering::{RenderMouseRegion, MouseCallbacks};
 ///
 /// let callbacks = MouseCallbacks {
 ///     on_enter: Some(|| println!("Mouse entered")),
 ///     on_exit: Some(|| println!("Mouse exited")),
 ///     on_hover: None,
 /// };
-/// let mut region = SingleRenderBox::new(MouseRegionData::new(callbacks));
+/// let mut region = RenderMouseRegion::new(callbacks);
 /// ```
-pub type RenderMouseRegion = SingleRenderBox<MouseRegionData>;
-
-// ===== Public API =====
+#[derive(Debug)]
+pub struct RenderMouseRegion {
+    /// Event callbacks
+    pub callbacks: MouseCallbacks,
+    /// Whether the mouse is currently hovering
+    pub is_hovering: bool,
+}
 
 impl RenderMouseRegion {
+    /// Create new RenderMouseRegion
+    pub fn new(callbacks: MouseCallbacks) -> Self {
+        Self {
+            callbacks,
+            is_hovering: false,
+        }
+    }
+
     /// Get the callbacks
     pub fn callbacks(&self) -> &MouseCallbacks {
-        &self.data().callbacks
+        &self.callbacks
     }
 
     /// Set new callbacks
     pub fn set_callbacks(&mut self, callbacks: MouseCallbacks) {
-        self.data_mut().callbacks = callbacks;
+        self.callbacks = callbacks;
         // No need to mark needs_layout or needs_paint - callbacks don't affect rendering
     }
 
     /// Check if mouse is currently hovering
     pub fn is_hovering(&self) -> bool {
-        self.data().is_hovering
+        self.is_hovering
     }
 
     /// Set hover state (called by hit testing system)
     pub fn set_hovering(&mut self, hovering: bool) {
-        self.data_mut().is_hovering = hovering;
+        self.is_hovering = hovering;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+impl RenderObject for RenderMouseRegion {
+    type Arity = SingleArity;
 
-impl DynRenderObject for RenderMouseRegion {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
-
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
         // Layout child with same constraints
-        let size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child_cached(child_id, constraints, None)
-        } else {
-            // No child - use smallest size
-            constraints.smallest()
-        };
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
-        size
+        let child = cx.child();
+        cx.layout_child(child, cx.constraints())
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         // Simply paint child - hover handling happens elsewhere
-        let children_ids = ctx.children();
-        if let Some(&child_id) = children_ids.first() {
-            ctx.paint_child(child_id, painter, offset);
-        }
+        let child = cx.child();
+        cx.capture_child_layer(child)
 
         // TODO: In a real implementation, we would:
         // 1. Register hit test area for hover detection
         // 2. Track mouse enter/exit events
         // 3. Call appropriate callbacks when hover state changes
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -146,7 +118,7 @@ mod tests {
             on_exit: None,
             on_hover: None,
         };
-        let region = SingleRenderBox::new(MouseRegionData::new(callbacks));
+        let region = RenderMouseRegion::new(callbacks);
         assert!(!region.is_hovering());
         assert!(region.callbacks().on_enter.is_none());
     }
@@ -160,7 +132,7 @@ mod tests {
             on_exit: None,
             on_hover: None,
         };
-        let mut region = SingleRenderBox::new(MouseRegionData::new(callbacks1));
+        let mut region = RenderMouseRegion::new(callbacks1);
 
         let callbacks2 = MouseCallbacks {
             on_enter: Some(dummy_callback),
@@ -178,7 +150,7 @@ mod tests {
             on_exit: None,
             on_hover: None,
         };
-        let mut region = SingleRenderBox::new(MouseRegionData::new(callbacks));
+        let mut region = RenderMouseRegion::new(callbacks);
 
         assert!(!region.is_hovering());
 
@@ -187,25 +159,6 @@ mod tests {
 
         region.set_hovering(false);
         assert!(!region.is_hovering());
-    }
-
-    #[test]
-    fn test_render_mouse_region_layout_no_child() {
-        use flui_core::testing::mock_render_context;
-
-        let callbacks = MouseCallbacks {
-            on_enter: None,
-            on_exit: None,
-            on_hover: None,
-        };
-        let region = SingleRenderBox::new(MouseRegionData::new(callbacks));
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = region.layout(constraints, &ctx);
-
-        // Should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
     }
 
     #[test]

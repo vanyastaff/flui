@@ -1,8 +1,8 @@
 //! RenderMergeSemantics - merges descendant semantics into one node
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::Size;
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 
 /// Data for RenderMergeSemantics
 #[derive(Debug, Clone, Copy)]
@@ -35,48 +35,46 @@ impl Default for MergeSemanticsData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::special::MergeSemanticsData};
+/// use flui_rendering::RenderMergeSemantics;
 ///
 /// // Merge button label + icon into single semantic node
-/// let mut merge = SingleRenderBox::new(MergeSemanticsData::new());
+/// let mut merge = RenderMergeSemantics::new();
 /// ```
-pub type RenderMergeSemantics = SingleRenderBox<MergeSemanticsData>;
+#[derive(Debug)]
+pub struct RenderMergeSemantics {
+    // Currently no additional data needed
+    // Presence of this widget indicates merging should occur
+}
 
-// ===== DynRenderObject Implementation =====
+impl RenderMergeSemantics {
+    /// Create new RenderMergeSemantics
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
-impl DynRenderObject for RenderMergeSemantics {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+impl Default for RenderMergeSemantics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+// ===== RenderObject Implementation =====
+
+impl RenderObject for RenderMergeSemantics {
+    type Arity = SingleArity;
+
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
         // Layout child with same constraints (pass-through)
-        let children_ids = ctx.children();
-        let size =
-        if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child_cached(child_id, constraints, None)
-        } else {
-            constraints.smallest()
-        };
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
-        size
+        let child = cx.child();
+        cx.layout_child(child, cx.constraints())
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         // Paint child directly (pass-through)
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
-        if let Some(&child_id) = children_ids.first() {
-            ctx.paint_child(child_id, painter, offset);
-        }
+        let child = cx.child();
+        cx.capture_child_layer(child)
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -97,21 +95,13 @@ mod tests {
 
     #[test]
     fn test_render_merge_semantics_new() {
-        let _merge = SingleRenderBox::new(MergeSemanticsData::new());
+        let _merge = RenderMergeSemantics::new();
         // Just ensure it compiles
     }
 
     #[test]
-    fn test_render_merge_semantics_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let merge = SingleRenderBox::new(MergeSemanticsData::new());
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = merge.layout(constraints, &ctx);
-
-        // No child, should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
+    fn test_render_merge_semantics_default() {
+        let _merge = RenderMergeSemantics::default();
+        // Just ensure it compiles
     }
 }

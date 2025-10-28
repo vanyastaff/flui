@@ -1,8 +1,8 @@
 //! RenderFittedBox - scales and positions child according to BoxFit
 
-use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::{Alignment, Offset, Size};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 
 /// How a box should be inscribed into another box
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,105 +129,85 @@ impl Default for FittedBoxData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::special::{FittedBoxData, BoxFit}};
+/// use flui_rendering::{RenderFittedBox, BoxFit};
 /// use flui_types::Alignment;
 ///
 /// // Scale child to cover the entire box
-/// let mut fitted = SingleRenderBox::new(
-///     FittedBoxData::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT)
-/// );
+/// let mut fitted = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT);
 /// ```
-pub type RenderFittedBox = SingleRenderBox<FittedBoxData>;
+#[derive(Debug)]
+pub struct RenderFittedBox {
+    /// Fitted box data
+    pub data: FittedBoxData,
+}
 
 // ===== Public API =====
 
 impl RenderFittedBox {
+    /// Create new RenderFittedBox
+    pub fn new(fit: BoxFit) -> Self {
+        Self {
+            data: FittedBoxData::new(fit),
+        }
+    }
+
+    /// Create with alignment
+    pub fn with_alignment(fit: BoxFit, alignment: Alignment) -> Self {
+        Self {
+            data: FittedBoxData::with_alignment(fit, alignment),
+        }
+    }
+
     /// Get fit mode
     pub fn fit(&self) -> BoxFit {
-        self.data().fit
+        self.data.fit
     }
 
     /// Set fit mode
     pub fn set_fit(&mut self, fit: BoxFit) {
-        if self.data().fit != fit {
-            self.data_mut().fit = fit;
-            self.mark_needs_layout();
-        }
+        self.data.fit = fit;
     }
 
     /// Get alignment
     pub fn alignment(&self) -> Alignment {
-        self.data().alignment
+        self.data.alignment
     }
 
     /// Set alignment
     pub fn set_alignment(&mut self, alignment: Alignment) {
-        if self.data().alignment != alignment {
-            self.data_mut().alignment = alignment;
-            self.mark_needs_paint(); // Only repaint needed for alignment change
-        }
+        self.data.alignment = alignment;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+// ===== RenderObject Implementation =====
 
-impl DynRenderObject for RenderFittedBox {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+impl RenderObject for RenderFittedBox {
+    type Arity = SingleArity;
 
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
         // Our size is determined by constraints (we try to be as large as possible)
+        let constraints = cx.constraints();
         let size = constraints.biggest();
 
         // Layout child with unbounded constraints to get natural size
-        let children_ids = ctx.children();
-        if let Some(&child_id) = children_ids.first() {
-            let child_constraints = BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-            let _child_size = ctx.layout_child_cached(child_id, child_constraints, None);
-        }
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
+        let child = cx.child();
+        let child_constraints = flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
+        cx.layout_child(child, child_constraints);
 
         size
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        // Get our size from state (avoid ambiguity by accessing state directly)
-        if let Some(size) = *state.size.lock() {
-            let children_ids = ctx.children();
-            if let Some(&child_id) = children_ids.first() {
-                // Get child's size
-                // Get child size from tree
-                let child_size = if let Some(child_elem) = ctx.tree().get(child_id) {
-                    if let Some(child_ro) = child_elem.render_object() {
-                        child_ro.size()
-                    } else {
-                        Size::ZERO
-                    }
-                } else {
-                    Size::ZERO
-                };
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        // Get child layer and calculate fit
+        let child = cx.child();
+        
 
-                // Calculate fitted size and offset
-                let (_fitted_size, child_offset) = self.data().calculate_fit(child_size, size);
+        // TODO: Apply transform for scaling based on self.data.calculate_fit()
+        // For now, just return child layer as-is
+        // In a real implementation, we'd wrap in a TransformLayer
 
-                // Apply transform for scaling
-                // Note: In a real implementation, we'd use egui's transform system
-                // For now, just paint child at calculated offset
-                let final_offset = Offset::new(
-                    offset.dx + child_offset.dx,
-                    offset.dy + child_offset.dy,
-                );
-
-                ctx.paint_child(child_id, painter, final_offset);
-            }
-        }
+        (cx.capture_child_layer(child)) as _
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -305,52 +285,31 @@ mod tests {
 
     #[test]
     fn test_render_fitted_box_new() {
-        let mut fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
+        let fitted = RenderFittedBox::new(BoxFit::Contain);
         assert_eq!(fitted.fit(), BoxFit::Contain);
         assert_eq!(fitted.alignment(), Alignment::CENTER);
     }
 
     #[test]
-    fn test_render_fitted_box_set_fit() {
-        use flui_core::DynRenderObject;
+    fn test_render_fitted_box_with_alignment() {
+        let fitted = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT);
+        assert_eq!(fitted.fit(), BoxFit::Cover);
+        assert_eq!(fitted.alignment(), Alignment::TOP_LEFT);
+    }
 
-        let mut fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
+    #[test]
+    fn test_render_fitted_box_set_fit() {
+        let mut fitted = RenderFittedBox::new(BoxFit::Contain);
 
         fitted.set_fit(BoxFit::Cover);
         assert_eq!(fitted.fit(), BoxFit::Cover);
-        assert!(DynRenderObject::needs_layout(&fitted));
     }
 
     #[test]
     fn test_render_fitted_box_set_alignment() {
-        use flui_core::testing::mock_render_context;
-
-        use flui_core::DynRenderObject;
-
-        let mut fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
-
-        // Layout first to clear initial needs_layout flag
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let (_tree, ctx) = mock_render_context();
-        fitted.layout(constraints, &ctx);
+        let mut fitted = RenderFittedBox::new(BoxFit::Contain);
 
         fitted.set_alignment(Alignment::TOP_LEFT);
         assert_eq!(fitted.alignment(), Alignment::TOP_LEFT);
-        assert!(DynRenderObject::needs_paint(&fitted));
-        assert!(!DynRenderObject::needs_layout(&fitted)); // Alignment only affects paint
-    }
-
-    #[test]
-    fn test_render_fitted_box_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let mut fitted = SingleRenderBox::new(FittedBoxData::new(BoxFit::Contain));
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = fitted.layout(constraints, &ctx);
-
-        // Should fill available space
-        assert_eq!(size, Size::new(100.0, 100.0));
     }
 }

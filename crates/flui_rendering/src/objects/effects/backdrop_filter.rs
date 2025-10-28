@@ -3,11 +3,9 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use flui_core::DynRenderObject;
-use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode};
-
-use crate::core::{RenderBoxMixin, SingleRenderBox};
-use crate::delegate_to_mixin;
+use flui_types::{Size, painting::BlendMode};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 
 // ===== Data Structure =====
 
@@ -88,7 +86,7 @@ impl BackdropFilterData {
     }
 }
 
-// ===== Type Alias =====
+// ===== RenderObject =====
 
 /// RenderBackdropFilter - Applies a filter to content behind the widget
 ///
@@ -98,11 +96,10 @@ impl BackdropFilterData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{RenderBackdropFilter, BackdropFilterData};
+/// use flui_rendering::RenderBackdropFilter;
 ///
 /// // Create frosted glass effect
-/// let data = BackdropFilterData::blur(10.0);
-/// let mut filter = RenderBackdropFilter::new(data);
+/// let filter = RenderBackdropFilter::blur(10.0);
 /// ```
 ///
 /// # Notes
@@ -110,94 +107,88 @@ impl BackdropFilterData {
 /// - This is an expensive operation (requires copying and filtering the backdrop)
 /// - Consider using RepaintBoundary around filtered areas for better performance
 /// - The filter is applied to the rectangular region covered by this widget
-pub type RenderBackdropFilter = SingleRenderBox<BackdropFilterData>;
+#[derive(Debug)]
+pub struct RenderBackdropFilter {
+    /// Image filter to apply to backdrop
+    pub filter: ImageFilter,
+    /// Blend mode for compositing filtered result
+    pub blend_mode: BlendMode,
+}
 
 // ===== Methods =====
 
 impl RenderBackdropFilter {
+    /// Create new backdrop filter with blur
+    pub fn blur(radius: f32) -> Self {
+        Self {
+            filter: ImageFilter::blur(radius),
+            blend_mode: BlendMode::default(),
+        }
+    }
+
+    /// Create with custom filter
+    pub fn new(filter: ImageFilter) -> Self {
+        Self {
+            filter,
+            blend_mode: BlendMode::default(),
+        }
+    }
+
+    /// Set blend mode
+    pub fn with_blend_mode(mut self, blend_mode: BlendMode) -> Self {
+        self.blend_mode = blend_mode;
+        self
+    }
+
     /// Get the image filter
     pub fn filter(&self) -> &ImageFilter {
-        &self.data().filter
+        &self.filter
     }
 
     /// Set the image filter
     pub fn set_filter(&mut self, filter: ImageFilter) {
-        if &self.data().filter != &filter {
-            self.data_mut().filter = filter;
-            self.mark_needs_paint();
-        }
+        self.filter = filter;
     }
 
     /// Get the blend mode
     pub fn blend_mode(&self) -> BlendMode {
-        self.data().blend_mode
+        self.blend_mode
     }
 
     /// Set the blend mode
     pub fn set_blend_mode(&mut self, blend_mode: BlendMode) {
-        if self.data().blend_mode != blend_mode {
-            self.data_mut().blend_mode = blend_mode;
-            self.mark_needs_paint();
-        }
+        self.blend_mode = blend_mode;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+// ===== RenderObject Implementation =====
 
-impl DynRenderObject for RenderBackdropFilter {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        *state.constraints.lock() = Some(constraints);
+impl RenderObject for RenderBackdropFilter {
+    type Arity = SingleArity;
 
-        let children_ids = ctx.children();
-        let size =
-        if let Some(&child_id) = children_ids.first() {
-            // Layout child with same constraints
-            ctx.layout_child_cached(child_id, constraints, None)
-        } else {
-            // No child - use smallest size
-            constraints.smallest()
-        };
-
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-        size
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        // Layout child with same constraints
+        let child = cx.child();
+        cx.layout_child(child, cx.constraints())
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        if let Some(size) = *state.size.lock() {
-            // Note: Full backdrop filtering requires compositor support
-            // In production, this would:
-            // 1. Capture the current paint layer content
-            // 2. Apply the image filter to that content
-            // 3. Paint the filtered result
-            // 4. Paint the child on top
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        // Capture child layer
+        let child = cx.child();
+        
 
-            // For now, we'll just paint the child
-            // In a real implementation with egui, we'd use layers and effects
+        // Note: Full backdrop filtering requires compositor support
+        // In production, this would:
+        // 1. Capture the current paint layer content
+        // 2. Apply the image filter to that content
+        // 3. Paint the filtered result
+        // 4. Paint the child on top
+        //
+        // For now, we just return the child layer
+        // TODO: Implement BackdropFilterLayer when compositor supports it
 
-            // Visual debug indicator (in production, this would show filtered backdrop)
-            if matches!(&self.data().filter, ImageFilter::Blur { .. }) {
-                let rect = egui::Rect::from_min_size(
-                    egui::pos2(offset.dx, offset.dy),
-                    egui::vec2(size.width, size.height),
-                );
-                // Draw a semi-transparent overlay to indicate backdrop filter region
-                painter.rect_filled(
-                    rect,
-                    4.0,
-                    egui::Color32::from_rgba_unmultiplied(200, 200, 255, 30),
-                );
-            }
-
-            let children_ids = ctx.children();
-        if let Some(&child_id) = children_ids.first() {
-            ctx.paint_child(child_id, painter, offset);
-            }
-        }
+        (cx.capture_child_layer(child)) as _
     }
-
-    // Delegate all other methods to the mixin
-    delegate_to_mixin!();
 }
 
 // ===== Tests =====
@@ -272,8 +263,7 @@ mod tests {
 
     #[test]
     fn test_render_backdrop_filter_new() {
-        let data = BackdropFilterData::blur(10.0);
-        let mut filter = SingleRenderBox::new(data);
+        let filter = RenderBackdropFilter::blur(10.0);
 
         match filter.filter() {
             ImageFilter::Blur { radius } => {
@@ -286,53 +276,26 @@ mod tests {
 
     #[test]
     fn test_render_backdrop_filter_set_filter() {
-        use flui_core::testing::mock_render_context;
-
-        let data = BackdropFilterData::blur(5.0);
-        let mut filter = SingleRenderBox::new(data);
-
-        // Do layout first to clear initial needs_paint
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let (_tree, ctx) = mock_render_context();
-        filter.layout(constraints, &ctx);
+        let mut filter = RenderBackdropFilter::blur(5.0);
 
         let new_filter = ImageFilter::brightness(1.5);
         filter.set_filter(new_filter.clone());
 
         assert_eq!(*filter.filter(), new_filter);
-        assert!(filter.needs_paint());
     }
 
     #[test]
     fn test_render_backdrop_filter_set_blend_mode() {
-        use flui_core::testing::mock_render_context;
-
-        let data = BackdropFilterData::blur(10.0);
-        let mut filter = SingleRenderBox::new(data);
-
-        // Do layout first to clear initial needs_paint
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let (_tree, ctx) = mock_render_context();
-        filter.layout(constraints, &ctx);
+        let mut filter = RenderBackdropFilter::blur(10.0);
 
         filter.set_blend_mode(BlendMode::Screen);
         assert_eq!(filter.blend_mode(), BlendMode::Screen);
-        assert!(filter.needs_paint());
     }
 
     #[test]
-    fn test_render_backdrop_filter_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let data = BackdropFilterData::blur(10.0);
-        let mut filter = SingleRenderBox::new(data);
-
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let (_tree, ctx) = mock_render_context();
-        let size = filter.layout(constraints, &ctx);
-
-        // Without child, should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
-        assert_eq!(filter.size(), Size::new(0.0, 0.0));
+    fn test_render_backdrop_filter_with_blend_mode() {
+        let filter = RenderBackdropFilter::blur(10.0)
+            .with_blend_mode(BlendMode::Multiply);
+        assert_eq!(filter.blend_mode(), BlendMode::Multiply);
     }
 }

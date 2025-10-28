@@ -1,8 +1,8 @@
 //! RenderMetaData - attaches metadata to child for parent access
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::Size;
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 use std::any::Any;
 
 /// Data for RenderMetaData
@@ -67,7 +67,7 @@ impl Default for MetaDataData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::special::MetaDataData};
+/// use flui_rendering::RenderMetaData;
 ///
 /// // Attach custom metadata to child
 /// #[derive(Debug)]
@@ -77,26 +77,51 @@ impl Default for MetaDataData {
 /// }
 ///
 /// let metadata = MyMetadata { id: 42, label: "Item".to_string() };
-/// let mut meta = SingleRenderBox::new(MetaDataData::with_metadata(metadata));
+/// let mut meta = RenderMetaData::with_metadata(metadata);
 /// ```
-pub type RenderMetaData = SingleRenderBox<MetaDataData>;
+#[derive(Debug)]
+pub struct RenderMetaData {
+    /// Metadata data
+    pub data: MetaDataData,
+}
 
 // ===== Public API =====
 
 impl RenderMetaData {
+    /// Create new RenderMetaData
+    pub fn new() -> Self {
+        Self {
+            data: MetaDataData::new(),
+        }
+    }
+
+    /// Create with metadata
+    pub fn with_metadata<T: Any + Send + Sync>(metadata: T) -> Self {
+        Self {
+            data: MetaDataData::with_metadata(metadata),
+        }
+    }
+
+    /// Create with behavior
+    pub fn with_behavior(behavior: HitTestBehavior) -> Self {
+        Self {
+            data: MetaDataData::with_behavior(behavior),
+        }
+    }
+
     /// Get behavior
     pub fn behavior(&self) -> HitTestBehavior {
-        self.data().behavior
+        self.data.behavior
     }
 
     /// Check if has metadata
     pub fn has_metadata(&self) -> bool {
-        self.data().metadata.is_some()
+        self.data.metadata.is_some()
     }
 
     /// Try to get metadata as specific type
     pub fn get_metadata<T: Any>(&self) -> Option<&T> {
-        self.data()
+        self.data
             .metadata
             .as_ref()
             .and_then(|m| m.downcast_ref::<T>())
@@ -104,57 +129,44 @@ impl RenderMetaData {
 
     /// Set behavior
     pub fn set_behavior(&mut self, behavior: HitTestBehavior) {
-        if self.data().behavior != behavior {
-            self.data_mut().behavior = behavior;
+        if self.data.behavior != behavior {
+            self.data.behavior = behavior;
         }
     }
 
     /// Set metadata
     pub fn set_metadata<T: Any + Send + Sync>(&mut self, metadata: T) {
-        self.data_mut().metadata = Some(Box::new(metadata));
+        self.data.metadata = Some(Box::new(metadata));
     }
 
     /// Clear metadata
     pub fn clear_metadata(&mut self) {
-        self.data_mut().metadata = None;
+        self.data.metadata = None;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+impl Default for RenderMetaData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-impl DynRenderObject for RenderMetaData {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+// ===== RenderObject Implementation =====
 
+impl RenderObject for RenderMetaData {
+    type Arity = SingleArity;
+
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
         // Layout child with same constraints (pass-through)
-        let children_ids = ctx.children();
-        let size =
-        if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child_cached(child_id, constraints, None)
-        } else {
-            constraints.smallest()
-        };
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
-        size
+        let child = cx.child();
+        cx.layout_child(child, cx.constraints())
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         // Paint child directly (pass-through)
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
-        if let Some(&child_id) = children_ids.first() {
-            ctx.paint_child(child_id, painter, offset);
-        }
+        let child = cx.child();
+        cx.capture_child_layer(child)
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -196,14 +208,31 @@ mod tests {
 
     #[test]
     fn test_render_metadata_new() {
-        let meta = SingleRenderBox::new(MetaDataData::new());
+        let meta = RenderMetaData::new();
         assert!(!meta.has_metadata());
         assert_eq!(meta.behavior(), HitTestBehavior::Defer);
     }
 
     #[test]
+    fn test_render_metadata_with_metadata() {
+        let test_data = TestMetadata { value: 42 };
+        let meta = RenderMetaData::with_metadata(test_data.clone());
+        assert!(meta.has_metadata());
+
+        let retrieved = meta.get_metadata::<TestMetadata>();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().value, 42);
+    }
+
+    #[test]
+    fn test_render_metadata_with_behavior() {
+        let meta = RenderMetaData::with_behavior(HitTestBehavior::Opaque);
+        assert_eq!(meta.behavior(), HitTestBehavior::Opaque);
+    }
+
+    #[test]
     fn test_render_metadata_set_metadata() {
-        let mut meta = SingleRenderBox::new(MetaDataData::new());
+        let mut meta = RenderMetaData::new();
         let test_data = TestMetadata { value: 123 };
 
         meta.set_metadata(test_data.clone());
@@ -216,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_render_metadata_clear_metadata() {
-        let mut meta = SingleRenderBox::new(MetaDataData::with_metadata(TestMetadata { value: 42 }));
+        let mut meta = RenderMetaData::with_metadata(TestMetadata { value: 42 });
         assert!(meta.has_metadata());
 
         meta.clear_metadata();
@@ -225,23 +254,9 @@ mod tests {
 
     #[test]
     fn test_render_metadata_set_behavior() {
-        let mut meta = SingleRenderBox::new(MetaDataData::new());
+        let mut meta = RenderMetaData::new();
 
         meta.set_behavior(HitTestBehavior::Translucent);
         assert_eq!(meta.behavior(), HitTestBehavior::Translucent);
-    }
-
-    #[test]
-    fn test_render_metadata_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let meta = SingleRenderBox::new(MetaDataData::new());
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = meta.layout(constraints, &ctx);
-
-        // No child, should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
     }
 }

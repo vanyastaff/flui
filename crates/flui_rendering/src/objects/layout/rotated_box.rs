@@ -1,8 +1,8 @@
 //! RenderRotatedBox - rotates child by quarter turns (90°, 180°, 270°)
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::{Size, Offset, constraints::BoxConstraints};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::{BoxedLayer, TransformLayer};
 
 /// Quarter turns for rotation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,41 +84,63 @@ impl Default for RotatedBoxData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::layout::{RotatedBoxData, QuarterTurns}};
+/// use flui_rendering::RenderRotatedBox;
 ///
 /// // Rotate child 90° clockwise
-/// let mut rotated = SingleRenderBox::new(RotatedBoxData::rotate_90());
+/// let mut rotated = RenderRotatedBox::rotate_90();
 /// ```
-pub type RenderRotatedBox = SingleRenderBox<RotatedBoxData>;
+#[derive(Debug)]
+pub struct RenderRotatedBox {
+    /// Number of quarter turns clockwise
+    pub quarter_turns: QuarterTurns,
+    /// Cached size from layout phase
+    size: Size,
+}
 
 // ===== Public API =====
 
 impl RenderRotatedBox {
-    /// Get quarter turns
-    pub fn quarter_turns(&self) -> QuarterTurns {
-        self.data().quarter_turns
+    /// Create new RenderRotatedBox
+    pub fn new(quarter_turns: QuarterTurns) -> Self {
+        Self {
+            quarter_turns,
+            size: Size::ZERO,
+        }
+    }
+
+    /// Create with 90° rotation
+    pub fn rotate_90() -> Self {
+        Self::new(QuarterTurns::One)
+    }
+
+    /// Create with 180° rotation
+    pub fn rotate_180() -> Self {
+        Self::new(QuarterTurns::Two)
+    }
+
+    /// Create with 270° rotation
+    pub fn rotate_270() -> Self {
+        Self::new(QuarterTurns::Three)
     }
 
     /// Set quarter turns
     pub fn set_quarter_turns(&mut self, quarter_turns: QuarterTurns) {
-        if self.data().quarter_turns != quarter_turns {
-            self.data_mut().quarter_turns = quarter_turns;
-            self.mark_needs_layout();
-        }
+        self.quarter_turns = quarter_turns;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+// ===== RenderObject Implementation =====
 
-impl DynRenderObject for RenderRotatedBox {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+impl RenderObject for RenderRotatedBox {
+    type Arity = SingleArity;
 
-        let quarter_turns = self.data().quarter_turns;
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        let child = cx.child();
+        let constraints = cx.constraints();
 
         // For odd quarter turns (90°, 270°), swap width and height constraints
-        let child_constraints = if quarter_turns.swaps_dimensions() {
+        let child_constraints = if self.quarter_turns.swaps_dimensions() {
+            // Manually flip constraints - swap width and height
             BoxConstraints::new(
                 constraints.min_height,
                 constraints.max_height,
@@ -130,77 +152,52 @@ impl DynRenderObject for RenderRotatedBox {
         };
 
         // Layout child
-        let children_ids = ctx.children();
-        let child_size =
-        if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child_cached(child_id, child_constraints, None)
-        } else {
-            child_constraints.smallest()
-        };
+        let child_size = cx.layout_child(child, child_constraints);
 
         // Our size is child size with potentially swapped dimensions
-        let size = if quarter_turns.swaps_dimensions() {
+        let size = if self.quarter_turns.swaps_dimensions() {
             Size::new(child_size.height, child_size.width)
         } else {
             child_size
         };
 
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
+        // Store size for paint phase
+        self.size = size;
         size
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        let children_ids = ctx.children();
-        if let Some(&child_id) = children_ids.first() {
-            let quarter_turns = self.data().quarter_turns;
-            let size = state.size.lock().unwrap_or(Size::ZERO);
-            // Child size is already stored in child's RenderObject after layout
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        let child = cx.child();
 
-            // Calculate paint offset based on rotation
-            let paint_offset = match quarter_turns {
-                QuarterTurns::Zero => {
-                    // No rotation
-                    offset
-                }
-                QuarterTurns::One => {
-                    // 90° clockwise: child's top-left becomes our top-right
-                    Offset::new(offset.dx + size.width, offset.dy)
-                }
-                QuarterTurns::Two => {
-                    // 180°: child's top-left becomes our bottom-right
-                    Offset::new(offset.dx + size.width, offset.dy + size.height)
-                }
-                QuarterTurns::Three => {
-                    // 270° clockwise: child's top-left becomes our bottom-left
-                    Offset::new(offset.dx, offset.dy + size.height)
-                }
-            };
+        // Calculate offset based on rotation
+        // Note: For now, this is a simplified implementation
+        // TODO: Implement proper rotation transformation
+        let offset = match self.quarter_turns {
+            QuarterTurns::Zero => Offset::new(0.0, 0.0),
+            QuarterTurns::One => {
+                // 90° clockwise: child's top-left becomes our top-right
+                Offset::new(self.size.width, 0.0)
+            }
+            QuarterTurns::Two => {
+                // 180°: child's top-left becomes our bottom-right
+                Offset::new(self.size.width, self.size.height)
+            }
+            QuarterTurns::Three => {
+                // 270° clockwise: child's top-left becomes our bottom-left
+                Offset::new(0.0, self.size.height)
+            }
+        };
 
-            // Paint with rotation
-            // Note: egui doesn't directly support rotation in Painter,
-            // so we would need to use a custom implementation or Transform widget
-            // For now, we'll paint at the calculated offset
-            // TODO: Implement proper rotation when egui supports it or use manual transformation
+        // Capture child layer and apply offset transform
+        // TODO: Add actual rotation transformation when available
+        let child_layer = cx.capture_child_layer(child);
 
-            painter.ctx().debug_painter().text(
-                egui::pos2(paint_offset.dx, paint_offset.dy),
-                egui::Align2::LEFT_TOP,
-                format!("Rotated {}°", quarter_turns.as_int() * 90),
-                egui::FontId::default(),
-                egui::Color32::RED,
-            );
-
-            // For now, paint child without actual rotation
-            // In real implementation, we would apply rotation matrix
-            ctx.paint_child(child_id, painter, paint_offset);
+        if offset != Offset::ZERO {
+            Box::new(TransformLayer::translate(child_layer, offset))
+        } else {
+            child_layer
         }
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -241,59 +238,27 @@ mod tests {
 
     #[test]
     fn test_render_rotated_box_new() {
-        let rotated = SingleRenderBox::new(RotatedBoxData::rotate_90());
-        assert_eq!(rotated.quarter_turns(), QuarterTurns::One);
+        let rotated = RenderRotatedBox::rotate_90();
+        assert_eq!(rotated.quarter_turns, QuarterTurns::One);
     }
 
     #[test]
     fn test_render_rotated_box_set_quarter_turns() {
-        let mut rotated = SingleRenderBox::new(RotatedBoxData::default());
+        let mut rotated = RenderRotatedBox::new(QuarterTurns::Zero);
 
         rotated.set_quarter_turns(QuarterTurns::Two);
-        assert_eq!(rotated.quarter_turns(), QuarterTurns::Two);
-        assert!(rotated.needs_layout());
+        assert_eq!(rotated.quarter_turns, QuarterTurns::Two);
     }
 
     #[test]
-    fn test_render_rotated_box_layout_no_rotation() {
-        use flui_core::testing::mock_render_context;
+    fn test_render_rotated_box_helpers() {
+        let rotated_90 = RenderRotatedBox::rotate_90();
+        assert_eq!(rotated_90.quarter_turns, QuarterTurns::One);
 
-        let rotated = SingleRenderBox::new(RotatedBoxData::default());
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
+        let rotated_180 = RenderRotatedBox::rotate_180();
+        assert_eq!(rotated_180.quarter_turns, QuarterTurns::Two);
 
-        let (_tree, ctx) = mock_render_context();
-        let size = rotated.layout(constraints, &ctx);
-
-        // No child, should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
-    }
-
-    #[test]
-    fn test_render_rotated_box_layout_90_degrees() {
-        use flui_core::testing::mock_render_context;
-
-        let rotated = SingleRenderBox::new(RotatedBoxData::rotate_90());
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = rotated.layout(constraints, &ctx);
-
-        // 90° rotation swaps dimensions: child gets swapped constraints
-        // No child, so size is smallest of swapped constraints
-        assert_eq!(size, Size::new(0.0, 0.0));
-    }
-
-    #[test]
-    fn test_render_rotated_box_layout_180_degrees() {
-        use flui_core::testing::mock_render_context;
-
-        let rotated = SingleRenderBox::new(RotatedBoxData::rotate_180());
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = rotated.layout(constraints, &ctx);
-
-        // 180° doesn't swap dimensions
-        assert_eq!(size, Size::new(0.0, 0.0));
+        let rotated_270 = RenderRotatedBox::rotate_270();
+        assert_eq!(rotated_270.quarter_turns, QuarterTurns::Three);
     }
 }

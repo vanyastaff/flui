@@ -1,22 +1,8 @@
 //! RenderConstrainedBox - applies additional constraints to a child
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
-
-/// Data for RenderConstrainedBox
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ConstrainedBoxData {
-    /// Additional constraints to apply
-    pub additional_constraints: BoxConstraints,
-}
-
-impl ConstrainedBoxData {
-    /// Create new constrained box data
-    pub fn new(additional_constraints: BoxConstraints) -> Self {
-        Self { additional_constraints }
-    }
-}
+use flui_types::{Size, constraints::BoxConstraints};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 
 /// RenderObject that applies additional constraints to its child
 ///
@@ -27,78 +13,56 @@ impl ConstrainedBoxData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::layout::ConstrainedBoxData};
+/// use flui_rendering::RenderConstrainedBox;
 /// use flui_types::constraints::BoxConstraints;
 ///
 /// let constraints = BoxConstraints::tight_for(100.0, 100.0);
-/// let mut constrained = SingleRenderBox::new(ConstrainedBoxData::new(constraints));
+/// let constrained = RenderConstrainedBox::new(constraints);
 /// ```
-pub type RenderConstrainedBox = SingleRenderBox<ConstrainedBoxData>;
-
-// ===== Public API =====
+#[derive(Debug)]
+pub struct RenderConstrainedBox {
+    /// Additional constraints to apply
+    pub additional_constraints: BoxConstraints,
+}
 
 impl RenderConstrainedBox {
-    /// Get the additional constraints
-    pub fn additional_constraints(&self) -> BoxConstraints {
-        self.data().additional_constraints
+    /// Create new RenderConstrainedBox with additional constraints
+    pub fn new(additional_constraints: BoxConstraints) -> Self {
+        Self {
+            additional_constraints,
+        }
     }
 
     /// Set new additional constraints
-    ///
-    /// If constraints change, marks as needing layout.
     pub fn set_additional_constraints(&mut self, constraints: BoxConstraints) {
-        if self.data().additional_constraints != constraints {
-            self.data_mut().additional_constraints = constraints;
-            self.mark_needs_layout();
-        }
+        self.additional_constraints = constraints;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+impl Default for RenderConstrainedBox {
+    fn default() -> Self {
+        Self::new(BoxConstraints::UNCONSTRAINED)
+    }
+}
 
-impl DynRenderObject for RenderConstrainedBox {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+impl RenderObject for RenderConstrainedBox {
+    type Arity = SingleArity;
 
-        let additional = self.data().additional_constraints;
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        let child = cx.child();
+        let constraints = cx.constraints();
 
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
-        // Layout child with enforced constraints
-        let size = if let Some(&child_id) = children_ids.first() {
-            // Enforce additional constraints
-            let child_constraints = constraints.enforce(additional);
-
-            // Layout child via RenderContext
-            let child_size = ctx.layout_child_cached(child_id, child_constraints, None);
-            child_size
-        } else {
-            // No child - use smallest size that satisfies both constraints
-            let enforced = additional.enforce(constraints);
-            enforced.smallest()
-        };
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
-        size
+        // SingleArity always has exactly one child
+        // Enforce additional constraints
+        let child_constraints = constraints.enforce(self.additional_constraints);
+        cx.layout_child(child, child_constraints)
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
-        // Simply paint child at offset
-        if let Some(&child_id) = children_ids.first() {
-            ctx.paint_child(child_id, painter, offset);
-        }
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        // Simply pass through child layer
+        let child = cx.child();
+        cx.capture_child_layer(child)
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -108,41 +72,23 @@ mod tests {
     #[test]
     fn test_render_constrained_box_new() {
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let constrained = SingleRenderBox::new(ConstrainedBoxData::new(constraints));
-        assert_eq!(constrained.additional_constraints(), constraints);
+        let constrained = RenderConstrainedBox::new(constraints);
+        assert_eq!(constrained.additional_constraints, constraints);
+    }
+
+    #[test]
+    fn test_render_constrained_box_default() {
+        let constrained = RenderConstrainedBox::default();
+        assert_eq!(constrained.additional_constraints, BoxConstraints::UNCONSTRAINED);
     }
 
     #[test]
     fn test_render_constrained_box_set_constraints() {
         let constraints1 = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let mut constrained = SingleRenderBox::new(ConstrainedBoxData::new(constraints1));
+        let mut constrained = RenderConstrainedBox::new(constraints1);
 
         let constraints2 = BoxConstraints::tight(Size::new(200.0, 200.0));
         constrained.set_additional_constraints(constraints2);
-        assert_eq!(constrained.additional_constraints(), constraints2);
-        assert!(constrained.needs_layout());
-    }
-
-    #[test]
-    fn test_render_constrained_box_layout_no_child() {
-        use flui_core::testing::mock_render_context;
-
-        let additional = BoxConstraints::new(50.0, 150.0, 50.0, 150.0);
-        let constrained = SingleRenderBox::new(ConstrainedBoxData::new(additional));
-
-        let incoming = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-        let (_tree, ctx) = mock_render_context();
-        let size = constrained.layout(incoming, &ctx);
-
-        // Should use smallest size that satisfies both constraints
-        assert_eq!(size, Size::new(50.0, 50.0));
-    }
-
-    #[test]
-    fn test_constrained_box_data_debug() {
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let data = ConstrainedBoxData::new(constraints);
-        let debug_str = format!("{:?}", data);
-        assert!(debug_str.contains("ConstrainedBoxData"));
+        assert_eq!(constrained.additional_constraints, constraints2);
     }
 }

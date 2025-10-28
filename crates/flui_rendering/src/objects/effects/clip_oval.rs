@@ -1,44 +1,8 @@
 //! RenderClipOval - clips child to an oval shape
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
-
-/// Clip behavior for RenderClipOval
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClipBehavior {
-    /// No clipping
-    None,
-    /// Clip to oval shape
-    AntiAlias,
-    /// Clip with anti-aliasing (slower but smoother)
-    AntiAliasWithSaveLayer,
-}
-
-/// Data for RenderClipOval
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ClipOvalData {
-    /// Clip behavior
-    pub clip_behavior: ClipBehavior,
-}
-
-impl ClipOvalData {
-    /// Create new clip oval data
-    pub fn new(clip_behavior: ClipBehavior) -> Self {
-        Self { clip_behavior }
-    }
-
-    /// Create with anti-alias clipping
-    pub fn anti_alias() -> Self {
-        Self::new(ClipBehavior::AntiAlias)
-    }
-}
-
-impl Default for ClipOvalData {
-    fn default() -> Self {
-        Self::new(ClipBehavior::AntiAlias)
-    }
-}
+use flui_types::{Size, painting::Clip};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 
 /// RenderObject that clips its child to an oval shape
 ///
@@ -48,97 +12,83 @@ impl Default for ClipOvalData {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::effects::{ClipOvalData, ClipBehavior}};
+/// use flui_rendering::RenderClipOval;
+/// use flui_types::painting::Clip;
 ///
-/// // Clip child to oval with anti-aliasing
-/// let mut clip_oval = SingleRenderBox::new(ClipOvalData::anti_alias());
+/// let clip_oval = RenderClipOval::new(Clip::AntiAlias);
 /// ```
-pub type RenderClipOval = SingleRenderBox<ClipOvalData>;
-
-// ===== Public API =====
+#[derive(Debug)]
+pub struct RenderClipOval {
+    /// The clipping behavior (None, HardEdge, AntiAlias, etc.)
+    pub clip_behavior: Clip,
+}
 
 impl RenderClipOval {
-    /// Get clip behavior
-    pub fn clip_behavior(&self) -> ClipBehavior {
-        self.data().clip_behavior
+    /// Create new RenderClipOval with specified clip behavior
+    pub fn new(clip_behavior: Clip) -> Self {
+        Self { clip_behavior }
     }
 
-    /// Set clip behavior
-    pub fn set_clip_behavior(&mut self, clip_behavior: ClipBehavior) {
-        if self.data().clip_behavior != clip_behavior {
-            self.data_mut().clip_behavior = clip_behavior;
-            self.mark_needs_paint();
+    /// Create with hard edge clipping
+    pub fn hard_edge() -> Self {
+        Self {
+            clip_behavior: Clip::HardEdge,
         }
+    }
+
+    /// Create with anti-aliased clipping (default for ovals)
+    pub fn anti_alias() -> Self {
+        Self {
+            clip_behavior: Clip::AntiAlias,
+        }
+    }
+
+    /// Set new clip behavior
+    pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
+        self.clip_behavior = clip_behavior;
     }
 }
 
-// ===== DynRenderObject Implementation =====
+impl Default for RenderClipOval {
+    fn default() -> Self {
+        Self::anti_alias()
+    }
+}
 
-impl DynRenderObject for RenderClipOval {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
+impl RenderObject for RenderClipOval {
+    type Arity = SingleArity;
 
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
         // Layout child with same constraints
-        let size = if let Some(&child_id) = children_ids.first() {
-            ctx.layout_child_cached(child_id, constraints, None)
-        } else {
-            constraints.smallest()
-        };
-
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
-
-        size
+        let child = cx.child();
+        cx.layout_child(child, cx.constraints())
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        let children_ids = ctx.children();
-        if let Some(&child_id) = children_ids.first() {
-            let clip_behavior = self.data().clip_behavior;
-
-            // Skip clipping if behavior is None
-            if matches!(clip_behavior, ClipBehavior::None) {
-                ctx.paint_child(child_id, painter, offset);
-                return;
-            }
-
-            // Get clip bounds
-            let size = state.size.lock().unwrap_or(Size::ZERO);
-            let _clip_rect = egui::Rect::from_min_size(
-                egui::pos2(offset.dx, offset.dy),
-                egui::vec2(size.width, size.height),
-            );
-
-            // TODO: egui doesn't directly support oval clipping with immutable painter
-            // For now, we just paint the child normally
-            // In a real implementation, we would:
-            // 1. Create an oval path
-            // 2. Apply the path as a clip region
-            // 3. Paint the child
-            // 4. Restore the clip region
-            //
-            // Alternative approaches:
-            // - Use painter.with_clip_rect() if available
-            // - Draw to an off-screen buffer and mask it
-            // - Use egui::Shape::circle() for circular clipping
-
-            // Paint child (without clipping for now - TODO)
-            ctx.paint_child(child_id, painter, offset);
-
-            // Note: Full oval clipping requires either:
-            // - A mutable context to set clip regions
-            // - Custom Shape implementation
-            // - Off-screen rendering with masking
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        // If no clipping needed, just return child layer
+        if !self.clip_behavior.clips() {
+            let child = cx.child();
+            return cx.capture_child_layer(child);
         }
-    }
 
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
+        // Get child layer
+        let child = cx.child();
+        
+
+        // TODO: Implement ClipOvalLayer when oval clipping is supported
+        // For now, just return the child layer without clipping
+        // In a real implementation, we would:
+        // 1. Create a ClipOvalLayer
+        // 2. Add the child layer to it
+        // 3. Return the ClipOvalLayer
+        //
+        // Alternative approaches:
+        // - Use ClipPathLayer with an oval path
+        // - Render to offscreen buffer and mask it
+        // - Use backend-specific oval clipping
+
+        (cx.capture_child_layer(child)) as _
+    }
 }
 
 #[cfg(test)]
@@ -146,69 +96,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clip_behavior_variants() {
-        assert_ne!(ClipBehavior::None, ClipBehavior::AntiAlias);
-        assert_ne!(ClipBehavior::AntiAlias, ClipBehavior::AntiAliasWithSaveLayer);
-    }
-
-    #[test]
-    fn test_clip_oval_data_new() {
-        let data = ClipOvalData::new(ClipBehavior::AntiAlias);
-        assert_eq!(data.clip_behavior, ClipBehavior::AntiAlias);
-    }
-
-    #[test]
-    fn test_clip_oval_data_anti_alias() {
-        let data = ClipOvalData::anti_alias();
-        assert_eq!(data.clip_behavior, ClipBehavior::AntiAlias);
-    }
-
-    #[test]
-    fn test_clip_oval_data_default() {
-        let data = ClipOvalData::default();
-        assert_eq!(data.clip_behavior, ClipBehavior::AntiAlias);
-    }
-
-    #[test]
     fn test_render_clip_oval_new() {
-        let clip_oval = SingleRenderBox::new(ClipOvalData::anti_alias());
-        assert_eq!(clip_oval.clip_behavior(), ClipBehavior::AntiAlias);
+        let clip = RenderClipOval::new(Clip::AntiAlias);
+        assert_eq!(clip.clip_behavior, Clip::AntiAlias);
+    }
+
+    #[test]
+    fn test_render_clip_oval_default() {
+        let clip = RenderClipOval::default();
+        assert_eq!(clip.clip_behavior, Clip::AntiAlias);
+    }
+
+    #[test]
+    fn test_render_clip_oval_hard_edge() {
+        let clip = RenderClipOval::hard_edge();
+        assert_eq!(clip.clip_behavior, Clip::HardEdge);
+    }
+
+    #[test]
+    fn test_render_clip_oval_anti_alias() {
+        let clip = RenderClipOval::anti_alias();
+        assert_eq!(clip.clip_behavior, Clip::AntiAlias);
     }
 
     #[test]
     fn test_render_clip_oval_set_clip_behavior() {
-        let mut clip_oval = SingleRenderBox::new(ClipOvalData::default());
-
-        clip_oval.set_clip_behavior(ClipBehavior::AntiAliasWithSaveLayer);
-        assert_eq!(clip_oval.clip_behavior(), ClipBehavior::AntiAliasWithSaveLayer);
-        assert!(clip_oval.needs_paint());
-    }
-
-    #[test]
-    fn test_render_clip_oval_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let clip_oval = SingleRenderBox::new(ClipOvalData::default());
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = clip_oval.layout(constraints, &ctx);
-
-        // No child, should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
-    }
-
-    #[test]
-    fn test_render_clip_oval_layout_with_constraints() {
-        use flui_core::testing::mock_render_context;
-
-        let clip_oval = SingleRenderBox::new(ClipOvalData::default());
-        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-
-        let (_tree, ctx) = mock_render_context();
-        let size = clip_oval.layout(constraints, &ctx);
-
-        // No child, should use smallest (which is 100x100 for tight constraints)
-        assert_eq!(size, Size::new(100.0, 100.0));
+        let mut clip = RenderClipOval::hard_edge();
+        clip.set_clip_behavior(Clip::AntiAlias);
+        assert_eq!(clip.clip_behavior, Clip::AntiAlias);
     }
 }

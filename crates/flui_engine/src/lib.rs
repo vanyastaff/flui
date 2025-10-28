@@ -84,7 +84,7 @@ pub mod surface;
 // Re-export commonly used types
 pub use layer::{
     Layer, BoxedLayer,
-    ContainerLayer, OpacityLayer, TransformLayer, ClipRectLayer, ClipRRectLayer, PictureLayer,
+    ContainerLayer, OpacityLayer, TransformLayer, Transform, ClipRectLayer, ClipRRectLayer, PictureLayer, DrawCommand,
 };
 pub use painter::{Painter, Paint, RRect};
 pub use paint_context::PaintContext;
@@ -100,7 +100,7 @@ pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
 
 // Re-export devtools integration (when feature enabled)
 #[cfg(feature = "devtools")]
-pub use devtools::{ProfiledCompositor, PerformanceOverlay, FrameTimelineGraph, FramePhase, FrameStats};
+pub use devtools::{ProfiledCompositor, PerformanceOverlay, FrameTimelineGraph, DevToolsLayout, UnifiedDevToolsOverlay, OverlayCorner, FramePhase, FrameStats};
 
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
 pub use devtools::MemoryGraph;

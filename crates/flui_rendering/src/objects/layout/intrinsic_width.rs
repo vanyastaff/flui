@@ -1,20 +1,33 @@
 //! RenderIntrinsicWidth - sizes child to its intrinsic width
 
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-use flui_core::DynRenderObject;
-use crate::core::{SingleRenderBox, RenderBoxMixin};
+use flui_types::{Size, constraints::BoxConstraints};
+use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_engine::BoxedLayer;
 
-/// Data for RenderIntrinsicWidth
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct IntrinsicWidthData {
+/// RenderObject that sizes child to its intrinsic width
+///
+/// This forces the child to be as wide as it "naturally" wants to be,
+/// ignoring the parent's width constraints. Useful for making text
+/// widgets take up only as much space as needed.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderIntrinsicWidth;
+///
+/// // Child will be sized to its intrinsic width
+/// let intrinsic = RenderIntrinsicWidth::new();
+/// ```
+#[derive(Debug)]
+pub struct RenderIntrinsicWidth {
     /// Step width (rounds intrinsic width to nearest multiple)
     pub step_width: Option<f32>,
     /// Step height (rounds intrinsic height to nearest multiple)
     pub step_height: Option<f32>,
 }
 
-impl IntrinsicWidthData {
-    /// Create new intrinsic width data
+impl RenderIntrinsicWidth {
+    /// Create new RenderIntrinsicWidth
     pub fn new() -> Self {
         Self {
             step_width: None,
@@ -45,122 +58,65 @@ impl IntrinsicWidthData {
             step_height: Some(step_height),
         }
     }
+
+    /// Set step width
+    pub fn set_step_width(&mut self, step_width: Option<f32>) {
+        self.step_width = step_width;
+    }
+
+    /// Set step height
+    pub fn set_step_height(&mut self, step_height: Option<f32>) {
+        self.step_height = step_height;
+    }
 }
 
-impl Default for IntrinsicWidthData {
+impl Default for RenderIntrinsicWidth {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// RenderObject that sizes child to its intrinsic width
-///
-/// This forces the child to be as wide as it "naturally" wants to be,
-/// ignoring the parent's width constraints. Useful for making text
-/// widgets take up only as much space as needed.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::{SingleRenderBox, objects::layout::IntrinsicWidthData};
-///
-/// // Child will be sized to its intrinsic width
-/// let mut intrinsic = SingleRenderBox::new(IntrinsicWidthData::new());
-/// ```
-pub type RenderIntrinsicWidth = SingleRenderBox<IntrinsicWidthData>;
+impl RenderObject for RenderIntrinsicWidth {
+    type Arity = SingleArity;
 
-// ===== Public API =====
+    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+        let constraints = cx.constraints();
 
-impl RenderIntrinsicWidth {
-    /// Get step width
-    pub fn step_width(&self) -> Option<f32> {
-        self.data().step_width
-    }
-
-    /// Get step height
-    pub fn step_height(&self) -> Option<f32> {
-        self.data().step_height
-    }
-
-    /// Set step width
-    pub fn set_step_width(&mut self, step_width: Option<f32>) {
-        if self.data().step_width != step_width {
-            self.data_mut().step_width = step_width;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Set step height
-    pub fn set_step_height(&mut self, step_height: Option<f32>) {
-        if self.data().step_height != step_height {
-            self.data_mut().step_height = step_height;
-            self.mark_needs_layout();
-        }
-    }
-}
-
-// ===== DynRenderObject Implementation =====
-
-impl DynRenderObject for RenderIntrinsicWidth {
-    fn layout(&self, state: &mut flui_core::RenderState, constraints: BoxConstraints, ctx: &flui_core::RenderContext) -> Size {
-        // Store constraints
-        *state.constraints.lock() = Some(constraints);
-
-        let step_width = self.data().step_width;
-        let step_height = self.data().step_height;
-
+        // SingleArity always has exactly one child
         // Layout child with infinite width to get intrinsic width
-        let children_ids = ctx.children();
-        let size =
-        if let Some(&child_id) = children_ids.first() {
-            // Get child's intrinsic width by giving it infinite width
-            let intrinsic_constraints = BoxConstraints::new(
-                0.0,
-                f32::INFINITY,
-                constraints.min_height,
-                constraints.max_height,
-            );
+        let child = cx.child();
 
-            let child_size = ctx.layout_child_cached(child_id, intrinsic_constraints, None);
+        // Get child's intrinsic width by giving it infinite width
+        let intrinsic_constraints = BoxConstraints::new(
+            0.0,
+            f32::INFINITY,
+            constraints.min_height,
+            constraints.max_height,
+        );
 
-            // Apply step width/height if specified
-            let width = if let Some(step) = step_width {
-                (child_size.width / step).ceil() * step
-            } else {
-                child_size.width
-            };
+        let child_size = cx.layout_child(child, intrinsic_constraints);
 
-            let height = if let Some(step) = step_height {
-                (child_size.height / step).ceil() * step
-            } else {
-                child_size.height
-            };
-
-            // Constrain to parent constraints
-            constraints.constrain(Size::new(width, height))
+        // Apply step width/height if specified
+        let width = if let Some(step) = self.step_width {
+            (child_size.width / step).ceil() * step
         } else {
-            constraints.smallest()
+            child_size.width
         };
 
-        // Store size and clear needs_layout flag
-        *state.size.lock() = Some(size);
-        state.flags.lock().remove(flui_core::RenderFlags::NEEDS_LAYOUT);
+        let height = if let Some(step) = self.step_height {
+            (child_size.height / step).ceil() * step
+        } else {
+            child_size.height
+        };
 
-        size
+        // Constrain to parent constraints
+        constraints.constrain(Size::new(width, height))
     }
 
-    fn paint(&self, state: &flui_core::RenderState, painter: &egui::Painter, offset: Offset, ctx: &flui_core::RenderContext) {
-        // Paint child at our position
-        // Get children from ElementTree via RenderContext
-        let children_ids = ctx.children();
-
-        if let Some(&child_id) = children_ids.first() {
-            ctx.paint_child(child_id, painter, offset);
-        }
+    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+        let child = cx.child();
+        cx.capture_child_layer(child)
     }
-
-    // Delegate all other methods to RenderBoxMixin
-    delegate_to_mixin!();
 }
 
 #[cfg(test)]
@@ -168,76 +124,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_intrinsic_width_data_new() {
-        let data = IntrinsicWidthData::new();
-        assert_eq!(data.step_width, None);
-        assert_eq!(data.step_height, None);
-    }
-
-    #[test]
-    fn test_intrinsic_width_data_with_step_width() {
-        let data = IntrinsicWidthData::with_step_width(10.0);
-        assert_eq!(data.step_width, Some(10.0));
-        assert_eq!(data.step_height, None);
-    }
-
-    #[test]
-    fn test_intrinsic_width_data_with_step_height() {
-        let data = IntrinsicWidthData::with_step_height(5.0);
-        assert_eq!(data.step_width, None);
-        assert_eq!(data.step_height, Some(5.0));
-    }
-
-    #[test]
-    fn test_intrinsic_width_data_with_steps() {
-        let data = IntrinsicWidthData::with_steps(10.0, 5.0);
-        assert_eq!(data.step_width, Some(10.0));
-        assert_eq!(data.step_height, Some(5.0));
-    }
-
-    #[test]
-    fn test_intrinsic_width_data_default() {
-        let data = IntrinsicWidthData::default();
-        assert_eq!(data.step_width, None);
-        assert_eq!(data.step_height, None);
-    }
-
-    #[test]
     fn test_render_intrinsic_width_new() {
-        let intrinsic = SingleRenderBox::new(IntrinsicWidthData::new());
-        assert_eq!(intrinsic.step_width(), None);
-        assert_eq!(intrinsic.step_height(), None);
+        let intrinsic = RenderIntrinsicWidth::new();
+        assert_eq!(intrinsic.step_width, None);
+        assert_eq!(intrinsic.step_height, None);
+    }
+
+    #[test]
+    fn test_render_intrinsic_width_with_step_width() {
+        let intrinsic = RenderIntrinsicWidth::with_step_width(10.0);
+        assert_eq!(intrinsic.step_width, Some(10.0));
+        assert_eq!(intrinsic.step_height, None);
+    }
+
+    #[test]
+    fn test_render_intrinsic_width_with_step_height() {
+        let intrinsic = RenderIntrinsicWidth::with_step_height(5.0);
+        assert_eq!(intrinsic.step_width, None);
+        assert_eq!(intrinsic.step_height, Some(5.0));
+    }
+
+    #[test]
+    fn test_render_intrinsic_width_with_steps() {
+        let intrinsic = RenderIntrinsicWidth::with_steps(10.0, 5.0);
+        assert_eq!(intrinsic.step_width, Some(10.0));
+        assert_eq!(intrinsic.step_height, Some(5.0));
     }
 
     #[test]
     fn test_render_intrinsic_width_set_step_width() {
-        let mut intrinsic = SingleRenderBox::new(IntrinsicWidthData::new());
-
+        let mut intrinsic = RenderIntrinsicWidth::new();
         intrinsic.set_step_width(Some(8.0));
-        assert_eq!(intrinsic.step_width(), Some(8.0));
-        assert!(intrinsic.needs_layout());
+        assert_eq!(intrinsic.step_width, Some(8.0));
     }
 
     #[test]
     fn test_render_intrinsic_width_set_step_height() {
-        let mut intrinsic = SingleRenderBox::new(IntrinsicWidthData::new());
-
+        let mut intrinsic = RenderIntrinsicWidth::new();
         intrinsic.set_step_height(Some(4.0));
-        assert_eq!(intrinsic.step_height(), Some(4.0));
-        assert!(intrinsic.needs_layout());
-    }
-
-    #[test]
-    fn test_render_intrinsic_width_layout() {
-        use flui_core::testing::mock_render_context;
-
-        let intrinsic = SingleRenderBox::new(IntrinsicWidthData::new());
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-        let (_tree, ctx) = mock_render_context();
-        let size = intrinsic.layout(constraints, &ctx);
-
-        // No child, should use smallest size
-        assert_eq!(size, Size::new(0.0, 0.0));
+        assert_eq!(intrinsic.step_height, Some(4.0));
     }
 }

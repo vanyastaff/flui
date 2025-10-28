@@ -138,14 +138,14 @@ impl Default for FlexParentData {
 }
 
 // Implement ParentData trait from flui_core
-impl flui_core::ParentData for FlexParentData {
-    fn as_parent_data_with_offset(&self) -> Option<&dyn flui_core::ParentDataWithOffset> {
+impl flui_core::render::ParentData for FlexParentData {
+    fn as_parent_data_with_offset(&self) -> Option<&dyn flui_core::render::ParentDataWithOffset> {
         Some(self)
     }
 }
 
 // Implement ParentDataWithOffset trait from flui_core
-impl flui_core::ParentDataWithOffset for FlexParentData {
+impl flui_core::render::ParentDataWithOffset for FlexParentData {
     fn offset(&self) -> flui_types::Offset {
         self.offset
     }
