@@ -181,11 +181,15 @@ impl eframe::App for LeakTestApp {
 
                 // Controls
                 ui.horizontal(|ui| {
-                    if ui.button(if self.leak_enabled { "⏸ Stop Leak" } else { "▶ Start Leak" }).clicked() {
+                    if ui.button(if self.leak_enabled { "⏸ Stop & Free" } else { "▶ Start Leak" }).clicked() {
+                        if self.leak_enabled {
+                            // Stop leaking AND free memory
+                            self.leaked_memory.clear();
+                        }
                         self.leak_enabled = !self.leak_enabled;
                     }
 
-                    if ui.button("🗑 Clear Leaked Memory").clicked() {
+                    if ui.button("🗑 Clear All & Reset").clicked() {
                         self.leaked_memory.clear();
                         self.memory_profiler.lock().unwrap().clear_history();
                     }
@@ -195,6 +199,9 @@ impl eframe::App for LeakTestApp {
                     ui.label("Leak rate:");
                     ui.add(egui::Slider::new(&mut self.leak_rate, 10..=500).suffix(" KB/s"));
                 });
+
+                ui.separator();
+                ui.label("💡 Tip: Watch the blue line grow, then press 'Stop & Free' to see it drop!");
             });
         });
 
