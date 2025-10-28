@@ -259,11 +259,12 @@ impl PictureLayer {
                 )
             }
             DrawCommand::Text { text, position, style } => {
-                // Approximate text bounds
-                // TODO: Use proper text measurement when available
+                // Approximate text bounds (conservative estimate)
+                // TODO(Phase 2): Integrate proper text measurement with font metrics
+                // See: https://github.com/yourusername/flui/issues/XXX
                 let font_size = style.font_size.unwrap_or(14.0) as f32;
-                let width = text.len() as f32 * font_size * 0.6;
-                let height = font_size * 1.2; // Include line height
+                let width = text.len() as f32 * font_size * 0.75; // More conservative (was 0.6)
+                let height = font_size * 1.5; // Account for descenders and line height
                 Rect::from_xywh(position.x, position.y, width, height)
             }
             DrawCommand::Image { dst_rect, paint, .. } => {

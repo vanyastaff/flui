@@ -21,7 +21,12 @@ pub enum ClipBehavior {
 
 /// Legacy clip layer - applies clipping to child layer
 ///
-/// **Deprecated**: Use `ClipRectLayer` or `ClipRRectLayer` instead.
+/// **Deprecated**: Use `ClipRectLayer` or `ClipRRectLayer` instead for proper
+/// lifecycle management and better performance.
+#[deprecated(
+    since = "0.1.0",
+    note = "Use ClipRectLayer or ClipRRectLayer instead. Will be removed in 0.2.0."
+)]
 pub struct ClipLayer {
     /// The child layer to clip
     child: BoxedLayer,
