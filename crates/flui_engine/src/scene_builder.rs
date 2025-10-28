@@ -257,21 +257,35 @@ impl SceneBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if there are no layers on the stack to pop.
+    /// Panics if there are no layers on the stack to pop. Use `depth()` to check
+    /// stack depth before popping, or `is_balanced()` to verify the stack is empty.
     pub fn pop(&mut self) {
-        if let Some(entry) = self.layer_stack.pop() {
-            // Convert the entry into a layer
-            let layer = entry.into_layer();
-
-            // Add to parent or root
-            if let Some(parent_entry) = self.layer_stack.last_mut() {
-                parent_entry.children_mut().push(layer);
-            } else {
-                self.root.add_child(layer);
-            }
-        } else {
-            panic!("SceneBuilder::pop() called with empty stack");
+        if self.layer_stack.is_empty() {
+            panic!(
+                "SceneBuilder::pop() called with empty stack. \
+                 Each push_* call must be balanced with a pop() call. \
+                 Use depth() to check stack depth before popping."
+            );
         }
+
+        let entry = self.layer_stack.pop().unwrap();
+        // Convert the entry into a layer
+        let layer = entry.into_layer();
+
+        // Add to parent or root
+        if let Some(parent_entry) = self.layer_stack.last_mut() {
+            parent_entry.children_mut().push(layer);
+        } else {
+            self.root.add_child(layer);
+        }
+    }
+
+    /// Check if the stack is balanced (empty)
+    ///
+    /// Returns `true` if all pushed layers have been popped.
+    /// This is useful for validation before calling `build()`.
+    pub fn is_balanced(&self) -> bool {
+        self.layer_stack.is_empty()
     }
 
     /// Build the final scene
