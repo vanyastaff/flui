@@ -3,15 +3,11 @@
 //! The Painter trait defines a backend-agnostic interface for rendering.
 //! Different backends (egui, wgpu, skia) implement this trait to provide
 //! actual rendering capabilities.
+//!
+//! **Note**: Backend implementations have been moved to the `crate::backends` module.
+//! Use `crate::backends::egui::EguiPainter` or `crate::backends::wgpu::WgpuPainter`.
 
 use flui_types::{Offset, Rect, Point};
-
-// Backend implementations
-#[cfg(feature = "egui")]
-pub mod egui;
-
-#[cfg(feature = "wgpu")]
-pub mod wgpu;
 
 
 

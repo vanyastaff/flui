@@ -358,7 +358,7 @@ impl App {
     /// Run with Egui backend
     #[cfg(feature = "egui")]
     fn run_egui<L: AppLogic>(self, mut logic: L) -> Result<(), String> {
-        use crate::painter::egui::EguiPainter;
+        use crate::backends::egui::EguiPainter;
         use std::time::Instant;
 
         // Setup application

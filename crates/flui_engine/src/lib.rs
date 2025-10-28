@@ -61,6 +61,7 @@
 
 pub mod app;
 pub mod backend;
+pub mod backends;
 pub mod compositor;
 pub mod layer;
 pub mod paint_context;
@@ -92,14 +93,13 @@ pub use backend::{RenderBackend, BackendCapabilities, BackendInfo};
 // Re-export unified app API
 pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
 
-// Re-export egui painter when feature is enabled
+// Re-export backend implementations when features are enabled
 #[cfg(feature = "egui")]
-pub use painter::egui::EguiPainter;
+pub use backends::egui::EguiPainter;
 
-// Re-export wgpu painter and renderer when feature is enabled
 #[cfg(feature = "wgpu")]
-pub use painter::wgpu::{
-    WgpuPainter, WgpuRenderer, RenderError,
+pub use backends::wgpu::{
+    WgpuPainter, WgpuRenderer,
     TextRenderer, TextCommand, TextAlign, TextRenderError,
 };
 
