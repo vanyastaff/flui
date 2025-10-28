@@ -2,7 +2,7 @@
 //!
 //! A composited layer that represents a visual element in the scene graph.
 
-use flui_types::Rect;
+use flui_types::{Rect, Offset, Event, HitTestResult};
 use crate::painter::Painter;
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -140,6 +140,62 @@ pub trait Layer: Send + Sync {
     /// Get a debug description of this layer
     fn debug_description(&self) -> String {
         format!("Layer({:?})", self.bounds())
+    }
+
+    /// Perform hit testing at the given position
+    ///
+    /// Determines if the given position intersects with this layer,
+    /// and adds appropriate entries to the hit test result.
+    ///
+    /// # Arguments
+    ///
+    /// * `position` - The position to test in global coordinates
+    /// * `result` - The hit test result to add entries to
+    ///
+    /// # Returns
+    ///
+    /// `true` if the position hits this layer or any of its children
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut result = HitTestResult::new();
+    /// if layer.hit_test(Offset::new(100.0, 200.0), &mut result) {
+    ///     // Position hits this layer
+    ///     result.dispatch(&event);
+    /// }
+    /// ```
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // Default implementation: check if position is within bounds
+        let bounds = self.bounds();
+        bounds.contains(position)
+    }
+
+    /// Handle an event that has been routed to this layer
+    ///
+    /// Returns `true` if the event was handled and should not propagate further.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The event to handle
+    ///
+    /// # Returns
+    ///
+    /// `true` if the event was handled, `false` if it should continue propagating
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if layer.handle_event(&event) {
+    ///     // Event was handled, stop propagation
+    /// } else {
+    ///     // Event was not handled, continue to next layer
+    /// }
+    /// ```
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Default implementation: do nothing, event not handled
+        let _ = event;
+        false
     }
 }
 

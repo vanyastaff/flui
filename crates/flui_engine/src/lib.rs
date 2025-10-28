@@ -63,12 +63,14 @@ pub mod app;
 pub mod backend;
 pub mod backends;
 pub mod compositor;
+pub mod event_router;
 pub mod layer;
 pub mod paint_context;
 pub mod painter;
 pub mod scene;
 pub mod scene_builder;
 pub mod surface;
+
 
 
 
@@ -89,6 +91,7 @@ pub use scene_builder::SceneBuilder;
 pub use compositor::{Compositor, CompositorOptions, CompositionStats};
 pub use surface::{Surface, Frame};
 pub use backend::{RenderBackend, BackendCapabilities, BackendInfo};
+pub use event_router::EventRouter;
 
 // Re-export unified app API
 pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
@@ -102,6 +105,7 @@ pub use backends::wgpu::{
     WgpuPainter, WgpuRenderer,
     TextRenderer, TextCommand, TextAlign, TextRenderError,
 };
+
 
 
 

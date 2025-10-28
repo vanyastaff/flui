@@ -74,7 +74,11 @@ pub mod typography;
 
 
 // Re-exports for convenience
-pub use events::{HitTestEntry, HitTestResult, PointerButton, PointerDeviceKind, PointerEvent, PointerEventData};
+pub use events::{
+    Event, HitTestEntry, HitTestResult, KeyEvent, KeyEventData, KeyModifiers, LogicalKey,
+    PhysicalKey, PointerButton, PointerDeviceKind, PointerEvent, PointerEventData, ScrollDelta,
+    ScrollEventData, WindowEvent,
+};
 pub use geometry::{Matrix4, Offset, Point, Rect, RRect, Size};
 pub use layout::{
     Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
