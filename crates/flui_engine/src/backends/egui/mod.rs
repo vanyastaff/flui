@@ -4,6 +4,9 @@
 //! It implements the Painter trait using egui's rendering primitives.
 
 pub mod painter;
+pub mod window;
+
 
 // Re-export main types
 pub use painter::EguiPainter;
+

@@ -271,137 +271,14 @@ impl App {
 
     /// Run with WGPU backend
     #[cfg(feature = "wgpu")]
-    fn run_wgpu<L: AppLogic>(self, mut logic: L) -> Result<(), String> {
-        use crate::painter::wgpu::{WgpuRenderer, WgpuPainter};
-        use winit::{
-            event::{Event, WindowEvent},
-            event_loop::EventLoop,
-        };
-        use std::time::Instant;
-
-        // Create event loop and window
-        let event_loop = EventLoop::new().map_err(|e| format!("Failed to create event loop: {}", e))?;
-
-        let mut window_attributes = winit::window::Window::default_attributes()
-            .with_title(&self.config.window.title)
-            .with_inner_size(winit::dpi::PhysicalSize::new(
-                self.config.window.width,
-                self.config.window.height,
-            ))
-            .with_resizable(self.config.window.resizable);
-
-        if self.config.window.maximized {
-            window_attributes = window_attributes.with_maximized(true);
-        }
-
-        let window = Arc::new(
-            event_loop.create_window(window_attributes)
-                .map_err(|e| format!("Failed to create window: {}", e))?
-        );
-
-        // Create WGPU renderer
-        let renderer = pollster::block_on(async {
-            WgpuRenderer::new(Some(window.clone())).await
-        }).map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
-
-        let renderer = Arc::new(Mutex::new(renderer));
-        let mut painter = WgpuPainter::new(renderer.clone());
-
-        // Setup application
-        logic.setup();
-
-        // Timing
-        let mut last_frame_time = Instant::now();
-
-        // Run event loop
-        event_loop.run(move |event, target| {
-            match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => {
-                        target.exit();
-                    }
-                    WindowEvent::Resized(size) => {
-                        renderer.lock().resize(size.width, size.height);
-                        window.request_redraw();
-                    }
-                    WindowEvent::RedrawRequested => {
-                        // Calculate delta time
-                        let now = Instant::now();
-                        let delta_time = now.duration_since(last_frame_time).as_secs_f32();
-                        last_frame_time = now;
-
-                        // Update logic
-                        logic.update(delta_time);
-
-                        // Render
-                        painter.begin_frame();
-                        logic.render(&mut painter);
-
-                        if let Err(e) = painter.end_frame() {
-                            eprintln!("Render error: {:?}", e);
-                        }
-
-                        window.request_redraw();
-                    }
-                    WindowEvent::KeyboardInput { event, .. } => {
-                        if event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) {
-                            target.exit();
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }).map_err(|e| format!("Event loop error: {}", e))
+    fn run_wgpu<L: AppLogic>(self, logic: L) -> Result<(), String> {
+        crate::backends::wgpu::window::run(logic, self.config.window)
     }
 
     /// Run with Egui backend
     #[cfg(feature = "egui")]
-    fn run_egui<L: AppLogic>(self, mut logic: L) -> Result<(), String> {
-        use crate::backends::egui::EguiPainter;
-        use std::time::Instant;
-
-        // Setup application
-        logic.setup();
-
-        // Timing
-        let mut last_frame_time = Instant::now();
-
-        let native_options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([self.config.window.width as f32, self.config.window.height as f32])
-                .with_title(&self.config.window.title)
-                .with_resizable(self.config.window.resizable)
-                .with_maximized(self.config.window.maximized),
-            vsync: self.config.window.vsync,
-            ..Default::default()
-        };
-
-        eframe::run_simple_native(
-            &self.config.window.title,
-            native_options,
-            move |ctx, _frame| {
-                // Calculate delta time
-                let now = Instant::now();
-                let delta_time = now.duration_since(last_frame_time).as_secs_f32();
-                last_frame_time = now;
-
-                // Update logic
-                logic.update(delta_time);
-
-                // Render
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(25, 25, 25)))
-                    .show(ctx, |ui| {
-                        let painter = ui.painter();
-                        let mut flui_painter = EguiPainter::new(painter);
-                        logic.render(&mut flui_painter);
-                    });
-
-                // Request continuous repainting
-                ctx.request_repaint();
-            },
-        ).map_err(|e| format!("Egui error: {}", e))
+    fn run_egui<L: AppLogic>(self, logic: L) -> Result<(), String> {
+        crate::backends::egui::window::run(logic, self.config.window)
     }
 }
 

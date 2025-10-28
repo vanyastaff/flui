@@ -6,6 +6,8 @@ mod pipeline;
 mod tesselator;
 pub mod text;
 mod vertex;
+pub mod window;
+
 
 
 pub use vertex::{SolidVertex, ViewportUniforms};
@@ -370,6 +372,7 @@ pub enum RenderError {
     #[error("Surface error: {0}")] SurfaceError(#[from] wgpu::SurfaceError),
     #[error("Text rendering failed: {0}")] TextRenderingFailed(String),
 }
+
 
 
 

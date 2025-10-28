@@ -13,7 +13,7 @@ use flui_engine::{
     Paint,
 };
 #[cfg(feature = "egui")]
-use flui_engine::painter::egui::EguiPainter;
+use flui_engine::backends::egui::EguiPainter;
 use flui_types::{Size, Rect, Point, Offset};
 
 /// Build a complex scene with multiple layers
