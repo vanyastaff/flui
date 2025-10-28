@@ -39,6 +39,74 @@ impl Default for Paint {
     }
 }
 
+impl Paint {
+    /// Create a new paint with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set color (builder pattern)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let paint = Paint::new().with_color([1.0, 0.0, 0.0, 1.0]); // Red
+    /// ```
+    pub fn with_color(mut self, color: [f32; 4]) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Set stroke width (builder pattern)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let paint = Paint::new().with_stroke_width(2.0);
+    /// ```
+    pub fn with_stroke_width(mut self, width: f32) -> Self {
+        self.stroke_width = width;
+        self
+    }
+
+    /// Enable or disable anti-aliasing (builder pattern)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let paint = Paint::new().with_anti_alias(false);
+    /// ```
+    pub fn with_anti_alias(mut self, enabled: bool) -> Self {
+        self.anti_alias = enabled;
+        self
+    }
+
+    /// Create a stroke paint with specified width and color
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let paint = Paint::stroke(2.0, [1.0, 0.0, 0.0, 1.0]); // Red stroke
+    /// ```
+    pub fn stroke(width: f32, color: [f32; 4]) -> Self {
+        Self {
+            color,
+            stroke_width: width,
+            anti_alias: true,
+        }
+    }
+
+    /// Create a fill paint with specified color
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let paint = Paint::fill([0.0, 1.0, 0.0, 1.0]); // Green fill
+    /// ```
+    pub fn fill(color: [f32; 4]) -> Self {
+        Self {
+            color,
+            stroke_width: 0.0,
+            anti_alias: true,
+        }
+    }
+}
+
 /// Rounded rectangle
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RRect {

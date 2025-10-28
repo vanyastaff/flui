@@ -84,6 +84,7 @@ pub use layer::{
 pub use painter::{Painter, Paint, RRect};
 pub use paint_context::PaintContext;
 pub use scene::{Scene, SceneMetadata};
+pub use scene_builder::SceneBuilder;
 pub use compositor::{Compositor, CompositorOptions, CompositionStats};
 pub use surface::{Surface, Frame};
 pub use backend::{RenderBackend, BackendCapabilities, BackendInfo};
