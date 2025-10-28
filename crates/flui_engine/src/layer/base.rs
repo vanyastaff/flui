@@ -196,8 +196,9 @@ mod tests {
     }
 
     impl Layer for TestLayer {
-        fn add_to_scene(&self, _painter: &mut dyn Painter, _offset: Offset) {
+        fn paint(&self, painter: &mut dyn Painter) {
             assert!(!self.disposed, "Cannot use disposed layer");
+            let _ = painter; // Suppress unused variable warning
         }
 
         fn bounds(&self) -> Rect {

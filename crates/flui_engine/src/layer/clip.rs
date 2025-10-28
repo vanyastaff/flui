@@ -4,8 +4,7 @@
 //! following Flutter's ClipRectLayer and ClipRRectLayer architecture.
 
 use flui_types::Rect;
-use crate::layer::{Layer as LegacyLayer, BoxedLayer};
-use crate::layer::base::Layer;
+use crate::layer::{Layer, BoxedLayer};
 use crate::painter::{Painter, RRect};
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -48,7 +47,7 @@ impl ClipLayer {
     }
 }
 
-impl LegacyLayer for ClipLayer {
+impl Layer for ClipLayer {
     fn paint(&self, painter: &mut dyn Painter) {
         painter.save();
 
