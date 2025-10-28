@@ -44,6 +44,7 @@ fn main() {
                 Ok(Box::new(ProfiledApp {
                     compositor,
                     scene,
+                    frame_started: false,
                 }))
             }),
         ).unwrap();
@@ -60,13 +61,22 @@ fn main() {
 struct ProfiledApp {
     compositor: ProfiledCompositor,
     scene: Scene,
+    frame_started: bool,
 }
 
 #[cfg(feature = "egui")]
 impl eframe::App for ProfiledApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Begin profiling frame
+        // End previous frame if it was started
+        let stats = if self.frame_started {
+            self.compositor.end_frame()
+        } else {
+            None
+        };
+
+        // Begin new frame
         self.compositor.begin_frame();
+        self.frame_started = true;
 
         egui::CentralPanel::default().show(ctx, |ui| {
             // Get the egui painter from ui
@@ -76,8 +86,8 @@ impl eframe::App for ProfiledApp {
             // Composite with profiling
             self.compositor.composite(&self.scene, &mut painter);
 
-            // End frame and get stats
-            if let Some(stats) = self.compositor.end_frame() {
+            // Display stats from PREVIOUS frame
+            if let Some(stats) = stats {
                 // Display performance info
                 ui.label(format!("Frame time: {:.2}ms", stats.total_time_ms()));
                 ui.label(format!("FPS: {:.1}", self.compositor.fps()));
@@ -95,6 +105,8 @@ impl eframe::App for ProfiledApp {
                         paint_phase.duration_ms()
                     ));
                 }
+            } else {
+                ui.label("Warming up...");
             }
 
             ui.separator();
