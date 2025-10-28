@@ -25,6 +25,9 @@
 //! - **GradientPainter**: Paints Linear/Radial/Sweep gradients
 //! - **ShadowPainter**: Paints box shadows with blur
 //! - **TextPainter**: Paints text with alignment, direction, overflow handling
+//! - **ImagePainter**: Paints images with fit, repeat, and alignment
+//! - **PathPainter**: Paints vector paths with fill and stroke
+//! - **ShapePainter**: Paints shape borders (rounded, circle, star, etc.)
 //!
 //! ## Design Principles
 //!
@@ -38,8 +41,12 @@ pub mod border;
 pub mod decoration;
 pub mod gradient;
 pub mod image;
+pub mod path;
 pub mod shadow;
+pub mod shape;
 pub mod text;
+
+
 
 
 
@@ -52,6 +59,8 @@ pub use gradient::GradientPainter;
 pub use shadow::ShadowPainter;
 pub use text::TextPainter;
 pub use image::ImagePainter;
+pub use path::PathPainter;
+pub use shape::ShapePainter;
 
 /// Prelude module for convenient imports
 pub mod prelude {
@@ -61,7 +70,11 @@ pub mod prelude {
     pub use crate::shadow::ShadowPainter;
     pub use crate::text::TextPainter;
     pub use crate::image::ImagePainter;
+    pub use crate::path::PathPainter;
+    pub use crate::shape::ShapePainter;
 }
+
+
 
 
 

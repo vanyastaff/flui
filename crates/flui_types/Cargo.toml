@@ -13,6 +13,7 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [features]
 default = []

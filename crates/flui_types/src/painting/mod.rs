@@ -7,7 +7,11 @@ pub mod blend_mode;
 pub mod canvas;
 pub mod clipping;
 pub mod image;
+pub mod image_provider;
+pub mod path;
 pub mod shader;
+
+
 
 // Re-exports for convenience
 pub use blend_mode::BlendMode;
@@ -17,4 +21,10 @@ pub use canvas::{
 };
 pub use clipping::{AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape};
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
+pub use image_provider::{
+    AssetImage, FileImage, ImageError, ImageProvider, ImageResult, MemoryImage, NetworkImage,
+    ResolvedImageProvider, TransformedImageProvider,
+};
 pub use shader::{ImageShader, MaskFilter, Shader};
+
+

@@ -199,6 +199,155 @@ pub trait Painter {
     /// Clip to rounded rectangle
     fn clip_rrect(&mut self, rrect: RRect);
 
+    // ========== Path Drawing ==========
+
+    /// Draw a path with the given paint style.
+    ///
+    /// This is an optional optimization. Backends can provide efficient path rendering,
+    /// or fall back to the default implementation which decomposes paths into primitives.
+    ///
+    /// # Parameters
+    /// - `path`: The path to draw
+    /// - `paint`: Paint style (color, stroke width, etc.)
+    ///
+    /// # Default Implementation
+    /// The default implementation decomposes the path into individual drawing commands
+    /// using the other primitives (line, circle, rect, etc.). This works but may be less
+    /// efficient than native path rendering.
+    fn path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
+        use flui_types::painting::path::PathCommand;
+
+        let commands = path.commands();
+        let mut current_pos = Point::new(0.0, 0.0);
+        let mut subpath_start = Point::new(0.0, 0.0);
+
+        for cmd in commands {
+            match cmd {
+                PathCommand::MoveTo(p) => {
+                    current_pos = *p;
+                    subpath_start = *p;
+                }
+                PathCommand::LineTo(p) => {
+                    self.line(current_pos, *p, paint);
+                    current_pos = *p;
+                }
+                PathCommand::QuadraticTo(control, end) => {
+                    // Convert quadratic to cubic Bézier
+                    let c1 = Point::new(
+                        current_pos.x + 2.0 / 3.0 * (control.x - current_pos.x),
+                        current_pos.y + 2.0 / 3.0 * (control.y - current_pos.y),
+                    );
+                    let c2 = Point::new(
+                        end.x + 2.0 / 3.0 * (control.x - end.x),
+                        end.y + 2.0 / 3.0 * (control.y - end.y),
+                    );
+
+                    // Draw cubic Bézier with line approximation
+                    const SEGMENTS: usize = 20;
+                    let mut prev = current_pos;
+                    for i in 1..=SEGMENTS {
+                        let t = i as f32 / SEGMENTS as f32;
+                        let t2 = t * t;
+                        let t3 = t2 * t;
+                        let mt = 1.0 - t;
+                        let mt2 = mt * mt;
+                        let mt3 = mt2 * mt;
+
+                        let x = mt3 * current_pos.x + 3.0 * mt2 * t * c1.x + 3.0 * mt * t2 * c2.x + t3 * end.x;
+                        let y = mt3 * current_pos.y + 3.0 * mt2 * t * c1.y + 3.0 * mt * t2 * c2.y + t3 * end.y;
+
+                        let point = Point::new(x, y);
+                        self.line(prev, point, paint);
+                        prev = point;
+                    }
+                    current_pos = *end;
+                }
+                PathCommand::CubicTo(c1, c2, end) => {
+                    // Draw cubic Bézier with line approximation
+                    const SEGMENTS: usize = 20;
+                    let mut prev = current_pos;
+                    for i in 1..=SEGMENTS {
+                        let t = i as f32 / SEGMENTS as f32;
+                        let t2 = t * t;
+                        let t3 = t2 * t;
+                        let mt = 1.0 - t;
+                        let mt2 = mt * mt;
+                        let mt3 = mt2 * mt;
+
+                        let x = mt3 * current_pos.x + 3.0 * mt2 * t * c1.x + 3.0 * mt * t2 * c2.x + t3 * end.x;
+                        let y = mt3 * current_pos.y + 3.0 * mt2 * t * c1.y + 3.0 * mt * t2 * c2.y + t3 * end.y;
+
+                        let point = Point::new(x, y);
+                        self.line(prev, point, paint);
+                        prev = point;
+                    }
+                    current_pos = *end;
+                }
+                PathCommand::Close => {
+                    if current_pos != subpath_start {
+                        self.line(current_pos, subpath_start, paint);
+                    }
+                    current_pos = subpath_start;
+                }
+                PathCommand::AddRect(rect) => {
+                    if paint.stroke_width > 0.0 {
+                        // Stroke
+                        let corners = [
+                            Point::new(rect.left(), rect.top()),
+                            Point::new(rect.right(), rect.top()),
+                            Point::new(rect.right(), rect.bottom()),
+                            Point::new(rect.left(), rect.bottom()),
+                        ];
+                        for i in 0..4 {
+                            self.line(corners[i], corners[(i + 1) % 4], paint);
+                        }
+                    } else {
+                        // Fill
+                        self.rect(*rect, paint);
+                    }
+                }
+                PathCommand::AddCircle(center, radius) => {
+                    self.circle(*center, *radius, paint);
+                }
+                PathCommand::AddOval(rect) => {
+                    let rx = rect.width() / 2.0;
+                    let ry = rect.height() / 2.0;
+                    let center = Point::new(rect.left() + rx, rect.top() + ry);
+
+                    if (rx - ry).abs() < 0.001 {
+                        self.circle(center, rx, paint);
+                    } else {
+                        self.ellipse(center, rx, ry, paint);
+                    }
+                }
+                PathCommand::AddArc(rect, start_angle, sweep_angle) => {
+                    // Approximate arc with line segments
+                    const SEGMENTS: usize = 32;
+                    let center_x = rect.left() + rect.width() / 2.0;
+                    let center_y = rect.top() + rect.height() / 2.0;
+                    let rx = rect.width() / 2.0;
+                    let ry = rect.height() / 2.0;
+
+                    let angle_step = sweep_angle / SEGMENTS as f32;
+                    let mut prev = Point::new(
+                        center_x + rx * start_angle.cos(),
+                        center_y + ry * start_angle.sin(),
+                    );
+
+                    for i in 1..=SEGMENTS {
+                        let angle = start_angle + angle_step * i as f32;
+                        let current = Point::new(
+                            center_x + rx * angle.cos(),
+                            center_y + ry * angle.sin(),
+                        );
+                        self.line(prev, current, paint);
+                        prev = current;
+                    }
+                }
+            }
+        }
+    }
+
     // ========== Advanced ==========
 
     /// Set opacity for subsequent draws (0.0 = transparent, 1.0 = opaque)

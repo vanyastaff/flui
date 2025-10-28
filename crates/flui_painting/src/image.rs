@@ -6,7 +6,7 @@
 use flui_types::{
     Rect, Point,
     layout::Alignment,
-    painting::{Image, BoxFit, ImageRepeat, ColorFilter, FittedSizes},
+    painting::{Image, BoxFit, ImageRepeat, ColorFilter},
     styling::DecorationImage,
 };
 use flui_engine::{Painter, Paint};
