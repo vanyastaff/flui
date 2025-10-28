@@ -89,7 +89,7 @@ impl Point {
     /// Check if point is finite (not NaN or infinity).
     #[inline]
     #[must_use]
-    pub const fn is_finite(&self) -> bool {
+    pub fn is_finite(&self) -> bool {
         self.x.is_finite() && self.y.is_finite()
     }
 
