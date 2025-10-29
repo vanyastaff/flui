@@ -1,37 +1,20 @@
 # FLUI Engine Examples
 
-This directory contains systematic tests and demos for the FLUI rendering engine.
+This directory contains systematic tests for the FLUI rendering engine.
 
 ## Systematic Tests
 
 These tests provide comprehensive coverage of engine features with clear visual verification:
 
-### Core Rendering
+### Core Rendering Tests
+- **alignment_test.rs** - Layout alignment and positioning
+- **clipping_test.rs** - Clipping (rect, rrect, oval, nested, with transform)
 - **gradient_test.rs** - Gradient rendering (horizontal, vertical, radial)
 - **shapes_test.rs** - Basic shapes (rect, circle, line, arc, polygon, oval)
 - **transform_test.rs** - Transformations (translate, scale, rotate, skew, nested)
-- **clipping_test.rs** - Clipping (rect, rrect, oval, nested, with transform)
-- **alignment_test_demo.rs** - Layout alignment and positioning
 
-### Advanced Features
-- **layer_demo.rs** - Layer system demonstration
-- **path_rendering_demo.rs** - Path rendering and manipulation
-- **material_elevation_demo.rs** - Material Design elevation
-- **material_elevation_demo_visual.rs** - Visual elevation demo
-- **text_effects_demo.rs** - Text rendering effects
-
-### Developer Tools
-- **memory_leak_test.rs** - Memory leak detection
-- **memory_profiling.rs** - Memory profiling tools
-- **performance_overlay.rs** - Performance monitoring overlay
-- **profiled_compositor.rs** - Compositor profiling
-- **profiled_rendering.rs** - Rendering profiling
-- **unified_devtools.rs** - Unified development tools
-
-### Interactive Examples
-- **input_tracker.rs** - Input event tracking
-- **interactive_button.rs** - Interactive UI elements
-- **full_pipeline.rs** - Full rendering pipeline
+### Developer Tests
+- **memory_leak_test.rs** - Memory leak detection and stress testing
 
 ## Running Examples
 
