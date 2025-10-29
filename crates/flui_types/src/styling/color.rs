@@ -353,6 +353,83 @@ impl Color {
         )
     }
 
+    /// Converts to RGBA f32 array (0.0-1.0 range).
+    ///
+    /// This is the preferred format for passing colors to GPU backends
+    /// that expect array inputs (egui, wgpu, etc.)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Color;
+    ///
+    /// let red = Color::RED;
+    /// let rgba = red.to_rgba_f32_array();
+    /// assert_eq!(rgba, [1.0, 0.0, 0.0, 1.0]);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn to_rgba_f32_array(&self) -> [f32; 4] {
+        [
+            self.r as f32 / 255.0,
+            self.g as f32 / 255.0,
+            self.b as f32 / 255.0,
+            self.a as f32 / 255.0,
+        ]
+    }
+
+    /// Create a color from RGBA f32 array (0.0-1.0 range).
+    ///
+    /// Values are clamped to [0.0, 1.0] range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Color;
+    ///
+    /// let color = Color::from_rgba_f32_array([1.0, 0.5, 0.0, 0.8]);
+    /// assert_eq!(color.r, 255);
+    /// assert_eq!(color.g, 127);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn from_rgba_f32_array(rgba: [f32; 4]) -> Self {
+        Self::rgba(
+            (rgba[0].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgba[1].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgba[2].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgba[3].clamp(0.0, 1.0) * 255.0) as u8,
+        )
+    }
+
+    /// Get the red component as f32 (0.0-1.0 range).
+    #[inline]
+    #[must_use]
+    pub const fn red_f32(&self) -> f32 {
+        self.r as f32 / 255.0
+    }
+
+    /// Get the green component as f32 (0.0-1.0 range).
+    #[inline]
+    #[must_use]
+    pub const fn green_f32(&self) -> f32 {
+        self.g as f32 / 255.0
+    }
+
+    /// Get the blue component as f32 (0.0-1.0 range).
+    #[inline]
+    #[must_use]
+    pub const fn blue_f32(&self) -> f32 {
+        self.b as f32 / 255.0
+    }
+
+    /// Get the alpha component as f32 (0.0-1.0 range).
+    #[inline]
+    #[must_use]
+    pub const fn alpha_f32(&self) -> f32 {
+        self.a as f32 / 255.0
+    }
+
     // ===== Helper methods for rendering =====
 
     /// Alpha blend this color over a background color.
@@ -1023,5 +1100,58 @@ mod tests {
     fn test_default() {
         let default: Color = Default::default();
         assert_eq!(default, Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn test_to_rgba_f32_array() {
+        let red = Color::RED;
+        let rgba = red.to_rgba_f32_array();
+        assert_eq!(rgba, [1.0, 0.0, 0.0, 1.0]);
+
+        let semi_transparent = Color::rgba(128, 64, 32, 127);
+        let rgba = semi_transparent.to_rgba_f32_array();
+        assert!((rgba[0] - 128.0 / 255.0).abs() < 0.01);
+        assert!((rgba[1] - 64.0 / 255.0).abs() < 0.01);
+        assert!((rgba[2] - 32.0 / 255.0).abs() < 0.01);
+        assert!((rgba[3] - 127.0 / 255.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_from_rgba_f32_array() {
+        let color = Color::from_rgba_f32_array([1.0, 0.5, 0.0, 0.8]);
+        assert_eq!(color.r, 255);
+        assert_eq!(color.g, 127); // 0.5 * 255
+        assert_eq!(color.b, 0);
+        assert_eq!(color.a, 204); // 0.8 * 255
+
+        // Test clamping
+        let clamped = Color::from_rgba_f32_array([2.0, -0.5, 0.5, 1.5]);
+        assert_eq!(clamped.r, 255); // Clamped to 1.0
+        assert_eq!(clamped.g, 0); // Clamped to 0.0
+        assert_eq!(clamped.b, 127);
+        assert_eq!(clamped.a, 255); // Clamped to 1.0
+    }
+
+    #[test]
+    fn test_component_f32_accessors() {
+        let color = Color::rgba(255, 128, 64, 32);
+
+        assert!((color.red_f32() - 1.0).abs() < 0.01);
+        assert!((color.green_f32() - 128.0 / 255.0).abs() < 0.01);
+        assert!((color.blue_f32() - 64.0 / 255.0).abs() < 0.01);
+        assert!((color.alpha_f32() - 32.0 / 255.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_array_round_trip() {
+        let original = Color::rgba(200, 150, 100, 180);
+        let array = original.to_rgba_f32_array();
+        let reconstructed = Color::from_rgba_f32_array(array);
+
+        // Should be very close (within rounding error)
+        assert!((original.r as i16 - reconstructed.r as i16).abs() <= 1);
+        assert!((original.g as i16 - reconstructed.g as i16).abs() <= 1);
+        assert!((original.b as i16 - reconstructed.b as i16).abs() <= 1);
+        assert!((original.a as i16 - reconstructed.a as i16).abs() <= 1);
     }
 }

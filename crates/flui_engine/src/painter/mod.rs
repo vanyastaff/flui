@@ -7,105 +7,185 @@
 //! **Note**: Backend implementations have been moved to the `crate::backends` module.
 //! Use `crate::backends::egui::EguiPainter` or `crate::backends::wgpu::WgpuPainter`.
 
-use flui_types::{Offset, Point, Rect};
+use flui_types::{
+    Offset, Point, Rect,
+    painting::{BlendMode, PaintingStyle, StrokeCap, StrokeJoin},
+    styling::Color,
+};
 
 /// Paint style information
+///
+/// Represents all styling information needed to draw shapes, paths, and text.
+/// Uses strong types from `flui_types` for type safety and consistency.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_engine::Paint;
+/// use flui_types::Color;
+///
+/// // Fill paint
+/// let fill = Paint::fill(Color::RED);
+///
+/// // Stroke paint
+/// let stroke = Paint::stroke(2.0, Color::BLUE);
+///
+/// // Builder pattern
+/// let paint = Paint::new()
+///     .with_color(Color::GREEN)
+///     .with_stroke_width(3.0)
+///     .with_blend_mode(BlendMode::Multiply);
+/// ```
 #[derive(Debug, Clone)]
 pub struct Paint {
-    /// Fill color (RGBA)
-    pub color: [f32; 4],
+    /// Fill/stroke color
+    pub color: Color,
 
-    /// Stroke width (0.0 = fill only)
+    /// Painting style (fill or stroke)
+    pub style: PaintingStyle,
+
+    /// Stroke width (only applies when style is Stroke)
     pub stroke_width: f32,
+
+    /// Stroke cap style (only applies when style is Stroke)
+    pub stroke_cap: StrokeCap,
+
+    /// Stroke join style (only applies when style is Stroke)
+    pub stroke_join: StrokeJoin,
+
+    /// Stroke miter limit (only applies when stroke_join is Miter)
+    pub stroke_miter_limit: f32,
 
     /// Anti-aliasing enabled
     pub anti_alias: bool,
+
+    /// Blend mode for compositing
+    pub blend_mode: BlendMode,
 }
 
 impl Default for Paint {
     fn default() -> Self {
         Self {
-            color: [0.0, 0.0, 0.0, 1.0], // Black
+            color: Color::BLACK,
+            style: PaintingStyle::Fill,
             stroke_width: 0.0,
+            stroke_cap: StrokeCap::Butt,
+            stroke_join: StrokeJoin::Miter,
+            stroke_miter_limit: 4.0,
             anti_alias: true,
+            blend_mode: BlendMode::SrcOver,
         }
     }
 }
 
 impl Paint {
-    /// Create a new paint with default settings
+    /// Create a new paint with default settings (black fill, anti-aliased)
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Set color (builder pattern)
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let paint = Paint::new().with_color([1.0, 0.0, 0.0, 1.0]); // Red
-    /// ```
-    pub fn with_color(mut self, color: [f32; 4]) -> Self {
-        self.color = color;
-        self
-    }
-
-    /// Set stroke width (builder pattern)
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let paint = Paint::new().with_stroke_width(2.0);
-    /// ```
-    pub fn with_stroke_width(mut self, width: f32) -> Self {
-        self.stroke_width = width;
-        self
-    }
-
-    /// Enable or disable anti-aliasing (builder pattern)
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let paint = Paint::new().with_anti_alias(false);
-    /// ```
-    pub fn with_anti_alias(mut self, enabled: bool) -> Self {
-        self.anti_alias = enabled;
-        self
-    }
-
-    /// Create a stroke paint with specified width and color
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let paint = Paint::stroke(2.0, [1.0, 0.0, 0.0, 1.0]); // Red stroke
-    /// ```
-    pub fn stroke(width: f32, color: [f32; 4]) -> Self {
-        Self {
-            color,
-            stroke_width: width,
-            anti_alias: true,
-        }
     }
 
     /// Create a fill paint with specified color
     ///
     /// # Example
     /// ```rust,ignore
-    /// let paint = Paint::fill([0.0, 1.0, 0.0, 1.0]); // Green fill
+    /// let paint = Paint::fill(Color::RED);
     /// ```
-    pub fn fill(color: [f32; 4]) -> Self {
+    pub fn fill(color: Color) -> Self {
         Self {
             color,
-            stroke_width: 0.0,
-            anti_alias: true,
+            style: PaintingStyle::Fill,
+            ..Default::default()
         }
+    }
+
+    /// Create a stroke paint with specified width and color
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let paint = Paint::stroke(2.0, Color::BLUE);
+    /// ```
+    pub fn stroke(width: f32, color: Color) -> Self {
+        Self {
+            color,
+            style: PaintingStyle::Stroke,
+            stroke_width: width,
+            ..Default::default()
+        }
+    }
+
+    /// Set color (builder pattern)
+    pub fn with_color(mut self, color: Color) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Set painting style (builder pattern)
+    pub fn with_style(mut self, style: PaintingStyle) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Set stroke width (builder pattern)
+    pub fn with_stroke_width(mut self, width: f32) -> Self {
+        self.stroke_width = width;
+        self
+    }
+
+    /// Set stroke cap (builder pattern)
+    pub fn with_stroke_cap(mut self, cap: StrokeCap) -> Self {
+        self.stroke_cap = cap;
+        self
+    }
+
+    /// Set stroke join (builder pattern)
+    pub fn with_stroke_join(mut self, join: StrokeJoin) -> Self {
+        self.stroke_join = join;
+        self
+    }
+
+    /// Set stroke miter limit (builder pattern)
+    pub fn with_stroke_miter_limit(mut self, limit: f32) -> Self {
+        self.stroke_miter_limit = limit;
+        self
+    }
+
+    /// Enable or disable anti-aliasing (builder pattern)
+    pub fn with_anti_alias(mut self, enabled: bool) -> Self {
+        self.anti_alias = enabled;
+        self
+    }
+
+    /// Set blend mode (builder pattern)
+    pub fn with_blend_mode(mut self, mode: BlendMode) -> Self {
+        self.blend_mode = mode;
+        self
+    }
+
+    /// Check if this is a fill paint
+    #[inline]
+    pub fn is_fill(&self) -> bool {
+        matches!(self.style, PaintingStyle::Fill)
+    }
+
+    /// Check if this is a stroke paint
+    #[inline]
+    pub fn is_stroke(&self) -> bool {
+        matches!(self.style, PaintingStyle::Stroke)
+    }
+
+    /// Get color as RGBA f32 array for backend consumption
+    ///
+    /// This is a convenience method for backends that need array format.
+    /// Prefer using the `color` field directly when possible.
+    #[inline]
+    pub fn color_array(&self) -> [f32; 4] {
+        self.color.to_rgba_f32_array()
     }
 }
 
-/// Rounded rectangle
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RRect {
-    pub rect: Rect,
-    pub corner_radius: f32,
-}
+// Re-export RRect from flui_types for convenience
+// This avoids duplication and provides full per-corner radius support
+pub use flui_types::geometry::RRect;
 
 /// Backend-agnostic painter trait
 ///
@@ -293,20 +373,7 @@ pub trait Painter {
     ) {
         // Default: extract font size and delegate to simple text()
         let font_size = style.font_size.unwrap_or(14.0) as f32;
-        let paint = Paint {
-            color: style
-                .color
-                .map(|c| {
-                    [
-                        c.red() as f32 / 255.0,
-                        c.green() as f32 / 255.0,
-                        c.blue() as f32 / 255.0,
-                        c.alpha() as f32 / 255.0,
-                    ]
-                })
-                .unwrap_or([0.0, 0.0, 0.0, 1.0]),
-            ..Default::default()
-        };
+        let paint = Paint::fill(style.color.unwrap_or(Color::BLACK));
         self.text(text, position, font_size, &paint);
     }
 
@@ -633,14 +700,14 @@ pub trait Painter {
     /// - `paint`: Paint style for the rectangle
     /// - `shadow_offset`: Offset of the shadow (dx, dy)
     /// - `shadow_blur`: Blur radius of the shadow
-    /// - `shadow_color`: Color of the shadow (RGBA)
+    /// - `shadow_color`: Color of the shadow
     fn rect_with_shadow(
         &mut self,
         rect: Rect,
         paint: &Paint,
         shadow_offset: Offset,
         shadow_blur: f32,
-        shadow_color: [f32; 4],
+        shadow_color: Color,
     ) {
         // Draw shadow with multiple layers for blur effect
         let layers = 8;
@@ -658,15 +725,7 @@ pub trait Painter {
                 rect.size(),
             );
 
-            let shadow_paint = Paint {
-                color: [
-                    shadow_color[0],
-                    shadow_color[1],
-                    shadow_color[2],
-                    shadow_color[3] * opacity,
-                ],
-                ..Default::default()
-            };
+            let shadow_paint = Paint::fill(shadow_color.with_opacity(shadow_color.alpha_f32() * opacity));
 
             self.rect(shadow_rect, &shadow_paint);
         }
@@ -693,26 +752,24 @@ pub trait Painter {
     ) {
         // Draw radial gradient from outside to inside
         let layers = 40;
+        let base_color = paint.color.to_rgba_f32_array();
         for i in (0..layers).rev() {
             let t = i as f32 / (layers - 1) as f32;
             let falloff = 1.0 - t;
             let eased = falloff * falloff * falloff; // Cubic easing
 
-            let glow_color = [
-                paint.color[0],
-                paint.color[1],
-                paint.color[2],
-                paint.color[3] * eased * glow_intensity,
-            ];
+            let glow_color = Color::from_rgba_f32_array([
+                base_color[0],
+                base_color[1],
+                base_color[2],
+                base_color[3] * eased * glow_intensity,
+            ]);
 
             let current_radius = radius + (1.0 - eased) * glow_radius;
             self.circle(
                 center,
                 current_radius,
-                &Paint {
-                    color: glow_color,
-                    ..Default::default()
-                },
+                &Paint::fill(glow_color),
             );
         }
 
@@ -728,7 +785,7 @@ pub trait Painter {
     /// - `font_size`: Font size in pixels
     /// - `paint`: Paint style for the text
     /// - `shadow_offset`: Offset of the shadow (dx, dy)
-    /// - `shadow_color`: Color of the shadow (RGBA)
+    /// - `shadow_color`: Color of the shadow
     fn text_with_shadow(
         &mut self,
         text: &str,
@@ -736,19 +793,12 @@ pub trait Painter {
         font_size: f32,
         paint: &Paint,
         shadow_offset: Offset,
-        shadow_color: [f32; 4],
+        shadow_color: Color,
     ) {
         // Draw shadow
         let shadow_pos = Point::new(position.x + shadow_offset.dx, position.y + shadow_offset.dy);
-        self.text(
-            text,
-            shadow_pos,
-            font_size,
-            &Paint {
-                color: shadow_color,
-                ..*paint
-            },
-        );
+        let shadow_paint = paint.clone().with_color(shadow_color);
+        self.text(text, shadow_pos, font_size, &shadow_paint);
 
         // Draw main text
         self.text(text, position, font_size, paint);
@@ -758,32 +808,20 @@ pub trait Painter {
     ///
     /// # Parameters
     /// - `rect`: Rectangle area to fill with gradient
-    /// - `start_color`: Color at the left edge (RGBA)
-    /// - `end_color`: Color at the right edge (RGBA)
-    fn horizontal_gradient(&mut self, rect: Rect, start_color: [f32; 4], end_color: [f32; 4]) {
+    /// - `start_color`: Color at the left edge
+    /// - `end_color`: Color at the right edge
+    fn horizontal_gradient(&mut self, rect: Rect, start_color: Color, end_color: Color) {
         let steps = 50;
         let step_width = rect.width() / steps as f32;
 
         for i in 0..steps {
             let t = i as f32 / (steps - 1) as f32;
-
-            let color = [
-                start_color[0] + t * (end_color[0] - start_color[0]),
-                start_color[1] + t * (end_color[1] - start_color[1]),
-                start_color[2] + t * (end_color[2] - start_color[2]),
-                start_color[3] + t * (end_color[3] - start_color[3]),
-            ];
+            let color = Color::lerp(start_color, end_color, t);
 
             let x = rect.left() + i as f32 * step_width;
             let strip = Rect::from_xywh(x, rect.top(), step_width, rect.height());
 
-            self.rect(
-                strip,
-                &Paint {
-                    color,
-                    ..Default::default()
-                },
-            );
+            self.rect(strip, &Paint::fill(color));
         }
     }
 
@@ -791,32 +829,20 @@ pub trait Painter {
     ///
     /// # Parameters
     /// - `rect`: Rectangle area to fill with gradient
-    /// - `start_color`: Color at the top edge (RGBA)
-    /// - `end_color`: Color at the bottom edge (RGBA)
-    fn vertical_gradient(&mut self, rect: Rect, start_color: [f32; 4], end_color: [f32; 4]) {
+    /// - `start_color`: Color at the top edge
+    /// - `end_color`: Color at the bottom edge
+    fn vertical_gradient(&mut self, rect: Rect, start_color: Color, end_color: Color) {
         let steps = 60;
         let step_height = rect.height() / steps as f32;
 
         for i in 0..steps {
             let t = i as f32 / (steps - 1) as f32;
-
-            let color = [
-                start_color[0] + t * (end_color[0] - start_color[0]),
-                start_color[1] + t * (end_color[1] - start_color[1]),
-                start_color[2] + t * (end_color[2] - start_color[2]),
-                start_color[3] + t * (end_color[3] - start_color[3]),
-            ];
+            let color = Color::lerp(start_color, end_color, t);
 
             let y = rect.top() + i as f32 * step_height;
             let strip = Rect::from_xywh(rect.left(), y, rect.width(), step_height);
 
-            self.rect(
-                strip,
-                &Paint {
-                    color,
-                    ..Default::default()
-                },
-            );
+            self.rect(strip, &Paint::fill(color));
         }
     }
 
@@ -826,39 +852,25 @@ pub trait Painter {
     /// - `center`: Center point of the gradient
     /// - `inner_radius`: Radius where start_color begins
     /// - `outer_radius`: Radius where end_color ends
-    /// - `start_color`: Color at the center (RGBA)
-    /// - `end_color`: Color at the outer edge (RGBA)
+    /// - `start_color`: Color at the center
+    /// - `end_color`: Color at the outer edge
     fn radial_gradient_simple(
         &mut self,
         center: Point,
         inner_radius: f32,
         outer_radius: f32,
-        start_color: [f32; 4],
-        end_color: [f32; 4],
+        start_color: Color,
+        end_color: Color,
     ) {
         let steps = 30;
 
         // Draw from outside to inside for proper layering
         for i in (0..steps).rev() {
             let t = i as f32 / (steps - 1) as f32;
-
-            let color = [
-                start_color[0] + t * (end_color[0] - start_color[0]),
-                start_color[1] + t * (end_color[1] - start_color[1]),
-                start_color[2] + t * (end_color[2] - start_color[2]),
-                start_color[3] + t * (end_color[3] - start_color[3]),
-            ];
-
+            let color = Color::lerp(start_color, end_color, t);
             let radius = inner_radius + t * (outer_radius - inner_radius);
 
-            self.circle(
-                center,
-                radius,
-                &Paint {
-                    color,
-                    ..Default::default()
-                },
-            );
+            self.circle(center, radius, &Paint::fill(color));
         }
     }
 
@@ -869,14 +881,14 @@ pub trait Painter {
     /// - `paint`: Paint style for the rectangle
     /// - `shadow_offset`: Offset of the shadow (dx, dy)
     /// - `shadow_blur`: Blur radius of the shadow
-    /// - `shadow_color`: Color of the shadow (RGBA)
+    /// - `shadow_color`: Color of the shadow
     fn rrect_with_shadow(
         &mut self,
         rrect: RRect,
         paint: &Paint,
         shadow_offset: Offset,
         shadow_blur: f32,
-        shadow_color: [f32; 4],
+        shadow_color: Color,
     ) {
         // Draw shadow with multiple layers for blur effect
         let layers = 8;
@@ -894,18 +906,13 @@ pub trait Painter {
                     ),
                     rrect.rect.size(),
                 ),
-                corner_radius: rrect.corner_radius,
+                top_left: rrect.top_left,
+                top_right: rrect.top_right,
+                bottom_right: rrect.bottom_right,
+                bottom_left: rrect.bottom_left,
             };
 
-            let shadow_paint = Paint {
-                color: [
-                    shadow_color[0],
-                    shadow_color[1],
-                    shadow_color[2],
-                    shadow_color[3] * opacity,
-                ],
-                ..Default::default()
-            };
+            let shadow_paint = Paint::fill(shadow_color.with_opacity((shadow_color.alpha_f32() * opacity).min(1.0)));
 
             self.rrect(shadow_rrect, &shadow_paint);
         }

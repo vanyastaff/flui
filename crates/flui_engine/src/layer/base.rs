@@ -3,7 +3,8 @@
 //! A composited layer that represents a visual element in the scene graph.
 
 use crate::painter::Painter;
-use flui_types::{Event, HitTestResult, Offset, Rect};
+use flui_types::{Offset, Rect};
+use flui_types::events::{Event, HitTestResult};
 use parking_lot::RwLock;
 use std::sync::Arc;
 

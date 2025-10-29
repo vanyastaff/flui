@@ -493,6 +493,27 @@ pub enum ImageFilter {
         sigma_y: f32,
     },
 
+    /// Dilate (expand bright areas) with specified radius.
+    ///
+    /// Morphological dilation operation - grows bright regions.
+    Dilate {
+        /// Dilation radius in pixels
+        radius: f32,
+    },
+
+    /// Erode (expand dark areas) with specified radius.
+    ///
+    /// Morphological erosion operation - shrinks bright regions.
+    Erode {
+        /// Erosion radius in pixels
+        radius: f32,
+    },
+
+    /// 5x4 color matrix transformation.
+    ///
+    /// Applies a custom color transformation matrix to all pixels.
+    Matrix(ColorMatrix),
+
     /// Color manipulation filter.
     ///
     /// Applies brightness, contrast, saturation, or other color adjustments.
@@ -520,6 +541,34 @@ impl ImageFilter {
     #[must_use]
     pub fn blur_directional(sigma_x: f32, sigma_y: f32) -> Self {
         Self::Blur { sigma_x, sigma_y }
+    }
+
+    /// Create a dilate filter with specified radius.
+    #[inline]
+    #[must_use]
+    pub fn dilate(radius: f32) -> Self {
+        Self::Dilate { radius }
+    }
+
+    /// Create an erode filter with specified radius.
+    #[inline]
+    #[must_use]
+    pub fn erode(radius: f32) -> Self {
+        Self::Erode { radius }
+    }
+
+    /// Create a matrix filter.
+    #[inline]
+    #[must_use]
+    pub fn matrix(matrix: ColorMatrix) -> Self {
+        Self::Matrix(matrix)
+    }
+
+    /// Create a color filter.
+    #[inline]
+    #[must_use]
+    pub fn color(filter: ColorFilter) -> Self {
+        Self::Color(filter)
     }
 }
 

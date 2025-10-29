@@ -7,7 +7,8 @@
 use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
 use flui_types::painting::effects::ImageFilter;
-use flui_types::{Event, HitTestResult, Offset, Rect};
+use flui_types::{Offset, Rect};
+use flui_types::events::{Event, HitTestResult};
 
 /// A layer that applies image filters to backdrop content.
 ///
@@ -121,6 +122,15 @@ impl BackdropFilterLayer {
                 sigma_y: _,
             } => {
                 // Would apply gaussian blur to backdrop here
+            }
+            ImageFilter::Dilate { radius: _ } => {
+                // Would apply morphological dilation to backdrop
+            }
+            ImageFilter::Erode { radius: _ } => {
+                // Would apply morphological erosion to backdrop
+            }
+            ImageFilter::Matrix(_matrix) => {
+                // Would apply color matrix to backdrop
             }
             ImageFilter::Color(_color_filter) => {
                 // Would apply color transformation to backdrop here

@@ -74,14 +74,13 @@ impl<'a> EguiPainter<'a> {
     }
 
     /// Convert our Paint to egui color
-    fn paint_to_color(&self, paint: &Paint) -> egui::Color32 {
-        let [r, g, b, a] = paint.color;
-        let opacity = a * self.current_state.opacity;
+    fn paint_color(&self, paint: &Paint) -> egui::Color32 {
+        let opacity = paint.color.alpha_f32() * self.current_state.opacity;
 
         egui::Color32::from_rgba_unmultiplied(
-            (r * 255.0) as u8,
-            (g * 255.0) as u8,
-            (b * 255.0) as u8,
+            paint.color.r,
+            paint.color.g,
+            paint.color.b,
             (opacity * 255.0) as u8,
         )
     }
@@ -345,7 +344,7 @@ impl<'a> Painter for EguiPainter<'a> {
             return;
         }
 
-        let color = self.paint_to_color(paint);
+        let color = self.paint_color(paint);
 
         // Check if we have skew transform - if so, use mesh rendering
         if self.has_complex_transform() {
@@ -380,9 +379,15 @@ impl<'a> Painter for EguiPainter<'a> {
 
         // Apply transformation
         let transformed_rect = self.transform_rect(rrect.rect);
-        let color = self.paint_to_color(paint);
+        let color = self.paint_color(paint);
         let egui_rect = Self::to_egui_rect(transformed_rect);
-        let rounding = egui::CornerRadius::same(rrect.corner_radius.min(255.0) as u8);
+        // Convert per-corner radii to egui format (uses only x component)
+        let rounding = egui::CornerRadius {
+            nw: rrect.top_left.x.min(255.0) as u8,
+            ne: rrect.top_right.x.min(255.0) as u8,
+            sw: rrect.bottom_left.x.min(255.0) as u8,
+            se: rrect.bottom_right.x.min(255.0) as u8,
+        };
 
         self.with_clip(|painter| {
             if paint.stroke_width > 0.0 {
@@ -402,7 +407,7 @@ impl<'a> Painter for EguiPainter<'a> {
             return;
         }
 
-        let color = self.paint_to_color(paint);
+        let color = self.paint_color(paint);
 
         // Check if we have skew transform - if so, use mesh rendering
         // This properly renders circles as ellipses when skewed
@@ -455,7 +460,7 @@ impl<'a> Painter for EguiPainter<'a> {
         let transformed_p1 = self.transform_point(p1);
         let transformed_p2 = self.transform_point(p2);
 
-        let color = self.paint_to_color(paint);
+        let color = self.paint_color(paint);
         let stroke = egui::Stroke::new(paint.stroke_width.max(1.0), color);
 
         self.with_clip(|painter| {
@@ -476,13 +481,8 @@ impl<'a> Painter for EguiPainter<'a> {
             println!("Using VECTOR rendering for text: '{}'", text);
             // Use vector text rendering for complex transforms
             if let Some(renderer) = &mut self.vector_text_renderer {
-                // Convert f32 colors (0.0-1.0) to u8 (0-255)
-                let color = flui_types::Color {
-                    r: (paint.color[0] * 255.0) as u8,
-                    g: (paint.color[1] * 255.0) as u8,
-                    b: (paint.color[2] * 255.0) as u8,
-                    a: (paint.color[3] * 255.0) as u8,
-                };
+                // Color is already in correct format
+                let color = paint.color;
 
                 // TODO: Extract letter_spacing and word_spacing from paint or style
                 let letter_spacing = 0.0;
@@ -535,7 +535,7 @@ impl<'a> Painter for EguiPainter<'a> {
         // Fast path: Raster text rendering with rotation and scale
         // Apply transformation to position
         let transformed_pos = self.transform_point(position);
-        let color = self.paint_to_color(paint);
+        let color = self.paint_color(paint);
         let pos = Self::to_egui_pos(transformed_pos);
 
         // Extract rotation and scale from transform matrix
@@ -574,15 +574,7 @@ impl<'a> Painter for EguiPainter<'a> {
         let paint = Paint {
             color: style
                 .color
-                .map(|c| {
-                    [
-                        c.red() as f32 / 255.0,
-                        c.green() as f32 / 255.0,
-                        c.blue() as f32 / 255.0,
-                        c.alpha() as f32 / 255.0,
-                    ]
-                })
-                .unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                .unwrap_or(flui_types::Color::BLACK),
             ..Default::default()
         };
 
@@ -595,12 +587,8 @@ impl<'a> Painter for EguiPainter<'a> {
         if needs_vector {
             // Use vector rendering with spacing support
             if let Some(renderer) = &mut self.vector_text_renderer {
-                let color = flui_types::Color {
-                    r: (paint.color[0] * 255.0) as u8,
-                    g: (paint.color[1] * 255.0) as u8,
-                    b: (paint.color[2] * 255.0) as u8,
-                    a: (paint.color[3] * 255.0) as u8,
-                };
+                // Color is already in correct format
+                let color = paint.color;
 
                 match renderer.render(
                     text,
@@ -750,17 +738,20 @@ mod tests {
     }
 
     #[test]
-    fn test_paint_to_color_conversion() {
-        let paint = Paint {
-            color: [1.0, 0.0, 0.0, 1.0], // Red
-            stroke_width: 0.0,
-            anti_alias: true,
-        };
+    fn test_paint_color_conversion() {
+        use flui_types::Color;
+
+        let paint = Paint::fill(Color::RED);
 
         let expected = egui::Color32::from_rgba_unmultiplied(255, 0, 0, 255);
 
-        // We can't create an EguiPainter without an egui::Painter,
-        // but we can test the conversion logic directly
+        // Test that Color::RED maps to the expected egui color
+        assert_eq!(paint.color.r, 255);
+        assert_eq!(paint.color.g, 0);
+        assert_eq!(paint.color.b, 0);
+        assert_eq!(paint.color.a, 255);
+
+        // Verify egui conversion
         assert_eq!(expected.r(), 255);
         assert_eq!(expected.g(), 0);
         assert_eq!(expected.b(), 0);

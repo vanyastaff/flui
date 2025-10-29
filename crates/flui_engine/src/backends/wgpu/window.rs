@@ -77,13 +77,13 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
                         event_translator::translate_window_event(&event, &modifiers)
                     {
                         // Update cursor position for pointer events
-                        if let flui_types::Event::Pointer(ref mut pointer_event) = flui_event {
+                        if let flui_types::events::Event::Pointer(ref mut pointer_event) = flui_event {
                             match pointer_event {
-                                flui_types::PointerEvent::Move(data) => {
+                                flui_types::events::PointerEvent::Move(data) => {
                                     last_cursor_position = data.position;
                                 }
-                                flui_types::PointerEvent::Down(data)
-                                | flui_types::PointerEvent::Up(data) => {
+                                flui_types::events::PointerEvent::Down(data)
+                                | flui_types::events::PointerEvent::Up(data) => {
                                     // Use last cursor position for click events
                                     data.position = last_cursor_position;
                                     data.local_position = last_cursor_position;
@@ -93,7 +93,7 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
                         }
 
                         // Update cursor position for scroll events
-                        if let flui_types::Event::Scroll(ref mut scroll_data) = flui_event {
+                        if let flui_types::events::Event::Scroll(ref mut scroll_data) = flui_event {
                             scroll_data.position = last_cursor_position;
                         }
 

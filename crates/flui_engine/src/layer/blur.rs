@@ -1,50 +1,63 @@
-//! BlurLayer - applies gaussian blur effect to child layers
+//! BlurLayer - applies image filters to child layers
 //!
-//! This module provides blur effects similar to CSS backdrop-filter and filter: blur(),
-//! supporting various blur algorithms with configurable quality and radius.
+//! This module provides compositor-level image filtering effects including blur,
+//! dilate, erode, and color matrix transformations. Supports CSS filter and
+//! backdrop-filter style effects.
 
 use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
-use flui_types::painting::effects::{BlurMode, BlurQuality};
-use flui_types::{Event, HitTestResult, Offset, Rect};
+use flui_types::painting::effects::{BlurMode, BlurQuality, ImageFilter};
+use flui_types::{Offset, Rect};
+use flui_types::events::{Event, HitTestResult};
 
-/// A layer that applies gaussian blur to its child or backdrop.
+/// A layer that applies image filters to its child content or backdrop.
 ///
-/// Similar to CSS filter: blur() and backdrop-filter: blur(). Supports
-/// configurable blur radius and quality levels.
+/// Supports various filter types from ImageFilter enum:
+/// - Blur (gaussian)
+/// - Dilate (morphological dilation)
+/// - Erode (morphological erosion)
+/// - Matrix (color transformation)
+/// - Color (brightness, contrast, etc.)
+/// - Compose (chain multiple filters)
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// use flui_engine::layer::{BlurLayer, BlurMode, BlurQuality};
+/// use flui_engine::layer::BlurLayer;
+/// use flui_types::painting::effects::ImageFilter;
 ///
-/// // Blur child content
+/// // Simple blur
 /// let blur = BlurLayer::new(child)
-///     .with_sigma(5.0)
-///     .with_quality(BlurQuality::High);
+///     .with_filter(ImageFilter::blur(5.0));
 ///
-/// // Backdrop blur (frosted glass effect)
-/// let backdrop = BlurLayer::new(child)
-///     .with_sigma(10.0)
-///     .with_mode(BlurMode::Backdrop);
+/// // Dilate effect
+/// let dilate = BlurLayer::new(child)
+///     .with_filter(ImageFilter::dilate(2.0));
+///
+/// // Combined filters
+/// let combined = BlurLayer::new(child)
+///     .with_filter(ImageFilter::Compose(vec![
+///         ImageFilter::blur(3.0),
+///         ImageFilter::color(ColorFilter::Brightness(0.1)),
+///     ]));
 /// ```
 pub struct BlurLayer {
     /// Child layer
     child: Option<BoxedLayer>,
 
-    /// Blur radius (sigma for gaussian blur)
-    sigma: f32,
+    /// Image filter to apply
+    filter: ImageFilter,
 
-    /// Blur quality/algorithm
+    /// Quality level for rendering
     quality: BlurQuality,
 
-    /// Blur mode (content or backdrop)
+    /// Filter mode (content or backdrop)
     mode: BlurMode,
 
     /// Tile mode for edges (true = clamp, false = transparent)
     tile_mode_clamp: bool,
 
-    /// Cached bounds including blur extent
+    /// Cached bounds including filter extent
     cached_bounds: Option<Rect>,
 
     /// Whether this layer has been disposed
@@ -52,16 +65,18 @@ pub struct BlurLayer {
 }
 
 impl BlurLayer {
-    /// Create a new blur layer with a child
+    /// Create a new image filter layer with a child
+    ///
+    /// Defaults to a blur filter with sigma=5.0
     ///
     /// # Arguments
     ///
-    /// * `child` - Child layer to blur
+    /// * `child` - Child layer to apply filter to
     #[must_use]
     pub fn new(child: BoxedLayer) -> Self {
         Self {
             child: Some(child),
-            sigma: 5.0,
+            filter: ImageFilter::blur(5.0),
             quality: BlurQuality::default(),
             mode: BlurMode::default(),
             tile_mode_clamp: true,
@@ -70,12 +85,10 @@ impl BlurLayer {
         }
     }
 
-    /// Set blur radius (sigma)
-    ///
-    /// Typical values: 0-20 (0 = no blur, 20 = very blurry)
+    /// Set the image filter
     #[must_use]
-    pub fn with_sigma(mut self, sigma: f32) -> Self {
-        self.sigma = sigma.max(0.0);
+    pub fn with_filter(mut self, filter: ImageFilter) -> Self {
+        self.filter = filter;
         self.cached_bounds = None;
         self
     }
@@ -87,7 +100,7 @@ impl BlurLayer {
         self
     }
 
-    /// Set blur mode (content or backdrop)
+    /// Set filter mode (content or backdrop)
     #[must_use]
     pub fn with_mode(mut self, mode: BlurMode) -> Self {
         self.mode = mode;
@@ -113,67 +126,62 @@ impl BlurLayer {
         self.mark_needs_paint();
     }
 
-    /// Update blur sigma
-    pub fn set_sigma(&mut self, sigma: f32) {
-        self.sigma = sigma.max(0.0);
+    /// Update the filter
+    pub fn set_filter(&mut self, filter: ImageFilter) {
+        self.filter = filter;
         self.cached_bounds = None;
         self.mark_needs_paint();
     }
 
-    /// Calculate blur extent (how far blur extends beyond content)
-    fn calculate_blur_extent(&self) -> f32 {
-        // Gaussian blur typically extends about 3 sigma
-        self.sigma * 3.0
-    }
-
-    /// Apply blur effect by rendering multiple passes
-    fn apply_blur(&self, painter: &mut dyn Painter, bounds: Rect) {
-        if self.sigma <= 0.0 {
-            return;
-        }
-
-        // Number of passes based on quality
-        let passes = match self.quality {
-            BlurQuality::Low => 1,
-            BlurQuality::Medium => 3,
-            BlurQuality::High => 5,
-        };
-
-        // Box blur approximation of gaussian
-        // Each pass reduces sigma by sqrt(passes)
-        let pass_sigma = self.sigma / (passes as f32).sqrt();
-
-        // For now, we simulate blur by rendering semi-transparent
-        // expanded versions (proper blur requires offscreen rendering)
-        painter.save();
-
-        for i in 0..passes {
-            let expansion = (i + 1) as f32 * pass_sigma;
-            let _alpha = 1.0 / (passes as f32 * 2.0);
-
-            let _expanded_bounds = Rect::from_xywh(
-                bounds.left() - expansion,
-                bounds.top() - expansion,
-                bounds.width() + expansion * 2.0,
-                bounds.height() + expansion * 2.0,
-            );
-
-            // Note: This is a simplified blur simulation
-            // Production implementation would use proper gaussian convolution
-            // or separable box blur filters
-            if let Some(child) = &self.child {
-                painter.save();
-                painter.translate(Offset::new(-expansion, -expansion));
-
-                // Apply reduced opacity for blur effect
-                // (This is a placeholder - real blur needs offscreen rendering)
-                child.paint(painter);
-
-                painter.restore();
+    /// Calculate filter extent (how far filter effects extend beyond content)
+    fn calculate_filter_extent(&self) -> f32 {
+        match &self.filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                // Gaussian blur typically extends about 3 sigma
+                sigma_x.max(*sigma_y) * 3.0
+            }
+            ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => {
+                // Morphological operations extend by their radius
+                *radius
+            }
+            ImageFilter::Matrix(_) | ImageFilter::Color(_) => {
+                // Color transformations don't extend bounds
+                0.0
+            }
+            ImageFilter::Compose(filters) => {
+                // Maximum extent of all composed filters
+                filters
+                    .iter()
+                    .map(|f| {
+                        // Recursively calculate extent for each filter
+                        match f {
+                            ImageFilter::Blur { sigma_x, sigma_y } => sigma_x.max(*sigma_y) * 3.0,
+                            ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => *radius,
+                            _ => 0.0,
+                        }
+                    })
+                    .fold(0.0f32, f32::max)
             }
         }
+    }
 
-        painter.restore();
+    /// Apply image filter by rendering (placeholder implementation)
+    fn apply_filter(&self, painter: &mut dyn Painter, _bounds: Rect) {
+        // Note: Proper image filter implementation requires offscreen rendering
+        // with GPU shaders or CPU convolution. This is a placeholder that just
+        // renders the child content.
+        //
+        // Production implementation would:
+        // 1. Render child to offscreen texture
+        // 2. Apply filter shader/convolution
+        // 3. Render result to screen
+        //
+        // For now, we just render the child normally
+        if let Some(child) = &self.child {
+            painter.save();
+            child.paint(painter);
+            painter.restore();
+        }
     }
 }
 
@@ -191,23 +199,17 @@ impl Layer for BlurLayer {
 
         match self.mode {
             BlurMode::Content => {
-                // Apply blur to child content
-                if self.sigma > 0.0 {
-                    self.apply_blur(painter, child.bounds());
-                } else {
-                    // No blur, just paint child
-                    child.paint(painter);
-                }
+                // Apply filter to child content
+                self.apply_filter(painter, child.bounds());
             }
             BlurMode::Backdrop => {
-                // Backdrop blur: blur what's behind the child
+                // Backdrop filter: filter what's behind the child
                 // Note: This requires rendering the backdrop first,
-                // applying blur, then rendering the child on top
-                // For now, we render child with reduced opacity
+                // applying filter, then rendering the child on top
                 // (proper implementation needs compositor support)
 
                 painter.save();
-                // TODO: Implement proper backdrop blur with offscreen rendering
+                // TODO: Implement proper backdrop filtering with offscreen rendering
                 child.paint(painter);
                 painter.restore();
             }
@@ -223,8 +225,8 @@ impl Layer for BlurLayer {
 
         let child_bounds = self.child.as_ref().map_or(Rect::ZERO, |c| c.bounds());
 
-        // Expand bounds by blur extent
-        let extent = self.calculate_blur_extent();
+        // Expand bounds by filter extent
+        let extent = self.calculate_filter_extent();
         Rect::from_xywh(
             child_bounds.left() - extent,
             child_bounds.top() - extent,
@@ -277,6 +279,7 @@ impl Layer for BlurLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::painting::effects::ColorFilter;
 
     #[test]
     fn test_blur_quality() {
@@ -289,12 +292,43 @@ mod tests {
     }
 
     #[test]
-    fn test_blur_extent() {
+    fn test_blur_filter_extent() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let blur = BlurLayer::new(child).with_sigma(10.0);
+        let blur = BlurLayer::new(child).with_filter(ImageFilter::blur(10.0));
 
         // Blur extent should be ~3 sigma
-        let extent = blur.calculate_blur_extent();
+        let extent = blur.calculate_filter_extent();
         assert!((extent - 30.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_dilate_extent() {
+        let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
+        let dilate = BlurLayer::new(child).with_filter(ImageFilter::dilate(5.0));
+
+        let extent = dilate.calculate_filter_extent();
+        assert_eq!(extent, 5.0);
+    }
+
+    #[test]
+    fn test_color_filter_no_extent() {
+        let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
+        let color = BlurLayer::new(child).with_filter(ImageFilter::color(ColorFilter::Brightness(0.5)));
+
+        let extent = color.calculate_filter_extent();
+        assert_eq!(extent, 0.0);
+    }
+
+    #[test]
+    fn test_compose_filter_extent() {
+        let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
+        let compose = BlurLayer::new(child).with_filter(ImageFilter::Compose(vec![
+            ImageFilter::blur(5.0),
+            ImageFilter::dilate(10.0),
+        ]));
+
+        // Should use max extent (blur(5.0)*3 = 15.0)
+        let extent = compose.calculate_filter_extent();
+        assert_eq!(extent, 15.0);
     }
 }

@@ -117,8 +117,16 @@ impl Tesselator {
     /// * `transform` - Transform matrix to apply
     pub fn tesselate_rrect(&mut self, rrect: RRect, color: [f32; 4], transform: Mat4) {
         let rect = rrect.rect;
-        let radius = rrect
-            .corner_radius
+        // Use maximum corner radius for tessellation
+        // TODO: Implement proper per-corner radius rendering
+        let radius = rrect.top_left.x
+            .max(rrect.top_left.y)
+            .max(rrect.top_right.x)
+            .max(rrect.top_right.y)
+            .max(rrect.bottom_right.x)
+            .max(rrect.bottom_right.y)
+            .max(rrect.bottom_left.x)
+            .max(rrect.bottom_left.y)
             .min(rect.width() * 0.5)
             .min(rect.height() * 0.5);
 

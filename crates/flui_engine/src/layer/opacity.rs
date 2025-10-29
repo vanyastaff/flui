@@ -2,7 +2,8 @@
 
 use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
-use flui_types::{Event, HitTestResult, Offset, Rect};
+use flui_types::{Offset, Rect};
+use flui_types::events::{Event, HitTestResult};
 
 /// Layer that applies opacity to its child
 ///

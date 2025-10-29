@@ -96,7 +96,8 @@
       "Bash(mv:*)",
       "Bash(rm:*)",
       "Bash(awk:*)",
-      "Bash(cargo doc:*)"
+      "Bash(cargo doc:*)",
+      "mcp__sequential-thinking__sequentialthinking"
     ],
     "deny": [],
     "ask": []

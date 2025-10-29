@@ -159,7 +159,7 @@ pub trait AppLogic: Send + 'static {
     ///
     /// # Returns
     /// `true` if the event was handled, `false` otherwise
-    fn on_event(&mut self, event: &flui_types::Event) -> bool {
+    fn on_event(&mut self, event: &flui_types::events::Event) -> bool {
         let _ = event;
         false // Default: event not handled
     }

@@ -5,7 +5,8 @@
 
 use crate::layer::{BoxedLayer, Layer};
 use crate::painter::{Painter, RRect};
-use flui_types::{Event, HitTestResult, Offset, Rect};
+use flui_types::{Offset, Rect};
+use flui_types::events::{Event, HitTestResult};
 
 // ============================================================================
 // ClipRectLayer

@@ -15,7 +15,7 @@ pub use text::{TextAlign, TextCommand, TextRenderError, TextRenderer};
 pub use vertex::{SolidVertex, ViewportUniforms};
 
 use crate::painter::{Paint, Painter, RRect};
-use flui_types::{Offset, Point, Rect, Size};
+use flui_types::{Color, Offset, Point, Rect, Size};
 use glam::Mat4;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -102,8 +102,10 @@ impl WgpuPainter {
         Ok(())
     }
 
-    fn apply_opacity(&self, color: [f32; 4]) -> [f32; 4] {
-        let [r, g, b, a] = color;
+    /// Convert Color to [f32; 4] array with opacity applied
+    fn color_to_array(&self, color: Color) -> [f32; 4] {
+        let rgba = color.to_rgba_f32_array();
+        let [r, g, b, a] = rgba;
         [r, g, b, a * self.current_state.opacity]
     }
 }
@@ -112,14 +114,14 @@ impl Painter for WgpuPainter {
     fn rect(&mut self, rect: Rect, paint: &Paint) {
         self.commands.push(GpuDrawCommand::Rect {
             rect,
-            color: self.apply_opacity(paint.color),
+            color: self.color_to_array(paint.color),
             transform: self.current_state.transform,
         });
     }
     fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         self.commands.push(GpuDrawCommand::RRect {
             rrect,
-            color: self.apply_opacity(paint.color),
+            color: self.color_to_array(paint.color),
             transform: self.current_state.transform,
         });
     }
@@ -127,7 +129,7 @@ impl Painter for WgpuPainter {
         self.commands.push(GpuDrawCommand::Circle {
             center,
             radius,
-            color: self.apply_opacity(paint.color),
+            color: self.color_to_array(paint.color),
             transform: self.current_state.transform,
         });
     }
@@ -136,7 +138,7 @@ impl Painter for WgpuPainter {
             p1,
             p2,
             width: paint.stroke_width.max(1.0),
-            color: self.apply_opacity(paint.color),
+            color: self.color_to_array(paint.color),
             transform: self.current_state.transform,
         });
     }
@@ -145,7 +147,7 @@ impl Painter for WgpuPainter {
             text: text.to_string(),
             position,
             font_size,
-            color: self.apply_opacity(paint.color),
+            color: self.color_to_array(paint.color),
             max_width: None,
             align: TextAlign::Left,
             transform: self.current_state.transform,
