@@ -28,7 +28,7 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 ///
 /// # IndexedSlot Enhancement
 ///
-/// For efficient RenderObject child insertion, slot can optionally store
+/// For efficient Render child insertion, slot can optionally store
 /// the previous sibling's ElementId.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -64,7 +64,7 @@ impl Slot {
     /// Create a slot with previous sibling reference
     ///
     /// This is the efficient version used by update_children() for
-    /// optimal RenderObject child insertion.
+    /// optimal Render child insertion.
     ///
     /// # Arguments
     ///

@@ -1,6 +1,6 @@
 //! ParentDataElement - element for ParentDataWidget
 //!
-//! Manages a single child and applies parent data to descendant RenderObjects.
+//! Manages a single child and applies parent data to descendant Renders.
 
 use crate::ElementId;
 use crate::element::ElementLifecycle;
@@ -9,8 +9,8 @@ use crate::widget::{BoxedWidget, DynWidget};
 /// Element for ParentDataWidget
 ///
 /// ParentDataElement holds a ParentDataWidget (type-erased as DynWidget) and manages
-/// a single child. It applies parent data to descendant RenderObjects by walking
-/// down the tree to find the first RenderObjectElement.
+/// a single child. It applies parent data to descendant Renders by walking
+/// down the tree to find the first RenderElement.
 ///
 /// # Architecture
 ///
@@ -29,13 +29,13 @@ use crate::widget::{BoxedWidget, DynWidget};
 /// # Parent Data Application
 ///
 /// When the child is mounted, this element walks down the tree to find
-/// the first RenderObjectElement and applies parent data to it.
+/// the first RenderElement and applies parent data to it.
 ///
 /// # Lifecycle
 ///
 /// 1. **mount()** - Insert into tree
 /// 2. **rebuild()** - Build child widget
-/// 3. **apply_parent_data()** - Set parent data on descendant RenderObject
+/// 3. **apply_parent_data()** - Set parent data on descendant Render
 /// 4. **unmount()** - Remove from tree
 #[derive(Debug)]
 pub struct ParentDataElement {

@@ -125,7 +125,7 @@ pub trait Notification: Any + Send + Sync + fmt::Debug {
 ///
 /// # Design Pattern
 ///
-/// This follows the same pattern as Widget/DynWidget and RenderObject/DynRenderObject:
+/// This follows the same pattern as Widget/DynWidget and Render/DynRender:
 /// - `Notification` - Has associated types, not object-safe
 /// - `DynNotification` - Object-safe for `&dyn DynNotification`
 pub trait DynNotification: Send + Sync + fmt::Debug {

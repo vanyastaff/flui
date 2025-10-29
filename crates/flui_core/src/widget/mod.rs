@@ -3,14 +3,14 @@
 //! This module provides the widget layer of FLUI's three-tree architecture:
 //! - **Widget** → Immutable configuration (typed, zero-cost)
 //! - **Element** → Mutable state holder (persists across rebuilds)
-//! - **RenderObject** → Layout and painting (optional, for render widgets)
+//! - **Render** → Layout and painting (optional, for render widgets)
 //!
 //! # Widget Types
 //!
 //! 1. **StatelessWidget** - Pure function from config to UI
 //! 2. **StatefulWidget** - Creates a State object that persists
 //! 3. **InheritedWidget** - Propagates data down the tree
-//! 4. **RenderObjectWidget** - Direct control over layout/paint
+//! 4. **RenderWidget** - Direct control over layout/paint
 //! 5. **ParentDataWidget** - Attaches metadata to descendants
 //!
 //! # Architecture
@@ -24,7 +24,7 @@
 //! StatelessWidget  ─┐
 //! StatefulWidget   ─┤
 //! InheritedWidget  ─┼→ impl Widget → impl DynWidget (automatic!)
-//! RenderObjectWidget┤
+//! RenderWidget┤
 //! ParentDataWidget ─┘
 //! ```
 //!
@@ -99,13 +99,19 @@
 
 // Submodules
 pub mod dyn_widget;
+// Temporarily disabled due to broken widget trait definitions
 pub mod inherited;
 pub mod notification_listener;
 pub mod parent_data_widget;
 pub mod render_object_widget;
 pub mod stateful;
 pub mod stateless;
+pub mod traits;
 pub mod widget;
+pub mod widget_enum;
+
+
+
 
 // Re-exports
 pub use dyn_widget::{BoxedWidget, DynWidget, SharedWidget};
@@ -113,7 +119,7 @@ pub use inherited::{InheritedModel, InheritedWidget};
 pub use notification_listener::NotificationListener;
 pub use parent_data_widget::{ParentData, ParentDataWidget};
 pub use render_object_widget::{
-    MultiChildRenderObjectWidget, RenderObjectWidget, SingleChildRenderObjectWidget,
+    MultiChildRenderWidget, RenderWidget, SingleChildRenderWidget,
 };
 pub use stateful::{State, StatefulWidget};
 pub use stateless::{KeyedStatelessWidget, StatelessWidget, with_key};
@@ -381,3 +387,7 @@ mod tests {
         assert!(widgets[2].is::<WidgetA>());
     }
 }
+
+
+
+

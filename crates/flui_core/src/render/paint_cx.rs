@@ -60,7 +60,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// Get the size of the current element
     ///
     /// Returns the size computed during the layout phase.
-    /// This is useful for RenderObjects that need to know their own size
+    /// This is useful for Renders that need to know their own size
     /// during painting (e.g., for creating clip regions).
     ///
     /// # Returns
@@ -124,7 +124,7 @@ impl<'a> SingleChildPaint for PaintCx<'a, SingleArity> {
 impl<'a> PaintCx<'a, SingleArity> {
     /// Internal: Paint child without cache
     fn capture_child_layer_uncached(&self, child_id: ElementId) -> BoxedLayer {
-        // Safe: Each element's RenderObject is wrapped in its own RefCell,
+        // Safe: Each element's Render is wrapped in its own RefCell,
         // so painting different elements doesn't cause aliasing.
         // The ElementTree reference is shared immutably, which is safe since
         // paint operations are read-only on the tree structure itself.
@@ -170,7 +170,7 @@ impl<'a> MultiChildPaint for PaintCx<'a, MultiArity> {
 impl<'a> PaintCx<'a, MultiArity> {
     /// Internal: Paint child without cache
     fn capture_child_layer_uncached(&self, child_id: ElementId) -> BoxedLayer {
-        // Safe: Each element's RenderObject is wrapped in its own RefCell,
+        // Safe: Each element's Render is wrapped in its own RefCell,
         // so painting different elements doesn't cause aliasing.
         // The ElementTree reference is shared immutably, which is safe since
         // paint operations are read-only on the tree structure itself.
@@ -184,15 +184,15 @@ impl<'a> PaintCx<'a, MultiArity> {
 mod tests {
     use super::*;
     use crate::render::arity::LeafArity;
-    use crate::{LayoutCx, RenderObject};
+    use crate::{LayoutCx, Render};
     use flui_engine::{BoxedLayer, ContainerLayer};
     use flui_types::Size;
 
-    // Test RenderObject for tests
+    // Test Render for tests
     #[derive(Debug)]
     struct TestRender;
 
-    impl RenderObject for TestRender {
+    impl Render for TestRender {
         type Arity = LeafArity;
 
         fn layout(&mut self, _cx: &mut LayoutCx<Self::Arity>) -> Size {

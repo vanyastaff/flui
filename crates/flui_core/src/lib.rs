@@ -43,7 +43,7 @@
 //!
 //! ## Render Tree (Layout & Paint)
 //!
-//! RenderObjects perform layout calculations and painting. They form the
+//! Renders perform layout calculations and painting. They form the
 //! actual visual representation that gets displayed.
 //!
 //! # Widget Types
@@ -120,29 +120,29 @@
 //! }
 //! ```
 //!
-//! ## RenderObjectWidget
+//! ## RenderWidget
 //!
 //! Widgets that create render objects for custom layout/paint.
 //!
 //! ```rust
-//! # use flui_core::{RenderObjectWidget, RenderObject};
+//! # use flui_core::{RenderWidget, Render};
 //! #[derive(Debug)]
 //! struct Container {
 //!     width: f64,
 //!     height: f64,
 //! }
 //!
-//! impl RenderObjectWidget for Container {
-//!     type RenderObject = RenderContainer;
+//! impl RenderWidget for Container {
+//!     type Render = RenderContainer;
 //!
-//!     fn create_render_object(&self) -> Self::RenderObject {
+//!     fn create_render_object(&self) -> Self::Render {
 //!         RenderContainer {
 //!             width: self.width,
 //!             height: self.height,
 //!         }
 //!     }
 //!
-//!     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+//!     fn update_render_object(&self, render_object: &mut Self::Render) {
 //!         render_object.width = self.width;
 //!         render_object.height = self.height;
 //!     }
@@ -154,7 +154,7 @@
 //! Widgets that attach layout metadata to descendants.
 //!
 //! ```rust
-//! # use flui_core::{ParentDataWidget, BoxedWidget, RenderObject};
+//! # use flui_core::{ParentDataWidget, BoxedWidget, Render};
 //! #[derive(Debug)]
 //! struct Flexible {
 //!     flex: i32,
@@ -164,7 +164,7 @@
 //! impl ParentDataWidget for Flexible {
 //!     type ParentDataType = FlexParentData;
 //!
-//!     fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+//!     fn apply_parent_data(&self, render_object: &mut dyn Render) {
 //!         // Apply flex data to child's render object
 //!     }
 //!
@@ -308,16 +308,16 @@ pub use widget::{
     InheritedWidget,
     // Helper types
     KeyedStatelessWidget,
-    MultiChildRenderObjectWidget,
+    MultiChildRenderWidget,
     NotificationListener,
 
     ParentData,
 
     ParentDataWidget,
-    RenderObjectWidget,
+    RenderWidget,
     SharedWidget,
 
-    SingleChildRenderObjectWidget,
+    SingleChildRenderWidget,
     State,
     StatefulWidget,
     // Widget types
@@ -370,14 +370,14 @@ pub use element::{
 pub use render::{
     // Arity types
     Arity,
-    BoxedRenderObject,
-    DynRenderObject,
+    BoxedRender,
+    DynRender,
     LayoutCx,
     LeafArity,
     MultiArity,
     PaintCx,
 
-    RenderObject,
+    Render,
     RenderState,
     SingleArity,
 };
@@ -403,13 +403,13 @@ pub mod prelude {
     pub use crate::foundation::{Key, KeyRef};
 
     pub use crate::widget::{
-        BoxedWidget, DynWidget, InheritedWidget, ParentDataWidget, RenderObjectWidget,
+        BoxedWidget, DynWidget, InheritedWidget, ParentDataWidget, RenderWidget,
         SharedWidget, State, StatefulWidget, StatelessWidget, Widget, boxed, shared, with_key,
     };
 
     pub use crate::element::{BuildContext, Element};
 
-    pub use crate::render::{LeafArity, MultiArity, RenderObject, SingleArity};
+    pub use crate::render::{LeafArity, MultiArity, Render, SingleArity};
 }
 
 // ============================================================================

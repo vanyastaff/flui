@@ -13,11 +13,11 @@ use crate::render::RenderState;
 /// # New Architecture
 ///
 /// ElementTree now stores heterogeneous Elements (ComponentElement, StatefulElement,
-/// RenderObjectElement) instead of RenderObjects directly. This provides:
+/// RenderElement) instead of Renders directly. This provides:
 /// - Unified tree structure for all element types
 /// - Widget lifecycle management (build, rebuild, mount, unmount)
 /// - State management for StatefulElements
-/// - RenderState is now inside RenderObjectElement
+/// - RenderState is now inside RenderElement
 ///
 /// # Memory Layout
 ///
@@ -39,12 +39,12 @@ use crate::render::RenderState;
 /// # Usage
 ///
 /// ```rust,ignore
-/// use flui_core::{ElementTree, RenderObjectElement};
+/// use flui_core::{ElementTree, RenderElement};
 ///
 /// let mut tree = ElementTree::new();
 ///
-/// // Insert root element (now stores Element, not RenderObject)
-/// let root_element = RenderObjectElement::new(FlexWidget::column());
+/// // Insert root element (now stores Element, not Render)
+/// let root_element = RenderElement::new(FlexWidget::column());
 /// let root_id = tree.insert(Box::new(root_element));
 ///
 /// // Access element
@@ -55,7 +55,7 @@ pub struct ElementTree {
     /// Slab-based arena for element nodes
     ///
     /// Each ElementNode contains:
-    /// - RenderObject (boxed trait object)
+    /// - Render (boxed trait object)
     /// - RenderState (size, constraints, flags)
     /// - Parent/children relationships
     pub(super) nodes: Slab<ElementNode>,
@@ -67,7 +67,7 @@ pub struct ElementTree {
 /// The Element enum contains all necessary data including:
 /// - Widget configuration
 /// - State (for StatefulElement)
-/// - RenderObject + RenderState (for RenderElement)
+/// - Render + RenderState (for RenderElement)
 /// - Lifecycle state
 /// - Children management
 #[derive(Debug)]
@@ -266,13 +266,13 @@ impl ElementTree {
             .unwrap_or(0)
     }
 
-    // ========== RenderObject Access ==========
+    // ========== Render Access ==========
 
-    /// Get a reference to the RenderObject for an element
+    /// Get a reference to the Render for an element
     ///
     /// # Returns
     ///
-    /// `Some(&dyn DynRenderObject)` if the element is a RenderObjectElement, `None` otherwise
+    /// `Some(&dyn DynRender)` if the element is a RenderElement, `None` otherwise
     ///
     // Note: render_object() and render_object_mut() methods removed
     // because they cannot work with RefCell guards (lifetime issues).
@@ -285,11 +285,11 @@ impl ElementTree {
     ///
     /// # Returns
     ///
-    /// `Some(RwLockReadGuard<RenderState>)` if the element is a RenderObjectElement
+    /// `Some(RwLockReadGuard<RenderState>)` if the element is a RenderElement
     ///
     /// # Note
     ///
-    /// Only RenderObjectElements have RenderState. ComponentElements and StatefulElements
+    /// Only RenderElements have RenderState. ComponentElements and StatefulElements
     /// will return None.
     ///
     /// # Example
@@ -318,7 +318,7 @@ impl ElementTree {
     ///
     /// # Returns
     ///
-    /// `Some(RwLockWriteGuard<RenderState>)` if the element is a RenderObjectElement
+    /// `Some(RwLockWriteGuard<RenderState>)` if the element is a RenderElement
     ///
     /// # Example
     ///
@@ -343,7 +343,7 @@ impl ElementTree {
 
     // ========== Layout & Paint Helpers ==========
 
-    /// Perform layout on a RenderObject
+    /// Perform layout on a Render
     ///
     /// Uses RefCell-based interior mutability for safe access to render objects.
     /// This is sound because layout is single-threaded and RefCell provides
@@ -356,7 +356,7 @@ impl ElementTree {
     ///
     /// # Returns
     ///
-    /// The size computed by the RenderObject, or None if element is not a RenderObjectElement
+    /// The size computed by the Render, or None if element is not a RenderElement
     ///
     /// # Panics
     ///
@@ -402,7 +402,7 @@ impl ElementTree {
         Some(size)
     }
 
-    /// Perform paint on a RenderObject
+    /// Perform paint on a Render
     ///
     /// This is a helper method that safely handles access to the render object
     /// and tree for painting.
@@ -414,7 +414,7 @@ impl ElementTree {
     ///
     /// # Returns
     ///
-    /// The layer tree, or None if element is not a RenderObjectElement
+    /// The layer tree, or None if element is not a RenderElement
     pub fn paint_render_object(
         &self,
         element_id: ElementId,
@@ -427,7 +427,7 @@ impl ElementTree {
         // Borrow the render object through RefCell - the guard must live until after the call
         let render_object_guard = render_element.render_object();
 
-        // Explicitly dereference to get &dyn DynRenderObject
+        // Explicitly dereference to get &dyn DynRender
         let layer = (&*render_object_guard).dyn_paint(self, element_id, offset);
 
         // Guard dropped here
@@ -469,9 +469,9 @@ impl ElementTree {
 
     // ========== Iteration ==========
 
-    /// Visit all RenderObjectElements in the tree
+    /// Visit all RenderElements in the tree
     ///
-    /// This only visits elements that have RenderObjects (RenderObjectElement).
+    /// This only visits elements that have Renders (RenderElement).
     /// ComponentElements and StatefulElements are skipped.
     ///
     /// # Example
@@ -483,10 +483,10 @@ impl ElementTree {
     /// ```
     pub fn visit_all_render_objects<F>(&self, mut visitor: F)
     where
-        F: FnMut(ElementId, &dyn crate::DynRenderObject, parking_lot::RwLockReadGuard<RenderState>),
+        F: FnMut(ElementId, &dyn crate::DynRender, parking_lot::RwLockReadGuard<RenderState>),
     {
         for (element_id, node) in &self.nodes {
-            // Only visit elements with RenderObjects
+            // Only visit elements with Renders
             let render_elem = match node.element.as_render() {
                 Some(re) => re,
                 None => continue,
@@ -637,12 +637,12 @@ impl Default for ElementTree {
 #[cfg(all(test, disabled))]
 mod tests {
     use super::*;
-    use crate::{DynWidget, RenderObject, RenderObjectWidget, Widget};
+    use crate::{DynWidget, Render, RenderWidget, Widget};
     use crate::{LayoutCx, LeafArity, PaintCx, SingleArity};
     use flui_engine::{BoxedLayer, ContainerLayer};
     use flui_types::Size;
 
-    // Test Widgets and RenderObjects
+    // Test Widgets and Renders
     #[derive(Debug, Clone)]
     struct TestLeafWidget;
 
@@ -653,21 +653,21 @@ mod tests {
         }
     }
 
-    impl RenderObjectWidget for TestLeafWidget {
-        type RenderObject = TestLeafRender;
+    impl RenderWidget for TestLeafWidget {
+        type Render = TestLeafRender;
         type Arity = LeafArity;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(&self) -> Self::Render {
             TestLeafRender
         }
 
-        fn update_render_object(&self, _render: &mut Self::RenderObject) {}
+        fn update_render_object(&self, _render: &mut Self::Render) {}
     }
 
     #[derive(Debug)]
     struct TestLeafRender;
 
-    impl RenderObject for TestLeafRender {
+    impl Render for TestLeafRender {
         type Arity = LeafArity;
 
         fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -689,21 +689,21 @@ mod tests {
         }
     }
 
-    impl RenderObjectWidget for TestSingleWidget {
-        type RenderObject = TestSingleRender;
+    impl RenderWidget for TestSingleWidget {
+        type Render = TestSingleRender;
         type Arity = SingleArity;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(&self) -> Self::Render {
             TestSingleRender
         }
 
-        fn update_render_object(&self, _render: &mut Self::RenderObject) {}
+        fn update_render_object(&self, _render: &mut Self::Render) {}
     }
 
     #[derive(Debug)]
     struct TestSingleRender;
 
-    impl RenderObject for TestSingleRender {
+    impl Render for TestSingleRender {
         type Arity = SingleArity;
 
         fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn test_insert_root() {
         let mut tree = ElementTree::new();
-        let element = RenderObjectElement::new(TestLeafWidget);
+        let element = RenderElement::new(TestLeafWidget);
         let root_id = tree.insert(Box::new(element));
 
         assert_eq!(tree.len(), 1);
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn test_remove_element() {
         let mut tree = ElementTree::new();
-        let element = RenderObjectElement::new(TestLeafWidget);
+        let element = RenderElement::new(TestLeafWidget);
         let root_id = tree.insert(Box::new(element));
 
         assert!(tree.remove(root_id));
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn test_render_object_access() {
         let mut tree = ElementTree::new();
-        let element = RenderObjectElement::new(TestLeafWidget);
+        let element = RenderElement::new(TestLeafWidget);
         let element_id = tree.insert(Box::new(element));
 
         // Immutable access
@@ -768,7 +768,7 @@ mod tests {
     #[test]
     fn test_render_state_access() {
         let mut tree = ElementTree::new();
-        let element = RenderObjectElement::new(TestLeafWidget);
+        let element = RenderElement::new(TestLeafWidget);
         let element_id = tree.insert(Box::new(element));
 
         // Read access
@@ -794,8 +794,8 @@ mod tests {
     #[test]
     fn test_visit_all_elements() {
         let mut tree = ElementTree::new();
-        tree.insert(Box::new(RenderObjectElement::new(TestLeafWidget)));
-        tree.insert(Box::new(RenderObjectElement::new(TestLeafWidget)));
+        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
+        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
 
         let mut count = 0;
         tree.visit_all_elements(|_id, _element| {
@@ -808,8 +808,8 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut tree = ElementTree::new();
-        tree.insert(Box::new(RenderObjectElement::new(TestLeafWidget)));
-        tree.insert(Box::new(RenderObjectElement::new(TestLeafWidget)));
+        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
+        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
 
         assert_eq!(tree.len(), 2);
 

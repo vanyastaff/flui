@@ -13,33 +13,33 @@ bitflags! {
     /// ~1000 times per frame, so we need it to be fast (5ns vs 50ns with RwLock).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct RenderFlags: u32 {
-        /// RenderObject needs layout computation
+        /// Render needs layout computation
         const NEEDS_LAYOUT = 1 << 0;
 
-        /// RenderObject needs painting
+        /// Render needs painting
         const NEEDS_PAINT = 1 << 1;
 
-        /// RenderObject needs compositing
+        /// Render needs compositing
         const NEEDS_COMPOSITING = 1 << 2;
 
-        /// RenderObject is a relayout boundary
+        /// Render is a relayout boundary
         ///
         /// When true, layout changes don't propagate to parent.
         /// This is a critical optimization for large trees.
         const IS_RELAYOUT_BOUNDARY = 1 << 3;
 
-        /// RenderObject is a repaint boundary
+        /// Render is a repaint boundary
         ///
         /// When true, paint changes don't trigger parent repaint.
         const IS_REPAINT_BOUNDARY = 1 << 4;
 
-        /// RenderObject needs semantics update
+        /// Render needs semantics update
         const NEEDS_SEMANTICS = 1 << 5;
 
-        /// RenderObject is detached from tree
+        /// Render is detached from tree
         const IS_DETACHED = 1 << 6;
 
-        /// RenderObject has been laid out at least once
+        /// Render has been laid out at least once
         const HAS_SIZE = 1 << 7;
     }
 }

@@ -11,7 +11,7 @@
 //!
 //! let mut pipeline = RenderPipeline::new();
 //!
-//! // Add root widget (creates RenderObjectElement internally)
+//! // Add root widget (creates RenderElement internally)
 //! let root_id = pipeline.insert_root(FlexWidget::column());
 //!
 //! // Each frame:
@@ -25,18 +25,18 @@
 //! # Architecture
 //!
 //! RenderPipeline works with the three-tree architecture:
-//! - Widget → RenderObjectElement → RenderObject
-//! - ElementTree stores RenderObjectElements (not bare RenderObjects)
+//! - Widget → RenderElement → Render
+//! - ElementTree stores RenderElements (not bare Renders)
 //! - Widgets are immutable configuration, Elements manage lifecycle
 //!
 //! # Phases
 //!
-//! 1. **Layout**: RenderObjects compute their size and position
-//! 2. **Paint**: RenderObjects produce their layer tree
+//! 1. **Layout**: Renders compute their size and position
+//! 2. **Paint**: Renders produce their layer tree
 //!
 //! # Dirty Tracking
 //!
-//! RenderPipeline tracks which RenderObjects need layout/paint:
+//! RenderPipeline tracks which Renders need layout/paint:
 //! - `nodes_needing_layout` - Elements that need relayout
 //! - `nodes_needing_paint` - Elements that need repaint
 //! - `flush_layout()` processes dirty nodes, sorted by depth (parents before children)
@@ -47,7 +47,7 @@ use flui_types::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 
 use crate::element::{ElementId, ElementTree, RenderElement};
-use crate::widget::RenderObjectWidget;
+use crate::widget::RenderWidget;
 
 /// RenderPipeline - orchestrates the rendering pipeline
 ///
@@ -60,9 +60,9 @@ use crate::widget::RenderObjectWidget;
 ///
 /// # Dirty Tracking
 ///
-/// Tracks dirty RenderObjects for incremental layout/paint:
-/// - `nodes_needing_layout` - RenderObjects that need relayout
-/// - `nodes_needing_paint` - RenderObjects that need repaint
+/// Tracks dirty Renders for incremental layout/paint:
+/// - `nodes_needing_layout` - Renders that need relayout
+/// - `nodes_needing_paint` - Renders that need repaint
 /// - `flush_layout()` processes only dirty nodes, sorted by depth
 /// - `flush_paint()` processes only dirty nodes
 pub struct RenderPipeline {
@@ -73,10 +73,10 @@ pub struct RenderPipeline {
     root_id: Option<ElementId>,
 
     // Dirty tracking
-    /// RenderObjects that need layout
+    /// Renders that need layout
     nodes_needing_layout: Vec<ElementId>,
 
-    /// RenderObjects that need paint
+    /// Renders that need paint
     nodes_needing_paint: Vec<ElementId>,
 }
 
@@ -149,13 +149,13 @@ impl RenderPipeline {
 
     // ========== Tree Construction ==========
 
-    /// Insert a root RenderObjectWidget
+    /// Insert a root RenderWidget
     ///
-    /// Creates the root of the render tree by wrapping the widget in a RenderObjectElement.
+    /// Creates the root of the render tree by wrapping the widget in a RenderElement.
     ///
     /// # Arguments
     ///
-    /// - `widget`: The root RenderObjectWidget
+    /// - `widget`: The root RenderWidget
     ///
     /// # Returns
     ///
@@ -168,12 +168,12 @@ impl RenderPipeline {
     /// ```
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where
-        W: RenderObjectWidget + crate::Widget + Clone + 'static,
-        W::RenderObject: std::fmt::Debug,
+        W: RenderWidget + crate::Widget + Clone + 'static,
+        W::Render: std::fmt::Debug,
     {
         let render = widget.create_render_object();
         let widget_boxed: crate::widget::BoxedWidget = crate::widget::BoxedWidget::new(widget);
-        let render_boxed: Box<dyn crate::render::DynRenderObject> = Box::new(render);
+        let render_boxed: Box<dyn crate::render::DynRender> = Box::new(render);
         let render_element = RenderElement::new(widget_boxed, render_boxed);
         let element = crate::element::Element::Render(render_element);
         let id = self.tree.insert(element);
@@ -188,10 +188,10 @@ impl RenderPipeline {
 
     // ========== Dirty Tracking API ==========
 
-    /// Request layout for a RenderObject
+    /// Request layout for a Render
     ///
     /// Adds the node to the layout dirty list if not already present.
-    /// Call this when a RenderObject's properties change and it needs relayout.
+    /// Call this when a Render's properties change and it needs relayout.
     ///
     /// # Arguments
     ///
@@ -208,10 +208,10 @@ impl RenderPipeline {
         }
     }
 
-    /// Request paint for a RenderObject
+    /// Request paint for a Render
     ///
     /// Adds the node to the paint dirty list if not already present.
-    /// Call this when a RenderObject's appearance changes and it needs repaint.
+    /// Call this when a Render's appearance changes and it needs repaint.
     ///
     /// # Arguments
     ///
@@ -284,7 +284,7 @@ impl RenderPipeline {
 
     /// Flush the paint phase
     ///
-    /// Paints the root RenderObject (and recursively, all children).
+    /// Paints the root Render (and recursively, all children).
     ///
     /// # Returns
     ///
@@ -330,7 +330,7 @@ impl Default for RenderPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DynWidget, RenderObject, RenderObjectWidget, Widget};
+    use crate::{DynWidget, Render, RenderWidget, Widget};
     use crate::{LayoutCx, LeafArity, PaintCx, SingleArity};
     use flui_engine::ContainerLayer;
 
@@ -349,17 +349,17 @@ mod tests {
 
     impl Widget for TestLeafWidget {}
 
-    impl RenderObjectWidget for TestLeafWidget {
-        type RenderObject = TestLeafRender;
+    impl RenderWidget for TestLeafWidget {
+        type Render = TestLeafRender;
         type Arity = LeafArity;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(&self) -> Self::Render {
             TestLeafRender {
                 size: Size::new(self.width, self.height),
             }
         }
 
-        fn update_render_object(&self, render: &mut Self::RenderObject) {
+        fn update_render_object(&self, render: &mut Self::Render) {
             render.size = Size::new(self.width, self.height);
         }
     }
@@ -369,7 +369,7 @@ mod tests {
         size: Size,
     }
 
-    impl RenderObject for TestLeafRender {
+    impl Render for TestLeafRender {
         type Arity = LeafArity;
 
         fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -386,21 +386,21 @@ mod tests {
 
     impl Widget for TestContainerWidget {}
 
-    impl RenderObjectWidget for TestContainerWidget {
+    impl RenderWidget for TestContainerWidget {
         type Arity = SingleArity;
-        type RenderObject = TestContainerRender;
+        type Render = TestContainerRender;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(&self) -> Self::Render {
             TestContainerRender
         }
 
-        fn update_render_object(&self, _render: &mut Self::RenderObject) {}
+        fn update_render_object(&self, _render: &mut Self::Render) {}
     }
 
     #[derive(Debug)]
     struct TestContainerRender;
 
-    impl RenderObject for TestContainerRender {
+    impl Render for TestContainerRender {
         type Arity = SingleArity;
 
         fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {

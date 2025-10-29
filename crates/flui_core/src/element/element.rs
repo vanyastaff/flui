@@ -13,7 +13,7 @@
 //! StatelessWidget     → Element::Component(ComponentElement)
 //! StatefulWidget      → Element::Stateful(StatefulElement)
 //! InheritedWidget     → Element::Inherited(InheritedElement)
-//! RenderObjectWidget  → Element::Render(RenderElement)
+//! RenderWidget  → Element::Render(RenderElement)
 //! ParentDataWidget    → Element::ParentData(ParentDataElement)
 //! ```
 //!
@@ -87,7 +87,7 @@ use crate::element::{
     ComponentElement, ElementId, ElementLifecycle, InheritedElement, ParentDataElement,
     RenderElement, StatefulElement,
 };
-use crate::render::DynRenderObject;
+use crate::render::DynRender;
 use crate::widget::DynWidget;
 
 // Re-export common element types
@@ -108,7 +108,7 @@ pub use crate::element::stateful::StatefulElement as Stateful;
 /// - **Component** - StatelessWidget → calls `build()` to produce child widget tree
 /// - **Stateful** - StatefulWidget → manages mutable `State` object across rebuilds
 /// - **Inherited** - InheritedWidget → propagates data down tree with dependency tracking
-/// - **Render** - RenderObjectWidget → owns RenderObject for layout and painting
+/// - **Render** - RenderWidget → owns Render for layout and painting
 /// - **ParentData** - ParentDataWidget → attaches metadata to child for parent's layout
 ///
 /// # Design Rationale
@@ -192,10 +192,10 @@ pub enum Element {
     /// ```
     Inherited(InheritedElement),
 
-    /// RenderObjectWidget → RenderElement
+    /// RenderWidget → RenderElement
     ///
-    /// Owns a RenderObject that performs layout and painting.
-    /// This is the bridge between Widget tree and RenderObject tree.
+    /// Owns a Render that performs layout and painting.
+    /// This is the bridge between Widget tree and Render tree.
     ///
     /// # Lifecycle
     ///
@@ -556,10 +556,10 @@ impl Element {
     /// Panics if the render object is currently borrowed mutably.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> Option<std::cell::Ref<'_, dyn DynRenderObject + '_>> {
+    pub fn render_object(&self) -> Option<std::cell::Ref<'_, dyn DynRender + '_>> {
         match self {
             Self::Render(r) => {
-                // Map the Ref<Box<dyn DynRenderObject>> to Ref<dyn DynRenderObject>
+                // Map the Ref<Box<dyn DynRender>> to Ref<dyn DynRender>
                 // Box<dyn T> needs **boxed to get &dyn T
                 Some(std::cell::Ref::map(r.render_object(), |boxed| &**boxed))
             }
@@ -577,10 +577,10 @@ impl Element {
     /// Panics if the render object is currently borrowed.
     #[inline]
     #[must_use]
-    pub fn render_object_mut(&self) -> Option<std::cell::RefMut<'_, dyn DynRenderObject + '_>> {
+    pub fn render_object_mut(&self) -> Option<std::cell::RefMut<'_, dyn DynRender + '_>> {
         match self {
             Self::Render(r) => {
-                // Map the RefMut<Box<dyn DynRenderObject>> to RefMut<dyn DynRenderObject>
+                // Map the RefMut<Box<dyn DynRender>> to RefMut<dyn DynRender>
                 // Box<dyn T> needs **boxed to get &mut dyn T
                 Some(std::cell::RefMut::map(r.render_object_mut(), |boxed| {
                     &mut **boxed
@@ -690,7 +690,7 @@ impl Element {
         }
     }
 
-    /// Get raw pointer to RenderState if this is a RenderObjectElement
+    /// Get raw pointer to RenderState if this is a RenderElement
     ///
     /// Returns None for ComponentElement, StatefulElement, etc.
     ///

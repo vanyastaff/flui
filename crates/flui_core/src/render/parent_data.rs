@@ -1,6 +1,6 @@
 //! ParentData - layout-specific data attached to children by their parent
 //!
-//! The ParentData system allows parent RenderObjects to attach metadata to their children
+//! The ParentData system allows parent Renders to attach metadata to their children
 //! without maintaining separate data structures. This is a core concept in the rendering
 //! pipeline, enabling parents to store per-child layout information efficiently.
 //!
@@ -40,7 +40,7 @@ use std::fmt;
 use downcast_rs::{DowncastSync, impl_downcast};
 use flui_types::Offset;
 
-/// ParentData - metadata that a parent RenderObject attaches to child elements
+/// ParentData - metadata that a parent Render attaches to child elements
 ///
 /// This trait enables parents to store layout-specific information about each child
 /// without maintaining separate data structures. The trait provides type-safe
@@ -132,13 +132,13 @@ pub trait ParentDataWithOffset: ParentData {
 
     /// Set the cached offset for this child
     ///
-    /// Called by parent RenderObject during layout.
+    /// Called by parent Render during layout.
     fn set_offset(&mut self, offset: Offset);
 }
 
 // Implement ParentData for () (unit type) to represent "no parent data"
 //
-// This allows RenderObjects that don't need parent data to use simple APIs
+// This allows Renders that don't need parent data to use simple APIs
 // without requiring a dedicated NoParentData type.
 impl ParentData for () {}
 
@@ -242,7 +242,7 @@ impl ParentDataWithOffset for BoxParentData {
 /// Container parent data - sibling links for efficient traversal
 ///
 /// Provides linked list functionality for maintaining sibling relationships.
-/// Used by container RenderObjects that need to traverse their children
+/// Used by container Renders that need to traverse their children
 /// efficiently in both directions.
 ///
 /// # Type Parameters
@@ -334,7 +334,7 @@ impl<ChildId> ContainerParentData<ChildId> {
 /// - Positioning information (from `BoxParentData`)
 /// - Sibling links (from `ContainerParentData`)
 ///
-/// Used by multi-child RenderObjects like Row, Column, Flex, Wrap, etc.
+/// Used by multi-child Renders like Row, Column, Flex, Wrap, etc.
 ///
 /// # Type Parameters
 ///

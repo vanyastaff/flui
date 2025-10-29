@@ -3,7 +3,7 @@
 //! This module provides the Element layer of the three-tree architecture:
 //! - **Widget** → Immutable configuration (recreated each rebuild)
 //! - **Element** → Mutable state holder (persists across rebuilds)
-//! - **RenderObject** → Layout and painting (optional, for render widgets)
+//! - **Render** → Layout and painting (optional, for render widgets)
 //!
 //! # Element Types
 //!
@@ -11,25 +11,25 @@
 //! 2. **StatefulElement** - For StatefulWidget (manages State object)
 //! 3. **InheritedElement** - For InheritedWidget (data propagation + dependency tracking)
 //! 4. **ParentDataElement** - For ParentDataWidget (attaches metadata to children)
-//! 5. **RenderElement** - For RenderObjectWidget (owns RenderObject)
+//! 5. **RenderElement** - For RenderWidget (owns Render)
 //!
 //! # Architecture
 //!
 //! ```text
-//! Widget → Element → RenderObject (optional)
+//! Widget → Element → Render (optional)
 //!
 //! StatelessWidget     → ComponentElement  → build() → child widget
 //! StatefulWidget      → StatefulElement   → State.build() → child widget
 //! InheritedWidget     → InheritedElement  → (data + dependents) → child widget
 //! ParentDataWidget    → ParentDataElement → (attach data) → child widget
-//! RenderObjectWidget  → RenderElement     → RenderObject (type-erased)
+//! RenderWidget  → RenderElement     → Render (type-erased)
 //! ```
 //!
 //! # ElementTree
 //!
-//! The ElementTree currently stores RenderObjects directly (will be refactored to store Elements):
-//! - **RenderObjects** for rendering (temporary, will become part of RenderObjectElement)
-//! - **RenderState** per RenderObject (size, constraints, dirty flags)
+//! The ElementTree currently stores Renders directly (will be refactored to store Elements):
+//! - **Renders** for rendering (temporary, will become part of RenderElement)
+//! - **RenderState** per Render (size, constraints, dirty flags)
 //! - **Tree relationships** (parent/children) via ElementId indices
 //!
 //! # Performance

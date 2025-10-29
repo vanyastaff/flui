@@ -56,7 +56,7 @@ use crate::foundation::Key;
 /// - `ComponentElement<Self>` for StatelessWidget
 /// - `StatefulElement<Self>` for StatefulWidget
 /// - `InheritedElement<Self>` for InheritedWidget
-/// - `RenderObjectElement<Self>` for RenderObjectWidget
+/// - `RenderElement<Self>` for RenderWidget
 ///
 /// ## State (default = ())
 ///
@@ -80,7 +80,7 @@ use crate::foundation::Key;
 /// - `StatelessWidget` for simple widgets
 /// - `StatefulWidget` for widgets with mutable state
 /// - `InheritedWidget` for data propagation
-/// - `RenderObjectWidget` for render widgets
+/// - `RenderWidget` for render widgets
 /// - `ParentDataWidget` for layout metadata
 ///
 /// These traits automatically implement `Widget` for you.
@@ -148,14 +148,14 @@ use crate::foundation::Key;
 /// }
 ///
 /// impl Widget for Column {
-///     type Element = RenderObjectElement<Column>;
+///     type Element = RenderElement<Column>;
 ///     type Arity = MultiArity;  // Override default
 /// }
 /// ```
 pub trait Widget: 'static {
     // Note: type Element and type Arity removed during enum Element migration
     // Element creation is now handled by DynWidget trait
-    // Arity is now part of RenderObject trait only
+    // Arity is now part of Render trait only
 
     /// Optional widget key for identity tracking
     ///
@@ -226,7 +226,7 @@ pub trait Widget: 'static {
     /// This method is called by ComponentElement and StatefulElement to build
     /// the child widget tree. It's only implemented by widgets that have a build phase.
     ///
-    /// RenderObjectWidgets return `None` since they don't build - they create render objects.
+    /// RenderWidgets return `None` since they don't build - they create render objects.
     ///
     /// # Arguments
     ///
@@ -235,7 +235,7 @@ pub trait Widget: 'static {
     /// # Returns
     ///
     /// - `Some(BoxedWidget)` for StatelessWidget/StatefulWidget with the built child tree
-    /// - `None` for RenderObjectWidget (not applicable)
+    /// - `None` for RenderWidget (not applicable)
     ///
     /// # Default Implementation
     ///

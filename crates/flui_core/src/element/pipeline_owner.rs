@@ -327,7 +327,7 @@ impl PipelineOwner {
     ///
     /// # Arguments
     ///
-    /// - `root_element`: The element to set as root (typically ComponentElement or RenderObjectElement)
+    /// - `root_element`: The element to set as root (typically ComponentElement or RenderElement)
     ///
     /// # Returns
     ///
@@ -639,12 +639,12 @@ impl PipelineOwner {
     // Layout & Paint Phases
     // =========================================================================
     // TODO: These methods are stubs for now. Full implementation will be added
-    // when RenderObject layout/paint system is fully integrated.
+    // when Render layout/paint system is fully integrated.
 
-    /// Request layout for a RenderObject
+    /// Request layout for a Render
     ///
     /// Adds the node to the layout dirty list if not already present.
-    /// Called by RenderObject::mark_needs_layout().
+    /// Called by Render::mark_needs_layout().
     pub fn request_layout(&mut self, _node_id: ElementId) {
         // TODO: Implement dirty tracking for layout
         #[cfg(debug_assertions)]
@@ -655,10 +655,10 @@ impl PipelineOwner {
         );
     }
 
-    /// Request paint for a RenderObject
+    /// Request paint for a Render
     ///
     /// Adds the node to the paint dirty list if not already present.
-    /// Called by RenderObject::mark_needs_paint().
+    /// Called by Render::mark_needs_paint().
     pub fn request_paint(&mut self, _node_id: ElementId) {
         // TODO: Implement dirty tracking for paint
         #[cfg(debug_assertions)]
@@ -671,7 +671,7 @@ impl PipelineOwner {
 
     /// Flush the layout phase
     ///
-    /// Performs layout on all RenderObjects in the tree.
+    /// Performs layout on all Renders in the tree.
     ///
     /// # Parameters
     ///
@@ -684,7 +684,7 @@ impl PipelineOwner {
     /// # Note
     ///
     /// This is a stub implementation. Full layout pipeline will be added
-    /// when RenderObject system is fully integrated.
+    /// when Render system is fully integrated.
     pub fn flush_layout(
         &mut self,
         _constraints: flui_types::constraints::BoxConstraints,
@@ -701,7 +701,7 @@ impl PipelineOwner {
 
     /// Flush the paint phase
     ///
-    /// Paints all RenderObjects to the given painter.
+    /// Paints all Renders to the given painter.
     ///
     /// # Parameters
     ///
@@ -710,7 +710,7 @@ impl PipelineOwner {
     /// # Note
     ///
     /// This is a stub implementation. Full paint pipeline will be added
-    /// when RenderObject system is fully integrated.
+    /// when Render system is fully integrated.
     pub fn flush_paint(&mut self, _offset: flui_types::Offset) {
         #[cfg(debug_assertions)]
         debug_println!(PRINT_LAYOUT, "PipelineOwner::flush_paint called (stub)");
@@ -731,7 +731,7 @@ impl PipelineOwner {
     /// - StatelessWidget → ComponentElement
     /// - StatefulWidget → StatefulElement
     /// - InheritedWidget → InheritedElement
-    /// - RenderObjectWidget → RenderElement
+    /// - RenderWidget → RenderElement
     /// - ParentDataWidget → ParentDataElement
     ///
     /// # Arguments
@@ -746,13 +746,13 @@ impl PipelineOwner {
             ComponentElement, InheritedElement, ParentDataElement, RenderElement, StatefulElement,
         };
         use crate::widget::{
-            InheritedWidget, ParentDataWidget, RenderObjectWidget, StatefulWidget, StatelessWidget,
+            InheritedWidget, ParentDataWidget, RenderWidget, StatefulWidget, StatelessWidget,
         };
 
         // Try each widget type in order
         // Note: We can't directly check traits, so we use a heuristic:
         // - If widget.build() returns Some, it's a buildable widget (Stateless/Stateful/Inherited)
-        // - Otherwise it's a RenderObjectWidget or ParentDataWidget
+        // - Otherwise it's a RenderWidget or ParentDataWidget
 
         // For now, assume all widgets coming through rebuild() are StatelessWidget
         // TODO: Add proper type detection when we support all widget types

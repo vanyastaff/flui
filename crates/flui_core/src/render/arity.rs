@@ -93,7 +93,7 @@ pub trait Arity: private::Sealed + fmt::Debug + Send + Sync + 'static {
 /// # Usage
 ///
 /// ```rust
-/// use flui_core::{Widget, RenderObjectWidget, LeafArity};
+/// use flui_core::{Widget, RenderWidget, LeafArity};
 ///
 /// #[derive(Debug)]
 /// struct Text {
@@ -105,8 +105,8 @@ pub trait Arity: private::Sealed + fmt::Debug + Send + Sync + 'static {
 ///     type Arity = LeafArity;  // ← No children
 /// }
 ///
-/// impl RenderObjectWidget for Text {
-///     type RenderObject = RenderParagraph;
+/// impl RenderWidget for Text {
+///     type Render = RenderParagraph;
 ///     type Arity = LeafArity;  // ← Consistent
 /// }
 /// ```
@@ -133,7 +133,7 @@ impl Arity for LeafArity {
 /// # Usage
 ///
 /// ```rust
-/// use flui_core::{Widget, RenderObjectWidget, SingleArity, BoxedWidget};
+/// use flui_core::{Widget, RenderWidget, SingleArity, BoxedWidget};
 ///
 /// #[derive(Debug)]
 /// struct Padding {
@@ -142,12 +142,12 @@ impl Arity for LeafArity {
 /// }
 ///
 /// impl Widget for Padding {
-///     type Element = RenderObjectElement<Self>;
+///     type Element = RenderElement<Self>;
 ///     type Arity = SingleArity;  // ← One child
 /// }
 ///
-/// impl RenderObjectWidget for Padding {
-///     type RenderObject = RenderPadding;
+/// impl RenderWidget for Padding {
+///     type Render = RenderPadding;
 ///     type Arity = SingleArity;  // ← Consistent
 /// }
 /// ```
@@ -162,7 +162,7 @@ impl Arity for LeafArity {
 ///     child: BoxedWidget,  // ← Store child
 /// }
 ///
-/// impl SingleChildRenderObjectWidget for Container {
+/// impl SingleChildRenderWidget for Container {
 ///     fn child(&self) -> &BoxedWidget {
 ///         &self.child
 ///     }
@@ -191,7 +191,7 @@ impl Arity for SingleArity {
 /// # Usage
 ///
 /// ```rust
-/// use flui_core::{Widget, RenderObjectWidget, MultiArity, BoxedWidget};
+/// use flui_core::{Widget, RenderWidget, MultiArity, BoxedWidget};
 ///
 /// #[derive(Debug)]
 /// struct Column {
@@ -199,12 +199,12 @@ impl Arity for SingleArity {
 /// }
 ///
 /// impl Widget for Column {
-///     type Element = RenderObjectElement<Self>;
+///     type Element = RenderElement<Self>;
 ///     type Arity = MultiArity;  // ← Multiple children
 /// }
 ///
-/// impl RenderObjectWidget for Column {
-///     type RenderObject = RenderFlex;
+/// impl RenderWidget for Column {
+///     type Render = RenderFlex;
 ///     type Arity = MultiArity;  // ← Consistent
 /// }
 /// ```
@@ -219,7 +219,7 @@ impl Arity for SingleArity {
 ///     children: Vec<BoxedWidget>,  // ← Store children
 /// }
 ///
-/// impl MultiChildRenderObjectWidget for Row {
+/// impl MultiChildRenderWidget for Row {
 ///     fn children(&self) -> &[BoxedWidget] {
 ///         &self.children
 ///     }

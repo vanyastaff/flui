@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors = ["FLUI Team"]
 license.workspace = true
-description = "Typed core for FLUI - RenderObject with compile-time arity constraints"
+description = "Typed core for FLUI - Render with compile-time arity constraints"
 repository.workspace = true
 
 [dependencies]

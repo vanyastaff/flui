@@ -10,7 +10,7 @@ use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
 /// Context for rendering operations
 ///
-/// Provides access to the ElementTree so RenderObjects can query tree structure,
+/// Provides access to the ElementTree so Renders can query tree structure,
 /// access RenderState, and manage ParentData.
 ///
 /// # Design
@@ -151,18 +151,18 @@ impl<'a> RenderContext<'a> {
         self.tree.render_state_mut(child_id)
     }
 
-    // ========== RenderObject Access ==========
+    // ========== Render Access ==========
 
     // NOTE: These methods removed due to RefCell guard lifetime issues.
     // Use tree.get(element_id)?.render_object()? directly instead.
     //
-    // /// Get the RenderObject for current element
-    // pub fn render_object(&self) -> Option<std::cell::Ref<'_, dyn crate::DynRenderObject>> {
+    // /// Get the Render for current element
+    // pub fn render_object(&self) -> Option<std::cell::Ref<'_, dyn crate::DynRender>> {
     //     self.tree.get(self.element_id)?.render_object()
     // }
     //
-    // /// Get the RenderObject for a child element
-    // pub fn child_render_object(&self, child_id: ElementId) -> Option<std::cell::Ref<'_, dyn crate::DynRenderObject>> {
+    // /// Get the Render for a child element
+    // pub fn child_render_object(&self, child_id: ElementId) -> Option<std::cell::Ref<'_, dyn crate::DynRender>> {
     //     self.tree.get(child_id)?.render_object()
     // }
 
@@ -190,14 +190,14 @@ impl<'a> RenderContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LayoutCx, LeafArity, PaintCx, RenderObject};
+    use crate::{LayoutCx, LeafArity, PaintCx, Render};
     use flui_engine::{BoxedLayer, ContainerLayer};
     use flui_types::Size;
 
     #[derive(Debug)]
     struct TestRender;
 
-    impl RenderObject for TestRender {
+    impl Render for TestRender {
         type Arity = LeafArity;
 
         fn layout(&mut self, _cx: &mut LayoutCx<Self::Arity>) -> Size {

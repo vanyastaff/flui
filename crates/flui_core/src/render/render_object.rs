@@ -1,4 +1,4 @@
-//! Typed RenderObject trait
+//! Typed Render trait
 //!
 //! Implementation from idea.md Chapter 2.3
 
@@ -9,7 +9,7 @@ use super::layout_cx::LayoutCx;
 use super::paint_cx::PaintCx;
 use crate::render::arity::Arity;
 
-/// Typed RenderObject with compile-time arity guarantees
+/// Typed Render with compile-time arity guarantees
 ///
 /// This is the core trait for all render objects in FLUI. Key features:
 ///
@@ -18,10 +18,10 @@ use crate::render::arity::Arity;
 /// 3. **Layer Return**: `paint()` returns a Layer for compositing
 /// 4. **Zero-Cost**: No `Box<dyn>`, no downcasts, full inlining
 ///
-/// # Example: Leaf RenderObject
+/// # Example: Leaf Render
 ///
 /// ```rust,ignore
-/// use flui_core::{RenderObject, LeafArity, LayoutCx, PaintCx};
+/// use flui_core::{Render, LeafArity, LayoutCx, PaintCx};
 /// use flui_engine::{PictureLayer, Paint};
 /// use flui_types::{Size, Rect};
 ///
@@ -30,7 +30,7 @@ use crate::render::arity::Arity;
 ///     pub font_size: f32,
 /// }
 ///
-/// impl RenderObject for RenderParagraph {
+/// impl Render for RenderParagraph {
 ///     type Arity = LeafArity;
 ///
 ///     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -60,17 +60,17 @@ use crate::render::arity::Arity;
 /// }
 /// ```
 ///
-/// # Example: Single-Child RenderObject
+/// # Example: Single-Child Render
 ///
 /// ```rust,ignore
-/// use flui_core::{RenderObject, SingleArity, LayoutCx, PaintCx};
+/// use flui_core::{Render, SingleArity, LayoutCx, PaintCx};
 /// use flui_engine::{OpacityLayer, BoxedLayer};
 ///
 /// pub struct RenderOpacity {
 ///     pub opacity: f32,
 /// }
 ///
-/// impl RenderObject for RenderOpacity {
+/// impl Render for RenderOpacity {
 ///     type Arity = SingleArity;
 ///
 ///     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -88,17 +88,17 @@ use crate::render::arity::Arity;
 /// }
 /// ```
 ///
-/// # Example: Multi-Child RenderObject
+/// # Example: Multi-Child Render
 ///
 /// ```rust,ignore
-/// use flui_core::{RenderObject, MultiArity, LayoutCx, PaintCx};
+/// use flui_core::{Render, MultiArity, LayoutCx, PaintCx};
 /// use flui_engine::{ContainerLayer, BoxedLayer};
 ///
 /// pub struct RenderFlex {
 ///     pub spacing: f32,
 /// }
 ///
-/// impl RenderObject for RenderFlex {
+/// impl Render for RenderFlex {
 ///     type Arity = MultiArity;
 ///
 ///     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -128,8 +128,8 @@ use crate::render::arity::Arity;
 ///     }
 /// }
 /// ```
-pub trait RenderObject: Send + Sync + Sized + 'static {
-    /// The arity constraint for this RenderObject
+pub trait Render: Send + Sync + Sized + 'static {
+    /// The arity constraint for this Render
     ///
     /// Determines the type of `LayoutCx` and `PaintCx`:
     /// - `LeafArity`: Contexts have NO child methods
@@ -137,7 +137,7 @@ pub trait RenderObject: Send + Sync + Sized + 'static {
     /// - `MultiArity`: Contexts have `.children()` method
     type Arity: Arity;
 
-    /// Compute layout for this RenderObject
+    /// Compute layout for this Render
     ///
     /// The context is typed by arity:
     /// - `LayoutCx<LeafArity>`: Only `.constraints()` available
@@ -146,7 +146,7 @@ pub trait RenderObject: Send + Sync + Sized + 'static {
     ///
     /// # Returns
     ///
-    /// The size chosen by this RenderObject, which must satisfy the constraints:
+    /// The size chosen by this Render, which must satisfy the constraints:
     /// `cx.constraints().is_satisfied_by(returned_size)`
     ///
     /// # Example
@@ -159,7 +159,7 @@ pub trait RenderObject: Send + Sync + Sized + 'static {
     /// ```
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size;
 
-    /// Paint this RenderObject and return a Layer
+    /// Paint this Render and return a Layer
     ///
     /// The context is typed by arity:
     /// - `PaintCx<LeafArity>`: Only `.painter()`, `.offset()` available
@@ -168,7 +168,7 @@ pub trait RenderObject: Send + Sync + Sized + 'static {
     ///
     /// # Returns
     ///
-    /// A Layer from flui_engine that represents this RenderObject's visual output.
+    /// A Layer from flui_engine that represents this Render's visual output.
     /// This can be:
     /// - `PictureLayer` for leaf objects (direct drawing)
     /// - `OpacityLayer`, `TransformLayer`, etc. for effects
@@ -198,7 +198,7 @@ pub trait RenderObject: Send + Sync + Sized + 'static {
         None
     }
 
-    /// Debug name for this RenderObject
+    /// Debug name for this Render
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
@@ -213,13 +213,13 @@ mod tests {
     use flui_engine::ContainerLayer;
     use flui_types::constraints::BoxConstraints;
 
-    // Example Leaf RenderObject
+    // Example Leaf Render
     #[derive(Debug)]
     struct TestLeaf {
         size: Size,
     }
 
-    impl RenderObject for TestLeaf {
+    impl Render for TestLeaf {
         type Arity = LeafArity;
 
         fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -233,11 +233,11 @@ mod tests {
         }
     }
 
-    // Example Single-child RenderObject
+    // Example Single-child Render
     #[derive(Debug)]
     struct TestSingle;
 
-    impl RenderObject for TestSingle {
+    impl Render for TestSingle {
         type Arity = SingleArity;
 
         fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {

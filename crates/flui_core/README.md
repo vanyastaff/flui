@@ -16,7 +16,7 @@ Widget Tree (immutable configuration)
     ↓
 Element Tree (living instances)
     ↓
-RenderObject Tree (layout & paint)
+Render Tree (layout & paint)
 ```
 
 ### Typed Arity System (idea.md Chapter 2)
@@ -32,10 +32,10 @@ pub struct SingleArity;  // One child
 pub struct MultiArity;   // Multiple children
 ```
 
-### RenderObject with Arity (idea.md Chapter 2.3)
+### Render with Arity (idea.md Chapter 2.3)
 
 ```rust
-pub trait RenderObject: Send + Sync + 'static {
+pub trait Render: Send + Sync + 'static {
     type Arity: RenderArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size;
@@ -52,11 +52,11 @@ LayoutCx<SingleArity>  // YES .child(), NO .children()
 LayoutCx<MultiArity>   // NO .child(), YES .children()
 ```
 
-### Widget → RenderObject Link (idea.md Chapter 4)
+### Widget → Render Link (idea.md Chapter 4)
 
 ```rust
-pub trait RenderObjectWidget: Widget {
-    type Render: RenderObject;
+pub trait RenderWidget: Widget {
+    type Render: Render;
 
     fn create_render_object(&self) -> Self::Render;
     fn update_render_object(&self, render: &mut Self::Render);
@@ -69,8 +69,8 @@ pub trait RenderObjectWidget: Widget {
 
 - [x] Project structure
 - [x] RenderArity traits (LeafArity, SingleArity, MultiArity)
-- [x] Typed RenderObject trait with Layer return
-- [x] Widget and RenderObjectWidget traits
+- [x] Typed Render trait with Layer return
+- [x] Widget and RenderWidget traits
 - [x] ElementId and ElementTree (stub)
 
 ### 🚧 In Progress
@@ -82,7 +82,7 @@ pub trait RenderObjectWidget: Widget {
 ### 📋 TODO
 
 - [ ] Full ElementTree implementation
-- [ ] Example RenderObjects (RenderParagraph, RenderOpacity, RenderFlex)
+- [ ] Example Renders (RenderParagraph, RenderOpacity, RenderFlex)
 - [ ] RenderPipeline integration
 - [ ] Compositor integration
 - [ ] Demo examples
@@ -93,7 +93,7 @@ pub trait RenderObjectWidget: Widget {
 
 ```rust
 // ✅ This compiles - SingleArity has .child()
-impl RenderObject for RenderOpacity {
+impl Render for RenderOpacity {
     type Arity = SingleArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -103,7 +103,7 @@ impl RenderObject for RenderOpacity {
 }
 
 // ❌ This doesn't compile - LeafArity has no .child()
-impl RenderObject for RenderParagraph {
+impl Render for RenderParagraph {
     type Arity = LeafArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -115,14 +115,14 @@ impl RenderObject for RenderParagraph {
 
 ### 2. Zero-Cost Abstractions
 
-- No `Box<dyn RenderObject>` - everything monomorphized
+- No `Box<dyn Render>` - everything monomorphized
 - No `downcast_mut` - types known at compile time
 - Full inline potential for LLVM optimization
 
 ### 3. IDE Support
 
 ```rust
-impl RenderObject for RenderFlex {
+impl Render for RenderFlex {
     type Arity = MultiArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -163,14 +163,14 @@ The old implementation is preserved in `flui_core_old`. Key differences:
 | Feature | Old (flui_core_old) | New (flui_core) |
 |---------|---------------------|-----------------|
 | Child count | Runtime checks | Compile-time types |
-| RenderObject storage | `Box<dyn>` | Monomorphized |
+| Render storage | `Box<dyn>` | Monomorphized |
 | Paint output | Direct to painter | Returns Layer |
 | Arity validation | Assertions | Type system |
 | IDE support | Generic methods | Specialized per arity |
 
 ## Examples
 
-### Example 1: Leaf RenderObject (No Children)
+### Example 1: Leaf Render (No Children)
 
 ```rust
 pub struct RenderParagraph {
@@ -178,7 +178,7 @@ pub struct RenderParagraph {
     pub font_size: f32,
 }
 
-impl RenderObject for RenderParagraph {
+impl Render for RenderParagraph {
     type Arity = LeafArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -202,14 +202,14 @@ impl RenderObject for RenderParagraph {
 }
 ```
 
-### Example 2: Single-Child RenderObject
+### Example 2: Single-Child Render
 
 ```rust
 pub struct RenderOpacity {
     pub opacity: f32,
 }
 
-impl RenderObject for RenderOpacity {
+impl Render for RenderOpacity {
     type Arity = SingleArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -227,14 +227,14 @@ impl RenderObject for RenderOpacity {
 }
 ```
 
-### Example 3: Multi-Child RenderObject
+### Example 3: Multi-Child Render
 
 ```rust
 pub struct RenderFlex {
     pub spacing: f32,
 }
 
-impl RenderObject for RenderFlex {
+impl Render for RenderFlex {
     type Arity = MultiArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {

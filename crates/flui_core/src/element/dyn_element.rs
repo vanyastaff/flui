@@ -5,7 +5,7 @@ use std::fmt;
 use parking_lot::RwLock;
 
 use crate::element::ElementId;
-use crate::render::{DynRenderObject, RenderState};
+use crate::render::{DynRender, RenderState};
 use crate::widget::DynWidget;
 
 /// Element lifecycle states
@@ -25,11 +25,11 @@ pub enum ElementLifecycle {
 ///
 /// This trait provides the minimal interface needed for heterogeneous element storage
 /// in the ElementTree. All element types (ComponentElement, StatefulElement,
-/// RenderObjectElement) implement this trait.
+/// RenderElement) implement this trait.
 ///
 /// # Design Pattern: Two-Trait Approach
 ///
-/// Similar to Widget/DynWidget and RenderObject/DynRenderObject:
+/// Similar to Widget/DynWidget and Render/DynRender:
 /// - **DynElement** (this trait) - Object-safe for `Box<dyn DynElement>`
 /// - **Element** - Has associated types for zero-cost concrete operations
 pub trait DynElement: fmt::Debug + Send + Sync {
@@ -86,21 +86,21 @@ pub trait DynElement: fmt::Debug + Send + Sync {
     /// (parent_id, child_widget, slot)
     fn rebuild(&mut self, element_id: ElementId) -> Vec<(ElementId, Box<dyn DynWidget>, usize)>;
 
-    // ========== RenderObject Access ==========
+    // ========== Render Access ==========
 
-    /// Get RenderObject if this is a RenderObjectElement
-    fn render_object(&self) -> Option<&dyn DynRenderObject> {
+    /// Get Render if this is a RenderElement
+    fn render_object(&self) -> Option<&dyn DynRender> {
         None
     }
 
-    /// Get mutable RenderObject if this is a RenderObjectElement
-    fn render_object_mut(&mut self) -> Option<&mut dyn DynRenderObject> {
+    /// Get mutable Render if this is a RenderElement
+    fn render_object_mut(&mut self) -> Option<&mut dyn DynRender> {
         None
     }
 
     // ========== RenderState Access ==========
 
-    /// Get raw pointer to RenderState if this is a RenderObjectElement
+    /// Get raw pointer to RenderState if this is a RenderElement
     ///
     /// Returns None for ComponentElement and StatefulElement.
     ///

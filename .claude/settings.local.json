@@ -88,7 +88,11 @@
       "Bash(taskkill:*)",
       "Bash(pkill:*)",
       "Bash(git add:*)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "WebFetch(domain:raphlinus.github.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(rustc:*)",
+      "Read(//c/tmp/**)"
     ],
     "deny": [],
     "ask": []

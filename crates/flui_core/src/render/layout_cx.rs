@@ -141,8 +141,8 @@ impl<'a> LayoutCx<'a, SingleArity> {
     /// Internal: Layout child without cache
     fn layout_child_uncached(&self, child_id: ElementId, constraints: BoxConstraints) -> Size {
         // Safe: ElementTree::layout_render_object uses RefCell for interior mutability
-        // Parent RenderObject is at self.element_id (immutable via self reference)
-        // Child RenderObject is at child_id (borrowed mutably through RefCell)
+        // Parent Render is at self.element_id (immutable via self reference)
+        // Child Render is at child_id (borrowed mutably through RefCell)
         // RefCell provides runtime borrow checking to prevent aliasing
         self.tree
             .layout_render_object(child_id, constraints)
@@ -210,14 +210,14 @@ impl<'a> LayoutCx<'a, MultiArity> {
 mod tests {
     use super::*;
     use crate::render::arity::LeafArity;
-    use crate::{PaintCx, RenderObject};
+    use crate::{PaintCx, Render};
     use flui_engine::{BoxedLayer, ContainerLayer};
 
-    // Test RenderObject for tests
+    // Test Render for tests
     #[derive(Debug)]
     struct TestRender;
 
-    impl RenderObject for TestRender {
+    impl Render for TestRender {
         type Arity = LeafArity;
 
         fn layout(&mut self, _cx: &mut LayoutCx<Self::Arity>) -> Size {

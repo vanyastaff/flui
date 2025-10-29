@@ -1,4 +1,4 @@
-//! RenderState - per-RenderObject state storage
+//! RenderState - per-Render state storage
 //!
 //! Migrated from flui_core_old with performance optimizations
 
@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use super::render_flags::{AtomicRenderFlags, RenderFlags};
 
-/// State for a RenderObject
+/// State for a Render
 ///
 /// **Performance Critical Design**:
 /// - Atomic flags for lock-free checks (10x faster than RwLock)
@@ -26,7 +26,7 @@ use super::render_flags::{AtomicRenderFlags, RenderFlags};
 /// }
 /// ```
 ///
-/// Total: ~60 bytes per RenderObject (acceptable overhead)
+/// Total: ~60 bytes per Render (acceptable overhead)
 #[derive(Debug)]
 pub struct RenderState {
     /// Atomic flags for lock-free state checks

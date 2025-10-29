@@ -305,7 +305,7 @@ pub trait DynWidget: fmt::Debug + Any + Send + Sync + 'static {
     /// This method is called by ComponentElement and StatefulElement to build
     /// the child widget tree. It's only implemented by widgets that have a build phase.
     ///
-    /// RenderObjectWidgets return `None` since they don't build - they create render objects.
+    /// RenderWidgets return `None` since they don't build - they create render objects.
     ///
     /// # Arguments
     ///
@@ -314,7 +314,7 @@ pub trait DynWidget: fmt::Debug + Any + Send + Sync + 'static {
     /// # Returns
     ///
     /// - `Some(BoxedWidget)` for StatelessWidget/StatefulWidget with the built child tree
-    /// - `None` for RenderObjectWidget (not applicable)
+    /// - `None` for RenderWidget (not applicable)
     ///
     /// # Default Implementation
     ///

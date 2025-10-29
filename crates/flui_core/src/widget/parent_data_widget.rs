@@ -33,7 +33,7 @@
 //!   ↓
 //! Flexible (ParentDataWidget)
 //!   ↓ attaches FlexParentData
-//! Container (RenderObject with parent_data: FlexParentData)
+//! Container (Render with parent_data: FlexParentData)
 //! ```
 
 use crate::widget::BoxedWidget;
@@ -43,17 +43,17 @@ use std::fmt;
 /// ParentDataWidget - widget that attaches parent data to descendants
 ///
 /// ParentDataWidget is a special widget that doesn't render anything itself.
-/// Instead, it attaches metadata (ParentData) to its child's RenderObject,
-/// which the parent RenderObject uses during layout.
+/// Instead, it attaches metadata (ParentData) to its child's Render,
+/// which the parent Render uses during layout.
 ///
 /// # How It Works
 ///
 /// ```text
 /// 1. ParentDataWidget wraps a child
-/// 2. Child creates a RenderObject
+/// 2. Child creates a Render
 /// 3. ParentDataWidget.apply_parent_data() is called
-/// 4. Metadata attached to child's RenderObject
-/// 5. Parent RenderObject reads this metadata during layout
+/// 4. Metadata attached to child's Render
+/// 5. Parent Render reads this metadata during layout
 /// ```
 ///
 /// # Common Use Cases
@@ -119,7 +119,7 @@ use std::fmt;
 /// impl ParentDataWidget for Flexible {
 ///     type ParentDataType = FlexParentData;
 ///
-///     fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+///     fn apply_parent_data(&self, render_object: &mut dyn Render) {
 ///         if let Some(parent_data) = render_object
 ///             .parent_data_mut()
 ///             .and_then(|d| d.downcast_mut::<FlexParentData>())
@@ -158,7 +158,7 @@ use std::fmt;
 /// impl ParentDataWidget for Positioned {
 ///     type ParentDataType = StackParentData;
 ///
-///     fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+///     fn apply_parent_data(&self, render_object: &mut dyn Render) {
 ///         if let Some(parent_data) = render_object
 ///             .parent_data_mut()
 ///             .and_then(|d| d.downcast_mut::<StackParentData>())
@@ -198,7 +198,7 @@ use std::fmt;
 /// impl ParentDataWidget for TableCell {
 ///     type ParentDataType = TableCellParentData;
 ///
-///     fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+///     fn apply_parent_data(&self, render_object: &mut dyn Render) {
 ///         if let Some(parent_data) = render_object
 ///             .parent_data_mut()
 ///             .and_then(|d| d.downcast_mut::<TableCellParentData>())
@@ -226,7 +226,7 @@ pub trait ParentDataWidget: Clone + fmt::Debug + Send + Sync + 'static {
     /// The type of parent data this widget applies
     ///
     /// This ensures type safety - the parent data type must match
-    /// what the parent RenderObject expects.
+    /// what the parent Render expects.
     type ParentDataType: Any;
 
     /// Apply parent data to the render object
@@ -249,7 +249,7 @@ pub trait ParentDataWidget: Clone + fmt::Debug + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+    /// fn apply_parent_data(&self, render_object: &mut dyn Render) {
     ///     if let Some(parent_data) = render_object
     ///         .parent_data_mut()
     ///         .and_then(|d| d.downcast_mut::<FlexParentData>())
@@ -259,13 +259,13 @@ pub trait ParentDataWidget: Clone + fmt::Debug + Send + Sync + 'static {
     ///     }
     /// }
     /// ```
-    // TODO: RenderObject is not dyn-compatible because it has Sized bound
+    // TODO: Render is not dyn-compatible because it has Sized bound
     // Need to either:
-    // 1. Create DynRenderObject trait without Sized
+    // 1. Create DynRender trait without Sized
     // 2. Use Box<dyn Any> and downcast
     // 3. Rethink ParentData architecture
     fn apply_parent_data(&self, _render_object: &mut ()) {
-        todo!("apply_parent_data needs DynRenderObject trait")
+        todo!("apply_parent_data needs DynRender trait")
     }
 
     /// Get the child widget
@@ -276,7 +276,7 @@ pub trait ParentDataWidget: Clone + fmt::Debug + Send + Sync + 'static {
     /// Check if parent data is valid for given parent type
     ///
     /// Override this if you want to validate that the parent
-    /// RenderObject is the correct type.
+    /// Render is the correct type.
     ///
     /// # Examples
     ///
@@ -385,16 +385,16 @@ mod tests {
         }
     }
 
-    // Mock RenderObject for testing
-    struct MockRenderObject {
+    // Mock Render for testing
+    struct MockRender {
         parent_data: Option<Box<dyn ParentData>>,
     }
 
-    impl RenderObject for MockRenderObject {
+    impl Render for MockRender {
         // Minimal implementation for testing
     }
 
-    impl MockRenderObject {
+    impl MockRender {
         fn parent_data_mut(&mut self) -> Option<&mut dyn ParentData> {
             self.parent_data.as_mut().map(|b| &mut **b)
         }
@@ -411,7 +411,7 @@ mod tests {
         impl ParentDataWidget for TestWidget {
             type ParentDataType = MockParentData;
 
-            fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
+            fn apply_parent_data(&self, render_object: &mut dyn Render) {
                 // In real code, would downcast and apply data
             }
 
@@ -446,10 +446,10 @@ mod tests {
         impl ParentDataWidget for TestWidget {
             type ParentDataType = MockParentData;
 
-            fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
-                // Downcast to MockRenderObject for testing
+            fn apply_parent_data(&self, render_object: &mut dyn Render) {
+                // Downcast to MockRender for testing
                 if let Some(mock) =
-                    (render_object as &mut dyn Any).downcast_mut::<MockRenderObject>()
+                    (render_object as &mut dyn Any).downcast_mut::<MockRender>()
                 {
                     if let Some(parent_data) = mock
                         .parent_data_mut()
@@ -470,7 +470,7 @@ mod tests {
             child: Box::new(MockWidget),
         };
 
-        let mut render_object = MockRenderObject {
+        let mut render_object = MockRender {
             parent_data: Some(Box::new(MockParentData::default())),
         };
 
@@ -498,7 +498,7 @@ mod tests {
         impl ParentDataWidget for NonCloneWidget {
             type ParentDataType = MockParentData;
 
-            fn apply_parent_data(&self, _render_object: &mut dyn RenderObject) {
+            fn apply_parent_data(&self, _render_object: &mut dyn Render) {
                 // Apply logic
             }
 

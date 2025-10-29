@@ -9,7 +9,7 @@
   - Zero runtime overhead
   - Type-safe at compile time
 
-- [x] **Typed RenderObject Trait**
+- [x] **Typed Render Trait**
   - Associated `Arity` type
   - `layout()` returns `Size`
   - `paint()` returns `BoxedLayer` (flui_engine integration)
@@ -29,7 +29,7 @@
 
 - [x] **Widget System**
   - Base `Widget` trait
-  - `RenderObjectWidget` with associated `Render` type
+  - `RenderWidget` with associated `Render` type
   - Type-safe widget → render link
 
 - [x] **Element System**
@@ -196,7 +196,7 @@ Add pipeline owner, frame scheduling, dirty tracking.
 
 **Effort**: 4-5 hours
 
-### Step 5: Example RenderObjects
+### Step 5: Example Renders
 
 Implement:
 - `RenderParagraph` (Leaf)
@@ -247,7 +247,7 @@ Full example showing:
 1. **Performance**: Atomic flags, slab allocation, advanced caching
 2. **Completeness**: Full ElementTree, RenderState, Pipeline
 3. **Features**: ParentData, hit testing, profiling
-4. **Examples**: Real RenderObjects demonstrating patterns
+4. **Examples**: Real Renders demonstrating patterns
 
 ### Architecture Decision
 

@@ -1,7 +1,7 @@
 //! Integration test for layout + paint pipeline
 //!
 //! Tests that the full pipeline works end-to-end:
-//! - Widget → Element → RenderObject
+//! - Widget → Element → Render
 //! - Layout (recursive)
 //! - Paint (recursive)
 //! - Layer composition
@@ -14,7 +14,7 @@ use flui_engine::ContainerLayer;
 // These traits provide arity-specific methods for LayoutCx and PaintCx.
 use flui_core::{MultiChild, MultiChildPaint, SingleChild, SingleChildPaint};
 
-// ========== Test RenderObjects ==========
+// ========== Test Renders ==========
 
 /// Simple colored box render object (Leaf)
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ impl ColorBox {
     }
 }
 
-impl RenderObject for ColorBox {
+impl Render for ColorBox {
     type Arity = LeafArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -61,7 +61,7 @@ impl SimpleContainer {
     }
 }
 
-impl RenderObject for SimpleContainer {
+impl Render for SimpleContainer {
     type Arity = SingleArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -113,7 +113,7 @@ impl RenderObject for SimpleContainer {
 #[derive(Debug, Clone)]
 struct SimpleColumn;
 
-impl RenderObject for SimpleColumn {
+impl Render for SimpleColumn {
     type Arity = MultiArity;
 
     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -162,7 +162,7 @@ impl RenderObject for SimpleColumn {
     }
 }
 
-// NOTE: Widget tests skipped - we're testing RenderObject directly
+// NOTE: Widget tests skipped - we're testing Render directly
 
 // ========== Tests ==========
 
@@ -222,11 +222,11 @@ fn test_multi_child_layout() {
 #[test]
 fn test_render_object_impls_exist() {
     // Just verify that our types implement the right traits
-    fn assert_render_object<T: RenderObject>() {}
+    fn assert_render_object<T: Render>() {}
 
     assert_render_object::<ColorBox>();
     assert_render_object::<SimpleContainer>();
     assert_render_object::<SimpleColumn>();
 
-    println!("✅ All RenderObject impls compile");
+    println!("✅ All Render impls compile");
 }

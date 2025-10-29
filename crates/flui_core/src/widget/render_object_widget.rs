@@ -1,6 +1,6 @@
-//! RenderObjectWidget - widgets that create render objects
+//! RenderWidget - widgets that create render objects
 //!
-//! RenderObjectWidget creates widgets that directly participate in
+//! RenderWidget creates widgets that directly participate in
 //! layout and painting. These are the "primitives" of the UI system.
 //!
 //! # When to Use
@@ -13,9 +13,9 @@
 //! # Architecture
 //!
 //! ```text
-//! RenderObjectWidget (immutable config)
+//! RenderWidget (immutable config)
 //!   ↓ creates
-//! RenderObject (mutable, performs layout/paint)
+//! Render (mutable, performs layout/paint)
 //!   ↓
 //! Constraints → Layout → Size → Paint
 //! ```
@@ -23,7 +23,7 @@
 //! # Examples
 //!
 //! ```
-//! use flui_core::{RenderObjectWidget, RenderObject};
+//! use flui_core::{RenderWidget, Render};
 //!
 //! #[derive(Debug)]
 //! struct Container {
@@ -32,10 +32,10 @@
 //!     color: Color,
 //! }
 //!
-//! impl RenderObjectWidget for Container {
-//!     type RenderObject = RenderContainer;
+//! impl RenderWidget for Container {
+//!     type Render = RenderContainer;
 //!
-//!     fn create_render_object(&self) -> Self::RenderObject {
+//!     fn create_render_object(&self) -> Self::Render {
 //!         RenderContainer {
 //!             width: self.width,
 //!             height: self.height,
@@ -43,7 +43,7 @@
 //!         }
 //!     }
 //!
-//!     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+//!     fn update_render_object(&self, render_object: &mut Self::Render) {
 //!         render_object.width = self.width;
 //!         render_object.height = self.height;
 //!         render_object.color = self.color;
@@ -53,18 +53,18 @@
 //! // Widget and DynWidget are automatic!
 //! ```
 
-use crate::RenderObject;
+use crate::Render;
 use std::fmt;
 
-/// RenderObjectWidget - widget that creates a render object
+/// RenderWidget - widget that creates a render object
 ///
 /// This is the trait for widgets that directly participate in layout
-/// and painting by creating RenderObject instances.
+/// and painting by creating Render instances.
 ///
 /// # Separation of Concerns
 ///
 /// - **Widget**: Immutable configuration (what to render)
-/// - **RenderObject**: Mutable state (how to render)
+/// - **Render**: Mutable state (how to render)
 ///
 /// ```text
 /// Container{width:100} → RenderContainer{width:100, size:Size{100,50}}
@@ -74,15 +74,15 @@ use std::fmt;
 ///                        Draws to canvas
 /// ```
 ///
-/// # Types of RenderObjectWidgets
+/// # Types of RenderWidgets
 ///
 /// ## Single Child
 ///
 /// Widgets with exactly one child (e.g., Padding, Center, SizedBox)
 ///
 /// ```rust
-/// impl RenderObjectWidget for Padding {
-///     type RenderObject = RenderPadding;
+/// impl RenderWidget for Padding {
+///     type Render = RenderPadding;
 ///     type Arity = SingleArity;  // One child
 /// }
 /// ```
@@ -92,8 +92,8 @@ use std::fmt;
 /// Widgets with multiple children (e.g., Row, Column, Stack)
 ///
 /// ```rust
-/// impl RenderObjectWidget for Column {
-///     type RenderObject = RenderColumn;
+/// impl RenderWidget for Column {
+///     type Render = RenderColumn;
 ///     type Arity = MultiArity;  // Multiple children
 /// }
 /// ```
@@ -103,8 +103,8 @@ use std::fmt;
 /// Widgets with no children (e.g., Text, Image)
 ///
 /// ```rust
-/// impl RenderObjectWidget for Text {
-///     type RenderObject = RenderParagraph;
+/// impl RenderWidget for Text {
+///     type Render = RenderParagraph;
 ///     // Arity = LeafArity (default)
 /// }
 /// ```
@@ -114,21 +114,21 @@ use std::fmt;
 /// ```text
 /// 1. Widget created: Container { width: 100 }
 /// 2. create_render_object() → RenderContainer
-/// 3. RenderObject attached to tree
-/// 4. Layout pass → RenderObject.layout()
-/// 5. Paint pass → RenderObject.paint()
+/// 3. Render attached to tree
+/// 4. Layout pass → Render.layout()
+/// 5. Paint pass → Render.paint()
 /// 6. Widget updated: Container { width: 200 }
 /// 7. update_render_object() → Updates existing RenderContainer
 /// 8. Layout + Paint again
 /// ...
-/// N. Widget removed → RenderObject detached
+/// N. Widget removed → Render detached
 /// ```
 ///
 /// # Performance
 ///
-/// - **RenderObject persists** - Not recreated on rebuild
+/// - **Render persists** - Not recreated on rebuild
 /// - **Update is fast** - Only changed properties updated
-/// - **Layout caching** - RenderObject caches layout results
+/// - **Layout caching** - Render caches layout results
 /// - **Repaint regions** - Only dirty regions repainted
 ///
 /// # Examples
@@ -136,7 +136,7 @@ use std::fmt;
 /// ## Single Child Widget (Padding)
 ///
 /// ```
-/// use flui_core::{RenderObjectWidget, SingleArity};
+/// use flui_core::{RenderWidget, SingleArity};
 ///
 /// #[derive(Debug)]
 /// struct Padding {
@@ -144,17 +144,17 @@ use std::fmt;
 ///     child: BoxedWidget,
 /// }
 ///
-/// impl RenderObjectWidget for Padding {
-///     type RenderObject = RenderPadding;
+/// impl RenderWidget for Padding {
+///     type Render = RenderPadding;
 ///     type Arity = SingleArity;
 ///
-///     fn create_render_object(&self) -> Self::RenderObject {
+///     fn create_render_object(&self) -> Self::Render {
 ///         RenderPadding {
 ///             padding: self.padding,
 ///         }
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+///     fn update_render_object(&self, render_object: &mut Self::Render) {
 ///         render_object.padding = self.padding;
 ///         if render_object.padding != self.padding {
 ///             render_object.mark_needs_layout();
@@ -166,7 +166,7 @@ use std::fmt;
 ///     padding: EdgeInsets,
 /// }
 ///
-/// impl RenderObject for RenderPadding {
+/// impl Render for RenderPadding {
 ///     fn layout(&mut self, constraints: BoxConstraints) -> Size {
 ///         // Add padding to child constraints
 ///         let child_constraints = constraints.deflate(self.padding);
@@ -193,11 +193,11 @@ use std::fmt;
 ///     cross_axis_alignment: CrossAxisAlignment,
 /// }
 ///
-/// impl RenderObjectWidget for Row {
-///     type RenderObject = RenderFlex;
+/// impl RenderWidget for Row {
+///     type Render = RenderFlex;
 ///     type Arity = MultiArity;
 ///
-///     fn create_render_object(&self) -> Self::RenderObject {
+///     fn create_render_object(&self) -> Self::Render {
 ///         RenderFlex {
 ///             direction: Axis::Horizontal,
 ///             main_axis_alignment: self.main_axis_alignment,
@@ -205,7 +205,7 @@ use std::fmt;
 ///         }
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+///     fn update_render_object(&self, render_object: &mut Self::Render) {
 ///         let mut needs_layout = false;
 ///
 ///         if render_object.main_axis_alignment != self.main_axis_alignment {
@@ -234,15 +234,15 @@ use std::fmt;
 ///     style: TextStyle,
 /// }
 ///
-/// impl RenderObjectWidget for Text {
-///     type RenderObject = RenderParagraph;
+/// impl RenderWidget for Text {
+///     type Render = RenderParagraph;
 ///     // Arity = LeafArity (default)
 ///
-///     fn create_render_object(&self) -> Self::RenderObject {
+///     fn create_render_object(&self) -> Self::Render {
 ///         RenderParagraph::new(&self.content, &self.style)
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+///     fn update_render_object(&self, render_object: &mut Self::Render) {
 ///         let mut needs_layout = false;
 ///
 ///         if render_object.text != self.content {
@@ -270,16 +270,16 @@ use std::fmt;
 ///     painter: Arc<dyn CustomPainter>,
 /// }
 ///
-/// impl RenderObjectWidget for CustomPaint {
-///     type RenderObject = RenderCustomPaint;
+/// impl RenderWidget for CustomPaint {
+///     type Render = RenderCustomPaint;
 ///
-///     fn create_render_object(&self) -> Self::RenderObject {
+///     fn create_render_object(&self) -> Self::Render {
 ///         RenderCustomPaint {
 ///             painter: self.painter.clone(),
 ///         }
 ///     }
 ///
-///     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+///     fn update_render_object(&self, render_object: &mut Self::Render) {
 ///         if !Arc::ptr_eq(&render_object.painter, &self.painter) {
 ///             render_object.painter = self.painter.clone();
 ///             render_object.mark_needs_paint();
@@ -291,7 +291,7 @@ use std::fmt;
 ///     painter: Arc<dyn CustomPainter>,
 /// }
 ///
-/// impl RenderObject for RenderCustomPaint {
+/// impl Render for RenderCustomPaint {
 ///     fn layout(&mut self, constraints: BoxConstraints) -> Size {
 ///         // Use maximum available space
 ///         constraints.biggest()
@@ -302,15 +302,15 @@ use std::fmt;
 ///     }
 /// }
 /// ```
-pub trait RenderObjectWidget: fmt::Debug + Send + Sync + 'static {
+pub trait RenderWidget: fmt::Debug + Send + Sync + 'static {
     /// The type of render object this widget creates
     ///
     /// This is the mutable object that performs layout and painting.
-    type RenderObject: RenderObject;
+    type Render: Render;
 
     /// The arity (number of children) for this widget
     ///
-    /// Must match the arity of the RenderObject.
+    /// Must match the arity of the Render.
     type Arity: crate::render::arity::Arity;
 
     /// Create a new render object
@@ -321,7 +321,7 @@ pub trait RenderObjectWidget: fmt::Debug + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// fn create_render_object(&self) -> Self::RenderObject {
+    /// fn create_render_object(&self) -> Self::Render {
     ///     RenderContainer {
     ///         width: self.width,
     ///         height: self.height,
@@ -329,7 +329,7 @@ pub trait RenderObjectWidget: fmt::Debug + Send + Sync + 'static {
     ///     }
     /// }
     /// ```
-    fn create_render_object(&self) -> Self::RenderObject;
+    fn create_render_object(&self) -> Self::Render;
 
     /// Update an existing render object
     ///
@@ -347,7 +347,7 @@ pub trait RenderObjectWidget: fmt::Debug + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    /// fn update_render_object(&self, render_object: &mut Self::Render) {
     ///     let mut needs_layout = false;
     ///     let mut needs_paint = false;
     ///
@@ -368,7 +368,7 @@ pub trait RenderObjectWidget: fmt::Debug + Send + Sync + 'static {
     ///     }
     /// }
     /// ```
-    fn update_render_object(&self, render_object: &mut Self::RenderObject);
+    fn update_render_object(&self, render_object: &mut Self::Render);
 
     /// Called when render object is about to be removed
     ///
@@ -378,27 +378,27 @@ pub trait RenderObjectWidget: fmt::Debug + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// fn did_unmount_render_object(&self, render_object: &mut Self::RenderObject) {
+    /// fn did_unmount_render_object(&self, render_object: &mut Self::Render) {
     ///     render_object.dispose_resources();
     /// }
     /// ```
-    fn did_unmount_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn did_unmount_render_object(&self, _render_object: &mut Self::Render) {
         // Default: do nothing
     }
 }
 
-/// Automatic Widget implementation for RenderObjectWidget
+/// Automatic Widget implementation for RenderWidget
 ///
-/// All RenderObjectWidget types automatically get Widget trait,
+/// All RenderWidget types automatically get Widget trait,
 /// which in turn automatically get DynWidget via blanket impl.
 ///
 /// # Element Type
 ///
-/// RenderObjectWidget uses `RenderObjectElement<Self>` which:
-/// - Creates and stores the RenderObject
-/// - Attaches RenderObject to render tree
-/// - Updates RenderObject when widget changes
-/// - Manages RenderObject lifecycle
+/// RenderWidget uses `RenderElement<Self>` which:
+/// - Creates and stores the Render
+/// - Attaches Render to render tree
+/// - Updates Render when widget changes
+/// - Manages Render lifecycle
 ///
 /// # State Type
 ///
@@ -409,38 +409,38 @@ pub trait RenderObjectWidget: fmt::Debug + Send + Sync + 'static {
 ///
 /// Uses default `LeafArity` unless overridden.
 /// Override for containers:
-// Widget impl is now generated by #[derive(RenderObjectWidget)] macro
+// Widget impl is now generated by #[derive(RenderWidget)] macro
 // This avoids blanket impl conflicts on stable Rust
 //
-// Use: #[derive(RenderObjectWidget)] on your widget type
+// Use: #[derive(RenderWidget)] on your widget type
 
 // DynWidget comes automatically via blanket impl in mod.rs!
 
 /// Helper trait to get child widget for single-child render widgets
 ///
-/// Implement this on your RenderObjectWidget to provide the child widget.
-pub trait SingleChildRenderObjectWidget: RenderObjectWidget {
+/// Implement this on your RenderWidget to provide the child widget.
+pub trait SingleChildRenderWidget: RenderWidget {
     /// Get the child widget
     fn child(&self) -> &crate::BoxedWidget;
 }
 
 /// Helper trait to get children for multi-child render widgets
 ///
-/// Implement this on your RenderObjectWidget to provide the children.
-pub trait MultiChildRenderObjectWidget: RenderObjectWidget {
+/// Implement this on your RenderWidget to provide the children.
+pub trait MultiChildRenderWidget: RenderWidget {
     /// Get the children widgets
     fn children(&self) -> &[crate::BoxedWidget];
 }
 
-// Note: Blanket impl for RenderObjectWidget -> Widget was removed
+// Note: Blanket impl for RenderWidget -> Widget was removed
 // because it conflicts with StatelessWidget -> Widget blanket impl.
 //
-// Instead, each RenderObjectWidget must manually implement Widget trait:
+// Instead, each RenderWidget must manually implement Widget trait:
 //
 // impl Widget for MyRenderWidget {}
 //
 // Widget trait has default implementations for all methods, so the impl is trivial.
-// Alternatively, use #[derive(RenderObjectWidget)] macro from flui_derive.
+// Alternatively, use #[derive(RenderWidget)] macro from flui_derive.
 
 // Tests disabled - need to be updated for new API
 #[cfg(all(test, disabled))]
@@ -448,12 +448,12 @@ mod tests {
     use super::*;
     use crate::Key;
 
-    // Mock RenderObject for testing
-    struct MockRenderObject {
+    // Mock Render for testing
+    struct MockRender {
         value: i32,
     }
 
-    impl RenderObject for MockRenderObject {
+    impl Render for MockRender {
         // Minimal implementation for testing
     }
 
@@ -464,14 +464,14 @@ mod tests {
             value: i32,
         }
 
-        impl RenderObjectWidget for TestWidget {
-            type RenderObject = MockRenderObject;
+        impl RenderWidget for TestWidget {
+            type Render = MockRender;
 
-            fn create_render_object(&self) -> Self::RenderObject {
-                MockRenderObject { value: self.value }
+            fn create_render_object(&self) -> Self::Render {
+                MockRender { value: self.value }
             }
 
-            fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+            fn update_render_object(&self, render_object: &mut Self::Render) {
                 render_object.value = self.value;
             }
         }
@@ -496,14 +496,14 @@ mod tests {
             value: i32,
         }
 
-        impl RenderObjectWidget for TestWidget {
-            type RenderObject = MockRenderObject;
+        impl RenderWidget for TestWidget {
+            type Render = MockRender;
 
-            fn create_render_object(&self) -> Self::RenderObject {
-                MockRenderObject { value: self.value }
+            fn create_render_object(&self) -> Self::Render {
+                MockRender { value: self.value }
             }
 
-            fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+            fn update_render_object(&self, render_object: &mut Self::Render) {
                 render_object.value = self.value;
             }
         }
@@ -521,22 +521,22 @@ mod tests {
 
     #[test]
     fn test_render_object_widget_without_clone() {
-        // RenderObjectWidget doesn't require Clone!
+        // RenderWidget doesn't require Clone!
         #[derive(Debug)]
         struct NonCloneWidget {
             data: Vec<u8>,
         }
 
-        impl RenderObjectWidget for NonCloneWidget {
-            type RenderObject = MockRenderObject;
+        impl RenderWidget for NonCloneWidget {
+            type Render = MockRender;
 
-            fn create_render_object(&self) -> Self::RenderObject {
-                MockRenderObject {
+            fn create_render_object(&self) -> Self::Render {
+                MockRender {
                     value: self.data.len() as i32,
                 }
             }
 
-            fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+            fn update_render_object(&self, render_object: &mut Self::Render) {
                 render_object.value = self.data.len() as i32;
             }
         }
@@ -557,23 +557,23 @@ mod tests {
             child: crate::BoxedWidget,
         }
 
-        impl RenderObjectWidget for PaddingWidget {
-            type RenderObject = MockRenderObject;
+        impl RenderWidget for PaddingWidget {
+            type Render = MockRender;
 
-            fn create_render_object(&self) -> Self::RenderObject {
-                MockRenderObject { value: 0 }
+            fn create_render_object(&self) -> Self::Render {
+                MockRender { value: 0 }
             }
 
-            fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+            fn update_render_object(&self, _render_object: &mut Self::Render) {
                 // Update logic
             }
         }
 
         impl Widget for PaddingWidget {
-            // Element type and Arity determined by RenderObjectWidget impl
+            // Element type and Arity determined by RenderWidget impl
         }
 
-        impl SingleChildRenderObjectWidget for PaddingWidget {
+        impl SingleChildRenderWidget for PaddingWidget {
             fn child(&self) -> &crate::BoxedWidget {
                 &self.child
             }

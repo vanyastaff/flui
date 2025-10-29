@@ -220,11 +220,11 @@ impl BuildContext {
         }
     }
 
-    /// Find the nearest ancestor RenderObject element
+    /// Find the nearest ancestor Render element
     ///
     /// Searches self first, then ancestors
     ///
-    /// Returns the ElementId of the RenderObject if found
+    /// Returns the ElementId of the Render if found
     pub fn find_render_object(&self) -> Option<ElementId> {
         let tree = self.tree.read();
 
@@ -282,7 +282,7 @@ impl BuildContext {
 
     /// Get the size of this element (after layout)
     ///
-    /// Returns `None` if element doesn't have a RenderObject or hasn't been laid out yet
+    /// Returns `None` if element doesn't have a Render or hasn't been laid out yet
     pub fn size(&self) -> Option<flui_types::Size> {
         // TODO: Implement when Element enum has render_object() API
         // For now, return None
@@ -294,8 +294,8 @@ impl BuildContext {
 mod tests {
     use super::*;
     use crate::element::{InheritedElement, RenderElement};
-    use crate::widget::{DynWidget, RenderObjectWidget, Widget};
-    use crate::{LayoutCx, LeafArity, PaintCx, RenderObject};
+    use crate::widget::{DynWidget, RenderWidget, Widget};
+    use crate::{LayoutCx, LeafArity, PaintCx, Render};
     use flui_engine::{BoxedLayer, ContainerLayer};
     use flui_types::Size;
     use parking_lot::RwLock;
@@ -324,21 +324,21 @@ mod tests {
 
     impl Widget for DummyWidget {}
 
-    impl RenderObjectWidget for DummyWidget {
-        type RenderObject = DummyRender;
+    impl RenderWidget for DummyWidget {
+        type Render = DummyRender;
         type Arity = LeafArity;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(&self) -> Self::Render {
             DummyRender
         }
 
-        fn update_render_object(&self, _render: &mut Self::RenderObject) {}
+        fn update_render_object(&self, _render: &mut Self::Render) {}
     }
 
     #[derive(Debug)]
     struct DummyRender;
 
-    impl RenderObject for DummyRender {
+    impl Render for DummyRender {
         type Arity = LeafArity;
 
         fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
@@ -370,7 +370,7 @@ mod tests {
             tree_guard.insert(crate::element::Element::Inherited(inherited_elem))
         };
 
-        // Insert child RenderObjectElement
+        // Insert child RenderElement
         let widget: crate::BoxedWidget = Box::new(DummyWidget);
         let child_elem = crate::element::ComponentElement::new(widget);
         let child_id = {
