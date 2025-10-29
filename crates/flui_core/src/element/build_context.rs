@@ -29,6 +29,7 @@ use std::sync::Arc;
 ///     }
 /// }
 /// ```
+#[derive(Debug)]
 pub struct BuildContext {
     /// Shared reference to the element tree (with interior mutability for dependency tracking)
     tree: Arc<RwLock<ElementTree>>,
@@ -228,7 +229,7 @@ impl BuildContext {
         let tree = self.tree.read();
 
         // Check self first
-        if let Some(element) = tree.get(self.element_id) {
+        if let Some(_element) = tree.get(self.element_id) {
             // Check if this element has a render object
             // This depends on element type - RenderElements have render objects
             // For now, we return self.element_id if it's a render element

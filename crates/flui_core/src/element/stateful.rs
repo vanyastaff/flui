@@ -144,6 +144,7 @@ pub struct StatefulElement {
     child: Option<ElementId>,
 
     /// Whether init_state has been called
+    #[allow(dead_code)]
     initialized: bool,
 }
 
@@ -206,6 +207,7 @@ impl StatefulElement {
     }
 
     /// Set the child element ID after it's been mounted
+    #[allow(dead_code)]
     pub(crate) fn set_child(&mut self, child_id: ElementId) {
         self.child = Some(child_id);
     }

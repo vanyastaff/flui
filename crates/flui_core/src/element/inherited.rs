@@ -103,6 +103,7 @@ impl InheritedElement {
     }
 
     /// Set child element ID
+    #[allow(dead_code)]
     pub(crate) fn set_child(&mut self, child_id: ElementId) {
         self.child_id = Some(child_id);
     }

@@ -150,6 +150,7 @@ impl Key {
 
     /// Get the inner NonZeroU64
     #[inline]
+    #[allow(dead_code)]
     pub(crate) const fn inner(&self) -> NonZeroU64 {
         self.0
     }

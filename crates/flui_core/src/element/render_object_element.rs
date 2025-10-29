@@ -218,18 +218,21 @@ impl RenderElement {
     }
 
     /// Set children (enforces arity constraints at runtime)
+    #[allow(dead_code)]
     pub(crate) fn set_children(&mut self, children: Vec<ElementId>) {
         // FIXME: Enforce arity constraints via RenderNode::arity() method
         self.children = children;
     }
 
     /// Add a child (for MultiArity)
+    #[allow(dead_code)]
     pub(crate) fn add_child(&mut self, child_id: ElementId) {
         // FIXME: Add arity check via RenderNode::arity() method
         self.children.push(child_id);
     }
 
     /// Remove a child by ID
+    #[allow(dead_code)]
     pub(crate) fn remove_child(&mut self, child_id: ElementId) {
         self.children.retain(|&id| id != child_id);
     }

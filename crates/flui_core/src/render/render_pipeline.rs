@@ -172,7 +172,9 @@ impl RenderPipeline {
     {
         // Create a dummy BuildContext for root widget
         // FIXME: BuildContext needs proper constructor - using unsafe zeroed for now
+        // This is temporary test code and will be replaced with proper initialization
         use crate::element::BuildContext;
+        #[allow(invalid_value)]
         let ctx = unsafe { std::mem::zeroed::<BuildContext>() };
 
         let render_boxed = widget.create_render_object(&ctx);

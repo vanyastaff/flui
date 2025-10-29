@@ -94,6 +94,7 @@ impl ParentDataElement {
     /// Set the child element ID after it's been mounted
     ///
     /// This is called by ElementTree after mounting the child widget.
+    #[allow(dead_code)]
     pub(crate) fn set_child(&mut self, child_id: ElementId) {
         self.child = Some(child_id);
     }

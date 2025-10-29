@@ -301,6 +301,7 @@ impl ElementTree {
     /// }
     /// ```
     #[inline]
+    #[allow(clippy::needless_lifetimes)]
     pub fn render_state(
         &self,
         element_id: ElementId,
@@ -328,6 +329,7 @@ impl ElementTree {
     /// }
     /// ```
     #[inline]
+    #[allow(clippy::needless_lifetimes)]
     pub fn render_state_mut(
         &self,
         element_id: ElementId,
@@ -632,7 +634,7 @@ impl Default for ElementTree {
 }
 
 // Tests disabled - need to be updated for new Element enum API
-#[cfg(all(test, disabled))]
+#[cfg(all(test, not(feature = "intentionally_disabled")))]
 mod tests {
     use super::*;
     use crate::{Render, RenderWidget, Widget};
