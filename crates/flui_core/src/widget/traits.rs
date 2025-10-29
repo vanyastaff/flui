@@ -19,106 +19,94 @@ use crate::render::RenderNode;
 use super::widget::Widget;
 
 // ============================================================================
-// Auto-Clone Helper Traits
+// Sealed helper traits for auto-implementation
 // ============================================================================
 
-/// Helper trait for auto-implementing clone_boxed on StatelessWidget
-///
-/// This trait is automatically implemented for all `Clone` types.
-/// Users never need to implement this manually.
-trait CloneStatelessWidget: fmt::Debug + Send + Sync + 'static {
-    fn clone_box_stateless(&self) -> Box<dyn StatelessWidget>;
-}
+mod sealed {
+    use super::*;
 
-/// Blanket impl: All Clone StatelessWidgets get clone_boxed for free!
-impl<T> CloneStatelessWidget for T
-where
-    T: StatelessWidget + Clone,
-{
-    fn clone_box_stateless(&self) -> Box<dyn StatelessWidget> {
-        Box::new(self.clone())
+    /// Sealed trait for auto-implementing clone_boxed on StatelessWidget
+    pub trait CloneStatelessWidget: fmt::Debug + Send + Sync + 'static {
+        fn clone_box_stateless(&self) -> Box<dyn StatelessWidget>;
     }
-}
 
-/// Helper trait for auto-implementing clone_boxed on StatefulWidget
-trait CloneStatefulWidget: fmt::Debug + Send + Sync + 'static {
-    fn clone_box_stateful(&self) -> Box<dyn StatefulWidget>;
-}
-
-/// Blanket impl for StatefulWidget
-impl<T> CloneStatefulWidget for T
-where
-    T: StatefulWidget + Clone,
-{
-    fn clone_box_stateful(&self) -> Box<dyn StatefulWidget> {
-        Box::new(self.clone())
+    impl<T> CloneStatelessWidget for T
+    where
+        T: StatelessWidget + Clone,
+    {
+        fn clone_box_stateless(&self) -> Box<dyn StatelessWidget> {
+            Box::new(self.clone())
+        }
     }
-}
 
-/// Helper trait for auto-implementing clone_boxed on InheritedWidget
-trait CloneInheritedWidget: fmt::Debug + Send + Sync + 'static {
-    fn clone_box_inherited(&self) -> Box<dyn InheritedWidget>;
-}
-
-/// Blanket impl for InheritedWidget
-impl<T> CloneInheritedWidget for T
-where
-    T: InheritedWidget + Clone,
-{
-    fn clone_box_inherited(&self) -> Box<dyn InheritedWidget> {
-        Box::new(self.clone())
+    /// Sealed trait for auto-implementing clone_boxed on StatefulWidget
+    pub trait CloneStatefulWidget: fmt::Debug + Send + Sync + 'static {
+        fn clone_box_stateful(&self) -> Box<dyn StatefulWidget>;
     }
-}
 
-/// Helper trait for auto-implementing clone_boxed on RenderWidget
-trait CloneRenderWidget: fmt::Debug + Send + Sync + 'static {
-    fn clone_box_render(&self) -> Box<dyn RenderWidget>;
-}
-
-/// Blanket impl for RenderWidget
-impl<T> CloneRenderWidget for T
-where
-    T: RenderWidget + Clone,
-{
-    fn clone_box_render(&self) -> Box<dyn RenderWidget> {
-        Box::new(self.clone())
+    impl<T> CloneStatefulWidget for T
+    where
+        T: StatefulWidget + Clone,
+    {
+        fn clone_box_stateful(&self) -> Box<dyn StatefulWidget> {
+            Box::new(self.clone())
+        }
     }
-}
 
-/// Helper trait for auto-implementing clone_boxed on ParentDataWidget
-trait CloneParentDataWidget: fmt::Debug + Send + Sync + 'static {
-    fn clone_box_parent_data(&self) -> Box<dyn ParentDataWidget>;
-}
-
-/// Blanket impl for ParentDataWidget
-impl<T> CloneParentDataWidget for T
-where
-    T: ParentDataWidget + Clone,
-{
-    fn clone_box_parent_data(&self) -> Box<dyn ParentDataWidget> {
-        Box::new(self.clone())
+    /// Sealed trait for auto-implementing clone_boxed on InheritedWidget
+    pub trait CloneInheritedWidget: fmt::Debug + Send + Sync + 'static {
+        fn clone_box_inherited(&self) -> Box<dyn InheritedWidget>;
     }
-}
 
-// ============================================================================
-// Auto-AsAny Helper Traits
-// ============================================================================
+    impl<T> CloneInheritedWidget for T
+    where
+        T: InheritedWidget + Clone,
+    {
+        fn clone_box_inherited(&self) -> Box<dyn InheritedWidget> {
+            Box::new(self.clone())
+        }
+    }
 
-/// Helper trait for auto-implementing as_any on all widget types.
-///
-/// This trait is automatically implemented for all 'static types.
-/// Users never need to implement this manually.
-trait AsAnyWidget: fmt::Debug + Send + Sync + 'static {
-    fn as_any_widget(&self) -> &dyn Any;
-}
+    /// Sealed trait for auto-implementing clone_boxed on RenderWidget
+    pub trait CloneRenderWidget: fmt::Debug + Send + Sync + 'static {
+        fn clone_box_render(&self) -> Box<dyn RenderWidget>;
+    }
 
-/// Blanket impl: All 'static types get as_any() for free!
-impl<T> AsAnyWidget for T
-where
-    T: fmt::Debug + Send + Sync + 'static,
-{
-    fn as_any_widget(&self) -> &dyn Any {
-        self
+    impl<T> CloneRenderWidget for T
+    where
+        T: RenderWidget + Clone,
+    {
+        fn clone_box_render(&self) -> Box<dyn RenderWidget> {
+            Box::new(self.clone())
+        }
+    }
+
+    /// Sealed trait for auto-implementing clone_boxed on ParentDataWidget
+    pub trait CloneParentDataWidget: fmt::Debug + Send + Sync + 'static {
+        fn clone_box_parent_data(&self) -> Box<dyn ParentDataWidget>;
+    }
+
+    impl<T> CloneParentDataWidget for T
+    where
+        T: ParentDataWidget + Clone,
+    {
+        fn clone_box_parent_data(&self) -> Box<dyn ParentDataWidget> {
+            Box::new(self.clone())
+        }
+    }
+
+    /// Sealed trait for auto-implementing as_any on all widget types
+    pub trait AsAnyWidget: fmt::Debug + Send + Sync + 'static {
+        fn as_any_widget(&self) -> &dyn Any;
+    }
+
+    impl<T> AsAnyWidget for T
+    where
+        T: fmt::Debug + Send + Sync + 'static,
+    {
+        fn as_any_widget(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
@@ -162,7 +150,7 @@ where
 ///     // clone_boxed() and as_any() are auto-implemented!
 /// }
 /// ```
-pub trait StatelessWidget: CloneStatelessWidget + AsAnyWidget {
+pub trait StatelessWidget: sealed::CloneStatelessWidget + sealed::AsAnyWidget {
     /// Build the widget tree
     ///
     /// This method is called whenever the widget needs to rebuild.
@@ -319,7 +307,7 @@ pub trait StatelessWidget: CloneStatelessWidget + AsAnyWidget {
 ///     }
 /// }
 /// ```
-pub trait StatefulWidget: CloneStatefulWidget + AsAnyWidget {
+pub trait StatefulWidget: sealed::CloneStatefulWidget + sealed::AsAnyWidget {
     /// Create the initial state
     ///
     /// This is called once when the widget is first created.
@@ -525,7 +513,7 @@ pub trait State: fmt::Debug + Send + Sync + 'static {
 ///     }
 /// }
 /// ```
-pub trait InheritedWidget: CloneInheritedWidget + AsAnyWidget {
+pub trait InheritedWidget: sealed::CloneInheritedWidget + sealed::AsAnyWidget {
     /// Get the child widget
     fn child(&self) -> &Widget;
 
@@ -584,7 +572,7 @@ pub trait InheritedWidget: CloneInheritedWidget + AsAnyWidget {
 ///                        ↓
 ///                     paint()
 /// ```
-pub trait RenderWidget: CloneRenderWidget + AsAnyWidget {
+pub trait RenderWidget: sealed::CloneRenderWidget + sealed::AsAnyWidget {
     /// Create a new RenderNode
     ///
     /// This is called once when the widget is first inserted into the tree.
@@ -648,7 +636,7 @@ pub trait RenderWidget: CloneRenderWidget + AsAnyWidget {
 /// - Positioned (in Stack)
 /// - Flexible (in Row/Column)
 /// - TableCell (in Table)
-pub trait ParentDataWidget: CloneParentDataWidget + AsAnyWidget {
+pub trait ParentDataWidget: sealed::CloneParentDataWidget + sealed::AsAnyWidget {
     /// Get the child widget
     fn child(&self) -> &Widget;
 

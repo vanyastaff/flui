@@ -41,30 +41,33 @@ use std::fmt;
 use flui_types::Offset;
 
 // ============================================================================
-// Helper trait for auto as_any() implementation
+// Sealed helper trait for auto as_any() implementation
 // ============================================================================
 
-/// Helper trait that provides as_any() automatically for all ParentData types.
-///
-/// This trait has a blanket implementation for all types that implement the
-/// main trait bounds, allowing automatic downcasting support without manual
-/// implementation.
-trait AsAnyParentData: fmt::Debug + Send + Sync + 'static {
-    fn as_any_parent_data(&self) -> &dyn Any;
-    fn as_any_parent_data_mut(&mut self) -> &mut dyn Any;
-}
+mod sealed {
+    use super::*;
 
-/// Blanket implementation: All 'static types get as_any() for free
-impl<T> AsAnyParentData for T
-where
-    T: fmt::Debug + Send + Sync + 'static,
-{
-    fn as_any_parent_data(&self) -> &dyn Any {
-        self
+    /// Sealed trait to prevent external implementations.
+    ///
+    /// This helper trait provides as_any() automatically for all ParentData types.
+    /// It's sealed to ensure it's only used internally.
+    pub trait AsAnyParentData: fmt::Debug + Send + Sync + 'static {
+        fn as_any_parent_data(&self) -> &dyn Any;
+        fn as_any_parent_data_mut(&mut self) -> &mut dyn Any;
     }
 
-    fn as_any_parent_data_mut(&mut self) -> &mut dyn Any {
-        self
+    /// Blanket implementation: All 'static types get as_any() for free
+    impl<T> AsAnyParentData for T
+    where
+        T: fmt::Debug + Send + Sync + 'static,
+    {
+        fn as_any_parent_data(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_parent_data_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 }
 
@@ -109,7 +112,7 @@ where
 ///     }
 /// }
 /// ```
-pub trait ParentData: AsAnyParentData {
+pub trait ParentData: sealed::AsAnyParentData {
     /// Downcast to &dyn Any for type-safe downcasting
     ///
     /// This method is automatically implemented via the helper trait.

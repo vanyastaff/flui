@@ -10,30 +10,33 @@ use super::{ElementBase, ElementLifecycle};
 use crate::{Widget, ElementId};
 
 // ============================================================================
-// Helper trait for auto as_any() implementation
+// Sealed helper trait for auto as_any() implementation
 // ============================================================================
 
-/// Helper trait that provides as_any() automatically for all DynState types.
-///
-/// This trait has a blanket implementation for all types that implement the
-/// main trait bounds, allowing automatic downcasting support without manual
-/// implementation.
-trait AsAnyState: fmt::Debug + Send + Sync + 'static {
-    fn as_any_state(&self) -> &dyn Any;
-    fn as_any_state_mut(&mut self) -> &mut dyn Any;
-}
+mod sealed {
+    use super::*;
 
-/// Blanket implementation: All 'static types get as_any() for free
-impl<T> AsAnyState for T
-where
-    T: fmt::Debug + Send + Sync + 'static,
-{
-    fn as_any_state(&self) -> &dyn Any {
-        self
+    /// Sealed trait to prevent external implementations.
+    ///
+    /// This helper trait provides as_any() automatically for all DynState types.
+    /// It's sealed to ensure it's only used internally.
+    pub trait AsAnyState: fmt::Debug + Send + Sync + 'static {
+        fn as_any_state(&self) -> &dyn Any;
+        fn as_any_state_mut(&mut self) -> &mut dyn Any;
     }
 
-    fn as_any_state_mut(&mut self) -> &mut dyn Any {
-        self
+    /// Blanket implementation: All 'static types get as_any() for free
+    impl<T> AsAnyState for T
+    where
+        T: fmt::Debug + Send + Sync + 'static,
+    {
+        fn as_any_state(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_state_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 }
 
@@ -50,7 +53,7 @@ where
 ///
 /// The `as_any()` and `as_any_mut()` methods are provided automatically
 /// through a helper trait. You don't need to implement them manually.
-pub trait DynState: AsAnyState {
+pub trait DynState: sealed::AsAnyState {
     /// Build widget tree using current state
     ///
     /// Called when element needs rebuild. The state can access
