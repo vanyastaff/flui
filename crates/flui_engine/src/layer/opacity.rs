@@ -1,6 +1,6 @@
 //! Opacity layer - applies opacity to child layer
 
-use crate::layer::{BoxedLayer, Layer};
+use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
 use flui_types::{Offset, Rect};
 use flui_types::events::{Event, HitTestResult};
@@ -18,8 +18,8 @@ use flui_types::events::{Event, HitTestResult};
 /// Result: Semi-transparent red box
 /// ```
 pub struct OpacityLayer {
-    /// The child layer to apply opacity to
-    child: BoxedLayer,
+    /// Base single-child layer functionality
+    base: SingleChildLayerBase,
 
     /// Opacity value (0.0 = transparent, 1.0 = opaque)
     opacity: f32,
@@ -38,7 +38,7 @@ impl OpacityLayer {
         );
 
         Self {
-            child,
+            base: SingleChildLayerBase::new(child),
             opacity: opacity.clamp(0.0, 1.0),
         }
     }
@@ -54,8 +54,8 @@ impl OpacityLayer {
     }
 
     /// Get the child layer
-    pub fn child(&self) -> &BoxedLayer {
-        &self.child
+    pub fn child(&self) -> Option<&BoxedLayer> {
+        self.base.child()
     }
 }
 
@@ -66,39 +66,46 @@ impl Layer for OpacityLayer {
             return;
         }
 
+        let Some(child) = self.base.child() else {
+            return;
+        };
+
         if self.opacity >= 1.0 {
             // Fully opaque - just paint child directly
-            self.child.paint(painter);
+            child.paint(painter);
             return;
         }
 
         // Apply opacity and paint child
         painter.save();
         painter.set_opacity(self.opacity);
-        self.child.paint(painter);
+        child.paint(painter);
         painter.restore();
     }
 
     fn bounds(&self) -> Rect {
-        self.child.bounds()
+        self.base.child_bounds()
     }
 
     fn is_visible(&self) -> bool {
-        self.opacity > 0.0 && self.child.is_visible()
+        self.opacity > 0.0 && self.base.is_child_visible()
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
         // Opacity doesn't affect hit testing geometry
-        // Just forward to child
+        // Fully transparent layers don't receive hits
         if self.opacity > 0.0 {
-            self.child.hit_test(position, result)
+            self.base.child_hit_test(position, result)
         } else {
-            false // Fully transparent layers don't receive hits
+            false
         }
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        // Forward event to child
-        self.child.handle_event(event)
+        self.base.child_handle_event(event)
+    }
+
+    fn dispose(&mut self) {
+        self.base.dispose_child();
     }
 }

@@ -4,7 +4,7 @@
 //! including brightness, contrast, saturation, hue rotation, grayscale, sepia,
 //! and custom color matrix transforms.
 
-use crate::layer::{BoxedLayer, Layer};
+use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
 use flui_types::painting::effects::{ColorFilter as EffectColorFilter, ColorMatrix};
 use flui_types::{Offset, Rect};
@@ -12,14 +12,11 @@ use flui_types::events::{Event, HitTestResult};
 
 /// A filter layer that applies color transformations
 pub struct FilterLayer {
-    /// Child layer
-    child: Option<BoxedLayer>,
+    /// Base single-child layer functionality
+    base: SingleChildLayerBase,
 
     /// Filters to apply (in order)
     filters: Vec<EffectColorFilter>,
-
-    /// Whether this layer has been disposed
-    disposed: bool,
 }
 
 impl FilterLayer {
@@ -31,9 +28,8 @@ impl FilterLayer {
     #[must_use]
     pub fn new(child: BoxedLayer) -> Self {
         Self {
-            child: Some(child),
+            base: SingleChildLayerBase::new(child),
             filters: Vec::new(),
-            disposed: false,
         }
     }
 
@@ -64,12 +60,12 @@ impl FilterLayer {
 
     /// Get the child layer
     pub fn child(&self) -> Option<&BoxedLayer> {
-        self.child.as_ref()
+        self.base.child()
     }
 
     /// Set the child layer
     pub fn set_child(&mut self, child: BoxedLayer) {
-        self.child = Some(child);
+        self.base.set_child(child);
         self.mark_needs_paint();
     }
 
@@ -141,11 +137,7 @@ impl FilterLayer {
 
 impl Layer for FilterLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        if self.disposed {
-            panic!("Cannot paint disposed FilterLayer");
-        }
-
-        let Some(child) = &self.child else {
+        let Some(child) = self.base.child() else {
             return;
         };
 
@@ -176,44 +168,31 @@ impl Layer for FilterLayer {
     }
 
     fn bounds(&self) -> Rect {
-        self.child.as_ref().map_or(Rect::ZERO, |c| c.bounds())
+        self.base.child_bounds()
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed && self.child.as_ref().is_some_and(|c| c.is_visible())
+        self.base.is_child_visible()
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        if self.disposed {
-            return false;
-        }
-
-        self.child
-            .as_ref()
-            .is_some_and(|c| c.hit_test(position, result))
+        self.base.child_hit_test(position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        if self.disposed {
-            return false;
-        }
-
-        self.child.as_mut().is_some_and(|c| c.handle_event(event))
+        self.base.child_handle_event(event)
     }
 
     fn dispose(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            child.dispose();
-        }
-        self.disposed = true;
+        self.base.dispose_child();
     }
 
     fn is_disposed(&self) -> bool {
-        self.disposed
+        self.base.is_disposed()
     }
 
     fn mark_needs_paint(&mut self) {
-        if let Some(child) = &mut self.child {
+        if let Some(child) = self.base.child_mut() {
             child.mark_needs_paint();
         }
     }

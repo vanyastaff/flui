@@ -83,24 +83,28 @@
 // ============================================================================
 
 // Core infrastructure
+pub mod backdrop_filter;
 pub mod base;
+pub mod base_multi_child;
+pub mod base_single_child;
+pub mod blur;
+pub mod clip;
+pub mod container;
+pub mod filter;
 pub mod handle;
+pub mod offset;
+pub mod opacity;
+pub mod picture;
 pub mod pool;
+pub mod transform;
+
 
 // Basic composition layers
-pub mod container;
-pub mod picture;
-pub mod transform;
-pub mod opacity;
-pub mod offset;
 
 // Clipping layers
-pub mod clip;
 
 // Filter layers (compositor effects)
-pub mod filter;
-pub mod blur;
-pub mod backdrop_filter;
+
 
 // ============================================================================
 // Public API Exports
@@ -133,6 +137,8 @@ pub use flui_types::painting::effects::{BlurMode, BlurQuality, ColorFilter, Colo
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
+
 
 
 

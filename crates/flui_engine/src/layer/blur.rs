@@ -4,7 +4,7 @@
 //! dilate, erode, and color matrix transformations. Supports CSS filter and
 //! backdrop-filter style effects.
 
-use crate::layer::{BoxedLayer, Layer};
+use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
 use flui_types::painting::effects::{BlurMode, BlurQuality, ImageFilter};
 use flui_types::{Offset, Rect};
@@ -42,8 +42,8 @@ use flui_types::events::{Event, HitTestResult};
 ///     ]));
 /// ```
 pub struct BlurLayer {
-    /// Child layer
-    child: Option<BoxedLayer>,
+    /// Base single-child layer functionality
+    base: SingleChildLayerBase,
 
     /// Image filter to apply
     filter: ImageFilter,
@@ -56,12 +56,6 @@ pub struct BlurLayer {
 
     /// Tile mode for edges (true = clamp, false = transparent)
     tile_mode_clamp: bool,
-
-    /// Cached bounds including filter extent
-    cached_bounds: Option<Rect>,
-
-    /// Whether this layer has been disposed
-    disposed: bool,
 }
 
 impl BlurLayer {
@@ -75,13 +69,11 @@ impl BlurLayer {
     #[must_use]
     pub fn new(child: BoxedLayer) -> Self {
         Self {
-            child: Some(child),
+            base: SingleChildLayerBase::new(child),
             filter: ImageFilter::blur(5.0),
             quality: BlurQuality::default(),
             mode: BlurMode::default(),
             tile_mode_clamp: true,
-            cached_bounds: None,
-            disposed: false,
         }
     }
 
@@ -89,7 +81,7 @@ impl BlurLayer {
     #[must_use]
     pub fn with_filter(mut self, filter: ImageFilter) -> Self {
         self.filter = filter;
-        self.cached_bounds = None;
+        self.base.invalidate_cache();
         self
     }
 
@@ -116,20 +108,19 @@ impl BlurLayer {
 
     /// Get the child layer
     pub fn child(&self) -> Option<&BoxedLayer> {
-        self.child.as_ref()
+        self.base.child()
     }
 
     /// Set the child layer
     pub fn set_child(&mut self, child: BoxedLayer) {
-        self.child = Some(child);
-        self.cached_bounds = None;
+        self.base.set_child(child);
         self.mark_needs_paint();
     }
 
     /// Update the filter
     pub fn set_filter(&mut self, filter: ImageFilter) {
         self.filter = filter;
-        self.cached_bounds = None;
+        self.base.invalidate_cache();
         self.mark_needs_paint();
     }
 
@@ -177,7 +168,7 @@ impl BlurLayer {
         // 3. Render result to screen
         //
         // For now, we just render the child normally
-        if let Some(child) = &self.child {
+        if let Some(child) = self.base.child() {
             painter.save();
             child.paint(painter);
             painter.restore();
@@ -187,11 +178,7 @@ impl BlurLayer {
 
 impl Layer for BlurLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        if self.disposed {
-            panic!("Cannot paint disposed BlurLayer");
-        }
-
-        let Some(child) = &self.child else {
+        let Some(child) = self.base.child() else {
             return;
         };
 
@@ -226,11 +213,11 @@ impl Layer for BlurLayer {
     }
 
     fn bounds(&self) -> Rect {
-        if let Some(bounds) = self.cached_bounds {
+        if let Some(bounds) = self.base.cached_bounds() {
             return bounds;
         }
 
-        let child_bounds = self.child.as_ref().map_or(Rect::ZERO, |c| c.bounds());
+        let child_bounds = self.base.child_bounds();
 
         // Expand bounds by filter extent
         let extent = self.calculate_filter_extent();
@@ -243,41 +230,29 @@ impl Layer for BlurLayer {
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed && self.child.as_ref().is_some_and(|c| c.is_visible())
+        self.base.is_child_visible()
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        if self.disposed {
-            return false;
-        }
-
         // Hit testing considers child, blur doesn't affect hit testing
-        self.child
-            .as_ref()
-            .is_some_and(|c| c.hit_test(position, result))
+        self.base.child_hit_test(position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        if self.disposed {
-            return false;
-        }
-
-        self.child.as_mut().is_some_and(|c| c.handle_event(event))
+        self.base.child_handle_event(event)
     }
 
     fn dispose(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            child.dispose();
-        }
-        self.disposed = true;
+        self.base.dispose_child();
     }
 
     fn is_disposed(&self) -> bool {
-        self.disposed
+        self.base.is_disposed()
     }
 
     fn mark_needs_paint(&mut self) {
-        if let Some(child) = &mut self.child {
+        self.base.invalidate_cache();
+        if let Some(child) = self.base.child_mut() {
             child.mark_needs_paint();
         }
     }
