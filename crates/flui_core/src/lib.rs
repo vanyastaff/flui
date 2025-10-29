@@ -22,7 +22,7 @@
 //! new widget instances.
 //!
 //! ```rust
-//! use flui_core::{StatelessWidget, BoxedWidget, BuildContext};
+//! use flui_core::{StatelessWidget, Widget, BuildContext};
 //!
 //! #[derive(Debug)]
 //! struct Greeting {
@@ -30,7 +30,7 @@
 //! }
 //!
 //! impl StatelessWidget for Greeting {
-//!     fn build(&self, context: &BuildContext) -> BoxedWidget {
+//!     fn build(&self, context: &BuildContext) -> Widget {
 //!         Box::new(Text::new(format!("Hello, {}!", self.name)))
 //!     }
 //! }
@@ -55,12 +55,12 @@
 //! Pure functional widgets without mutable state.
 //!
 //! ```rust
-//! # use flui_core::{StatelessWidget, BoxedWidget, BuildContext};
+//! # use flui_core::{StatelessWidget, Widget, BuildContext};
 //! #[derive(Debug)]
 //! struct HelloWorld;
 //!
 //! impl StatelessWidget for HelloWorld {
-//!     fn build(&self, context: &BuildContext) -> BoxedWidget {
+//!     fn build(&self, context: &BuildContext) -> Widget {
 //!         Box::new(Text::new("Hello, World!"))
 //!     }
 //! }
@@ -71,7 +71,7 @@
 //! Widgets with persistent mutable state.
 //!
 //! ```rust
-//! # use flui_core::{StatefulWidget, State, BoxedWidget, BuildContext};
+//! # use flui_core::{StatefulWidget, State, Widget, BuildContext};
 //! #[derive(Debug)]
 //! struct Counter {
 //!     initial: i32,
@@ -90,7 +90,7 @@
 //! }
 //!
 //! impl State<Counter> for CounterState {
-//!     fn build(&mut self, widget: &Counter) -> BoxedWidget {
+//!     fn build(&mut self, widget: &Counter) -> Widget {
 //!         Box::new(Text::new(format!("Count: {}", self.count)))
 //!     }
 //! }
@@ -101,12 +101,12 @@
 //! Efficient data propagation down the widget tree.
 //!
 //! ```rust
-//! # use flui_core::{InheritedWidget, BoxedWidget};
+//! # use flui_core::{InheritedWidget, Widget};
 //! # use std::sync::Arc;
 //! #[derive(Debug)]
 //! struct Theme {
 //!     colors: Arc<ColorScheme>,
-//!     child: BoxedWidget,
+//!     child: Widget,
 //! }
 //!
 //! impl InheritedWidget for Theme {
@@ -114,7 +114,7 @@
 //!         !Arc::ptr_eq(&self.colors, &old.colors)
 //!     }
 //!
-//!     fn child(&self) -> BoxedWidget {
+//!     fn child(&self) -> Widget {
 //!         self.child.clone()
 //!     }
 //! }
@@ -154,11 +154,11 @@
 //! Widgets that attach layout metadata to descendants.
 //!
 //! ```rust
-//! # use flui_core::{ParentDataWidget, BoxedWidget, Render};
+//! # use flui_core::{ParentDataWidget, Widget, Render};
 //! #[derive(Debug)]
 //! struct Flexible {
 //!     flex: i32,
-//!     child: BoxedWidget,
+//!     child: Widget,
 //! }
 //!
 //! impl ParentDataWidget for Flexible {
@@ -168,7 +168,7 @@
 //!         // Apply flex data to child's render object
 //!     }
 //!
-//!     fn child(&self) -> &BoxedWidget {
+//!     fn child(&self) -> &Widget {
 //!         &self.child
 //!     }
 //! }
@@ -181,18 +181,18 @@
 //! All widgets automatically get object-safe `DynWidget` trait via blanket impl:
 //!
 //! ```rust
-//! # use flui_core::{StatelessWidget, BoxedWidget, DynWidget, BuildContext};
+//! # use flui_core::{StatelessWidget, Widget, DynWidget, BuildContext};
 //! #[derive(Debug)]
 //! struct MyWidget;
 //!
 //! impl StatelessWidget for MyWidget {
-//!     fn build(&self, context: &BuildContext) -> BoxedWidget {
+//!     fn build(&self, context: &BuildContext) -> Widget {
 //!         Box::new(Text::new("Test"))
 //!     }
 //! }
 //!
 //! // DynWidget is automatic!
-//! let widget: Box<dyn DynWidget> = Box::new(MyWidget);
+//! let widget: Widget = Box::new(MyWidget);
 //! ```
 //!
 //! ## No Forced Clone
@@ -200,7 +200,7 @@
 //! Widgets don't require Clone, enabling use of closures and non-Clone types:
 //!
 //! ```rust
-//! # use flui_core::{Widget, BoxedWidget};
+//! # use flui_core::{Widget, Widget};
 //! #[derive(Debug)]
 //! struct Button<F> {
 //!     label: String,
@@ -300,11 +300,6 @@ pub use foundation::{
 
 // Re-export widget types
 pub use widget::{
-    // Type aliases
-    BoxedWidget,
-    DynWidget,
-    SharedWidget,
-
     // Widget traits
     InheritedWidget,
     NotificationListener,
@@ -324,8 +319,6 @@ pub use widget::{
 
 // Re-export element types
 pub use element::{
-    // Type aliases
-    BoxedElement,
     // Context types
     BuildContext,
     // Element types
@@ -333,9 +326,8 @@ pub use element::{
     // Dependency tracking
     DependencyInfo,
     DependencyTracker,
-    DynElement,
 
-    // Core traits
+    // Core enum
     Element,
     ElementId,
 
@@ -383,8 +375,8 @@ pub mod prelude {
     pub use crate::foundation::{Key, KeyRef};
 
     pub use crate::widget::{
-        BoxedWidget, DynWidget, InheritedWidget, ParentDataWidget, RenderWidget,
-        SharedWidget, State, StatefulWidget, StatelessWidget, Widget,
+        InheritedWidget, ParentDataWidget, RenderWidget,
+        State, StatefulWidget, StatelessWidget, Widget,
     };
 
     pub use crate::element::{BuildContext, Element};
@@ -426,6 +418,6 @@ mod tests {
 
         // Test that all major types are available
         let _key: Option<Key> = None;
-        let _widget: Option<BoxedWidget> = None;
+        let _widget: Option<Widget> = None;
     }
 }

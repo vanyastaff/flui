@@ -741,7 +741,7 @@ impl PipelineOwner {
     /// # Returns
     ///
     /// An Element enum variant ready to be inserted into the tree
-    fn inflate_widget(&self, widget: crate::BoxedWidget) -> Element {
+    fn inflate_widget(&self, widget: crate::Widget) -> Element {
         use crate::element::{
             ComponentElement, InheritedElement, ParentDataElement, RenderElement, StatefulElement,
         };
@@ -771,14 +771,14 @@ mod tests {
     use super::*;
     use crate::BuildContext;
     use crate::element::{ComponentElement, Element};
-    use crate::widget::{BoxedWidget, StatelessWidget};
+    use crate::widget::{Widget, StatelessWidget};
 
     // Test widget for testing
     #[derive(Debug, Clone)]
     struct TestWidget;
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &BuildContext) -> BoxedWidget {
+        fn build(&self, _context: &BuildContext) -> Widget {
             Box::new(TestWidget)
         }
     }

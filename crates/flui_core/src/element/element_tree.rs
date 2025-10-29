@@ -636,7 +636,7 @@ impl Default for ElementTree {
 #[cfg(all(test, disabled))]
 mod tests {
     use super::*;
-    use crate::{DynWidget, Render, RenderWidget, Widget};
+    use crate::{Render, RenderWidget, Widget};
     use crate::{LayoutCx, LeafArity, PaintCx, SingleArity};
     use flui_engine::{BoxedLayer, ContainerLayer};
     use flui_types::Size;
@@ -646,7 +646,7 @@ mod tests {
     struct TestLeafWidget;
 
     impl Widget for TestLeafWidget {}
-    impl DynWidget for TestLeafWidget {
+    impl Widget for TestLeafWidget {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
@@ -682,7 +682,7 @@ mod tests {
     struct TestSingleWidget;
 
     impl Widget for TestSingleWidget {}
-    impl DynWidget for TestSingleWidget {
+    impl Widget for TestSingleWidget {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }

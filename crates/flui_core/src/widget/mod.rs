@@ -79,13 +79,11 @@
 //! ```
 
 // Submodules
-pub mod dyn_widget;
 pub mod notification_listener;
 pub mod traits;
 pub mod widget;
 
-// Re-exports - New enum-based system
-pub use dyn_widget::{BoxedWidget, DynWidget, SharedWidget};
+// Re-exports - Enum-based system
 pub use notification_listener::NotificationListener;
 pub use traits::{
     InheritedWidget, ParentDataWidget, RenderWidget,
@@ -93,8 +91,8 @@ pub use traits::{
 };
 pub use widget::Widget;
 
-// Widget enum is the main type - no blanket impls needed!
-// The enum already encapsulates all widget types.
+// Widget is an enum - no DynWidget trait needed!
+
 
 
 

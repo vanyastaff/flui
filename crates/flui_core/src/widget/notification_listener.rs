@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::foundation::notification::{DynNotification, Notification};
-use crate::widget::BoxedWidget;
+use crate::widget::Widget;
 
 /// Widget that listens for notifications of type T bubbling up the tree
 ///
@@ -82,7 +82,7 @@ pub struct NotificationListener<T: Notification + Clone + 'static> {
     on_notification: Arc<dyn Fn(&T) -> bool + Send + Sync>,
 
     /// Child widget
-    child: BoxedWidget,
+    child: Widget,
 
     /// Phantom data for type parameter
     _phantom: PhantomData<T>,
@@ -122,7 +122,7 @@ impl<T: Notification + Clone + 'static> NotificationListener<T> {
     /// ```
     pub fn new(
         on_notification: impl Fn(&T) -> bool + Send + Sync + 'static,
-        child: BoxedWidget,
+        child: Widget,
     ) -> Self {
         Self {
             on_notification: Arc::new(on_notification),
@@ -168,7 +168,7 @@ impl<T: Notification + Clone + 'static> NotificationListener<T> {
     }
 
     /// Get reference to child widget
-    pub fn child(&self) -> &BoxedWidget {
+    pub fn child(&self) -> &Widget {
         &self.child
     }
 }
@@ -198,7 +198,7 @@ mod tests {
     struct ChildWidget;
 
     impl StatelessWidget for ChildWidget {
-        fn build(&self, _context: &BuildContext) -> BoxedWidget {
+        fn build(&self, _context: &BuildContext) -> Widget {
             Box::new(ChildWidget)
         }
     }
@@ -251,7 +251,7 @@ mod tests {
     }
 
     // Note: Clone test removed because NotificationListener
-    // doesn't impl Clone (BoxedWidget is not Clone)
+    // doesn't impl Clone (Widget is not Clone)
 
     #[test]
     fn test_notification_listener_debug() {

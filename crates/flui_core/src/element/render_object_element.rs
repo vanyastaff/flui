@@ -6,10 +6,10 @@
 use parking_lot::RwLock;
 use std::cell::RefCell;
 
-use super::dyn_element::ElementLifecycle;
+use super::ElementLifecycle;
 use crate::element::ElementId;
 use crate::render::{RenderNode, RenderState};
-use crate::widget::{BoxedWidget, DynWidget};
+use crate::widget::{Widget};
 
 /// Element for RenderWidget (type-erased)
 ///
@@ -21,7 +21,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 ///
 /// ```text
 /// RenderElement
-///   ├─ widget: Box<dyn DynWidget> (type-erased RenderWidget)
+///   ├─ widget: Widget (type-erased RenderWidget)
 ///   ├─ render_object: RenderNode (type-erased Render)
 ///   ├─ render_state: RwLock<RenderState> (size, constraints, dirty flags)
 ///   ├─ parent_data: Option<Box<dyn ParentData>> (metadata from parent)
@@ -34,7 +34,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 /// Unlike the old generic `RenderElement<W, A>`, this version uses type erasure
 /// for both widget and render object:
 ///
-/// - **Widget**: `Box<dyn DynWidget>` (user-extensible, unbounded types)
+/// - **Widget**: `Widget` (user-extensible, unbounded types)
 /// - **Render**: `RenderNode` (user-extensible, unbounded types)
 /// - **Arity**: Runtime information via RenderNode trait
 ///
@@ -55,7 +55,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 /// 6. **unmount()** - Render cleanup
 pub struct RenderElement {
     /// The widget this element represents (type-erased)
-    widget: BoxedWidget,
+    widget: Widget,
 
     /// The render object created by the widget (type-erased)
     ///
@@ -99,7 +99,7 @@ pub struct RenderElement {
 impl std::fmt::Debug for RenderElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderElement")
-            .field("widget", &"<BoxedWidget>")
+            .field("widget", &"<Widget>")
             .field("render_object", &"<RefCell<RenderNode>>")
             .field("render_state", &self.render_state)
             .field("parent_data", &self.parent_data.is_some())
@@ -127,7 +127,7 @@ impl RenderElement {
     /// let render = widget.create_render_object();
     /// let element = RenderElement::new(widget, Box::new(render));
     /// ```
-    pub fn new(widget: BoxedWidget, render_object: RenderNode) -> Self {
+    pub fn new(widget: Widget, render_object: RenderNode) -> Self {
         Self {
             widget,
             render_object: RefCell::new(render_object),
@@ -146,7 +146,7 @@ impl RenderElement {
     /// Following Rust API Guidelines - no `get_` prefix for getters.
     #[inline]
     #[must_use]
-    pub fn widget(&self) -> &dyn DynWidget {
+    pub fn widget(&self) -> &Widget {
         &*self.widget
     }
 
@@ -227,7 +227,7 @@ impl RenderElement {
     /// Update with a new widget
     ///
     /// The new widget must be compatible (same type and key) with the current widget.
-    pub fn update(&mut self, new_widget: BoxedWidget) {
+    pub fn update(&mut self, new_widget: Widget) {
         self.widget = new_widget;
 
         // TODO: Call update_render_object to sync config to render object
@@ -342,7 +342,7 @@ impl RenderElement {
         &mut self,
         _element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
-    ) -> Vec<(ElementId, BoxedWidget, usize)> {
+    ) -> Vec<(ElementId, Widget, usize)> {
         self.dirty = false;
         Vec::new()
     }
@@ -392,13 +392,13 @@ mod tests {
         size: Size,
     }
 
-    impl crate::DynWidget for TestLeafWidget {
+    impl crate::Widget for TestLeafWidget {
         // Minimal implementation for testing
     }
 
     #[test]
     fn test_render_element_creation() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_render_element_mount() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_render_element_update() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -439,7 +439,7 @@ mod tests {
         element.mount(Some(0), 0);
 
         // Update with new widget
-        let new_widget: BoxedWidget = Box::new(TestLeafWidget {
+        let new_widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(200.0, 100.0),
         });
         element.update(new_widget);
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_render_element_unmount() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn test_render_element_lifecycle() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn test_render_element_dirty_flag() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_render_element_children_management() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn test_render_element_render_object_access() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_render_element_render_state_access() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget {
+        let widget: Widget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
         let render: RenderNode = Box::new(TestLeafRender {

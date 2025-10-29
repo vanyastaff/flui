@@ -3,8 +3,8 @@
 //! This element type is created by StatelessWidget and calls build() to create
 //! its child widget tree.
 
-use super::dyn_element::ElementLifecycle;
-use crate::{BoxedWidget, DynWidget, ElementId};
+use super::ElementLifecycle;
+use crate::{Widget, ElementId};
 
 /// Element for StatelessWidget
 ///
@@ -16,7 +16,7 @@ use crate::{BoxedWidget, DynWidget, ElementId};
 ///
 /// ```text
 /// ComponentElement
-///   ├─ widget: Box<dyn DynWidget> (type-erased StatelessWidget)
+///   ├─ widget: Widget (type-erased StatelessWidget)
 ///   ├─ child: Option<ElementId> (single child from build())
 ///   └─ lifecycle state
 /// ```
@@ -24,7 +24,7 @@ use crate::{BoxedWidget, DynWidget, ElementId};
 /// # Type Erasure
 ///
 /// Unlike the old generic `ComponentElement<W>`, this version uses type erasure
-/// to enable storage in `enum Element`. The widget is stored as `Box<dyn DynWidget>`,
+/// to enable storage in `enum Element`. The widget is stored as `Widget`,
 /// which is acceptable because:
 ///
 /// - Widget layer is user-extensible (unbounded types)
@@ -40,7 +40,7 @@ use crate::{BoxedWidget, DynWidget, ElementId};
 #[derive(Debug)]
 pub struct ComponentElement {
     /// The widget this element represents (type-erased)
-    widget: BoxedWidget,
+    widget: Widget,
 
     /// Parent element ID
     parent: Option<ElementId>,
@@ -70,7 +70,7 @@ impl ComponentElement {
     /// ```rust
     /// let element = ComponentElement::new(Box::new(MyWidget::new()));
     /// ```
-    pub fn new(widget: BoxedWidget) -> Self {
+    pub fn new(widget: Widget) -> Self {
         Self {
             widget,
             parent: None,
@@ -86,7 +86,7 @@ impl ComponentElement {
     /// Following Rust API Guidelines - no `get_` prefix for getters.
     #[inline]
     #[must_use]
-    pub fn widget(&self) -> &dyn DynWidget {
+    pub fn widget(&self) -> &Widget {
         &*self.widget
     }
 
@@ -94,7 +94,7 @@ impl ComponentElement {
     ///
     /// The new widget must be compatible (same type and key) with the current widget.
     /// This is checked via `can_update()`.
-    pub fn update(&mut self, new_widget: BoxedWidget) {
+    pub fn update(&mut self, new_widget: Widget) {
         // Could add debug assertion for can_update check
         self.widget = new_widget;
         self.dirty = true;
@@ -213,7 +213,7 @@ impl ComponentElement {
         &mut self,
         element_id: ElementId,
         tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
-    ) -> Vec<(ElementId, BoxedWidget, usize)> {
+    ) -> Vec<(ElementId, Widget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -261,13 +261,13 @@ mod tests {
         value: i32,
     }
 
-    impl crate::DynWidget for TestWidget {
+    impl crate::Widget for TestWidget {
         // Minimal implementation for testing
     }
 
     #[test]
     fn test_component_element_creation() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let element = ComponentElement::new(widget);
 
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_component_element_mount() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ComponentElement::new(widget);
 
         element.mount(Some(0), 0);
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_component_element_lifecycle() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ComponentElement::new(widget);
 
         // Initial
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_component_element_dirty_flag() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ComponentElement::new(widget);
 
         // Initially dirty

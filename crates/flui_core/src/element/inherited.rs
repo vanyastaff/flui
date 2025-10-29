@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use crate::ElementId;
 use crate::element::ElementLifecycle;
-use crate::widget::{BoxedWidget, DynWidget};
+use crate::widget::{Widget};
 
 /// Element for InheritedWidget
 ///
@@ -17,7 +17,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 ///
 /// ```text
 /// InheritedElement
-///   ├─ widget: Box<dyn DynWidget> (type-erased InheritedWidget)
+///   ├─ widget: Widget (type-erased InheritedWidget)
 ///   ├─ dependents: HashSet<ElementId> (who depends on this)
 ///   ├─ child_id: ElementId (single child)
 ///   └─ parent: Option<ElementId>
@@ -37,7 +37,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 #[derive(Debug)]
 pub struct InheritedElement {
     /// The inherited widget containing data (type-erased)
-    widget: BoxedWidget,
+    widget: Widget,
 
     /// Set of elements that depend on this InheritedWidget
     ///
@@ -63,7 +63,7 @@ pub struct InheritedElement {
 
 impl InheritedElement {
     /// Create a new InheritedElement
-    pub fn new(widget: BoxedWidget) -> Self {
+    pub fn new(widget: Widget) -> Self {
         Self {
             widget,
             dependents: HashSet::new(),
@@ -78,14 +78,14 @@ impl InheritedElement {
     /// Get reference to the widget
     #[inline]
     #[must_use]
-    pub fn widget(&self) -> &dyn DynWidget {
+    pub fn widget(&self) -> &Widget {
         &*self.widget
     }
 
     /// Update with a new widget
     ///
     /// Checks if dependents should be notified via update_should_notify.
-    pub fn update(&mut self, new_widget: BoxedWidget) {
+    pub fn update(&mut self, new_widget: Widget) {
         // TODO: Call update_should_notify on the widget to check if dependents should rebuild
         // For now, always mark dependents dirty
         self.widget = new_widget;
@@ -194,7 +194,7 @@ impl InheritedElement {
         &mut self,
         _element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
-    ) -> Vec<(ElementId, BoxedWidget, usize)> {
+    ) -> Vec<(ElementId, Widget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -231,13 +231,13 @@ mod tests {
         value: i32,
     }
 
-    impl crate::DynWidget for TestWidget {
+    impl crate::Widget for TestWidget {
         // Minimal implementation
     }
 
     #[test]
     fn test_inherited_element_creation() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let element = InheritedElement::new(widget);
 
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_inherited_element_dependents() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = InheritedElement::new(widget);
 
         // Add dependents
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_inherited_element_mount() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = InheritedElement::new(widget);
 
         element.mount(Some(0), 0);
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_inherited_element_unmount() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = InheritedElement::new(widget);
         element.add_dependent(1);
         element.add_dependent(2);

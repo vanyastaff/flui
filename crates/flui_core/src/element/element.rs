@@ -88,7 +88,7 @@ use crate::element::{
     RenderElement, StatefulElement,
 };
 use crate::render::RenderNode;
-use crate::widget::DynWidget;
+use crate::widget::Widget;
 
 // Re-export common element types
 pub use crate::element::component::ComponentElement as Component;
@@ -536,7 +536,7 @@ impl Element {
     /// Returns a reference to the widget configuration this element represents.
     #[inline]
     #[must_use]
-    pub fn widget(&self) -> &dyn DynWidget {
+    pub fn widget(&self) -> &Widget {
         match self {
             Self::Component(c) => c.widget(),
             Self::Stateful(s) => s.widget(),
@@ -670,7 +670,7 @@ impl Element {
         &mut self,
         element_id: ElementId,
         tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
-    ) -> Vec<(ElementId, crate::widget::BoxedWidget, usize)> {
+    ) -> Vec<(ElementId, crate::widget::Widget, usize)> {
         match self {
             Self::Component(c) => c.rebuild(element_id, tree),
             Self::Stateful(s) => s.rebuild(element_id, tree),

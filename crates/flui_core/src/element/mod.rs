@@ -42,20 +42,20 @@
 pub mod build_context;
 pub mod component;
 pub mod dependency;
-pub mod dyn_element;
 pub mod element;
 pub mod element_tree;
 pub mod inherited;
+pub mod lifecycle;
 pub mod parent_data_element;
 pub mod pipeline_owner;
 pub mod render_object_element;
 pub mod stateful;
 
+
 // Re-exports
 pub use build_context::BuildContext;
 pub use component::ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
-pub use dyn_element::{BoxedElement, DynElement, ElementLifecycle};
 pub use element::Element;
 pub use element_tree::ElementTree;
 pub use inherited::InheritedElement;
@@ -64,9 +64,24 @@ pub use pipeline_owner::PipelineOwner;
 pub use render_object_element::RenderElement;
 pub use stateful::{BoxedState, DynState, StatefulElement};
 
+/// Element lifecycle states
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementLifecycle {
+    /// Element created but not yet mounted
+    Initial,
+    /// Element is active in the tree
+    Active,
+    /// Element removed from tree but might be reinserted
+    Inactive,
+    /// Element permanently removed
+    Defunct,
+}
+
 /// Element ID - stable index into the ElementTree slab
 ///
 /// This is a handle to an element that remains valid until the element is removed.
 /// ElementIds are reused after removal (slab behavior), so don't store them long-term
 /// without verifying the element still exists.
 pub type ElementId = usize;
+
+

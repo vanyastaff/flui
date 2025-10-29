@@ -4,7 +4,7 @@
 
 use crate::ElementId;
 use crate::element::ElementLifecycle;
-use crate::widget::{BoxedWidget, DynWidget};
+use crate::widget::{Widget};
 
 /// Element for ParentDataWidget
 ///
@@ -16,7 +16,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 ///
 /// ```text
 /// ParentDataElement
-///   ├─ widget: Box<dyn DynWidget> (type-erased ParentDataWidget)
+///   ├─ widget: Widget (type-erased ParentDataWidget)
 ///   ├─ child: Option<ElementId> (single child)
 ///   └─ lifecycle state
 /// ```
@@ -24,7 +24,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 /// # Type Erasure
 ///
 /// Like other element types, ParentDataElement uses type erasure to enable storage
-/// in `enum Element`. The widget is stored as `Box<dyn DynWidget>`.
+/// in `enum Element`. The widget is stored as `Widget`.
 ///
 /// # Parent Data Application
 ///
@@ -40,7 +40,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 #[derive(Debug)]
 pub struct ParentDataElement {
     /// The parent data widget (type-erased)
-    widget: BoxedWidget,
+    widget: Widget,
 
     /// Parent element ID
     parent: Option<ElementId>,
@@ -73,7 +73,7 @@ impl ParentDataElement {
     ///     child: Box::new(Container::new()),
     /// }));
     /// ```
-    pub fn new(widget: BoxedWidget) -> Self {
+    pub fn new(widget: Widget) -> Self {
         Self {
             widget,
             parent: None,
@@ -89,14 +89,14 @@ impl ParentDataElement {
     /// Following Rust API Guidelines - no `get_` prefix for getters.
     #[inline]
     #[must_use]
-    pub fn widget(&self) -> &dyn DynWidget {
+    pub fn widget(&self) -> &Widget {
         &*self.widget
     }
 
     /// Update with a new widget
     ///
     /// The new widget must be compatible (same type and key) with the current widget.
-    pub fn update(&mut self, new_widget: BoxedWidget) {
+    pub fn update(&mut self, new_widget: Widget) {
         self.widget = new_widget;
         self.dirty = true;
     }
@@ -217,19 +217,19 @@ impl ParentDataElement {
         &mut self,
         _element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
-    ) -> Vec<(ElementId, BoxedWidget, usize)> {
+    ) -> Vec<(ElementId, Widget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
 
         self.dirty = false;
 
-        // Get child widget from ParentDataWidget via DynWidget::parent_data_child()
+        // Get child widget from ParentDataWidget via Widget::parent_data_child()
         if let Some(child_widget_ref) = self.widget.parent_data_child() {
             // Mark old child for unmounting
             self.child = None;
 
-            // Clone the child widget using DynWidget::clone_boxed()
+            // Clone the child widget using Widget::clone_boxed()
             let child_widget = (**child_widget_ref).clone_boxed();
 
             // Return child to be mounted
@@ -259,13 +259,13 @@ mod tests {
         value: i32,
     }
 
-    impl crate::DynWidget for TestWidget {
+    impl crate::Widget for TestWidget {
         // Minimal implementation for testing
     }
 
     #[test]
     fn test_parent_data_element_creation() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let element = ParentDataElement::new(widget);
 
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_parent_data_element_mount() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
 
         element.mount(Some(100), 0);
@@ -287,10 +287,10 @@ mod tests {
 
     #[test]
     fn test_parent_data_element_update() {
-        let widget1: BoxedWidget = Box::new(TestWidget { value: 1 });
+        let widget1: Widget = Box::new(TestWidget { value: 1 });
         let mut element = ParentDataElement::new(widget1);
 
-        let widget2: BoxedWidget = Box::new(TestWidget { value: 2 });
+        let widget2: Widget = Box::new(TestWidget { value: 2 });
         element.update(widget2);
 
         assert!(element.is_dirty());
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_parent_data_element_unmount() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
         element.mount(None, 0);
 
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_parent_data_element_lifecycle() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
 
         // Initial
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_parent_data_element_dirty_flag() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
 
         // Initially dirty
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_parent_data_element_child_management() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
 
         // No child initially
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_parent_data_element_rebuild() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let mut element = ParentDataElement::new(widget);
         element.mount(Some(0), 0);
 

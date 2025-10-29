@@ -6,8 +6,8 @@
 use std::any::Any;
 use std::fmt;
 
-use super::dyn_element::ElementLifecycle;
-use crate::{BoxedWidget, DynWidget, ElementId};
+use super::ElementLifecycle;
+use crate::{Widget, ElementId};
 
 /// Object-safe State trait
 ///
@@ -25,15 +25,15 @@ pub trait DynState: fmt::Debug + Send + Sync + 'static {
     /// - `context`: BuildContext for accessing inherited widgets and tree
     fn build(
         &mut self,
-        widget: &dyn DynWidget,
+        widget: &Widget,
         context: &crate::element::BuildContext,
-    ) -> BoxedWidget;
+    ) -> Widget;
 
     /// Called when widget configuration changes
     ///
     /// Allows state to react to configuration updates.
     /// Both old and new widget are provided for comparison.
-    fn did_update_widget(&mut self, old_widget: &dyn DynWidget, new_widget: &dyn DynWidget);
+    fn did_update_widget(&mut self, old_widget: &Widget, new_widget: &Widget);
 
     /// Called when state is being disposed
     ///
@@ -62,7 +62,7 @@ pub type BoxedState = Box<dyn DynState>;
 ///
 /// ```text
 /// StatefulElement
-///   ├─ widget: Box<dyn DynWidget> (type-erased StatefulWidget)
+///   ├─ widget: Widget (type-erased StatefulWidget)
 ///   ├─ state: Box<dyn DynState> (type-erased State)
 ///   ├─ child: Option<ElementId> (single child from State.build())
 ///   └─ lifecycle state
@@ -71,7 +71,7 @@ pub type BoxedState = Box<dyn DynState>;
 /// # Type Erasure
 ///
 /// Both widget and state are type-erased via trait objects:
-/// - Widget: `Box<dyn DynWidget>` (user-extensible)
+/// - Widget: `Widget` (user-extensible)
 /// - State: `Box<dyn DynState>` (user-extensible)
 ///
 /// This enables storage in `enum Element` while maintaining flexibility.
@@ -87,7 +87,7 @@ pub type BoxedState = Box<dyn DynState>;
 #[derive(Debug)]
 pub struct StatefulElement {
     /// The widget this element represents (type-erased)
-    widget: BoxedWidget,
+    widget: Widget,
 
     /// The state object (type-erased)
     state: BoxedState,
@@ -118,7 +118,7 @@ impl StatefulElement {
     ///
     /// - `widget` - Any widget implementing DynWidget (StatefulWidget)
     /// - `state` - State object created by widget
-    pub fn new(widget: BoxedWidget, state: BoxedState) -> Self {
+    pub fn new(widget: Widget, state: BoxedState) -> Self {
         Self {
             widget,
             state,
@@ -134,7 +134,7 @@ impl StatefulElement {
     /// Get reference to the widget (as DynWidget trait object)
     #[inline]
     #[must_use]
-    pub fn widget(&self) -> &dyn DynWidget {
+    pub fn widget(&self) -> &Widget {
         &*self.widget
     }
 
@@ -155,7 +155,7 @@ impl StatefulElement {
     /// Update with a new widget
     ///
     /// Calls did_update_widget on the state to notify about configuration change.
-    pub fn update(&mut self, new_widget: BoxedWidget) {
+    pub fn update(&mut self, new_widget: Widget) {
         let old_widget = std::mem::replace(&mut self.widget, new_widget);
 
         // Call did_update_widget on the state
@@ -250,7 +250,7 @@ impl StatefulElement {
         &mut self,
         element_id: ElementId,
         tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
-    ) -> Vec<(ElementId, BoxedWidget, usize)> {
+    ) -> Vec<(ElementId, Widget, usize)> {
         if !self.dirty {
             return Vec::new();
         }
@@ -296,8 +296,8 @@ mod tests {
         value: i32,
     }
 
-    impl crate::DynWidget for TestWidget {
-        fn clone_boxed(&self) -> crate::BoxedWidget {
+    impl crate::Widget for TestWidget {
+        fn clone_boxed(&self) -> crate::Widget {
             Box::new(self.clone())
         }
     }
@@ -311,13 +311,13 @@ mod tests {
     impl DynState for TestState {
         fn build(
             &mut self,
-            _widget: &dyn DynWidget,
+            _widget: &Widget,
             _context: &crate::element::BuildContext,
-        ) -> BoxedWidget {
+        ) -> Widget {
             Box::new(TestWidget { value: self.count })
         }
 
-        fn did_update_widget(&mut self, _old: &dyn DynWidget, _new: &dyn DynWidget) {
+        fn did_update_widget(&mut self, _old: &Widget, _new: &Widget) {
             // Could update state based on widget changes
         }
 
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_stateful_element_creation() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let state: BoxedState = Box::new(TestState { count: 0 });
         let element = StatefulElement::new(widget, state);
 
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn test_stateful_element_mount() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let state: BoxedState = Box::new(TestState { count: 0 });
         let mut element = StatefulElement::new(widget, state);
 
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_stateful_element_rebuild() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let state: BoxedState = Box::new(TestState { count: 10 });
         let mut element = StatefulElement::new(widget, state);
         element.mount(Some(0), 0);
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_stateful_element_state_access() {
-        let widget: BoxedWidget = Box::new(TestWidget { value: 42 });
+        let widget: Widget = Box::new(TestWidget { value: 42 });
         let state: BoxedState = Box::new(TestState { count: 10 });
         let mut element = StatefulElement::new(widget, state);
 

@@ -4,9 +4,9 @@
 
 use crate::ElementId;
 use crate::element::ElementTree;
-use crate::widget::{DynWidget, InheritedWidget};
+use crate::widget::{InheritedWidget, Widget};
 use parking_lot::RwLock;
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::sync::Arc;
 
 /// BuildContext - provides access to tree during widget build
@@ -20,7 +20,7 @@ use std::sync::Arc;
 ///
 /// ```rust,ignore
 /// impl StatelessWidget for MyWidget {
-///     fn build(&self, context: &BuildContext) -> BoxedWidget {
+///     fn build(&self, context: &BuildContext) -> Widget {
 ///         // Access theme with dependency (auto-rebuild on change)
 ///         let theme = context.depend_on::<Theme>().unwrap();
 ///
@@ -124,11 +124,10 @@ impl BuildContext {
                 // Check if this element's widget is InheritedWidget of type T
                 let widget = element.widget();
 
-                if DynWidget::type_id(widget) == target_type_id {
+                // Get type_id from the Widget enum
+                if widget.type_id() == target_type_id {
                     // Found it! Try to downcast
-                    if let Some(inherited_widget) =
-                        (widget as &dyn std::any::Any).downcast_ref::<T>()
-                    {
+                    if let Some(inherited_widget) = widget.as_any().downcast_ref::<T>() {
                         let result = inherited_widget.clone();
 
                         // Drop read lock before acquiring write lock (to avoid deadlock)
@@ -294,7 +293,7 @@ impl BuildContext {
 mod tests {
     use super::*;
     use crate::element::{InheritedElement, RenderElement};
-    use crate::widget::{DynWidget, RenderWidget, Widget};
+    use crate::widget::{RenderWidget, Widget};
     use crate::{LayoutCx, LeafArity, PaintCx, Render};
     use flui_engine::{BoxedLayer, ContainerLayer};
     use flui_types::Size;
@@ -312,7 +311,7 @@ mod tests {
             self.color != old.color
         }
 
-        fn child(&self) -> crate::BoxedWidget {
+        fn child(&self) -> crate::Widget {
             Box::new(DummyWidget)
         }
     }
@@ -371,7 +370,7 @@ mod tests {
         };
 
         // Insert child RenderElement
-        let widget: crate::BoxedWidget = Box::new(DummyWidget);
+        let widget: crate::Widget = Box::new(DummyWidget);
         let child_elem = crate::element::ComponentElement::new(widget);
         let child_id = {
             let mut tree_guard = tree.write();

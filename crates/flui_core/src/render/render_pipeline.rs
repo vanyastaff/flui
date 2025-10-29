@@ -47,7 +47,7 @@ use flui_types::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 
 use crate::element::{ElementId, ElementTree, RenderElement};
-use crate::widget::{RenderWidget, BoxedWidget, DynWidget};
+use crate::widget::{RenderWidget, Widget};
 
 /// RenderPipeline - orchestrates the rendering pipeline
 ///
@@ -168,7 +168,7 @@ impl RenderPipeline {
     /// ```
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where
-        W: RenderWidget + Clone + Send + Sync + std::fmt::Debug + DynWidget + 'static,
+        W: RenderWidget + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         // Create a dummy BuildContext for root widget
         // TODO: This should be properly constructed
@@ -178,7 +178,7 @@ impl RenderPipeline {
         let render_boxed = widget.create_render_object(&ctx);
 
         // Box the widget (it implements DynWidget)
-        let widget_boxed = BoxedWidget::new(widget);
+        let widget_boxed = Widget::new(widget);
 
         let render_element = RenderElement::new(widget_boxed, render_boxed);
         let element = crate::element::Element::Render(render_element);
