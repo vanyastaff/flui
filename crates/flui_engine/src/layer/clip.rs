@@ -855,10 +855,9 @@ impl Layer for ClipPathLayer {
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        // For path clipping, use bounding box as conservative hit test
-        // TODO: Implement proper path containment check
-        if !self.path_bounds.contains(position) {
-            return false;
+        // Use proper path containment check
+        if !self.clip_path.contains(position.into()) {
+            return false; // Outside clip path, no hit
         }
 
         // Test children in reverse order (front to back)

@@ -580,6 +580,331 @@ impl Path {
             bounds: None,
         }
     }
+
+    /// Tests whether a point is inside the path using the path's fill rule.
+    ///
+    /// This implements both even-odd and non-zero winding number algorithms
+    /// for path containment testing.
+    ///
+    /// # Algorithm
+    ///
+    /// - **EvenOdd**: Counts the number of times a ray from the point crosses
+    ///   path edges. Point is inside if count is odd.
+    /// - **NonZero**: Computes the winding number by considering edge direction.
+    ///   Point is inside if winding number is non-zero.
+    ///
+    /// # Performance
+    ///
+    /// This method processes all path commands and may be expensive for complex paths.
+    /// Consider caching results if testing many points against the same path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::{Point, Rect};
+    ///
+    /// let mut path = Path::rectangle(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+    /// assert!(path.contains(Point::new(50.0, 50.0)));
+    /// assert!(!path.contains(Point::new(150.0, 50.0)));
+    /// ```
+    #[must_use]
+    pub fn contains(&self, point: Point) -> bool {
+        // Quick bounds check
+        let bounds = self.clone().bounds();
+        if !bounds.contains(point) {
+            return false;
+        }
+
+        match self.fill_type {
+            PathFillType::EvenOdd => self.contains_even_odd(point),
+            PathFillType::NonZero => self.contains_non_zero(point),
+        }
+    }
+
+    /// Ray casting algorithm for even-odd fill rule.
+    fn contains_even_odd(&self, point: Point) -> bool {
+        let mut crossings = 0;
+        let mut current_pos = Point::ZERO;
+        let mut subpath_start = Point::ZERO;
+
+        for cmd in &self.commands {
+            match cmd {
+                PathCommand::MoveTo(p) => {
+                    current_pos = *p;
+                    subpath_start = *p;
+                }
+                PathCommand::LineTo(p) => {
+                    if self.ray_intersects_segment(point, current_pos, *p) {
+                        crossings += 1;
+                    }
+                    current_pos = *p;
+                }
+                PathCommand::Close => {
+                    if self.ray_intersects_segment(point, current_pos, subpath_start) {
+                        crossings += 1;
+                    }
+                    current_pos = subpath_start;
+                }
+                PathCommand::QuadraticTo(c, e) => {
+                    // Approximate with line segments
+                    crossings += self.count_curve_crossings_quad(point, current_pos, *c, *e);
+                    current_pos = *e;
+                }
+                PathCommand::CubicTo(c1, c2, e) => {
+                    // Approximate with line segments
+                    crossings += self.count_curve_crossings_cubic(point, current_pos, *c1, *c2, *e);
+                    current_pos = *e;
+                }
+                PathCommand::AddRect(rect) => {
+                    // Simple rectangle test
+                    if rect.contains(point) {
+                        crossings += 1;
+                    }
+                }
+                PathCommand::AddCircle(center, radius) => {
+                    // Simple circle test
+                    let dx = point.x - center.x;
+                    let dy = point.y - center.y;
+                    if dx * dx + dy * dy <= radius * radius {
+                        crossings += 1;
+                    }
+                }
+                PathCommand::AddOval(rect) => {
+                    // Ellipse test
+                    let cx = (rect.left() + rect.right()) * 0.5;
+                    let cy = (rect.top() + rect.bottom()) * 0.5;
+                    let rx = rect.width() * 0.5;
+                    let ry = rect.height() * 0.5;
+                    let dx = (point.x - cx) / rx;
+                    let dy = (point.y - cy) / ry;
+                    if dx * dx + dy * dy <= 1.0 {
+                        crossings += 1;
+                    }
+                }
+                PathCommand::AddArc(_, _, _) => {
+                    // TODO: Implement arc containment
+                    // For now, skip arcs (conservative - may miss some points)
+                }
+            }
+        }
+
+        crossings % 2 == 1
+    }
+
+    /// Winding number algorithm for non-zero fill rule.
+    fn contains_non_zero(&self, point: Point) -> bool {
+        let mut winding = 0;
+        let mut current_pos = Point::ZERO;
+        let mut subpath_start = Point::ZERO;
+
+        for cmd in &self.commands {
+            match cmd {
+                PathCommand::MoveTo(p) => {
+                    current_pos = *p;
+                    subpath_start = *p;
+                }
+                PathCommand::LineTo(p) => {
+                    winding += self.segment_winding(point, current_pos, *p);
+                    current_pos = *p;
+                }
+                PathCommand::Close => {
+                    winding += self.segment_winding(point, current_pos, subpath_start);
+                    current_pos = subpath_start;
+                }
+                PathCommand::QuadraticTo(c, e) => {
+                    winding += self.curve_winding_quad(point, current_pos, *c, *e);
+                    current_pos = *e;
+                }
+                PathCommand::CubicTo(c1, c2, e) => {
+                    winding += self.curve_winding_cubic(point, current_pos, *c1, *c2, *e);
+                    current_pos = *e;
+                }
+                PathCommand::AddRect(rect) => {
+                    if rect.contains(point) {
+                        winding += 1;
+                    }
+                }
+                PathCommand::AddCircle(center, radius) => {
+                    let dx = point.x - center.x;
+                    let dy = point.y - center.y;
+                    if dx * dx + dy * dy <= radius * radius {
+                        winding += 1;
+                    }
+                }
+                PathCommand::AddOval(rect) => {
+                    let cx = (rect.left() + rect.right()) * 0.5;
+                    let cy = (rect.top() + rect.bottom()) * 0.5;
+                    let rx = rect.width() * 0.5;
+                    let ry = rect.height() * 0.5;
+                    let dx = (point.x - cx) / rx;
+                    let dy = (point.y - cy) / ry;
+                    if dx * dx + dy * dy <= 1.0 {
+                        winding += 1;
+                    }
+                }
+                PathCommand::AddArc(_, _, _) => {
+                    // TODO: Implement arc winding
+                }
+            }
+        }
+
+        winding != 0
+    }
+
+    /// Tests if a horizontal ray from point intersects a line segment.
+    fn ray_intersects_segment(&self, point: Point, p1: Point, p2: Point) -> bool {
+        // Ray extends to the right from point
+        if (p1.y > point.y) == (p2.y > point.y) {
+            return false; // Both endpoints on same side of ray
+        }
+
+        // Calculate x coordinate of intersection
+        let x_intersect = p1.x + (point.y - p1.y) / (p2.y - p1.y) * (p2.x - p1.x);
+        x_intersect > point.x
+    }
+
+    /// Compute winding contribution of a line segment.
+    fn segment_winding(&self, point: Point, p1: Point, p2: Point) -> i32 {
+        if p1.y <= point.y {
+            if p2.y > point.y {
+                // Upward crossing
+                if self.is_left(p1, p2, point) > 0.0 {
+                    return 1;
+                }
+            }
+        } else if p2.y <= point.y {
+            // Downward crossing
+            if self.is_left(p1, p2, point) < 0.0 {
+                return -1;
+            }
+        }
+        0
+    }
+
+    /// Test if point is left of line segment (p1 -> p2).
+    /// Returns > 0 for left, < 0 for right, 0 for on line.
+    fn is_left(&self, p1: Point, p2: Point, point: Point) -> f32 {
+        (p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y)
+    }
+
+    /// Count crossings for quadratic bezier curve (approximated).
+    fn count_curve_crossings_quad(&self, point: Point, p0: Point, p1: Point, p2: Point) -> usize {
+        // Simple approximation: subdivide into 4 line segments
+        let t_values = [0.0, 0.25, 0.5, 0.75, 1.0];
+        let mut crossings = 0;
+
+        for i in 0..4 {
+            let t1 = t_values[i];
+            let t2 = t_values[i + 1];
+
+            let start = self.eval_quadratic(p0, p1, p2, t1);
+            let end = self.eval_quadratic(p0, p1, p2, t2);
+
+            if self.ray_intersects_segment(point, start, end) {
+                crossings += 1;
+            }
+        }
+
+        crossings
+    }
+
+    /// Count crossings for cubic bezier curve (approximated).
+    fn count_curve_crossings_cubic(
+        &self,
+        point: Point,
+        p0: Point,
+        p1: Point,
+        p2: Point,
+        p3: Point,
+    ) -> usize {
+        // Simple approximation: subdivide into 8 line segments
+        let t_values = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+        let mut crossings = 0;
+
+        for i in 0..8 {
+            let t1 = t_values[i];
+            let t2 = t_values[i + 1];
+
+            let start = self.eval_cubic(p0, p1, p2, p3, t1);
+            let end = self.eval_cubic(p0, p1, p2, p3, t2);
+
+            if self.ray_intersects_segment(point, start, end) {
+                crossings += 1;
+            }
+        }
+
+        crossings
+    }
+
+    /// Winding number for quadratic curve.
+    fn curve_winding_quad(&self, point: Point, p0: Point, p1: Point, p2: Point) -> i32 {
+        let t_values = [0.0, 0.25, 0.5, 0.75, 1.0];
+        let mut winding = 0;
+
+        for i in 0..4 {
+            let t1 = t_values[i];
+            let t2 = t_values[i + 1];
+
+            let start = self.eval_quadratic(p0, p1, p2, t1);
+            let end = self.eval_quadratic(p0, p1, p2, t2);
+
+            winding += self.segment_winding(point, start, end);
+        }
+
+        winding
+    }
+
+    /// Winding number for cubic curve.
+    fn curve_winding_cubic(
+        &self,
+        point: Point,
+        p0: Point,
+        p1: Point,
+        p2: Point,
+        p3: Point,
+    ) -> i32 {
+        let t_values = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+        let mut winding = 0;
+
+        for i in 0..8 {
+            let t1 = t_values[i];
+            let t2 = t_values[i + 1];
+
+            let start = self.eval_cubic(p0, p1, p2, p3, t1);
+            let end = self.eval_cubic(p0, p1, p2, p3, t2);
+
+            winding += self.segment_winding(point, start, end);
+        }
+
+        winding
+    }
+
+    /// Evaluate quadratic bezier at parameter t.
+    fn eval_quadratic(&self, p0: Point, p1: Point, p2: Point, t: f32) -> Point {
+        let t2 = t * t;
+        let mt = 1.0 - t;
+        let mt2 = mt * mt;
+
+        Point::new(
+            mt2 * p0.x + 2.0 * mt * t * p1.x + t2 * p2.x,
+            mt2 * p0.y + 2.0 * mt * t * p1.y + t2 * p2.y,
+        )
+    }
+
+    /// Evaluate cubic bezier at parameter t.
+    fn eval_cubic(&self, p0: Point, p1: Point, p2: Point, p3: Point, t: f32) -> Point {
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let mt = 1.0 - t;
+        let mt2 = mt * mt;
+        let mt3 = mt2 * mt;
+
+        Point::new(
+            mt3 * p0.x + 3.0 * mt2 * t * p1.x + 3.0 * mt * t2 * p2.x + t3 * p3.x,
+            mt3 * p0.y + 3.0 * mt2 * t * p1.y + 3.0 * mt * t2 * p2.y + t3 * p3.y,
+        )
+    }
 }
 
 impl Default for Path {
@@ -677,5 +1002,247 @@ mod tests {
             }
             _ => panic!("Expected MoveTo"),
         }
+    }
+
+    // Path containment tests
+
+    #[test]
+    fn test_contains_rect_even_odd() {
+        let mut path = Path::new();
+        path.set_fill_type(PathFillType::EvenOdd);
+        path.add_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
+
+        // Points inside
+        assert!(path.contains(Point::new(50.0, 50.0)));
+        assert!(path.contains(Point::new(20.0, 20.0)));
+        assert!(path.contains(Point::new(100.0, 100.0)));
+
+        // Points outside
+        assert!(!path.contains(Point::new(0.0, 0.0)));
+        assert!(!path.contains(Point::new(150.0, 50.0)));
+        assert!(!path.contains(Point::new(50.0, 150.0)));
+
+        // Edge cases (on boundary)
+        assert!(path.contains(Point::new(10.0, 50.0)));
+        assert!(path.contains(Point::new(110.0, 50.0)));
+    }
+
+    #[test]
+    fn test_contains_rect_non_zero() {
+        let mut path = Path::new();
+        path.set_fill_type(PathFillType::NonZero);
+        path.add_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
+
+        // Points inside
+        assert!(path.contains(Point::new(50.0, 50.0)));
+        assert!(path.contains(Point::new(20.0, 20.0)));
+        assert!(path.contains(Point::new(100.0, 100.0)));
+
+        // Points outside
+        assert!(!path.contains(Point::new(0.0, 0.0)));
+        assert!(!path.contains(Point::new(150.0, 50.0)));
+        assert!(!path.contains(Point::new(50.0, 150.0)));
+    }
+
+    #[test]
+    fn test_contains_circle() {
+        let mut path = Path::new();
+        let center = Point::new(50.0, 50.0);
+        let radius = 25.0;
+        path.add_circle(center, radius);
+
+        // Points inside
+        assert!(path.contains(center));
+        assert!(path.contains(Point::new(60.0, 50.0)));
+        assert!(path.contains(Point::new(50.0, 60.0)));
+
+        // Points outside
+        assert!(!path.contains(Point::new(0.0, 0.0)));
+        assert!(!path.contains(Point::new(100.0, 50.0)));
+        assert!(!path.contains(Point::new(50.0, 100.0)));
+
+        // Points near boundary (inside)
+        assert!(path.contains(Point::new(50.0 + radius * 0.9, 50.0)));
+        assert!(path.contains(Point::new(50.0, 50.0 + radius * 0.9)));
+
+        // Points near boundary (outside)
+        assert!(!path.contains(Point::new(50.0 + radius * 1.1, 50.0)));
+        assert!(!path.contains(Point::new(50.0, 50.0 + radius * 1.1)));
+    }
+
+    #[test]
+    fn test_contains_oval() {
+        let mut path = Path::new();
+        path.add_oval(Rect::from_xywh(10.0, 10.0, 100.0, 50.0));
+
+        // Points inside
+        assert!(path.contains(Point::new(60.0, 35.0))); // Center
+        assert!(path.contains(Point::new(70.0, 35.0)));
+
+        // Points outside
+        assert!(!path.contains(Point::new(0.0, 0.0)));
+        assert!(!path.contains(Point::new(150.0, 35.0)));
+        assert!(!path.contains(Point::new(60.0, 100.0)));
+    }
+
+    #[test]
+    fn test_contains_triangle() {
+        let mut path = Path::new();
+        path.move_to(Point::new(50.0, 10.0));
+        path.line_to(Point::new(90.0, 90.0));
+        path.line_to(Point::new(10.0, 90.0));
+        path.close();
+
+        // Point inside
+        assert!(path.contains(Point::new(50.0, 50.0)));
+        assert!(path.contains(Point::new(40.0, 60.0)));
+
+        // Points outside
+        assert!(!path.contains(Point::new(10.0, 10.0)));
+        assert!(!path.contains(Point::new(90.0, 10.0)));
+        assert!(!path.contains(Point::new(50.0, 95.0)));
+    }
+
+    #[test]
+    fn test_contains_quadratic_bezier() {
+        let mut path = Path::new();
+        // Create a simple closed shape with a quadratic bezier curve
+        path.move_to(Point::new(10.0, 50.0));
+        path.line_to(Point::new(10.0, 10.0));
+        path.line_to(Point::new(90.0, 10.0));
+        path.line_to(Point::new(90.0, 50.0));
+        // Quadratic curve back (bulging downward)
+        path.quadratic_to(Point::new(50.0, 80.0), Point::new(10.0, 50.0));
+        path.close();
+
+        // Points inside the shape
+        assert!(path.contains(Point::new(50.0, 30.0)));
+        assert!(path.contains(Point::new(30.0, 25.0)));
+        assert!(path.contains(Point::new(50.0, 50.0)));
+
+        // Points outside (below the curve or far away)
+        assert!(!path.contains(Point::new(50.0, 85.0)));
+        assert!(!path.contains(Point::new(0.0, 0.0)));
+        assert!(!path.contains(Point::new(100.0, 10.0)));
+    }
+
+    #[test]
+    fn test_contains_cubic_bezier() {
+        let mut path = Path::new();
+        path.move_to(Point::new(10.0, 50.0));
+        path.cubic_to(
+            Point::new(30.0, 10.0),
+            Point::new(70.0, 90.0),
+            Point::new(90.0, 50.0),
+        );
+        path.line_to(Point::new(90.0, 80.0));
+        path.line_to(Point::new(10.0, 80.0));
+        path.close();
+
+        // Points inside (should be inside the closed path)
+        assert!(path.contains(Point::new(50.0, 60.0)));
+
+        // Points outside
+        assert!(!path.contains(Point::new(0.0, 50.0)));
+        assert!(!path.contains(Point::new(100.0, 50.0)));
+        assert!(!path.contains(Point::new(50.0, 0.0)));
+    }
+
+    #[test]
+    fn test_contains_donut_even_odd() {
+        // Create a donut shape: outer rect with inner rect hole
+        let mut path = Path::new();
+        path.set_fill_type(PathFillType::EvenOdd);
+
+        // Outer rectangle
+        path.add_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+
+        // Inner rectangle (hole)
+        path.add_rect(Rect::from_xywh(25.0, 25.0, 50.0, 50.0));
+
+        // Points in the "ring" (between outer and inner)
+        assert!(path.contains(Point::new(10.0, 10.0)));
+        assert!(path.contains(Point::new(90.0, 90.0)));
+        assert!(path.contains(Point::new(10.0, 50.0)));
+
+        // Points in the hole (should be outside with even-odd)
+        assert!(!path.contains(Point::new(50.0, 50.0)));
+        assert!(!path.contains(Point::new(40.0, 40.0)));
+        assert!(!path.contains(Point::new(60.0, 60.0)));
+
+        // Points completely outside
+        assert!(!path.contains(Point::new(-10.0, 50.0)));
+        assert!(!path.contains(Point::new(110.0, 50.0)));
+    }
+
+    #[test]
+    fn test_contains_donut_non_zero() {
+        // Create a donut with non-zero winding
+        let mut path = Path::new();
+        path.set_fill_type(PathFillType::NonZero);
+
+        // Outer rectangle (counter-clockwise)
+        path.move_to(Point::new(0.0, 0.0));
+        path.line_to(Point::new(100.0, 0.0));
+        path.line_to(Point::new(100.0, 100.0));
+        path.line_to(Point::new(0.0, 100.0));
+        path.close();
+
+        // Inner rectangle (clockwise - opposite winding)
+        path.move_to(Point::new(25.0, 25.0));
+        path.line_to(Point::new(25.0, 75.0));
+        path.line_to(Point::new(75.0, 75.0));
+        path.line_to(Point::new(75.0, 25.0));
+        path.close();
+
+        // Points in the ring
+        assert!(path.contains(Point::new(10.0, 10.0)));
+        assert!(path.contains(Point::new(90.0, 90.0)));
+
+        // Points in the hole (opposite winding cancels out)
+        assert!(!path.contains(Point::new(50.0, 50.0)));
+        assert!(!path.contains(Point::new(40.0, 40.0)));
+    }
+
+    #[test]
+    fn test_contains_complex_path() {
+        // Complex path with lines and curves
+        let mut path = Path::new();
+        path.move_to(Point::new(20.0, 20.0));
+        path.line_to(Point::new(80.0, 20.0));
+        path.quadratic_to(Point::new(100.0, 50.0), Point::new(80.0, 80.0));
+        path.line_to(Point::new(20.0, 80.0));
+        path.cubic_to(
+            Point::new(10.0, 60.0),
+            Point::new(10.0, 40.0),
+            Point::new(20.0, 20.0),
+        );
+        path.close();
+
+        // Point clearly inside
+        assert!(path.contains(Point::new(50.0, 50.0)));
+
+        // Points clearly outside
+        assert!(!path.contains(Point::new(0.0, 0.0)));
+        assert!(!path.contains(Point::new(110.0, 50.0)));
+        assert!(!path.contains(Point::new(50.0, 100.0)));
+    }
+
+    #[test]
+    fn test_contains_empty_path() {
+        let path = Path::new();
+        assert!(!path.contains(Point::new(50.0, 50.0)));
+    }
+
+    #[test]
+    fn test_contains_point_outside_bounds() {
+        let mut path = Path::new();
+        path.add_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
+
+        // Points far outside the bounds should quickly return false
+        assert!(!path.contains(Point::new(-100.0, 50.0)));
+        assert!(!path.contains(Point::new(200.0, 50.0)));
+        assert!(!path.contains(Point::new(50.0, -100.0)));
+        assert!(!path.contains(Point::new(50.0, 200.0)));
     }
 }
