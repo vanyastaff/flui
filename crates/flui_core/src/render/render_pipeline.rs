@@ -170,12 +170,14 @@ impl RenderPipeline {
     where
         W: RenderWidget + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
-        // Create a dummy BuildContext for root widget
-        // FIXME: BuildContext needs proper constructor - using unsafe zeroed for now
-        // This is temporary test code and will be replaced with proper initialization
-        use crate::element::BuildContext;
-        #[allow(invalid_value)]
-        let ctx = unsafe { std::mem::zeroed::<BuildContext>() };
+        // Create a temporary BuildContext for root widget creation
+        // Use an empty temporary tree since root has no parent context
+        use crate::element::{BuildContext, ElementTree};
+        use parking_lot::RwLock;
+        use std::sync::Arc;
+
+        let temp_tree = Arc::new(RwLock::new(ElementTree::new()));
+        let ctx = BuildContext::new(temp_tree, 0);
 
         let render_boxed = widget.create_render_object(&ctx);
 
