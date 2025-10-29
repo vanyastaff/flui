@@ -157,7 +157,7 @@ impl BuildContext {
 
     /// Get shared reference to the element tree
     ///
-    /// Returns the Arc<RwLock<ElementTree>> for more complex operations.
+    /// Returns the `Arc<RwLock<ElementTree>>` for more complex operations.
     /// Most methods should use the convenience methods on BuildContext instead.
     pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
         Arc::clone(&self.tree)

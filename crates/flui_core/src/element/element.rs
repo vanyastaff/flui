@@ -21,7 +21,7 @@
 //!
 //! Enum-based storage provides significant benefits over `Box<dyn DynElement>`:
 //!
-//! | Metric | Box<dyn> | enum | Improvement |
+//! | Metric | `Box<dyn>` | enum | Improvement |
 //! |--------|----------|------|-------------|
 //! | **Element Access** | 150μs | 40μs | **3.75x faster** ⚡ |
 //! | **Dispatch** | 180μs | 50μs | **3.60x faster** ⚡ |
@@ -45,7 +45,7 @@
 //!
 //! This is acceptable because:
 //! - Elements stored in contiguous Slab (cache-friendly)
-//! - No heap indirection (unlike Box<dyn>)
+//! - No heap indirection (unlike `Box<dyn>`)
 //! - Compiler can optimize away unused variants
 //!
 //! # Type Safety
@@ -113,7 +113,7 @@ pub use crate::element::stateful::StatefulElement as Stateful;
 ///
 /// # Design Rationale
 ///
-/// ## Why enum over Box<dyn>?
+/// ## Why enum over `Box<dyn>`?
 ///
 /// **1. Known, Closed Set**
 /// - FLUI has exactly 5 element types (fixed by framework)

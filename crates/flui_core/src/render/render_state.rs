@@ -169,7 +169,7 @@ impl RenderState {
     // ========== Size & Constraints ==========
 
     /// Get computed size
-    pub fn get_size(&self) -> Option<Size> {
+    pub fn size(&self) -> Option<Size> {
         *self.size.read()
     }
 
@@ -186,7 +186,7 @@ impl RenderState {
     }
 
     /// Get constraints
-    pub fn get_constraints(&self) -> Option<BoxConstraints> {
+    pub fn constraints(&self) -> Option<BoxConstraints> {
         *self.constraints.read()
     }
 
@@ -198,7 +198,7 @@ impl RenderState {
     // ========== Offset ==========
 
     /// Get offset
-    pub fn get_offset(&self) -> Offset {
+    pub fn offset(&self) -> Offset {
         *self.offset.read()
     }
 
@@ -283,7 +283,7 @@ mod tests {
 
         state.set_size(Size::new(100.0, 100.0));
         assert!(state.has_size());
-        assert_eq!(state.get_size(), Some(Size::new(100.0, 100.0)));
+        assert_eq!(state.size(), Some(Size::new(100.0, 100.0)));
     }
 
     #[test]
@@ -309,6 +309,6 @@ mod tests {
 
         assert!(!state.needs_layout());
         assert!(!state.has_size());
-        assert_eq!(state.get_size(), None);
+        assert_eq!(state.size(), None);
     }
 }

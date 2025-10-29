@@ -378,10 +378,10 @@ impl ElementTree {
         {
             let state = render_state.read();
             if state.has_size() && !state.needs_layout() {
-                if let Some(cached_constraints) = state.get_constraints() {
+                if let Some(cached_constraints) = state.constraints() {
                     if cached_constraints == constraints {
                         // Cache hit! Return cached size without layout computation
-                        return state.get_size();
+                        return state.size();
                     }
                 }
             }
@@ -786,7 +786,7 @@ mod tests {
         {
             let state = tree.render_state(element_id).unwrap();
             assert!(state.has_size());
-            assert_eq!(state.get_size(), Some(Size::new(100.0, 50.0)));
+            assert_eq!(state.size(), Some(Size::new(100.0, 50.0)));
         }
     }
 
