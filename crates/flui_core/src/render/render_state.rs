@@ -169,6 +169,7 @@ impl RenderState {
     // ========== Size & Constraints ==========
 
     /// Get computed size
+    #[inline]
     pub fn size(&self) -> Option<Size> {
         *self.size.read()
     }
@@ -186,6 +187,7 @@ impl RenderState {
     }
 
     /// Get constraints
+    #[inline]
     pub fn constraints(&self) -> Option<BoxConstraints> {
         *self.constraints.read()
     }
@@ -198,6 +200,7 @@ impl RenderState {
     // ========== Offset ==========
 
     /// Get offset
+    #[inline]
     pub fn offset(&self) -> Offset {
         *self.offset.read()
     }
