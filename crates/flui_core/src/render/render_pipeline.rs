@@ -177,8 +177,8 @@ impl RenderPipeline {
 
         let render_boxed = widget.create_render_object(&ctx);
 
-        // Box the widget (it implements DynWidget)
-        let widget_boxed = Widget::new(widget);
+        // Box the widget (it implements RenderWidget)
+        let widget_boxed = Widget::render_object(widget);
 
         let render_element = RenderElement::new(widget_boxed, render_boxed);
         let element = crate::element::Element::Render(render_element);

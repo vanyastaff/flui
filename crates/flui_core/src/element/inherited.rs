@@ -79,7 +79,7 @@ impl InheritedElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &*self.widget
+        &self.widget
     }
 
     /// Update with a new widget

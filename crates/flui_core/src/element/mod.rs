@@ -43,6 +43,7 @@ pub mod build_context;
 pub mod component;
 pub mod dependency;
 pub mod element;
+pub mod element_base;
 pub mod element_tree;
 pub mod inherited;
 pub mod lifecycle;
@@ -52,11 +53,13 @@ pub mod render_object_element;
 pub mod stateful;
 
 
+
 // Re-exports
 pub use build_context::BuildContext;
 pub use component::ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
 pub use element::Element;
+pub use element_base::ElementBase;
 pub use element_tree::ElementTree;
 pub use inherited::InheritedElement;
 pub use parent_data_element::ParentDataElement;
@@ -83,5 +86,6 @@ pub enum ElementLifecycle {
 /// ElementIds are reused after removal (slab behavior), so don't store them long-term
 /// without verifying the element still exists.
 pub type ElementId = usize;
+
 
 

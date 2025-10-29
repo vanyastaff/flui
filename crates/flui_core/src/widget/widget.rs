@@ -301,6 +301,50 @@ impl Widget {
             Widget::ParentData(_) => "ParentData",
         }
     }
+
+    // ========== Widget-specific Methods ==========
+
+    /// Build the widget tree (for StatelessWidget only)
+    ///
+    /// Returns Some(Widget) if this is a StatelessWidget, None otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(child) = widget.build(&context) {
+    ///     // Process child widget
+    /// }
+    /// ```
+    pub fn build(&self, context: &crate::BuildContext) -> Option<Widget> {
+        match self {
+            Widget::Stateless(w) => Some(w.build(context)),
+            _ => None,
+        }
+    }
+
+    /// Get the child widget (for ParentDataWidget only)
+    ///
+    /// Returns Some(&Widget) if this is a ParentDataWidget, None otherwise.
+    pub fn parent_data_child(&self) -> Option<&Widget> {
+        match self {
+            Widget::ParentData(w) => Some(w.child()),
+            _ => None,
+        }
+    }
+
+    /// Get as Any for downcasting (unified interface)
+    ///
+    /// This provides a unified way to access the underlying Any trait
+    /// for all widget types.
+    pub fn as_any(&self) -> &dyn Any {
+        match self {
+            Widget::Stateless(w) => w.as_any(),
+            Widget::Stateful(w) => w.as_any(),
+            Widget::Inherited(w) => w.as_any(),
+            Widget::Render(w) => w.as_any(),
+            Widget::ParentData(w) => w.as_any(),
+        }
+    }
 }
 
 impl Clone for Widget {

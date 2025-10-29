@@ -3,7 +3,7 @@
 //! This element type is created by StatelessWidget and calls build() to create
 //! its child widget tree.
 
-use super::ElementLifecycle;
+use super::{ElementBase, ElementLifecycle};
 use crate::{Widget, ElementId};
 
 /// Element for StatelessWidget
@@ -16,9 +16,8 @@ use crate::{Widget, ElementId};
 ///
 /// ```text
 /// ComponentElement
-///   ├─ widget: Widget (type-erased StatelessWidget)
-///   ├─ child: Option<ElementId> (single child from build())
-///   └─ lifecycle state
+///   ├─ base: ElementBase (common fields: widget, parent, slot, lifecycle, dirty)
+///   └─ child: Option<ElementId> (single child from build())
 /// ```
 ///
 /// # Type Erasure
@@ -39,23 +38,11 @@ use crate::{Widget, ElementId};
 /// - Element operations: Fast via enum
 #[derive(Debug)]
 pub struct ComponentElement {
-    /// The widget this element represents (type-erased)
-    widget: Widget,
-
-    /// Parent element ID
-    parent: Option<ElementId>,
+    /// Common element data (widget, parent, slot, lifecycle, dirty)
+    base: ElementBase,
 
     /// Child element created by build()
     child: Option<ElementId>,
-
-    /// Slot position in parent's child list
-    slot: usize,
-
-    /// Lifecycle state
-    lifecycle: ElementLifecycle,
-
-    /// Dirty flag (needs rebuild)
-    dirty: bool,
 }
 
 impl ComponentElement {
@@ -72,12 +59,8 @@ impl ComponentElement {
     /// ```
     pub fn new(widget: Widget) -> Self {
         Self {
-            widget,
-            parent: None,
+            base: ElementBase::new(widget),
             child: None,
-            slot: 0,
-            lifecycle: ElementLifecycle::Initial,
-            dirty: true,
         }
     }
 
@@ -87,7 +70,7 @@ impl ComponentElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &*self.widget
+        self.base.widget()
     }
 
     /// Update with a new widget
@@ -96,8 +79,7 @@ impl ComponentElement {
     /// This is checked via `can_update()`.
     pub fn update(&mut self, new_widget: Widget) {
         // Could add debug assertion for can_update check
-        self.widget = new_widget;
-        self.dirty = true;
+        self.base.set_widget(new_widget);
     }
 
     /// Get child element ID
@@ -124,7 +106,7 @@ impl ComponentElement {
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
-        self.parent
+        self.base.parent()
     }
 
     /// Get iterator over child element IDs
@@ -137,7 +119,7 @@ impl ComponentElement {
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
+        self.base.lifecycle()
     }
 
     /// Mount element to tree
@@ -145,10 +127,7 @@ impl ComponentElement {
     /// Sets parent, slot, and transitions to Active lifecycle state.
     /// Marks element as dirty to trigger initial build.
     pub fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
-        self.parent = parent;
-        self.slot = slot;
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Will rebuild on first frame
+        self.base.mount(parent, slot);
     }
 
     /// Unmount element from tree
@@ -156,7 +135,7 @@ impl ComponentElement {
     /// Transitions to Defunct lifecycle state and clears child reference.
     /// The child element will be unmounted by ElementTree separately.
     pub fn unmount(&mut self) {
-        self.lifecycle = ElementLifecycle::Defunct;
+        self.base.unmount();
         // Child will be unmounted by ElementTree
         self.child = None;
     }
@@ -165,15 +144,14 @@ impl ComponentElement {
     ///
     /// Called when element is temporarily deactivated (e.g., moved to cache).
     pub fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
+        self.base.deactivate();
     }
 
     /// Activate element
     ///
     /// Called when element is reactivated. Marks dirty to trigger rebuild.
     pub fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Rebuild when reactivated
+        self.base.activate();
     }
 
     /// Check if element needs rebuild
@@ -182,13 +160,13 @@ impl ComponentElement {
     #[inline]
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.base.is_dirty()
     }
 
     /// Mark element as needing rebuild
     #[inline]
     pub fn mark_dirty(&mut self) {
-        self.dirty = true;
+        self.base.mark_dirty();
     }
 
     /// Perform rebuild
@@ -214,17 +192,17 @@ impl ComponentElement {
         element_id: ElementId,
         tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, Widget, usize)> {
-        if !self.dirty {
+        if !self.base.is_dirty() {
             return Vec::new();
         }
 
-        self.dirty = false;
+        self.base.clear_dirty();
 
         // Create BuildContext for the build phase
         let context = crate::element::BuildContext::new(tree, element_id);
 
         // Call build() on the widget (if it's a StatelessWidget)
-        if let Some(child_widget) = self.widget.build(&context) {
+        if let Some(child_widget) = self.base.widget().build(&context) {
             // Return child to be mounted at slot 0
             vec![(element_id, child_widget, 0)]
         } else {
@@ -261,13 +239,23 @@ mod tests {
         value: i32,
     }
 
-    impl crate::Widget for TestWidget {
-        // Minimal implementation for testing
+    impl crate::widget::StatelessWidget for TestWidget {
+        fn build(&self, _ctx: &crate::element::BuildContext) -> Widget {
+            Widget::stateless(TestWidget { value: self.value + 1 })
+        }
+
+        fn clone_boxed(&self) -> Box<dyn crate::widget::StatelessWidget> {
+            Box::new(self.clone())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[test]
     fn test_component_element_creation() {
-        let widget: Widget = Box::new(TestWidget { value: 42 });
+        let widget = Widget::stateless(TestWidget { value: 42 });
         let element = ComponentElement::new(widget);
 
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
@@ -276,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_component_element_mount() {
-        let widget: Widget = Box::new(TestWidget { value: 42 });
+        let widget = Widget::stateless(TestWidget { value: 42 });
         let mut element = ComponentElement::new(widget);
 
         element.mount(Some(0), 0);
@@ -287,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_component_element_lifecycle() {
-        let widget: Widget = Box::new(TestWidget { value: 42 });
+        let widget = Widget::stateless(TestWidget { value: 42 });
         let mut element = ComponentElement::new(widget);
 
         // Initial
@@ -313,15 +301,11 @@ mod tests {
 
     #[test]
     fn test_component_element_dirty_flag() {
-        let widget: Widget = Box::new(TestWidget { value: 42 });
+        let widget = Widget::stateless(TestWidget { value: 42 });
         let mut element = ComponentElement::new(widget);
 
         // Initially dirty
         assert!(element.is_dirty());
-
-        // Clear dirty manually for testing
-        element.dirty = false;
-        assert!(!element.is_dirty());
 
         // Mark dirty
         element.mark_dirty();

@@ -147,7 +147,7 @@ impl RenderElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &*self.widget
+        &self.widget
     }
 
     /// Get reference to the render object

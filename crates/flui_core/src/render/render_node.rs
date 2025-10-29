@@ -91,34 +91,130 @@ impl RenderNode {
     }
 
     /// Get child (Single only)
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(ElementId)` if this is a Single variant, `None` otherwise.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if called on non-Single variant.
+    /// Consider using `try_child()` for non-panicking version.
     pub fn child(&self) -> ElementId {
         match self {
             Self::Single { child, .. } => *child,
-            _ => panic!("child() called on non-Single"),
+            _ => panic!("child() called on non-Single RenderNode (use try_child() for safe access)"),
+        }
+    }
+
+    /// Try to get child (Single only) - non-panicking version
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(ElementId)` if this is a Single variant, `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(child_id) = render.try_child() {
+    ///     // Process child
+    /// }
+    /// ```
+    pub fn try_child(&self) -> Option<ElementId> {
+        match self {
+            Self::Single { child, .. } => Some(*child),
+            _ => None,
         }
     }
 
     /// Set child (Single only)
+    ///
+    /// # Panics
+    ///
+    /// This method panics if called on non-Single variant.
+    /// Consider using `try_set_child()` for non-panicking version.
     pub fn set_child(&mut self, new_child: ElementId) {
         match self {
             Self::Single { child, .. } => *child = new_child,
-            _ => panic!("set_child() called on non-Single"),
+            _ => panic!("set_child() called on non-Single RenderNode (use try_set_child() for safe access)"),
+        }
+    }
+
+    /// Try to set child (Single only) - non-panicking version
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if child was set (Single variant), `false` otherwise.
+    pub fn try_set_child(&mut self, new_child: ElementId) -> bool {
+        match self {
+            Self::Single { child, .. } => {
+                *child = new_child;
+                true
+            }
+            _ => false,
         }
     }
 
     /// Get children (Multi only)
+    ///
+    /// # Panics
+    ///
+    /// This method panics if called on non-Multi variant.
+    /// Consider using `try_children()` for non-panicking version.
     pub fn children(&self) -> &[ElementId] {
         match self {
             Self::Multi { children, .. } => children,
-            _ => panic!("children() called on non-Multi"),
+            _ => panic!("children() called on non-Multi RenderNode (use try_children() for safe access)"),
+        }
+    }
+
+    /// Try to get children (Multi only) - non-panicking version
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(&[ElementId])` if this is a Multi variant, `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(children) = render.try_children() {
+    ///     for child_id in children {
+    ///         // Process each child
+    ///     }
+    /// }
+    /// ```
+    pub fn try_children(&self) -> Option<&[ElementId]> {
+        match self {
+            Self::Multi { children, .. } => Some(children),
+            _ => None,
         }
     }
 
     /// Set children (Multi only)
+    ///
+    /// # Panics
+    ///
+    /// This method panics if called on non-Multi variant.
+    /// Consider using `try_set_children()` for non-panicking version.
     pub fn set_children(&mut self, new_children: Vec<ElementId>) {
         match self {
             Self::Multi { children, .. } => *children = new_children,
-            _ => panic!("set_children() called on non-Multi"),
+            _ => panic!("set_children() called on non-Multi RenderNode (use try_set_children() for safe access)"),
+        }
+    }
+
+    /// Try to set children (Multi only) - non-panicking version
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if children were set (Multi variant), `false` otherwise.
+    pub fn try_set_children(&mut self, new_children: Vec<ElementId>) -> bool {
+        match self {
+            Self::Multi { children, .. } => {
+                *children = new_children;
+                true
+            }
+            _ => false,
         }
     }
 

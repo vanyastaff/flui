@@ -135,7 +135,7 @@ impl StatefulElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &*self.widget
+        &self.widget
     }
 
     /// Get reference to the state (as DynState trait object)
@@ -159,7 +159,7 @@ impl StatefulElement {
         let old_widget = std::mem::replace(&mut self.widget, new_widget);
 
         // Call did_update_widget on the state
-        self.state.did_update_widget(&*old_widget, &*self.widget);
+        self.state.did_update_widget(&old_widget, &self.widget);
 
         // Mark as dirty to trigger rebuild
         self.dirty = true;
@@ -261,7 +261,7 @@ impl StatefulElement {
         let context = crate::element::BuildContext::new(tree, element_id);
 
         // Call build() on the state with BuildContext
-        let child_widget = self.state.build(&*self.widget, &context);
+        let child_widget = self.state.build(&self.widget, &context);
 
         // Clear old child (will be unmounted by caller if needed)
         self.child = None;

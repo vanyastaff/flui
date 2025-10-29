@@ -90,7 +90,7 @@ impl ParentDataElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &*self.widget
+        &self.widget
     }
 
     /// Update with a new widget
@@ -229,8 +229,8 @@ impl ParentDataElement {
             // Mark old child for unmounting
             self.child = None;
 
-            // Clone the child widget using Widget::clone_boxed()
-            let child_widget = (**child_widget_ref).clone_boxed();
+            // Clone the child widget
+            let child_widget = child_widget_ref.clone();
 
             // Return child to be mounted
             // Note: Parent should be set when this element was mounted
