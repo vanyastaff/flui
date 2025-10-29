@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 8: Font family information
     println!("8. Getting font family information...");
-    if let Some(family) = FontLoader::get_family("Roboto") {
+    if let Some(family) = FontLoader::family("Roboto") {
         println!("   Family: {}", family.name());
         println!("   Variants: {}", family.variant_count());
         println!("   Available variants:");

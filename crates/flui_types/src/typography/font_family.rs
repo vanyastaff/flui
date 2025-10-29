@@ -94,7 +94,7 @@ impl FontFamily {
     ///
     /// * `weight` - Desired font weight
     /// * `style` - Desired font style
-    pub fn get_font(&self, weight: FontWeight, style: FontStyle) -> Option<Arc<dyn FontProvider>> {
+    pub fn font(&self, weight: FontWeight, style: FontStyle) -> Option<Arc<dyn FontProvider>> {
         // 1. Try exact match
         if let Some(font) = self.fonts.get(&(weight, style)) {
             return Some(Arc::clone(font));
@@ -139,7 +139,7 @@ impl FontFamily {
     /// * `weight` - Desired font weight
     /// * `style` - Desired font style
     pub async fn load(&self, weight: FontWeight, style: FontStyle) -> FontResult<FontData> {
-        let provider = self.get_font(weight, style).ok_or_else(|| {
+        let provider = self.font(weight, style).ok_or_else(|| {
             crate::typography::FontError::NotFound(format!(
                 "No font found for family '{}' with weight {:?} and style {:?}",
                 self.name, weight, style
@@ -209,7 +209,7 @@ mod tests {
         let mut family = FontFamily::new("Roboto");
         family.add_font(create_test_font(), FontWeight::W400, FontStyle::Normal);
 
-        let font = family.get_font(FontWeight::W400, FontStyle::Normal);
+        let font = family.font(FontWeight::W400, FontStyle::Normal);
         assert!(font.is_some());
     }
 
@@ -219,7 +219,7 @@ mod tests {
         family.add_font(create_test_font(), FontWeight::W700, FontStyle::Normal);
 
         // Request italic, should fallback to normal
-        let font = family.get_font(FontWeight::W700, FontStyle::Italic);
+        let font = family.font(FontWeight::W700, FontStyle::Italic);
         assert!(font.is_some());
     }
 
@@ -229,7 +229,7 @@ mod tests {
         family.add_font(create_test_font(), FontWeight::W400, FontStyle::Normal);
 
         // Request bold, should fallback to W400
-        let font = family.get_font(FontWeight::W700, FontStyle::Normal);
+        let font = family.font(FontWeight::W700, FontStyle::Normal);
         assert!(font.is_some());
     }
 
@@ -239,7 +239,7 @@ mod tests {
         family.set_default(create_test_font());
 
         // No variants added, should return default
-        let font = family.get_font(FontWeight::W400, FontStyle::Normal);
+        let font = family.font(FontWeight::W400, FontStyle::Normal);
         assert!(font.is_some());
     }
 

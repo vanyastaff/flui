@@ -9,7 +9,7 @@ use std::any::Any;
 
 /// Data for RenderMetaData
 #[derive(Debug)]
-pub struct MetaDataData {
+pub struct MetaData {
     /// Metadata value (can be any type)
     pub metadata: Option<Box<dyn Any + Send + Sync>>,
     /// Whether hit testing should use this metadata
@@ -27,7 +27,7 @@ pub enum HitTestBehavior {
     Translucent,
 }
 
-impl MetaDataData {
+impl MetaData {
     /// Create new metadata data
     pub fn new() -> Self {
         Self {
@@ -53,7 +53,7 @@ impl MetaDataData {
     }
 }
 
-impl Default for MetaDataData {
+impl Default for MetaData {
     fn default() -> Self {
         Self::new()
     }
@@ -84,7 +84,7 @@ impl Default for MetaDataData {
 #[derive(Debug)]
 pub struct RenderMetaData {
     /// Metadata data
-    pub data: MetaDataData,
+    pub data: MetaData,
 }
 
 // ===== Public API =====
@@ -93,21 +93,21 @@ impl RenderMetaData {
     /// Create new RenderMetaData
     pub fn new() -> Self {
         Self {
-            data: MetaDataData::new(),
+            data: MetaData::new(),
         }
     }
 
     /// Create with metadata
     pub fn with_metadata<T: Any + Send + Sync>(metadata: T) -> Self {
         Self {
-            data: MetaDataData::with_metadata(metadata),
+            data: MetaData::with_metadata(metadata),
         }
     }
 
     /// Create with behavior
     pub fn with_behavior(behavior: HitTestBehavior) -> Self {
         Self {
-            data: MetaDataData::with_behavior(behavior),
+            data: MetaData::with_behavior(behavior),
         }
     }
 
@@ -122,7 +122,7 @@ impl RenderMetaData {
     }
 
     /// Try to get metadata as specific type
-    pub fn get_metadata<T: Any>(&self) -> Option<&T> {
+    pub fn metadata<T: Any>(&self) -> Option<&T> {
         self.data
             .metadata
             .as_ref()
@@ -221,7 +221,7 @@ mod tests {
         let meta = RenderMetaData::with_metadata(test_data.clone());
         assert!(meta.has_metadata());
 
-        let retrieved = meta.get_metadata::<TestMetadata>();
+        let retrieved = meta.metadata::<TestMetadata>();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().value, 42);
     }
@@ -240,7 +240,7 @@ mod tests {
         meta.set_metadata(test_data.clone());
         assert!(meta.has_metadata());
 
-        let retrieved = meta.get_metadata::<TestMetadata>();
+        let retrieved = meta.metadata::<TestMetadata>();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap(), &test_data);
     }

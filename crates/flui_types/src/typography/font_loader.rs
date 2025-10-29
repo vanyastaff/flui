@@ -113,7 +113,7 @@ impl FontLoader {
     /// # Returns
     ///
     /// The font family, or None if not found
-    pub fn get_family(family_name: &str) -> Option<Arc<FontFamily>> {
+    pub fn family(family_name: &str) -> Option<Arc<FontFamily>> {
         Self::global()
             .families
             .read()
@@ -174,7 +174,7 @@ impl FontLoader {
         }
 
         // Not in cache, load it
-        let family = Self::get_family(family_name).ok_or_else(|| {
+        let family = Self::family(family_name).ok_or_else(|| {
             FontError::NotFound(format!("Font family '{}' not registered", family_name))
         })?;
 
@@ -446,7 +446,7 @@ mod tests {
             FontLoader::register_family(family);
 
             assert!(FontLoader::has_family("TestFont"));
-            assert!(FontLoader::get_family("TestFont").is_some());
+            assert!(FontLoader::family("TestFont").is_some());
         });
     }
 
@@ -462,7 +462,7 @@ mod tests {
 
             assert!(FontLoader::has_family("SimpleFont"));
 
-            let family = FontLoader::get_family("SimpleFont").unwrap();
+            let family = FontLoader::family("SimpleFont").unwrap();
             assert!(family.has_variant(FontWeight::W400, FontStyle::Normal));
         });
     }
@@ -471,7 +471,7 @@ mod tests {
     fn test_get_nonexistent_family() {
         with_clean_loader(|| {
             assert!(!FontLoader::has_family("NonExistent"));
-            assert!(FontLoader::get_family("NonExistent").is_none());
+            assert!(FontLoader::family("NonExistent").is_none());
         });
     }
 

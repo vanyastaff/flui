@@ -108,7 +108,7 @@ impl<'a> EguiPainter<'a> {
     }
 
     /// Get the current clip rect for egui
-    fn get_egui_clip_rect(&self) -> egui::Rect {
+    fn egui_clip_rect(&self) -> egui::Rect {
         if let Some(clip) = self.current_state.clip_rect {
             // Transform clip rect to screen space
             let transformed_clip = self.transform_rect(clip);
@@ -126,7 +126,7 @@ impl<'a> EguiPainter<'a> {
         F: FnOnce(&egui::Painter),
     {
         if self.current_state.clip_rect.is_some() {
-            let clip_rect = self.get_egui_clip_rect();
+            let clip_rect = self.egui_clip_rect();
             let clipped = self.painter.with_clip_rect(clip_rect);
             f(&clipped);
         } else {
@@ -203,7 +203,7 @@ impl<'a> EguiPainter<'a> {
     }
 
     /// Get transformed corners of a rectangle
-    fn get_transformed_corners(&self, rect: Rect) -> [Point; 4] {
+    fn transformed_corners(&self, rect: Rect) -> [Point; 4] {
         [
             self.transform_point(Point::new(rect.min.x, rect.min.y)), // top-left
             self.transform_point(Point::new(rect.max.x, rect.min.y)), // top-right
@@ -214,7 +214,7 @@ impl<'a> EguiPainter<'a> {
 
     /// Draw a filled rectangle using mesh (supports arbitrary transforms including skew)
     fn draw_rect_mesh(&self, rect: Rect, color: egui::Color32) {
-        let corners = self.get_transformed_corners(rect);
+        let corners = self.transformed_corners(rect);
 
         // Create mesh with 4 vertices (quad)
         let vertices = corners
@@ -240,7 +240,7 @@ impl<'a> EguiPainter<'a> {
 
     /// Draw a stroked rectangle using line segments (supports arbitrary transforms)
     fn draw_rect_stroke_mesh(&self, rect: Rect, stroke: egui::Stroke) {
-        let corners = self.get_transformed_corners(rect);
+        let corners = self.transformed_corners(rect);
 
         self.with_clip(|painter| {
             // Draw 4 line segments connecting the corners
