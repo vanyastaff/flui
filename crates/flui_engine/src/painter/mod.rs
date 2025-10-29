@@ -233,6 +233,50 @@ pub trait Painter {
     /// - `position`: Top-left position of the text
     /// - `font_size`: Font size in pixels
     /// - `paint`: Paint style (uses color from paint)
+    ///
+    /// # Per-Character Custom Effects
+    ///
+    /// For custom per-character transformations (wave, circle, pyramid text, etc.),
+    /// render each character separately using helpers from `flui_types::text_path`:
+    ///
+    /// ```rust,ignore
+    /// use flui_types::text_path::*;
+    ///
+    /// // Wave text
+    /// for (i, ch) in text.chars().enumerate() {
+    ///     let wave_y = wave_offset(i, 0.5, 10.0);
+    ///     painter.text(&ch.to_string(), Point::new(x + i * 20.0, y + wave_y), 16.0, &paint);
+    /// }
+    ///
+    /// // Circle text
+    /// for (i, ch) in text.chars().enumerate() {
+    ///     let transform = arc_position(i, text.len(), 100.0, 0.0, TAU);
+    ///     painter.save();
+    ///     painter.translate(Offset::new(transform.position.x, transform.position.y));
+    ///     painter.rotate(transform.rotation);
+    ///     painter.text(&ch.to_string(), Point::ZERO, 16.0, &paint);
+    ///     painter.restore();
+    /// }
+    ///
+    /// // Pyramid/trapezoid text (vertical gradient scaling)
+    /// let lines: Vec<&str> = text.lines().collect();
+    /// for (i, line) in lines.iter().enumerate() {
+    ///     let y_norm = i as f32 / lines.len() as f32;
+    ///     let scale_x = vertical_scale(y_norm, 0.5, 1.0); // narrow top, wide bottom
+    ///     painter.save();
+    ///     painter.scale(scale_x, 1.0);
+    ///     painter.text(line, Point::new(x, y + i * line_height), 16.0, &paint);
+    ///     painter.restore();
+    /// }
+    /// ```
+    ///
+    /// See `flui_types::text_path` module for more helper functions:
+    /// - `arc_position()` - circular/arc text
+    /// - `wave_offset()`, `wave_rotation()` - wave effects
+    /// - `spiral_position()` - spiral text
+    /// - `vertical_scale()` - pyramid/trapezoid scaling
+    /// - `bezier_point()` - text along Bezier curves
+    /// - `parametric_position()` - custom parametric paths
     fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {
         // Default implementation is no-op (for backends that don't support text yet)
         let _ = (text, position, font_size, paint);
@@ -293,6 +337,87 @@ pub trait Painter {
     /// Scale coordinate system
     fn scale(&mut self, sx: f32, sy: f32);
 
+    /// Skew (shear) coordinate system
+    ///
+    /// # Parameters
+    /// - `skew_x`: Horizontal skew angle in radians
+    /// - `skew_y`: Vertical skew angle in radians
+    ///
+    /// # Default Implementation
+    /// Uses a matrix transform equivalent to skew.
+    /// Backends can override for more efficient implementation.
+    fn skew(&mut self, skew_x: f32, skew_y: f32) {
+        // Skew matrix:
+        // | 1      tan(skew_x)  0 |
+        // | tan(skew_y)  1      0 |
+        // | 0      0      1 |
+        let tan_x = skew_x.tan();
+        let tan_y = skew_y.tan();
+        self.transform_matrix(1.0, tan_y, tan_x, 1.0, 0.0, 0.0);
+    }
+
+    /// Apply arbitrary 2D affine transformation matrix
+    ///
+    /// # Parameters
+    /// Matrix [a, b, c, d, tx, ty] represents:
+    /// | a  c  tx |
+    /// | b  d  ty |
+    /// | 0  0  1  |
+    ///
+    /// # Default Implementation
+    /// Composes the transform using translate, rotate, scale operations.
+    /// Backends should override for direct matrix support.
+    fn transform_matrix(&mut self, a: f32, b: f32, c: f32, d: f32, tx: f32, ty: f32) {
+        // For backends without native matrix support, decompose the matrix
+        // This is approximate and may not handle all edge cases perfectly
+
+        // Apply translation
+        self.translate(Offset::new(tx, ty));
+
+        // Decompose matrix to rotation + scale
+        // [a c]   [cos -sin] [sx  0 ]
+        // [b d] = [sin  cos] [0   sy]
+
+        let sx = (a * a + b * b).sqrt();
+        let sy = (c * c + d * d).sqrt();
+
+        if sx.abs() > 0.001 && sy.abs() > 0.001 {
+            let cos_theta = a / sx;
+            let sin_theta = b / sx;
+            let angle = sin_theta.atan2(cos_theta);
+
+            self.rotate(angle);
+            self.scale(sx, sy);
+        }
+    }
+
+    /// Apply full 4x4 transformation matrix (supports 3D perspective)
+    ///
+    /// # Parameters
+    /// - `matrix`: 4x4 transformation matrix (glam::Mat4)
+    ///
+    /// This method applies a full 4x4 matrix transformation, including
+    /// perspective projection. For standard 2D transforms, the matrix
+    /// should have the form:
+    /// ```text
+    /// | sx  shx 0  px |
+    /// | shy sy  0  py |
+    /// | 0   0   1  0  |
+    /// | tx  ty  0  1  |
+    /// ```
+    ///
+    /// For 3D perspective, non-zero values in row 4 (tx, ty columns) create
+    /// perspective division effects.
+    ///
+    /// # Default Implementation
+    /// Backends without native Mat4 support should override this method.
+    /// The default implementation extracts 2D affine part and ignores perspective.
+    fn apply_matrix4(&mut self, matrix: glam::Mat4) {
+        let m = matrix.to_cols_array_2d();
+        // Extract 2D affine transform (ignore perspective)
+        self.transform_matrix(m[0][0], m[0][1], m[1][0], m[1][1], m[3][0], m[3][1]);
+    }
+
     // ========== Clipping ==========
 
     /// Clip to rectangle (intersects with current clip)
@@ -300,6 +425,116 @@ pub trait Painter {
 
     /// Clip to rounded rectangle
     fn clip_rrect(&mut self, rrect: RRect);
+
+    /// Clip to oval/ellipse
+    ///
+    /// # Parameters
+    /// - `rect`: The bounding rectangle of the oval
+    ///
+    /// # Default Implementation
+    /// Falls back to clip_rect (conservative approximation).
+    /// Backends should override for proper oval clipping.
+    fn clip_oval(&mut self, rect: Rect) {
+        // Default: clip to bounding rect (conservative)
+        self.clip_rect(rect);
+    }
+
+    /// Clip to an arbitrary path
+    ///
+    /// # Parameters
+    /// - `path`: The path defining the clip region (passed by reference)
+    /// - `bounds`: Pre-computed bounds of the path (avoids mutation)
+    ///
+    /// # Default Implementation
+    /// Falls back to clip_rect of the path's bounding box.
+    /// Backends should override for proper path clipping.
+    fn clip_path(&mut self, _path: &flui_types::painting::path::Path, bounds: flui_types::Rect) {
+        // Default: clip to bounding box (conservative)
+        self.clip_rect(bounds);
+    }
+
+    // ========== Gradient Rendering ==========
+
+    /// Draw a linear gradient
+    ///
+    /// # Parameters
+    /// - `rect`: Rectangle to fill with gradient
+    /// - `gradient`: Linear gradient definition with colors and stops
+    ///
+    /// # Default Implementation
+    /// Falls back to solid color fill using first color.
+    /// Backends should override for proper gradient rendering.
+    fn linear_gradient(&mut self, rect: Rect, gradient: &flui_types::styling::LinearGradient) {
+        // Fallback: use first color
+        if !gradient.colors.is_empty() {
+            let color = &gradient.colors[0];
+            let paint = Paint {
+                color: [
+                    color.r as f32 / 255.0,
+                    color.g as f32 / 255.0,
+                    color.b as f32 / 255.0,
+                    color.a as f32 / 255.0,
+                ],
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
+            self.rect(rect, &paint);
+        }
+    }
+
+    /// Draw a radial gradient
+    ///
+    /// # Parameters
+    /// - `rect`: Rectangle to fill with gradient
+    /// - `gradient`: Radial gradient definition with colors and stops
+    ///
+    /// # Default Implementation
+    /// Falls back to solid color fill using first color.
+    /// Backends should override for proper gradient rendering.
+    fn radial_gradient(&mut self, rect: Rect, gradient: &flui_types::styling::RadialGradient) {
+        // Fallback: use first color
+        if !gradient.colors.is_empty() {
+            let color = &gradient.colors[0];
+            let paint = Paint {
+                color: [
+                    color.r as f32 / 255.0,
+                    color.g as f32 / 255.0,
+                    color.b as f32 / 255.0,
+                    color.a as f32 / 255.0,
+                ],
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
+            self.rect(rect, &paint);
+        }
+    }
+
+    /// Draw a sweep (conic/angular) gradient
+    ///
+    /// # Parameters
+    /// - `rect`: Rectangle to fill with gradient
+    /// - `gradient`: Sweep gradient definition with colors and stops
+    ///
+    /// # Default Implementation
+    /// Falls back to solid color fill using first color.
+    /// Backends should override for proper gradient rendering.
+    fn sweep_gradient(&mut self, rect: Rect, gradient: &flui_types::styling::SweepGradient) {
+        // Fallback: use first color
+        if !gradient.colors.is_empty() {
+            let color = &gradient.colors[0];
+            let paint = Paint {
+                color: [
+                    color.r as f32 / 255.0,
+                    color.g as f32 / 255.0,
+                    color.b as f32 / 255.0,
+                    color.a as f32 / 255.0,
+                ],
+                stroke_width: 0.0,
+                anti_alias: true,
+            };
+            self.rect(rect, &paint);
+        }
+    }
 
     // ========== Path Drawing ==========
 
@@ -642,7 +877,7 @@ pub trait Painter {
         }
     }
 
-    /// Draw a radial gradient
+    /// Draw a simple radial gradient (legacy helper method)
     ///
     /// # Parameters
     /// - `center`: Center point of the gradient
@@ -650,7 +885,7 @@ pub trait Painter {
     /// - `outer_radius`: Radius where end_color ends
     /// - `start_color`: Color at the center (RGBA)
     /// - `end_color`: Color at the outer edge (RGBA)
-    fn radial_gradient(
+    fn radial_gradient_simple(
         &mut self,
         center: Point,
         inner_radius: f32,

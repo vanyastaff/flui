@@ -71,6 +71,24 @@ pub enum DrawCommand {
         points: Arc<Vec<Point>>,
         paint: Paint,
     },
+
+    /// Draw a linear gradient
+    LinearGradient {
+        rect: Rect,
+        gradient: flui_types::styling::LinearGradient,
+    },
+
+    /// Draw a radial gradient
+    RadialGradient {
+        rect: Rect,
+        gradient: flui_types::styling::RadialGradient,
+    },
+
+    /// Draw a sweep gradient
+    SweepGradient {
+        rect: Rect,
+        gradient: flui_types::styling::SweepGradient,
+    },
 }
 
 /// Picture layer - a leaf layer that contains drawing commands
@@ -213,6 +231,33 @@ impl PictureLayer {
         self.add_command(DrawCommand::Polygon { points, paint });
     }
 
+    /// Draw a linear gradient
+    ///
+    /// # Arguments
+    /// * `rect` - The rectangle to fill with the gradient
+    /// * `gradient` - The linear gradient definition
+    pub fn draw_linear_gradient(&mut self, rect: Rect, gradient: flui_types::styling::LinearGradient) {
+        self.add_command(DrawCommand::LinearGradient { rect, gradient });
+    }
+
+    /// Draw a radial gradient
+    ///
+    /// # Arguments
+    /// * `rect` - The rectangle to fill with the gradient
+    /// * `gradient` - The radial gradient definition
+    pub fn draw_radial_gradient(&mut self, rect: Rect, gradient: flui_types::styling::RadialGradient) {
+        self.add_command(DrawCommand::RadialGradient { rect, gradient });
+    }
+
+    /// Draw a sweep gradient
+    ///
+    /// # Arguments
+    /// * `rect` - The rectangle to fill with the gradient
+    /// * `gradient` - The sweep gradient definition
+    pub fn draw_sweep_gradient(&mut self, rect: Rect, gradient: flui_types::styling::SweepGradient) {
+        self.add_command(DrawCommand::SweepGradient { rect, gradient });
+    }
+
     /// Get all drawing commands
     pub fn commands(&self) -> &[DrawCommand] {
         &self.commands
@@ -329,6 +374,9 @@ impl PictureLayer {
                     Point::new(max_x + stroke, max_y + stroke),
                 )
             }
+            DrawCommand::LinearGradient { rect, .. } => *rect,
+            DrawCommand::RadialGradient { rect, .. } => *rect,
+            DrawCommand::SweepGradient { rect, .. } => *rect,
         }
     }
 }
@@ -374,6 +422,15 @@ impl Layer for PictureLayer {
                 }
                 DrawCommand::Polygon { points, paint } => {
                     painter.polygon(points, paint);
+                }
+                DrawCommand::LinearGradient { rect, gradient } => {
+                    painter.linear_gradient(*rect, gradient);
+                }
+                DrawCommand::RadialGradient { rect, gradient } => {
+                    painter.radial_gradient(*rect, gradient);
+                }
+                DrawCommand::SweepGradient { rect, gradient } => {
+                    painter.sweep_gradient(*rect, gradient);
                 }
             }
         }
