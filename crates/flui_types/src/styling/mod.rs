@@ -24,7 +24,7 @@ pub mod shape_border;
 
 
 // Re-exports for convenience
-pub use border::{BorderSide, BorderStyle};
+pub use border::{BorderPosition, BorderSide, BorderStyle};
 pub use border_radius::{BorderRadius, BorderRadiusDirectional};
 pub use box_border::{Border, BorderDirectional, BoxBorder};
 pub use color::{Color, ParseColorError};
@@ -38,7 +38,7 @@ pub use gradient::{
 pub use hsl_hsv::{HSLColor, HSVColor};
 pub use material_colors::MaterialColors;
 pub use radius::Radius;
-pub use shadow::{BoxShadow, Shadow};
+pub use shadow::{BoxShadow, Shadow, ShadowQuality};
 pub use shape_border::{
     BeveledRectangleBorder, CircleBorder, ContinuousRectangleBorder, LinearBorder,
     LinearBorderEdges, OvalBorder, RoundedRectangleBorder, ShapeBorder, StadiumBorder, StarBorder,

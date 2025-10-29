@@ -135,7 +135,7 @@ impl Default for Shadow {
 /// Similar to Flutter's `BoxShadow`.
 ///
 /// BoxShadow extends Shadow with a spread radius, which causes the shadow to
-/// expand or contract before being blurred.
+/// expand or contract before being blurred. It also supports inner shadows.
 ///
 /// # Examples
 ///
@@ -150,6 +150,14 @@ impl Default for Shadow {
 ///     8.0,
 ///     2.0,
 /// );
+///
+/// // Inner shadow (like CSS inset)
+/// let inner = BoxShadow::new(
+///     Color::BLACK.with_alpha(51), // 0.2 * 255 ≈ 51
+///     Offset::new(0.0, 2.0),
+///     4.0,
+///     0.0,
+/// ).with_inset(true);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -167,6 +175,11 @@ pub struct BoxShadow {
     ///
     /// Positive values make the shadow larger, negative values make it smaller.
     pub spread_radius: f32,
+
+    /// Whether this is an inner shadow (rendered inside the box).
+    ///
+    /// Similar to CSS `inset` keyword in `box-shadow`.
+    pub inset: bool,
 }
 
 impl BoxShadow {
@@ -184,6 +197,25 @@ impl BoxShadow {
             offset,
             blur_radius,
             spread_radius,
+            inset: false,
+        }
+    }
+
+    /// Creates a new inner (inset) shadow.
+    ///
+    /// # Arguments
+    ///
+    /// * `color` - The color of the shadow
+    /// * `offset` - The offset of the shadow from the element
+    /// * `blur_radius` - The blur radius of the shadow
+    /// * `spread_radius` - The spread radius of the shadow
+    pub const fn inner(color: Color, offset: Offset, blur_radius: f32, spread_radius: f32) -> Self {
+        Self {
+            color,
+            offset,
+            blur_radius,
+            spread_radius,
+            inset: true,
         }
     }
 
@@ -220,6 +252,11 @@ impl BoxShadow {
         }
     }
 
+    /// Creates a copy of this box shadow with the given inset value.
+    pub const fn with_inset(self, inset: bool) -> Self {
+        Self { inset, ..self }
+    }
+
     /// Linearly interpolate between two box shadows.
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
@@ -228,6 +265,7 @@ impl BoxShadow {
             offset: Offset::lerp(a.offset, b.offset, t),
             blur_radius: a.blur_radius + (b.blur_radius - a.blur_radius) * t,
             spread_radius: a.spread_radius + (b.spread_radius - a.spread_radius) * t,
+            inset: if t < 0.5 { a.inset } else { b.inset },
         }
     }
 
@@ -243,12 +281,14 @@ impl BoxShadow {
                 offset: Offset::ZERO,
                 blur_radius: 0.0,
                 spread_radius: 0.0,
+                inset: false,
             });
             let b_shadow = b.get(i).copied().unwrap_or(Self {
                 color: Color::TRANSPARENT,
                 offset: Offset::ZERO,
                 blur_radius: 0.0,
                 spread_radius: 0.0,
+                inset: false,
             });
             result.push(Self::lerp(a_shadow, b_shadow, t));
         }
@@ -283,6 +323,7 @@ impl From<Shadow> for BoxShadow {
             offset: shadow.offset,
             blur_radius: shadow.blur_radius,
             spread_radius: 0.0,
+            inset: false,
         }
     }
 }
@@ -294,7 +335,31 @@ impl Default for BoxShadow {
             offset: Offset::ZERO,
             blur_radius: 0.0,
             spread_radius: 0.0,
+            inset: false,
         }
+    }
+}
+
+/// Shadow rendering quality level.
+///
+/// Used by shadow rendering systems to control blur quality and performance.
+/// Higher quality levels produce smoother shadows but require more computation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ShadowQuality {
+    /// Low quality - single pass blur approximation
+    Low,
+
+    /// Medium quality - multi-pass blur (3 passes)
+    Medium,
+
+    /// High quality - high-quality gaussian blur (5+ passes)
+    High,
+}
+
+impl Default for ShadowQuality {
+    fn default() -> Self {
+        Self::Medium
     }
 }
 
