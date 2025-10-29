@@ -1,7 +1,7 @@
 //! Test example to demonstrate gradient rendering with Painter primitives
 
 use flui_engine::{App, AppConfig, AppLogic, Paint, Painter};
-use flui_types::{Event, Point, Rect};
+use flui_types::{events::Event, Point, Rect};
 
 struct GradientTestApp;
 
@@ -9,7 +9,7 @@ impl AppLogic for GradientTestApp {
     fn on_event(&mut self, event: &Event) -> bool {
         match event {
             Event::Window(window_event) => {
-                if let flui_types::WindowEvent::CloseRequested = window_event {
+                if let flui_types::events::WindowEvent::CloseRequested = window_event {
                     return false;
                 }
             }

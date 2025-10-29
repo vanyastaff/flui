@@ -104,7 +104,7 @@ impl AppLogic for AlignmentTestDemo {
     fn on_event(&mut self, event: &Event) -> bool {
         match event {
             Event::Window(window_event) => {
-                if let flui_types::WindowEvent::CloseRequested = window_event {
+                if let flui_types::events::WindowEvent::CloseRequested = window_event {
                     return false;
                 }
             }

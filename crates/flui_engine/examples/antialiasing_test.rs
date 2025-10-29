@@ -1,7 +1,7 @@
 //! Systematic test for anti-aliasing and rendering quality
 
 use flui_engine::{App, AppConfig, AppLogic, Paint, Painter, RRect};
-use flui_types::{Event, Point, Rect};
+use flui_types::{events::Event, Point, Rect};
 
 struct AntialiasingTestApp;
 
@@ -9,7 +9,7 @@ impl AppLogic for AntialiasingTestApp {
     fn on_event(&mut self, event: &Event) -> bool {
         match event {
             Event::Window(window_event) => {
-                if let flui_types::WindowEvent::CloseRequested = window_event {
+                if let flui_types::events::WindowEvent::CloseRequested = window_event {
                     return false;
                 }
             }

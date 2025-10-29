@@ -1,7 +1,7 @@
 //! Systematic test for transformations
 
 use flui_engine::{App, AppConfig, AppLogic, Paint, Painter};
-use flui_types::{Event, Offset, Point, Rect};
+use flui_types::{events::Event, Offset, Point, Rect};
 
 struct TransformTestApp;
 
@@ -9,7 +9,7 @@ impl AppLogic for TransformTestApp {
     fn on_event(&mut self, event: &Event) -> bool {
         match event {
             Event::Window(window_event) => {
-                if let flui_types::WindowEvent::CloseRequested = window_event {
+                if let flui_types::events::WindowEvent::CloseRequested = window_event {
                     return false;
                 }
             }
