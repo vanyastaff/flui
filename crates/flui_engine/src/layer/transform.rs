@@ -153,6 +153,40 @@ impl TransformLayer {
     pub fn child(&self) -> &BoxedLayer {
         &self.child
     }
+
+    /// Apply the transform to a point (forward transform)
+    fn transform_point(&self, point: Offset) -> Offset {
+        match self.transform {
+            Transform::Translate(offset) => {
+                Offset::new(point.dx + offset.dx, point.dy + offset.dy)
+            }
+            Transform::Rotate(angle) => {
+                let cos = angle.cos();
+                let sin = angle.sin();
+                Offset::new(
+                    point.dx * cos - point.dy * sin,
+                    point.dx * sin + point.dy * cos,
+                )
+            }
+            Transform::Scale(scale) => Offset::new(point.dx * scale, point.dy * scale),
+            Transform::ScaleXY { sx, sy } => Offset::new(point.dx * sx, point.dy * sy),
+            Transform::Skew { skew_x, skew_y } => {
+                let tan_x = skew_x.tan();
+                let tan_y = skew_y.tan();
+                Offset::new(point.dx + tan_x * point.dy, tan_y * point.dx + point.dy)
+            }
+            Transform::Matrix { a, b, c, d, tx, ty } => {
+                Offset::new(a * point.dx + c * point.dy + tx, b * point.dx + d * point.dy + ty)
+            }
+            Transform::Trapezoid { top_scale, bottom_scale } => {
+                // For trapezoid, we need the child bounds to calculate normalized y
+                // For bounds calculation, we'll approximate by using the larger scale
+                // This gives a conservative bounding box
+                let max_scale = top_scale.max(bottom_scale);
+                Offset::new(point.dx * max_scale, point.dy)
+            }
+        }
+    }
 }
 
 impl Layer for TransformLayer {
@@ -207,9 +241,32 @@ impl Layer for TransformLayer {
     }
 
     fn bounds(&self) -> Rect {
-        // TODO: Transform the child bounds by the matrix
-        // For now, just return child bounds (conservative approximation)
-        self.child.bounds()
+        let child_bounds = self.child.bounds();
+
+        // Get the four corners of the child bounds
+        let corners = child_bounds.corners();
+
+        // Transform each corner point
+        let transformed_corners: Vec<Offset> = corners
+            .iter()
+            .map(|&corner| self.transform_point(Offset::new(corner.x, corner.y)))
+            .collect();
+
+        // Find the axis-aligned bounding box of the transformed corners
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+
+        for point in &transformed_corners {
+            min_x = min_x.min(point.dx);
+            min_y = min_y.min(point.dy);
+            max_x = max_x.max(point.dx);
+            max_y = max_y.max(point.dy);
+        }
+
+        // Return the bounding rect
+        Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 
     fn is_visible(&self) -> bool {
@@ -291,5 +348,157 @@ impl Layer for TransformLayer {
     fn handle_event(&mut self, event: &Event) -> bool {
         // Forward event to child
         self.child.handle_event(event)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layer::picture::PictureLayer;
+    use std::f32::consts::PI;
+
+    fn create_test_layer() -> BoxedLayer {
+        // Create a picture layer with known bounds (0,0 -> 100,100)
+        let mut picture = PictureLayer::new();
+        // Draw a rectangle to set bounds
+        picture.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            crate::painter::Paint::default(),
+        );
+        Box::new(picture)
+    }
+
+    #[test]
+    fn test_translate_bounds() {
+        let child = create_test_layer();
+        let layer = TransformLayer::translate(child, Offset::new(50.0, 30.0));
+
+        let bounds = layer.bounds();
+        // Original: (0,0)-(100,100)
+        // After translate by (50,30): (50,30)-(150,130)
+        assert_eq!(bounds.left(), 50.0);
+        assert_eq!(bounds.top(), 30.0);
+        assert_eq!(bounds.right(), 150.0);
+        assert_eq!(bounds.bottom(), 130.0);
+    }
+
+    #[test]
+    fn test_scale_bounds() {
+        let child = create_test_layer();
+        let layer = TransformLayer::scale(child, 2.0);
+
+        let bounds = layer.bounds();
+        // Original: (0,0)-(100,100)
+        // After scale by 2: (0,0)-(200,200)
+        assert_eq!(bounds.left(), 0.0);
+        assert_eq!(bounds.top(), 0.0);
+        assert_eq!(bounds.right(), 200.0);
+        assert_eq!(bounds.bottom(), 200.0);
+    }
+
+    #[test]
+    fn test_scale_xy_bounds() {
+        let child = create_test_layer();
+        let layer = TransformLayer::scale_xy(child, 2.0, 0.5);
+
+        let bounds = layer.bounds();
+        // Original: (0,0)-(100,100)
+        // After scale by (2, 0.5): (0,0)-(200,50)
+        assert_eq!(bounds.left(), 0.0);
+        assert_eq!(bounds.top(), 0.0);
+        assert_eq!(bounds.right(), 200.0);
+        assert_eq!(bounds.bottom(), 50.0);
+    }
+
+    #[test]
+    fn test_rotate_90_bounds() {
+        let child = create_test_layer();
+        // Rotate 90 degrees counter-clockwise
+        let layer = TransformLayer::rotate(child, PI / 2.0);
+
+        let bounds = layer.bounds();
+        // Original: (0,0)-(100,100)
+        // After 90° rotation: corners become (-100,0), (0,0), (0,100), (-100,100)
+        // Bounding box: (-100,0)-(0,100)
+        assert!((bounds.left() - (-100.0)).abs() < 0.01);
+        assert!((bounds.top() - 0.0).abs() < 0.01);
+        assert!((bounds.right() - 0.0).abs() < 0.01);
+        assert!((bounds.bottom() - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_rotate_45_bounds() {
+        let child = create_test_layer();
+        // Rotate 45 degrees
+        let layer = TransformLayer::rotate(child, PI / 4.0);
+
+        let bounds = layer.bounds();
+        // The bounding box of a rotated square should expand
+        // Width/height should be approximately 100 * sqrt(2) ≈ 141.42
+        let width = bounds.width();
+        let height = bounds.height();
+        assert!((width - 141.42).abs() < 0.1);
+        assert!((height - 141.42).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_skew_x_bounds() {
+        let child = create_test_layer();
+        // Skew horizontally by 45 degrees
+        let layer = TransformLayer::skew_x(child, PI / 4.0);
+
+        let bounds = layer.bounds();
+        // Original: (0,0)-(100,100)
+        // After skew_x(45°): corners become (0,0), (100,0), (100+100*tan45,100), (100*tan45,100)
+        // tan(45°) = 1.0
+        // So: (0,0), (100,0), (200,100), (100,100)
+        // Bounding box: (0,0)-(200,100)
+        assert!((bounds.left() - 0.0).abs() < 0.01);
+        assert!((bounds.top() - 0.0).abs() < 0.01);
+        assert!((bounds.right() - 200.0).abs() < 0.1);
+        assert!((bounds.bottom() - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_matrix_bounds() {
+        let child = create_test_layer();
+        // Identity matrix should not change bounds
+        let layer = TransformLayer::matrix(child, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+
+        let bounds = layer.bounds();
+        assert_eq!(bounds.left(), 0.0);
+        assert_eq!(bounds.top(), 0.0);
+        assert_eq!(bounds.right(), 100.0);
+        assert_eq!(bounds.bottom(), 100.0);
+    }
+
+    #[test]
+    fn test_matrix_scale_translate_bounds() {
+        let child = create_test_layer();
+        // Scale by 2 and translate by (10, 20)
+        // Matrix: [2, 0, 0, 2, 10, 20]
+        let layer = TransformLayer::matrix(child, 2.0, 0.0, 0.0, 2.0, 10.0, 20.0);
+
+        let bounds = layer.bounds();
+        // Original: (0,0)-(100,100)
+        // After scale by 2: (0,0)-(200,200)
+        // After translate by (10,20): (10,20)-(210,220)
+        assert_eq!(bounds.left(), 10.0);
+        assert_eq!(bounds.top(), 20.0);
+        assert_eq!(bounds.right(), 210.0);
+        assert_eq!(bounds.bottom(), 220.0);
+    }
+
+    #[test]
+    fn test_trapezoid_bounds() {
+        let child = create_test_layer();
+        // Trapezoid with top_scale=0.5, bottom_scale=1.5
+        let layer = TransformLayer::trapezoid(child, 0.5, 1.5);
+
+        let bounds = layer.bounds();
+        // Conservative approximation uses max_scale = 1.5
+        // Width should be 100 * 1.5 = 150
+        assert_eq!(bounds.width(), 150.0);
+        assert_eq!(bounds.height(), 100.0);
     }
 }

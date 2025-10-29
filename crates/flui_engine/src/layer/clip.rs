@@ -339,9 +339,8 @@ impl Layer for ClipRRectLayer {
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        // First check if position is within clip rrect
-        // For now, use rectangular hit test (TODO: proper rounded rect hit testing)
-        if !self.clip_rrect.rect.contains(position) {
+        // First check if position is within clip rrect (proper rounded rect testing)
+        if !self.clip_rrect.contains(position.into()) {
             return false; // Outside clip region, no hit
         }
 
@@ -411,6 +410,126 @@ mod tests {
         // Update clip rect
         layer.set_clip_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
         assert_eq!(layer.clip_rect(), Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn test_clip_rrect_hit_test_center() {
+        use flui_types::geometry::RRect;
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        // Create a rounded rect layer (100x100 with 20px corner radius)
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
+        let mut layer = ClipRRectLayer::new(rrect);
+
+        // Add a child that covers the entire area
+        let mut picture = PictureLayer::new();
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
+        layer.add_child(Box::new(picture));
+
+        let mut result = HitTestResult::new();
+
+        // Center should always hit
+        assert!(layer.hit_test(Offset::new(50.0, 50.0), &mut result));
+    }
+
+    #[test]
+    fn test_clip_rrect_hit_test_corners() {
+        use flui_types::geometry::RRect;
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        // Create a rounded rect layer (100x100 with 20px corner radius)
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
+        let mut layer = ClipRRectLayer::new(rrect);
+
+        // Add a child that covers the entire area
+        let mut picture = PictureLayer::new();
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
+        layer.add_child(Box::new(picture));
+
+        let mut result = HitTestResult::new();
+
+        // Top-left corner (0,0) should NOT hit (inside rounded corner)
+        assert!(!layer.hit_test(Offset::new(0.0, 0.0), &mut result));
+
+        // Point inside the corner radius (but outside rounded edge) should NOT hit
+        assert!(!layer.hit_test(Offset::new(2.0, 2.0), &mut result));
+
+        // Point well inside corner radius should hit
+        assert!(layer.hit_test(Offset::new(15.0, 15.0), &mut result));
+    }
+
+    #[test]
+    fn test_clip_rrect_hit_test_edges() {
+        use flui_types::geometry::RRect;
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        // Create a rounded rect layer (100x100 with 20px corner radius)
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
+        let mut layer = ClipRRectLayer::new(rrect);
+
+        // Add a child that covers the entire area
+        let mut picture = PictureLayer::new();
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
+        layer.add_child(Box::new(picture));
+
+        let mut result = HitTestResult::new();
+
+        // Middle of edges should hit (not affected by corner radius)
+        assert!(layer.hit_test(Offset::new(50.0, 0.0), &mut result)); // top edge
+        assert!(layer.hit_test(Offset::new(50.0, 100.0), &mut result)); // bottom edge
+        assert!(layer.hit_test(Offset::new(0.0, 50.0), &mut result)); // left edge
+        assert!(layer.hit_test(Offset::new(100.0, 50.0), &mut result)); // right edge
+    }
+
+    #[test]
+    fn test_clip_rrect_hit_test_outside() {
+        use flui_types::geometry::RRect;
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        // Create a rounded rect layer (100x100 with 20px corner radius)
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
+        let mut layer = ClipRRectLayer::new(rrect);
+
+        // Add a child that covers the entire area
+        let mut picture = PictureLayer::new();
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
+        layer.add_child(Box::new(picture));
+
+        let mut result = HitTestResult::new();
+
+        // Points completely outside should not hit
+        assert!(!layer.hit_test(Offset::new(-10.0, 50.0), &mut result));
+        assert!(!layer.hit_test(Offset::new(110.0, 50.0), &mut result));
+        assert!(!layer.hit_test(Offset::new(50.0, -10.0), &mut result));
+        assert!(!layer.hit_test(Offset::new(50.0, 110.0), &mut result));
+    }
+
+    #[test]
+    fn test_clip_rrect_hit_test_no_radius() {
+        use flui_types::geometry::RRect;
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        // Create a rect with no rounding (should behave like ClipRectLayer)
+        let rrect = RRect::from_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+        let mut layer = ClipRRectLayer::new(rrect);
+
+        // Add a child that covers the entire area
+        let mut picture = PictureLayer::new();
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
+        layer.add_child(Box::new(picture));
+
+        let mut result = HitTestResult::new();
+
+        // All corners should hit (no rounding)
+        assert!(layer.hit_test(Offset::new(0.0, 0.0), &mut result));
+        assert!(layer.hit_test(Offset::new(100.0, 0.0), &mut result));
+        assert!(layer.hit_test(Offset::new(0.0, 100.0), &mut result));
+        assert!(layer.hit_test(Offset::new(100.0, 100.0), &mut result));
     }
 }
 
