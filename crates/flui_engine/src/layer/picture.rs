@@ -246,12 +246,27 @@ impl PictureLayer {
                 position,
                 style,
             } => {
-                // Approximate text bounds (conservative estimate)
-                // TODO(Phase 2): Integrate proper text measurement with font metrics
-                // See: https://github.com/yourusername/flui/issues/XXX
+                // Approximate text bounds using heuristic calculation
+                //
+                // This is a conservative estimate that works reasonably well for most cases
+                // but doesn't account for actual glyph metrics or font characteristics.
+                //
+                // Phase 2 Enhancement: Integrate proper text measurement
+                // A production implementation would use font metrics from a text shaping library
+                // (e.g., rustybuzz, cosmic-text) to calculate exact bounds:
+                // - Measure actual glyph widths and advances
+                // - Account for kerning pairs
+                // - Handle letter and word spacing accurately
+                // - Support font features (ligatures, alternates, etc.)
+                // - Calculate proper line height and baseline metrics
+                //
+                // Current heuristic approach:
+                // - Width: character count × font_size × 0.75 (assumes average glyph width)
+                // - Height: font_size × 1.5 (includes descenders and line height)
+                // This provides reasonable bounds for layout and hit testing without font dependencies
                 let font_size = style.font_size.unwrap_or(14.0) as f32;
-                let width = text.len() as f32 * font_size * 0.75; // More conservative (was 0.6)
-                let height = font_size * 1.5; // Account for descenders and line height
+                let width = text.len() as f32 * font_size * 0.75;
+                let height = font_size * 1.5;
                 Rect::from_xywh(position.x, position.y, width, height)
             }
             DrawCommand::Image {

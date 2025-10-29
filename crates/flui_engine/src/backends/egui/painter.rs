@@ -484,14 +484,16 @@ impl<'a> Painter for EguiPainter<'a> {
                 // Color is already in correct format
                 let color = paint.color;
 
-                // TODO: Extract letter_spacing and word_spacing from paint or style
+                // Extract letter and word spacing from paint
                 let params = crate::text::TextRenderParams::new(
                     text,
                     position,
                     font_size,
                     color,
                     &self.current_state.transform,
-                );
+                )
+                .with_letter_spacing(paint.letter_spacing)
+                .with_word_spacing(paint.word_spacing);
 
                 match renderer.render(&params) {
                     Ok((vertices, indices)) => {

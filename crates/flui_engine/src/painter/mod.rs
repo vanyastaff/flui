@@ -61,6 +61,12 @@ pub struct Paint {
 
     /// Blend mode for compositing
     pub blend_mode: BlendMode,
+
+    /// Letter spacing for text (in pixels, only applies to text rendering)
+    pub letter_spacing: f32,
+
+    /// Word spacing for text (in pixels, only applies to text rendering)
+    pub word_spacing: f32,
 }
 
 impl Default for Paint {
@@ -74,6 +80,8 @@ impl Default for Paint {
             stroke_miter_limit: 4.0,
             anti_alias: true,
             blend_mode: BlendMode::SrcOver,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
         }
     }
 }
@@ -158,6 +166,18 @@ impl Paint {
     /// Set blend mode (builder pattern)
     pub fn with_blend_mode(mut self, mode: BlendMode) -> Self {
         self.blend_mode = mode;
+        self
+    }
+
+    /// Set letter spacing for text (builder pattern)
+    pub fn with_letter_spacing(mut self, spacing: f32) -> Self {
+        self.letter_spacing = spacing;
+        self
+    }
+
+    /// Set word spacing for text (builder pattern)
+    pub fn with_word_spacing(mut self, spacing: f32) -> Self {
+        self.word_spacing = spacing;
         self
     }
 
