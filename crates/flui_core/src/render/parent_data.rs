@@ -35,9 +35,9 @@
 //! }
 //! ```
 
+use std::any::Any;
 use std::fmt;
 
-use downcast_rs::{DowncastSync, impl_downcast};
 use flui_types::Offset;
 
 /// ParentData - metadata that a parent Render attaches to child elements
@@ -61,16 +61,39 @@ use flui_types::Offset;
 ///     fit: FlexFit,
 /// }
 ///
-/// impl ParentData for FlexParentData {}
+/// impl ParentData for FlexParentData {
+///     fn as_any(&self) -> &dyn Any { self }
+///     fn as_any_mut(&mut self) -> &mut dyn Any { self }
+/// }
 ///
 /// // Use in layout code:
 /// fn layout_child(parent_data: &dyn ParentData) {
-///     if let Some(flex_data) = parent_data.downcast_ref::<FlexParentData>() {
+///     if let Some(flex_data) = parent_data.as_any().downcast_ref::<FlexParentData>() {
 ///         let flex_value = flex_data.flex;
 ///     }
 /// }
 /// ```
-pub trait ParentData: DowncastSync + fmt::Debug {
+pub trait ParentData: fmt::Debug + Send + Sync + 'static {
+    /// Downcast to &dyn Any for type-safe downcasting
+    ///
+    /// # Implementation
+    ///
+    /// Always implement as:
+    /// ```ignore
+    /// fn as_any(&self) -> &dyn Any { self }
+    /// ```
+    fn as_any(&self) -> &dyn Any;
+
+    /// Downcast to &mut dyn Any for mutable downcasting
+    ///
+    /// # Implementation
+    ///
+    /// Always implement as:
+    /// ```ignore
+    /// fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    /// ```
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
     /// Try to access this ParentData as ParentDataWithOffset
     ///
     /// Returns `Some` if this ParentData implements ParentDataWithOffset,
@@ -84,9 +107,6 @@ pub trait ParentData: DowncastSync + fmt::Debug {
         None
     }
 }
-
-// Enable downcasting for ParentData trait objects
-impl_downcast!(sync ParentData);
 
 /// ParentData with cached offset for efficient hit testing and painting
 ///
@@ -140,7 +160,15 @@ pub trait ParentDataWithOffset: ParentData {
 //
 // This allows Renders that don't need parent data to use simple APIs
 // without requiring a dedicated NoParentData type.
-impl ParentData for () {}
+impl ParentData for () {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
 
 /// Box parent data - stores offset for positioned children
 ///
@@ -224,6 +252,14 @@ impl BoxParentData {
 }
 
 impl ParentData for BoxParentData {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
         Some(self)
     }
@@ -475,6 +511,14 @@ impl<ChildId> ParentData for ContainerBoxParentData<ChildId>
 where
     ChildId: fmt::Debug + Send + Sync + 'static,
 {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
         Some(self)
     }

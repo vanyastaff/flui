@@ -1784,7 +1784,6 @@ dependencies = [
  "ahash",
  "bitflags 2.10.0",
  "criterion 0.7.0",
- "downcast-rs 2.0.2",
  "flui_derive",
  "flui_engine",
  "flui_types",
