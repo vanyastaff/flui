@@ -69,7 +69,7 @@ impl InheritedElement {
     ///
     /// Checks if dependents should be notified via update_should_notify.
     pub fn update(&mut self, new_widget: Widget) {
-        // TODO: Call update_should_notify on the widget to check if dependents should rebuild
+        // FIXME: Call update_should_notify on the widget to check if dependents should rebuild
         // For now, always mark dependents dirty
         self.base.set_widget(new_widget);
 

@@ -36,13 +36,17 @@ pub enum RenderNode {
 
     /// Single child
     Single {
+        /// Render object
         render: Box<dyn SingleRender>,
+        /// Child element ID
         child: ElementId,
     },
 
     /// Multiple children
     Multi {
+        /// Render object
         render: Box<dyn MultiRender>,
+        /// Child element IDs
         children: Vec<ElementId>,
     },
 }

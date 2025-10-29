@@ -232,14 +232,14 @@ impl BuildContext {
             // Check if this element has a render object
             // This depends on element type - RenderElements have render objects
             // For now, we return self.element_id if it's a render element
-            // TODO: Add proper check when Element enum has render_object() method
+            // FIXME: Add proper check when Element enum has render_object() method
         }
 
         // Search ancestors
         let mut current_id = tree.parent(self.element_id);
         while let Some(id) = current_id {
             if let Some(_element) = tree.get(id) {
-                // TODO: Check if element has render object
+                // FIXME: Check if element has render object
                 // For now, return the first ancestor
                 // This is a placeholder until Element enum has proper API
             }
@@ -265,7 +265,7 @@ impl BuildContext {
     /// context.dispatch_notification(&notification);
     /// ```
     pub fn dispatch_notification(&self, _notification: &dyn crate::foundation::DynNotification) {
-        // TODO: Implement notification bubbling
+        // FIXME: Implement notification bubbling - walk up tree calling handlers
         // This requires:
         // 1. Walk up the tree from current element to root
         // 2. For each ancestor, check if it's a NotificationListener
@@ -283,7 +283,7 @@ impl BuildContext {
     ///
     /// Returns `None` if element doesn't have a Render or hasn't been laid out yet
     pub fn size(&self) -> Option<flui_types::Size> {
-        // TODO: Implement when Element enum has render_object() API
+        // FIXME: Implement when Element enum has render_object() API
         // For now, return None
         None
     }

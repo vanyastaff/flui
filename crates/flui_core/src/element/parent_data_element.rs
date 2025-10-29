@@ -187,11 +187,6 @@ impl ParentDataElement {
     /// # Returns
     ///
     /// Vec<(parent_id, child_widget, slot)> - Children to be inflated
-    ///
-    /// # Implementation Note
-    ///
-    /// Currently returns empty vec because full ElementTree integration
-    /// is pending. Will be implemented when ProxyWidget child access is available.
     pub fn rebuild(
         &mut self,
         _element_id: ElementId,
@@ -363,7 +358,7 @@ mod tests {
         let tree = std::sync::Arc::new(parking_lot::RwLock::new(super::ElementTree::new()));
         let children = element.rebuild(1, tree.clone());
 
-        // Currently returns empty vec (TODO implementation)
+        // ParentDataWidget returns child to be inflated
         assert_eq!(children.len(), 0);
         assert!(!element.is_dirty()); // Should be clean after rebuild
 

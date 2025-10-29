@@ -95,7 +95,8 @@
       "Read(//c/tmp/**)",
       "Bash(mv:*)",
       "Bash(rm:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(cargo doc:*)"
     ],
     "deny": [],
     "ask": []

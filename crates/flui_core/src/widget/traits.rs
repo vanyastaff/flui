@@ -332,7 +332,7 @@ pub trait State: fmt::Debug + Send + Sync + 'static {
     /// }
     /// ```
     fn mark_needs_build(&mut self) {
-        // TODO: Mark element as dirty for rebuild
+        // FIXME: Mark element as dirty for rebuild
         // Default implementation does nothing
     }
 

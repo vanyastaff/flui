@@ -171,7 +171,7 @@ impl RenderPipeline {
         W: RenderWidget + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         // Create a dummy BuildContext for root widget
-        // TODO: This should be properly constructed
+        // FIXME: BuildContext needs proper constructor - using unsafe zeroed for now
         use crate::element::BuildContext;
         let ctx = unsafe { std::mem::zeroed::<BuildContext>() };
 

@@ -50,7 +50,12 @@ pub enum CoreError {
 
     /// Invalid parent-child relationship
     #[error("Invalid parent-child relationship: parent={parent}, child={child}")]
-    InvalidHierarchy { parent: ElementId, child: ElementId },
+    InvalidHierarchy {
+        /// Parent element ID
+        parent: ElementId,
+        /// Child element ID
+        child: ElementId,
+    },
 
     /// Element is not mounted in tree
     #[error("Element {0} is not mounted")]
@@ -58,12 +63,17 @@ pub enum CoreError {
 
     /// Cannot update element due to type mismatch
     #[error("Cannot update element {id}: widget type mismatch")]
-    TypeMismatch { id: ElementId },
+    TypeMismatch {
+        /// Element ID
+        id: ElementId,
+    },
 
     /// Rebuild operation failed
     #[error("Rebuild failed for element {id}: {reason}")]
     RebuildFailed {
+        /// Element ID
         id: ElementId,
+        /// Failure reason
         reason: Cow<'static, str>,
     },
 
@@ -73,12 +83,19 @@ pub enum CoreError {
 
     /// Slot index out of bounds
     #[error("Slot index {slot} out of bounds for element {element}")]
-    SlotOutOfBounds { element: ElementId, slot: usize },
+    SlotOutOfBounds {
+        /// Element ID
+        element: ElementId,
+        /// Slot index
+        slot: usize,
+    },
 
     /// Invalid operation on element in current state
     #[error("Invalid operation on element {id}: {reason}")]
     InvalidOperation {
+        /// Element ID
         id: ElementId,
+        /// Failure reason
         reason: Cow<'static, str>,
     },
 
@@ -89,8 +106,11 @@ pub enum CoreError {
     /// Widget build failed with source error
     #[error("Failed to build widget '{widget_type}' (element {element_id}): {source}")]
     BuildFailed {
+        /// Widget type name
         widget_type: &'static str,
+        /// Element ID
         element_id: ElementId,
+        /// Underlying error
         source: Arc<dyn std::error::Error + Send + Sync>,
     },
 
@@ -99,9 +119,13 @@ pub enum CoreError {
         "Lifecycle violation for element {element_id}: Cannot {operation} in state {actual_state:?} (expected {expected_state:?})"
     )]
     LifecycleViolation {
+        /// Element ID
         element_id: ElementId,
+        /// Expected lifecycle state
         expected_state: ElementLifecycle,
+        /// Actual lifecycle state
         actual_state: ElementLifecycle,
+        /// Operation that was attempted
         operation: &'static str,
     },
 
@@ -110,21 +134,27 @@ pub enum CoreError {
         "No InheritedWidget of type '{widget_type}' found in ancestor tree of element {context_element_id}. Did you forget to wrap your app with the widget?"
     )]
     InheritedWidgetNotFound {
+        /// Widget type name
         widget_type: &'static str,
+        /// Context element ID
         context_element_id: ElementId,
     },
 
     /// Layout operation failed
     #[error("Layout failed for element {element_id}: {reason}")]
     LayoutFailed {
+        /// Element ID
         element_id: ElementId,
+        /// Failure reason
         reason: Cow<'static, str>,
     },
 
     /// Paint operation failed
     #[error("Paint failed for element {element_id}: {reason}")]
     PaintFailed {
+        /// Element ID
         element_id: ElementId,
+        /// Failure reason
         reason: Cow<'static, str>,
     },
 }

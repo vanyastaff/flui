@@ -600,7 +600,7 @@ impl PipelineOwner {
                 if let Some(Element::Component(parent_component)) = tree_guard.get_mut(parent_id) {
                     parent_component.set_child(child_id);
                 }
-                // TODO: Handle other element types (Stateful, Inherited, Render, ParentData)
+                // FIXME: Handle other element types (Stateful, Inherited, Render, ParentData)
 
                 drop(tree_guard);
 
@@ -638,7 +638,7 @@ impl PipelineOwner {
     // =========================================================================
     // Layout & Paint Phases
     // =========================================================================
-    // TODO: These methods are stubs for now. Full implementation will be added
+    // FIXME: Implement full rendering pipeline (layout/paint phases)
     // when Render layout/paint system is fully integrated.
 
     /// Request layout for a Render
@@ -646,7 +646,7 @@ impl PipelineOwner {
     /// Adds the node to the layout dirty list if not already present.
     /// Called by Render::mark_needs_layout().
     pub fn request_layout(&mut self, _node_id: ElementId) {
-        // TODO: Implement dirty tracking for layout
+        // FIXME: Implement dirty tracking for layout
         #[cfg(debug_assertions)]
         debug_println!(
             PRINT_LAYOUT,
@@ -660,7 +660,7 @@ impl PipelineOwner {
     /// Adds the node to the paint dirty list if not already present.
     /// Called by Render::mark_needs_paint().
     pub fn request_paint(&mut self, _node_id: ElementId) {
-        // TODO: Implement dirty tracking for paint
+        // FIXME: Implement dirty tracking for paint
         #[cfg(debug_assertions)]
         debug_println!(
             PRINT_LAYOUT,
@@ -692,7 +692,7 @@ impl PipelineOwner {
         #[cfg(debug_assertions)]
         debug_println!(PRINT_LAYOUT, "PipelineOwner::flush_layout called (stub)");
 
-        // TODO: Implement layout phase:
+        // FIXME: Implement layout phase:
         // 1. Sort dirty nodes by depth
         // 2. Layout each node with constraints
         // 3. Return root size
@@ -715,7 +715,7 @@ impl PipelineOwner {
         #[cfg(debug_assertions)]
         debug_println!(PRINT_LAYOUT, "PipelineOwner::flush_paint called (stub)");
 
-        // TODO: Implement paint phase:
+        // FIXME: Implement paint phase:
         // 1. Paint dirty nodes
         // 2. Composite layers
         // 3. Send to backend
@@ -755,7 +755,7 @@ impl PipelineOwner {
         // - Otherwise it's a RenderWidget or ParentDataWidget
 
         // For now, assume all widgets coming through rebuild() are StatelessWidget
-        // TODO: Add proper type detection when we support all widget types
+        // FIXME: Add proper type detection when we support all widget types
         Element::Component(ComponentElement::new(widget))
     }
 }

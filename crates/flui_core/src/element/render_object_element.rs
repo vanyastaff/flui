@@ -210,7 +210,7 @@ impl RenderElement {
     pub fn update(&mut self, new_widget: Widget) {
         self.base.set_widget(new_widget);
 
-        // TODO: Call update_render_object to sync config to render object
+        // FIXME: Call update_render_object to sync config to render object
         // This requires calling a method on the type-erased widget
         // For now, mark dirty to trigger rebuild
 
@@ -219,13 +219,13 @@ impl RenderElement {
 
     /// Set children (enforces arity constraints at runtime)
     pub(crate) fn set_children(&mut self, children: Vec<ElementId>) {
-        // TODO: Enforce arity constraints via RenderNode::arity() method
+        // FIXME: Enforce arity constraints via RenderNode::arity() method
         self.children = children;
     }
 
     /// Add a child (for MultiArity)
     pub(crate) fn add_child(&mut self, child_id: ElementId) {
-        // TODO: Add arity check via RenderNode::arity() method
+        // FIXME: Add arity check via RenderNode::arity() method
         self.children.push(child_id);
     }
 
