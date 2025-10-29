@@ -272,7 +272,7 @@ impl ElementTree {
     ///
     /// # Returns
     ///
-    /// `Some(&dyn DynRender)` if the element is a RenderElement, `None` otherwise
+    /// `Some(&RenderNode)` if the element is a RenderElement, `None` otherwise
     ///
     // Note: render_object() and render_object_mut() methods removed
     // because they cannot work with RefCell guards (lifetime issues).
@@ -389,7 +389,7 @@ impl ElementTree {
 
         // Cache miss or needs relayout - compute layout
         let mut render_object = render_element.render_object_mut();
-        let size = render_object.dyn_layout(self, element_id, constraints);
+        let size = render_object.layout(self, constraints);
 
         // Update RenderState with new size and constraints
         {
@@ -427,8 +427,8 @@ impl ElementTree {
         // Borrow the render object through RefCell - the guard must live until after the call
         let render_object_guard = render_element.render_object();
 
-        // Explicitly dereference to get &dyn DynRender
-        let layer = (&*render_object_guard).dyn_paint(self, element_id, offset);
+        // Call paint on RenderNode
+        let layer = render_object_guard.paint(self, offset);
 
         // Guard dropped here
         Some(layer)
@@ -483,7 +483,7 @@ impl ElementTree {
     /// ```
     pub fn visit_all_render_objects<F>(&self, mut visitor: F)
     where
-        F: FnMut(ElementId, &dyn crate::DynRender, parking_lot::RwLockReadGuard<RenderState>),
+        F: FnMut(ElementId, &crate::RenderNode, parking_lot::RwLockReadGuard<RenderState>),
     {
         for (element_id, node) in &self.nodes {
             // Only visit elements with Renders
@@ -497,10 +497,9 @@ impl ElementTree {
             let state_ptr: *const parking_lot::RwLock<RenderState> = render_elem.render_state();
             let state = unsafe { (*state_ptr).read() };
 
-            // Double-dereference: Ref<Box<dyn T>> -> &dyn T
-            // First * gets Box<dyn T>, second * gets dyn T, & takes reference
+            // Dereference Ref<RenderNode> to get &RenderNode
             // The guard lives for the duration of the visitor call
-            visitor(element_id, &**render_obj_guard, state);
+            visitor(element_id, &*render_obj_guard, state);
             // Guard is dropped here
         }
     }

@@ -355,18 +355,11 @@ pub use element::{
 
 // Re-export render types
 pub use render::{
-    // Arity types
-    Arity,
-    BoxedRender,
-    DynRender,
-    LayoutCx,
-    LeafArity,
-    MultiArity,
-    PaintCx,
-
-    Render,
+    LeafRender,
+    MultiRender,
+    RenderNode,
     RenderState,
-    SingleArity,
+    SingleRender,
 };
 
 // ============================================================================
@@ -396,7 +389,7 @@ pub mod prelude {
 
     pub use crate::element::{BuildContext, Element};
 
-    pub use crate::render::{LeafArity, MultiArity, RenderNode, SingleArity};
+    pub use crate::render::{LeafRender, MultiRender, RenderNode, SingleRender};
 }
 
 // ============================================================================

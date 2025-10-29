@@ -87,7 +87,7 @@ use crate::element::{
     ComponentElement, ElementId, ElementLifecycle, InheritedElement, ParentDataElement,
     RenderElement, StatefulElement,
 };
-use crate::render::DynRender;
+use crate::render::RenderNode;
 use crate::widget::DynWidget;
 
 // Re-export common element types
@@ -556,13 +556,9 @@ impl Element {
     /// Panics if the render object is currently borrowed mutably.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> Option<std::cell::Ref<'_, dyn DynRender + '_>> {
+    pub fn render_object(&self) -> Option<std::cell::Ref<'_, RenderNode>> {
         match self {
-            Self::Render(r) => {
-                // Map the Ref<Box<dyn DynRender>> to Ref<dyn DynRender>
-                // Box<dyn T> needs **boxed to get &dyn T
-                Some(std::cell::Ref::map(r.render_object(), |boxed| &**boxed))
-            }
+            Self::Render(r) => Some(r.render_object()),
             _ => None,
         }
     }
@@ -577,15 +573,9 @@ impl Element {
     /// Panics if the render object is currently borrowed.
     #[inline]
     #[must_use]
-    pub fn render_object_mut(&self) -> Option<std::cell::RefMut<'_, dyn DynRender + '_>> {
+    pub fn render_object_mut(&self) -> Option<std::cell::RefMut<'_, RenderNode>> {
         match self {
-            Self::Render(r) => {
-                // Map the RefMut<Box<dyn DynRender>> to RefMut<dyn DynRender>
-                // Box<dyn T> needs **boxed to get &mut dyn T
-                Some(std::cell::RefMut::map(r.render_object_mut(), |boxed| {
-                    &mut **boxed
-                }))
-            }
+            Self::Render(r) => Some(r.render_object_mut()),
             _ => None,
         }
     }

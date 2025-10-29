@@ -8,7 +8,7 @@ use std::fmt;
 
 use crate::foundation::Key;
 use crate::BuildContext;
-use crate::render::DynRender;
+use crate::render::RenderNode;
 
 use super::widget::Widget;
 
@@ -463,20 +463,17 @@ pub trait InheritedWidget: fmt::Debug + Send + Sync + 'static {
 ///                     paint()
 /// ```
 pub trait RenderWidget: fmt::Debug + Send + Sync + 'static {
-    /// Create a new Render
+    /// Create a new RenderNode
     ///
     /// This is called once when the widget is first inserted into the tree.
-    fn create_render_object(&self, context: &BuildContext) -> Box<dyn DynRender>;
+    /// Return a RenderNode (enum) wrapping your render implementation.
+    fn create_render_object(&self, context: &BuildContext) -> RenderNode;
 
-    /// Update an existing Render
+    /// Update an existing RenderNode
     ///
     /// This is called when the widget configuration changes.
-    /// Update the Render to reflect the new configuration.
-    fn update_render_object(
-        &self,
-        context: &BuildContext,
-        render_object: &mut dyn DynRender,
-    );
+    /// Update the RenderNode to reflect the new configuration.
+    fn update_render_object(&self, context: &BuildContext, render_object: &mut RenderNode);
 
     /// Get children for MultiChildRenderWidget
     ///
@@ -530,7 +527,7 @@ pub trait ParentDataWidget: fmt::Debug + Send + Sync + 'static {
     /// Apply parent data to a Render
     ///
     /// This is called to configure the parent data on descendant Renders.
-    fn apply_parent_data(&self, render_object: &mut dyn DynRender);
+    fn apply_parent_data(&self, render_object: &mut RenderNode);
 
     /// Optional widget key
     fn key(&self) -> Option<Key> {

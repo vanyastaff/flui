@@ -8,7 +8,7 @@ use std::cell::RefCell;
 
 use super::dyn_element::ElementLifecycle;
 use crate::element::ElementId;
-use crate::render::{DynRender, RenderState};
+use crate::render::{RenderNode, RenderState};
 use crate::widget::{BoxedWidget, DynWidget};
 
 /// Element for RenderWidget (type-erased)
@@ -22,7 +22,7 @@ use crate::widget::{BoxedWidget, DynWidget};
 /// ```text
 /// RenderElement
 ///   ├─ widget: Box<dyn DynWidget> (type-erased RenderWidget)
-///   ├─ render_object: Box<dyn DynRender> (type-erased Render)
+///   ├─ render_object: RenderNode (type-erased Render)
 ///   ├─ render_state: RwLock<RenderState> (size, constraints, dirty flags)
 ///   ├─ parent_data: Option<Box<dyn ParentData>> (metadata from parent)
 ///   ├─ children: Vec<ElementId> (managed by Render arity)
@@ -35,8 +35,8 @@ use crate::widget::{BoxedWidget, DynWidget};
 /// for both widget and render object:
 ///
 /// - **Widget**: `Box<dyn DynWidget>` (user-extensible, unbounded types)
-/// - **Render**: `Box<dyn DynRender>` (user-extensible, unbounded types)
-/// - **Arity**: Runtime information via DynRender trait
+/// - **Render**: `RenderNode` (user-extensible, unbounded types)
+/// - **Arity**: Runtime information via RenderNode trait
 ///
 /// # Performance
 ///
@@ -64,7 +64,7 @@ pub struct RenderElement {
     /// - Layout is single-threaded (no concurrent access)
     /// - Borrow checking at runtime prevents aliasing
     /// - More sound than raw pointer casting
-    render_object: RefCell<Box<dyn DynRender>>,
+    render_object: RefCell<RenderNode>,
 
     /// Render state (size, constraints, dirty flags)
     ///
@@ -100,7 +100,7 @@ impl std::fmt::Debug for RenderElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderElement")
             .field("widget", &"<BoxedWidget>")
-            .field("render_object", &"<RefCell<Box<dyn DynRender>>>")
+            .field("render_object", &"<RefCell<RenderNode>>")
             .field("render_state", &self.render_state)
             .field("parent_data", &self.parent_data.is_some())
             .field("parent", &self.parent)
@@ -127,7 +127,7 @@ impl RenderElement {
     /// let render = widget.create_render_object();
     /// let element = RenderElement::new(widget, Box::new(render));
     /// ```
-    pub fn new(widget: BoxedWidget, render_object: Box<dyn DynRender>) -> Self {
+    pub fn new(widget: BoxedWidget, render_object: RenderNode) -> Self {
         Self {
             widget,
             render_object: RefCell::new(render_object),
@@ -158,7 +158,7 @@ impl RenderElement {
     /// This should never happen in correct usage since layout is single-threaded.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> std::cell::Ref<'_, Box<dyn DynRender>> {
+    pub fn render_object(&self) -> std::cell::Ref<'_, RenderNode> {
         self.render_object.borrow()
     }
 
@@ -170,7 +170,7 @@ impl RenderElement {
     /// This should never happen in correct usage since layout is single-threaded.
     #[inline]
     #[must_use]
-    pub fn render_object_mut(&self) -> std::cell::RefMut<'_, Box<dyn DynRender>> {
+    pub fn render_object_mut(&self) -> std::cell::RefMut<'_, RenderNode> {
         self.render_object.borrow_mut()
     }
 
@@ -239,13 +239,13 @@ impl RenderElement {
 
     /// Set children (enforces arity constraints at runtime)
     pub(crate) fn set_children(&mut self, children: Vec<ElementId>) {
-        // TODO: Enforce arity constraints via DynRender::arity() method
+        // TODO: Enforce arity constraints via RenderNode::arity() method
         self.children = children;
     }
 
     /// Add a child (for MultiArity)
     pub(crate) fn add_child(&mut self, child_id: ElementId) {
-        // TODO: Add arity check via DynRender::arity() method
+        // TODO: Add arity check via RenderNode::arity() method
         self.children.push(child_id);
     }
 
@@ -401,7 +401,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let element = RenderElement::new(widget, render);
@@ -416,7 +416,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let mut element = RenderElement::new(widget, render);
@@ -432,7 +432,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let mut element = RenderElement::new(widget, render);
@@ -452,7 +452,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let mut element = RenderElement::new(widget, render);
@@ -469,7 +469,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let mut element = RenderElement::new(widget, render);
@@ -500,7 +500,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let mut element = RenderElement::new(widget, render);
@@ -522,7 +522,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let mut element = RenderElement::new(widget, render);
@@ -554,7 +554,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let element = RenderElement::new(widget, render);
@@ -569,7 +569,7 @@ mod tests {
         let widget: BoxedWidget = Box::new(TestLeafWidget {
             size: Size::new(100.0, 50.0),
         });
-        let render: Box<dyn DynRender> = Box::new(TestLeafRender {
+        let render: RenderNode = Box::new(TestLeafRender {
             size: Size::new(100.0, 50.0),
         });
         let element = RenderElement::new(widget, render);

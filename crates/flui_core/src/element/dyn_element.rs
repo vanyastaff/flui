@@ -5,7 +5,7 @@ use std::fmt;
 use parking_lot::RwLock;
 
 use crate::element::ElementId;
-use crate::render::{DynRender, RenderState};
+use crate::render::{RenderNode, RenderState};
 use crate::widget::DynWidget;
 
 /// Element lifecycle states
@@ -29,7 +29,7 @@ pub enum ElementLifecycle {
 ///
 /// # Design Pattern: Two-Trait Approach
 ///
-/// Similar to Widget/DynWidget and Render/DynRender:
+/// Similar to Widget/DynWidget and Render/RenderNode:
 /// - **DynElement** (this trait) - Object-safe for `Box<dyn DynElement>`
 /// - **Element** - Has associated types for zero-cost concrete operations
 pub trait DynElement: fmt::Debug + Send + Sync {
@@ -89,12 +89,12 @@ pub trait DynElement: fmt::Debug + Send + Sync {
     // ========== Render Access ==========
 
     /// Get Render if this is a RenderElement
-    fn render_object(&self) -> Option<&dyn DynRender> {
+    fn render_object(&self) -> Option<&RenderNode> {
         None
     }
 
     /// Get mutable Render if this is a RenderElement
-    fn render_object_mut(&mut self) -> Option<&mut dyn DynRender> {
+    fn render_object_mut(&mut self) -> Option<&mut RenderNode> {
         None
     }
 
