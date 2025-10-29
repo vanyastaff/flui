@@ -1785,7 +1785,6 @@ dependencies = [
  "bitflags 2.10.0",
  "criterion 0.7.0",
  "downcast-rs 2.0.2",
- "dyn-clone",
  "flui_derive",
  "flui_engine",
  "flui_types",

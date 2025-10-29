@@ -20,7 +20,6 @@ tracing.workspace = true
 smallvec.workspace = true
 bitflags.workspace = true
 downcast-rs.workspace = true
-dyn-clone.workspace = true
 
 # Cache and performance
 moka = { workspace = true, features = ["sync"] }
