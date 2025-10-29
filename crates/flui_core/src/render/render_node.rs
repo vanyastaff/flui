@@ -354,23 +354,23 @@ mod tests {
 
     #[test]
     fn test_leaf() {
-        let render = Render::new_leaf(Box::new(TestLeaf));
+        let render = RenderNode::new_leaf(Box::new(TestLeaf));
         assert!(render.is_leaf());
         assert_eq!(render.arity(), Some(0));
     }
 
     #[test]
     fn test_single() {
-        let render = Render::new_single(Box::new(TestSingle), ElementId::from_raw(1));
+        let render = RenderNode::new_single(Box::new(TestSingle), 1);
         assert!(render.is_single());
         assert_eq!(render.arity(), Some(1));
-        assert_eq!(render.child(), ElementId::from_raw(1));
+        assert_eq!(render.child(), 1);
     }
 
     #[test]
     fn test_multi() {
-        let children = vec![ElementId::from_raw(1), ElementId::from_raw(2)];
-        let render = Render::new_multi(Box::new(TestMulti), children.clone());
+        let children = vec![1, 2];
+        let render = RenderNode::new_multi(Box::new(TestMulti), children.clone());
         assert!(render.is_multi());
         assert_eq!(render.arity(), None);
         assert_eq!(render.children(), &children[..]);
@@ -378,24 +378,24 @@ mod tests {
 
     #[test]
     fn test_set_child() {
-        let mut render = Render::new_single(Box::new(TestSingle), ElementId::from_raw(1));
-        render.set_child(ElementId::from_raw(2));
-        assert_eq!(render.child(), ElementId::from_raw(2));
+        let mut render = RenderNode::new_single(Box::new(TestSingle), 1);
+        render.set_child(2);
+        assert_eq!(render.child(), 2);
     }
 
     #[test]
     fn test_set_children() {
-        let mut render = Render::new_multi(Box::new(TestMulti), vec![]);
-        let new_children = vec![ElementId::from_raw(1)];
+        let mut render = RenderNode::new_multi(Box::new(TestMulti), vec![]);
+        let new_children = vec![1];
         render.set_children(new_children.clone());
         assert_eq!(render.children(), &new_children[..]);
     }
 
     #[test]
     fn test_debug_names() {
-        let leaf = Render::new_leaf(Box::new(TestLeaf));
-        let single = Render::new_single(Box::new(TestSingle), ElementId::from_raw(1));
-        let multi = Render::new_multi(Box::new(TestMulti), vec![]);
+        let leaf = RenderNode::new_leaf(Box::new(TestLeaf));
+        let single = RenderNode::new_single(Box::new(TestSingle), 1);
+        let multi = RenderNode::new_multi(Box::new(TestMulti), vec![]);
 
         assert!(leaf.debug_name().contains("TestLeaf"));
         assert!(single.debug_name().contains("TestSingle"));
