@@ -19,6 +19,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_engine/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_devtools/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_devtools/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_types/examples" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

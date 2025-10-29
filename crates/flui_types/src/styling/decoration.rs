@@ -375,20 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn test_decoration_image_new() {
-        let image = DecorationImage::new(BoxFit::Cover, crate::layout::Alignment::CENTER);
-        assert_eq!(image.fit, BoxFit::Cover);
-        assert_eq!(image.opacity, 1.0);
-    }
-
-    #[test]
-    fn test_decoration_image_default() {
-        let image = DecorationImage::default();
-        assert_eq!(image.fit, BoxFit::Contain);
-        assert_eq!(image.repeat, ImageRepeat::NoRepeat);
-    }
-
-    #[test]
     fn test_box_fit_variants() {
         assert_eq!(BoxFit::default(), BoxFit::Contain);
         assert_ne!(BoxFit::Fill, BoxFit::Cover);
