@@ -1,58 +1,35 @@
-//! ElementBase - Common fields and methods for all element types
+//! ElementBase - Internal foundation for element lifecycle management
 //!
-//! This module provides a shared foundation for all element types, reducing
-//! code duplication and ensuring consistent lifecycle behavior.
+//! This module provides the common foundation that all element types build upon.
+//!
+//! **Note**: ElementBase is typically not used directly by application code.
+//! Instead, use the high-level element types (ComponentElement, StatefulElement, etc.)
+//! or the Element enum.
 
 use crate::element::{ElementId, ElementLifecycle};
 use crate::widget::Widget;
 
-/// ElementBase - Common data and behavior for all element types
+/// ElementBase - Internal element lifecycle management
 ///
-/// All five element types (Component, Stateful, Inherited, Render, ParentData)
-/// share common fields and lifecycle methods. ElementBase extracts this shared
-/// behavior to reduce duplication and ensure consistency.
+/// Provides common lifecycle management for all element types.
+/// This type is used internally by the framework and typically not accessed directly.
 ///
-/// # Shared Fields
+/// # Lifecycle States
 ///
-/// - `widget`: The widget configuration this element represents
-/// - `parent`: Parent element ID (None for root)
-/// - `slot`: Position in parent's child list
-/// - `lifecycle`: Current lifecycle state
-/// - `dirty`: Whether element needs rebuild
+/// - `Initial`: Element created but not yet mounted
+/// - `Active`: Element mounted and participating in the tree
+/// - `Inactive`: Element temporarily deactivated (cached)
+/// - `Defunct`: Element unmounted and removed from tree
 ///
-/// # Benefits
+/// # Common Operations
 ///
-/// - **DRY**: Eliminates ~60 lines of duplicated code across 5 element types
-/// - **Consistency**: Ensures all elements handle lifecycle identically
-/// - **Maintainability**: Single source of truth for common behavior
-/// - **Performance**: No overhead - simple struct composition
-///
-/// # Usage Pattern 1: With Widget Field
-///
-/// ```rust
-/// pub struct ComponentElement {
-///     base: ElementBase,
-///     child: Option<ElementId>,
-/// }
-///
-/// impl ComponentElement {
-///     pub fn new(widget: Widget) -> Self {
-///         Self {
-///             base: ElementBase::new(widget),
-///             child: None,
-///         }
-///     }
-///
-///     pub fn parent(&self) -> Option<ElementId> {
-///         self.base.parent()
-///     }
-/// }
-/// ```
-///
-/// # Usage Pattern 2: Separate Widget Field (for types with special widget handling)
-///
-/// Some element types may keep `widget: Widget` as a separate field for specific
-/// access patterns while still using ElementBase for other common fields.
+/// All elements support these operations via ElementBase:
+/// - `mount()` - Attach element to tree
+/// - `unmount()` - Remove element from tree
+/// - `activate()` / `deactivate()` - Cache management
+/// - `mark_dirty()` - Request rebuild
+/// - `parent()` - Get parent element ID
+/// - `widget()` - Get associated widget configuration
 #[derive(Debug)]
 pub struct ElementBase {
     /// The widget this element represents

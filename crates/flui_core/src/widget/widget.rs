@@ -1,27 +1,47 @@
-//! Widget Enum - Unified widget type for Flui
+//! Widget - Core UI building block
 //!
-//! This module provides the core `Widget` enum that replaces the trait hierarchy.
-//! Instead of multiple traits with blanket impls (which cause coherence conflicts),
-//! we use a single enum with variants for different widget types.
+//! Widgets are immutable configuration objects that describe what the UI should look like.
+//! This is the main type you'll use when building user interfaces with FLUI.
 //!
-//! # Architecture
+//! # Widget Types
+//!
+//! FLUI provides five widget types, each with different capabilities:
 //!
 //! ```text
-//! Widget (enum)
-//!   ├─ Stateless(Box<dyn StatelessWidget>)
-//!   ├─ Stateful(Box<dyn StatefulWidget>)
-//!   ├─ Inherited(Box<dyn InheritedWidget>)
-//!   ├─ Render(Box<dyn RenderWidget>)
-//!   └─ ParentData(Box<dyn ParentDataWidget>)
+//! StatelessWidget    → Pure UI, no state
+//! StatefulWidget     → Mutable state that persists
+//! InheritedWidget    → Share data down the tree
+//! RenderWidget       → Custom layout and painting
+//! ParentDataWidget   → Metadata for parent layouts
 //! ```
 //!
-//! # Benefits
+//! # Creating Widgets
 //!
-//! - ✅ No blanket impl conflicts (enum, not trait)
-//! - ✅ Exhaustive matching (compiler-checked)
-//! - ✅ Semantic clarity (Widget::Stateless vs Widget::Stateful)
-//! - ✅ Consistent with Element enum
-//! - ✅ Simple downcast and type checking
+//! Use the appropriate constructor for your widget type:
+//!
+//! ```ignore
+//! // Stateless widget (most common)
+//! let widget = Widget::stateless(MyWidget { ... });
+//!
+//! // Stateful widget (with mutable state)
+//! let widget = Widget::stateful(Counter { initial: 0 });
+//!
+//! // Inherited widget (for data propagation)
+//! let widget = Widget::inherited(Theme { colors: ... });
+//!
+//! // Render widget (custom rendering)
+//! let widget = Widget::render_object(Container { width: 100.0 });
+//!
+//! // Parent data widget (layout metadata)
+//! let widget = Widget::parent_data(Flexible { flex: 1, ... });
+//! ```
+//!
+//! # Performance
+//!
+//! Widget uses an enum-based architecture for excellent performance:
+//! - Fast dispatch (no vtable lookups)
+//! - Cache-friendly memory layout
+//! - Type-safe exhaustive matching
 //!
 //! # Examples
 //!
