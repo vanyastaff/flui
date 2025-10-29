@@ -381,7 +381,7 @@ impl Layer for PictureLayer {
                     dst_rect,
                     paint,
                 } => {
-                    painter.image(image, *src_rect, *dst_rect, paint);
+                    painter.draw_image(image, Some(*src_rect), *dst_rect, paint);
                 }
                 DrawCommand::Path { path, paint } => {
                     painter.path(path, paint);

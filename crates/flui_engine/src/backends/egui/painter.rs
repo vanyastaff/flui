@@ -727,6 +727,66 @@ impl<'a> Painter for EguiPainter<'a> {
         // - Implement stencil-based clipping in a custom backend
     }
 
+    fn draw_image(
+        &mut self,
+        image: &flui_types::painting::Image,
+        src: Option<Rect>,
+        dst: Rect,
+        paint: &crate::painter::Paint,
+    ) {
+        // Convert image data to egui ColorImage
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+            [image.width() as usize, image.height() as usize],
+            image.data(),
+        );
+
+        // Upload to egui texture system
+        // Note: In a real implementation, we would cache textures to avoid re-uploading
+        // For now, we create a temporary texture handle
+        let texture_handle = self.painter.ctx().load_texture(
+            format!("temp_image_{}x{}", image.width(), image.height()),
+            color_image,
+            egui::TextureOptions::default(),
+        );
+
+        // Calculate source and destination UV coordinates
+        let src_rect = src.unwrap_or(Rect::from_xywh(
+            0.0,
+            0.0,
+            image.width() as f32,
+            image.height() as f32,
+        ));
+
+        // Normalize source coordinates to UV space (0.0-1.0)
+        let uv = egui::Rect::from_min_max(
+            egui::pos2(
+                src_rect.left() / image.width() as f32,
+                src_rect.top() / image.height() as f32,
+            ),
+            egui::pos2(
+                src_rect.right() / image.width() as f32,
+                src_rect.bottom() / image.height() as f32,
+            ),
+        );
+
+        // Transform destination rectangle
+        let transformed_dst = self.transform_rect(dst);
+        let egui_rect = Self::to_egui_rect(transformed_dst);
+
+        // Apply opacity
+        let tint = egui::Color32::WHITE.gamma_multiply(self.current_state.opacity * paint.color.alpha_f32());
+
+        // Create image shape
+        let image_shape = egui::Shape::image(
+            texture_handle.id(),
+            egui_rect,
+            uv,
+            tint,
+        );
+
+        self.add_shape(image_shape);
+    }
+
     fn set_opacity(&mut self, opacity: f32) {
         // Multiply with current opacity (for nested opacity layers)
         self.current_state.opacity *= opacity.clamp(0.0, 1.0);

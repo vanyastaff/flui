@@ -706,6 +706,59 @@ pub trait Painter {
         }
     }
 
+    // ========== Image Drawing ==========
+
+    /// Draw an image at the specified destination rectangle.
+    ///
+    /// This is the primary method for rendering images. The image will be scaled
+    /// to fit the destination rectangle according to the BoxFit parameter.
+    ///
+    /// # Parameters
+    /// - `image`: The image to draw (RGBA8 format)
+    /// - `src`: Source rectangle within the image (use None for entire image)
+    /// - `dst`: Destination rectangle where the image should be drawn
+    /// - `paint`: Paint settings (opacity, blend mode, etc.)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_types::painting::Image;
+    /// use flui_types::{Rect, Color};
+    /// use flui_engine::painter::Paint;
+    ///
+    /// // Draw entire image
+    /// let image = Image::solid_color(100, 100, Color::RED);
+    /// painter.draw_image(
+    ///     &image,
+    ///     None,
+    ///     Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+    ///     &Paint::default()
+    /// );
+    ///
+    /// // Draw portion of image
+    /// painter.draw_image(
+    ///     &image,
+    ///     Some(Rect::from_xywh(25.0, 25.0, 50.0, 50.0)),
+    ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+    ///     &Paint::default()
+    /// );
+    /// ```
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation does nothing. Backends should override this
+    /// to provide actual image rendering support.
+    fn draw_image(
+        &mut self,
+        _image: &flui_types::painting::Image,
+        _src: Option<Rect>,
+        _dst: Rect,
+        _paint: &Paint,
+    ) {
+        // Default implementation: no-op
+        // Backends should override to provide image support
+    }
+
     // ========== Advanced ==========
 
     /// Set opacity for subsequent draws (0.0 = transparent, 1.0 = opaque)
