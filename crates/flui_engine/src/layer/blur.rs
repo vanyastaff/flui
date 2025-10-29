@@ -204,12 +204,19 @@ impl Layer for BlurLayer {
             }
             BlurMode::Backdrop => {
                 // Backdrop filter: filter what's behind the child
-                // Note: This requires rendering the backdrop first,
-                // applying filter, then rendering the child on top
-                // (proper implementation needs compositor support)
+                // Uses save_layer_backdrop() to capture the backdrop for filtering
+                // Note: Full effect requires GPU backend with framebuffer capture
 
-                painter.save();
-                // TODO: Implement proper backdrop filtering with offscreen rendering
+                let child_bounds = child.bounds();
+                painter.save_layer_backdrop(child_bounds);
+
+                // In a full implementation with GPU backend:
+                // 1. save_layer_backdrop() captures what's already painted
+                // 2. Apply blur filter to the captured backdrop
+                // 3. Paint child on top of blurred backdrop
+                // 4. restore() composites everything back
+
+                // For now, just paint the child (no blur applied in non-GPU backends)
                 child.paint(painter);
                 painter.restore();
             }

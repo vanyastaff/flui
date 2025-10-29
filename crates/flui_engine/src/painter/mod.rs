@@ -691,6 +691,80 @@ pub trait Painter {
     /// Set opacity for subsequent draws (0.0 = transparent, 1.0 = opaque)
     fn set_opacity(&mut self, opacity: f32);
 
+    // ========== Offscreen Rendering (Layer Support) ==========
+
+    /// Begin rendering to an offscreen layer
+    ///
+    /// Creates an offscreen rendering context where all subsequent drawing operations
+    /// are captured until `restore()` is called. The layer is then composited back to
+    /// the main surface using the provided paint settings (opacity, blend mode, etc.).
+    ///
+    /// # Parameters
+    /// - `bounds`: The rectangular region for the layer (in current coordinate space)
+    /// - `paint`: Paint settings for compositing the layer (opacity, blend mode)
+    ///
+    /// # Usage Pattern
+    /// ```rust,ignore
+    /// painter.save_layer(bounds, &Paint::new().with_opacity(0.5));
+    /// // ... draw content that should be in the layer ...
+    /// painter.restore(); // Composites layer back with 50% opacity
+    /// ```
+    ///
+    /// # Backend Requirements
+    /// Full implementation requires GPU backend support for render-to-texture.
+    /// The default implementation falls back to `save()` without offscreen rendering,
+    /// meaning effects like opacity and blend modes are applied per-primitive instead
+    /// of to the entire layer group.
+    ///
+    /// # Use Cases
+    /// - Group opacity: Apply opacity to a group of shapes atomically
+    /// - Color filters: Apply color transformations to child content
+    /// - Advanced blend modes: Composite groups with special blend modes
+    /// - Caching: Pre-render complex content to a texture
+    ///
+    /// # Default Implementation
+    /// Falls back to regular `save()` for backends without offscreen support.
+    fn save_layer(&mut self, _bounds: Rect, _paint: &Paint) {
+        // Default: just save state (no actual offscreen rendering)
+        // Backends with render-to-texture support should override
+        self.save();
+    }
+
+    /// Begin rendering to a layer with backdrop capture
+    ///
+    /// Similar to `save_layer()`, but captures the current backdrop (what's already
+    /// been painted behind this layer) for use in backdrop filters like blur.
+    ///
+    /// # Parameters
+    /// - `bounds`: The rectangular region for the layer (in current coordinate space)
+    ///
+    /// # Usage Pattern
+    /// ```rust,ignore
+    /// painter.save_layer_backdrop(bounds);
+    /// // ... apply backdrop filter (e.g., blur the captured backdrop) ...
+    /// // ... draw child content on top ...
+    /// painter.restore();
+    /// ```
+    ///
+    /// # Backend Requirements
+    /// Requires GPU backend with framebuffer read capabilities. This is a more
+    /// advanced feature than basic `save_layer()` because it needs to capture
+    /// the current rendered output before proceeding.
+    ///
+    /// # Use Cases
+    /// - Backdrop blur (frosted glass effect)
+    /// - Backdrop brightness/saturation adjustments
+    /// - Content-aware backgrounds
+    ///
+    /// # Default Implementation
+    /// Falls back to regular `save()` without backdrop capture.
+    /// The backdrop filter effect will not be visible without proper backend support.
+    fn save_layer_backdrop(&mut self, _bounds: Rect) {
+        // Default: just save state (no backdrop capture)
+        // Backends with framebuffer read support should override
+        self.save();
+    }
+
     // ========== Convenience Methods (Default Implementations) ==========
 
     /// Draw a rectangle with a drop shadow

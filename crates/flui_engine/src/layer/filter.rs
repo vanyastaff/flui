@@ -155,16 +155,21 @@ impl Layer for FilterLayer {
             return;
         }
 
-        painter.save();
+        // Use save_layer to render child to offscreen buffer for filtering
+        // Note: Full color filter implementation requires GPU backend with shader support
+        let child_bounds = child.bounds();
+        let paint = crate::painter::Paint::default(); // TODO: Apply color matrix via paint/shader
 
-        // Note: Proper color filter implementation requires offscreen rendering
-        // with shader support. For now, we just paint the child normally.
-        // Production implementation would:
-        // 1. Render child to offscreen buffer
-        // 2. Apply color matrix transform to buffer
-        // 3. Composite result back to main surface
+        painter.save_layer(child_bounds, &paint);
 
-        // TODO: Implement offscreen rendering with color matrix shader
+        // In a full GPU backend implementation:
+        // 1. save_layer() creates offscreen render target
+        // 2. Child is rendered to the offscreen buffer
+        // 3. Color matrix shader is applied to the buffer
+        // 4. restore() composites the filtered result back
+        //
+        // For non-GPU backends, child is painted normally without filter effect
+
         child.paint(painter);
 
         painter.restore();
