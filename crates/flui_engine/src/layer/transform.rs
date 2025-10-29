@@ -43,6 +43,7 @@ pub enum Transform {
     /// Creates pyramid or trapezoid effect by scaling differently at top and bottom
     /// - `top_scale`: horizontal scale factor at the top (1.0 = normal width)
     /// - `bottom_scale`: horizontal scale factor at the bottom (1.0 = normal width)
+    ///
     /// Example: top_scale=0.5, bottom_scale=1.0 creates pyramid (narrow top, wide bottom)
     Trapezoid { top_scale: f32, bottom_scale: f32 },
 }
@@ -128,6 +129,7 @@ impl TransformLayer {
     /// Create a trapezoid/perspective transform layer
     /// - `top_scale`: horizontal scale at the top (< 1.0 makes top narrow)
     /// - `bottom_scale`: horizontal scale at the bottom (> 1.0 makes bottom wide)
+    ///
     /// Example: trapezoid(child, 0.5, 1.0) creates pyramid (narrow top, wide bottom)
     pub fn trapezoid(child: BoxedLayer, top_scale: f32, bottom_scale: f32) -> Self {
         Self::new(

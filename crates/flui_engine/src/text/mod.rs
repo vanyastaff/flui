@@ -5,4 +5,4 @@
 
 pub mod vector;
 
-pub use vector::{TextVertex, VectorTextError, VectorTextRenderer};
+pub use vector::{TextRenderParams, TextVertex, VectorTextError, VectorTextRenderer};

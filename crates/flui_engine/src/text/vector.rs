@@ -18,6 +18,60 @@ pub struct TextVertex {
     pub color: Color,
 }
 
+/// Parameters for text rendering
+#[derive(Debug, Clone)]
+pub struct TextRenderParams<'a> {
+    /// Text to render
+    pub text: &'a str,
+    /// Starting position
+    pub position: Point,
+    /// Font size in pixels
+    pub font_size: f32,
+    /// Text color
+    pub color: Color,
+    /// Full 4x4 transformation matrix
+    pub transform: &'a Mat4,
+    /// Additional spacing between letters (default 0.0)
+    pub letter_spacing: f32,
+    /// Additional spacing between words (default 0.0)
+    pub word_spacing: f32,
+}
+
+impl<'a> TextRenderParams<'a> {
+    /// Create new text render parameters
+    pub fn new(
+        text: &'a str,
+        position: Point,
+        font_size: f32,
+        color: Color,
+        transform: &'a Mat4,
+    ) -> Self {
+        Self {
+            text,
+            position,
+            font_size,
+            color,
+            transform,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+        }
+    }
+
+    /// Set letter spacing
+    #[must_use]
+    pub fn with_letter_spacing(mut self, spacing: f32) -> Self {
+        self.letter_spacing = spacing;
+        self
+    }
+
+    /// Set word spacing
+    #[must_use]
+    pub fn with_word_spacing(mut self, spacing: f32) -> Self {
+        self.word_spacing = spacing;
+        self
+    }
+}
+
 /// Vector text renderer that converts glyphs to paths and tessellates them
 pub struct VectorTextRenderer {
     /// Cached font face data
@@ -53,25 +107,13 @@ impl VectorTextRenderer {
     /// Render text as vector paths and return backend-agnostic vertices and indices
     ///
     /// # Parameters
-    /// - `text`: The text string to render
-    /// - `position`: Starting position
-    /// - `font_size`: Font size in pixels
-    /// - `color`: Text color
-    /// - `transform`: Full 4x4 transformation matrix (including skew, perspective)
-    /// - `letter_spacing`: Additional spacing between letters (in pixels, default 0.0)
-    /// - `word_spacing`: Additional spacing between words (in pixels, default 0.0)
+    /// - `params`: Text rendering parameters
     ///
     /// # Returns
     /// Tuple of (vertices, indices) that can be converted to any backend format
     pub fn render(
         &mut self,
-        text: &str,
-        position: Point,
-        font_size: f32,
-        color: Color,
-        transform: &Mat4,
-        letter_spacing: f32,
-        word_spacing: f32,
+        params: &TextRenderParams,
     ) -> Result<(Vec<TextVertex>, Vec<u32>), VectorTextError> {
         // Parse font face
         let face = ttf_parser::Face::parse(&self.font_data, 0)
@@ -79,17 +121,17 @@ impl VectorTextRenderer {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        let mut x_offset = position.x;
+        let mut x_offset = params.position.x;
 
         // Process each character
-        for ch in text.chars() {
+        for ch in params.text.chars() {
             // Get glyph ID for character
             let glyph_id = face
                 .glyph_index(ch)
                 .ok_or(VectorTextError::GlyphNotFound(ch))?;
 
             // Calculate scale for this glyph
-            let scale = font_size / face.units_per_em() as f32;
+            let scale = params.font_size / face.units_per_em() as f32;
 
             // Create a new path builder for this glyph
             let mut path_builder = lyon::path::Builder::new();
@@ -110,9 +152,9 @@ impl VectorTextRenderer {
                 if let Some(advance) = face.glyph_hor_advance(glyph_id) {
                     x_offset += advance as f32 * scale;
                 }
-                x_offset += letter_spacing;
+                x_offset += params.letter_spacing;
                 if ch.is_whitespace() {
-                    x_offset += word_spacing;
+                    x_offset += params.word_spacing;
                 }
                 continue;
             }
@@ -142,10 +184,10 @@ impl VectorTextRenderer {
                 // Place character at its offset position (relative to start of string)
                 // Then the transform matrix will be applied to the whole positioned text
                 let local_x = point.x + x_offset;
-                let local_y = point.y + position.y;
+                let local_y = point.y + params.position.y;
 
                 // Apply full 4x4 transformation with perspective division
-                let m = transform.to_cols_array_2d();
+                let m = params.transform.to_cols_array_2d();
 
                 // Full 4x4 matrix multiplication (treating 2D point as 3D with z=0)
                 let x = m[0][0] * local_x + m[1][0] * local_y + m[2][0] * 0.0 + m[3][0];
@@ -162,7 +204,7 @@ impl VectorTextRenderer {
                 vertices.push(TextVertex {
                     x: transformed_x,
                     y: transformed_y,
-                    color,
+                    color: params.color,
                 });
             }
 
@@ -177,11 +219,11 @@ impl VectorTextRenderer {
             }
 
             // Apply letter spacing after each character
-            x_offset += letter_spacing;
+            x_offset += params.letter_spacing;
 
             // Apply word spacing after space characters
             if ch.is_whitespace() {
-                x_offset += word_spacing;
+                x_offset += params.word_spacing;
             }
         }
 

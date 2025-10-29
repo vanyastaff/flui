@@ -485,18 +485,15 @@ impl<'a> Painter for EguiPainter<'a> {
                 let color = paint.color;
 
                 // TODO: Extract letter_spacing and word_spacing from paint or style
-                let letter_spacing = 0.0;
-                let word_spacing = 0.0;
-
-                match renderer.render(
+                let params = crate::text::TextRenderParams::new(
                     text,
                     position,
                     font_size,
                     color,
                     &self.current_state.transform,
-                    letter_spacing,
-                    word_spacing,
-                ) {
+                );
+
+                match renderer.render(&params) {
                     Ok((vertices, indices)) => {
                         // Convert TextVertex to egui::epaint::Vertex
                         let egui_vertices: Vec<egui::epaint::Vertex> = vertices
@@ -590,15 +587,17 @@ impl<'a> Painter for EguiPainter<'a> {
                 // Color is already in correct format
                 let color = paint.color;
 
-                match renderer.render(
+                let params = crate::text::TextRenderParams::new(
                     text,
                     position,
                     font_size,
                     color,
                     &self.current_state.transform,
-                    letter_spacing,
-                    word_spacing,
-                ) {
+                )
+                .with_letter_spacing(letter_spacing)
+                .with_word_spacing(word_spacing);
+
+                match renderer.render(&params) {
                     Ok((vertices, indices)) => {
                         // Convert TextVertex to egui::epaint::Vertex
                         let egui_vertices: Vec<egui::epaint::Vertex> = vertices
