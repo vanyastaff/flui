@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(hsl.alpha, 1.0);
 
         let back: Color = hsl.into();
-        assert!((back.red() as i16 - red.red() as i16).abs() <= 2);
+        assert!((back.r as i16 - red.r as i16).abs() <= 2);
     }
 
     #[test]
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(hsv.alpha, 1.0);
 
         let back: Color = hsv.into();
-        assert!((back.red() as i16 - red.red() as i16).abs() <= 2);
+        assert!((back.r as i16 - red.r as i16).abs() <= 2);
     }
 
     #[test]
@@ -358,9 +358,9 @@ mod tests {
             let back: Color = hsl.into();
 
             // Allow small error due to rounding
-            assert!((back.red() as i16 - original.red() as i16).abs() <= 2);
-            assert!((back.green() as i16 - original.green() as i16).abs() <= 2);
-            assert!((back.blue() as i16 - original.blue() as i16).abs() <= 2);
+            assert!((back.r as i16 - original.r as i16).abs() <= 2);
+            assert!((back.g as i16 - original.g as i16).abs() <= 2);
+            assert!((back.b as i16 - original.b as i16).abs() <= 2);
         }
     }
 
@@ -380,9 +380,9 @@ mod tests {
             let back: Color = hsv.into();
 
             // Allow small error due to rounding
-            assert!((back.red() as i16 - original.red() as i16).abs() <= 2);
-            assert!((back.green() as i16 - original.green() as i16).abs() <= 2);
-            assert!((back.blue() as i16 - original.blue() as i16).abs() <= 2);
+            assert!((back.r as i16 - original.r as i16).abs() <= 2);
+            assert!((back.g as i16 - original.g as i16).abs() <= 2);
+            assert!((back.b as i16 - original.b as i16).abs() <= 2);
         }
     }
 }

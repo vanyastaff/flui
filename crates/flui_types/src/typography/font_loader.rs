@@ -426,6 +426,17 @@ mod tests {
         FontLoader::clear_all();
     }
 
+    // Helper for async tests
+    async fn with_clean_loader_async<F, Fut>(f: F)
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        FontLoader::clear_all();
+        f().await;
+        FontLoader::clear_all();
+    }
+
     #[test]
     fn test_register_and_get_family() {
         with_clean_loader(|| {
@@ -538,32 +549,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_font() {
-        with_clean_loader(|| {
-            async {
-                FontLoader::register_font(
-                    "LoadTest",
-                    create_test_font(),
-                    FontWeight::W400,
-                    FontStyle::Normal,
-                );
+        with_clean_loader_async(|| async {
+            FontLoader::register_font(
+                "LoadTest",
+                create_test_font(),
+                FontWeight::W400,
+                FontStyle::Normal,
+            );
 
-                let result =
-                    FontLoader::load("LoadTest", FontWeight::W400, FontStyle::Normal).await;
-                assert!(result.is_ok());
-            }
-            .await
-        });
+            let result =
+                FontLoader::load("LoadTest", FontWeight::W400, FontStyle::Normal).await;
+            assert!(result.is_ok());
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn test_load_nonexistent_family() {
-        with_clean_loader(|| {
-            async {
-                let result =
-                    FontLoader::load("NonExistent", FontWeight::W400, FontStyle::Normal).await;
-                assert!(result.is_err());
-            }
-            .await
-        });
+        with_clean_loader_async(|| async {
+            let result =
+                FontLoader::load("NonExistent", FontWeight::W400, FontStyle::Normal).await;
+            assert!(result.is_err());
+        })
+        .await;
     }
 }

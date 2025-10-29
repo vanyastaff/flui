@@ -150,6 +150,82 @@ impl Shader {
         Shader::Image(shader)
     }
 
+    /// Creates a simple linear gradient with default settings.
+    ///
+    /// This is a convenience method that creates a linear gradient with:
+    /// - No color stops (colors evenly distributed)
+    /// - TileMode::Clamp (no repeating)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Shader;
+    /// use flui_types::geometry::Offset;
+    /// use flui_types::styling::Color;
+    ///
+    /// let shader = Shader::simple_linear(
+    ///     Offset::ZERO,
+    ///     Offset::new(100.0, 0.0),
+    ///     vec![Color::RED, Color::BLUE],
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn simple_linear(from: Offset, to: Offset, colors: Vec<Color>) -> Self {
+        Self::linear_gradient(from, to, colors, None, TileMode::Clamp)
+    }
+
+    /// Creates a simple radial gradient with default settings.
+    ///
+    /// This is a convenience method that creates a radial gradient with:
+    /// - No color stops (colors evenly distributed)
+    /// - No focal point
+    /// - TileMode::Clamp (no repeating)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Shader;
+    /// use flui_types::geometry::Offset;
+    /// use flui_types::styling::Color;
+    ///
+    /// let shader = Shader::simple_radial(
+    ///     Offset::new(50.0, 50.0),
+    ///     25.0,
+    ///     vec![Color::RED, Color::BLUE],
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn simple_radial(center: Offset, radius: f32, colors: Vec<Color>) -> Self {
+        Self::radial_gradient(center, radius, colors, None, TileMode::Clamp, None, None)
+    }
+
+    /// Creates a simple sweep (conic) gradient with default settings.
+    ///
+    /// This is a convenience method that creates a full 360° sweep gradient with:
+    /// - No color stops (colors evenly distributed)
+    /// - Full rotation (0 to 2π radians)
+    /// - TileMode::Clamp (no repeating)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Shader;
+    /// use flui_types::geometry::Offset;
+    /// use flui_types::styling::Color;
+    ///
+    /// let shader = Shader::simple_sweep(
+    ///     Offset::new(50.0, 50.0),
+    ///     vec![Color::RED, Color::GREEN, Color::BLUE],
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn simple_sweep(center: Offset, colors: Vec<Color>) -> Self {
+        Self::sweep_gradient(center, colors, None, TileMode::Clamp, 0.0, std::f32::consts::TAU)
+    }
+
     /// Returns the number of colors in this shader.
     #[inline]
     #[must_use]

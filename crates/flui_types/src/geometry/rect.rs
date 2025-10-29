@@ -79,22 +79,57 @@ impl Rect {
         Self::from_xywh(left, top, width, height)
     }
 
+    /// Create a rectangle from left, top, right, bottom coordinates.
+    ///
+    /// This is a common pattern in graphics APIs where you specify the edges directly.
+    /// Similar to Flutter's `Rect.fromLTRB`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::geometry::Rect;
+    ///
+    /// let rect = Rect::from_ltrb(10.0, 20.0, 110.0, 120.0);
+    /// assert_eq!(rect.left(), 10.0);
+    /// assert_eq!(rect.top(), 20.0);
+    /// assert_eq!(rect.right(), 110.0);
+    /// assert_eq!(rect.bottom(), 120.0);
+    /// assert_eq!(rect.width(), 100.0);
+    /// assert_eq!(rect.height(), 100.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn from_ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        Self {
+            min: Point::new(left, top),
+            max: Point::new(right, bottom),
+        }
+    }
+
     /// Get the width of the rectangle.
-    pub fn width(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn width(&self) -> f32 {
         self.max.x - self.min.x
     }
 
     /// Get the height of the rectangle.
-    pub fn height(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn height(&self) -> f32 {
         self.max.y - self.min.y
     }
 
     /// Get the size of the rectangle.
+    #[inline]
+    #[must_use]
     pub fn size(&self) -> Size {
         Size::new(self.width(), self.height())
     }
 
     /// Get the center point of the rectangle.
+    #[inline]
+    #[must_use]
     pub fn center(&self) -> Point {
         Point::new(
             (self.min.x + self.max.x) * 0.5,
@@ -103,7 +138,9 @@ impl Rect {
     }
 
     /// Get the area of the rectangle.
-    pub fn area(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn area(&self) -> f32 {
         self.width() * self.height()
     }
 
@@ -118,6 +155,8 @@ impl Rect {
     }
 
     /// Check if the rectangle contains a point.
+    #[inline]
+    #[must_use]
     pub fn contains(&self, point: impl Into<Point>) -> bool {
         let point = point.into();
         point.x >= self.min.x
@@ -127,6 +166,8 @@ impl Rect {
     }
 
     /// Check if this rectangle intersects another.
+    #[inline]
+    #[must_use]
     pub fn intersects(&self, other: &Rect) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x
@@ -168,32 +209,44 @@ impl Rect {
     }
 
     /// Check if the rectangle is empty (zero or negative size).
-    pub fn is_empty(&self) -> bool {
+    #[inline]
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.width() <= 0.0 || self.height() <= 0.0
     }
 
     /// Check if the rectangle has finite coordinates.
+    #[inline]
+    #[must_use]
     pub fn is_finite(&self) -> bool {
         self.min.is_finite() && self.max.is_finite()
     }
 
     /// Get the left edge X coordinate.
-    pub fn left(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn left(&self) -> f32 {
         self.min.x
     }
 
     /// Get the right edge X coordinate.
-    pub fn right(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn right(&self) -> f32 {
         self.max.x
     }
 
     /// Get the top edge Y coordinate.
-    pub fn top(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn top(&self) -> f32 {
         self.min.y
     }
 
     /// Get the bottom edge Y coordinate.
-    pub fn bottom(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn bottom(&self) -> f32 {
         self.max.y
     }
 
@@ -335,6 +388,189 @@ impl Rect {
             min: Point::lerp(a.min, b.min, t),
             max: Point::lerp(a.max, b.max, t),
         }
+    }
+
+    /// Create a rectangle centered on a specific point.
+    ///
+    /// Useful for positioning dialogs, tooltips, or popups around a point.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Rect, Size, Point};
+    ///
+    /// let size = Size::new(100.0, 50.0);
+    /// let center = Point::new(200.0, 150.0);
+    /// let rect = Rect::center_on(center, size);
+    ///
+    /// assert_eq!(rect.center(), center);
+    /// assert_eq!(rect.size(), size);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn center_on(center: impl Into<Point>, size: impl Into<Size>) -> Self {
+        let center = center.into();
+        let size = size.into();
+        let half_width = size.width * 0.5;
+        let half_height = size.height * 0.5;
+
+        Rect {
+            min: Point::new(center.x - half_width, center.y - half_height),
+            max: Point::new(center.x + half_width, center.y + half_height),
+        }
+    }
+
+    /// Create a bounding rectangle from a collection of points.
+    ///
+    /// Returns the smallest rectangle that contains all the given points.
+    /// Returns None if the slice is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Rect, Point};
+    ///
+    /// let points = vec![
+    ///     Point::new(10.0, 20.0),
+    ///     Point::new(50.0, 30.0),
+    ///     Point::new(30.0, 60.0),
+    /// ];
+    ///
+    /// let bounds = Rect::from_points(&points).unwrap();
+    /// assert_eq!(bounds.min, Point::new(10.0, 20.0));
+    /// assert_eq!(bounds.max, Point::new(50.0, 60.0));
+    /// ```
+    #[must_use]
+    pub fn from_points(points: &[Point]) -> Option<Self> {
+        if points.is_empty() {
+            return None;
+        }
+
+        let mut min_x = points[0].x;
+        let mut min_y = points[0].y;
+        let mut max_x = points[0].x;
+        let mut max_y = points[0].y;
+
+        for point in &points[1..] {
+            min_x = min_x.min(point.x);
+            min_y = min_y.min(point.y);
+            max_x = max_x.max(point.x);
+            max_y = max_y.max(point.y);
+        }
+
+        Some(Rect {
+            min: Point::new(min_x, min_y),
+            max: Point::new(max_x, max_y),
+        })
+    }
+
+    /// Shrink this rectangle by the given edge insets.
+    ///
+    /// This is the opposite of `inflate()` - it applies insets to shrink the rectangle.
+    /// Commonly used for applying padding or margins.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Rect, Point};
+    /// use flui_types::layout::EdgeInsets;
+    ///
+    /// let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    /// let insets = EdgeInsets::all(10.0);
+    /// let inset_rect = rect.inset_by(&insets);
+    ///
+    /// assert_eq!(inset_rect, Rect::from_xywh(10.0, 10.0, 80.0, 80.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn inset_by(&self, insets: &crate::layout::EdgeInsets) -> Self {
+        Rect {
+            min: Point::new(self.min.x + insets.left, self.min.y + insets.top),
+            max: Point::new(self.max.x - insets.right, self.max.y - insets.bottom),
+        }
+    }
+
+    /// Expand this rectangle to include the given point.
+    ///
+    /// If the point is already inside, returns the same rectangle.
+    /// Otherwise, expands the minimum bounds to include the point.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Rect, Point};
+    ///
+    /// let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
+    ///
+    /// // Point inside - no change
+    /// let expanded = rect.expanded_to_include(Point::new(15.0, 15.0));
+    /// assert_eq!(expanded, rect);
+    ///
+    /// // Point outside - expands
+    /// let expanded = rect.expanded_to_include(Point::new(50.0, 5.0));
+    /// assert_eq!(expanded.min, Point::new(10.0, 5.0));
+    /// assert_eq!(expanded.max, Point::new(50.0, 30.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn expanded_to_include(&self, point: impl Into<Point>) -> Self {
+        let point = point.into();
+        Rect {
+            min: Point::new(self.min.x.min(point.x), self.min.y.min(point.y)),
+            max: Point::new(self.max.x.max(point.x), self.max.y.max(point.y)),
+        }
+    }
+
+    /// Check if this rectangle intersects with any rectangle in a batch.
+    ///
+    /// Returns true if there's at least one intersection.
+    /// Faster than checking each rectangle individually in a loop.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Rect, Point};
+    ///
+    /// let rect = Rect::from_min_max(Point::new(0.0, 0.0), Point::new(10.0, 10.0));
+    /// let rects = vec![
+    ///     Rect::from_min_max(Point::new(20.0, 20.0), Point::new(30.0, 30.0)), // No intersection
+    ///     Rect::from_min_max(Point::new(5.0, 5.0), Point::new(15.0, 15.0)),   // Intersection!
+    /// ];
+    ///
+    /// assert!(rect.intersects_any(&rects));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn intersects_any(&self, rects: &[Rect]) -> bool {
+        rects.iter().any(|r| self.intersects(r))
+    }
+
+    /// Batch intersection test - get all rectangles that intersect with this one.
+    ///
+    /// Returns indices of rectangles that intersect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Rect, Point};
+    ///
+    /// let rect = Rect::from_min_max(Point::new(0.0, 0.0), Point::new(10.0, 10.0));
+    /// let rects = vec![
+    ///     Rect::from_min_max(Point::new(20.0, 20.0), Point::new(30.0, 30.0)),
+    ///     Rect::from_min_max(Point::new(5.0, 5.0), Point::new(15.0, 15.0)),
+    ///     Rect::from_min_max(Point::new(8.0, 8.0), Point::new(12.0, 12.0)),
+    /// ];
+    ///
+    /// let intersecting = rect.intersecting_indices(&rects);
+    /// assert_eq!(intersecting, vec![1, 2]);
+    /// ```
+    #[must_use]
+    pub fn intersecting_indices(&self, rects: &[Rect]) -> Vec<usize> {
+        rects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| if self.intersects(r) { Some(i) } else { None })
+            .collect()
     }
 }
 

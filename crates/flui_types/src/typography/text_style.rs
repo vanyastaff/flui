@@ -56,6 +56,43 @@ impl FontWeight {
     pub const fn is_bold(&self) -> bool {
         self.value() >= 600
     }
+
+    /// Convert a CSS font-weight value (100-900) to a FontWeight.
+    ///
+    /// Rounds to the nearest valid weight. Useful when parsing CSS or web fonts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::typography::FontWeight;
+    ///
+    /// assert_eq!(FontWeight::from_css(400), FontWeight::W400);
+    /// assert_eq!(FontWeight::from_css(700), FontWeight::W700);
+    ///
+    /// // Rounds to nearest valid weight
+    /// assert_eq!(FontWeight::from_css(350), FontWeight::W300);
+    /// assert_eq!(FontWeight::from_css(450), FontWeight::W500);
+    /// assert_eq!(FontWeight::from_css(650), FontWeight::W700);
+    ///
+    /// // Clamps out-of-range values
+    /// assert_eq!(FontWeight::from_css(50), FontWeight::W100);
+    /// assert_eq!(FontWeight::from_css(1000), FontWeight::W900);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub const fn from_css(value: i32) -> Self {
+        match value {
+            0..=150 => Self::W100,
+            151..=250 => Self::W200,
+            251..=350 => Self::W300,
+            351..=449 => Self::W400,
+            450..=549 => Self::W500,
+            550..=649 => Self::W600,
+            650..=749 => Self::W700,
+            750..=849 => Self::W800,
+            _ => Self::W900,
+        }
+    }
 }
 
 impl Default for FontWeight {

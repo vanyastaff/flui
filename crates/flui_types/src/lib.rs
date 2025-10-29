@@ -72,45 +72,38 @@ pub mod semantics;
 pub mod styling;
 pub mod typography;
 
-// Re-exports for convenience
-pub use constraints::{BoxConstraints, SliverConstraints};
-pub use events::{
-    Event, HitTestEntry, HitTestResult, KeyEvent, KeyEventData, KeyModifiers, LogicalKey,
-    PhysicalKey, PointerButton, PointerDeviceKind, PointerEvent, PointerEventData, ScrollDelta,
-    ScrollEventData, WindowEvent,
-};
-pub use geometry::{
-    CharTransform, Matrix4, Offset, Point, RRect, Rect, Size, arc_position, bezier_point,
-    bezier_tangent_rotation, grid_position, parametric_position, spiral_position, vertical_scale,
-    wave_offset, wave_rotation,
-};
-pub use layout::{
-    Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
-    MainAxisSize, Orientation, VerticalDirection,
-};
-pub use styling::{Color, HSLColor, HSVColor, MaterialColors, ParseColorError};
-pub use typography::{
-    FontStyle, FontWeight, TextAffinity, TextAlign, TextAlignVertical, TextBaseline,
-    TextDecoration, TextDecorationStyle, TextDirection, TextOverflow, TextPosition, TextRange,
-    TextSelection, TextSpan, TextStyle,
-};
+// Re-exports for convenience - Most commonly used types
+pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
+pub use layout::{Alignment, Axis, EdgeInsets};
+pub use styling::Color;
 
-/// Prelude module for convenient imports
+/// Prelude module for convenient glob imports
+///
+/// Import with `use flui_types::prelude::*;` to get all commonly-used types.
 pub mod prelude {
-    pub use crate::constraints::{BoxConstraints, SliverConstraints};
-    pub use crate::geometry::{
-        CharTransform, Matrix4, Offset, Point, RRect, Rect, Size, arc_position, bezier_point,
-        bezier_tangent_rotation, grid_position, parametric_position, spiral_position,
-        vertical_scale, wave_offset, wave_rotation,
-    };
+    // Geometry - Essential types
+    pub use crate::geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
+
+    // Layout - Common types
     pub use crate::layout::{
         Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
         MainAxisSize, Orientation, VerticalDirection,
     };
-    pub use crate::styling::{Color, HSLColor, HSVColor, MaterialColors};
+
+    // Styling - Essential
+    pub use crate::styling::{Color, HSLColor, HSVColor};
+
+    // Constraints - Common
+    pub use crate::constraints::BoxConstraints;
+
+    // Animation - Frequently used
+    pub use crate::animation::{Curve, Curves, Linear, Tween};
+
+    // Typography - Common
     pub use crate::typography::{
-        FontStyle, FontWeight, TextAffinity, TextAlign, TextAlignVertical, TextBaseline,
-        TextDecoration, TextDecorationStyle, TextDirection, TextOverflow, TextPosition, TextRange,
-        TextSelection, TextSpan, TextStyle,
+        FontStyle, FontWeight, TextAlign, TextBaseline, TextDirection, TextStyle,
     };
+
+    // Events - Common
+    pub use crate::events::{KeyEvent, PointerEvent, WindowEvent};
 }

@@ -669,8 +669,8 @@ mod tests {
     fn test_color_tween() {
         let tween = ColorTween::new(Color::RED, Color::BLUE);
         let mid = tween.transform(0.5);
-        assert_eq!(mid.red(), 127);
-        assert_eq!(mid.blue(), 127);
+        assert_eq!(mid.r, 127);
+        assert_eq!(mid.b, 127);
     }
 
     #[test]

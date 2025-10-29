@@ -596,6 +596,6 @@ mod tests {
         let red_900 = MaterialColors::RED_900;
 
         // 50 should be lighter than 900
-        assert!(red_50.red() > red_900.red());
+        assert!(red_50.r > red_900.r);
     }
 }

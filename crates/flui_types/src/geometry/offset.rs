@@ -97,6 +97,8 @@ impl Offset {
     /// let offset = Offset::new(3.0, 4.0);
     /// assert_eq!(offset.distance(), 5.0); // 3-4-5 triangle
     /// ```
+    #[inline]
+    #[must_use]
     pub fn distance(&self) -> f32 {
         (self.dx * self.dx + self.dy * self.dy).sqrt()
     }
@@ -111,7 +113,9 @@ impl Offset {
     /// let offset = Offset::new(3.0, 4.0);
     /// assert_eq!(offset.distance_squared(), 25.0);
     /// ```
-    pub fn distance_squared(&self) -> f32 {
+    #[inline]
+    #[must_use]
+    pub const fn distance_squared(&self) -> f32 {
         self.dx * self.dx + self.dy * self.dy
     }
 
@@ -311,6 +315,98 @@ impl Offset {
             if self.dx >= 0.0 { self.dx } else { -self.dx },
             if self.dy >= 0.0 { self.dy } else { -self.dy },
         )
+    }
+
+    /// Clamp the magnitude (length) of this offset to a maximum value.
+    ///
+    /// If the magnitude exceeds `max`, returns a scaled version with magnitude `max`.
+    /// Direction is preserved.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Offset;
+    ///
+    /// let offset = Offset::new(30.0, 40.0); // magnitude = 50
+    /// let clamped = offset.clamp_magnitude(25.0);
+    ///
+    /// assert!((clamped.distance() - 25.0).abs() < 0.1);
+    /// // Direction preserved: still pointing in same direction
+    /// assert!((clamped.direction() - offset.direction()).abs() < 0.01);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn clamp_magnitude(&self, max: f32) -> Offset {
+        let magnitude = self.distance();
+        if magnitude > max && magnitude > f32::EPSILON {
+            let scale = max / magnitude;
+            Offset::new(self.dx * scale, self.dy * scale)
+        } else {
+            *self
+        }
+    }
+
+    /// Move towards another offset by a specific distance.
+    ///
+    /// If the distance to target is less than `max_distance`, returns the target.
+    /// Otherwise, moves `max_distance` units towards the target.
+    ///
+    /// Useful for smooth following behavior and lerping with fixed step size.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Offset;
+    ///
+    /// let start = Offset::new(0.0, 0.0);
+    /// let target = Offset::new(10.0, 0.0);
+    ///
+    /// // Move 3 units towards target
+    /// let moved = start.move_towards(target, 3.0);
+    /// assert_eq!(moved, Offset::new(3.0, 0.0));
+    ///
+    /// // Moving beyond target distance returns target
+    /// let at_target = start.move_towards(target, 20.0);
+    /// assert_eq!(at_target, target);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn move_towards(&self, target: impl Into<Offset>, max_distance: f32) -> Offset {
+        let target = target.into();
+        let delta = target - *self;
+        let distance = delta.distance();
+
+        if distance <= max_distance || distance < f32::EPSILON {
+            target
+        } else {
+            let direction = delta.normalize();
+            *self + direction * max_distance
+        }
+    }
+
+    /// Calculate the angle between this offset and another, in radians.
+    ///
+    /// Returns the absolute angle difference in range [0, π].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Offset;
+    /// use std::f32::consts::PI;
+    ///
+    /// let right = Offset::new(1.0, 0.0);
+    /// let up = Offset::new(0.0, 1.0);
+    ///
+    /// let angle = right.angle_to(up);
+    /// assert!((angle - PI / 2.0).abs() < 0.01);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn angle_to(&self, other: impl Into<Offset>) -> f32 {
+        let other = other.into();
+        let dot = self.dot(other);
+        let det = self.cross(other);
+        det.atan2(dot).abs()
     }
 }
 

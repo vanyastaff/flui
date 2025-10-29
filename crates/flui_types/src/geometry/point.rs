@@ -64,6 +64,7 @@ impl Point {
     }
 
     /// Linear interpolation between two points.
+    #[inline]
     #[must_use]
     pub fn lerp(a: impl Into<Point>, b: impl Into<Point>, t: f32) -> Point {
         let a = a.into();
@@ -94,6 +95,7 @@ impl Point {
     }
 
     /// Get the minimum of two points (component-wise).
+    #[inline]
     #[must_use]
     pub fn min(a: impl Into<Point>, b: impl Into<Point>) -> Point {
         let a = a.into();
@@ -105,6 +107,7 @@ impl Point {
     }
 
     /// Get the maximum of two points (component-wise).
+    #[inline]
     #[must_use]
     pub fn max(a: impl Into<Point>, b: impl Into<Point>) -> Point {
         let a = a.into();
@@ -162,6 +165,7 @@ impl Point {
     /// Normalizes this point as a vector (returns unit vector).
     ///
     /// Returns `Point::ZERO` if magnitude is zero.
+    #[inline]
     #[must_use]
     pub fn normalize(&self) -> Point {
         let mag = self.magnitude();

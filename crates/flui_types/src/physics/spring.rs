@@ -124,6 +124,65 @@ impl SpringDescription {
         }
     }
 
+    /// Create a bouncy spring preset (underdamped).
+    ///
+    /// Great for playful animations with overshoot.
+    /// Uses damping ratio of ~0.4 for visible bounce.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::{SpringDescription, SpringType};
+    ///
+    /// let spring = SpringDescription::bouncy();
+    /// assert_eq!(spring.spring_type(), SpringType::Underdamped);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn bouncy() -> Self {
+        // Mass=1, Stiffness=300, Damping=10 gives ~0.4 damping ratio
+        Self::new(1.0, 300.0, 10.0)
+    }
+
+    /// Create a stiff spring preset (critically damped).
+    ///
+    /// Snappy, responsive animations without bounce.
+    /// Returns to rest as quickly as possible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::{SpringDescription, SpringType};
+    ///
+    /// let spring = SpringDescription::stiff();
+    /// assert_eq!(spring.spring_type(), SpringType::Critical);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn stiff() -> Self {
+        Self::with_critical_damping(1.0, 500.0)
+    }
+
+    /// Create a soft spring preset (overdamped).
+    ///
+    /// Gentle, smooth animations without overshoot.
+    /// Good for subtle UI transitions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::physics::{SpringDescription, SpringType};
+    ///
+    /// let spring = SpringDescription::soft();
+    /// assert_eq!(spring.spring_type(), SpringType::Overdamped);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn soft() -> Self {
+        // Mass=1, Stiffness=100, Damping=30 gives ~1.5 damping ratio
+        Self::new(1.0, 100.0, 30.0)
+    }
+
     /// Returns the type of this spring
     ///
     /// # Examples

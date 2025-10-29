@@ -1,5 +1,6 @@
 //! Animation curves for interpolation.
 
+use smallvec::SmallVec;
 use std::f32::consts::PI;
 
 /// A mapping from the unit interval to the unit interval.
@@ -32,13 +33,11 @@ pub trait Curve {
     fn transform(&self, t: f32) -> f32;
 
     /// Returns a new curve that is the reversed curve of this one.
-    fn flipped(&self) -> FlippedCurve<Self>
+    fn flipped(self) -> FlippedCurve<Self>
     where
-        Self: Sized + Clone,
+        Self: Sized,
     {
-        FlippedCurve {
-            curve: self.clone(),
-        }
+        FlippedCurve { curve: self }
     }
 }
 
@@ -130,7 +129,7 @@ impl Curve for SawTooth {
 /// Similar to Flutter's `Interval`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Interval<C: Curve = Linear> {
+pub struct Interval<C: Curve + Copy = Linear> {
     /// The start of the interval (0.0 to 1.0).
     pub begin: f32,
     /// The end of the interval (0.0 to 1.0).
@@ -139,7 +138,7 @@ pub struct Interval<C: Curve = Linear> {
     pub curve: C,
 }
 
-impl<C: Curve> Interval<C> {
+impl<C: Curve + Copy> Interval<C> {
     /// Creates a new interval curve.
     #[inline]
     #[must_use]
@@ -166,7 +165,7 @@ impl Interval<Linear> {
     }
 }
 
-impl<C: Curve> Curve for Interval<C> {
+impl<C: Curve + Copy> Curve for Interval<C> {
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
 
@@ -391,12 +390,15 @@ impl Curve for ElasticInOutCurve {
 
 /// A Catmull-Rom curve passing through a set of points.
 ///
+/// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
+///
 /// Similar to Flutter's `CatmullRomCurve`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CatmullRomCurve {
     /// The control points of the curve.
-    pub points: Vec<(f32, f32)>,
+    /// Stack-allocated for up to 8 points, heap-allocated for more.
+    pub points: SmallVec<[(f32, f32); 8]>,
     /// The tension parameter (0.0 = no tension, 0.5 = Catmull-Rom, 1.0 = tight).
     pub tension: f32,
 }
@@ -405,7 +407,8 @@ impl CatmullRomCurve {
     /// Creates a new Catmull-Rom curve.
     #[inline]
     #[must_use]
-    pub fn new(points: Vec<(f32, f32)>, tension: f32) -> Self {
+    pub fn new(points: impl Into<SmallVec<[(f32, f32); 8]>>, tension: f32) -> Self {
+        let points = points.into();
         assert!(points.len() >= 2, "Must have at least 2 points");
         Self { points, tension }
     }
@@ -413,7 +416,7 @@ impl CatmullRomCurve {
     /// Creates a Catmull-Rom curve with default tension (0.0).
     #[inline]
     #[must_use]
-    pub fn with_points(points: Vec<(f32, f32)>) -> Self {
+    pub fn with_points(points: impl Into<SmallVec<[(f32, f32); 8]>>) -> Self {
         Self::new(points, 0.0)
     }
 }
@@ -462,19 +465,23 @@ impl Curve for CatmullRomCurve {
 
 /// A Catmull-Rom spline.
 ///
+/// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
+///
 /// Similar to Flutter's `CatmullRomSpline`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CatmullRomSpline {
     /// The control points of the spline.
-    pub points: Vec<Curve2DSample>,
+    /// Stack-allocated for up to 8 points, heap-allocated for more.
+    pub points: SmallVec<[Curve2DSample; 8]>,
 }
 
 impl CatmullRomSpline {
     /// Creates a new Catmull-Rom spline.
     #[inline]
     #[must_use]
-    pub fn new(points: Vec<Curve2DSample>) -> Self {
+    pub fn new(points: impl Into<SmallVec<[Curve2DSample; 8]>>) -> Self {
+        let points = points.into();
         assert!(points.len() >= 2, "Must have at least 2 points");
         Self { points }
     }

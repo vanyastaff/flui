@@ -35,4 +35,5 @@ pub use image_provider::{
     AssetImage, FileImage, ImageError, ImageProvider, ImageResult, MemoryImage, NetworkImage,
     ResolvedImageProvider, TransformedImageProvider,
 };
+pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};

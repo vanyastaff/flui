@@ -1894,6 +1894,7 @@ dependencies = [
  "once_cell",
  "reqwest",
  "serde",
+ "smallvec",
  "tokio",
  "tracing",
  "ttf-parser 0.24.1",

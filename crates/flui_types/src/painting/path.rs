@@ -4,6 +4,7 @@
 
 use crate::geometry::{Offset, Point, Rect};
 use crate::painting::PathFillType;
+use smallvec::SmallVec;
 
 /// A command in a path.
 ///
@@ -72,7 +73,8 @@ pub enum PathCommand {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
     /// The list of path commands.
-    commands: Vec<PathCommand>,
+    /// Uses SmallVec to avoid heap allocation for simple paths (<16 commands).
+    commands: SmallVec<[PathCommand; 16]>,
 
     /// The fill type for this path.
     fill_type: PathFillType,
@@ -87,7 +89,7 @@ impl Path {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            commands: Vec::new(),
+            commands: SmallVec::new(),
             fill_type: PathFillType::default(),
             bounds: None,
         }
@@ -98,10 +100,256 @@ impl Path {
     #[must_use]
     pub fn with_fill_type(fill_type: PathFillType) -> Self {
         Self {
-            commands: Vec::new(),
+            commands: SmallVec::new(),
             fill_type,
             bounds: None,
         }
+    }
+
+    /// Creates a path containing a rectangle.
+    ///
+    /// Common pattern for drawing rectangular shapes. More concise than creating
+    /// an empty path and calling add_rect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::Rect;
+    ///
+    /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 50.0);
+    /// let path = Path::rectangle(rect);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn rectangle(rect: Rect) -> Self {
+        let mut path = Self::new();
+        path.add_rect(rect);
+        path
+    }
+
+    /// Creates a path containing a circle.
+    ///
+    /// Common pattern for drawing circular shapes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::Point;
+    ///
+    /// let path = Path::circle(Point::new(50.0, 50.0), 25.0);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn circle(center: Point, radius: f32) -> Self {
+        let mut path = Self::new();
+        path.add_circle(center, radius);
+        path
+    }
+
+    /// Creates a path containing a single line.
+    ///
+    /// Useful for drawing simple lines without manual move_to/line_to calls.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::Point;
+    ///
+    /// let path = Path::line(Point::new(0.0, 0.0), Point::new(100.0, 100.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn line(from: Point, to: Point) -> Self {
+        let mut path = Self::new();
+        path.move_to(from);
+        path.line_to(to);
+        path
+    }
+
+    /// Creates a path containing an oval (ellipse).
+    ///
+    /// The oval is inscribed within the given rectangle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::Rect;
+    ///
+    /// let path = Path::oval(Rect::from_xywh(0.0, 0.0, 100.0, 50.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn oval(rect: Rect) -> Self {
+        let mut path = Self::new();
+        path.add_oval(rect);
+        path
+    }
+
+    /// Creates a path containing an arc.
+    ///
+    /// The arc is part of an oval inscribed in the given rectangle.
+    ///
+    /// # Arguments
+    ///
+    /// * `rect` - The bounding rectangle of the oval
+    /// * `start_angle` - The starting angle in radians
+    /// * `sweep_angle` - The sweep angle in radians
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::Rect;
+    /// use std::f32::consts::PI;
+    ///
+    /// // Create a quarter circle arc
+    /// let path = Path::arc(
+    ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+    ///     0.0,
+    ///     PI / 2.0,
+    /// );
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn arc(rect: Rect, start_angle: f32, sweep_angle: f32) -> Self {
+        let mut path = Self::new();
+        path.add_arc(rect, start_angle, sweep_angle);
+        path
+    }
+
+    /// Creates a path containing a polygon from a sequence of points.
+    ///
+    /// The path will automatically close by connecting the last point to the first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::Point;
+    ///
+    /// // Create a triangle
+    /// let path = Path::polygon(&[
+    ///     Point::new(50.0, 0.0),
+    ///     Point::new(100.0, 100.0),
+    ///     Point::new(0.0, 100.0),
+    /// ]);
+    /// ```
+    #[must_use]
+    pub fn polygon(points: &[Point]) -> Self {
+        let mut path = Self::new();
+
+        if points.is_empty() {
+            return path;
+        }
+
+        path.move_to(points[0]);
+        for point in &points[1..] {
+            path.line_to(*point);
+        }
+        path.close();
+
+        path
+    }
+
+    /// Creates a path from a rounded rectangle (RRect).
+    ///
+    /// This creates a path that traces the outline of a rounded rectangle,
+    /// properly handling the elliptical corners.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Path;
+    /// use flui_types::geometry::{RRect, Rect};
+    /// use flui_types::styling::Radius;
+    ///
+    /// let rrect = RRect::from_rect_circular(
+    ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+    ///     10.0
+    /// );
+    /// let path = Path::from_rrect(rrect);
+    /// ```
+    #[must_use]
+    pub fn from_rrect(rrect: crate::geometry::RRect) -> Self {
+        let mut path = Self::new();
+
+        // If no rounding, just add a rectangle
+        if rrect.is_rect() {
+            path.add_rect(rrect.bounding_rect());
+            return path;
+        }
+
+        let rect = rrect.bounding_rect();
+        let tl = rrect.top_left;
+        let tr = rrect.top_right;
+        let br = rrect.bottom_right;
+        let bl = rrect.bottom_left;
+
+        // Start at top-left, after the corner radius
+        path.move_to(Point::new(rect.left() + tl.x, rect.top()));
+
+        // Top edge
+        path.line_to(Point::new(rect.right() - tr.x, rect.top()));
+
+        // Top-right corner
+        if tr.x > 0.0 || tr.y > 0.0 {
+            let corner_rect = Rect::from_xywh(
+                rect.right() - tr.x * 2.0,
+                rect.top(),
+                tr.x * 2.0,
+                tr.y * 2.0,
+            );
+            path.add_arc(corner_rect, -std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+        }
+
+        // Right edge
+        path.line_to(Point::new(rect.right(), rect.bottom() - br.y));
+
+        // Bottom-right corner
+        if br.x > 0.0 || br.y > 0.0 {
+            let corner_rect = Rect::from_xywh(
+                rect.right() - br.x * 2.0,
+                rect.bottom() - br.y * 2.0,
+                br.x * 2.0,
+                br.y * 2.0,
+            );
+            path.add_arc(corner_rect, 0.0, std::f32::consts::FRAC_PI_2);
+        }
+
+        // Bottom edge
+        path.line_to(Point::new(rect.left() + bl.x, rect.bottom()));
+
+        // Bottom-left corner
+        if bl.x > 0.0 || bl.y > 0.0 {
+            let corner_rect = Rect::from_xywh(
+                rect.left(),
+                rect.bottom() - bl.y * 2.0,
+                bl.x * 2.0,
+                bl.y * 2.0,
+            );
+            path.add_arc(corner_rect, std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+        }
+
+        // Left edge
+        path.line_to(Point::new(rect.left(), rect.top() + tl.y));
+
+        // Top-left corner
+        if tl.x > 0.0 || tl.y > 0.0 {
+            let corner_rect = Rect::from_xywh(
+                rect.left(),
+                rect.top(),
+                tl.x * 2.0,
+                tl.y * 2.0,
+            );
+            path.add_arc(corner_rect, std::f32::consts::PI, std::f32::consts::FRAC_PI_2);
+        }
+
+        path.close();
+        path
     }
 
     /// Sets the fill type for this path.

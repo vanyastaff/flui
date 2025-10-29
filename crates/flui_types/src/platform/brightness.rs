@@ -96,10 +96,10 @@ impl Brightness {
     /// use flui_types::platform::Brightness;
     ///
     /// let light_bg = Brightness::Light.background_color();
-    /// assert_eq!(light_bg.red(), 255);
+    /// assert_eq!(light_bg.r, 255);
     ///
     /// let dark_bg = Brightness::Dark.background_color();
-    /// assert_eq!(dark_bg.red(), 18);
+    /// assert_eq!(dark_bg.r, 18);
     /// ```
     #[inline]
     #[must_use]
@@ -120,10 +120,10 @@ impl Brightness {
     /// use flui_types::platform::Brightness;
     ///
     /// let light_fg = Brightness::Light.foreground_color();
-    /// assert_eq!(light_fg.red(), 0);
+    /// assert_eq!(light_fg.r, 0);
     ///
     /// let dark_fg = Brightness::Dark.foreground_color();
-    /// assert_eq!(dark_fg.red(), 255);
+    /// assert_eq!(dark_fg.r, 255);
     /// ```
     #[inline]
     #[must_use]
@@ -144,10 +144,10 @@ impl Brightness {
     /// use flui_types::platform::Brightness;
     ///
     /// let light_surface = Brightness::Light.surface_color();
-    /// assert_eq!(light_surface.red(), 255);
+    /// assert_eq!(light_surface.r, 255);
     ///
     /// let dark_surface = Brightness::Dark.surface_color();
-    /// assert_eq!(dark_surface.red(), 30);
+    /// assert_eq!(dark_surface.r, 30);
     /// ```
     #[inline]
     #[must_use]

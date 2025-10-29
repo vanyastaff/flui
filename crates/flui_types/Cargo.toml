@@ -29,6 +29,9 @@ image = { version = "0.25", optional = true, default-features = false, features 
 # Async HTTP for NetworkImage (optional)
 reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls"] }
 
+# Stack-allocated Vec for small collections (animation curves)
+smallvec = "1.13"
+
 [dev-dependencies]
 criterion.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -42,5 +45,9 @@ tracing = ["dep:tracing"]
 image-loading = ["dep:image"]
 network-images = ["dep:reqwest", "image-loading"]
 
+# SIMD acceleration for matrix and vector operations
+# Automatically detects and uses SSE/AVX on x86_64, NEON on ARM
+simd = []
+
 # All features enabled
-full = ["serde", "tracing", "image-loading", "network-images"]
+full = ["serde", "tracing", "image-loading", "network-images", "simd"]

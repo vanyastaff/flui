@@ -120,6 +120,77 @@ impl Image {
     pub fn clone_handle(&self) -> Self {
         self.clone()
     }
+
+    /// Creates a solid color image.
+    ///
+    /// Useful for placeholders, backgrounds, and testing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Image;
+    /// use flui_types::Color;
+    ///
+    /// // Red 100x100 image
+    /// let image = Image::solid_color(100, 100, Color::RED);
+    /// assert_eq!(image.width(), 100);
+    /// assert_eq!(image.height(), 100);
+    /// ```
+    #[must_use]
+    pub fn solid_color(width: u32, height: u32, color: Color) -> Self {
+        let pixel_count = (width * height) as usize;
+        let mut data = Vec::with_capacity(pixel_count * 4);
+
+        for _ in 0..pixel_count {
+            data.push(color.r);
+            data.push(color.g);
+            data.push(color.b);
+            data.push(color.a);
+        }
+
+        Self::from_rgba8(width, height, data)
+    }
+
+    /// Creates a fully transparent image.
+    ///
+    /// Useful for creating empty image buffers or placeholders.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Image;
+    ///
+    /// let image = Image::transparent(200, 150);
+    /// assert_eq!(image.width(), 200);
+    /// assert_eq!(image.height(), 150);
+    /// ```
+    #[must_use]
+    pub fn transparent(width: u32, height: u32) -> Self {
+        Self::solid_color(width, height, Color::TRANSPARENT)
+    }
+
+    /// Returns the aspect ratio (width / height) of the image.
+    ///
+    /// Returns 0.0 if height is 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::painting::Image;
+    /// use flui_types::Color;
+    ///
+    /// let image = Image::solid_color(1920, 1080, Color::BLACK);
+    /// assert!((image.aspect_ratio() - 16.0/9.0).abs() < 0.01);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn aspect_ratio(&self) -> f32 {
+        if self.height == 0 {
+            0.0
+        } else {
+            self.width as f32 / self.height as f32
+        }
+    }
 }
 
 impl PartialEq for Image {

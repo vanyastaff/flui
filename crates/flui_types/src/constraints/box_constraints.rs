@@ -163,6 +163,73 @@ impl BoxConstraints {
         }
     }
 
+    /// Create tight square constraints (width equals height).
+    ///
+    /// Convenience method for creating square constraints.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::constraints::BoxConstraints;
+    /// use flui_types::Size;
+    ///
+    /// let constraints = BoxConstraints::square(100.0);
+    /// assert_eq!(constraints.biggest(), Size::new(100.0, 100.0));
+    /// assert!(constraints.is_tight());
+    /// ```
+    #[inline]
+    pub fn square(size: f32) -> Self {
+        Self::tight(Size::new(size, size))
+    }
+
+    /// Expand to fill width while constraining height.
+    ///
+    /// Creates constraints with infinite max width but tight height.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::constraints::BoxConstraints;
+    ///
+    /// let constraints = BoxConstraints::expand_width(50.0);
+    /// assert_eq!(constraints.max_width, f32::INFINITY);
+    /// assert!(constraints.has_tight_height());
+    /// assert_eq!(constraints.min_height, 50.0);
+    /// ```
+    #[inline]
+    pub fn expand_width(height: f32) -> Self {
+        Self {
+            min_width: 0.0,
+            max_width: f32::INFINITY,
+            min_height: height,
+            max_height: height,
+        }
+    }
+
+    /// Expand to fill height while constraining width.
+    ///
+    /// Creates constraints with infinite max height but tight width.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::constraints::BoxConstraints;
+    ///
+    /// let constraints = BoxConstraints::expand_height(100.0);
+    /// assert_eq!(constraints.max_height, f32::INFINITY);
+    /// assert!(constraints.has_tight_width());
+    /// assert_eq!(constraints.min_width, 100.0);
+    /// ```
+    #[inline]
+    pub fn expand_height(width: f32) -> Self {
+        Self {
+            min_width: width,
+            max_width: width,
+            min_height: 0.0,
+            max_height: f32::INFINITY,
+        }
+    }
+
     /// Create constraints with tight width
     ///
     /// Forces a specific width but allows any height.
@@ -364,11 +431,15 @@ impl BoxConstraints {
     }
 
     /// Constrain a width to be within min/max bounds
+    #[inline]
+    #[must_use]
     pub fn constrain_width(&self, width: f32) -> f32 {
         width.clamp(self.min_width, self.max_width)
     }
 
     /// Constrain a height to be within min/max bounds
+    #[inline]
+    #[must_use]
     pub fn constrain_height(&self, height: f32) -> f32 {
         height.clamp(self.min_height, self.max_height)
     }
@@ -395,6 +466,8 @@ impl BoxConstraints {
     /// let size3 = constraints.constrain(Size::new(100.0, 50.0));
     /// assert_eq!(size3, Size::new(100.0, 50.0));
     /// ```
+    #[inline]
+    #[must_use]
     pub fn constrain(&self, size: Size) -> Size {
         Size::new(
             self.constrain_width(size.width),
@@ -415,6 +488,8 @@ impl BoxConstraints {
     /// assert!(!constraints.is_satisfied_by(Size::new(40.0, 50.0))); // Width too small
     /// assert!(!constraints.is_satisfied_by(Size::new(200.0, 50.0))); // Width too large
     /// ```
+    #[inline]
+    #[must_use]
     pub fn is_satisfied_by(&self, size: Size) -> bool {
         size.width >= self.min_width
             && size.width <= self.max_width

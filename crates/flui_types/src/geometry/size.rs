@@ -50,21 +50,29 @@ impl Size {
     }
 
     /// Check if this size is zero
+    #[inline]
+    #[must_use]
     pub fn is_zero(&self) -> bool {
         self.width == 0.0 && self.height == 0.0
     }
 
     /// Check if this size has finite dimensions
+    #[inline]
+    #[must_use]
     pub fn is_finite(&self) -> bool {
         self.width.is_finite() && self.height.is_finite()
     }
 
     /// Check if this size is empty (width or height is zero)
+    #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.width <= 0.0 || self.height <= 0.0
     }
 
     /// Get the aspect ratio (width / height)
+    #[inline]
+    #[must_use]
     pub fn aspect_ratio(&self) -> f32 {
         if self.height == 0.0 {
             0.0
@@ -74,11 +82,15 @@ impl Size {
     }
 
     /// Calculate the shortest side
+    #[inline]
+    #[must_use]
     pub fn shortest_side(&self) -> f32 {
         self.width.min(self.height)
     }
 
     /// Calculate the longest side
+    #[inline]
+    #[must_use]
     pub fn longest_side(&self) -> f32 {
         self.width.max(self.height)
     }
@@ -105,6 +117,7 @@ impl Size {
     }
 
     /// Linearly interpolate between two sizes.
+    #[inline]
     #[must_use]
     pub fn lerp(a: impl Into<Size>, b: impl Into<Size>, t: f32) -> Self {
         let a = a.into();
@@ -208,6 +221,74 @@ impl Size {
             self.width.clamp(min.width, max.width),
             self.height.clamp(min.height, max.height),
         )
+    }
+
+    /// Adjust height to maintain a specific aspect ratio.
+    ///
+    /// Returns a new size with the same width but height adjusted to match the aspect ratio.
+    /// Useful for maintaining aspect ratios when resizing images or videos.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Size;
+    ///
+    /// // 16:9 aspect ratio
+    /// let size = Size::new(1920.0, 0.0);
+    /// let adjusted = size.with_aspect_ratio(16.0 / 9.0);
+    ///
+    /// assert_eq!(adjusted.width, 1920.0);
+    /// assert_eq!(adjusted.height, 1080.0); // 1920 / (16/9) = 1080
+    /// assert!((adjusted.aspect_ratio() - 16.0 / 9.0).abs() < 0.01);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn with_aspect_ratio(&self, aspect_ratio: f32) -> Size {
+        if aspect_ratio <= 0.0 {
+            return *self;
+        }
+        Size::new(self.width, self.width / aspect_ratio)
+    }
+
+    /// Scale this size to fit within bounds while maintaining aspect ratio.
+    ///
+    /// Returns a size that fits completely inside `bounds` with the same aspect ratio.
+    /// This is equivalent to `BoxFit::Contain` behavior.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Size;
+    ///
+    /// // 1920x1080 image scaled to fit in 800x600
+    /// let image = Size::new(1920.0, 1080.0);
+    /// let bounds = Size::new(800.0, 600.0);
+    /// let fitted = image.scaled_to_fit(bounds);
+    ///
+    /// // Should be 800x450 (maintains 16:9 aspect ratio, fits width)
+    /// assert!((fitted.width - 800.0).abs() < 0.1);
+    /// assert!((fitted.height - 450.0).abs() < 0.1);
+    /// assert!(fitted.width <= bounds.width);
+    /// assert!(fitted.height <= bounds.height);
+    /// ```
+    #[must_use]
+    pub fn scaled_to_fit(&self, bounds: impl Into<Size>) -> Size {
+        let bounds = bounds.into();
+
+        if self.is_empty() || bounds.is_empty() {
+            return Size::ZERO;
+        }
+
+        let self_aspect = self.aspect_ratio();
+        let bounds_aspect = bounds.aspect_ratio();
+
+        if self_aspect > bounds_aspect {
+            // Width constrained
+            Size::new(bounds.width, bounds.width / self_aspect)
+        } else {
+            // Height constrained
+            Size::new(bounds.height * self_aspect, bounds.height)
+        }
     }
 }
 

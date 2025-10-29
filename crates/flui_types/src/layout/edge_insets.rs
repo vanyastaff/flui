@@ -147,6 +147,23 @@ impl EdgeInsets {
         }
     }
 
+    /// Create uniform edge insets (same value on all sides).
+    ///
+    /// This is an alias for `all()` that may be more intuitive in some contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::EdgeInsets;
+    ///
+    /// let padding = EdgeInsets::uniform(16.0);
+    /// assert_eq!(padding, EdgeInsets::all(16.0));
+    /// ```
+    #[inline]
+    pub const fn uniform(value: f32) -> Self {
+        Self::all(value)
+    }
+
     /// Create edge insets with only horizontal values.
     pub const fn horizontal(value: f32) -> Self {
         Self::symmetric(value, 0.0)

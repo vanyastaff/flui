@@ -153,6 +153,65 @@ impl Locale {
             "ar" | "he" | "fa" | "ur" | "yi" | "ji"
         )
     }
+
+    /// Parse a language tag string into a Locale.
+    ///
+    /// Supports both underscore and hyphen separators (BCP 47 format):
+    /// - "en" -> Locale(language: "en")
+    /// - "en_US" or "en-US" -> Locale(language: "en", country: "US")
+    /// - "zh_Hans_CN" -> Locale(language: "zh", script: "Hans", country: "CN")
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::platform::Locale;
+    ///
+    /// let locale = Locale::from_language_tag("en_US").unwrap();
+    /// assert_eq!(locale.language(), "en");
+    /// assert_eq!(locale.country(), Some("US"));
+    ///
+    /// let locale = Locale::from_language_tag("en-GB").unwrap();
+    /// assert_eq!(locale.language(), "en");
+    /// assert_eq!(locale.country(), Some("GB"));
+    ///
+    /// let locale = Locale::from_language_tag("zh-Hans-CN").unwrap();
+    /// assert_eq!(locale.language(), "zh");
+    /// assert_eq!(locale.script(), Some("Hans"));
+    /// assert_eq!(locale.country(), Some("CN"));
+    /// ```
+    #[must_use]
+    pub fn from_language_tag(tag: &str) -> Option<Self> {
+        if tag.is_empty() {
+            return None;
+        }
+
+        // Normalize separators to underscore
+        let normalized = tag.replace('-', "_");
+        let parts: Vec<&str> = normalized.split('_').collect();
+
+        match parts.len() {
+            1 => {
+                // Just language: "en"
+                Some(Self::new(parts[0], None::<String>))
+            }
+            2 => {
+                // Language + country OR language + script
+                // Country codes are typically 2 chars, script codes are 4
+                if parts[1].len() == 4 {
+                    // Probably a script: "zh_Hans"
+                    Some(Self::with_script(parts[0], None::<String>, Some(parts[1])))
+                } else {
+                    // Probably a country: "en_US"
+                    Some(Self::new(parts[0], Some(parts[1])))
+                }
+            }
+            3 => {
+                // Language + script + country: "zh_Hans_CN"
+                Some(Self::with_script(parts[0], Some(parts[2]), Some(parts[1])))
+            }
+            _ => None, // Invalid format
+        }
+    }
 }
 
 impl fmt::Display for Locale {

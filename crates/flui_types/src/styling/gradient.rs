@@ -141,6 +141,56 @@ impl LinearGradient {
         )
     }
 
+    /// Creates a simple two-color linear gradient.
+    ///
+    /// A common pattern for basic gradients. Transitions from `start_color` to `end_color`
+    /// along the specified alignment axis.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::{LinearGradient, Color};
+    /// use flui_types::layout::Alignment;
+    ///
+    /// // Simple fade from red to blue, left to right
+    /// let gradient = LinearGradient::simple(
+    ///     Color::RED,
+    ///     Color::BLUE,
+    ///     Alignment::CENTER_LEFT,
+    ///     Alignment::CENTER_RIGHT,
+    /// );
+    /// ```
+    pub fn simple(start_color: Color, end_color: Color, begin: Alignment, end: Alignment) -> Self {
+        Self::new(
+            begin,
+            end,
+            vec![start_color, end_color],
+            None,
+            TileMode::Clamp,
+        )
+    }
+
+    /// Creates a diagonal linear gradient from top-left to bottom-right.
+    ///
+    /// Common pattern for modern UI designs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::{LinearGradient, Color};
+    ///
+    /// let gradient = LinearGradient::diagonal(vec![Color::RED, Color::YELLOW, Color::BLUE]);
+    /// ```
+    pub fn diagonal(colors: Vec<Color>) -> Self {
+        Self::new(
+            Alignment::TOP_LEFT,
+            Alignment::BOTTOM_RIGHT,
+            colors,
+            None,
+            TileMode::Clamp,
+        )
+    }
+
     /// Linearly interpolate between two linear gradients.
     ///
     /// Returns None if the gradients have different numbers of colors.
@@ -254,6 +304,31 @@ impl RadialGradient {
         Self::new(
             Alignment::CENTER,
             radius,
+            colors,
+            None,
+            TileMode::Clamp,
+            None,
+            None,
+        )
+    }
+
+    /// Creates a circular radial gradient that fills the entire box.
+    ///
+    /// Uses radius of 0.5, which ensures the gradient reaches from center to edges.
+    /// Common pattern for spotlight effects, vignettes, and circular buttons.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::{RadialGradient, Color};
+    ///
+    /// // White center fading to black edges
+    /// let gradient = RadialGradient::circular(vec![Color::WHITE, Color::BLACK]);
+    /// ```
+    pub fn circular(colors: Vec<Color>) -> Self {
+        Self::new(
+            Alignment::CENTER,
+            0.5,
             colors,
             None,
             TileMode::Clamp,

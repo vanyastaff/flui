@@ -109,6 +109,38 @@ impl Velocity {
         Self::new(Offset::from_direction(direction, magnitude))
     }
 
+    /// Create a velocity from an offset traveled over a duration.
+    ///
+    /// This is the inverse of `distance_over_duration()`. Useful for calculating
+    /// velocity from gesture tracking data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::gestures::Velocity;
+    /// use flui_types::Offset;
+    /// use std::time::Duration;
+    ///
+    /// // Moved 100px right and 50px down in 100ms
+    /// let velocity = Velocity::from_offset_over_duration(
+    ///     Offset::new(100.0, 50.0),
+    ///     Duration::from_millis(100)
+    /// );
+    ///
+    /// // Velocity should be 1000px/s right, 500px/s down
+    /// assert!((velocity.dx() - 1000.0).abs() < 0.1);
+    /// assert!((velocity.dy() - 500.0).abs() < 0.1);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn from_offset_over_duration(offset: Offset, duration: Duration) -> Self {
+        let seconds = duration.as_secs_f32();
+        if seconds == 0.0 {
+            return Self::ZERO;
+        }
+        Self::new(offset / seconds)
+    }
+
     /// Returns the magnitude (speed) of the velocity
     ///
     /// This is the Euclidean distance in pixels per second.
@@ -341,14 +373,14 @@ impl Default for Velocity {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct VelocityEstimate {
+    /// The duration over which the velocity was estimated
+    pub duration: Duration,
+
     /// The offset at which the velocity was estimated
     pub offset: Offset,
 
     /// The velocity in pixels per second
     pub pixels_per_second: Offset,
-
-    /// The duration over which the velocity was estimated
-    pub duration: Duration,
 
     /// A value between 0.0 and 1.0 indicating confidence in the estimate
     ///
@@ -382,9 +414,9 @@ impl VelocityEstimate {
         confidence: f32,
     ) -> Self {
         Self {
+            duration,
             offset,
             pixels_per_second,
-            duration,
             confidence,
         }
     }

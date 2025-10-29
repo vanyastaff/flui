@@ -246,7 +246,7 @@ impl BoxDecoration {
         let color = match (a.color, b.color) {
             (Some(a_color), Some(b_color)) => Some(Color::lerp(a_color, b_color, t)),
             (Some(color), None) | (None, Some(color)) => {
-                let alpha_f32 = color.alpha() as f32 / 255.0;
+                let alpha_f32 = color.a as f32 / 255.0;
                 let new_alpha = (alpha_f32
                     * if t < 0.5 {
                         1.0 - t * 2.0
@@ -283,9 +283,17 @@ impl BoxDecoration {
             _ => None,
         };
 
+        // Image interpolation: crossfade between images
+        // At t=0, use image a; at t=1, use image b; in between, prefer closer image
+        let image = if t < 0.5 {
+            a.image.clone()
+        } else {
+            b.image.clone()
+        };
+
         Self {
             color,
-            image: None, // TODO: interpolate images
+            image,
             border,
             border_radius,
             box_shadow,

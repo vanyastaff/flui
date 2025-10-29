@@ -134,6 +134,63 @@ impl BorderRadius {
         }
     }
 
+    /// Creates a border radius for the top corners only.
+    ///
+    /// Bottom corners will have zero radius. Common pattern for cards, modals, and sheets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::{BorderRadius, Radius};
+    ///
+    /// let radius = BorderRadius::top(Radius::circular(16.0));
+    /// ```
+    pub const fn top(radius: Radius) -> Self {
+        Self {
+            top_left: radius,
+            top_right: radius,
+            bottom_left: Radius::ZERO,
+            bottom_right: Radius::ZERO,
+        }
+    }
+
+    /// Creates a border radius for the bottom corners only.
+    ///
+    /// Top corners will have zero radius. Common for bottom sheets and dropdowns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::{BorderRadius, Radius};
+    ///
+    /// let radius = BorderRadius::bottom(Radius::circular(16.0));
+    /// ```
+    pub const fn bottom(radius: Radius) -> Self {
+        Self {
+            top_left: Radius::ZERO,
+            top_right: Radius::ZERO,
+            bottom_left: radius,
+            bottom_right: radius,
+        }
+    }
+
+    /// Creates a "pill" border radius (fully rounded sides).
+    ///
+    /// Uses a very large radius (9999.0) to create pill-shaped elements.
+    /// The actual rounding is clamped by the element's dimensions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::styling::BorderRadius;
+    ///
+    /// // Perfect for buttons, tags, and badges
+    /// let radius = BorderRadius::pill();
+    /// ```
+    pub const fn pill() -> Self {
+        Self::circular(9999.0)
+    }
+
     /// A border radius with zero radius on all corners.
     pub const ZERO: Self = Self {
         top_left: Radius::ZERO,
