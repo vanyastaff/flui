@@ -41,18 +41,7 @@ impl TextPainter {
         _soft_wrap: bool,               // TODO: implement soft wrap
     ) {
         // Convert color
-        let paint_color = [
-            color.red() as f32 / 255.0,
-            color.green() as f32 / 255.0,
-            color.blue() as f32 / 255.0,
-            color.alpha() as f32 / 255.0,
-        ];
-
-        let paint = Paint {
-            color: paint_color,
-            stroke_width: 0.0,
-            anti_alias: true,
-        };
+        let paint = Paint::fill(color);
 
         // Calculate text position based on alignment
         // TODO: This is a simplified implementation - proper text layout
@@ -86,26 +75,7 @@ impl TextPainter {
         shadow_color: Color,
         shadow_offset: flui_types::Offset,
     ) {
-        // Convert colors
-        let text_color = [
-            color.red() as f32 / 255.0,
-            color.green() as f32 / 255.0,
-            color.blue() as f32 / 255.0,
-            color.alpha() as f32 / 255.0,
-        ];
-
-        let shadow_rgba = [
-            shadow_color.red() as f32 / 255.0,
-            shadow_color.green() as f32 / 255.0,
-            shadow_color.blue() as f32 / 255.0,
-            shadow_color.alpha() as f32 / 255.0,
-        ];
-
-        let paint = Paint {
-            color: text_color,
-            stroke_width: 0.0,
-            anti_alias: true,
-        };
+        let paint = Paint::fill(color);
 
         let position = Point::new(rect.left(), rect.top());
 
@@ -116,7 +86,7 @@ impl TextPainter {
             font_size,
             &paint,
             shadow_offset,
-            shadow_rgba,
+            shadow_color,
         );
     }
 
@@ -187,29 +157,12 @@ impl TextPainter {
         let color = style.color.unwrap_or(Color::BLACK);
         let font_size = style.font_size.unwrap_or(14.0) as f32;
 
-        let paint_color = [
-            color.red() as f32 / 255.0,
-            color.green() as f32 / 255.0,
-            color.blue() as f32 / 255.0,
-            color.alpha() as f32 / 255.0,
-        ];
-
-        let paint = Paint {
-            color: paint_color,
-            stroke_width: 0.0,
-            anti_alias: true,
-        };
+        let paint = Paint::fill(color);
 
         // Check if we have shadows
         if !style.shadows.is_empty() {
             // Paint with the first shadow (simplified)
             let shadow = &style.shadows[0];
-            let shadow_color = [
-                shadow.color.red() as f32 / 255.0,
-                shadow.color.green() as f32 / 255.0,
-                shadow.color.blue() as f32 / 255.0,
-                shadow.color.alpha() as f32 / 255.0,
-            ];
 
             let shadow_offset = flui_types::Offset {
                 dx: shadow.offset_x as f32,
@@ -222,7 +175,7 @@ impl TextPainter {
                 font_size,
                 &paint,
                 shadow_offset,
-                shadow_color,
+                shadow.color,
             );
         } else {
             painter.text(text, *current_pos, font_size, &paint);

@@ -47,18 +47,7 @@ impl BorderPainter {
     ) {
         let Some(side) = border.top else { return };
 
-        let color = [
-            side.color.red() as f32 / 255.0,
-            side.color.green() as f32 / 255.0,
-            side.color.blue() as f32 / 255.0,
-            side.color.alpha() as f32 / 255.0,
-        ];
-
-        let paint = Paint {
-            color,
-            stroke_width: side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(side.width, side.color);
 
         // Adjust rect for stroke alignment
         let adjusted_rect = if side.stroke_align == 0.0 {
@@ -84,11 +73,12 @@ impl BorderPainter {
 
         // Draw border based on whether it has rounded corners
         if let Some(radius) = border_radius {
-            // Use the first corner radius (assuming uniform for now)
-            let corner_radius = radius.top_left.x;
             let rrect = RRect {
                 rect: adjusted_rect,
-                corner_radius,
+                top_left: radius.top_left,
+                top_right: radius.top_right,
+                bottom_right: radius.bottom_right,
+                bottom_left: radius.bottom_left,
             };
             painter.rrect(rrect, &paint);
         } else {
@@ -110,18 +100,7 @@ impl BorderPainter {
         // Top
         if let Some(top) = border.top {
             if top.is_visible() {
-                let color = [
-                    top.color.red() as f32 / 255.0,
-                    top.color.green() as f32 / 255.0,
-                    top.color.blue() as f32 / 255.0,
-                    top.color.alpha() as f32 / 255.0,
-                ];
-
-                let paint = Paint {
-                    color,
-                    stroke_width: top.width,
-                    anti_alias: true,
-                };
+                let paint = Paint::stroke(top.width, top.color);
 
                 painter.line(
                     Point::new(rect.left(), rect.top()),
@@ -134,18 +113,7 @@ impl BorderPainter {
         // Right
         if let Some(right) = border.right {
             if right.is_visible() {
-                let color = [
-                    right.color.red() as f32 / 255.0,
-                    right.color.green() as f32 / 255.0,
-                    right.color.blue() as f32 / 255.0,
-                    right.color.alpha() as f32 / 255.0,
-                ];
-
-                let paint = Paint {
-                    color,
-                    stroke_width: right.width,
-                    anti_alias: true,
-                };
+                let paint = Paint::stroke(right.width, right.color);
 
                 painter.line(
                     Point::new(rect.right(), rect.top()),
@@ -158,18 +126,7 @@ impl BorderPainter {
         // Bottom
         if let Some(bottom) = border.bottom {
             if bottom.is_visible() {
-                let color = [
-                    bottom.color.red() as f32 / 255.0,
-                    bottom.color.green() as f32 / 255.0,
-                    bottom.color.blue() as f32 / 255.0,
-                    bottom.color.alpha() as f32 / 255.0,
-                ];
-
-                let paint = Paint {
-                    color,
-                    stroke_width: bottom.width,
-                    anti_alias: true,
-                };
+                let paint = Paint::stroke(bottom.width, bottom.color);
 
                 painter.line(
                     Point::new(rect.right(), rect.bottom()),
@@ -182,18 +139,7 @@ impl BorderPainter {
         // Left
         if let Some(left) = border.left {
             if left.is_visible() {
-                let color = [
-                    left.color.red() as f32 / 255.0,
-                    left.color.green() as f32 / 255.0,
-                    left.color.blue() as f32 / 255.0,
-                    left.color.alpha() as f32 / 255.0,
-                ];
-
-                let paint = Paint {
-                    color,
-                    stroke_width: left.width,
-                    anti_alias: true,
-                };
+                let paint = Paint::stroke(left.width, left.color);
 
                 painter.line(
                     Point::new(rect.left(), rect.bottom()),

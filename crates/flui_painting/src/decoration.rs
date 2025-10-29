@@ -41,24 +41,16 @@ impl BoxDecorationPainter {
             GradientPainter::paint(painter, rect, gradient);
         } else if let Some(color) = decoration.color {
             // Solid color background
-            let paint_color = [
-                color.red() as f32 / 255.0,
-                color.green() as f32 / 255.0,
-                color.blue() as f32 / 255.0,
-                color.alpha() as f32 / 255.0,
-            ];
+            let paint = Paint::fill(color);
 
-            let paint = Paint {
-                color: paint_color,
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
-
-            if let Some(radius) = border_radius {
+            if let Some(_radius) = border_radius {
                 // Rounded rectangle
                 let rrect = RRect {
                     rect,
-                    corner_radius: radius,
+                    top_left: decoration.border_radius.unwrap().top_left,
+                    top_right: decoration.border_radius.unwrap().top_right,
+                    bottom_right: decoration.border_radius.unwrap().bottom_right,
+                    bottom_left: decoration.border_radius.unwrap().bottom_left,
                 };
                 painter.rrect(rrect, &paint);
             } else {
@@ -82,23 +74,15 @@ impl BoxDecorationPainter {
         if let Some(ref gradient) = decoration.gradient {
             GradientPainter::paint(painter, rect, gradient);
         } else if let Some(color) = decoration.color {
-            let paint_color = [
-                color.red() as f32 / 255.0,
-                color.green() as f32 / 255.0,
-                color.blue() as f32 / 255.0,
-                color.alpha() as f32 / 255.0,
-            ];
+            let paint = Paint::fill(color);
 
-            let paint = Paint {
-                color: paint_color,
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
-
-            if let Some(radius) = border_radius {
+            if let Some(_radius) = border_radius {
                 let rrect = RRect {
                     rect,
-                    corner_radius: radius,
+                    top_left: decoration.border_radius.unwrap().top_left,
+                    top_right: decoration.border_radius.unwrap().top_right,
+                    bottom_right: decoration.border_radius.unwrap().bottom_right,
+                    bottom_left: decoration.border_radius.unwrap().bottom_left,
                 };
                 painter.rrect(rrect, &paint);
             } else {

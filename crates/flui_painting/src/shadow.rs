@@ -1,7 +1,7 @@
 //! Shadow painting implementation
 
 use flui_engine::{Paint, Painter, RRect};
-use flui_types::{Rect, styling::BoxShadow};
+use flui_types::{Rect, styling::{BoxShadow, Radius}};
 
 /// Painter for box shadows
 pub struct ShadowPainter;
@@ -60,39 +60,27 @@ impl ShadowPainter {
             shadow_rect
         };
 
-        let base_color = [
-            shadow.color.red() as f32 / 255.0,
-            shadow.color.green() as f32 / 255.0,
-            shadow.color.blue() as f32 / 255.0,
-            shadow.color.alpha() as f32 / 255.0,
-        ];
-
         // Paint using the built-in shadow methods from Painter trait
         if let Some(radius) = border_radius {
             // Rounded rectangle shadow
             let rrect = RRect {
                 rect: shadow_rect,
-                corner_radius: radius,
+                top_left: Radius::circular(radius),
+                top_right: Radius::circular(radius),
+                bottom_right: Radius::circular(radius),
+                bottom_left: Radius::circular(radius),
             };
 
-            let paint = Paint {
-                color: base_color,
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
+            let paint = Paint::fill(shadow.color);
 
             let offset = flui_types::Offset::new(0.0, 0.0);
-            painter.rrect_with_shadow(rrect, &paint, offset, shadow.blur_radius, base_color);
+            painter.rrect_with_shadow(rrect, &paint, offset, shadow.blur_radius, shadow.color);
         } else {
             // Sharp rectangle shadow
-            let paint = Paint {
-                color: base_color,
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
+            let paint = Paint::fill(shadow.color);
 
             let offset = flui_types::Offset::new(0.0, 0.0);
-            painter.rect_with_shadow(shadow_rect, &paint, offset, shadow.blur_radius, base_color);
+            painter.rect_with_shadow(shadow_rect, &paint, offset, shadow.blur_radius, shadow.color);
         }
     }
 }

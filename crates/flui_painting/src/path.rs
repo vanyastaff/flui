@@ -2,7 +2,7 @@
 //!
 //! Provides PathPainter for rendering vector paths with various fill and stroke styles.
 
-use flui_engine::painter::{Paint, Painter};
+use flui_engine::{Paint, Painter};
 use flui_types::painting::path::Path;
 use flui_types::styling::Color;
 
@@ -38,19 +38,7 @@ impl PathPainter {
     /// * `path` - The path to fill
     /// * `color` - The fill color
     pub fn fill(painter: &mut dyn Painter, path: &Path, color: Color) {
-        let paint_color = [
-            color.red() as f32 / 255.0,
-            color.green() as f32 / 255.0,
-            color.blue() as f32 / 255.0,
-            color.alpha() as f32 / 255.0,
-        ];
-
-        let paint = Paint {
-            color: paint_color,
-            stroke_width: 0.0,
-            anti_alias: true,
-        };
-
+        let paint = Paint::fill(color);
         Self::paint_path(painter, path, &paint, false);
     }
 
@@ -63,19 +51,7 @@ impl PathPainter {
     /// * `color` - The stroke color
     /// * `stroke_width` - The width of the stroke
     pub fn stroke(painter: &mut dyn Painter, path: &Path, color: Color, stroke_width: f32) {
-        let paint_color = [
-            color.red() as f32 / 255.0,
-            color.green() as f32 / 255.0,
-            color.blue() as f32 / 255.0,
-            color.alpha() as f32 / 255.0,
-        ];
-
-        let paint = Paint {
-            color: paint_color,
-            stroke_width,
-            anti_alias: true,
-        };
-
+        let paint = Paint::stroke(stroke_width, color);
         Self::paint_path(painter, path, &paint, true);
     }
 

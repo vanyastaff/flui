@@ -25,16 +25,6 @@ impl GradientPainter {
         }
     }
 
-    /// Convert flui Color to RGBA f32 array
-    fn color_to_rgba(color: &flui_types::styling::Color) -> [f32; 4] {
-        [
-            color.red() as f32 / 255.0,
-            color.green() as f32 / 255.0,
-            color.blue() as f32 / 255.0,
-            color.alpha() as f32 / 255.0,
-        ]
-    }
-
     /// Paint a linear gradient
     fn paint_linear(painter: &mut dyn Painter, rect: Rect, gradient: &LinearGradient) {
         if gradient.colors.is_empty() {
@@ -43,11 +33,7 @@ impl GradientPainter {
 
         if gradient.colors.len() == 1 {
             // Single color - just fill
-            let paint = flui_engine::Paint {
-                color: Self::color_to_rgba(&gradient.colors[0]),
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
+            let paint = flui_engine::Paint::fill(gradient.colors[0]);
             painter.rect(rect, &paint);
             return;
         }
@@ -63,8 +49,8 @@ impl GradientPainter {
 
         // For now, only support 2-color gradients through Painter trait methods
         // TODO: Support multi-stop gradients with custom mesh rendering
-        let start_color = Self::color_to_rgba(&gradient.colors[0]);
-        let end_color = Self::color_to_rgba(gradient.colors.last().unwrap());
+        let start_color = gradient.colors[0];
+        let end_color = *gradient.colors.last().unwrap();
 
         if is_horizontal {
             painter.horizontal_gradient(rect, start_color, end_color);
@@ -85,11 +71,7 @@ impl GradientPainter {
 
         if gradient.colors.len() == 1 {
             // Single color - just fill
-            let paint = flui_engine::Paint {
-                color: Self::color_to_rgba(&gradient.colors[0]),
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
+            let paint = flui_engine::Paint::fill(gradient.colors[0]);
             painter.rect(rect, &paint);
             return;
         }
@@ -104,8 +86,8 @@ impl GradientPainter {
         let inner_radius = 0.0;
         let outer_radius = gradient.radius * max_dim;
 
-        let start_color = Self::color_to_rgba(&gradient.colors[0]);
-        let end_color = Self::color_to_rgba(gradient.colors.last().unwrap());
+        let start_color = gradient.colors[0];
+        let end_color = *gradient.colors.last().unwrap();
 
         painter.radial_gradient_simple(center, inner_radius, outer_radius, start_color, end_color);
     }
@@ -115,11 +97,7 @@ impl GradientPainter {
         // TODO: Implement sweep gradients
         // For now, just fill with first color as a fallback
         if let Some(first_color) = _gradient.colors.first() {
-            let paint = flui_engine::Paint {
-                color: Self::color_to_rgba(first_color),
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
+            let paint = flui_engine::Paint::fill(*first_color);
             painter.rect(rect, &paint);
         }
     }

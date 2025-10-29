@@ -5,7 +5,7 @@
 
 use flui_engine::{Paint, Painter};
 use flui_types::{
-    Point, Rect,
+    Rect,
     layout::Alignment,
     painting::{BoxFit, ColorFilter, Image, ImageRepeat},
     styling::DecorationImage,
@@ -83,29 +83,19 @@ impl ImagePainter {
         // Calculate the destination rectangle based on alignment
         let dest_rect = Self::align_rect(fitted.destination, rect, alignment);
 
-        // TODO: Apply color_filter
-        // TODO: Use painter.image() method when available
+        // Create paint with opacity
+        let mut paint = Paint::default();
+        paint.color = paint.color.with_opacity(opacity);
 
-        // For now, just draw a placeholder rect to show where the image would be
-        let paint = Paint {
-            color: [0.5, 0.5, 0.5, opacity],
-            stroke_width: 1.0,
-            anti_alias: true,
-        };
+        // TODO: Apply color_filter - need to convert from painting::ColorFilter
+        // to effects::ColorFilter for apply_image_filter
 
-        painter.rect(dest_rect, &paint);
+        // For now, use the entire image as source
+        // TODO: Handle fitted.source size to crop the source image if needed
+        let src_rect = None;
 
-        // Draw an X to indicate this is a placeholder
-        painter.line(
-            Point::new(dest_rect.left(), dest_rect.top()),
-            Point::new(dest_rect.right(), dest_rect.bottom()),
-            &paint,
-        );
-        painter.line(
-            Point::new(dest_rect.right(), dest_rect.top()),
-            Point::new(dest_rect.left(), dest_rect.bottom()),
-            &paint,
-        );
+        // Draw the image
+        painter.draw_image(image, src_rect, dest_rect, &paint);
     }
 
     /// Paint a repeated image (tiled)
@@ -115,7 +105,7 @@ impl ImagePainter {
         image: &Image,
         fit: BoxFit,
         opacity: f32,
-        color_filter: Option<ColorFilter>,
+        _color_filter: Option<ColorFilter>,
         repeat_x: bool,
         repeat_y: bool,
     ) {
@@ -158,7 +148,7 @@ impl ImagePainter {
                         BoxFit::Fill, // Fill each tile
                         Alignment::CENTER,
                         opacity,
-                        color_filter,
+                        None, // TODO: pass color_filter once type conversion is implemented
                     );
                 }
             }

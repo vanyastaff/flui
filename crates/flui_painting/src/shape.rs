@@ -3,12 +3,12 @@
 //! Provides painting functionality for various shape borders including
 //! rounded rectangles, circles, ovals, stars, and more.
 
-use flui_engine::painter::{Paint, Painter, RRect};
+use flui_engine::{Paint, Painter, RRect};
 use flui_types::{
     geometry::{Point, Rect},
     styling::{
         BeveledRectangleBorder, CircleBorder, ContinuousRectangleBorder, LinearBorder, OvalBorder,
-        RoundedRectangleBorder, StadiumBorder, StarBorder,
+        Radius, RoundedRectangleBorder, StadiumBorder, StarBorder,
     },
 };
 use std::f32::consts::PI;
@@ -49,23 +49,15 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
-        // Create rounded rectangle with average corner radius
-        let avg_radius = (border.border_radius.top_left.x
-            + border.border_radius.top_right.x
-            + border.border_radius.bottom_left.x
-            + border.border_radius.bottom_right.x)
-            / 4.0;
-
+        // Create rounded rectangle
         let rrect = RRect {
             rect,
-            corner_radius: avg_radius,
+            top_left: border.border_radius.top_left,
+            top_right: border.border_radius.top_right,
+            bottom_right: border.border_radius.bottom_right,
+            bottom_left: border.border_radius.bottom_left,
         };
 
         painter.rrect(rrect, &paint);
@@ -89,12 +81,7 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
         // Get bevel distances (using border_radius as bevel distance)
         let tl = border.border_radius.top_left.x;
@@ -147,12 +134,7 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
         let center = rect.center();
         let radius = rect.width().min(rect.height()) / 2.0;
@@ -172,12 +154,7 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
         let center = rect.center();
         let rx = rect.width() / 2.0;
@@ -198,18 +175,17 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
         // Stadium is a rounded rect with corner radius = half of the shorter side
         let radius = rect.width().min(rect.height()) / 2.0;
+        let corner_radius = Radius::circular(radius);
         let rrect = RRect {
             rect,
-            corner_radius: radius,
+            top_left: corner_radius,
+            top_right: corner_radius,
+            bottom_right: corner_radius,
+            bottom_left: corner_radius,
         };
 
         painter.rrect(rrect, &paint);
@@ -227,12 +203,7 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
         let center = rect.center();
         let outer_radius = rect.width().min(rect.height()) / 2.0;
@@ -282,24 +253,16 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
         // For now, approximate with rounded rect
         // TODO: Implement true continuous curve (squircle)
-        let avg_radius = (border.border_radius.top_left.x
-            + border.border_radius.top_right.x
-            + border.border_radius.bottom_left.x
-            + border.border_radius.bottom_right.x)
-            / 4.0;
-
         let rrect = RRect {
             rect,
-            corner_radius: avg_radius,
+            top_left: border.border_radius.top_left,
+            top_right: border.border_radius.top_right,
+            bottom_right: border.border_radius.bottom_right,
+            bottom_left: border.border_radius.bottom_left,
         };
 
         painter.rrect(rrect, &paint);
@@ -319,12 +282,7 @@ impl ShapePainter {
             return;
         }
 
-        let color = Self::border_color(&border.side.color);
-        let paint = Paint {
-            color,
-            stroke_width: border.side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(border.side.width, border.side.color);
 
         let left = rect.left();
         let top = rect.top();
@@ -344,16 +302,6 @@ impl ShapePainter {
         if border.edges.left {
             painter.line(Point::new(left, bottom), Point::new(left, top), &paint);
         }
-    }
-
-    /// Converts a Color to RGBA array for painting.
-    fn border_color(color: &flui_types::styling::Color) -> [f32; 4] {
-        [
-            color.red() as f32 / 255.0,
-            color.green() as f32 / 255.0,
-            color.blue() as f32 / 255.0,
-            color.alpha() as f32 / 255.0,
-        ]
     }
 }
 
