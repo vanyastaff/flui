@@ -1,8 +1,9 @@
 //! RenderIndexedStack - shows only one child by index
 
-use flui_types::{Offset, Size, Alignment};
+use flui_types::{Size, Alignment};
 use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer, TransformLayer};
+use flui_engine::{BoxedLayer, layer::pool};
+use crate::utils::layout_utils::apply_offset_transform_v2;
 
 /// RenderObject that shows only one child from a list
 ///
@@ -103,7 +104,7 @@ impl RenderObject for RenderIndexedStack {
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         let children = cx.children();
-        let mut container = ContainerLayer::new();
+        let mut container = pool::acquire_container();
 
         // Only paint the selected child
         if let Some(index) = self.index
@@ -113,13 +114,7 @@ impl RenderObject for RenderIndexedStack {
 
                 // Capture child layer and apply offset transform
                 let child_layer = cx.capture_child_layer(child);
-
-                if child_offset != Offset::ZERO {
-                    let transform_layer = TransformLayer::translate(child_layer, child_offset);
-                    container.add_child(Box::new(transform_layer));
-                } else {
-                    container.add_child(child_layer);
-                }
+                container.add_child(apply_offset_transform_v2(child_layer, child_offset));
             }
 
         Box::new(container)

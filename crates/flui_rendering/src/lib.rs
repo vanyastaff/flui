@@ -100,8 +100,8 @@ pub use objects::{
     RenderOpacity,
     RenderDecoratedBox, DecoratedBoxData, DecorationPosition,
     RenderTransform,
-    RenderClipRect,
-    RenderClipRRect,
+    RenderClipRect, RectShape,
+    RenderClipRRect, RRectShape,
     RenderOffstage,
 
     // Interaction objects

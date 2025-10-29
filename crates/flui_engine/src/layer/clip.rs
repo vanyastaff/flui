@@ -408,3 +408,351 @@ mod tests {
         assert_eq!(layer.clip_rect(), Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
     }
 }
+
+// ============================================================================
+// ClipOvalLayer
+// ============================================================================
+
+/// A composited layer that clips its children to an oval
+///
+/// The oval fills the bounding rectangle provided.
+/// If the rect is square, this creates a circle.
+pub struct ClipOvalLayer {
+    /// The bounding rectangle of the oval
+    clip_rect: Rect,
+
+    /// Child layers
+    children: Vec<BoxedLayer>,
+
+    /// Whether this layer has been disposed
+    disposed: bool,
+
+    /// Cached bounds
+    cached_bounds: Option<Rect>,
+}
+
+impl ClipOvalLayer {
+    /// Create a new clip oval layer
+    ///
+    /// # Arguments
+    ///
+    /// * `clip_rect` - The bounding rectangle of the oval
+    pub fn new(clip_rect: Rect) -> Self {
+        Self {
+            clip_rect,
+            children: Vec::new(),
+            disposed: false,
+            cached_bounds: None,
+        }
+    }
+
+    /// Set the clip rectangle
+    pub fn set_clip_rect(&mut self, rect: Rect) {
+        if self.clip_rect != rect {
+            self.clip_rect = rect;
+            self.cached_bounds = None;
+            self.mark_needs_paint();
+        }
+    }
+
+    /// Get the clip rectangle
+    pub fn clip_rect(&self) -> Rect {
+        self.clip_rect
+    }
+
+    /// Add a child layer
+    pub fn add_child(&mut self, child: BoxedLayer) {
+        self.children.push(child);
+        self.cached_bounds = None;
+    }
+
+    /// Remove all children
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+        self.cached_bounds = None;
+    }
+}
+
+impl Layer for ClipOvalLayer {
+    fn paint(&self, painter: &mut dyn Painter) {
+        if self.disposed {
+            panic!("Cannot use disposed ClipOvalLayer");
+        }
+
+        painter.save();
+
+        // Apply oval clip
+        painter.clip_oval(self.clip_rect);
+
+        // Paint all children
+        for child in &self.children {
+            if child.is_visible() {
+                child.paint(painter);
+            }
+        }
+
+        painter.restore();
+    }
+
+    fn bounds(&self) -> Rect {
+        if let Some(bounds) = self.cached_bounds {
+            return bounds;
+        }
+
+        if self.children.is_empty() {
+            return self.clip_rect;
+        }
+
+        // Union of all children bounds, clipped to clip_rect
+        let mut bounds = Rect::ZERO;
+        for (i, child) in self.children.iter().enumerate() {
+            let child_bounds = child.bounds();
+            if i == 0 {
+                bounds = child_bounds;
+            } else {
+                bounds = bounds.union(&child_bounds);
+            }
+        }
+
+        // Clip to oval bounds (use rect as approximation)
+        bounds.intersection(&self.clip_rect).unwrap_or(Rect::ZERO)
+    }
+
+    fn is_visible(&self) -> bool {
+        !self.disposed
+            && self.clip_rect.width() > 0.0
+            && self.clip_rect.height() > 0.0
+            && self.children.iter().any(|c| c.is_visible())
+    }
+
+    fn mark_needs_paint(&mut self) {
+        self.cached_bounds = None;
+    }
+
+    fn dispose(&mut self) {
+        self.disposed = true;
+        self.children.clear();
+        self.cached_bounds = None;
+    }
+
+    fn is_disposed(&self) -> bool {
+        self.disposed
+    }
+
+    fn debug_description(&self) -> String {
+        format!("ClipOvalLayer(clip_rect: {:?}, children: {})", self.clip_rect, self.children.len())
+    }
+
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // Check if position is within oval
+        // Use ellipse equation: ((x-cx)/rx)^2 + ((y-cy)/ry)^2 <= 1
+        let center_x = self.clip_rect.left() + self.clip_rect.width() / 2.0;
+        let center_y = self.clip_rect.top() + self.clip_rect.height() / 2.0;
+        let rx = self.clip_rect.width() / 2.0;
+        let ry = self.clip_rect.height() / 2.0;
+
+        if rx <= 0.0 || ry <= 0.0 {
+            return false;
+        }
+
+        let dx = (position.dx - center_x) / rx;
+        let dy = (position.dy - center_y) / ry;
+        let in_oval = (dx * dx + dy * dy) <= 1.0;
+
+        if !in_oval {
+            return false; // Outside oval, no hit
+        }
+
+        // Test children in reverse order (front to back)
+        let mut hit = false;
+        for child in self.children.iter().rev() {
+            if child.is_visible() && child.hit_test(position, result) {
+                hit = true;
+            }
+        }
+
+        hit
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Dispatch to children in reverse order (front to back)
+        for child in self.children.iter_mut().rev() {
+            if child.handle_event(event) {
+                return true; // Event handled
+            }
+        }
+        false
+    }
+}
+
+// ============================================================================
+// ClipPathLayer
+// ============================================================================
+
+use flui_types::painting::path::Path;
+
+/// A composited layer that clips its children to an arbitrary path
+///
+/// This layer clips children to any arbitrary path shape.
+pub struct ClipPathLayer {
+    /// The clip path
+    clip_path: Path,
+
+    /// Pre-computed bounds of the path
+    path_bounds: Rect,
+
+    /// Child layers
+    children: Vec<BoxedLayer>,
+
+    /// Whether this layer has been disposed
+    disposed: bool,
+
+    /// Cached bounds
+    cached_bounds: Option<Rect>,
+}
+
+impl ClipPathLayer {
+    /// Create a new clip path layer
+    ///
+    /// # Arguments
+    ///
+    /// * `clip_path` - The path to clip to
+    pub fn new(mut clip_path: Path) -> Self {
+        let path_bounds = clip_path.bounds();
+        Self {
+            clip_path,
+            path_bounds,
+            children: Vec::new(),
+            disposed: false,
+            cached_bounds: None,
+        }
+    }
+
+    /// Set the clip path
+    pub fn set_clip_path(&mut self, mut path: Path) {
+        self.path_bounds = path.bounds();
+        self.clip_path = path;
+        self.cached_bounds = None;
+        self.mark_needs_paint();
+    }
+
+    /// Get reference to the clip path
+    pub fn clip_path(&self) -> &Path {
+        &self.clip_path
+    }
+
+    /// Get the pre-computed bounds
+    pub fn path_bounds(&self) -> Rect {
+        self.path_bounds
+    }
+
+    /// Add a child layer
+    pub fn add_child(&mut self, child: BoxedLayer) {
+        self.children.push(child);
+        self.cached_bounds = None;
+    }
+
+    /// Remove all children
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+        self.cached_bounds = None;
+    }
+}
+
+impl Layer for ClipPathLayer {
+    fn paint(&self, painter: &mut dyn Painter) {
+        if self.disposed {
+            panic!("Cannot use disposed ClipPathLayer");
+        }
+
+        painter.save();
+
+        // Apply path clip with pre-computed bounds
+        painter.clip_path(&self.clip_path, self.path_bounds);
+
+        // Paint all children
+        for child in &self.children {
+            if child.is_visible() {
+                child.paint(painter);
+            }
+        }
+
+        painter.restore();
+    }
+
+    fn bounds(&self) -> Rect {
+        if let Some(bounds) = self.cached_bounds {
+            return bounds;
+        }
+
+        if self.children.is_empty() {
+            return self.path_bounds;
+        }
+
+        // Union of all children bounds, clipped to path bounds
+        let mut bounds = Rect::ZERO;
+        for (i, child) in self.children.iter().enumerate() {
+            let child_bounds = child.bounds();
+            if i == 0 {
+                bounds = child_bounds;
+            } else {
+                bounds = bounds.union(&child_bounds);
+            }
+        }
+
+        // Clip to path bounds (already computed)
+        bounds.intersection(&self.path_bounds).unwrap_or(Rect::ZERO)
+    }
+
+    fn is_visible(&self) -> bool {
+        !self.disposed
+            && !self.clip_path.is_empty()
+            && self.children.iter().any(|c| c.is_visible())
+    }
+
+    fn mark_needs_paint(&mut self) {
+        self.cached_bounds = None;
+    }
+
+    fn dispose(&mut self) {
+        self.disposed = true;
+        self.children.clear();
+        self.cached_bounds = None;
+    }
+
+    fn is_disposed(&self) -> bool {
+        self.disposed
+    }
+
+    fn debug_description(&self) -> String {
+        format!("ClipPathLayer(children: {})", self.children.len())
+    }
+
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        // For path clipping, use bounding box as conservative hit test
+        // TODO: Implement proper path containment check
+        if !self.path_bounds.contains(position) {
+            return false;
+        }
+
+        // Test children in reverse order (front to back)
+        let mut hit = false;
+        for child in self.children.iter().rev() {
+            if child.is_visible() && child.hit_test(position, result) {
+                hit = true;
+            }
+        }
+
+        hit
+    }
+
+    fn handle_event(&mut self, event: &Event) -> bool {
+        // Dispatch to children in reverse order (front to back)
+        for child in self.children.iter_mut().rev() {
+            if child.handle_event(event) {
+                return true; // Event handled
+            }
+        }
+        false
+    }
+}

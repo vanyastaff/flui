@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn test_is_positioned_with_alignment() {
         let mut data = StackParentData::default();
-        data.alignment = Some(Alignment::center());
+        data.alignment = Some(Alignment::new(0.0, 0.0));
         // Alignment alone doesn't make it positioned
         assert!(!data.is_positioned());
     }

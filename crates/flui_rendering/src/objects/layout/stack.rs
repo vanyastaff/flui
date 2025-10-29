@@ -3,7 +3,8 @@
 use flui_types::{Offset, Size, constraints::BoxConstraints, Alignment};
 use flui_types::layout::StackFit;
 use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer, TransformLayer};
+use flui_engine::{BoxedLayer, layer::pool};
+use crate::utils::layout_utils::apply_offset_transform_v2;
 
 /// RenderObject for stack layout (layering)
 ///
@@ -135,8 +136,8 @@ impl RenderStack {
         if let Some(stack_data) = parent_data
             && stack_data.is_positioned() {
                 // Positioned child - calculate position from edges
-                let mut x = 0.0;
-                let mut y = 0.0;
+                let x;
+                let y;
 
                 // Calculate x position
                 if let Some(left) = stack_data.left {
@@ -194,15 +195,20 @@ impl RenderObject for RenderStack {
         let mut max_height: f32 = 0.0;
 
         for child in children.iter().copied() {
-            // Check if child is positioned by reading parent data
-            // Note: In the new architecture, we don't have direct access to parent data
-            // during layout in the same way. We'll need to handle this differently.
-            // For now, we'll use fit-based constraints for all children.
+            // Check if child has StackParentData and is positioned
+            let stack_data = cx.parent_data::<crate::parent_data::StackParentData>(child);
 
-            let child_constraints = match self.fit {
-                StackFit::Loose => constraints.loosen(),
-                StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
-                StackFit::Passthrough => constraints,
+            let child_constraints = if let Some(data) = stack_data
+                && data.is_positioned() {
+                // Child is positioned - use computed constraints based on positioning
+                Self::compute_positioned_constraints(data, constraints)
+            } else {
+                // Child is not positioned - use fit-based constraints
+                match self.fit {
+                    StackFit::Loose => constraints.loosen(),
+                    StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
+                    StackFit::Passthrough => constraints,
+                }
             };
 
             let child_size = cx.layout_child(child, child_constraints);
@@ -221,10 +227,17 @@ impl RenderObject for RenderStack {
         };
 
         // Calculate and save child offsets
-        for &child_size in self.child_sizes.iter() {
-            // For now, use alignment for all children
-            // TODO: Add support for reading parent data to determine if child is positioned
-            let child_offset = self.alignment.calculate_offset(child_size, size);
+        for (i, &child) in children.iter().enumerate() {
+            let child_size = self.child_sizes[i];
+            let stack_data = cx.parent_data::<crate::parent_data::StackParentData>(child);
+
+            // Use the existing calculate_child_offset function
+            let child_offset = Self::calculate_child_offset(
+                child_size,
+                size,
+                self.alignment,
+                stack_data,
+            );
             self.child_offsets.push(child_offset);
         }
 
@@ -233,7 +246,7 @@ impl RenderObject for RenderStack {
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         let children = cx.children();
-        let mut container = ContainerLayer::new();
+        let mut container = pool::acquire_container();
 
         // Paint children in order (first child in back, last child on top)
         for (i, &child) in children.iter().enumerate() {
@@ -241,13 +254,7 @@ impl RenderObject for RenderStack {
 
             // Capture child layer and apply offset transform
             let child_layer = cx.capture_child_layer(child);
-
-            if offset != Offset::ZERO {
-                let transform_layer = TransformLayer::translate(child_layer, offset);
-                container.add_child(Box::new(transform_layer));
-            } else {
-                container.add_child(child_layer);
-            }
+            container.add_child(apply_offset_transform_v2(child_layer, offset));
         }
 
         Box::new(container)

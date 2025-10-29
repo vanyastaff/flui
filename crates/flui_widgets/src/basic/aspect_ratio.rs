@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderAspectRatio;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderAspectRatio, SingleArity};
 
 /// A widget that sizes its child to a specific aspect ratio.
 ///
@@ -200,24 +200,22 @@ impl Default for AspectRatio {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for AspectRatio {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::AspectRatioData;
-        Box::new(RenderAspectRatio::new(AspectRatioData::new(self.aspect_ratio)))
+    type RenderObject = RenderAspectRatio;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderAspectRatio::new(self.aspect_ratio)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(aspect_ratio_render) = render_object.downcast_mut::<RenderAspectRatio>() {
-            aspect_ratio_render.set_aspect_ratio(self.aspect_ratio);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_aspect_ratio(self.aspect_ratio);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for AspectRatio {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("AspectRatio requires a child"))
     }
 }

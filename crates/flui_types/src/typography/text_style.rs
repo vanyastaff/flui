@@ -260,6 +260,12 @@ impl TextStyle {
         self
     }
 
+    /// Sets the word spacing.
+    pub fn with_word_spacing(mut self, word_spacing: f64) -> Self {
+        self.word_spacing = Some(word_spacing);
+        self
+    }
+
     /// Sets the line height.
     pub fn with_height(mut self, height: f64) -> Self {
         self.height = Some(height);

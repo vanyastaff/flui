@@ -3,7 +3,7 @@
 //! Universal solution without code duplication (idea.md Chapter 3)
 
 use std::marker::PhantomData;
-use flui_types::Offset;
+use flui_types::{Offset, Size};
 use flui_engine::BoxedLayer;
 
 use crate::element::{ElementId, ElementTree};
@@ -57,6 +57,32 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         self.tree
     }
 
+    /// Get the size of the current element
+    ///
+    /// Returns the size computed during the layout phase.
+    /// This is useful for RenderObjects that need to know their own size
+    /// during painting (e.g., for creating clip regions).
+    ///
+    /// # Returns
+    ///
+    /// - `Some(size)` if layout has been computed
+    /// - `None` if layout hasn't been computed yet (shouldn't happen during paint)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    ///     let size = cx.size().unwrap_or(Size::ZERO);
+    ///     let clip_rect = Rect::from_min_size(Offset::ZERO, size);
+    ///     // ... use size for clipping
+    /// }
+    /// ```
+    pub fn size(&self) -> Option<Size> {
+        self.tree
+            .render_state(self.element_id)
+            .and_then(|state| *state.size.read())
+    }
+
     /// Create a new context with different offset
     pub fn with_offset(&self, offset: Offset) -> Self {
         Self {
@@ -97,21 +123,13 @@ impl<'a> SingleChildPaint for PaintCx<'a, SingleArity> {
 
 impl<'a> PaintCx<'a, SingleArity> {
     /// Internal: Paint child without cache
-    #[allow(invalid_reference_casting)]
     fn capture_child_layer_uncached(&self, child_id: ElementId) -> BoxedLayer {
-        // SAFETY: Split borrow - we're painting child (different from parent)
-        // Parent RenderObject is at self.element_id (immutable in this context)
-        // Child RenderObject is at child_id (we get mutable access)
-        // This is safe because:
-        // 1. Parent and child are different elements (no aliasing)
-        // 2. Paint is single-threaded
-        // 3. No other code accesses child_id during parent's paint
-        // TODO: Use UnsafeCell for proper interior mutability
-        unsafe {
-            let tree_ref = &*(self.tree as *const ElementTree);
-            tree_ref.paint_render_object(child_id, self.offset)
-                .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
-        }
+        // Safe: Each element's RenderObject is wrapped in its own RefCell,
+        // so painting different elements doesn't cause aliasing.
+        // The ElementTree reference is shared immutably, which is safe since
+        // paint operations are read-only on the tree structure itself.
+        self.tree.paint_render_object(child_id, self.offset)
+            .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
     }
 }
 
@@ -150,15 +168,13 @@ impl<'a> MultiChildPaint for PaintCx<'a, MultiArity> {
 
 impl<'a> PaintCx<'a, MultiArity> {
     /// Internal: Paint child without cache
-    #[allow(invalid_reference_casting)]
     fn capture_child_layer_uncached(&self, child_id: ElementId) -> BoxedLayer {
-        // SAFETY: Same split borrow pattern as SingleArity
-        // TODO: Use UnsafeCell for proper interior mutability
-        unsafe {
-            let tree_ref = &*(self.tree as *const ElementTree);
-            tree_ref.paint_render_object(child_id, self.offset)
-                .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
-        }
+        // Safe: Each element's RenderObject is wrapped in its own RefCell,
+        // so painting different elements doesn't cause aliasing.
+        // The ElementTree reference is shared immutably, which is safe since
+        // paint operations are read-only on the tree structure itself.
+        self.tree.paint_render_object(child_id, self.offset)
+            .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
     }
 }
 

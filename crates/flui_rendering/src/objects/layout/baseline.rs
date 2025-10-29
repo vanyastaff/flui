@@ -1,17 +1,8 @@
 //! RenderBaseline - aligns child based on baseline
 
-use flui_types::{Size, Offset};
+use flui_types::{Size, Offset, TextBaseline};
 use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
 use flui_engine::{BoxedLayer, TransformLayer};
-
-/// Baseline type for text alignment
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextBaseline {
-    /// Alphabetic baseline (most common for Latin scripts)
-    Alphabetic,
-    /// Ideographic baseline (used for CJK scripts)
-    Ideographic,
-}
 
 /// Data for RenderBaseline
 #[derive(Debug, Clone, Copy, PartialEq)]

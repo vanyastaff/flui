@@ -26,8 +26,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderAlign;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderAlign, SingleArity};
 use flui_types::Alignment;
 
 /// A widget that centers its child within the available space.
@@ -299,30 +299,28 @@ mod tests {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Center {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{SingleRenderBox, AlignData};
-        Box::new(SingleRenderBox::new(AlignData::with_factors(
+    type RenderObject = RenderAlign;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderAlign::with_factors(
             Alignment::CENTER,
             self.width_factor,
             self.height_factor,
-        )))
+        )
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(align) = render_object.downcast_mut::<RenderAlign>() {
-            align.set_alignment(Alignment::CENTER);
-            align.set_width_factor(self.width_factor);
-            align.set_height_factor(self.height_factor);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_alignment(Alignment::CENTER);
+        render_object.set_width_factor(self.width_factor);
+        render_object.set_height_factor(self.height_factor);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for Center {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("Center requires a child"))
     }
 }

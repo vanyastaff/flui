@@ -11,26 +11,36 @@ repository.workspace = true
 # No dependencies on other flui crates - this is the base!
 serde = { workspace = true, optional = true }
 
+# Lazy static for font loader
+once_cell = "1.20"
+
+# Font parsing for metadata extraction
+ttf-parser = "0.24"
+
+# Logging (optional)
+tracing = { version = "0.1", optional = true }
+
+# Async runtime for font loading
+tokio = { version = "1", features = ["fs", "io-util"] }
+
 # Image decoding support (optional)
 image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
 
 # Async HTTP for NetworkImage (optional)
 reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls"] }
 
-# Async runtime
-tokio = { version = "1", optional = true, features = ["fs", "io-util"] }
-
 [dev-dependencies]
 criterion.workspace = true
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []
 serde = ["dep:serde"]
+tracing = ["dep:tracing"]
 
 # Image loading features
-image-loading = ["dep:image", "dep:tokio"]
-network-images = ["dep:reqwest", "dep:tokio", "image-loading"]
+image-loading = ["dep:image"]
+network-images = ["dep:reqwest", "image-loading"]
 
 # All features enabled
-full = ["serde", "image-loading", "network-images"]
+full = ["serde", "tracing", "image-loading", "network-images"]

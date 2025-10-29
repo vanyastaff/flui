@@ -4,6 +4,7 @@
 //! It bridges the Widget tree to the RenderObject tree.
 
 
+use std::cell::RefCell;
 use parking_lot::RwLock;
 
 use crate::element::ElementId;
@@ -24,6 +25,7 @@ use super::dyn_element::ElementLifecycle;
 ///   ├─ widget: Box<dyn DynWidget> (type-erased RenderObjectWidget)
 ///   ├─ render_object: Box<dyn DynRenderObject> (type-erased RenderObject)
 ///   ├─ render_state: RwLock<RenderState> (size, constraints, dirty flags)
+///   ├─ parent_data: Option<Box<dyn ParentData>> (metadata from parent)
 ///   ├─ children: Vec<ElementId> (managed by RenderObject arity)
 ///   └─ lifecycle state
 /// ```
@@ -52,19 +54,31 @@ use super::dyn_element::ElementLifecycle;
 /// 4. **layout()** - RenderObject layout pass
 /// 5. **paint()** - RenderObject paint pass
 /// 6. **unmount()** - RenderObject cleanup
-#[derive(Debug)]
 pub struct RenderElement {
     /// The widget this element represents (type-erased)
     widget: BoxedWidget,
 
     /// The render object created by the widget (type-erased)
-    render_object: Box<dyn DynRenderObject>,
+    ///
+    /// Wrapped in RefCell to allow interior mutability during layout.
+    /// This is safe because:
+    /// - Layout is single-threaded (no concurrent access)
+    /// - Borrow checking at runtime prevents aliasing
+    /// - More sound than raw pointer casting
+    render_object: RefCell<Box<dyn DynRenderObject>>,
 
     /// Render state (size, constraints, dirty flags)
     ///
     /// Uses RwLock for interior mutability during layout/paint.
     /// Atomic flags inside RenderState provide lock-free checks.
     render_state: RwLock<RenderState>,
+
+    /// Parent data attached by parent RenderObject
+    ///
+    /// This metadata is set by the parent's layout algorithm (e.g., FlexParentData for Flex,
+    /// StackParentData for Stack). Parent accesses this during layout to determine how to
+    /// position and size this child.
+    parent_data: Option<Box<dyn crate::render::ParentData>>,
 
     /// Parent element ID
     parent: Option<ElementId>,
@@ -80,6 +94,23 @@ pub struct RenderElement {
 
     /// Dirty flag (needs rebuild)
     dirty: bool,
+}
+
+// Manual Debug implementation because RefCell<Box<dyn Trait>> doesn't auto-derive
+impl std::fmt::Debug for RenderElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderElement")
+            .field("widget", &"<BoxedWidget>")
+            .field("render_object", &"<RefCell<Box<dyn DynRenderObject>>>")
+            .field("render_state", &self.render_state)
+            .field("parent_data", &self.parent_data.is_some())
+            .field("parent", &self.parent)
+            .field("children", &self.children)
+            .field("slot", &self.slot)
+            .field("lifecycle", &self.lifecycle)
+            .field("dirty", &self.dirty)
+            .finish()
+    }
 }
 
 impl RenderElement {
@@ -100,8 +131,9 @@ impl RenderElement {
     pub fn new(widget: BoxedWidget, render_object: Box<dyn DynRenderObject>) -> Self {
         Self {
             widget,
-            render_object,
+            render_object: RefCell::new(render_object),
             render_state: RwLock::new(RenderState::new()),
+            parent_data: None,
             parent: None,
             children: Vec::new(),
             slot: 0,
@@ -120,17 +152,27 @@ impl RenderElement {
     }
 
     /// Get reference to the render object
+    ///
+    /// # Panics
+    ///
+    /// Panics if the render object is currently borrowed mutably.
+    /// This should never happen in correct usage since layout is single-threaded.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> &dyn DynRenderObject {
-        &*self.render_object
+    pub fn render_object(&self) -> std::cell::Ref<'_, Box<dyn DynRenderObject>> {
+        self.render_object.borrow()
     }
 
     /// Get mutable reference to the render object
+    ///
+    /// # Panics
+    ///
+    /// Panics if the render object is currently borrowed.
+    /// This should never happen in correct usage since layout is single-threaded.
     #[inline]
     #[must_use]
-    pub fn render_object_mut(&mut self) -> &mut dyn DynRenderObject {
-        &mut *self.render_object
+    pub fn render_object_mut(&self) -> std::cell::RefMut<'_, Box<dyn DynRenderObject>> {
+        self.render_object.borrow_mut()
     }
 
     /// Get children element IDs
@@ -148,6 +190,35 @@ impl RenderElement {
     #[must_use]
     pub fn render_state(&self) -> &RwLock<RenderState> {
         &self.render_state
+    }
+
+    /// Get parent data attached to this element
+    ///
+    /// Returns the ParentData trait object if parent has attached metadata,
+    /// None otherwise.
+    #[inline]
+    #[must_use]
+    pub fn parent_data(&self) -> Option<&dyn crate::render::ParentData> {
+        self.parent_data.as_ref().map(|pd| &**pd as &dyn crate::render::ParentData)
+    }
+
+    /// Get mutable parent data attached to this element
+    #[inline]
+    #[must_use]
+    pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::render::ParentData> {
+        self.parent_data.as_mut().map(|pd| &mut **pd as &mut dyn crate::render::ParentData)
+    }
+
+    /// Set parent data for this element
+    ///
+    /// Called by parent RenderObject during setup or when parent changes.
+    pub fn set_parent_data(&mut self, parent_data: Box<dyn crate::render::ParentData>) {
+        self.parent_data = Some(parent_data);
+    }
+
+    /// Clear parent data
+    pub fn clear_parent_data(&mut self) {
+        self.parent_data = None;
     }
 
     /// Update with a new widget

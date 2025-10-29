@@ -30,9 +30,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynRenderObject, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::{RenderStack, StackFit};
-use flui_types::layout::Alignment;
+use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
+use flui_rendering::{RenderStack, MultiArity};
+use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that positions its children relative to the edges of its box.
 ///
@@ -170,7 +170,7 @@ pub struct Stack {
     /// Children are painted in order, with the first child at the bottom
     /// and subsequent children painted on top.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn DynWidget>>,
+    pub children: Vec<BoxedWidget>,
 }
 
 impl Stack {
@@ -237,26 +237,19 @@ impl Default for Stack {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Stack {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{ContainerRenderBox, StackData};
-        let data = StackData {
-            alignment: self.alignment,
-            fit: self.fit,
-        };
-        Box::new(ContainerRenderBox::new(data))
+    type RenderObject = RenderStack;
+    type Arity = MultiArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderStack::with_alignment(self.alignment)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(stack_render) = render_object.downcast_mut::<RenderStack>() {
-            stack_render.set_alignment(self.alignment);
-            stack_render.set_fit(self.fit);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_alignment(self.alignment);
+        render_object.set_fit(self.fit);
     }
-}
 
-// Implement MultiChildRenderObjectWidget
-impl MultiChildRenderObjectWidget for Stack {
-    fn children(&self) -> &[Box<dyn DynWidget>] {
+    fn children(&self) -> &[BoxedWidget] {
         &self.children
     }
 }

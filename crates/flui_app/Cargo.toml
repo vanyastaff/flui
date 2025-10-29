@@ -6,18 +6,25 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Application framework for Flui - Flutter-inspired UI on egui"
+description = "Application framework for Flui - Flutter-inspired UI"
+
+[features]
+default = ["egui", "widgets"]
+egui = ["dep:egui", "dep:eframe", "flui_engine/egui"]
+wgpu = ["flui_engine/wgpu"]
+widgets = ["dep:flui_widgets"]  # Optional widgets library
 
 [dependencies]
 # Flui crates
 flui_core = { path = "../flui_core" }
 flui_types = { path = "../flui_types" }
 flui_rendering = { path = "../flui_rendering" }
-flui_widgets = { path = "../flui_widgets" }
+flui_widgets = { path = "../flui_widgets", optional = true }
 
-# egui & platform
-egui.workspace = true
-eframe.workspace = true
+# egui & platform (optional - enabled via features)
+egui = { workspace = true, optional = true }
+eframe = { workspace = true, optional = true }
+flui_engine = { path = "../flui_engine" }
 
 # Utilities
 tracing.workspace = true

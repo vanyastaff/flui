@@ -14,11 +14,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderClipRect;
-
-// Use the Clip enum from clip_rect module
-type Clip = flui_rendering::objects::effects::clip_rect::Clip;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderClipRect, RectShape, SingleArity};
+use flui_types::painting::Clip;
 
 /// A widget that clips its child using a rectangle.
 ///
@@ -121,24 +119,22 @@ impl<S: State> ClipRectBuilder<S> {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for ClipRect {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{SingleRenderBox, objects::effects::clip_rect::ClipRectData};
-        Box::new(SingleRenderBox::new(ClipRectData::new(self.clip_behavior)))
+    type RenderObject = RenderClipRect;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderClipRect::new(RectShape, self.clip_behavior)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(clip) = render_object.downcast_mut::<RenderClipRect>() {
-            clip.set_clip_behavior(self.clip_behavior);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_clip_behavior(self.clip_behavior);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for ClipRect {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("ClipRect requires a child"))
     }
 }

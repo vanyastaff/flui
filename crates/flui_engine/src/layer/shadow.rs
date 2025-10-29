@@ -6,7 +6,7 @@
 //! - Multiple shadows
 //! - Configurable offset, blur radius, spread radius, and color
 
-use flui_types::{Rect, Offset, Event, HitTestResult, Color};
+use flui_types::{Rect, Offset, Event, HitTestResult};
 use flui_types::styling::{BoxShadow, ShadowQuality};
 use crate::layer::{Layer, BoxedLayer};
 use crate::painter::{Painter, Paint};

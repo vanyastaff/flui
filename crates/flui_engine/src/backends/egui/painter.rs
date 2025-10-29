@@ -120,17 +120,21 @@ impl<'a> EguiPainter<'a> {
         }
     }
 
+    /// Get a painter with current clip rect applied
+    /// Returns a new painter with clipping if needed, or clone of current painter
+    fn get_painter_with_clip(&self) -> egui::Painter {
+        if self.current_state.clip_rect.is_some() {
+            let clip_rect = self.get_egui_clip_rect();
+            self.painter.with_clip_rect(clip_rect)
+        } else {
+            self.painter.clone()
+        }
+    }
+
     /// Add a shape with current clipping applied
     fn add_shape(&self, shape: egui::Shape) {
-        if self.current_state.clip_rect.is_some() {
-            // Use with_clip_rect to apply clipping
-            let clip_rect = self.get_egui_clip_rect();
-            let clipped_painter = self.painter.with_clip_rect(clip_rect);
-            clipped_painter.add(shape);
-        } else {
-            // No clipping needed
-            self.painter.add(shape);
-        }
+        let painter = self.get_painter_with_clip();
+        painter.add(shape);
     }
 
     /// Apply current transformation to a point
@@ -227,12 +231,13 @@ impl<'a> EguiPainter<'a> {
     /// Draw a stroked rectangle using line segments (supports arbitrary transforms)
     fn draw_rect_stroke_mesh(&self, rect: Rect, stroke: egui::Stroke) {
         let corners = self.get_transformed_corners(rect);
+        let painter = self.get_painter_with_clip();
 
         // Draw 4 line segments connecting the corners
         for i in 0..4 {
             let start = Self::to_egui_pos(corners[i]);
             let end = Self::to_egui_pos(corners[(i + 1) % 4]);
-            self.painter.line_segment([start, end], stroke);
+            painter.line_segment([start, end], stroke);
         }
     }
 
@@ -313,11 +318,13 @@ impl<'a> EguiPainter<'a> {
             .map(|&p| Self::to_egui_pos(self.transform_point(p)))
             .collect();
 
+        let painter = self.get_painter_with_clip();
+
         // Draw line segments connecting the points
         for i in 0..SEGMENTS {
             let start = transformed_points[i];
             let end = transformed_points[(i + 1) % SEGMENTS];
-            self.painter.line_segment([start, end], stroke);
+            painter.line_segment([start, end], stroke);
         }
     }
 }
@@ -344,13 +351,7 @@ impl<'a> Painter for EguiPainter<'a> {
             // No skew - use simple rect rendering (rotation/scale already in transform)
             let transformed_rect = self.transform_rect(rect);
             let egui_rect = Self::to_egui_rect(transformed_rect);
-
-            let painter = if self.current_state.clip_rect.is_some() {
-                let clip_rect = self.get_egui_clip_rect();
-                self.painter.with_clip_rect(clip_rect)
-            } else {
-                self.painter.clone()
-            };
+            let painter = self.get_painter_with_clip();
 
             if paint.stroke_width > 0.0 {
                 let stroke = egui::Stroke::new(paint.stroke_width, color);
@@ -371,13 +372,7 @@ impl<'a> Painter for EguiPainter<'a> {
         let color = self.paint_to_color(paint);
         let egui_rect = Self::to_egui_rect(transformed_rect);
         let rounding = egui::CornerRadius::same(rrect.corner_radius.min(255.0) as u8);
-
-        let painter = if self.current_state.clip_rect.is_some() {
-            let clip_rect = self.get_egui_clip_rect();
-            self.painter.with_clip_rect(clip_rect)
-        } else {
-            self.painter.clone()
-        };
+        let painter = self.get_painter_with_clip();
 
         if paint.stroke_width > 0.0 {
             let stroke = egui::Stroke::new(paint.stroke_width, color);
@@ -418,13 +413,7 @@ impl<'a> Painter for EguiPainter<'a> {
             // Scale the radius (uniform scale)
             let scale = self.current_state.transform.to_scale_rotation_translation().0;
             let scaled_radius = radius * scale.x.max(scale.y);
-
-            let painter = if self.current_state.clip_rect.is_some() {
-                let clip_rect = self.get_egui_clip_rect();
-                self.painter.with_clip_rect(clip_rect)
-            } else {
-                self.painter.clone()
-            };
+            let painter = self.get_painter_with_clip();
 
             if paint.stroke_width > 0.0 {
                 let stroke = egui::Stroke::new(paint.stroke_width, color);
@@ -456,13 +445,7 @@ impl<'a> Painter for EguiPainter<'a> {
 
         let color = self.paint_to_color(paint);
         let stroke = egui::Stroke::new(paint.stroke_width.max(1.0), color);
-
-        let painter = if self.current_state.clip_rect.is_some() {
-            let clip_rect = self.get_egui_clip_rect();
-            self.painter.with_clip_rect(clip_rect)
-        } else {
-            self.painter.clone()
-        };
+        let painter = self.get_painter_with_clip();
 
         painter.line_segment(
             [Self::to_egui_pos(transformed_p1), Self::to_egui_pos(transformed_p2)],

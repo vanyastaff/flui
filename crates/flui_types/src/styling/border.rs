@@ -190,6 +190,39 @@ impl Default for BorderSide {
     }
 }
 
+/// Position of a border side in a box.
+///
+/// Used to identify which side of a border is being painted or styled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum BorderPosition {
+    /// Top side of the border
+    Top,
+    /// Right side of the border
+    Right,
+    /// Bottom side of the border
+    Bottom,
+    /// Left side of the border
+    Left,
+}
+
+impl BorderPosition {
+    /// Returns all border positions in order: Top, Right, Bottom, Left
+    pub const fn all() -> [Self; 4] {
+        [Self::Top, Self::Right, Self::Bottom, Self::Left]
+    }
+
+    /// Returns true if this is a horizontal position (Top or Bottom)
+    pub const fn is_horizontal(&self) -> bool {
+        matches!(self, Self::Top | Self::Bottom)
+    }
+
+    /// Returns true if this is a vertical position (Left or Right)
+    pub const fn is_vertical(&self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +308,31 @@ mod tests {
     fn test_border_side_default() {
         let default = BorderSide::default();
         assert_eq!(default, BorderSide::HAIRLINE);
+    }
+
+    #[test]
+    fn test_border_position_all() {
+        let positions = BorderPosition::all();
+        assert_eq!(positions.len(), 4);
+        assert_eq!(positions[0], BorderPosition::Top);
+        assert_eq!(positions[1], BorderPosition::Right);
+        assert_eq!(positions[2], BorderPosition::Bottom);
+        assert_eq!(positions[3], BorderPosition::Left);
+    }
+
+    #[test]
+    fn test_border_position_is_horizontal() {
+        assert!(BorderPosition::Top.is_horizontal());
+        assert!(BorderPosition::Bottom.is_horizontal());
+        assert!(!BorderPosition::Left.is_horizontal());
+        assert!(!BorderPosition::Right.is_horizontal());
+    }
+
+    #[test]
+    fn test_border_position_is_vertical() {
+        assert!(BorderPosition::Left.is_vertical());
+        assert!(BorderPosition::Right.is_vertical());
+        assert!(!BorderPosition::Top.is_vertical());
+        assert!(!BorderPosition::Bottom.is_vertical());
     }
 }

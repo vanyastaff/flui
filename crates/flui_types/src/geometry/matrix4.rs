@@ -241,6 +241,49 @@ impl Matrix4 {
         )
     }
 
+    /// Creates a 2D skew (shear) transformation matrix.
+    ///
+    /// Skewing tilts the coordinate space while keeping sides parallel (parallelogram effect).
+    /// Commonly used for italic-style text or perspective-like distortions.
+    ///
+    /// # Arguments
+    /// * `skew_x` - Horizontal skew angle in radians (affects X based on Y)
+    /// * `skew_y` - Vertical skew angle in radians (affects Y based on X)
+    ///
+    /// # Matrix Form
+    /// ```text
+    /// | 1         tan(skew_x)  0  0 |
+    /// | tan(skew_y)  1         0  0 |
+    /// | 0            0         1  0 |
+    /// | 0            0         0  1 |
+    /// ```
+    ///
+    /// # Examples
+    /// ```
+    /// use flui_types::Matrix4;
+    ///
+    /// // Horizontal skew (italic effect)
+    /// let italic = Matrix4::skew_2d(0.3, 0.0);
+    ///
+    /// // Vertical skew
+    /// let vertical_skew = Matrix4::skew_2d(0.0, 0.2);
+    ///
+    /// // Combined skew (parallelogram)
+    /// let combined = Matrix4::skew_2d(0.4, -0.2);
+    /// ```
+    #[inline]
+    pub fn skew_2d(skew_x: f32, skew_y: f32) -> Self {
+        let tan_x = skew_x.tan();
+        let tan_y = skew_y.tan();
+
+        Self::new(
+            1.0,   tan_y, 0.0, 0.0,
+            tan_x, 1.0,   0.0, 0.0,
+            0.0,   0.0,   1.0, 0.0,
+            0.0,   0.0,   0.0, 1.0,
+        )
+    }
+
     /// Returns whether this is an identity matrix.
     ///
     /// Uses epsilon comparison for floating-point tolerance.

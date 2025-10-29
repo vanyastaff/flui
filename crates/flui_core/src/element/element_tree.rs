@@ -276,32 +276,10 @@ impl ElementTree {
     ///
     /// `Some(&dyn DynRenderObject)` if the element is a RenderObjectElement, `None` otherwise
     ///
-    /// # Note
-    ///
-    /// Only RenderObjectElements have RenderObjects. ComponentElements and StatefulElements
-    /// will return None.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(render_obj) = tree.render_object(element_id) {
-    ///     println!("Arity: {:?}", render_obj.arity());
-    /// }
-    /// ```
-    #[inline]
-    pub fn render_object(&self, element_id: ElementId) -> Option<&dyn crate::DynRenderObject> {
-        self.get(element_id).and_then(|element| element.render_object())
-    }
-
-    /// Get a mutable reference to the RenderObject for an element
-    ///
-    /// # Returns
-    ///
-    /// `Some(&mut dyn DynRenderObject)` if the element is a RenderObjectElement, `None` otherwise
-    #[inline]
-    pub fn render_object_mut(&mut self, element_id: ElementId) -> Option<&mut dyn crate::DynRenderObject> {
-        self.get_mut(element_id).and_then(|element| element.render_object_mut())
-    }
+    // Note: render_object() and render_object_mut() methods removed
+    // because they cannot work with RefCell guards (lifetime issues).
+    // Instead, use: tree.get(element_id)?.render_object()?
+    // or: tree.get(element_id)?.render_object_mut()?
 
     // ========== RenderState Access ==========
 
@@ -363,8 +341,9 @@ impl ElementTree {
 
     /// Perform layout on a RenderObject
     ///
-    /// This is a helper method that safely handles the split borrow between
-    /// the render object (mutable) and the tree (immutable for children access).
+    /// Uses RefCell-based interior mutability for safe access to render objects.
+    /// This is sound because layout is single-threaded and RefCell provides
+    /// runtime borrow checking.
     ///
     /// # Arguments
     ///
@@ -374,34 +353,45 @@ impl ElementTree {
     /// # Returns
     ///
     /// The size computed by the RenderObject, or None if element is not a RenderObjectElement
-    pub fn layout_render_object(&mut self, element_id: ElementId, constraints: BoxConstraints) -> Option<flui_types::Size> {
-        // Check element exists and has a render object
-        if !self.contains(element_id) {
-            return None;
+    ///
+    /// # Panics
+    ///
+    /// Panics if the render object is already borrowed mutably (indicates a layout cycle).
+    pub fn layout_render_object(&self, element_id: ElementId, constraints: BoxConstraints) -> Option<flui_types::Size> {
+        // Check element exists and is a render element
+        let element = self.get(element_id)?;
+        let render_element = element.as_render()?;
+
+        // **Optimization**: Check RenderState cache before computing layout
+        // This avoids expensive dyn_layout() calls when constraints haven't changed
+        let render_state = render_element.render_state();
+
+        // Try to use cached size if constraints match and no relayout needed
+        {
+            let state = render_state.read();
+            if state.has_size() && !state.needs_layout() {
+                if let Some(cached_constraints) = state.get_constraints() {
+                    if cached_constraints == constraints {
+                        // Cache hit! Return cached size without layout computation
+                        return state.get_size();
+                    }
+                }
+            }
+        } // Release read lock
+
+        // Cache miss or needs relayout - compute layout
+        let mut render_object = render_element.render_object_mut();
+        let size = render_object.dyn_layout(self, element_id, constraints);
+
+        // Update RenderState with new size and constraints
+        {
+            let state = render_state.write();
+            state.set_size(size);
+            state.set_constraints(constraints);
+            state.clear_needs_layout();
         }
 
-        // SAFETY: We're doing a split borrow using raw pointers:
-        // - Get mutable pointer to render_object for calling layout()
-        // - Get const pointer to self for tree access in LayoutCx
-        //
-        // This is safe because:
-        // 1. The render_object being laid out is at element_id
-        // 2. LayoutCx only reads tree for children (not element_id's render_object)
-        // 3. We've verified element_id exists above
-        // 4. No aliasing occurs - we're modifying render_object, reading tree
-        unsafe {
-            let self_ptr = self as *const Self;
-            let self_mut_ptr = self as *mut Self;
-
-            // Get mutable access to element
-            let element = (*self_mut_ptr).get_mut(element_id)?;
-
-            // Get mutable access to render object
-            let render_object = element.render_object_mut()?;
-
-            let size = render_object.dyn_layout(&*self_ptr, element_id, constraints);
-            Some(size)
-        }
+        Some(size)
     }
 
     /// Perform paint on a RenderObject
@@ -418,9 +408,17 @@ impl ElementTree {
     ///
     /// The layer tree, or None if element is not a RenderObjectElement
     pub fn paint_render_object(&self, element_id: ElementId, offset: crate::Offset) -> Option<crate::BoxedLayer> {
+        // Get render element
         let element = self.get(element_id)?;
-        let render_object = element.render_object()?;
-        let layer = render_object.dyn_paint(self, element_id, offset);
+        let render_element = element.as_render()?;
+
+        // Borrow the render object through RefCell - the guard must live until after the call
+        let render_object_guard = render_element.render_object();
+
+        // Explicitly dereference to get &dyn DynRenderObject
+        let layer = (&*render_object_guard).dyn_paint(self, element_id, offset);
+
+        // Guard dropped here
         Some(layer)
     }
 
@@ -477,13 +475,21 @@ impl ElementTree {
     {
         for (element_id, node) in &self.nodes {
             // Only visit elements with RenderObjects
-            if let Some(render_obj) = node.element.render_object() {
-                if let Some(render_elem) = node.element.as_render() {
-                    let state_ptr: *const parking_lot::RwLock<RenderState> = render_elem.render_state();
-                    let state = unsafe { (*state_ptr).read() };
-                    visitor(element_id, render_obj, state);
-                }
-            }
+            let render_elem = match node.element.as_render() {
+                Some(re) => re,
+                None => continue,
+            };
+
+            // Borrow render object through RefCell guard
+            let render_obj_guard = render_elem.render_object();
+            let state_ptr: *const parking_lot::RwLock<RenderState> = render_elem.render_state();
+            let state = unsafe { (*state_ptr).read() };
+
+            // Double-dereference: Ref<Box<dyn T>> -> &dyn T
+            // First * gets Box<dyn T>, second * gets dyn T, & takes reference
+            // The guard lives for the duration of the visitor call
+            visitor(element_id, &**render_obj_guard, state);
+            // Guard is dropped here
         }
     }
 

@@ -1741,7 +1741,6 @@ checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 name = "flui"
 version = "0.1.0"
 dependencies = [
- "criterion 0.7.0",
  "eframe",
  "egui 0.33.0",
  "env_logger",
@@ -1770,6 +1769,7 @@ dependencies = [
  "eframe",
  "egui 0.33.0",
  "flui_core",
+ "flui_engine",
  "flui_rendering",
  "flui_types",
  "flui_widgets",
@@ -1854,6 +1854,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.17",
  "tracing",
+ "ttf-parser 0.25.1",
  "wgpu 25.0.2",
  "winit",
 ]
@@ -1892,9 +1893,12 @@ version = "0.1.0"
 dependencies = [
  "criterion 0.7.0",
  "image",
+ "once_cell",
  "reqwest",
  "serde",
  "tokio",
+ "tracing",
+ "ttf-parser 0.24.1",
 ]
 
 [[package]]
@@ -5258,6 +5262,12 @@ name = "ttf-parser"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c591d83f69777866b9126b24c6dd9a18351f177e49d625920d19f989fd31cf8"
+
+[[package]]
+name = "ttf-parser"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5be21190ff5d38e8b4a2d3b6a3ae57f612cc39c96e83cedeaf7abc338a8bac4a"
 
 [[package]]
 name = "ttf-parser"

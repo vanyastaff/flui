@@ -76,6 +76,7 @@ glyphon = "0.9"  # GPU text rendering (Latest: 0.9.0)
 cosmic-text = "0.14"  # Text shaping (via glyphon)
 guillotiere = "0.6"  # Texture atlas bin packing
 lyon = "1.0"  # Path tesselation
+ttf-parser = "0.25"  # TrueType/OpenType font parser for glyph outlines
 pollster = "0.3"  # Block on async for examples
 
 # MEMORY & CACHING
@@ -149,14 +150,21 @@ tracing-tracy = { workspace = true, optional = true }
 puffin_http = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion.workspace = true
+# criterion only needed in individual crates for benchmarks, not in root
 
 [features]
-default = ["persistence"]
+default = ["egui", "persistence"]
+# Backend selection (mutually exclusive)
+egui = ["flui_app?/egui", "flui_engine/egui"]
+wgpu = ["flui_app?/wgpu", "flui_engine/wgpu"]
+# Optional features
 persistence = ["eframe/persistence"]
 profiling = ["puffin", "puffin_egui", "puffin_http"]
 tracy = ["tracing-tracy"]
 full-profiling = ["profiling", "tracy"]
+# High-level API features
+flui_app = ["dep:flui_app"]
+flui_widgets = ["dep:flui_widgets"]
 
 [profile.release]
 opt-level = 3
@@ -200,3 +208,15 @@ required-features = []  # Uses flui_engine/egui + eframe
 name = "unified_app"
 path = "examples/unified_app.rs"
 required-features = []  # Auto-selects backend based on features
+
+# Minimal high-level app - no flui_widgets dependency
+[[example]]
+name = "minimal_app"
+path = "examples/minimal_app.rs"
+required-features = ["flui_app"]  # Only needs flui_app, not flui_widgets
+
+# High-level Widget API example - demonstrates StatelessWidget pattern
+[[example]]
+name = "widget_hello_world"
+path = "examples/widget_hello_world.rs"
+required-features = ["flui_app", "flui_widgets"]  # Needs high-level APIs

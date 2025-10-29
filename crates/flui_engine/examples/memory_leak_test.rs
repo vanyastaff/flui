@@ -4,12 +4,6 @@
 //! capabilities of the MemoryProfiler. Watch the memory graph grow and see
 //! the "⚠ LEAK?" warning appear!
 
-use flui_engine::*;
-#[cfg(all(feature = "egui", feature = "devtools", feature = "memory-profiler"))]
-use flui_engine::DevToolsLayout;
-use flui_types::{Size, Rect, Offset};
-use std::sync::{Arc, Mutex};
-
 fn main() {
     #[cfg(not(all(feature = "egui", feature = "devtools", feature = "memory-profiler")))]
     {
@@ -25,6 +19,9 @@ fn main() {
 #[cfg(all(feature = "egui", feature = "devtools", feature = "memory-profiler"))]
 fn run_leak_test() {
     use eframe::egui;
+    use flui_engine::{*, DevToolsLayout};
+    use flui_types::{Size, Rect, Offset};
+    use std::sync::{Arc, Mutex};
 
     // Create profilers
     let compositor = ProfiledCompositor::new();

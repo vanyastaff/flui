@@ -2,7 +2,7 @@
 
 use flui_types::{Color, Size};
 use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer, PictureLayer, Paint};
+use flui_engine::{BoxedLayer, PictureLayer, Paint};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

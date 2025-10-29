@@ -2,7 +2,7 @@
 
 use flui_types::{Offset, Size, constraints::BoxConstraints, Axis};
 use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer, TransformLayer};
+use flui_engine::{BoxedLayer, layer::pool, TransformLayer};
 
 /// Alignment for runs in wrap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,7 +211,7 @@ impl RenderObject for RenderWrap {
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         let children = cx.children();
-        let mut container = ContainerLayer::new();
+        let mut container = pool::acquire_container();
 
         for (i, &child) in children.iter().enumerate() {
             let offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);

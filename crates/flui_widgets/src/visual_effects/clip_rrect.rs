@@ -29,12 +29,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderClipRRect;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderClipRRect, RRectShape, SingleArity};
 use flui_types::styling::BorderRadius;
-
-// Use the Clip enum from clip_rect module
-type Clip = flui_rendering::objects::effects::clip_rect::Clip;
+use flui_types::painting::Clip;
 
 /// A widget that clips its child to a rounded rectangle.
 ///
@@ -297,28 +295,26 @@ impl Default for ClipRRect {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for ClipRRect {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{SingleRenderBox, objects::effects::clip_rrect::ClipRRectData};
-        Box::new(SingleRenderBox::new(ClipRRectData::new(
-            self.border_radius,
+    type RenderObject = RenderClipRRect;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderClipRRect::new(
+            RRectShape::new(self.border_radius),
             self.clip_behavior,
-        )))
+        )
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(clip_render) = render_object.downcast_mut::<RenderClipRRect>() {
-            clip_render.set_border_radius(self.border_radius);
-            clip_render.set_clip_behavior(self.clip_behavior);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.shape.border_radius = self.border_radius;
+        render_object.set_clip_behavior(self.clip_behavior);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for ClipRRect {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("ClipRRect requires a child"))
     }
 }

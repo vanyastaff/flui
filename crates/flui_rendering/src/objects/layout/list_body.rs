@@ -2,7 +2,7 @@
 
 use flui_types::{Offset, Size, constraints::BoxConstraints, Axis};
 use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer, Transform, TransformLayer};
+use flui_engine::{BoxedLayer, layer::pool, Transform, TransformLayer};
 
 /// RenderObject that arranges children in a simple scrollable list
 ///
@@ -148,7 +148,7 @@ impl RenderObject for RenderListBody {
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         let children = cx.children();
-        let mut container = ContainerLayer::new();
+        let mut container = pool::acquire_container();
 
         let mut current_offset = 0.0_f32;
 

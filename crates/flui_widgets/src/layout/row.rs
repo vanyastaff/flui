@@ -32,8 +32,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynRenderObject, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::RenderFlex;
+use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
+use flui_rendering::{RenderFlex, MultiArity};
 use flui_types::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 /// A widget that displays its children in a horizontal array.
@@ -96,7 +96,7 @@ pub struct Row {
     ///
     /// Children are laid out horizontally in the order they appear in the vector.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn DynWidget>>,
+    pub children: Vec<BoxedWidget>,
 }
 
 impl Row {
@@ -125,7 +125,7 @@ impl Row {
     }
 
     /// Sets all children at once.
-    pub fn set_children(&mut self, children: Vec<Box<dyn DynWidget>>) {
+    pub fn set_children(&mut self, children: Vec<BoxedWidget>) {
         self.children = children;
     }
 
@@ -148,23 +148,23 @@ impl Default for Row {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Row {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        let flex = RenderFlex::row()
+    type RenderObject = RenderFlex;
+    type Arity = MultiArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderFlex::row()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
-            .with_main_axis_size(self.main_axis_size);
-        Box::new(flex)
+            .with_main_axis_size(self.main_axis_size)
     }
 
-    fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {
-        // RenderFlex is immutable data - updates are handled by recreating the RenderObject
-        // TODO: Implement proper update strategy once architecture is finalized
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.main_axis_alignment = self.main_axis_alignment;
+        render_object.cross_axis_alignment = self.cross_axis_alignment;
+        render_object.main_axis_size = self.main_axis_size;
     }
-}
 
-// Implement MultiChildRenderObjectWidget
-impl MultiChildRenderObjectWidget for Row {
-    fn children(&self) -> &[Box<dyn DynWidget>] {
+    fn children(&self) -> &[BoxedWidget] {
         &self.children
     }
 }
@@ -189,7 +189,7 @@ where
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Box<dyn DynWidget>>) -> RowBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<BoxedWidget>) -> RowBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }

@@ -432,6 +432,16 @@ pub trait MultiChildRenderObjectWidget: RenderObjectWidget {
     fn children(&self) -> &[crate::BoxedWidget];
 }
 
+// Note: Blanket impl for RenderObjectWidget -> Widget was removed
+// because it conflicts with StatelessWidget -> Widget blanket impl.
+//
+// Instead, each RenderObjectWidget must manually implement Widget trait:
+//
+// impl Widget for MyRenderWidget {}
+//
+// Widget trait has default implementations for all methods, so the impl is trivial.
+// Alternatively, use #[derive(RenderObjectWidget)] macro from flui_derive.
+
 // Tests disabled - need to be updated for new API
 #[cfg(all(test, disabled))]
 mod tests {

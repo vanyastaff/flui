@@ -243,6 +243,29 @@ pub trait Widget: 'static {
     fn build(&self, _context: &crate::element::BuildContext) -> Option<crate::BoxedWidget> {
         None
     }
+
+    /// Get child widget for ParentDataWidget types
+    ///
+    /// This method is used by ParentDataElement to access the child widget from
+    /// ParentDataWidget instances. Returns None for non-ParentDataWidget types.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns `None`. ParentDataWidget types should override this.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // ParentDataWidget override
+    /// impl Widget for Flexible {
+    ///     fn parent_data_child(&self) -> Option<&BoxedWidget> {
+    ///         Some(&self.child)
+    ///     }
+    /// }
+    /// ```
+    fn parent_data_child(&self) -> Option<&crate::BoxedWidget> {
+        None
+    }
 }
 
 /// Widget state trait

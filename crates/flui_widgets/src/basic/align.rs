@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -435,30 +435,28 @@ mod tests {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Align {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{SingleRenderBox, AlignData};
-        Box::new(SingleRenderBox::new(AlignData::with_factors(
+    type RenderObject = RenderAlign;
+    type Arity = flui_core::render::SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderAlign::with_factors(
             self.alignment,
             self.width_factor,
             self.height_factor,
-        )))
+        )
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(align) = render_object.downcast_mut::<RenderAlign>() {
-            align.set_alignment(self.alignment);
-            align.set_width_factor(self.width_factor);
-            align.set_height_factor(self.height_factor);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_alignment(self.alignment);
+        render_object.set_width_factor(self.width_factor);
+        render_object.set_height_factor(self.height_factor);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
-impl SingleChildRenderObjectWidget for Align {
-    fn child(&self) -> &dyn DynWidget {
+impl flui_core::SingleChildRenderObjectWidget for Align {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("Align requires a child"))
     }
 }

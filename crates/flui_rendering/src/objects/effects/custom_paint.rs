@@ -226,7 +226,7 @@ impl RenderObject for RenderCustomPaint {
     }
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        use flui_engine::ContainerLayer;
+        
 
         // Use the size from layout phase
         let size = self.laid_out_size;

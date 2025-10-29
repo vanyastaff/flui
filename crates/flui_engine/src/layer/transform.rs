@@ -19,7 +19,34 @@ pub enum Transform {
     /// Scale non-uniformly
     ScaleXY { sx: f32, sy: f32 },
 
-    // TODO: Add full 2D matrix transform when needed
+    /// Skew (shear) transform - creates parallelogram effect
+    /// - `skew_x`: horizontal skew angle in radians
+    /// - `skew_y`: vertical skew angle in radians
+    Skew { skew_x: f32, skew_y: f32 },
+
+    /// Full 2D affine transformation matrix
+    /// [a, b, c, d, tx, ty] represents:
+    /// | a  c  tx |
+    /// | b  d  ty |
+    /// | 0  0  1  |
+    Matrix {
+        a: f32,   // x scale / horizontal stretch
+        b: f32,   // vertical skew
+        c: f32,   // horizontal skew
+        d: f32,   // y scale / vertical stretch
+        tx: f32,  // x translation
+        ty: f32,  // y translation
+    },
+
+    /// Trapezoid/Perspective transform - applies vertical gradient scaling
+    /// Creates pyramid or trapezoid effect by scaling differently at top and bottom
+    /// - `top_scale`: horizontal scale factor at the top (1.0 = normal width)
+    /// - `bottom_scale`: horizontal scale factor at the bottom (1.0 = normal width)
+    /// Example: top_scale=0.5, bottom_scale=1.0 creates pyramid (narrow top, wide bottom)
+    Trapezoid {
+        top_scale: f32,
+        bottom_scale: f32,
+    },
 }
 
 /// Layer that applies a transform to its child
@@ -71,6 +98,34 @@ impl TransformLayer {
         Self::new(child, Transform::ScaleXY { sx, sy })
     }
 
+    /// Create a skew transform layer
+    pub fn skew(child: BoxedLayer, skew_x: f32, skew_y: f32) -> Self {
+        Self::new(child, Transform::Skew { skew_x, skew_y })
+    }
+
+    /// Create a skew X transform layer (horizontal skew only)
+    pub fn skew_x(child: BoxedLayer, angle: f32) -> Self {
+        Self::new(child, Transform::Skew { skew_x: angle, skew_y: 0.0 })
+    }
+
+    /// Create a skew Y transform layer (vertical skew only)
+    pub fn skew_y(child: BoxedLayer, angle: f32) -> Self {
+        Self::new(child, Transform::Skew { skew_x: 0.0, skew_y: angle })
+    }
+
+    /// Create a matrix transform layer
+    pub fn matrix(child: BoxedLayer, a: f32, b: f32, c: f32, d: f32, tx: f32, ty: f32) -> Self {
+        Self::new(child, Transform::Matrix { a, b, c, d, tx, ty })
+    }
+
+    /// Create a trapezoid/perspective transform layer
+    /// - `top_scale`: horizontal scale at the top (< 1.0 makes top narrow)
+    /// - `bottom_scale`: horizontal scale at the bottom (> 1.0 makes bottom wide)
+    /// Example: trapezoid(child, 0.5, 1.0) creates pyramid (narrow top, wide bottom)
+    pub fn trapezoid(child: BoxedLayer, top_scale: f32, bottom_scale: f32) -> Self {
+        Self::new(child, Transform::Trapezoid { top_scale, bottom_scale })
+    }
+
     /// Get the transform
     pub fn transform(&self) -> Transform {
         self.transform
@@ -104,6 +159,31 @@ impl Layer for TransformLayer {
             }
             Transform::ScaleXY { sx, sy } => {
                 painter.scale(sx, sy);
+            }
+            Transform::Skew { skew_x, skew_y } => {
+                painter.skew(skew_x, skew_y);
+            }
+            Transform::Matrix { a, b, c, d, tx, ty } => {
+                painter.transform_matrix(a, b, c, d, tx, ty);
+            }
+            Transform::Trapezoid { .. } => {
+                // Trapezoid is a non-affine transform (non-linear gradient scaling)
+                // that cannot be represented by standard painter methods.
+                //
+                // To achieve trapezoid/pyramid text effects, use per-character rendering
+                // with flui_types::text_path::vertical_scale() helper:
+                //
+                // Example:
+                //   for (i, ch) in text.chars().enumerate() {
+                //       let y_norm = i as f32 / total as f32;
+                //       let scale_x = vertical_scale(y_norm, 0.5, 1.0);
+                //       painter.save();
+                //       painter.scale(scale_x, 1.0);
+                //       painter.text(&ch.to_string(), pos, size, &paint);
+                //       painter.restore();
+                //   }
+                //
+                // For this variant, child is painted without transform.
             }
         }
 
@@ -152,6 +232,45 @@ impl Layer for TransformLayer {
                     return false; // Degenerate scale, no hit
                 }
                 Offset::new(position.dx / sx, position.dy / sy)
+            }
+            Transform::Skew { skew_x, skew_y } => {
+                // Inverse skew transformation
+                // For skew matrix: [1, tan_x], [tan_y, 1]
+                // Inverse: [1/(1-tan_x*tan_y), -tan_x/(1-tan_x*tan_y)], [-tan_y/(1-tan_x*tan_y), 1/(1-tan_x*tan_y)]
+                let tan_x = skew_x.tan();
+                let tan_y = skew_y.tan();
+                let det = 1.0 - tan_x * tan_y;
+                if det.abs() < 0.001 {
+                    return false; // Degenerate transform
+                }
+                let inv_det = 1.0 / det;
+                Offset::new(
+                    (position.dx - tan_x * position.dy) * inv_det,
+                    (position.dy - tan_y * position.dx) * inv_det,
+                )
+            }
+            Transform::Matrix { a, b, c, d, tx, ty } => {
+                // Inverse of 2D affine matrix
+                // First subtract translation
+                let px = position.dx - tx;
+                let py = position.dy - ty;
+
+                // Then apply inverse of [a, c; b, d]
+                let det = a * d - b * c;
+                if det.abs() < 0.001 {
+                    return false; // Degenerate transform
+                }
+                let inv_det = 1.0 / det;
+                Offset::new(
+                    (d * px - c * py) * inv_det,
+                    (-b * px + a * py) * inv_det,
+                )
+            }
+            Transform::Trapezoid { .. } => {
+                // Trapezoid transform is complex (non-linear gradient)
+                // For hit testing, approximate as identity for now
+                // TODO: Implement proper inverse trapezoid transform
+                position
             }
         };
 

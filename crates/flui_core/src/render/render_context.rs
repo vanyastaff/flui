@@ -150,19 +150,18 @@ impl<'a> RenderContext<'a> {
 
     // ========== RenderObject Access ==========
 
-    /// Get the RenderObject for current element
-    ///
-    /// Returns `None` if element doesn't exist or doesn't have a RenderObject.
-    #[inline]
-    pub fn render_object(&self) -> Option<&dyn crate::DynRenderObject> {
-        self.tree.render_object(self.element_id)
-    }
-
-    /// Get the RenderObject for a child element
-    #[inline]
-    pub fn child_render_object(&self, child_id: ElementId) -> Option<&dyn crate::DynRenderObject> {
-        self.tree.render_object(child_id)
-    }
+    // NOTE: These methods removed due to RefCell guard lifetime issues.
+    // Use tree.get(element_id)?.render_object()? directly instead.
+    //
+    // /// Get the RenderObject for current element
+    // pub fn render_object(&self) -> Option<std::cell::Ref<'_, dyn crate::DynRenderObject>> {
+    //     self.tree.get(self.element_id)?.render_object()
+    // }
+    //
+    // /// Get the RenderObject for a child element
+    // pub fn child_render_object(&self, child_id: ElementId) -> Option<std::cell::Ref<'_, dyn crate::DynRenderObject>> {
+    //     self.tree.get(child_id)?.render_object()
+    // }
 
     // ========== Helper Methods ==========
 

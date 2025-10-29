@@ -8,7 +8,6 @@ use flui_types::constraints::BoxConstraints;
 
 use crate::element::{ElementId, ElementTree};
 use crate::render::arity::{Arity, SingleArity, MultiArity};
-use super::cache::{layout_cache, LayoutCacheKey, LayoutResult};
 
 /// Typed layout context
 ///
@@ -64,6 +63,53 @@ impl<'a, A: Arity> LayoutCx<'a, A> {
     pub fn tree(&self) -> &ElementTree {
         self.tree
     }
+
+    /// Get parent data for a child element
+    ///
+    /// Reads the ParentData attached to a child RenderElement and downcasts it
+    /// to the requested concrete type. Returns `None` if:
+    /// - The child doesn't exist
+    /// - The child is not a RenderElement
+    /// - The child has no parent data attached
+    /// - The parent data cannot be downcast to type `T`
+    ///
+    /// # Type Parameters
+    ///
+    /// - `T`: The concrete ParentData type to downcast to (e.g., `FlexParentData`, `StackParentData`)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // In RenderFlex::layout()
+    /// for child in children {
+    ///     if let Some(flex_data) = cx.parent_data::<FlexParentData>(child) {
+    ///         if flex_data.flex > 0 {
+    ///             // Child is flexible - allocate space proportionally
+    ///             flexible_children.push((child, flex_data.flex));
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ```rust,ignore
+    /// // In RenderStack::layout()
+    /// if let Some(stack_data) = cx.parent_data::<StackParentData>(child) {
+    ///     if stack_data.is_positioned() {
+    ///         // Child is positioned - use absolute positioning
+    ///         let constraints = compute_positioned_constraints(stack_data, parent_size);
+    ///         cx.layout_child(child, constraints);
+    ///     }
+    /// }
+    /// ```
+    pub fn parent_data<T>(&self, child_id: ElementId) -> Option<&T>
+    where
+        T: crate::render::ParentData + 'static,
+    {
+        self.tree
+            .get(child_id)?
+            .parent_data()?
+            .downcast_ref::<T>()
+    }
 }
 
 // ========== SingleChild Extension Trait ==========
@@ -88,43 +134,22 @@ impl<'a> SingleChild for LayoutCx<'a, SingleArity> {
     }
 
     fn layout_child(&self, child: ElementId, constraints: BoxConstraints) -> Size {
-        // Use cache
-        let cache_key = LayoutCacheKey::new(child, constraints);
-        let cache = layout_cache();
-
-        if let Some(cached) = cache.get(&cache_key) {
-            if !cached.needs_layout {
-                return cached.size;
-            }
-        }
-
-        // Actually layout the child!
-        let size = self.layout_child_uncached(child, constraints);
-
-        // Store in cache
-        cache.insert(cache_key, LayoutResult::new(size));
-
-        size
+        // Layout child - RenderState caching is handled in layout_render_object()
+        // No need for global cache here since RenderState provides per-object caching
+        self.layout_child_uncached(child, constraints)
     }
 }
 
 impl<'a> LayoutCx<'a, SingleArity> {
     /// Internal: Layout child without cache
-    #[allow(invalid_reference_casting)]
     fn layout_child_uncached(&self, child_id: ElementId, constraints: BoxConstraints) -> Size {
-        // SAFETY: Split borrow - we're laying out child (different from parent)
-        // Parent RenderObject is at self.element_id (immutable in this context)
-        // Child RenderObject is at child_id (we get mutable access)
-        // This is safe because:
-        // 1. Parent and child are different elements (no aliasing)
-        // 2. Layout is single-threaded
-        // 3. No other code accesses child_id during parent's layout
-        // TODO: Use UnsafeCell for proper interior mutability
-        unsafe {
-            let tree_mut = &mut *(self.tree as *const ElementTree as *mut ElementTree);
-            tree_mut.layout_render_object(child_id, constraints)
-                .unwrap_or(Size::ZERO)
-        }
+        // Safe: ElementTree::layout_render_object uses RefCell for interior mutability
+        // Parent RenderObject is at self.element_id (immutable via self reference)
+        // Child RenderObject is at child_id (borrowed mutably through RefCell)
+        // RefCell provides runtime borrow checking to prevent aliasing
+        self.tree
+            .layout_render_object(child_id, constraints)
+            .unwrap_or(Size::ZERO)
     }
 }
 
@@ -167,39 +192,20 @@ impl<'a> MultiChild for LayoutCx<'a, MultiArity> {
     }
 
     fn layout_child(&self, child: ElementId, constraints: BoxConstraints) -> Size {
-        // Use cache with child count
-        let child_count = self.child_count();
-        let cache_key = LayoutCacheKey::new(child, constraints)
-            .with_child_count(child_count);
-        let cache = layout_cache();
-
-        if let Some(cached) = cache.get(&cache_key) {
-            if !cached.needs_layout {
-                return cached.size;
-            }
-        }
-
-        // Actually layout the child!
-        let size = self.layout_child_uncached(child, constraints);
-
-        // Store in cache
-        cache.insert(cache_key, LayoutResult::new(size));
-
-        size
+        // Layout child - RenderState caching is handled in layout_render_object()
+        // No need for global cache here since RenderState provides per-object caching
+        self.layout_child_uncached(child, constraints)
     }
 }
 
 impl<'a> LayoutCx<'a, MultiArity> {
     /// Internal: Layout child without cache
-    #[allow(invalid_reference_casting)]
     fn layout_child_uncached(&self, child_id: ElementId, constraints: BoxConstraints) -> Size {
-        // SAFETY: Same split borrow pattern as SingleArity
-        // TODO: Use UnsafeCell for proper interior mutability
-        unsafe {
-            let tree_mut = &mut *(self.tree as *const ElementTree as *mut ElementTree);
-            tree_mut.layout_render_object(child_id, constraints)
-                .unwrap_or(Size::ZERO)
-        }
+        // Safe: ElementTree::layout_render_object uses RefCell for interior mutability
+        // Same safety reasoning as SingleArity version
+        self.tree
+            .layout_render_object(child_id, constraints)
+            .unwrap_or(Size::ZERO)
     }
 }
 

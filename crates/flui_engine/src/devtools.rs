@@ -182,6 +182,12 @@ pub struct PerformanceOverlay {
 
     /// Overlay position (0.0-1.0, relative to viewport)
     pub position: (f32, f32),
+
+    /// Background opacity (0.0-1.0)
+    pub bg_opacity: f32,
+
+    /// Text opacity (0.0-1.0)
+    pub text_opacity: f32,
 }
 
 #[cfg(feature = "devtools")]
@@ -193,6 +199,8 @@ impl PerformanceOverlay {
             show_frame_time: true,
             show_jank: true,
             position: (0.02, 0.02), // Top-left corner
+            bg_opacity: 0.7,
+            text_opacity: 1.0,
         }
     }
 
@@ -229,15 +237,15 @@ impl PerformanceOverlay {
         // Draw background
         let bg_rect = Rect::from_xywh(x, y, width, height);
         let bg_paint = Paint {
-            color: [0.0, 0.0, 0.0, 0.75], // Semi-transparent black
+            color: [0.0, 0.0, 0.0, self.bg_opacity], // Semi-transparent black with configurable opacity
             ..Default::default()
         };
         painter.save();
         painter.rect(bg_rect, &bg_paint);
 
-        // Text paint (white)
+        // Text paint (white) - with separate text opacity
         let text_paint = Paint {
-            color: [1.0, 1.0, 1.0, 1.0],
+            color: [1.0, 1.0, 1.0, self.text_opacity],
             ..Default::default()
         };
 
@@ -272,7 +280,7 @@ impl PerformanceOverlay {
             if self.show_jank {
                 if stats.is_jank() {
                     let jank_paint = Paint {
-                        color: [1.0, 0.3, 0.3, 1.0], // Red for jank
+                        color: [1.0, 0.3, 0.3, self.text_opacity], // Red for jank with text opacity
                         ..Default::default()
                     };
                     painter.text("⚠ JANK", Point::new(padding_x, current_y), font_size, &jank_paint);
@@ -312,6 +320,12 @@ pub struct FrameTimelineGraph {
 
     /// Maximum frames to display
     pub max_frames: usize,
+
+    /// Background opacity (0.0-1.0)
+    pub bg_opacity: f32,
+
+    /// Text opacity (0.0-1.0)
+    pub text_opacity: f32,
 }
 
 #[cfg(feature = "devtools")]
@@ -324,6 +338,8 @@ impl FrameTimelineGraph {
             height: 60.0,
             target_frame_time_ms: 16.67, // 60 FPS
             max_frames: 60,
+            bg_opacity: 0.7,
+            text_opacity: 1.0,
         }
     }
 
@@ -350,7 +366,7 @@ impl FrameTimelineGraph {
         // Draw background
         let bg_rect = Rect::from_xywh(x, y, self.width, self.height);
         let bg_paint = Paint {
-            color: [0.0, 0.0, 0.0, 0.75],
+            color: [0.0, 0.0, 0.0, self.bg_opacity],
             ..Default::default()
         };
         painter.save();
@@ -359,7 +375,7 @@ impl FrameTimelineGraph {
         // Draw target line (60fps = 16.67ms)
         let target_y = y + self.height - (self.target_frame_time_ms / 33.33 * self.height);
         let target_paint = Paint {
-            color: [0.4, 0.4, 0.4, 0.8], // Gray line
+            color: [0.4, 0.4, 0.4, 0.5], // Gray line
             stroke_width: 1.0,
             ..Default::default()
         };
@@ -385,11 +401,11 @@ impl FrameTimelineGraph {
 
             // Color based on performance (green = good, yellow = ok, red = bad)
             let color = if stats.is_jank() {
-                [1.0, 0.3, 0.3, 0.9] // Red for jank
+                [1.0, 0.3, 0.3, 0.85] // Red for jank
             } else if frame_time_ms > self.target_frame_time_ms {
-                [1.0, 0.8, 0.2, 0.9] // Yellow for slight slowdown
+                [1.0, 0.8, 0.2, 0.85] // Yellow for slight slowdown
             } else {
-                [0.2, 0.8, 0.4, 0.9] // Green for good
+                [0.2, 0.8, 0.4, 0.85] // Green for good
             };
 
             let bar_paint = Paint {
@@ -403,7 +419,7 @@ impl FrameTimelineGraph {
 
         // Draw label
         let text_paint = Paint {
-            color: [0.8, 0.8, 0.8, 1.0],
+            color: [0.8, 0.8, 0.8, self.text_opacity],
             ..Default::default()
         };
         painter.text("Frame Time", Point::new(x + 5.0, y + 12.0), 10.0, &text_paint);
@@ -434,6 +450,12 @@ pub struct MemoryGraph {
 
     /// Maximum memory to display (in MB)
     pub max_memory_mb: f32,
+
+    /// Background opacity (0.0-1.0)
+    pub bg_opacity: f32,
+
+    /// Text opacity (0.0-1.0)
+    pub text_opacity: f32,
 }
 
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
@@ -445,6 +467,8 @@ impl MemoryGraph {
             width: 200.0,
             height: 100.0,
             max_memory_mb: 100.0, // 100MB max
+            bg_opacity: 0.7,
+            text_opacity: 1.0,
         }
     }
 
@@ -471,7 +495,7 @@ impl MemoryGraph {
         // Draw background
         let bg_rect = Rect::from_xywh(x, y, self.width, self.height);
         let bg_paint = Paint {
-            color: [0.0, 0.0, 0.0, 0.75],
+            color: [0.0, 0.0, 0.0, self.bg_opacity],
             ..Default::default()
         };
         painter.save();
@@ -504,7 +528,7 @@ impl MemoryGraph {
 
         // Draw current memory value
         let text_paint = Paint {
-            color: [0.9, 0.9, 0.9, 1.0],
+            color: [0.9, 0.9, 0.9, self.text_opacity],
             ..Default::default()
         };
 
@@ -525,7 +549,7 @@ impl MemoryGraph {
         // Leak warning
         if memory_profiler.is_leaking() {
             let warning_paint = Paint {
-                color: [1.0, 0.3, 0.3, 1.0],
+                color: [1.0, 0.3, 0.3, self.text_opacity],
                 ..Default::default()
             };
             painter.text("⚠ LEAK?", Point::new(x + 5.0, y + 60.0), 11.0, &warning_paint);
@@ -537,6 +561,563 @@ impl MemoryGraph {
 
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
 impl Default for MemoryGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Corner position for overlay anchoring
+#[cfg(feature = "devtools")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayCorner {
+    /// Top-left corner
+    TopLeft,
+    /// Top-right corner
+    TopRight,
+    /// Bottom-left corner
+    BottomLeft,
+    /// Bottom-right corner
+    BottomRight,
+}
+
+/// Unified DevTools overlay - single compact panel with all metrics
+///
+/// This combines FPS, frame timing, and memory info into one compact panel,
+/// similar to professional tools like RenderDoc, PIX, Nsight Graphics, etc.
+#[cfg(feature = "devtools")]
+pub struct UnifiedDevToolsOverlay {
+    /// Corner to anchor the overlay to
+    pub corner: OverlayCorner,
+
+    /// Background opacity (0.0-1.0)
+    pub bg_opacity: f32,
+
+    /// Text opacity (0.0-1.0)
+    pub text_opacity: f32,
+
+    /// Show FPS and frame time
+    pub show_performance: bool,
+
+    /// Show frame timeline graph
+    pub show_timeline: bool,
+
+    /// Show memory stats
+    #[cfg(feature = "memory-profiler")]
+    pub show_memory: bool,
+
+    /// Width of the overlay
+    pub width: f32,
+}
+
+#[cfg(feature = "devtools")]
+impl UnifiedDevToolsOverlay {
+    /// Create a new unified overlay (defaults to top-left corner)
+    pub fn new() -> Self {
+        Self {
+            corner: OverlayCorner::TopLeft,
+            bg_opacity: 0.75,
+            text_opacity: 1.0,
+            show_performance: true,
+            show_timeline: true,
+            #[cfg(feature = "memory-profiler")]
+            show_memory: true,
+            width: 320.0,
+        }
+    }
+
+    /// Set the corner to anchor the overlay to
+    pub fn set_corner(&mut self, corner: OverlayCorner) {
+        self.corner = corner;
+    }
+
+    /// Render the unified overlay
+    pub fn render(
+        &self,
+        profiler: &flui_devtools::profiler::Profiler,
+        #[cfg(feature = "memory-profiler")]
+        memory_profiler: Option<&flui_devtools::memory::MemoryProfiler>,
+        painter: &mut dyn crate::Painter,
+        viewport_size: flui_types::Size,
+    ) {
+        use crate::Paint;
+        use flui_types::{Point, Rect};
+
+        // Calculate total height needed first (for bottom corners)
+        let mut total_height = 10.0; // Top padding
+        let line_height = 16.0;
+        let section_spacing = 8.0;
+
+        // Performance section
+        if self.show_performance {
+            total_height += line_height * 3.0 + section_spacing; // FPS, Frame time, Jank
+        }
+
+        // Timeline section
+        if self.show_timeline {
+            total_height += 70.0 + section_spacing; // Graph height
+        }
+
+        // Memory section
+        #[cfg(feature = "memory-profiler")]
+        if self.show_memory && memory_profiler.is_some() {
+            total_height += line_height * 3.0 + section_spacing; // Current, Peak, Avg
+        }
+
+        total_height += 10.0; // Bottom padding
+
+        // Calculate position based on corner
+        let margin = 8.0;
+        let (x, mut y) = match self.corner {
+            OverlayCorner::TopLeft => (margin, margin),
+            OverlayCorner::TopRight => (viewport_size.width - self.width - margin, margin),
+            OverlayCorner::BottomLeft => (margin, viewport_size.height - total_height - margin),
+            OverlayCorner::BottomRight => (
+                viewport_size.width - self.width - margin,
+                viewport_size.height - total_height - margin
+            ),
+        };
+
+        // Draw background
+        let bg_rect = Rect::from_xywh(x, y, self.width, total_height);
+        let bg_paint = Paint {
+            color: [0.0, 0.0, 0.0, self.bg_opacity],
+            ..Default::default()
+        };
+        painter.save();
+        painter.rect(bg_rect, &bg_paint);
+
+        // Text paint
+        let text_paint = Paint {
+            color: [1.0, 1.0, 1.0, self.text_opacity],
+            ..Default::default()
+        };
+
+        let padding_x = x + 10.0;
+        y += 12.0;
+
+        // === Performance Section ===
+        if self.show_performance {
+            let stats = profiler.frame_stats();
+            let avg_fps = profiler.average_fps();
+            let jank_pct = profiler.jank_percentage();
+
+            // Title
+            let title_paint = Paint {
+                color: [0.7, 0.9, 1.0, self.text_opacity], // Light blue
+                ..Default::default()
+            };
+            painter.text("⚡ PERFORMANCE", Point::new(padding_x, y), 12.0, &title_paint);
+            y += line_height + 2.0;
+
+            // FPS
+            let fps_text = format!("FPS: {:.1}", avg_fps);
+            painter.text(&fps_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+            y += line_height;
+
+            // Frame time
+            if let Some(stats) = stats {
+                let time_text = format!("Frame: {:.2}ms", stats.total_time_ms());
+                painter.text(&time_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                y += line_height;
+
+                // Jank
+                if stats.is_jank() {
+                    let jank_paint = Paint {
+                        color: [1.0, 0.3, 0.3, self.text_opacity],
+                        ..Default::default()
+                    };
+                    painter.text("⚠ JANK", Point::new(padding_x + 15.0, y), 11.0, &jank_paint);
+                } else {
+                    let jank_text = format!("Jank: {:.1}%", jank_pct);
+                    painter.text(&jank_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                }
+                y += line_height;
+            }
+
+            y += section_spacing;
+        }
+
+        // === Timeline Graph Section ===
+        if self.show_timeline {
+            let title_paint = Paint {
+                color: [0.7, 1.0, 0.8, self.text_opacity], // Light green
+                ..Default::default()
+            };
+            painter.text("📊 TIMELINE", Point::new(padding_x, y), 12.0, &title_paint);
+            y += line_height + 2.0;
+
+            // Draw mini timeline graph
+            let graph_width = self.width - 20.0;
+            let graph_height = 50.0;
+            let graph_x = padding_x;
+            let graph_y = y;
+
+            // Draw graph background
+            let graph_bg_rect = Rect::from_xywh(graph_x, graph_y, graph_width, graph_height);
+            let graph_bg_paint = Paint {
+                color: [0.1, 0.1, 0.1, 0.5],
+                ..Default::default()
+            };
+            painter.rect(graph_bg_rect, &graph_bg_paint);
+
+            // Draw target line (60fps)
+            let target_y = graph_y + graph_height - (16.67 / 33.33 * graph_height);
+            let target_paint = Paint {
+                color: [0.4, 0.4, 0.4, 0.5],
+                stroke_width: 1.0,
+                ..Default::default()
+            };
+            painter.line(
+                Point::new(graph_x, target_y),
+                Point::new(graph_x + graph_width, target_y),
+                &target_paint,
+            );
+
+            // Draw frame bars
+            let history = profiler.frame_history();
+            if !history.is_empty() {
+                let max_frames = 60;
+                let frames_to_show = history.len().min(max_frames);
+                let bar_width = graph_width / frames_to_show as f32;
+
+                for (i, stats) in history.iter().rev().take(frames_to_show).enumerate() {
+                    let frame_time_ms = stats.total_time_ms() as f32;
+                    let clamped_time = frame_time_ms.min(33.33);
+                    let bar_height = clamped_time / 33.33 * graph_height;
+
+                    let bar_x = graph_x + i as f32 * bar_width;
+                    let bar_y = graph_y + graph_height - bar_height;
+
+                    let color = if stats.is_jank() {
+                        [1.0, 0.3, 0.3, 0.85]
+                    } else if frame_time_ms > 16.67 {
+                        [1.0, 0.8, 0.2, 0.85]
+                    } else {
+                        [0.2, 0.8, 0.4, 0.85]
+                    };
+
+                    let bar_paint = Paint {
+                        color,
+                        ..Default::default()
+                    };
+
+                    let bar_rect = Rect::from_xywh(bar_x, bar_y, bar_width - 1.0, bar_height);
+                    painter.rect(bar_rect, &bar_paint);
+                }
+            }
+
+            y += graph_height + section_spacing;
+        }
+
+        // === Memory Section ===
+        #[cfg(feature = "memory-profiler")]
+        if self.show_memory {
+            if let Some(mem_profiler) = memory_profiler {
+                let title_paint = Paint {
+                    color: [1.0, 0.8, 0.6, self.text_opacity], // Light orange
+                    ..Default::default()
+                };
+                painter.text("💾 MEMORY", Point::new(padding_x, y), 12.0, &title_paint);
+                y += line_height + 2.0;
+
+                let current_mb = mem_profiler.current_stats().total_mb();
+                let mem_text = format!("Current: {:.1} MB", current_mb);
+                painter.text(&mem_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                y += line_height;
+
+                if let Some(peak) = mem_profiler.peak_memory() {
+                    let peak_text = format!("Peak: {:.1} MB", peak.total_mb());
+                    painter.text(&peak_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                    y += line_height;
+                }
+
+                let avg_text = format!("Avg: {:.1} MB", mem_profiler.average_memory_mb());
+                painter.text(&avg_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                y += line_height;
+
+                // Leak warning
+                if mem_profiler.is_leaking() {
+                    let warning_paint = Paint {
+                        color: [1.0, 0.3, 0.3, self.text_opacity],
+                        ..Default::default()
+                    };
+                    painter.text("⚠ LEAK DETECTED", Point::new(padding_x + 15.0, y), 11.0, &warning_paint);
+                }
+            }
+        }
+
+        painter.restore();
+    }
+}
+
+#[cfg(feature = "devtools")]
+impl Default for UnifiedDevToolsOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Layout manager for DevTools overlays
+///
+/// Organizes the positioning of multiple DevTools components to avoid overlap
+/// and provide a clean, organized display.
+#[cfg(feature = "devtools")]
+pub struct DevToolsLayout {
+    /// Performance overlay configuration
+    pub performance_overlay: PerformanceOverlay,
+
+    /// Frame timeline graph configuration
+    pub timeline_graph: FrameTimelineGraph,
+
+    /// Memory graph configuration (if memory-profiler feature is enabled)
+    #[cfg(feature = "memory-profiler")]
+    pub memory_graph: MemoryGraph,
+
+    /// Global opacity for all overlays (0.0-1.0)
+    pub global_opacity: f32,
+
+    /// Show/hide performance overlay
+    pub show_performance: bool,
+
+    /// Show/hide timeline graph
+    pub show_timeline: bool,
+
+    /// Show/hide memory graph
+    #[cfg(feature = "memory-profiler")]
+    pub show_memory: bool,
+}
+
+#[cfg(feature = "devtools")]
+impl DevToolsLayout {
+    /// Create a new DevTools layout with default "compact" preset
+    pub fn new() -> Self {
+        Self::compact()
+    }
+
+    /// Compact layout - all overlays visible, non-overlapping
+    /// Performance at top-left, Memory at top-right, Timeline at bottom-left
+    pub fn compact() -> Self {
+        let mut perf = PerformanceOverlay::new();
+        perf.position = (0.01, 0.01); // Top-left with small margin
+
+        let mut timeline = FrameTimelineGraph::new();
+        timeline.position = (0.01, 0.85); // Bottom-left
+        timeline.width = 250.0;
+        timeline.height = 70.0;
+
+        #[cfg(feature = "memory-profiler")]
+        let mut memory = MemoryGraph::new();
+        #[cfg(feature = "memory-profiler")]
+        {
+            memory.position = (0.72, 0.01); // Top-right
+            memory.width = 260.0;
+            memory.height = 110.0;
+        }
+
+        Self {
+            performance_overlay: perf,
+            timeline_graph: timeline,
+            #[cfg(feature = "memory-profiler")]
+            memory_graph: memory,
+            global_opacity: 0.7,
+            show_performance: true,
+            show_timeline: true,
+            #[cfg(feature = "memory-profiler")]
+            show_memory: true,
+        }
+    }
+
+    /// Minimal layout - only FPS counter
+    pub fn minimal() -> Self {
+        let mut layout = Self::compact();
+        layout.show_timeline = false;
+        #[cfg(feature = "memory-profiler")]
+        {
+            layout.show_memory = false;
+        }
+        layout
+    }
+
+    /// Detailed layout - larger overlays stacked vertically on left side
+    pub fn detailed() -> Self {
+        let mut perf = PerformanceOverlay::new();
+        perf.position = (0.01, 0.01);
+
+        let mut timeline = FrameTimelineGraph::new();
+        timeline.position = (0.01, 0.18);
+        timeline.width = 320.0;
+        timeline.height = 90.0;
+
+        #[cfg(feature = "memory-profiler")]
+        let mut memory = MemoryGraph::new();
+        #[cfg(feature = "memory-profiler")]
+        {
+            memory.position = (0.01, 0.38);
+            memory.width = 320.0;
+            memory.height = 140.0;
+        }
+
+        Self {
+            performance_overlay: perf,
+            timeline_graph: timeline,
+            #[cfg(feature = "memory-profiler")]
+            memory_graph: memory,
+            global_opacity: 0.7,
+            show_performance: true,
+            show_timeline: true,
+            #[cfg(feature = "memory-profiler")]
+            show_memory: true,
+        }
+    }
+
+    /// Bottom bar layout - all overlays in a horizontal bar at the bottom
+    pub fn bottom_bar() -> Self {
+        let mut perf = PerformanceOverlay::new();
+        perf.position = (0.01, 0.88); // Bottom-left
+
+        let mut timeline = FrameTimelineGraph::new();
+        timeline.position = (0.25, 0.88); // Bottom-center-left
+        timeline.width = 200.0;
+        timeline.height = 70.0;
+
+        #[cfg(feature = "memory-profiler")]
+        let mut memory = MemoryGraph::new();
+        #[cfg(feature = "memory-profiler")]
+        {
+            memory.position = (0.51, 0.88); // Bottom-center-right
+            memory.width = 220.0;
+            memory.height = 70.0;
+        }
+
+        Self {
+            performance_overlay: perf,
+            timeline_graph: timeline,
+            #[cfg(feature = "memory-profiler")]
+            memory_graph: memory,
+            global_opacity: 0.7,
+            show_performance: true,
+            show_timeline: true,
+            #[cfg(feature = "memory-profiler")]
+            show_memory: true,
+        }
+    }
+
+    /// Right side layout - all overlays stacked vertically on right side
+    pub fn right_side() -> Self {
+        let mut perf = PerformanceOverlay::new();
+        perf.position = (0.77, 0.01); // Top-right
+
+        let mut timeline = FrameTimelineGraph::new();
+        timeline.position = (0.73, 0.18); // Mid-right
+        timeline.width = 260.0;
+        timeline.height = 80.0;
+
+        #[cfg(feature = "memory-profiler")]
+        let mut memory = MemoryGraph::new();
+        #[cfg(feature = "memory-profiler")]
+        {
+            memory.position = (0.73, 0.38); // Lower-right
+            memory.width = 260.0;
+            memory.height = 120.0;
+        }
+
+        Self {
+            performance_overlay: perf,
+            timeline_graph: timeline,
+            #[cfg(feature = "memory-profiler")]
+            memory_graph: memory,
+            global_opacity: 0.7,
+            show_performance: true,
+            show_timeline: true,
+            #[cfg(feature = "memory-profiler")]
+            show_memory: true,
+        }
+    }
+
+    /// Corners layout - overlays positioned in different corners
+    /// FPS in top-left, Memory in top-right, Timeline in bottom-left
+    pub fn corners() -> Self {
+        let mut perf = PerformanceOverlay::new();
+        perf.position = (0.01, 0.01); // Top-left
+
+        let mut timeline = FrameTimelineGraph::new();
+        timeline.position = (0.01, 0.88); // Bottom-left
+        timeline.width = 220.0;
+        timeline.height = 65.0;
+
+        #[cfg(feature = "memory-profiler")]
+        let mut memory = MemoryGraph::new();
+        #[cfg(feature = "memory-profiler")]
+        {
+            memory.position = (0.75, 0.01); // Top-right
+            memory.width = 240.0;
+            memory.height = 100.0;
+        }
+
+        Self {
+            performance_overlay: perf,
+            timeline_graph: timeline,
+            #[cfg(feature = "memory-profiler")]
+            memory_graph: memory,
+            global_opacity: 0.7,
+            show_performance: true,
+            show_timeline: true,
+            #[cfg(feature = "memory-profiler")]
+            show_memory: true,
+        }
+    }
+
+    /// Set global background opacity for all overlays
+    pub fn set_opacity(&mut self, opacity: f32) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        self.global_opacity = opacity;
+        self.performance_overlay.bg_opacity = opacity;
+        self.timeline_graph.bg_opacity = opacity;
+        #[cfg(feature = "memory-profiler")]
+        {
+            self.memory_graph.bg_opacity = opacity;
+        }
+    }
+
+    /// Set text opacity for all overlays
+    pub fn set_text_opacity(&mut self, opacity: f32) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        self.performance_overlay.text_opacity = opacity;
+        self.timeline_graph.text_opacity = opacity;
+        #[cfg(feature = "memory-profiler")]
+        {
+            self.memory_graph.text_opacity = opacity;
+        }
+    }
+
+    /// Render all enabled overlays
+    pub fn render(
+        &self,
+        profiler: &flui_devtools::profiler::Profiler,
+        #[cfg(feature = "memory-profiler")]
+        memory_profiler: Option<&flui_devtools::memory::MemoryProfiler>,
+        painter: &mut dyn crate::Painter,
+        viewport_size: flui_types::Size,
+    ) {
+        if self.show_performance {
+            self.performance_overlay.render(profiler, painter, viewport_size);
+        }
+
+        if self.show_timeline {
+            self.timeline_graph.render(profiler, painter, viewport_size);
+        }
+
+        #[cfg(feature = "memory-profiler")]
+        if self.show_memory {
+            if let Some(mem_profiler) = memory_profiler {
+                self.memory_graph.render(mem_profiler, painter, viewport_size);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "devtools")]
+impl Default for DevToolsLayout {
     fn default() -> Self {
         Self::new()
     }

@@ -2,7 +2,7 @@
 
 use flui_types::Size;
 use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer};
+use flui_engine::{BoxedLayer, layer::pool};
 
 /// RenderObject that hides its child from display
 ///
@@ -71,7 +71,7 @@ impl RenderObject for RenderOffstage {
             cx.capture_child_layer(child)
         } else {
             // Return empty container layer when offstage
-            Box::new(ContainerLayer::new())
+            Box::new(pool::acquire_container())
         }
     }
 }

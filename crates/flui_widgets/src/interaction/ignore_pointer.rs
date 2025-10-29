@@ -23,8 +23,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderIgnorePointer;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderIgnorePointer, SingleArity};
 
 /// A widget that is invisible to pointer events.
 ///
@@ -246,24 +246,20 @@ mod tests {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for IgnorePointer {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::objects::interaction::ignore_pointer::IgnorePointerData;
-        Box::new(RenderIgnorePointer::new(IgnorePointerData::new(self.ignoring)))
+    type RenderObject = RenderIgnorePointer;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderIgnorePointer::new(self.ignoring)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(ignore) = render_object.downcast_mut::<RenderIgnorePointer>() {
-            ignore.set_ignoring(self.ignoring);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_ignoring(self.ignoring);
     }
-}
 
-// Implement SingleChildRenderObjectWidget
-impl SingleChildRenderObjectWidget for IgnorePointer {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("IgnorePointer requires a child"))
     }
 }

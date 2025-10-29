@@ -23,8 +23,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderAbsorbPointer;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderAbsorbPointer, SingleArity};
 
 /// A widget that absorbs pointer events during hit testing.
 ///
@@ -246,24 +246,20 @@ mod tests {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for AbsorbPointer {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::objects::interaction::absorb_pointer::AbsorbPointerData;
-        Box::new(RenderAbsorbPointer::new(AbsorbPointerData::new(self.absorbing)))
+    type RenderObject = RenderAbsorbPointer;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderAbsorbPointer::new(self.absorbing)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(absorb) = render_object.downcast_mut::<RenderAbsorbPointer>() {
-            absorb.set_absorbing(self.absorbing);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_absorbing(self.absorbing);
     }
-}
 
-// Implement SingleChildRenderObjectWidget
-impl SingleChildRenderObjectWidget for AbsorbPointer {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("AbsorbPointer requires a child"))
     }
 }

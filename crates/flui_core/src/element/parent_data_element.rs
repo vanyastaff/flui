@@ -216,7 +216,7 @@ impl ParentDataElement {
     /// is pending. Will be implemented when ProxyWidget child access is available.
     pub fn rebuild(
         &mut self,
-        element_id: ElementId,
+        _element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, BoxedWidget, usize)> {
         if !self.dirty {
@@ -225,18 +225,21 @@ impl ParentDataElement {
 
         self.dirty = false;
 
-        // TODO: Get child widget from ParentDataWidget
-        // For now, this is unimplemented because ParentDataElement needs
-        // ProxyWidget child access which requires full ElementTree integration
+        // Get child widget from ParentDataWidget via DynWidget::parent_data_child()
+        if let Some(child_widget_ref) = self.widget.parent_data_child() {
+            // Mark old child for unmounting
+            self.child = None;
 
-        // Will return:
-        // let child_widget = self.widget.child(); // via ProxyWidget trait
-        // vec![(element_id, child_widget, 0)]
+            // Clone the child widget using DynWidget::clone_boxed()
+            let child_widget = (**child_widget_ref).clone_boxed();
 
-        // Mark old child for unmounting
-        self.child = None;
-
-        Vec::new()
+            // Return child to be mounted
+            // Note: Parent should be set when this element was mounted
+            vec![(self.parent.unwrap_or(0), child_widget, 0)]
+        } else {
+            // Not a ParentDataWidget or no child
+            Vec::new()
+        }
     }
 
     /// Update slot for child

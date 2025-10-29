@@ -30,9 +30,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynRenderObject, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::{RenderIndexedStack, StackFit};
-use flui_types::layout::Alignment;
+use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
+use flui_rendering::{RenderIndexedStack, MultiArity};
+use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that shows only a single child from a list of children.
 ///
@@ -156,7 +156,7 @@ pub struct IndexedStack {
     /// Only the child at `index` will be visible, but all children
     /// are laid out to compute the correct size and maintain state.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn DynWidget>>,
+    pub children: Vec<BoxedWidget>,
 }
 
 impl IndexedStack {
@@ -258,27 +258,19 @@ impl Default for IndexedStack {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for IndexedStack {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{ContainerRenderBox, IndexedStackData};
-        let data = IndexedStackData {
-            index: self.index,
-            alignment: self.alignment,
-        };
-        Box::new(ContainerRenderBox::new(data))
+    type RenderObject = RenderIndexedStack;
+    type Arity = MultiArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderIndexedStack::with_alignment(self.index, self.alignment)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(indexed_stack_render) = render_object.downcast_mut::<RenderIndexedStack>() {
-            indexed_stack_render.set_index(self.index);
-            indexed_stack_render.set_alignment(self.alignment);
-            // Note: sizing is not used in IndexedStack layout
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_index(self.index);
+        render_object.set_alignment(self.alignment);
     }
-}
 
-// Implement MultiChildRenderObjectWidget
-impl MultiChildRenderObjectWidget for IndexedStack {
-    fn children(&self) -> &[Box<dyn DynWidget>] {
+    fn children(&self) -> &[BoxedWidget] {
         &self.children
     }
 }

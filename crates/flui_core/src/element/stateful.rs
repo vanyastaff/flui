@@ -293,7 +293,9 @@ mod tests {
     }
 
     impl crate::DynWidget for TestWidget {
-        // Minimal implementation for testing
+        fn clone_boxed(&self) -> crate::BoxedWidget {
+            Box::new(self.clone())
+        }
     }
 
     // Mock state for testing

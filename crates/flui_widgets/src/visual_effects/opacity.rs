@@ -4,8 +4,8 @@
 //! Similar to Flutter's Opacity widget.
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderOpacity;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderOpacity, SingleArity};
 
 /// A widget that makes its child partially transparent.
 ///
@@ -114,24 +114,22 @@ impl Default for Opacity {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Opacity {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{SingleRenderBox, objects::effects::opacity::OpacityData};
-        Box::new(SingleRenderBox::new(OpacityData::new(self.opacity)))
+    type RenderObject = RenderOpacity;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderOpacity::new(self.opacity)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(opacity_render) = render_object.downcast_mut::<RenderOpacity>() {
-            opacity_render.set_opacity(self.opacity);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_opacity(self.opacity);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for Opacity {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("Opacity requires a child"))
     }
 }

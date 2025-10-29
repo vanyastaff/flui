@@ -1,8 +1,10 @@
 //! RenderFlex - flex layout container (Row/Column)
 
-use flui_types::{Offset, Size, constraints::BoxConstraints, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize};
+use flui_types::{Offset, Size, constraints::BoxConstraints, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize, TextBaseline};
+use flui_core::element::ElementId;
 use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer, Transform, TransformLayer};
+use flui_engine::{BoxedLayer, layer::pool};
+use crate::utils::layout_utils::apply_offset_transform;
 
 /// RenderObject for flex layout (Row/Column)
 ///
@@ -35,6 +37,8 @@ pub struct RenderFlex {
     pub main_axis_size: MainAxisSize,
     /// How to align children along the cross axis
     pub cross_axis_alignment: CrossAxisAlignment,
+    /// Text baseline type for baseline alignment
+    pub text_baseline: TextBaseline,
 
     // Cache for paint
     child_offsets: Vec<Offset>,
@@ -48,6 +52,7 @@ impl RenderFlex {
             main_axis_alignment: MainAxisAlignment::default(),
             main_axis_size: MainAxisSize::default(),
             cross_axis_alignment: CrossAxisAlignment::default(),
+            text_baseline: TextBaseline::default(),
             child_offsets: Vec::new(),
         }
     }
@@ -105,6 +110,30 @@ impl RenderFlex {
         self.cross_axis_alignment = alignment;
         self
     }
+
+    /// Get text baseline
+    pub fn text_baseline(&self) -> TextBaseline {
+        self.text_baseline
+    }
+
+    /// Set text baseline (returns new instance)
+    pub fn with_text_baseline(mut self, baseline: TextBaseline) -> Self {
+        self.text_baseline = baseline;
+        self
+    }
+
+    /// Helper: Estimate baseline distance from top for a given size
+    ///
+    /// This is a simplified heuristic. In a full implementation, baseline would be
+    /// queried from the child RenderObject or computed from text metrics.
+    ///
+    /// For now, we use a heuristic: baseline = height * 0.75 (75% down from top)
+    fn estimate_baseline(&self, size: Size) -> f32 {
+        match self.direction {
+            Axis::Horizontal => size.height * 0.75,
+            Axis::Vertical => size.width * 0.75,
+        }
+    }
 }
 
 impl Default for RenderFlex {
@@ -138,11 +167,6 @@ impl RenderObject for RenderFlex {
         // 4. Allocate space to flexible children proportionally
         // 5. Layout flexible children with FlexFit constraints
 
-        // Step 1: Collect flex information for each child
-        // Note: In the new architecture, we don't have direct access to parent data
-        // during layout. For now, treat all children as inflexible.
-        // TODO: Add parent data support when available in LayoutCx
-
         let mut child_sizes: Vec<Size> = Vec::new();
         let direction = self.direction;
         let main_axis_size = self.main_axis_size;
@@ -165,16 +189,38 @@ impl RenderObject for RenderFlex {
             }
         };
 
-        // Layout all children (simplified - treating all as inflexible for now)
+        // Step 1: Separate inflexible and flexible children
+        let mut inflexible_children: Vec<(ElementId, Size)> = Vec::new();
+        let mut flexible_children: Vec<(ElementId, i32, flui_types::layout::FlexFit)> = Vec::new();
+        let mut total_flex = 0i32;
+
+        for &child in children.iter() {
+            if let Some(flex_data) = cx.parent_data::<crate::parent_data::FlexParentData>(child) {
+                if flex_data.flex > 0 {
+                    // Child is flexible
+                    flexible_children.push((child, flex_data.flex, flex_data.fit));
+                    total_flex += flex_data.flex;
+                    continue;
+                }
+            }
+            // Child is inflexible (no FlexParentData or flex == 0)
+            inflexible_children.push((child, Size::ZERO)); // Size will be filled in next step
+        }
+
+        // Step 2: Layout inflexible children
+        let max_main_size = match direction {
+            Axis::Horizontal => constraints.max_width,
+            Axis::Vertical => constraints.max_height,
+        };
+
         let mut allocated_main_size = 0.0f32;
         let mut max_cross_size = 0.0f32;
 
-        for child in children.iter().copied() {
-            // Give loose main axis constraints
+        for (child, size_slot) in inflexible_children.iter_mut() {
             let child_constraints = match direction {
                 Axis::Horizontal => BoxConstraints::new(
                     0.0,
-                    constraints.max_width,
+                    max_main_size,
                     cross_constraints.0,
                     cross_constraints.1,
                 ),
@@ -182,11 +228,77 @@ impl RenderObject for RenderFlex {
                     cross_constraints.0,
                     cross_constraints.1,
                     0.0,
-                    constraints.max_height,
+                    max_main_size,
                 ),
             };
 
-            let child_size = cx.layout_child(child, child_constraints);
+            let child_size = cx.layout_child(*child, child_constraints);
+            *size_slot = child_size;
+            child_sizes.push(child_size);
+
+            let child_main_size = match direction {
+                Axis::Horizontal => child_size.width,
+                Axis::Vertical => child_size.height,
+            };
+            let child_cross_size = match direction {
+                Axis::Horizontal => child_size.height,
+                Axis::Vertical => child_size.width,
+            };
+
+            allocated_main_size += child_main_size;
+            max_cross_size = max_cross_size.max(child_cross_size);
+        }
+
+        // Step 3: Calculate space for flexible children
+        let remaining_space = (max_main_size - allocated_main_size).max(0.0);
+        let space_per_flex = if total_flex > 0 {
+            remaining_space / total_flex as f32
+        } else {
+            0.0
+        };
+
+        // Step 4 & 5: Layout flexible children
+        for (child, flex, fit) in flexible_children.iter() {
+            let allocated_space = space_per_flex * (*flex as f32);
+
+            let child_constraints = match (direction, fit) {
+                (Axis::Horizontal, flui_types::layout::FlexFit::Tight) => {
+                    // Tight fit: child must fill allocated space
+                    BoxConstraints::new(
+                        allocated_space,
+                        allocated_space,
+                        cross_constraints.0,
+                        cross_constraints.1,
+                    )
+                }
+                (Axis::Horizontal, flui_types::layout::FlexFit::Loose) => {
+                    // Loose fit: child can be smaller
+                    BoxConstraints::new(
+                        0.0,
+                        allocated_space,
+                        cross_constraints.0,
+                        cross_constraints.1,
+                    )
+                }
+                (Axis::Vertical, flui_types::layout::FlexFit::Tight) => {
+                    BoxConstraints::new(
+                        cross_constraints.0,
+                        cross_constraints.1,
+                        allocated_space,
+                        allocated_space,
+                    )
+                }
+                (Axis::Vertical, flui_types::layout::FlexFit::Loose) => {
+                    BoxConstraints::new(
+                        cross_constraints.0,
+                        cross_constraints.1,
+                        0.0,
+                        allocated_space,
+                    )
+                }
+            };
+
+            let child_size = cx.layout_child(*child, child_constraints);
             child_sizes.push(child_size);
 
             let child_main_size = match direction {
@@ -237,10 +349,20 @@ impl RenderObject for RenderFlex {
             children.len(),
         );
 
+        // For baseline alignment, calculate baselines for all children
+        let child_baselines: Vec<f32> = if self.cross_axis_alignment == CrossAxisAlignment::Baseline {
+            child_sizes.iter().map(|&size| self.estimate_baseline(size)).collect()
+        } else {
+            Vec::new()
+        };
+
+        // Find max baseline for baseline alignment
+        let max_baseline = child_baselines.iter().copied().fold(0.0f32, f32::max);
+
         // Calculate offset for each child
         let mut current_main_pos = leading_space;
 
-        for child_size in child_sizes {
+        for (i, child_size) in child_sizes.iter().enumerate() {
             // Calculate cross-axis offset based on alignment
             let child_offset = match direction {
                 Axis::Horizontal => {
@@ -249,7 +371,11 @@ impl RenderObject for RenderFlex {
                         CrossAxisAlignment::Center => (size.height - child_size.height) / 2.0,
                         CrossAxisAlignment::End => size.height - child_size.height,
                         CrossAxisAlignment::Stretch => 0.0,
-                        CrossAxisAlignment::Baseline => 0.0, // TODO: Baseline alignment
+                        CrossAxisAlignment::Baseline => {
+                            // Align by baseline: offset = max_baseline - child_baseline
+                            let child_baseline = child_baselines.get(i).copied().unwrap_or(0.0);
+                            max_baseline - child_baseline
+                        }
                     };
                     Offset::new(current_main_pos, cross_offset)
                 }
@@ -259,7 +385,11 @@ impl RenderObject for RenderFlex {
                         CrossAxisAlignment::Center => (size.width - child_size.width) / 2.0,
                         CrossAxisAlignment::End => size.width - child_size.width,
                         CrossAxisAlignment::Stretch => 0.0,
-                        CrossAxisAlignment::Baseline => 0.0, // TODO: Baseline alignment
+                        CrossAxisAlignment::Baseline => {
+                            // For vertical direction, baseline alignment uses horizontal baseline
+                            let child_baseline = child_baselines.get(i).copied().unwrap_or(0.0);
+                            max_baseline - child_baseline
+                        }
                     };
                     Offset::new(cross_offset, current_main_pos)
                 }
@@ -279,7 +409,7 @@ impl RenderObject for RenderFlex {
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         let children = cx.children();
-        let mut container = ContainerLayer::new();
+        let mut container = pool::acquire_container();
 
         // Paint children with their calculated offsets
         for (i, &child) in children.iter().enumerate() {
@@ -287,14 +417,7 @@ impl RenderObject for RenderFlex {
 
             // Capture child layer and apply offset transform
             let child_layer = cx.capture_child_layer(child);
-
-            if offset != Offset::ZERO {
-                let transform = Transform::Translate(offset);
-                let transform_layer = TransformLayer::new(child_layer, transform);
-                container.add_child(Box::new(transform_layer));
-            } else {
-                container.add_child(child_layer);
-            }
+            container.add_child(apply_offset_transform(child_layer, offset));
         }
 
         Box::new(container)

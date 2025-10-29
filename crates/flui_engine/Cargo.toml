@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = ["egui"]
-egui = ["dep:egui", "dep:eframe", "dep:egui-winit"]
+egui = ["dep:egui", "dep:eframe", "dep:egui-winit", "dep:lyon", "dep:ttf-parser"]
 wgpu = [
     "dep:wgpu",
     "dep:winit",
@@ -17,6 +17,7 @@ wgpu = [
     "dep:cosmic-text",
     "dep:guillotiere",
     "dep:lyon",
+    "dep:ttf-parser",
     "dep:pollster",
 ]
 # DevTools integration
@@ -44,6 +45,7 @@ glyphon = { workspace = true, optional = true }
 cosmic-text = { workspace = true, optional = true }
 guillotiere = { workspace = true, optional = true }
 lyon = { workspace = true, optional = true }
+ttf-parser = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 
 # Skia backend (future)

@@ -706,14 +706,18 @@ mod tests {
     }
 
     // Mock widget for testing
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct MockWidget;
 
     impl Widget for MockWidget {
         // Element type determined by framework
     }
 
-    impl crate::DynWidget for MockWidget {}
+    impl crate::DynWidget for MockWidget {
+        fn clone_boxed(&self) -> crate::BoxedWidget {
+            Box::new(self.clone())
+        }
+    }
 
     #[derive(Debug)]
     struct MockElement;

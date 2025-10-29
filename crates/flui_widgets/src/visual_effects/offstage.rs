@@ -14,8 +14,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderOffstage;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderOffstage, SingleArity};
 
 /// A widget that lays out its child as if it was in the tree, but without painting or hit testing.
 ///
@@ -126,24 +126,22 @@ impl<S: State> OffstageBuilder<S> {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Offstage {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_rendering::{SingleRenderBox, objects::effects::offstage::OffstageData};
-        Box::new(SingleRenderBox::new(OffstageData::new(self.offstage)))
+    type RenderObject = RenderOffstage;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderOffstage::new(self.offstage)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(offstage) = render_object.downcast_mut::<RenderOffstage>() {
-            offstage.set_offstage(self.offstage);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_offstage(self.offstage);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for Offstage {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("Offstage requires a child"))
     }
 }

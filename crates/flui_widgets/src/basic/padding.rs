@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::RenderPadding;
+use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderPadding, SingleArity};
 use flui_types::EdgeInsets;
 
 /// A widget that insets its child by the given padding.
@@ -152,23 +152,22 @@ impl Default for Padding {
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Padding {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        Box::new(RenderPadding::new(self.padding))
+    type RenderObject = RenderPadding;
+    type Arity = SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        RenderPadding::new(self.padding)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(padding) = render_object.downcast_mut::<RenderPadding>() {
-            *padding = RenderPadding::new(self.padding);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        render_object.set_padding(self.padding);
     }
 }
 
-// Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for Padding {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("Padding requires a child"))
     }
 }

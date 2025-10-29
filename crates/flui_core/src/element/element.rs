@@ -553,24 +553,42 @@ impl Element {
 
     /// Get render object if this is a render element
     ///
-    /// Returns `Some(&dyn DynRenderObject)` for Render elements, `None` otherwise.
+    /// Returns a `Ref` guard to the render object for Render elements, `None` otherwise.
+    /// The guard ensures safe access through RefCell's borrow checking.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the render object is currently borrowed mutably.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> Option<&dyn DynRenderObject> {
+    pub fn render_object(&self) -> Option<std::cell::Ref<'_, dyn DynRenderObject + '_>> {
         match self {
-            Self::Render(r) => Some(r.render_object()),
+            Self::Render(r) => {
+                // Map the Ref<Box<dyn DynRenderObject>> to Ref<dyn DynRenderObject>
+                // Box<dyn T> needs **boxed to get &dyn T
+                Some(std::cell::Ref::map(r.render_object(), |boxed| &**boxed))
+            }
             _ => None,
         }
     }
 
     /// Get mutable render object if this is a render element
     ///
-    /// Returns `Some(&mut dyn DynRenderObject)` for Render elements, `None` otherwise.
+    /// Returns a `RefMut` guard to the render object for Render elements, `None` otherwise.
+    /// The guard ensures safe mutable access through RefCell's borrow checking.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the render object is currently borrowed.
     #[inline]
     #[must_use]
-    pub fn render_object_mut(&mut self) -> Option<&mut dyn DynRenderObject> {
+    pub fn render_object_mut(&self) -> Option<std::cell::RefMut<'_, dyn DynRenderObject + '_>> {
         match self {
-            Self::Render(r) => Some(r.render_object_mut()),
+            Self::Render(r) => {
+                // Map the RefMut<Box<dyn DynRenderObject>> to RefMut<dyn DynRenderObject>
+                // Box<dyn T> needs **boxed to get &mut dyn T
+                Some(std::cell::RefMut::map(r.render_object_mut(), |boxed| &mut **boxed))
+            }
             _ => None,
         }
     }
@@ -594,6 +612,30 @@ impl Element {
             Self::Inherited(_) => "Inherited",
             Self::Render(_) => "Render",
             Self::ParentData(_) => "ParentData",
+        }
+    }
+
+    /// Get parent data if this is a RenderElement
+    ///
+    /// Returns `Some(&dyn ParentData)` for Render elements with attached parent data,
+    /// `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(parent_data) = element.parent_data() {
+    ///     // Downcast to specific type
+    ///     if let Some(flex_data) = parent_data.downcast_ref::<FlexParentData>() {
+    ///         println!("Flex factor: {}", flex_data.flex);
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn parent_data(&self) -> Option<&dyn crate::render::ParentData> {
+        match self {
+            Self::Render(r) => r.parent_data(),
+            _ => None,
         }
     }
 
