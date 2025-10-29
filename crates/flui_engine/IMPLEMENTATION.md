@@ -238,10 +238,10 @@ To further enhance the pipeline:
    - ⏳ SkiaPainter - future enhancement
 
 3. **Advanced Features**
-   - ⏳ Path clipping (beyond rect/rrect)
-   - ⏳ Custom shaders
-   - ⏳ Blur/filter effects
-   - ⏳ Image/texture support
+   - ✅ Path clipping (ClipPathLayer with pixel-perfect hit testing)
+   - ⏳ Custom shaders (prepared via apply_image_filter API)
+   - ✅ Blur/filter effects (ImageFilter and ColorFilter support)
+   - ✅ Image/texture support (draw_image with NetworkImage provider)
    - ✅ Event system (hit testing, pointer, keyboard, window events)
    - ✅ DevTools integration (performance profiling, FPS tracking, jank detection)
 
