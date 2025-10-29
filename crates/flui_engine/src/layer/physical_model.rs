@@ -88,7 +88,7 @@ impl PhysicalModelLayer {
     /// Set the elevation level.
     #[must_use]
     pub fn with_elevation(mut self, elevation: f32) -> Self {
-        self.elevation = elevation.max(0.0).min(Elevation::MAX);
+        self.elevation = elevation.clamp(0.0, Elevation::MAX);
         self.cached_bounds = None;
         self
     }
@@ -130,7 +130,7 @@ impl PhysicalModelLayer {
 
     /// Update the elevation.
     pub fn set_elevation(&mut self, elevation: f32) {
-        self.elevation = elevation.max(0.0).min(Elevation::MAX);
+        self.elevation = elevation.clamp(0.0, Elevation::MAX);
         self.cached_bounds = None;
         self.mark_needs_paint();
     }

@@ -285,7 +285,10 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl Widget + 'static) -> FlexibleBuilder<SetChild<S>> {
+    pub fn child<W>(self, child: W) -> FlexibleBuilder<SetChild<S>>
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child_internal(BoxedWidget::new(child))
     }
 }
