@@ -4,7 +4,7 @@
 //! allowing blur and color adjustments to be applied to content behind an element.
 //! Creates the popular "frosted glass" or "blurred background" effect.
 
-use crate::layer::{BoxedLayer, Layer};
+use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
 use flui_types::painting::effects::ImageFilter;
 use flui_types::{Offset, Rect};
@@ -34,8 +34,8 @@ use flui_types::events::{Event, HitTestResult};
 ///     ]));
 /// ```
 pub struct BackdropFilterLayer {
-    /// Child layer
-    child: Option<BoxedLayer>,
+    /// Base single-child layer functionality
+    base: SingleChildLayerBase,
 
     /// Filter to apply to backdrop
     filter: ImageFilter,
@@ -43,9 +43,6 @@ pub struct BackdropFilterLayer {
     /// Blend mode for compositing (future use)
     /// For now, always uses source-over blending
     _blend_mode_placeholder: (),
-
-    /// Whether this layer has been disposed
-    disposed: bool,
 }
 
 impl BackdropFilterLayer {
@@ -57,10 +54,9 @@ impl BackdropFilterLayer {
     #[must_use]
     pub fn new(child: BoxedLayer) -> Self {
         Self {
-            child: Some(child),
+            base: SingleChildLayerBase::new(child),
             filter: ImageFilter::blur(5.0), // Default frosted glass effect
             _blend_mode_placeholder: (),
-            disposed: false,
         }
     }
 
@@ -84,12 +80,12 @@ impl BackdropFilterLayer {
 
     /// Get the child layer.
     pub fn child(&self) -> Option<&BoxedLayer> {
-        self.child.as_ref()
+        self.base.child()
     }
 
     /// Set the child layer.
     pub fn set_child(&mut self, child: BoxedLayer) {
-        self.child = Some(child);
+        self.base.set_child(child);
         self.mark_needs_paint();
     }
 
@@ -149,11 +145,7 @@ impl BackdropFilterLayer {
 
 impl Layer for BackdropFilterLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        if self.disposed {
-            panic!("Cannot paint disposed BackdropFilterLayer");
-        }
-
-        let Some(child) = &self.child else {
+        let Some(child) = self.base.child() else {
             return;
         };
 
@@ -172,45 +164,32 @@ impl Layer for BackdropFilterLayer {
     }
 
     fn bounds(&self) -> Rect {
-        self.child.as_ref().map_or(Rect::ZERO, |c| c.bounds())
+        self.base.child_bounds()
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed && self.child.as_ref().is_some_and(|c| c.is_visible())
+        self.base.is_child_visible()
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        if self.disposed {
-            return false;
-        }
-
         // Hit testing passes through to child
-        self.child
-            .as_ref()
-            .is_some_and(|c| c.hit_test(position, result))
+        self.base.child_hit_test(position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        if self.disposed {
-            return false;
-        }
-
-        self.child.as_mut().is_some_and(|c| c.handle_event(event))
+        self.base.child_handle_event(event)
     }
 
     fn dispose(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            child.dispose();
-        }
-        self.disposed = true;
+        self.base.dispose_child();
     }
 
     fn is_disposed(&self) -> bool {
-        self.disposed
+        self.base.is_disposed()
     }
 
     fn mark_needs_paint(&mut self) {
-        if let Some(child) = &mut self.child {
+        if let Some(child) = self.base.child_mut() {
             child.mark_needs_paint();
         }
     }

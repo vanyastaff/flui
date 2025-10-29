@@ -3,7 +3,7 @@
 //! This module provides layers that clip their children to specific regions,
 //! following Flutter's ClipRectLayer and ClipRRectLayer architecture.
 
-use crate::layer::{BoxedLayer, Layer};
+use crate::layer::{base_multi_child::MultiChildLayerBase, BoxedLayer, Layer};
 use crate::painter::{Painter, RRect};
 use flui_types::{Offset, Rect};
 use flui_types::events::{Event, HitTestResult};
@@ -48,17 +48,11 @@ use flui_types::events::{Event, HitTestResult};
 /// }
 /// ```
 pub struct ClipRectLayer {
+    /// Base multi-child layer functionality
+    base: MultiChildLayerBase,
+
     /// The clip rectangle in layer coordinates
     clip_rect: Rect,
-
-    /// Child layers
-    children: Vec<BoxedLayer>,
-
-    /// Whether this layer has been disposed
-    disposed: bool,
-
-    /// Cached bounds
-    cached_bounds: Option<Rect>,
 }
 
 impl ClipRectLayer {
@@ -69,10 +63,8 @@ impl ClipRectLayer {
     /// * `clip_rect` - The rectangle to clip to
     pub fn new(clip_rect: Rect) -> Self {
         Self {
+            base: MultiChildLayerBase::new(),
             clip_rect,
-            children: Vec::new(),
-            disposed: false,
-            cached_bounds: None,
         }
     }
 
@@ -80,7 +72,7 @@ impl ClipRectLayer {
     pub fn set_clip_rect(&mut self, rect: Rect) {
         if self.clip_rect != rect {
             self.clip_rect = rect;
-            self.cached_bounds = None;
+            self.base.invalidate_cache();
             self.mark_needs_paint();
         }
     }
@@ -92,88 +84,69 @@ impl ClipRectLayer {
 
     /// Add a child layer
     pub fn add_child(&mut self, child: BoxedLayer) {
-        self.children.push(child);
-        self.cached_bounds = None;
+        self.base.add_child(child);
     }
 
     /// Remove all children
     pub fn clear_children(&mut self) {
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.clear_children();
+    }
+
+    /// Get children
+    pub fn children(&self) -> &[BoxedLayer] {
+        self.base.children()
     }
 }
 
 impl Layer for ClipRectLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        if self.disposed {
-            panic!("Cannot use disposed ClipRectLayer");
-        }
-
         painter.save();
-
-        // Apply clip rect
         painter.clip_rect(self.clip_rect);
-
-        // Paint all children
-        for child in &self.children {
-            if child.is_visible() {
-                child.paint(painter);
-            }
-        }
-
+        self.base.paint_children(painter);
         painter.restore();
     }
 
     fn bounds(&self) -> Rect {
-        if let Some(bounds) = self.cached_bounds {
+        if let Some(bounds) = self.base.cached_bounds() {
             return bounds;
         }
 
-        if self.children.is_empty() {
+        if self.base.is_empty() {
             return self.clip_rect;
         }
 
         // Union of all children bounds, clipped to clip_rect
-        let mut bounds = Rect::ZERO;
-        for (i, child) in self.children.iter().enumerate() {
-            let child_bounds = child.bounds();
-            if i == 0 {
-                bounds = child_bounds;
-            } else {
-                bounds = bounds.union(&child_bounds);
-            }
-        }
-
-        // Clip to clip_rect
-        bounds.intersection(&self.clip_rect).unwrap_or(Rect::ZERO)
+        let children_bounds = self.base.children_bounds_union();
+        children_bounds.intersection(&self.clip_rect).unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed
+        !self.base.is_disposed()
             && self.clip_rect.width() > 0.0
             && self.clip_rect.height() > 0.0
-            && self.children.iter().any(|c| c.is_visible())
+            && self.base.is_any_child_visible()
     }
 
     fn mark_needs_paint(&mut self) {
-        self.cached_bounds = None;
+        self.base.invalidate_cache();
+        for child in self.base.children_mut() {
+            child.mark_needs_paint();
+        }
     }
 
     fn dispose(&mut self) {
-        self.disposed = true;
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.dispose_children();
     }
 
     fn is_disposed(&self) -> bool {
-        self.disposed
+        self.base.is_disposed()
     }
 
     fn debug_description(&self) -> String {
         format!(
             "ClipRectLayer(clip_rect: {:?}, children: {})",
             self.clip_rect,
-            self.children.len()
+            self.base.len()
         )
     }
 
@@ -183,25 +156,11 @@ impl Layer for ClipRectLayer {
             return false; // Outside clip region, no hit
         }
 
-        // Test children in reverse order (front to back)
-        let mut hit = false;
-        for child in self.children.iter().rev() {
-            if child.is_visible() && child.hit_test(position, result) {
-                hit = true;
-            }
-        }
-
-        hit
+        self.base.hit_test_children_reverse(position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        // Dispatch to children in reverse order (front to back)
-        for child in self.children.iter_mut().rev() {
-            if child.handle_event(event) {
-                return true; // Event handled
-            }
-        }
-        false
+        self.base.handle_event_children_reverse(event)
     }
 }
 
@@ -213,27 +172,19 @@ impl Layer for ClipRectLayer {
 ///
 /// Similar to ClipRectLayer but with rounded corners.
 pub struct ClipRRectLayer {
+    /// Base multi-child layer functionality
+    base: MultiChildLayerBase,
+
     /// The clip rounded rectangle
     clip_rrect: RRect,
-
-    /// Child layers
-    children: Vec<BoxedLayer>,
-
-    /// Whether this layer has been disposed
-    disposed: bool,
-
-    /// Cached bounds
-    cached_bounds: Option<Rect>,
 }
 
 impl ClipRRectLayer {
     /// Create a new clip rrect layer
     pub fn new(clip_rrect: RRect) -> Self {
         Self {
+            base: MultiChildLayerBase::new(),
             clip_rrect,
-            children: Vec::new(),
-            disposed: false,
-            cached_bounds: None,
         }
     }
 
@@ -241,7 +192,7 @@ impl ClipRRectLayer {
     pub fn set_clip_rrect(&mut self, rrect: RRect) {
         if self.clip_rrect != rrect {
             self.clip_rrect = rrect;
-            self.cached_bounds = None;
+            self.base.invalidate_cache();
             self.mark_needs_paint();
         }
     }
@@ -253,88 +204,70 @@ impl ClipRRectLayer {
 
     /// Add a child layer
     pub fn add_child(&mut self, child: BoxedLayer) {
-        self.children.push(child);
-        self.cached_bounds = None;
+        self.base.add_child(child);
     }
 
     /// Remove all children
     pub fn clear_children(&mut self) {
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.clear_children();
+    }
+
+    /// Get children
+    pub fn children(&self) -> &[BoxedLayer] {
+        self.base.children()
     }
 }
 
 impl Layer for ClipRRectLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        if self.disposed {
-            panic!("Cannot use disposed ClipRRectLayer");
-        }
-
         painter.save();
-
-        // Apply clip rrect
         painter.clip_rrect(self.clip_rrect);
-
-        // Paint all children
-        for child in &self.children {
-            if child.is_visible() {
-                child.paint(painter);
-            }
-        }
-
+        self.base.paint_children(painter);
         painter.restore();
     }
 
     fn bounds(&self) -> Rect {
-        if let Some(bounds) = self.cached_bounds {
+        if let Some(bounds) = self.base.cached_bounds() {
             return bounds;
         }
 
-        if self.children.is_empty() {
+        if self.base.is_empty() {
             return self.clip_rrect.rect;
         }
 
-        let mut bounds = Rect::ZERO;
-        for (i, child) in self.children.iter().enumerate() {
-            let child_bounds = child.bounds();
-            if i == 0 {
-                bounds = child_bounds;
-            } else {
-                bounds = bounds.union(&child_bounds);
-            }
-        }
-
-        bounds
+        let children_bounds = self.base.children_bounds_union();
+        children_bounds
             .intersection(&self.clip_rrect.rect)
             .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed
+        !self.base.is_disposed()
             && self.clip_rrect.rect.width() > 0.0
             && self.clip_rrect.rect.height() > 0.0
-            && self.children.iter().any(|c| c.is_visible())
+            && self.base.is_any_child_visible()
     }
 
     fn mark_needs_paint(&mut self) {
-        self.cached_bounds = None;
+        self.base.invalidate_cache();
+        for child in self.base.children_mut() {
+            child.mark_needs_paint();
+        }
     }
 
     fn dispose(&mut self) {
-        self.disposed = true;
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.dispose_children();
     }
 
     fn is_disposed(&self) -> bool {
-        self.disposed
+        self.base.is_disposed()
     }
 
     fn debug_description(&self) -> String {
         format!(
             "ClipRRectLayer(clip_rrect: {:?}, children: {})",
             self.clip_rrect,
-            self.children.len()
+            self.base.len()
         )
     }
 
@@ -344,25 +277,11 @@ impl Layer for ClipRRectLayer {
             return false; // Outside clip region, no hit
         }
 
-        // Test children in reverse order (front to back)
-        let mut hit = false;
-        for child in self.children.iter().rev() {
-            if child.is_visible() && child.hit_test(position, result) {
-                hit = true;
-            }
-        }
-
-        hit
+        self.base.hit_test_children_reverse(position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        // Dispatch to children in reverse order (front to back)
-        for child in self.children.iter_mut().rev() {
-            if child.handle_event(event) {
-                return true; // Event handled
-            }
-        }
-        false
+        self.base.handle_event_children_reverse(event)
     }
 }
 
@@ -542,17 +461,11 @@ mod tests {
 /// The oval fills the bounding rectangle provided.
 /// If the rect is square, this creates a circle.
 pub struct ClipOvalLayer {
+    /// Base multi-child layer functionality
+    base: MultiChildLayerBase,
+
     /// The bounding rectangle of the oval
     clip_rect: Rect,
-
-    /// Child layers
-    children: Vec<BoxedLayer>,
-
-    /// Whether this layer has been disposed
-    disposed: bool,
-
-    /// Cached bounds
-    cached_bounds: Option<Rect>,
 }
 
 impl ClipOvalLayer {
@@ -563,10 +476,8 @@ impl ClipOvalLayer {
     /// * `clip_rect` - The bounding rectangle of the oval
     pub fn new(clip_rect: Rect) -> Self {
         Self {
+            base: MultiChildLayerBase::new(),
             clip_rect,
-            children: Vec::new(),
-            disposed: false,
-            cached_bounds: None,
         }
     }
 
@@ -574,7 +485,7 @@ impl ClipOvalLayer {
     pub fn set_clip_rect(&mut self, rect: Rect) {
         if self.clip_rect != rect {
             self.clip_rect = rect;
-            self.cached_bounds = None;
+            self.base.invalidate_cache();
             self.mark_needs_paint();
         }
     }
@@ -586,88 +497,68 @@ impl ClipOvalLayer {
 
     /// Add a child layer
     pub fn add_child(&mut self, child: BoxedLayer) {
-        self.children.push(child);
-        self.cached_bounds = None;
+        self.base.add_child(child);
     }
 
     /// Remove all children
     pub fn clear_children(&mut self) {
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.clear_children();
+    }
+
+    /// Get children
+    pub fn children(&self) -> &[BoxedLayer] {
+        self.base.children()
     }
 }
 
 impl Layer for ClipOvalLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        if self.disposed {
-            panic!("Cannot use disposed ClipOvalLayer");
-        }
-
         painter.save();
-
-        // Apply oval clip
         painter.clip_oval(self.clip_rect);
-
-        // Paint all children
-        for child in &self.children {
-            if child.is_visible() {
-                child.paint(painter);
-            }
-        }
-
+        self.base.paint_children(painter);
         painter.restore();
     }
 
     fn bounds(&self) -> Rect {
-        if let Some(bounds) = self.cached_bounds {
+        if let Some(bounds) = self.base.cached_bounds() {
             return bounds;
         }
 
-        if self.children.is_empty() {
+        if self.base.is_empty() {
             return self.clip_rect;
         }
 
-        // Union of all children bounds, clipped to clip_rect
-        let mut bounds = Rect::ZERO;
-        for (i, child) in self.children.iter().enumerate() {
-            let child_bounds = child.bounds();
-            if i == 0 {
-                bounds = child_bounds;
-            } else {
-                bounds = bounds.union(&child_bounds);
-            }
-        }
-
-        // Clip to oval bounds (use rect as approximation)
-        bounds.intersection(&self.clip_rect).unwrap_or(Rect::ZERO)
+        let children_bounds = self.base.children_bounds_union();
+        children_bounds.intersection(&self.clip_rect).unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed
+        !self.base.is_disposed()
             && self.clip_rect.width() > 0.0
             && self.clip_rect.height() > 0.0
-            && self.children.iter().any(|c| c.is_visible())
+            && self.base.is_any_child_visible()
     }
 
     fn mark_needs_paint(&mut self) {
-        self.cached_bounds = None;
+        self.base.invalidate_cache();
+        for child in self.base.children_mut() {
+            child.mark_needs_paint();
+        }
     }
 
     fn dispose(&mut self) {
-        self.disposed = true;
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.dispose_children();
     }
 
     fn is_disposed(&self) -> bool {
-        self.disposed
+        self.base.is_disposed()
     }
 
     fn debug_description(&self) -> String {
         format!(
             "ClipOvalLayer(clip_rect: {:?}, children: {})",
             self.clip_rect,
-            self.children.len()
+            self.base.len()
         )
     }
 
@@ -691,25 +582,11 @@ impl Layer for ClipOvalLayer {
             return false; // Outside oval, no hit
         }
 
-        // Test children in reverse order (front to back)
-        let mut hit = false;
-        for child in self.children.iter().rev() {
-            if child.is_visible() && child.hit_test(position, result) {
-                hit = true;
-            }
-        }
-
-        hit
+        self.base.hit_test_children_reverse(position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        // Dispatch to children in reverse order (front to back)
-        for child in self.children.iter_mut().rev() {
-            if child.handle_event(event) {
-                return true; // Event handled
-            }
-        }
-        false
+        self.base.handle_event_children_reverse(event)
     }
 }
 
@@ -723,20 +600,14 @@ use flui_types::painting::path::Path;
 ///
 /// This layer clips children to any arbitrary path shape.
 pub struct ClipPathLayer {
+    /// Base multi-child layer functionality
+    base: MultiChildLayerBase,
+
     /// The clip path
     clip_path: Path,
 
     /// Pre-computed bounds of the path
     path_bounds: Rect,
-
-    /// Child layers
-    children: Vec<BoxedLayer>,
-
-    /// Whether this layer has been disposed
-    disposed: bool,
-
-    /// Cached bounds
-    cached_bounds: Option<Rect>,
 }
 
 impl ClipPathLayer {
@@ -748,11 +619,9 @@ impl ClipPathLayer {
     pub fn new(mut clip_path: Path) -> Self {
         let path_bounds = clip_path.bounds();
         Self {
+            base: MultiChildLayerBase::new(),
             clip_path,
             path_bounds,
-            children: Vec::new(),
-            disposed: false,
-            cached_bounds: None,
         }
     }
 
@@ -760,7 +629,7 @@ impl ClipPathLayer {
     pub fn set_clip_path(&mut self, mut path: Path) {
         self.path_bounds = path.bounds();
         self.clip_path = path;
-        self.cached_bounds = None;
+        self.base.invalidate_cache();
         self.mark_needs_paint();
     }
 
@@ -776,82 +645,62 @@ impl ClipPathLayer {
 
     /// Add a child layer
     pub fn add_child(&mut self, child: BoxedLayer) {
-        self.children.push(child);
-        self.cached_bounds = None;
+        self.base.add_child(child);
     }
 
     /// Remove all children
     pub fn clear_children(&mut self) {
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.clear_children();
+    }
+
+    /// Get children
+    pub fn children(&self) -> &[BoxedLayer] {
+        self.base.children()
     }
 }
 
 impl Layer for ClipPathLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        if self.disposed {
-            panic!("Cannot use disposed ClipPathLayer");
-        }
-
         painter.save();
-
-        // Apply path clip with pre-computed bounds
         painter.clip_path(&self.clip_path, self.path_bounds);
-
-        // Paint all children
-        for child in &self.children {
-            if child.is_visible() {
-                child.paint(painter);
-            }
-        }
-
+        self.base.paint_children(painter);
         painter.restore();
     }
 
     fn bounds(&self) -> Rect {
-        if let Some(bounds) = self.cached_bounds {
+        if let Some(bounds) = self.base.cached_bounds() {
             return bounds;
         }
 
-        if self.children.is_empty() {
+        if self.base.is_empty() {
             return self.path_bounds;
         }
 
-        // Union of all children bounds, clipped to path bounds
-        let mut bounds = Rect::ZERO;
-        for (i, child) in self.children.iter().enumerate() {
-            let child_bounds = child.bounds();
-            if i == 0 {
-                bounds = child_bounds;
-            } else {
-                bounds = bounds.union(&child_bounds);
-            }
-        }
-
-        // Clip to path bounds (already computed)
-        bounds.intersection(&self.path_bounds).unwrap_or(Rect::ZERO)
+        let children_bounds = self.base.children_bounds_union();
+        children_bounds.intersection(&self.path_bounds).unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed && !self.clip_path.is_empty() && self.children.iter().any(|c| c.is_visible())
+        !self.base.is_disposed() && !self.clip_path.is_empty() && self.base.is_any_child_visible()
     }
 
     fn mark_needs_paint(&mut self) {
-        self.cached_bounds = None;
+        self.base.invalidate_cache();
+        for child in self.base.children_mut() {
+            child.mark_needs_paint();
+        }
     }
 
     fn dispose(&mut self) {
-        self.disposed = true;
-        self.children.clear();
-        self.cached_bounds = None;
+        self.base.dispose_children();
     }
 
     fn is_disposed(&self) -> bool {
-        self.disposed
+        self.base.is_disposed()
     }
 
     fn debug_description(&self) -> String {
-        format!("ClipPathLayer(children: {})", self.children.len())
+        format!("ClipPathLayer(children: {})", self.base.len())
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
@@ -860,24 +709,10 @@ impl Layer for ClipPathLayer {
             return false; // Outside clip path, no hit
         }
 
-        // Test children in reverse order (front to back)
-        let mut hit = false;
-        for child in self.children.iter().rev() {
-            if child.is_visible() && child.hit_test(position, result) {
-                hit = true;
-            }
-        }
-
-        hit
+        self.base.hit_test_children_reverse(position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        // Dispatch to children in reverse order (front to back)
-        for child in self.children.iter_mut().rev() {
-            if child.handle_event(event) {
-                return true; // Event handled
-            }
-        }
-        false
+        self.base.handle_event_children_reverse(event)
     }
 }

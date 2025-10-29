@@ -1,6 +1,6 @@
 //! Transform layer - applies matrix transform to child layer
 
-use crate::layer::{BoxedLayer, Layer};
+use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
 use flui_types::{Offset, Rect};
 use flui_types::events::{Event, HitTestResult};
@@ -61,8 +61,8 @@ pub enum Transform {
 /// Result: Rotated square
 /// ```
 pub struct TransformLayer {
-    /// The child layer to transform
-    child: BoxedLayer,
+    /// Base single-child layer functionality
+    base: SingleChildLayerBase,
 
     /// The transform to apply
     transform: Transform,
@@ -71,7 +71,10 @@ pub struct TransformLayer {
 impl TransformLayer {
     /// Create a new transform layer
     pub fn new(child: BoxedLayer, transform: Transform) -> Self {
-        Self { child, transform }
+        Self {
+            base: SingleChildLayerBase::new(child),
+            transform,
+        }
     }
 
     /// Create a translation transform layer
@@ -152,8 +155,8 @@ impl TransformLayer {
     }
 
     /// Get the child layer
-    pub fn child(&self) -> &BoxedLayer {
-        &self.child
+    pub fn child(&self) -> Option<&BoxedLayer> {
+        self.base.child()
     }
 
     /// Apply the transform to a point (forward transform)
@@ -193,6 +196,10 @@ impl TransformLayer {
 
 impl Layer for TransformLayer {
     fn paint(&self, painter: &mut dyn Painter) {
+        let Some(child) = self.base.child() else {
+            return;
+        };
+
         painter.save();
 
         // Apply transform
@@ -237,13 +244,13 @@ impl Layer for TransformLayer {
         }
 
         // Paint child in transformed space
-        self.child.paint(painter);
+        child.paint(painter);
 
         painter.restore();
     }
 
     fn bounds(&self) -> Rect {
-        let child_bounds = self.child.bounds();
+        let child_bounds = self.base.child_bounds();
 
         // Get the four corners of the child bounds
         let corners = child_bounds.corners();
@@ -272,7 +279,7 @@ impl Layer for TransformLayer {
     }
 
     fn is_visible(&self) -> bool {
-        self.child.is_visible()
+        self.base.is_child_visible()
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
@@ -344,12 +351,26 @@ impl Layer for TransformLayer {
         };
 
         // Test child with transformed position
-        self.child.hit_test(local_position, result)
+        self.base.child_hit_test(local_position, result)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        // Forward event to child
-        self.child.handle_event(event)
+        self.base.child_handle_event(event)
+    }
+
+    fn dispose(&mut self) {
+        self.base.dispose_child();
+    }
+
+    fn is_disposed(&self) -> bool {
+        self.base.is_disposed()
+    }
+
+    fn mark_needs_paint(&mut self) {
+        self.base.invalidate_cache();
+        if let Some(child) = self.base.child_mut() {
+            child.mark_needs_paint();
+        }
     }
 }
 
