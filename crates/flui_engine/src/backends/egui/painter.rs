@@ -108,6 +108,31 @@ impl<'a> EguiPainter<'a> {
         }
     }
 
+    /// Get the current clip rect for egui
+    fn get_egui_clip_rect(&self) -> egui::Rect {
+        if let Some(clip) = self.current_state.clip_rect {
+            // Transform clip rect to screen space
+            let transformed_clip = self.transform_rect(clip);
+            Self::to_egui_rect(transformed_clip)
+        } else {
+            // No clip - use full screen
+            egui::Rect::EVERYTHING
+        }
+    }
+
+    /// Add a shape with current clipping applied
+    fn add_shape(&self, shape: egui::Shape) {
+        if self.current_state.clip_rect.is_some() {
+            // Use with_clip_rect to apply clipping
+            let clip_rect = self.get_egui_clip_rect();
+            let clipped_painter = self.painter.with_clip_rect(clip_rect);
+            clipped_painter.add(shape);
+        } else {
+            // No clipping needed
+            self.painter.add(shape);
+        }
+    }
+
     /// Apply current transformation to a point
     fn transform_point(&self, point: Point) -> Point {
         let vec = Vec3::new(point.x, point.y, 1.0);
@@ -196,7 +221,7 @@ impl<'a> EguiPainter<'a> {
             texture_id: Default::default(),
         };
 
-        self.painter.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
+        self.add_shape(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
     }
 
     /// Draw a stroked rectangle using line segments (supports arbitrary transforms)
@@ -266,7 +291,7 @@ impl<'a> EguiPainter<'a> {
             texture_id: Default::default(),
         };
 
-        self.painter.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
+        self.add_shape(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
     }
 
     /// Draw a stroked circle/ellipse using line segments (supports arbitrary transforms)
@@ -320,13 +345,18 @@ impl<'a> Painter for EguiPainter<'a> {
             let transformed_rect = self.transform_rect(rect);
             let egui_rect = Self::to_egui_rect(transformed_rect);
 
-            if paint.stroke_width > 0.0 {
-                // Stroked rect
-                let stroke = egui::Stroke::new(paint.stroke_width, color);
-                self.painter.rect_stroke(egui_rect, 0.0, stroke, egui::StrokeKind::Outside);
+            let painter = if self.current_state.clip_rect.is_some() {
+                let clip_rect = self.get_egui_clip_rect();
+                self.painter.with_clip_rect(clip_rect)
             } else {
-                // Filled rect
-                self.painter.rect_filled(egui_rect, 0.0, color);
+                self.painter.clone()
+            };
+
+            if paint.stroke_width > 0.0 {
+                let stroke = egui::Stroke::new(paint.stroke_width, color);
+                painter.rect_stroke(egui_rect, 0.0, stroke, egui::StrokeKind::Outside);
+            } else {
+                painter.rect_filled(egui_rect, 0.0, color);
             }
         }
     }
@@ -342,13 +372,18 @@ impl<'a> Painter for EguiPainter<'a> {
         let egui_rect = Self::to_egui_rect(transformed_rect);
         let rounding = egui::CornerRadius::same(rrect.corner_radius.min(255.0) as u8);
 
-        if paint.stroke_width > 0.0 {
-            // Stroked rounded rect
-            let stroke = egui::Stroke::new(paint.stroke_width, color);
-            self.painter.rect_stroke(egui_rect, rounding, stroke, egui::StrokeKind::Outside);
+        let painter = if self.current_state.clip_rect.is_some() {
+            let clip_rect = self.get_egui_clip_rect();
+            self.painter.with_clip_rect(clip_rect)
         } else {
-            // Filled rounded rect
-            self.painter.rect_filled(egui_rect, rounding, color);
+            self.painter.clone()
+        };
+
+        if paint.stroke_width > 0.0 {
+            let stroke = egui::Stroke::new(paint.stroke_width, color);
+            painter.rect_stroke(egui_rect, rounding, stroke, egui::StrokeKind::Outside);
+        } else {
+            painter.rect_filled(egui_rect, rounding, color);
         }
     }
 
@@ -384,13 +419,18 @@ impl<'a> Painter for EguiPainter<'a> {
             let scale = self.current_state.transform.to_scale_rotation_translation().0;
             let scaled_radius = radius * scale.x.max(scale.y);
 
-            if paint.stroke_width > 0.0 {
-                // Stroked circle
-                let stroke = egui::Stroke::new(paint.stroke_width, color);
-                self.painter.circle_stroke(egui_center, scaled_radius, stroke);
+            let painter = if self.current_state.clip_rect.is_some() {
+                let clip_rect = self.get_egui_clip_rect();
+                self.painter.with_clip_rect(clip_rect)
             } else {
-                // Filled circle
-                self.painter.circle_filled(egui_center, scaled_radius, color);
+                self.painter.clone()
+            };
+
+            if paint.stroke_width > 0.0 {
+                let stroke = egui::Stroke::new(paint.stroke_width, color);
+                painter.circle_stroke(egui_center, scaled_radius, stroke);
+            } else {
+                painter.circle_filled(egui_center, scaled_radius, color);
             }
         }
     }
@@ -417,7 +457,14 @@ impl<'a> Painter for EguiPainter<'a> {
         let color = self.paint_to_color(paint);
         let stroke = egui::Stroke::new(paint.stroke_width.max(1.0), color);
 
-        self.painter.line_segment(
+        let painter = if self.current_state.clip_rect.is_some() {
+            let clip_rect = self.get_egui_clip_rect();
+            self.painter.with_clip_rect(clip_rect)
+        } else {
+            self.painter.clone()
+        };
+
+        painter.line_segment(
             [Self::to_egui_pos(transformed_p1), Self::to_egui_pos(transformed_p2)],
             stroke,
         );
@@ -466,7 +513,7 @@ impl<'a> Painter for EguiPainter<'a> {
                             texture_id: Default::default(),
                         };
 
-                        self.painter.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
+                        self.add_shape(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
                         return; // Successfully rendered with vector text
                     }
                     Err(e) => {
@@ -499,7 +546,7 @@ impl<'a> Painter for EguiPainter<'a> {
         // Set rotation angle (egui 0.28+ supports angle field)
         text_shape.angle = angle;
 
-        self.painter.add(egui::Shape::Text(text_shape));
+        self.add_shape(egui::Shape::Text(text_shape));
     }
 
     fn text_styled(&mut self, text: &str, position: Point, style: &flui_types::typography::TextStyle) {
@@ -555,7 +602,7 @@ impl<'a> Painter for EguiPainter<'a> {
                             texture_id: Default::default(),
                         };
 
-                        self.painter.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
+                        self.add_shape(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
                         return;
                     }
                     Err(e) => {
