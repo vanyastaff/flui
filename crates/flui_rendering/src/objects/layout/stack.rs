@@ -1,10 +1,10 @@
 //! RenderStack - layering container
 
-use flui_types::{Offset, Size, constraints::BoxConstraints, Alignment};
-use flui_types::layout::StackFit;
-use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, layer::pool};
 use crate::utils::layout_utils::apply_offset_transform_v2;
+use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_engine::{BoxedLayer, layer::pool};
+use flui_types::layout::StackFit;
+use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject for stack layout (layering)
 ///
@@ -134,33 +134,34 @@ impl RenderStack {
         parent_data: Option<&crate::parent_data::StackParentData>,
     ) -> Offset {
         if let Some(stack_data) = parent_data
-            && stack_data.is_positioned() {
-                // Positioned child - calculate position from edges
-                let x;
-                let y;
+            && stack_data.is_positioned()
+        {
+            // Positioned child - calculate position from edges
+            let x;
+            let y;
 
-                // Calculate x position
-                if let Some(left) = stack_data.left {
-                    x = left;
-                } else if let Some(right) = stack_data.right {
-                    x = stack_size.width - child_size.width - right;
-                } else {
-                    // Center horizontally if no left/right specified
-                    x = (stack_size.width - child_size.width) / 2.0;
-                }
-
-                // Calculate y position
-                if let Some(top) = stack_data.top {
-                    y = top;
-                } else if let Some(bottom) = stack_data.bottom {
-                    y = stack_size.height - child_size.height - bottom;
-                } else {
-                    // Center vertically if no top/bottom specified
-                    y = (stack_size.height - child_size.height) / 2.0;
-                }
-
-                return Offset::new(x, y);
+            // Calculate x position
+            if let Some(left) = stack_data.left {
+                x = left;
+            } else if let Some(right) = stack_data.right {
+                x = stack_size.width - child_size.width - right;
+            } else {
+                // Center horizontally if no left/right specified
+                x = (stack_size.width - child_size.width) / 2.0;
             }
+
+            // Calculate y position
+            if let Some(top) = stack_data.top {
+                y = top;
+            } else if let Some(bottom) = stack_data.bottom {
+                y = stack_size.height - child_size.height - bottom;
+            } else {
+                // Center vertically if no top/bottom specified
+                y = (stack_size.height - child_size.height) / 2.0;
+            }
+
+            return Offset::new(x, y);
+        }
 
         // Non-positioned child - use alignment
         alignment.calculate_offset(child_size, stack_size)
@@ -199,7 +200,8 @@ impl RenderObject for RenderStack {
             let stack_data = cx.parent_data::<crate::parent_data::StackParentData>(child);
 
             let child_constraints = if let Some(data) = stack_data
-                && data.is_positioned() {
+                && data.is_positioned()
+            {
                 // Child is positioned - use computed constraints based on positioning
                 Self::compute_positioned_constraints(data, constraints)
             } else {
@@ -232,12 +234,8 @@ impl RenderObject for RenderStack {
             let stack_data = cx.parent_data::<crate::parent_data::StackParentData>(child);
 
             // Use the existing calculate_child_offset function
-            let child_offset = Self::calculate_child_offset(
-                child_size,
-                size,
-                self.alignment,
-                stack_data,
-            );
+            let child_offset =
+                Self::calculate_child_offset(child_size, size, self.alignment, stack_data);
             self.child_offsets.push(child_offset);
         }
 

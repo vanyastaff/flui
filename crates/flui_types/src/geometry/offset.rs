@@ -272,10 +272,7 @@ impl Offset {
     #[must_use]
     pub fn rotate(&self, angle: f32) -> Offset {
         let (sin, cos) = angle.sin_cos();
-        Offset::new(
-            self.dx * cos - self.dy * sin,
-            self.dx * sin + self.dy * cos,
-        )
+        Offset::new(self.dx * cos - self.dy * sin, self.dx * sin + self.dy * cos)
     }
 
     /// Round components to nearest integer.
@@ -303,10 +300,7 @@ impl Offset {
     #[inline]
     #[must_use]
     pub fn clamp(&self, min: Offset, max: Offset) -> Offset {
-        Offset::new(
-            self.dx.clamp(min.dx, max.dx),
-            self.dy.clamp(min.dy, max.dy),
-        )
+        Offset::new(self.dx.clamp(min.dx, max.dx), self.dy.clamp(min.dy, max.dy))
     }
 
     /// Get absolute values of components.

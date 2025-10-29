@@ -182,7 +182,10 @@ impl Align {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
@@ -259,13 +262,11 @@ macro_rules! align {
 mod tests {
     use super::*;
     use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
     use flui_rendering::RenderPadding;
+    use flui_types::EdgeInsets;
 
     #[derive(Debug, Clone)]
     struct MockWidget;
-
-    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {
@@ -325,17 +326,13 @@ mod tests {
 
     #[test]
     fn test_align_builder() {
-        let align = Align::builder()
-            .alignment(Alignment::TOP_LEFT)
-            .build();
+        let align = Align::builder().alignment(Alignment::TOP_LEFT).build();
         assert_eq!(align.alignment, Alignment::TOP_LEFT);
     }
 
     #[test]
     fn test_align_builder_with_child() {
-        let align = Align::builder()
-            .child(MockWidget)
-            .build();
+        let align = Align::builder().child(MockWidget).build();
         assert!(align.child.is_some());
     }
 
@@ -372,9 +369,7 @@ mod tests {
 
     #[test]
     fn test_align_validate_ok() {
-        let align = Align::builder()
-            .width_factor(1.5)
-            .build();
+        let align = Align::builder().width_factor(1.5).build();
         assert!(align.validate().is_ok());
     }
 
@@ -439,11 +434,7 @@ impl RenderObjectWidget for Align {
     type Arity = flui_core::render::SingleArity;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        RenderAlign::with_factors(
-            self.alignment,
-            self.width_factor,
-            self.height_factor,
-        )
+        RenderAlign::with_factors(self.alignment, self.width_factor, self.height_factor)
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {

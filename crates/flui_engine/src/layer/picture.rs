@@ -1,27 +1,21 @@
 //! Picture layer - leaf layer with actual drawing commands
 
-use flui_types::{Rect, Point};
+use crate::layer::Layer;
+use crate::painter::{Paint, Painter, RRect};
 use flui_types::painting::path::Path;
 use flui_types::painting::Image;
 use flui_types::typography::TextStyle;
-use crate::layer::Layer;
-use crate::painter::{Painter, Paint, RRect};
+use flui_types::{Point, Rect};
 use std::sync::Arc;
 
 /// A drawing command to be executed
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
     /// Draw a rectangle
-    Rect {
-        rect: Rect,
-        paint: Paint,
-    },
+    Rect { rect: Rect, paint: Paint },
 
     /// Draw a rounded rectangle
-    RRect {
-        rrect: RRect,
-        paint: Paint,
-    },
+    RRect { rrect: RRect, paint: Paint },
 
     /// Draw a circle
     Circle {
@@ -31,11 +25,7 @@ pub enum DrawCommand {
     },
 
     /// Draw a line
-    Line {
-        p1: Point,
-        p2: Point,
-        paint: Paint,
-    },
+    Line { p1: Point, p2: Point, paint: Paint },
 
     /// Draw text
     Text {
@@ -53,10 +43,7 @@ pub enum DrawCommand {
     },
 
     /// Draw a path
-    Path {
-        path: Arc<Path>,
-        paint: Paint,
-    },
+    Path { path: Arc<Path>, paint: Paint },
 
     /// Draw an arc or pie slice
     Arc {
@@ -129,7 +116,11 @@ impl PictureLayer {
 
     /// Draw a circle
     pub fn draw_circle(&mut self, center: Point, radius: f32, paint: Paint) {
-        self.add_command(DrawCommand::Circle { center, radius, paint });
+        self.add_command(DrawCommand::Circle {
+            center,
+            radius,
+            paint,
+        });
     }
 
     /// Draw a line
@@ -158,13 +149,7 @@ impl PictureLayer {
     /// * `src_rect` - Source rectangle in image coordinates
     /// * `dst_rect` - Destination rectangle on canvas
     /// * `paint` - Paint settings (opacity, blend mode, etc.)
-    pub fn draw_image(
-        &mut self,
-        image: Arc<Image>,
-        src_rect: Rect,
-        dst_rect: Rect,
-        paint: Paint,
-    ) {
+    pub fn draw_image(&mut self, image: Arc<Image>, src_rect: Rect, dst_rect: Rect, paint: Paint) {
         self.add_command(DrawCommand::Image {
             image,
             src_rect,
@@ -189,13 +174,7 @@ impl PictureLayer {
     /// * `start_angle` - Starting angle in radians
     /// * `sweep_angle` - Angle to sweep in radians
     /// * `paint` - Paint settings
-    pub fn draw_arc(
-        &mut self,
-        rect: Rect,
-        start_angle: f32,
-        sweep_angle: f32,
-        paint: Paint,
-    ) {
+    pub fn draw_arc(&mut self, rect: Rect, start_angle: f32, sweep_angle: f32, paint: Paint) {
         self.add_command(DrawCommand::Arc {
             rect,
             start_angle,
@@ -236,7 +215,11 @@ impl PictureLayer {
                     rrect.rect
                 }
             }
-            DrawCommand::Circle { center, radius, paint } => {
+            DrawCommand::Circle {
+                center,
+                radius,
+                paint,
+            } => {
                 let r = if paint.stroke_width > 0.0 {
                     radius + paint.stroke_width / 2.0
                 } else {
@@ -258,7 +241,11 @@ impl PictureLayer {
                     Point::new(max_x + stroke, max_y + stroke),
                 )
             }
-            DrawCommand::Text { text, position, style } => {
+            DrawCommand::Text {
+                text,
+                position,
+                style,
+            } => {
                 // Approximate text bounds (conservative estimate)
                 // TODO(Phase 2): Integrate proper text measurement with font metrics
                 // See: https://github.com/yourusername/flui/issues/XXX
@@ -267,7 +254,9 @@ impl PictureLayer {
                 let height = font_size * 1.5; // Account for descenders and line height
                 Rect::from_xywh(position.x, position.y, width, height)
             }
-            DrawCommand::Image { dst_rect, paint, .. } => {
+            DrawCommand::Image {
+                dst_rect, paint, ..
+            } => {
                 if paint.stroke_width > 0.0 {
                     dst_rect.expand(paint.stroke_width / 2.0)
                 } else {
@@ -290,7 +279,11 @@ impl PictureLayer {
                         PathCommand::AddOval(r) | PathCommand::AddArc(r, _, _) => *r,
                         _ => Rect::ZERO,
                     };
-                    if acc == Rect::ZERO { cmd_rect } else { acc.union(&cmd_rect) }
+                    if acc == Rect::ZERO {
+                        cmd_rect
+                    } else {
+                        acc.union(&cmd_rect)
+                    }
                 });
 
                 if paint.stroke_width > 0.0 {
@@ -350,22 +343,40 @@ impl Layer for PictureLayer {
                 DrawCommand::RRect { rrect, paint } => {
                     painter.rrect(*rrect, paint);
                 }
-                DrawCommand::Circle { center, radius, paint } => {
+                DrawCommand::Circle {
+                    center,
+                    radius,
+                    paint,
+                } => {
                     painter.circle(*center, *radius, paint);
                 }
                 DrawCommand::Line { p1, p2, paint } => {
                     painter.line(*p1, *p2, paint);
                 }
-                DrawCommand::Text { text, position, style } => {
+                DrawCommand::Text {
+                    text,
+                    position,
+                    style,
+                } => {
                     painter.text_styled(text, *position, style);
                 }
-                DrawCommand::Image { image, src_rect, dst_rect, paint } => {
+                DrawCommand::Image {
+                    image,
+                    src_rect,
+                    dst_rect,
+                    paint,
+                } => {
                     painter.image(image, *src_rect, *dst_rect, paint);
                 }
                 DrawCommand::Path { path, paint } => {
                     painter.path(path, paint);
                 }
-                DrawCommand::Arc { rect, start_angle, sweep_angle, paint } => {
+                DrawCommand::Arc {
+                    rect,
+                    start_angle,
+                    sweep_angle,
+                    paint,
+                } => {
                     // Convert rect-based arc to center/radius arc
                     let center = rect.center();
                     let radius = rect.width().min(rect.height()) / 2.0;

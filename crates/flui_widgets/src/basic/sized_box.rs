@@ -29,7 +29,10 @@
 //!     height: 50.0,
 //! }
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::{
+    BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget,
+    Widget,
+};
 use flui_rendering::RenderConstrainedBox;
 
 /// A box with a specified size.
@@ -160,13 +163,19 @@ impl SizedBox {
     pub fn validate(&self) -> Result<(), String> {
         if let Some(width) = self.width {
             if width < 0.0 || width.is_nan() {
-                return Err(format!("Invalid width: {}. Width must be non-negative and finite (or infinity).", width));
+                return Err(format!(
+                    "Invalid width: {}. Width must be non-negative and finite (or infinity).",
+                    width
+                ));
             }
         }
 
         if let Some(height) = self.height {
             if height < 0.0 || height.is_nan() {
-                return Err(format!("Invalid height: {}. Height must be non-negative and finite (or infinity).", height));
+                return Err(format!(
+                    "Invalid height: {}. Height must be non-negative and finite (or infinity).",
+                    height
+                ));
             }
         }
 
@@ -179,8 +188,6 @@ impl Default for SizedBox {
         Self::new()
     }
 }
-
-
 
 // bon Builder Extensions
 use sized_box_builder::{IsUnset, SetChild, State};
@@ -244,8 +251,6 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    
-
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {
             use flui_core::{BoxConstraints, EdgeInsets};
@@ -287,19 +292,14 @@ mod tests {
 
     #[test]
     fn test_sized_box_builder() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).build();
         assert_eq!(sized_box.width, Some(100.0));
         assert!(sized_box.height.is_none());
     }
 
     #[test]
     fn test_sized_box_builder_chaining() {
-        let sized_box = SizedBox::builder()
-            .width(200.0)
-            .height(100.0)
-            .build();
+        let sized_box = SizedBox::builder().width(200.0).height(100.0).build();
 
         assert_eq!(sized_box.width, Some(200.0));
         assert_eq!(sized_box.height, Some(100.0));
@@ -335,10 +335,7 @@ mod tests {
 
     #[test]
     fn test_sized_box_builder_with_child() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .child(MockWidget)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).child(MockWidget).build();
         assert!(sized_box.child.is_some());
     }
 
@@ -360,10 +357,7 @@ mod tests {
 
     #[test]
     fn test_sized_box_validate_ok() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .height(50.0)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).height(50.0).build();
         assert!(sized_box.validate().is_ok());
     }
 
@@ -393,28 +387,21 @@ mod tests {
 
     #[test]
     fn test_sized_box_only_width() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).build();
         assert_eq!(sized_box.width, Some(100.0));
         assert!(sized_box.height.is_none());
     }
 
     #[test]
     fn test_sized_box_only_height() {
-        let sized_box = SizedBox::builder()
-            .height(50.0)
-            .build();
+        let sized_box = SizedBox::builder().height(50.0).build();
         assert!(sized_box.width.is_none());
         assert_eq!(sized_box.height, Some(50.0));
     }
 
     #[test]
     fn test_widget_trait() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .child(MockWidget)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).child(MockWidget).build();
 
         // Test that it implements Widget and can create an element
         let _element = sized_box.into_element();
@@ -422,10 +409,7 @@ mod tests {
 
     #[test]
     fn test_single_child_render_object_widget_trait() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .child(MockWidget)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).child(MockWidget).build();
 
         // Test child() method
         let _child = sized_box.child();

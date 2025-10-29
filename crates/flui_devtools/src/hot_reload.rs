@@ -33,13 +33,13 @@
 //! }
 //! ```
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-use parking_lot::RwLock;
 use notify::{
     Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher,
 };
+use parking_lot::RwLock;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Hot reloader for watching file changes
 ///

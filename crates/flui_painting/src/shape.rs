@@ -3,14 +3,14 @@
 //! Provides painting functionality for various shape borders including
 //! rounded rectangles, circles, ovals, stars, and more.
 
+use flui_engine::painter::{Paint, Painter, RRect};
 use flui_types::{
     geometry::{Point, Rect},
     styling::{
-        RoundedRectangleBorder, BeveledRectangleBorder, CircleBorder, OvalBorder,
-        StadiumBorder, StarBorder, ContinuousRectangleBorder, LinearBorder,
+        BeveledRectangleBorder, CircleBorder, ContinuousRectangleBorder, LinearBorder, OvalBorder,
+        RoundedRectangleBorder, StadiumBorder, StarBorder,
     },
 };
-use flui_engine::painter::{Paint, Painter, RRect};
 use std::f32::consts::PI;
 
 /// Painter for shape borders.
@@ -142,11 +142,7 @@ impl ShapePainter {
     /// * `painter` - The painter to draw with
     /// * `rect` - The bounding rectangle
     /// * `border` - The circle border style
-    pub fn paint_circle(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        border: &CircleBorder,
-    ) {
+    pub fn paint_circle(painter: &mut dyn Painter, rect: Rect, border: &CircleBorder) {
         if border.side.width <= 0.0 {
             return;
         }
@@ -171,11 +167,7 @@ impl ShapePainter {
     /// * `painter` - The painter to draw with
     /// * `rect` - The bounding rectangle
     /// * `border` - The oval border style
-    pub fn paint_oval(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        border: &OvalBorder,
-    ) {
+    pub fn paint_oval(painter: &mut dyn Painter, rect: Rect, border: &OvalBorder) {
         if border.side.width <= 0.0 {
             return;
         }
@@ -201,11 +193,7 @@ impl ShapePainter {
     /// * `painter` - The painter to draw with
     /// * `rect` - The bounding rectangle
     /// * `border` - The stadium border style
-    pub fn paint_stadium(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        border: &StadiumBorder,
-    ) {
+    pub fn paint_stadium(painter: &mut dyn Painter, rect: Rect, border: &StadiumBorder) {
         if border.side.width <= 0.0 {
             return;
         }
@@ -234,11 +222,7 @@ impl ShapePainter {
     /// * `painter` - The painter to draw with
     /// * `rect` - The bounding rectangle
     /// * `border` - The star border style
-    pub fn paint_star(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        border: &StarBorder,
-    ) {
+    pub fn paint_star(painter: &mut dyn Painter, rect: Rect, border: &StarBorder) {
         if border.side.width <= 0.0 || border.points < 3 {
             return;
         }
@@ -330,11 +314,7 @@ impl ShapePainter {
     /// * `painter` - The painter to draw with
     /// * `rect` - The rectangle bounds
     /// * `border` - The linear border style
-    pub fn paint_linear(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        border: &LinearBorder,
-    ) {
+    pub fn paint_linear(painter: &mut dyn Painter, rect: Rect, border: &LinearBorder) {
         if border.side.width <= 0.0 {
             return;
         }
@@ -380,7 +360,7 @@ impl ShapePainter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::styling::{BorderSide, BorderRadius, BorderStyle, Color, LinearBorderEdges};
+    use flui_types::styling::{BorderRadius, BorderSide, BorderStyle, Color, LinearBorderEdges};
 
     fn test_side() -> BorderSide {
         BorderSide::new(Color::BLACK, 2.0, BorderStyle::Solid)

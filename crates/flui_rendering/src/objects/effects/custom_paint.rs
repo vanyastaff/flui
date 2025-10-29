@@ -1,8 +1,10 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, PictureLayer};
+use flui_types::Size;
 
 /// Custom painter trait
 ///
@@ -226,8 +228,6 @@ impl RenderObject for RenderCustomPaint {
     }
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        
-
         // Use the size from layout phase
         let size = self.laid_out_size;
         let mut layers: Vec<BoxedLayer> = Vec::new();
@@ -283,10 +283,7 @@ mod tests {
 
     #[test]
     fn test_custom_paint_data_with_painter() {
-        let data = CustomPaintData::with_painter(
-            Box::new(MockPainter),
-            Size::new(50.0, 75.0),
-        );
+        let data = CustomPaintData::with_painter(Box::new(MockPainter), Size::new(50.0, 75.0));
         assert_eq!(data.size, Size::new(50.0, 75.0));
         assert!(data.painter.is_some());
         assert!(data.foreground_painter.is_none());
@@ -294,10 +291,7 @@ mod tests {
 
     #[test]
     fn test_custom_paint_data_with_foreground() {
-        let data = CustomPaintData::with_foreground(
-            Box::new(MockPainter),
-            Size::new(50.0, 75.0),
-        );
+        let data = CustomPaintData::with_foreground(Box::new(MockPainter), Size::new(50.0, 75.0));
         assert_eq!(data.size, Size::new(50.0, 75.0));
         assert!(data.painter.is_none());
         assert!(data.foreground_painter.is_some());
@@ -343,10 +337,7 @@ mod tests {
 
     #[test]
     fn test_render_custom_paint_with_painter() {
-        let custom = RenderCustomPaint::with_painter(
-            Box::new(MockPainter),
-            Size::new(50.0, 75.0),
-        );
+        let custom = RenderCustomPaint::with_painter(Box::new(MockPainter), Size::new(50.0, 75.0));
         assert_eq!(custom.size(), Size::new(50.0, 75.0));
         assert!(custom.painter.is_some());
         assert!(custom.foreground_painter.is_none());
@@ -354,10 +345,8 @@ mod tests {
 
     #[test]
     fn test_render_custom_paint_with_foreground() {
-        let custom = RenderCustomPaint::with_foreground(
-            Box::new(MockPainter),
-            Size::new(50.0, 75.0),
-        );
+        let custom =
+            RenderCustomPaint::with_foreground(Box::new(MockPainter), Size::new(50.0, 75.0));
         assert_eq!(custom.size(), Size::new(50.0, 75.0));
         assert!(custom.painter.is_none());
         assert!(custom.foreground_painter.is_some());

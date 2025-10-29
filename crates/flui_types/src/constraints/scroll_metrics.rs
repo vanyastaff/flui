@@ -446,10 +446,7 @@ impl FixedScrollMetrics {
     #[inline]
     #[must_use]
     pub fn with_pixels(&self, pixels: f32) -> Self {
-        Self {
-            pixels,
-            ..*self
-        }
+        Self { pixels, ..*self }
     }
 }
 

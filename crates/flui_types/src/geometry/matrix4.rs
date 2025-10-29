@@ -134,17 +134,26 @@ impl Matrix4 {
     #[inline]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        m00: f32, m01: f32, m02: f32, m03: f32,
-        m10: f32, m11: f32, m12: f32, m13: f32,
-        m20: f32, m21: f32, m22: f32, m23: f32,
-        m30: f32, m31: f32, m32: f32, m33: f32,
+        m00: f32,
+        m01: f32,
+        m02: f32,
+        m03: f32,
+        m10: f32,
+        m11: f32,
+        m12: f32,
+        m13: f32,
+        m20: f32,
+        m21: f32,
+        m22: f32,
+        m23: f32,
+        m30: f32,
+        m31: f32,
+        m32: f32,
+        m33: f32,
     ) -> Self {
         Self {
             m: [
-                m00, m01, m02, m03,
-                m10, m11, m12, m13,
-                m20, m21, m22, m23,
-                m30, m31, m32, m33,
+                m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23, m30, m31, m32, m33,
             ],
         }
     }
@@ -162,10 +171,7 @@ impl Matrix4 {
     pub const fn identity() -> Self {
         Self {
             m: [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
             ],
         }
     }
@@ -176,10 +182,7 @@ impl Matrix4 {
     #[inline]
     pub fn translation(x: f32, y: f32, z: f32) -> Self {
         Self::new(
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            x,   y,   z,   1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, x, y, z, 1.0,
         )
     }
 
@@ -189,10 +192,7 @@ impl Matrix4 {
     #[inline]
     pub fn scaling(x: f32, y: f32, z: f32) -> Self {
         Self::new(
-            x,   0.0, 0.0, 0.0,
-            0.0, y,   0.0, 0.0,
-            0.0, 0.0, z,   0.0,
-            0.0, 0.0, 0.0, 1.0,
+            x, 0.0, 0.0, 0.0, 0.0, y, 0.0, 0.0, 0.0, 0.0, z, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
     }
 
@@ -204,10 +204,7 @@ impl Matrix4 {
     pub fn rotation_z(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
         Self::new(
-            cos, sin, 0.0, 0.0,
-            -sin, cos, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            cos, sin, 0.0, 0.0, -sin, cos, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
     }
 
@@ -219,10 +216,7 @@ impl Matrix4 {
     pub fn rotation_x(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
         Self::new(
-            1.0, 0.0, 0.0, 0.0,
-            0.0, cos, sin, 0.0,
-            0.0, -sin, cos, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, cos, sin, 0.0, 0.0, -sin, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
     }
 
@@ -234,10 +228,7 @@ impl Matrix4 {
     pub fn rotation_y(angle: f32) -> Self {
         let (sin, cos) = angle.sin_cos();
         Self::new(
-            cos, 0.0, -sin, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            sin, 0.0, cos, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            cos, 0.0, -sin, 0.0, 0.0, 1.0, 0.0, 0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
     }
 
@@ -277,10 +268,7 @@ impl Matrix4 {
         let tan_y = skew_y.tan();
 
         Self::new(
-            1.0,   tan_y, 0.0, 0.0,
-            tan_x, 1.0,   0.0, 0.0,
-            0.0,   0.0,   1.0, 0.0,
-            0.0,   0.0,   0.0, 1.0,
+            1.0, tan_y, 0.0, 0.0, tan_x, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
     }
 
@@ -371,10 +359,8 @@ impl Matrix4 {
     pub fn transpose(&self) -> Self {
         let m = &self.m;
         Self::new(
-            m[0], m[4], m[8],  m[12],
-            m[1], m[5], m[9],  m[13],
-            m[2], m[6], m[10], m[14],
-            m[3], m[7], m[11], m[15],
+            m[0], m[4], m[8], m[12], m[1], m[5], m[9], m[13], m[2], m[6], m[10], m[14], m[3], m[7],
+            m[11], m[15],
         )
     }
 
@@ -398,8 +384,8 @@ impl Matrix4 {
     #[must_use]
     pub fn to_row_major_2d(&self) -> [[f32; 4]; 4] {
         [
-            [self.m[0], self.m[4], self.m[8],  self.m[12]],
-            [self.m[1], self.m[5], self.m[9],  self.m[13]],
+            [self.m[0], self.m[4], self.m[8], self.m[12]],
+            [self.m[1], self.m[5], self.m[9], self.m[13]],
             [self.m[2], self.m[6], self.m[10], self.m[14]],
             [self.m[3], self.m[7], self.m[11], self.m[15]],
         ]
@@ -409,8 +395,8 @@ impl Matrix4 {
     #[must_use]
     pub fn to_col_major_2d(&self) -> [[f32; 4]; 4] {
         [
-            [self.m[0], self.m[1], self.m[2],  self.m[3]],
-            [self.m[4], self.m[5], self.m[6],  self.m[7]],
+            [self.m[0], self.m[1], self.m[2], self.m[3]],
+            [self.m[4], self.m[5], self.m[6], self.m[7]],
             [self.m[8], self.m[9], self.m[10], self.m[11]],
             [self.m[12], self.m[13], self.m[14], self.m[15]],
         ]
@@ -514,21 +500,21 @@ impl Matrix4 {
         // Cofactor expansion along first row
         let m = &self.m;
 
-        let a0 = m[0] * (m[5] * (m[10] * m[15] - m[11] * m[14]) -
-                         m[9] * (m[6] * m[15] - m[7] * m[14]) +
-                         m[13] * (m[6] * m[11] - m[7] * m[10]));
+        let a0 = m[0]
+            * (m[5] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[6] * m[15] - m[7] * m[14])
+                + m[13] * (m[6] * m[11] - m[7] * m[10]));
 
-        let a1 = m[4] * (m[1] * (m[10] * m[15] - m[11] * m[14]) -
-                         m[9] * (m[2] * m[15] - m[3] * m[14]) +
-                         m[13] * (m[2] * m[11] - m[3] * m[10]));
+        let a1 = m[4]
+            * (m[1] * (m[10] * m[15] - m[11] * m[14]) - m[9] * (m[2] * m[15] - m[3] * m[14])
+                + m[13] * (m[2] * m[11] - m[3] * m[10]));
 
-        let a2 = m[8] * (m[1] * (m[6] * m[15] - m[7] * m[14]) -
-                         m[5] * (m[2] * m[15] - m[3] * m[14]) +
-                         m[13] * (m[2] * m[7] - m[3] * m[6]));
+        let a2 = m[8]
+            * (m[1] * (m[6] * m[15] - m[7] * m[14]) - m[5] * (m[2] * m[15] - m[3] * m[14])
+                + m[13] * (m[2] * m[7] - m[3] * m[6]));
 
-        let a3 = m[12] * (m[1] * (m[6] * m[11] - m[7] * m[10]) -
-                          m[5] * (m[2] * m[11] - m[3] * m[10]) +
-                          m[9] * (m[2] * m[7] - m[3] * m[6]));
+        let a3 = m[12]
+            * (m[1] * (m[6] * m[11] - m[7] * m[10]) - m[5] * (m[2] * m[11] - m[3] * m[10])
+                + m[9] * (m[2] * m[7] - m[3] * m[6]));
 
         a0 - a1 + a2 - a3
     }
@@ -662,10 +648,9 @@ impl From<[[f32; 4]; 4]> for Matrix4 {
     fn from(arr: [[f32; 4]; 4]) -> Self {
         Self {
             m: [
-                arr[0][0], arr[0][1], arr[0][2], arr[0][3],
-                arr[1][0], arr[1][1], arr[1][2], arr[1][3],
-                arr[2][0], arr[2][1], arr[2][2], arr[2][3],
-                arr[3][0], arr[3][1], arr[3][2], arr[3][3],
+                arr[0][0], arr[0][1], arr[0][2], arr[0][3], arr[1][0], arr[1][1], arr[1][2],
+                arr[1][3], arr[2][0], arr[2][1], arr[2][2], arr[2][3], arr[3][0], arr[3][1],
+                arr[3][2], arr[3][3],
             ],
         }
     }
@@ -995,10 +980,7 @@ mod tests {
     #[test]
     fn test_matrix4_transpose() {
         let m = Matrix4::new(
-            1.0,  2.0,  3.0,  4.0,
-            5.0,  6.0,  7.0,  8.0,
-            9.0,  10.0, 11.0, 12.0,
-            13.0, 14.0, 15.0, 16.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         );
 
         let t = m.transpose();
@@ -1063,10 +1045,7 @@ mod tests {
     #[test]
     fn test_matrix4_from_array() {
         let arr = [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            5.0, 10.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 10.0, 0.0, 1.0,
         ];
         let m = Matrix4::from(arr);
 
@@ -1140,10 +1119,7 @@ mod tests {
     #[test]
     fn test_matrix4_transpose_in_place() {
         let mut m = Matrix4::new(
-            1.0,  2.0,  3.0,  4.0,
-            5.0,  6.0,  7.0,  8.0,
-            9.0,  10.0, 11.0, 12.0,
-            13.0, 14.0, 15.0, 16.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         );
 
         let original = m;

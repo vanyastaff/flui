@@ -30,7 +30,7 @@
 //! pool::release_container(container);
 //! ```
 
-use super::{ContainerLayer, ClipRectLayer};
+use super::{ClipRectLayer, ContainerLayer};
 use std::cell::RefCell;
 
 /// Maximum number of layers to keep in each pool
@@ -65,11 +65,7 @@ thread_local! {
 /// assert!(container.children().is_empty());
 /// ```
 pub fn acquire_container() -> ContainerLayer {
-    CONTAINER_POOL.with(|pool| {
-        pool.borrow_mut()
-            .pop()
-            .unwrap_or_else(ContainerLayer::new)
-    })
+    CONTAINER_POOL.with(|pool| pool.borrow_mut().pop().unwrap_or_else(ContainerLayer::new))
 }
 
 /// Release a ContainerLayer back to the pool

@@ -6,10 +6,10 @@
 //! - Multiple shadows
 //! - Configurable offset, blur radius, spread radius, and color
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
+use crate::layer::{BoxedLayer, Layer};
+use crate::painter::{Paint, Painter};
 use flui_types::styling::{BoxShadow, ShadowQuality};
-use crate::layer::{Layer, BoxedLayer};
-use crate::painter::{Painter, Paint};
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// A layer that renders shadows around its child.
 ///
@@ -205,12 +205,7 @@ impl ShadowLayer {
                 );
 
                 let blur_paint = Paint {
-                    color: [
-                        color_array[0],
-                        color_array[1],
-                        color_array[2],
-                        step_alpha,
-                    ],
+                    color: [color_array[0], color_array[1], color_array[2], step_alpha],
                     stroke_width: 0.0,
                     anti_alias: true,
                 };
@@ -303,7 +298,9 @@ impl Layer for ShadowLayer {
         }
 
         // Hit testing only considers child, not shadows
-        self.child.as_ref().is_some_and(|c| c.hit_test(position, result))
+        self.child
+            .as_ref()
+            .is_some_and(|c| c.hit_test(position, result))
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -339,12 +336,7 @@ mod tests {
 
     #[test]
     fn test_shadow_new() {
-        let shadow = Shadow::new(
-            Color::rgba(0, 0, 0, 76),
-            Offset::new(2.0, 2.0),
-            4.0,
-            0.0,
-        );
+        let shadow = Shadow::new(Color::rgba(0, 0, 0, 76), Offset::new(2.0, 2.0), 4.0, 0.0);
 
         assert_eq!(shadow.offset, Offset::new(2.0, 2.0));
         assert_eq!(shadow.blur_radius, 4.0);
@@ -354,24 +346,14 @@ mod tests {
 
     #[test]
     fn test_shadow_inner() {
-        let shadow = Shadow::inner(
-            Color::rgba(0, 0, 0, 128),
-            Offset::new(0.0, 2.0),
-            4.0,
-            0.0,
-        );
+        let shadow = Shadow::inner(Color::rgba(0, 0, 0, 128), Offset::new(0.0, 2.0), 4.0, 0.0);
 
         assert!(shadow.inset);
     }
 
     #[test]
     fn test_shadow_with_no_blur() {
-        let shadow = Shadow::new(
-            Color::rgba(0, 0, 0, 51),
-            Offset::new(1.0, 1.0),
-            0.0,
-            0.0,
-        );
+        let shadow = Shadow::new(Color::rgba(0, 0, 0, 51), Offset::new(1.0, 1.0), 0.0, 0.0);
 
         assert_eq!(shadow.blur_radius, 0.0);
         assert_eq!(shadow.spread_radius, 0.0);

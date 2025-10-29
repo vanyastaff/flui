@@ -110,13 +110,6 @@ pub mod timeline;
 
 // Feature-gated modules
 
-
-
-
-
-
-
-
 // Re-exports
 pub use common::*;
 
@@ -133,7 +126,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// ```
 pub mod prelude {
     #[cfg(feature = "profiling")]
-    pub use crate::profiler::{Profiler, FramePhase, FrameStats};
+    pub use crate::profiler::{FramePhase, FrameStats, Profiler};
 
     #[cfg(feature = "timeline")]
     pub use crate::timeline::{Timeline, TimelineEvent};
@@ -154,6 +147,3 @@ mod tests {
         assert!(!VERSION.is_empty());
     }
 }
-
-
-

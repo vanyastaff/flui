@@ -14,42 +14,18 @@ pub mod render_object;
 pub mod render_pipeline;
 pub mod render_state;
 
-
-
-
-
-
-
-pub use arity::{
-    Arity,
-    LeafArity,
-    SingleArity,
-    MultiArity,
-};
+pub use arity::{Arity, LeafArity, MultiArity, SingleArity};
 
 // Re-exports
-pub use render_object::RenderObject;
-pub use dyn_render_object::{DynRenderObject, BoxedRenderObject};
-pub use layout_cx::{LayoutCx, SingleChild, MultiChild};
-pub use paint_cx::{PaintCx, SingleChildPaint, MultiChildPaint};
-pub use render_context::RenderContext;
-pub use render_pipeline::RenderPipeline;
 pub use cache::{LayoutCache, LayoutCacheKey, LayoutResult};
-pub use render_state::RenderState;
-pub use render_flags::{RenderFlags, AtomicRenderFlags};
+pub use dyn_render_object::{BoxedRenderObject, DynRenderObject};
+pub use layout_cx::{LayoutCx, MultiChild, SingleChild};
+pub use paint_cx::{MultiChildPaint, PaintCx, SingleChildPaint};
 pub use parent_data::{
-    ParentData,
-    ParentDataWithOffset,
-    BoxParentData,
-    ContainerParentData,
-    ContainerBoxParentData,
+    BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset,
 };
-
-
-
-
-
-
-
-
-
+pub use render_context::RenderContext;
+pub use render_flags::{AtomicRenderFlags, RenderFlags};
+pub use render_object::RenderObject;
+pub use render_pipeline::RenderPipeline;
+pub use render_state::RenderState;

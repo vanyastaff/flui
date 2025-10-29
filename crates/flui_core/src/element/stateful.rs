@@ -3,11 +3,11 @@
 //! This element type is created by StatefulWidget and manages a State object
 //! that persists across rebuilds.
 
-use std::fmt;
 use std::any::Any;
+use std::fmt;
 
-use crate::{ElementId, DynWidget, BoxedWidget};
 use super::dyn_element::ElementLifecycle;
+use crate::{BoxedWidget, DynWidget, ElementId};
 
 /// Object-safe State trait
 ///
@@ -23,7 +23,11 @@ pub trait DynState: fmt::Debug + Send + Sync + 'static {
     ///
     /// - `widget`: The current widget configuration
     /// - `context`: BuildContext for accessing inherited widgets and tree
-    fn build(&mut self, widget: &dyn DynWidget, context: &crate::element::BuildContext) -> BoxedWidget;
+    fn build(
+        &mut self,
+        widget: &dyn DynWidget,
+        context: &crate::element::BuildContext,
+    ) -> BoxedWidget;
 
     /// Called when widget configuration changes
     ///
@@ -305,7 +309,11 @@ mod tests {
     }
 
     impl DynState for TestState {
-        fn build(&mut self, _widget: &dyn DynWidget, _context: &crate::element::BuildContext) -> BoxedWidget {
+        fn build(
+            &mut self,
+            _widget: &dyn DynWidget,
+            _context: &crate::element::BuildContext,
+        ) -> BoxedWidget {
             Box::new(TestWidget { value: self.count })
         }
 
@@ -368,14 +376,26 @@ mod tests {
         let mut element = StatefulElement::new(widget, state);
 
         // Test state access
-        let state = element.state().as_any().downcast_ref::<TestState>().unwrap();
+        let state = element
+            .state()
+            .as_any()
+            .downcast_ref::<TestState>()
+            .unwrap();
         assert_eq!(state.count, 10);
 
         // Test mutable state access
-        let state_mut = element.state_mut().as_any_mut().downcast_mut::<TestState>().unwrap();
+        let state_mut = element
+            .state_mut()
+            .as_any_mut()
+            .downcast_mut::<TestState>()
+            .unwrap();
         state_mut.count = 20;
 
-        let state = element.state().as_any().downcast_ref::<TestState>().unwrap();
+        let state = element
+            .state()
+            .as_any()
+            .downcast_ref::<TestState>()
+            .unwrap();
         assert_eq!(state.count, 20);
     }
 }

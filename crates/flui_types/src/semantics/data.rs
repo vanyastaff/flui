@@ -163,7 +163,10 @@ impl SemanticsRole {
     #[inline]
     #[must_use]
     pub const fn is_selectable(&self) -> bool {
-        matches!(self, Self::Checkbox | Self::Radio | Self::Tab | Self::MenuItem)
+        matches!(
+            self,
+            Self::Checkbox | Self::Radio | Self::Tab | Self::MenuItem
+        )
     }
 
     /// Returns a human-readable name for this role

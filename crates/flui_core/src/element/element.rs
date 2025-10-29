@@ -84,23 +84,18 @@
 use std::fmt;
 
 use crate::element::{
-    ComponentElement,
-    StatefulElement,
-    InheritedElement,
-    ParentDataElement,
-    RenderElement,
-    ElementId,
-    ElementLifecycle,
+    ComponentElement, ElementId, ElementLifecycle, InheritedElement, ParentDataElement,
+    RenderElement, StatefulElement,
 };
-use crate::widget::DynWidget;
 use crate::render::DynRenderObject;
+use crate::widget::DynWidget;
 
 // Re-export common element types
 pub use crate::element::component::ComponentElement as Component;
-pub use crate::element::stateful::StatefulElement as Stateful;
 pub use crate::element::inherited::InheritedElement as Inherited;
 pub use crate::element::parent_data_element::ParentDataElement as ParentData;
 pub use crate::element::render_object_element::RenderElement as Render;
+pub use crate::element::stateful::StatefulElement as Stateful;
 
 /// Element - Heterogeneous element storage via enum
 ///
@@ -587,7 +582,9 @@ impl Element {
             Self::Render(r) => {
                 // Map the RefMut<Box<dyn DynRenderObject>> to RefMut<dyn DynRenderObject>
                 // Box<dyn T> needs **boxed to get &mut dyn T
-                Some(std::cell::RefMut::map(r.render_object_mut(), |boxed| &mut **boxed))
+                Some(std::cell::RefMut::map(r.render_object_mut(), |boxed| {
+                    &mut **boxed
+                }))
             }
             _ => None,
         }
@@ -702,7 +699,9 @@ impl Element {
     /// Caller must ensure pointer is used safely and respects RwLock semantics.
     #[inline]
     #[must_use]
-    pub fn render_state_ptr(&self) -> Option<*const parking_lot::RwLock<crate::render::RenderState>> {
+    pub fn render_state_ptr(
+        &self,
+    ) -> Option<*const parking_lot::RwLock<crate::render::RenderState>> {
         match self {
             Self::Render(r) => Some(r.render_state()),
             _ => None,

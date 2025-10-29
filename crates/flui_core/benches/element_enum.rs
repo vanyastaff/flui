@@ -3,8 +3,10 @@
 //! Measures the performance improvements from migrating from Box<dyn DynElement>
 //! to enum Element.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use flui_core::element::{Element, ComponentElement, StatefulElement, InheritedElement, ElementTree, ElementId};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use flui_core::element::{
+    ComponentElement, Element, ElementId, ElementTree, InheritedElement, StatefulElement,
+};
 use flui_core::widget::BoxedWidget;
 
 // Mock widget for benchmarking

@@ -63,7 +63,6 @@ impl GrowthDirection {
     }
 }
 
-
 /// Direction of a scroll gesture or animation
 ///
 /// Similar to Flutter's `ScrollDirection`.
@@ -156,7 +155,6 @@ impl ScrollDirection {
         }
     }
 }
-
 
 /// The direction in which a sliver's content is ordered
 ///

@@ -85,46 +85,37 @@ pub mod pool;
 pub mod shadow;
 pub mod transform;
 
-
-
-
-
-
-
-
-
 // Layer implementations
 
-
 // Re-export core types - Layer is now the main trait
-pub use base::{Layer, AnyLayer, LayerState};
+pub use base::{AnyLayer, Layer, LayerState};
 pub use handle::LayerHandle;
 
 // Re-export layer implementations
 pub use container::ContainerLayer;
 pub use offset::OffsetLayer;
 pub use opacity::OpacityLayer;
-pub use transform::{TransformLayer, Transform};
+pub use transform::{Transform, TransformLayer};
 
 // Clip layers
-pub use clip::{ClipRectLayer, ClipRRectLayer, ClipOvalLayer, ClipPathLayer};
-pub use picture::{PictureLayer, DrawCommand};
+pub use clip::{ClipOvalLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer};
+pub use picture::{DrawCommand, PictureLayer};
 
 // Gradient layer
 pub use gradient::GradientLayer;
 
 // Path layer
+pub use flui_types::painting::effects::{PathPaintMode, StrokeOptions};
 pub use path::PathLayer;
-pub use flui_types::painting::effects::{StrokeOptions, PathPaintMode};
 
 // Shadow layer
-pub use shadow::ShadowLayer;
 pub use flui_types::styling::{BoxShadow as Shadow, ShadowQuality};
+pub use shadow::ShadowLayer;
 
 // Blur and filter layers
 pub use blur::BlurLayer;
-pub use flui_types::painting::effects::{BlurQuality, BlurMode};
 pub use filter::FilterLayer;
+pub use flui_types::painting::effects::{BlurMode, BlurQuality};
 pub use flui_types::painting::effects::{ColorFilter, ColorMatrix};
 
 // Backdrop filter layer
@@ -132,21 +123,11 @@ pub use backdrop_filter::BackdropFilterLayer;
 pub use flui_types::painting::effects::ImageFilter;
 
 // Physical model layer (Material Design elevation)
+pub use flui_types::styling::{Elevation, MaterialType, PhysicalShape};
 pub use physical_model::PhysicalModelLayer;
-pub use flui_types::styling::{PhysicalShape, MaterialType, Elevation};
 
 /// Type-erased layer (for dynamic dispatch)
 ///
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
-
-
-
-
-
-
-
-
-
-

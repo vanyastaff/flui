@@ -42,7 +42,10 @@ impl AnimationStatus {
     #[inline]
     #[must_use]
     pub const fn is_stopped(&self) -> bool {
-        matches!(self, AnimationStatus::Dismissed | AnimationStatus::Completed)
+        matches!(
+            self,
+            AnimationStatus::Dismissed | AnimationStatus::Completed
+        )
     }
 
     /// Returns true if the animation is at the beginning (dismissed).
@@ -89,7 +92,6 @@ impl AnimationStatus {
         }
     }
 }
-
 
 /// Configures how an animation should behave when not in view.
 ///

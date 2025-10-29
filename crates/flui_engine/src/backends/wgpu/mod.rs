@@ -9,16 +9,13 @@ pub mod text;
 mod vertex;
 pub mod window;
 
-
-
-
-pub use vertex::{SolidVertex, ViewportUniforms};
-pub use text::{TextRenderer, TextCommand, TextAlign, TextRenderError};
 use pipeline::SolidPipeline;
 use tesselator::Tesselator;
+pub use text::{TextAlign, TextCommand, TextRenderError, TextRenderer};
+pub use vertex::{SolidVertex, ViewportUniforms};
 
-use crate::painter::{Painter, Paint, RRect};
-use flui_types::{Point, Rect, Offset, Size};
+use crate::painter::{Paint, Painter, RRect};
+use flui_types::{Offset, Point, Rect, Size};
 use glam::Mat4;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -27,10 +24,29 @@ use wgpu::util::DeviceExt;
 /// Internal GPU draw command
 #[derive(Debug, Clone)]
 enum GpuDrawCommand {
-    Rect { rect: Rect, color: [f32; 4], transform: Mat4 },
-    RRect { rrect: RRect, color: [f32; 4], transform: Mat4 },
-    Circle { center: Point, radius: f32, color: [f32; 4], transform: Mat4 },
-    Line { p1: Point, p2: Point, width: f32, color: [f32; 4], transform: Mat4 },
+    Rect {
+        rect: Rect,
+        color: [f32; 4],
+        transform: Mat4,
+    },
+    RRect {
+        rrect: RRect,
+        color: [f32; 4],
+        transform: Mat4,
+    },
+    Circle {
+        center: Point,
+        radius: f32,
+        color: [f32; 4],
+        transform: Mat4,
+    },
+    Line {
+        p1: Point,
+        p2: Point,
+        width: f32,
+        color: [f32; 4],
+        transform: Mat4,
+    },
     Text(TextCommand),
 }
 
@@ -44,7 +60,11 @@ struct PainterState {
 
 impl Default for PainterState {
     fn default() -> Self {
-        Self { transform: Mat4::IDENTITY, opacity: 1.0, clip_rect: None }
+        Self {
+            transform: Mat4::IDENTITY,
+            opacity: 1.0,
+            clip_rect: None,
+        }
     }
 }
 
@@ -73,7 +93,9 @@ impl WgpuPainter {
     }
 
     pub fn end_frame(&mut self) -> Result<(), RenderError> {
-        if self.commands.is_empty() { return Ok(()); }
+        if self.commands.is_empty() {
+            return Ok(());
+        }
         let mut renderer = self.renderer.lock();
         renderer.render_frame(&self.commands)?;
         self.commands.clear();
@@ -89,23 +111,33 @@ impl WgpuPainter {
 impl Painter for WgpuPainter {
     fn rect(&mut self, rect: Rect, paint: &Paint) {
         self.commands.push(GpuDrawCommand::Rect {
-            rect, color: self.apply_opacity(paint.color), transform: self.current_state.transform
+            rect,
+            color: self.apply_opacity(paint.color),
+            transform: self.current_state.transform,
         });
     }
     fn rrect(&mut self, rrect: RRect, paint: &Paint) {
         self.commands.push(GpuDrawCommand::RRect {
-            rrect, color: self.apply_opacity(paint.color), transform: self.current_state.transform
+            rrect,
+            color: self.apply_opacity(paint.color),
+            transform: self.current_state.transform,
         });
     }
     fn circle(&mut self, center: Point, radius: f32, paint: &Paint) {
         self.commands.push(GpuDrawCommand::Circle {
-            center, radius, color: self.apply_opacity(paint.color), transform: self.current_state.transform
+            center,
+            radius,
+            color: self.apply_opacity(paint.color),
+            transform: self.current_state.transform,
         });
     }
     fn line(&mut self, p1: Point, p2: Point, paint: &Paint) {
         self.commands.push(GpuDrawCommand::Line {
-            p1, p2, width: paint.stroke_width.max(1.0), color: self.apply_opacity(paint.color),
-            transform: self.current_state.transform
+            p1,
+            p2,
+            width: paint.stroke_width.max(1.0),
+            color: self.apply_opacity(paint.color),
+            transform: self.current_state.transform,
         });
     }
     fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {
@@ -119,26 +151,38 @@ impl Painter for WgpuPainter {
             transform: self.current_state.transform,
         }));
     }
-    fn save(&mut self) { self.state_stack.push(self.current_state.clone()); }
-    fn restore(&mut self) { if let Some(s) = self.state_stack.pop() { self.current_state = s; }}
+    fn save(&mut self) {
+        self.state_stack.push(self.current_state.clone());
+    }
+    fn restore(&mut self) {
+        if let Some(s) = self.state_stack.pop() {
+            self.current_state = s;
+        }
+    }
     fn translate(&mut self, offset: Offset) {
-        self.current_state.transform = self.current_state.transform *
-            Mat4::from_translation(glam::Vec3::new(offset.dx, offset.dy, 0.0));
+        self.current_state.transform = self.current_state.transform
+            * Mat4::from_translation(glam::Vec3::new(offset.dx, offset.dy, 0.0));
     }
     fn rotate(&mut self, angle: f32) {
         self.current_state.transform = self.current_state.transform * Mat4::from_rotation_z(angle);
     }
     fn scale(&mut self, sx: f32, sy: f32) {
-        self.current_state.transform = self.current_state.transform *
-            Mat4::from_scale(glam::Vec3::new(sx, sy, 1.0));
+        self.current_state.transform =
+            self.current_state.transform * Mat4::from_scale(glam::Vec3::new(sx, sy, 1.0));
     }
     fn clip_rect(&mut self, rect: Rect) {
         self.current_state.clip_rect = Some(if let Some(c) = self.current_state.clip_rect {
             c.intersection(&rect).unwrap_or(Rect::ZERO)
-        } else { rect });
+        } else {
+            rect
+        });
     }
-    fn clip_rrect(&mut self, rrect: RRect) { self.clip_rect(rrect.rect); }
-    fn set_opacity(&mut self, opacity: f32) { self.current_state.opacity *= opacity.clamp(0.0, 1.0); }
+    fn clip_rrect(&mut self, rrect: RRect) {
+        self.clip_rect(rrect.rect);
+    }
+    fn set_opacity(&mut self, opacity: f32) {
+        self.current_state.opacity *= opacity.clamp(0.0, 1.0);
+    }
 }
 
 /// WGPU renderer state
@@ -158,25 +202,35 @@ pub struct WgpuRenderer {
 impl WgpuRenderer {
     pub async fn new(window: Option<Arc<winit::window::Window>>) -> Result<Self, RenderError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(), ..Default::default()
+            backends: wgpu::Backends::all(),
+            ..Default::default()
         });
         let surface = if let Some(w) = window.as_ref() {
-            Some(instance.create_surface(w.clone())
-                .map_err(|e| RenderError::SurfaceCreation(e.to_string()))?)
-        } else { None };
-        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: surface.as_ref(),
-        }).await.map_err(|e| RenderError::AdapterRequest(e.to_string()))?;
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
+            Some(
+                instance
+                    .create_surface(w.clone())
+                    .map_err(|e| RenderError::SurfaceCreation(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: surface.as_ref(),
+            })
+            .await
+            .map_err(|e| RenderError::AdapterRequest(e.to_string()))?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Flui WGPU Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
-            },
-        ).await.map_err(|e| RenderError::DeviceCreation(e.to_string()))?;
+            })
+            .await
+            .map_err(|e| RenderError::DeviceCreation(e.to_string()))?;
         let surface_config = if let (Some(s), Some(w)) = (surface.as_ref(), window) {
             let size = w.inner_size();
             let caps = s.get_capabilities(&adapter);
@@ -192,15 +246,22 @@ impl WgpuRenderer {
             };
             s.configure(&device, &config);
             Some(config)
-        } else { None };
-        let surface_format = surface_config.as_ref().map(|c| c.format)
+        } else {
+            None
+        };
+        let surface_format = surface_config
+            .as_ref()
+            .map(|c| c.format)
             .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
-        let viewport_size = surface_config.as_ref()
-            .map(|c| (c.width as f32, c.height as f32)).unwrap_or((800.0, 600.0));
+        let viewport_size = surface_config
+            .as_ref()
+            .map(|c| (c.width as f32, c.height as f32))
+            .unwrap_or((800.0, 600.0));
 
         // Use 4x MSAA for smooth anti-aliasing
         let sample_count = 4;
-        let solid_pipeline = SolidPipeline::new_with_msaa(&device, surface_format, viewport_size, sample_count);
+        let solid_pipeline =
+            SolidPipeline::new_with_msaa(&device, surface_format, viewport_size, sample_count);
 
         // Create MSAA texture if we have a surface
         let msaa_texture = surface_config.as_ref().map(|config| {
@@ -222,7 +283,14 @@ impl WgpuRenderer {
 
         // Initialize text renderer with same MSAA as main renderer
         let text_renderer = surface_config.as_ref().map(|c| {
-            TextRenderer::new_with_msaa(&device, &queue, surface_format, c.width, c.height, sample_count)
+            TextRenderer::new_with_msaa(
+                &device,
+                &queue,
+                surface_format,
+                c.width,
+                c.height,
+                sample_count,
+            )
         });
 
         Ok(Self {
@@ -245,14 +313,33 @@ impl WgpuRenderer {
         self.tesselator.clear();
         for cmd in commands {
             match cmd {
-                GpuDrawCommand::Rect { rect, color, transform } =>
-                    self.tesselator.tesselate_rect(*rect, *color, *transform),
-                GpuDrawCommand::RRect { rrect, color, transform } =>
-                    self.tesselator.tesselate_rrect(*rrect, *color, *transform),
-                GpuDrawCommand::Circle { center, radius, color, transform } =>
-                    self.tesselator.tesselate_circle(*center, *radius, *color, *transform),
-                GpuDrawCommand::Line { p1, p2, width, color, transform } =>
-                    self.tesselator.tesselate_line(*p1, *p2, *width, *color, *transform),
+                GpuDrawCommand::Rect {
+                    rect,
+                    color,
+                    transform,
+                } => self.tesselator.tesselate_rect(*rect, *color, *transform),
+                GpuDrawCommand::RRect {
+                    rrect,
+                    color,
+                    transform,
+                } => self.tesselator.tesselate_rrect(*rrect, *color, *transform),
+                GpuDrawCommand::Circle {
+                    center,
+                    radius,
+                    color,
+                    transform,
+                } => self
+                    .tesselator
+                    .tesselate_circle(*center, *radius, *color, *transform),
+                GpuDrawCommand::Line {
+                    p1,
+                    p2,
+                    width,
+                    color,
+                    transform,
+                } => self
+                    .tesselator
+                    .tesselate_line(*p1, *p2, *width, *color, *transform),
                 GpuDrawCommand::Text(text_cmd) => {
                     text_commands.push(text_cmd.clone());
                 }
@@ -262,33 +349,45 @@ impl WgpuRenderer {
         // Prepare text rendering if we have text commands
         if let Some(ref mut text_renderer) = self.text_renderer {
             if !text_commands.is_empty() {
-                text_renderer.prepare(&self.device, &self.queue, &text_commands)
+                text_renderer
+                    .prepare(&self.device, &self.queue, &text_commands)
                     .map_err(|e| RenderError::TextRenderingFailed(e.to_string()))?;
             }
         }
-        if self.tesselator.vertex_count() == 0 { return Ok(()); }
-        let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&self.tesselator.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let ibuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&self.tesselator.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        if self.tesselator.vertex_count() == 0 {
+            return Ok(());
+        }
+        let vbuf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(&self.tesselator.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let ibuf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(&self.tesselator.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
         if let Some(surface) = &self.surface {
             let frame = surface.get_current_texture()?;
-            let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
 
             // Create MSAA view if available
-            let msaa_view = self.msaa_texture.as_ref().map(|tex| {
-                tex.create_view(&wgpu::TextureViewDescriptor::default())
-            });
+            let msaa_view = self
+                .msaa_texture
+                .as_ref()
+                .map(|tex| tex.create_view(&wgpu::TextureViewDescriptor::default()));
 
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                });
             {
                 // Use MSAA texture as render target, resolve to screen
                 let (render_view, resolve_target) = if let Some(ref msaa) = msaa_view {
@@ -303,11 +402,18 @@ impl WgpuRenderer {
                         view: render_view,
                         resolve_target,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.1,
+                                g: 0.1,
+                                b: 0.1,
+                                a: 1.0,
+                            }),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
-                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
                 });
                 // Render shapes first
                 if self.tesselator.vertex_count() > 0 {
@@ -321,7 +427,8 @@ impl WgpuRenderer {
                 // Render text on top of shapes
                 if let Some(ref text_renderer) = self.text_renderer {
                     if !text_commands.is_empty() {
-                        text_renderer.render(&mut rpass)
+                        text_renderer
+                            .render(&mut rpass)
                             .map_err(|e| RenderError::TextRenderingFailed(e.to_string()))?;
                     }
                 }
@@ -334,9 +441,11 @@ impl WgpuRenderer {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if let (Some(s), Some(c)) = (self.surface.as_ref(), self.surface_config.as_mut()) {
-            c.width = width; c.height = height;
+            c.width = width;
+            c.height = height;
             s.configure(&self.device, c);
-            self.solid_pipeline.update_viewport(&self.queue, width as f32, height as f32);
+            self.solid_pipeline
+                .update_viewport(&self.queue, width as f32, height as f32);
 
             // Recreate MSAA texture with new size
             self.msaa_texture = Some(self.device.create_texture(&wgpu::TextureDescriptor {
@@ -362,23 +471,24 @@ impl WgpuRenderer {
     }
 
     pub fn surface_size(&self) -> Option<Size> {
-        self.surface_config.as_ref().map(|c| Size::new(c.width as f32, c.height as f32))
+        self.surface_config
+            .as_ref()
+            .map(|c| Size::new(c.width as f32, c.height as f32))
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
-    #[error("Failed to create surface: {0}")] SurfaceCreation(String),
-    #[error("No suitable GPU adapter found")] AdapterNotFound,
-    #[error("Failed to request adapter: {0}")] AdapterRequest(String),
-    #[error("Failed to create device: {0}")] DeviceCreation(String),
-    #[error("Surface error: {0}")] SurfaceError(#[from] wgpu::SurfaceError),
-    #[error("Text rendering failed: {0}")] TextRenderingFailed(String),
+    #[error("Failed to create surface: {0}")]
+    SurfaceCreation(String),
+    #[error("No suitable GPU adapter found")]
+    AdapterNotFound,
+    #[error("Failed to request adapter: {0}")]
+    AdapterRequest(String),
+    #[error("Failed to create device: {0}")]
+    DeviceCreation(String),
+    #[error("Surface error: {0}")]
+    SurfaceError(#[from] wgpu::SurfaceError),
+    #[error("Text rendering failed: {0}")]
+    TextRenderingFailed(String),
 }
-
-
-
-
-
-
-

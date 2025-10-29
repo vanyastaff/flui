@@ -2,12 +2,12 @@
 //!
 //! Provides access to the element tree and InheritedWidgets during build phase.
 
-use std::any::TypeId;
-use std::sync::Arc;
-use parking_lot::RwLock;
 use crate::ElementId;
 use crate::element::ElementTree;
-use crate::widget::{InheritedWidget, DynWidget};
+use crate::widget::{DynWidget, InheritedWidget};
+use parking_lot::RwLock;
+use std::any::TypeId;
+use std::sync::Arc;
 
 /// BuildContext - provides access to tree during widget build
 ///
@@ -126,7 +126,9 @@ impl BuildContext {
 
                 if DynWidget::type_id(widget) == target_type_id {
                     // Found it! Try to downcast
-                    if let Some(inherited_widget) = (widget as &dyn std::any::Any).downcast_ref::<T>() {
+                    if let Some(inherited_widget) =
+                        (widget as &dyn std::any::Any).downcast_ref::<T>()
+                    {
                         let result = inherited_widget.clone();
 
                         // Drop read lock before acquiring write lock (to avoid deadlock)
@@ -291,13 +293,13 @@ impl BuildContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use parking_lot::RwLock;
-    use crate::widget::{Widget, DynWidget, RenderObjectWidget};
-    use crate::element::{RenderElement, InheritedElement};
-    use crate::{RenderObject, LeafArity, LayoutCx, PaintCx};
-    use flui_types::Size;
+    use crate::element::{InheritedElement, RenderElement};
+    use crate::widget::{DynWidget, RenderObjectWidget, Widget};
+    use crate::{LayoutCx, LeafArity, PaintCx, RenderObject};
     use flui_engine::{BoxedLayer, ContainerLayer};
+    use flui_types::Size;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
 
     // Test theme widget
     #[derive(Debug, Clone, PartialEq)]
@@ -380,7 +382,9 @@ mod tests {
         // (In real code, this would be done by build system)
         {
             let mut tree_guard = tree.write();
-            if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(child_id) {
+            if let Some(crate::element::Element::Component(component)) =
+                tree_guard.get_mut(child_id)
+            {
                 // Set up parent relationship would be done here
                 // For now, this is just a compilation test
             }

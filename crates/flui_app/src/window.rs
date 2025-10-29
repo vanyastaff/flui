@@ -3,8 +3,8 @@
 //! This module provides window configuration and the main entry point
 //! for running Flui applications.
 
-use flui_core::DynWidget;
 use crate::app::FluiApp;
+use flui_core::DynWidget;
 
 /// Run a Flui application
 ///

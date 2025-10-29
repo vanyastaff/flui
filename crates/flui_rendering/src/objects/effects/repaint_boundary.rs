@@ -1,8 +1,10 @@
 //! RenderRepaintBoundary - optimization boundary for repainting
 
-use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::Size;
 
 /// RenderObject that creates a repaint boundary
 ///

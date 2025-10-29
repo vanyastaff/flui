@@ -1,8 +1,10 @@
 //! RenderLimitedBox - limits max width/height
 
-use flui_types::{Size, constraints::BoxConstraints};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::{Size, constraints::BoxConstraints};
 
 /// RenderObject that limits maximum size when unconstrained
 ///
@@ -28,7 +30,10 @@ pub struct RenderLimitedBox {
 impl RenderLimitedBox {
     /// Create new RenderLimitedBox
     pub fn new(max_width: f32, max_height: f32) -> Self {
-        Self { max_width, max_height }
+        Self {
+            max_width,
+            max_height,
+        }
     }
 
     /// Set new max width

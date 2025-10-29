@@ -1,8 +1,10 @@
 //! RenderAspectRatio - maintains aspect ratio
 
-use flui_types::{Size, constraints::BoxConstraints};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::{Size, constraints::BoxConstraints};
 
 /// RenderObject that maintains an aspect ratio
 ///
@@ -83,7 +85,6 @@ impl RenderObject for RenderAspectRatio {
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         let child = cx.child();
-        
 
         // Simply return child layer - no transformation needed
         (cx.capture_child_layer(child)) as _

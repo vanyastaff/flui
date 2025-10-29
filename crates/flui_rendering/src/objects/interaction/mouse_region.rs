@@ -1,15 +1,16 @@
 //! RenderMouseRegion - handles mouse hover events
 
-use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::Size;
 
 /// Mouse hover event callbacks
 #[derive(Clone)]
 pub struct MouseCallbacks {
     // For now, we use Option<fn()> placeholders
     // In a real implementation, these would be proper callback types
-
     /// Called when mouse enters the region
     pub on_enter: Option<fn()>,
 

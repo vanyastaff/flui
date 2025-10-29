@@ -2,10 +2,10 @@
 //!
 //! A composited layer that represents a visual element in the scene graph.
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
 use crate::painter::Painter;
-use std::sync::Arc;
+use flui_types::{Event, HitTestResult, Offset, Rect};
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// Layer lifecycle state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

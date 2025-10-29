@@ -3,9 +3,11 @@
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
 
-use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::Size;
 
 // ===== Data Structure =====
 
@@ -24,10 +26,7 @@ pub struct AnnotatedRegionData<T: Clone + Send + Sync + std::fmt::Debug + 'stati
 impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> AnnotatedRegionData<T> {
     /// Create new annotated region data
     pub fn new(value: T) -> Self {
-        Self {
-            value,
-            sized: true,
-        }
+        Self { value, sized: true }
     }
 
     /// Create with custom sized flag

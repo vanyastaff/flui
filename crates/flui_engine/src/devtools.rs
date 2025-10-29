@@ -257,7 +257,12 @@ impl PerformanceOverlay {
         // Draw FPS
         if self.show_fps {
             let fps_text = format!("FPS: {:.1}", avg_fps);
-            painter.text(&fps_text, Point::new(padding_x, current_y), font_size, &text_paint);
+            painter.text(
+                &fps_text,
+                Point::new(padding_x, current_y),
+                font_size,
+                &text_paint,
+            );
             current_y += line_height;
         }
 
@@ -265,13 +270,23 @@ impl PerformanceOverlay {
         if let Some(stats) = stats {
             if self.show_frame_time {
                 let time_text = format!("Frame: {:.2}ms", stats.total_time_ms());
-                painter.text(&time_text, Point::new(padding_x, current_y), font_size, &text_paint);
+                painter.text(
+                    &time_text,
+                    Point::new(padding_x, current_y),
+                    font_size,
+                    &text_paint,
+                );
                 current_y += line_height;
 
                 // Draw paint phase time if available
                 if let Some(paint_phase) = stats.phase(FramePhase::Paint) {
                     let paint_text = format!("Paint: {:.2}ms", paint_phase.duration_ms());
-                    painter.text(&paint_text, Point::new(padding_x, current_y), font_size, &text_paint);
+                    painter.text(
+                        &paint_text,
+                        Point::new(padding_x, current_y),
+                        font_size,
+                        &text_paint,
+                    );
                     current_y += line_height;
                 }
             }
@@ -283,10 +298,20 @@ impl PerformanceOverlay {
                         color: [1.0, 0.3, 0.3, self.text_opacity], // Red for jank with text opacity
                         ..Default::default()
                     };
-                    painter.text("⚠ JANK", Point::new(padding_x, current_y), font_size, &jank_paint);
+                    painter.text(
+                        "⚠ JANK",
+                        Point::new(padding_x, current_y),
+                        font_size,
+                        &jank_paint,
+                    );
                 } else {
                     let jank_text = format!("Jank: {:.1}%", jank_pct);
-                    painter.text(&jank_text, Point::new(padding_x, current_y), font_size, &text_paint);
+                    painter.text(
+                        &jank_text,
+                        Point::new(padding_x, current_y),
+                        font_size,
+                        &text_paint,
+                    );
                 }
             }
         }
@@ -422,7 +447,12 @@ impl FrameTimelineGraph {
             color: [0.8, 0.8, 0.8, self.text_opacity],
             ..Default::default()
         };
-        painter.text("Frame Time", Point::new(x + 5.0, y + 12.0), 10.0, &text_paint);
+        painter.text(
+            "Frame Time",
+            Point::new(x + 5.0, y + 12.0),
+            10.0,
+            &text_paint,
+        );
 
         painter.restore();
     }
@@ -516,8 +546,10 @@ impl MemoryGraph {
                 let mem2 = history[i + 1].total_mb() as f32;
 
                 // Normalize to graph height
-                let y1 = y + self.height - (mem1 / self.max_memory_mb * self.height).min(self.height);
-                let y2 = y + self.height - (mem2 / self.max_memory_mb * self.height).min(self.height);
+                let y1 =
+                    y + self.height - (mem1 / self.max_memory_mb * self.height).min(self.height);
+                let y2 =
+                    y + self.height - (mem2 / self.max_memory_mb * self.height).min(self.height);
 
                 let x1 = x + i as f32 * point_width;
                 let x2 = x + (i + 1) as f32 * point_width;
@@ -552,7 +584,12 @@ impl MemoryGraph {
                 color: [1.0, 0.3, 0.3, self.text_opacity],
                 ..Default::default()
             };
-            painter.text("⚠ LEAK?", Point::new(x + 5.0, y + 60.0), 11.0, &warning_paint);
+            painter.text(
+                "⚠ LEAK?",
+                Point::new(x + 5.0, y + 60.0),
+                11.0,
+                &warning_paint,
+            );
         }
 
         painter.restore();
@@ -634,8 +671,9 @@ impl UnifiedDevToolsOverlay {
     pub fn render(
         &self,
         profiler: &flui_devtools::profiler::Profiler,
-        #[cfg(feature = "memory-profiler")]
-        memory_profiler: Option<&flui_devtools::memory::MemoryProfiler>,
+        #[cfg(feature = "memory-profiler")] memory_profiler: Option<
+            &flui_devtools::memory::MemoryProfiler,
+        >,
         painter: &mut dyn crate::Painter,
         viewport_size: flui_types::Size,
     ) {
@@ -673,7 +711,7 @@ impl UnifiedDevToolsOverlay {
             OverlayCorner::BottomLeft => (margin, viewport_size.height - total_height - margin),
             OverlayCorner::BottomRight => (
                 viewport_size.width - self.width - margin,
-                viewport_size.height - total_height - margin
+                viewport_size.height - total_height - margin,
             ),
         };
 
@@ -706,18 +744,33 @@ impl UnifiedDevToolsOverlay {
                 color: [0.7, 0.9, 1.0, self.text_opacity], // Light blue
                 ..Default::default()
             };
-            painter.text("⚡ PERFORMANCE", Point::new(padding_x, y), 12.0, &title_paint);
+            painter.text(
+                "⚡ PERFORMANCE",
+                Point::new(padding_x, y),
+                12.0,
+                &title_paint,
+            );
             y += line_height + 2.0;
 
             // FPS
             let fps_text = format!("FPS: {:.1}", avg_fps);
-            painter.text(&fps_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+            painter.text(
+                &fps_text,
+                Point::new(padding_x + 15.0, y),
+                11.0,
+                &text_paint,
+            );
             y += line_height;
 
             // Frame time
             if let Some(stats) = stats {
                 let time_text = format!("Frame: {:.2}ms", stats.total_time_ms());
-                painter.text(&time_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                painter.text(
+                    &time_text,
+                    Point::new(padding_x + 15.0, y),
+                    11.0,
+                    &text_paint,
+                );
                 y += line_height;
 
                 // Jank
@@ -729,7 +782,12 @@ impl UnifiedDevToolsOverlay {
                     painter.text("⚠ JANK", Point::new(padding_x + 15.0, y), 11.0, &jank_paint);
                 } else {
                     let jank_text = format!("Jank: {:.1}%", jank_pct);
-                    painter.text(&jank_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                    painter.text(
+                        &jank_text,
+                        Point::new(padding_x + 15.0, y),
+                        11.0,
+                        &text_paint,
+                    );
                 }
                 y += line_height;
             }
@@ -822,17 +880,32 @@ impl UnifiedDevToolsOverlay {
 
                 let current_mb = mem_profiler.current_stats().total_mb();
                 let mem_text = format!("Current: {:.1} MB", current_mb);
-                painter.text(&mem_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                painter.text(
+                    &mem_text,
+                    Point::new(padding_x + 15.0, y),
+                    11.0,
+                    &text_paint,
+                );
                 y += line_height;
 
                 if let Some(peak) = mem_profiler.peak_memory() {
                     let peak_text = format!("Peak: {:.1} MB", peak.total_mb());
-                    painter.text(&peak_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                    painter.text(
+                        &peak_text,
+                        Point::new(padding_x + 15.0, y),
+                        11.0,
+                        &text_paint,
+                    );
                     y += line_height;
                 }
 
                 let avg_text = format!("Avg: {:.1} MB", mem_profiler.average_memory_mb());
-                painter.text(&avg_text, Point::new(padding_x + 15.0, y), 11.0, &text_paint);
+                painter.text(
+                    &avg_text,
+                    Point::new(padding_x + 15.0, y),
+                    11.0,
+                    &text_paint,
+                );
                 y += line_height;
 
                 // Leak warning
@@ -841,7 +914,12 @@ impl UnifiedDevToolsOverlay {
                         color: [1.0, 0.3, 0.3, self.text_opacity],
                         ..Default::default()
                     };
-                    painter.text("⚠ LEAK DETECTED", Point::new(padding_x + 15.0, y), 11.0, &warning_paint);
+                    painter.text(
+                        "⚠ LEAK DETECTED",
+                        Point::new(padding_x + 15.0, y),
+                        11.0,
+                        &warning_paint,
+                    );
                 }
             }
         }
@@ -1094,13 +1172,15 @@ impl DevToolsLayout {
     pub fn render(
         &self,
         profiler: &flui_devtools::profiler::Profiler,
-        #[cfg(feature = "memory-profiler")]
-        memory_profiler: Option<&flui_devtools::memory::MemoryProfiler>,
+        #[cfg(feature = "memory-profiler")] memory_profiler: Option<
+            &flui_devtools::memory::MemoryProfiler,
+        >,
         painter: &mut dyn crate::Painter,
         viewport_size: flui_types::Size,
     ) {
         if self.show_performance {
-            self.performance_overlay.render(profiler, painter, viewport_size);
+            self.performance_overlay
+                .render(profiler, painter, viewport_size);
         }
 
         if self.show_timeline {
@@ -1110,7 +1190,8 @@ impl DevToolsLayout {
         #[cfg(feature = "memory-profiler")]
         if self.show_memory {
             if let Some(mem_profiler) = memory_profiler {
-                self.memory_graph.render(mem_profiler, painter, viewport_size);
+                self.memory_graph
+                    .render(mem_profiler, painter, viewport_size);
             }
         }
     }

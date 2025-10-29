@@ -3,8 +3,8 @@
 //! Slivers are scrollable areas that can lay out their children in a scrollable viewport.
 //! This module provides constraint and geometry types for slivers.
 
-use crate::layout::{Axis, AxisDirection};
 use super::direction::GrowthDirection;
+use crate::layout::{Axis, AxisDirection};
 
 /// Immutable layout constraints for slivers
 ///
@@ -184,7 +184,9 @@ impl SliverConstraints {
     #[must_use]
     pub fn visible_extent(&self, total_extent: f32) -> f32 {
         let corrected_offset = self.scroll_offset_corrected();
-        (total_extent - corrected_offset).max(0.0).min(self.remaining_paint_extent)
+        (total_extent - corrected_offset)
+            .max(0.0)
+            .min(self.remaining_paint_extent)
     }
 
     /// Copy constraints with different scroll offset

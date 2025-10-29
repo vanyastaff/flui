@@ -1,8 +1,10 @@
 //! RenderPadding - adds padding around a child
 
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
+use flui_engine::{BoxedLayer, TransformLayer};
 use flui_types::{EdgeInsets, Offset, Size};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{TransformLayer, BoxedLayer};
 
 /// RenderObject that adds padding around its child
 ///

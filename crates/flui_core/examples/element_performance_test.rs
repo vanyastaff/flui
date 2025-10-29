@@ -3,9 +3,11 @@
 //! This is a standalone test that doesn't require criterion or other dependencies.
 //! Run with: cargo run --example element_performance_test --release
 
-use std::time::Instant;
-use flui_core::element::{Element, ComponentElement, StatefulElement, InheritedElement, ElementTree};
+use flui_core::element::{
+    ComponentElement, Element, ElementTree, InheritedElement, StatefulElement,
+};
 use flui_core::widget::BoxedWidget;
+use std::time::Instant;
 
 // Mock widget for testing
 #[derive(Debug, Clone)]
@@ -106,7 +108,10 @@ fn main() {
     let total_ops = iterations * elements.len();
     let per_op = duration.as_nanos() / total_ops as u128;
 
-    println!("  {} match operations: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
+    println!(
+        "  {} match operations: {:?} ({} ns/op) [sum={}]",
+        total_ops, duration, per_op, sum
+    );
 
     println!();
 
@@ -137,7 +142,10 @@ fn main() {
     let duration = start.elapsed();
     let total_ops = iterations * ids.len();
     let per_op = duration.as_nanos() / total_ops as u128;
-    println!("  parent() × {}: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
+    println!(
+        "  parent() × {}: {:?} ({} ns/op) [sum={}]",
+        total_ops, duration, per_op, sum
+    );
 
     // lifecycle() calls
     let iterations = 10_000;
@@ -153,7 +161,10 @@ fn main() {
     let duration = start.elapsed();
     let total_ops = iterations * ids.len();
     let per_op = duration.as_nanos() / total_ops as u128;
-    println!("  lifecycle() × {}: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
+    println!(
+        "  lifecycle() × {}: {:?} ({} ns/op) [sum={}]",
+        total_ops, duration, per_op, sum
+    );
 
     // is_dirty() calls
     let iterations = 10_000;
@@ -169,7 +180,10 @@ fn main() {
     let duration = start.elapsed();
     let total_ops = iterations * ids.len();
     let per_op = duration.as_nanos() / total_ops as u128;
-    println!("  is_dirty() × {}: {:?} ({} ns/op) [sum={}]", total_ops, duration, per_op, sum);
+    println!(
+        "  is_dirty() × {}: {:?} ({} ns/op) [sum={}]",
+        total_ops, duration, per_op, sum
+    );
 
     println!();
 

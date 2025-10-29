@@ -31,7 +31,7 @@
 
 use bon::Builder;
 use flui_core::{BoxedWidget, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::{RenderStack, MultiArity};
+use flui_rendering::{MultiArity, RenderStack};
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that positions its children relative to the edges of its box.
@@ -200,7 +200,7 @@ impl Stack {
     /// stack.add_child(Text::new("Overlay"));
     /// ```
     pub fn add_child<W: Widget + 'static>(&mut self, child: W) {
-        self.children.push(Box::new(child));
+        self.children.push(BoxedWidget::new(child));
     }
 
     /// Sets the children widgets.
@@ -331,8 +331,8 @@ macro_rules! stack {
 mod tests {
     use super::*;
     use flui_core::{LeafRenderObjectElement, RenderObjectWidget};
-    use flui_types::EdgeInsets;
     use flui_rendering::RenderPadding;
+    use flui_types::EdgeInsets;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
@@ -346,8 +346,6 @@ mod tests {
             Self { id: id.to_string() }
         }
     }
-
-    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

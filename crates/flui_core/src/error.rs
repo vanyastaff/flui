@@ -33,9 +33,9 @@
 //! }
 //! ```
 
-use thiserror::Error;
-use std::sync::Arc;
 use std::borrow::Cow;
+use std::sync::Arc;
+use thiserror::Error;
 
 use crate::element::{ElementId, ElementLifecycle};
 
@@ -50,10 +50,7 @@ pub enum CoreError {
 
     /// Invalid parent-child relationship
     #[error("Invalid parent-child relationship: parent={parent}, child={child}")]
-    InvalidHierarchy {
-        parent: ElementId,
-        child: ElementId,
-    },
+    InvalidHierarchy { parent: ElementId, child: ElementId },
 
     /// Element is not mounted in tree
     #[error("Element {0} is not mounted")]
@@ -61,9 +58,7 @@ pub enum CoreError {
 
     /// Cannot update element due to type mismatch
     #[error("Cannot update element {id}: widget type mismatch")]
-    TypeMismatch {
-        id: ElementId,
-    },
+    TypeMismatch { id: ElementId },
 
     /// Rebuild operation failed
     #[error("Rebuild failed for element {id}: {reason}")]
@@ -78,10 +73,7 @@ pub enum CoreError {
 
     /// Slot index out of bounds
     #[error("Slot index {slot} out of bounds for element {element}")]
-    SlotOutOfBounds {
-        element: ElementId,
-        slot: usize,
-    },
+    SlotOutOfBounds { element: ElementId, slot: usize },
 
     /// Invalid operation on element in current state
     #[error("Invalid operation on element {id}: {reason}")]
@@ -103,7 +95,9 @@ pub enum CoreError {
     },
 
     /// Lifecycle violation (debug only)
-    #[error("Lifecycle violation for element {element_id}: Cannot {operation} in state {actual_state:?} (expected {expected_state:?})")]
+    #[error(
+        "Lifecycle violation for element {element_id}: Cannot {operation} in state {actual_state:?} (expected {expected_state:?})"
+    )]
     LifecycleViolation {
         element_id: ElementId,
         expected_state: ElementLifecycle,
@@ -112,7 +106,9 @@ pub enum CoreError {
     },
 
     /// InheritedWidget not found
-    #[error("No InheritedWidget of type '{widget_type}' found in ancestor tree of element {context_element_id}. Did you forget to wrap your app with the widget?")]
+    #[error(
+        "No InheritedWidget of type '{widget_type}' found in ancestor tree of element {context_element_id}. Did you forget to wrap your app with the widget?"
+    )]
     InheritedWidgetNotFound {
         widget_type: &'static str,
         context_element_id: ElementId,

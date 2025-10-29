@@ -1,8 +1,10 @@
 //! RenderFractionallySizedBox - sizes child as fraction of parent
 
-use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::Size;
 
 /// RenderObject that sizes child as a fraction of available space
 ///
@@ -29,10 +31,16 @@ impl RenderFractionallySizedBox {
     /// Create new RenderFractionallySizedBox
     pub fn new(width_factor: Option<f32>, height_factor: Option<f32>) -> Self {
         if let Some(w) = width_factor {
-            assert!((0.0..=1.0).contains(&w), "Width factor must be between 0.0 and 1.0");
+            assert!(
+                (0.0..=1.0).contains(&w),
+                "Width factor must be between 0.0 and 1.0"
+            );
         }
         if let Some(h) = height_factor {
-            assert!((0.0..=1.0).contains(&h), "Height factor must be between 0.0 and 1.0");
+            assert!(
+                (0.0..=1.0).contains(&h),
+                "Height factor must be between 0.0 and 1.0"
+            );
         }
         Self {
             width_factor,
@@ -58,7 +66,10 @@ impl RenderFractionallySizedBox {
     /// Set new width factor
     pub fn set_width_factor(&mut self, factor: Option<f32>) {
         if let Some(w) = factor {
-            assert!((0.0..=1.0).contains(&w), "Width factor must be between 0.0 and 1.0");
+            assert!(
+                (0.0..=1.0).contains(&w),
+                "Width factor must be between 0.0 and 1.0"
+            );
         }
         self.width_factor = factor;
     }
@@ -66,7 +77,10 @@ impl RenderFractionallySizedBox {
     /// Set new height factor
     pub fn set_height_factor(&mut self, factor: Option<f32>) {
         if let Some(h) = factor {
-            assert!((0.0..=1.0).contains(&h), "Height factor must be between 0.0 and 1.0");
+            assert!(
+                (0.0..=1.0).contains(&h),
+                "Height factor must be between 0.0 and 1.0"
+            );
         }
         self.height_factor = factor;
     }
@@ -89,10 +103,7 @@ impl RenderObject for RenderFractionallySizedBox {
         let target_height = self.height_factor.map(|f| constraints.max_height * f);
 
         // Create child constraints
-        let child_constraints = constraints.tighten(
-            target_width,
-            target_height,
-        );
+        let child_constraints = constraints.tighten(target_width, target_height);
 
         // SingleArity always has exactly one child
         let child = cx.child();

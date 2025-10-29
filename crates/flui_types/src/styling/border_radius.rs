@@ -165,12 +165,18 @@ impl BorderRadius {
 
     /// Returns a copy of this border radius with the bottom-left corner replaced.
     pub const fn with_bottom_left(self, bottom_left: Radius) -> Self {
-        Self { bottom_left, ..self }
+        Self {
+            bottom_left,
+            ..self
+        }
     }
 
     /// Returns a copy of this border radius with the bottom-right corner replaced.
     pub const fn with_bottom_right(self, bottom_right: Radius) -> Self {
-        Self { bottom_right, ..self }
+        Self {
+            bottom_right,
+            ..self
+        }
     }
 }
 
@@ -313,10 +319,7 @@ mod tests {
 
     #[test]
     fn test_border_radius_vertical() {
-        let radius = BorderRadius::vertical(
-            Radius::circular(5.0),
-            Radius::circular(10.0),
-        );
+        let radius = BorderRadius::vertical(Radius::circular(5.0), Radius::circular(10.0));
         assert_eq!(radius.top_left, Radius::circular(5.0));
         assert_eq!(radius.top_right, Radius::circular(5.0));
         assert_eq!(radius.bottom_left, Radius::circular(10.0));
@@ -325,10 +328,7 @@ mod tests {
 
     #[test]
     fn test_border_radius_horizontal() {
-        let radius = BorderRadius::horizontal(
-            Radius::circular(5.0),
-            Radius::circular(10.0),
-        );
+        let radius = BorderRadius::horizontal(Radius::circular(5.0), Radius::circular(10.0));
         assert_eq!(radius.top_left, Radius::circular(5.0));
         assert_eq!(radius.top_right, Radius::circular(10.0));
         assert_eq!(radius.bottom_left, Radius::circular(5.0));

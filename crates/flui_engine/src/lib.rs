@@ -73,42 +73,31 @@ pub mod scene_builder;
 pub mod surface;
 pub mod text;
 
-
-
-
-
-
-
-
-
-
 // Re-export commonly used types
+pub use backend::{BackendCapabilities, BackendInfo, RenderBackend};
+pub use compositor::{CompositionStats, Compositor, CompositorOptions};
+pub use event_router::EventRouter;
 pub use layer::{
-    Layer, BoxedLayer,
-    ContainerLayer, OpacityLayer, TransformLayer, Transform,
-    ClipRectLayer, ClipRRectLayer, ClipOvalLayer, ClipPathLayer,
-    PictureLayer, DrawCommand,
-    GradientLayer,
-    PathLayer, StrokeOptions, PathPaintMode,
-    ShadowLayer, Shadow, ShadowQuality,
-    BlurLayer, BlurQuality, BlurMode,
-    FilterLayer, ColorFilter, ColorMatrix,
+    BlurLayer, BlurMode, BlurQuality, BoxedLayer, ClipOvalLayer, ClipPathLayer, ClipRRectLayer,
+    ClipRectLayer, ColorFilter, ColorMatrix, ContainerLayer, DrawCommand, FilterLayer,
+    GradientLayer, Layer, OpacityLayer, PathLayer, PathPaintMode, PictureLayer, Shadow,
+    ShadowLayer, ShadowQuality, StrokeOptions, Transform, TransformLayer,
 };
-pub use painter::{Painter, Paint, RRect};
 pub use paint_context::PaintContext;
+pub use painter::{Paint, Painter, RRect};
 pub use scene::{Scene, SceneMetadata};
 pub use scene_builder::SceneBuilder;
-pub use compositor::{Compositor, CompositorOptions, CompositionStats};
-pub use surface::{Surface, Frame};
-pub use backend::{RenderBackend, BackendCapabilities, BackendInfo};
-pub use event_router::EventRouter;
+pub use surface::{Frame, Surface};
 
 // Re-export unified app API
 pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
 
 // Re-export devtools integration (when feature enabled)
 #[cfg(feature = "devtools")]
-pub use devtools::{ProfiledCompositor, PerformanceOverlay, FrameTimelineGraph, DevToolsLayout, UnifiedDevToolsOverlay, OverlayCorner, FramePhase, FrameStats};
+pub use devtools::{
+    DevToolsLayout, FramePhase, FrameStats, FrameTimelineGraph, OverlayCorner, PerformanceOverlay,
+    ProfiledCompositor, UnifiedDevToolsOverlay,
+};
 
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
 pub use devtools::MemoryGraph;
@@ -119,15 +108,5 @@ pub use backends::egui::EguiPainter;
 
 #[cfg(feature = "wgpu")]
 pub use backends::wgpu::{
-    WgpuPainter, WgpuRenderer,
-    TextRenderer, TextCommand, TextAlign, TextRenderError,
+    TextAlign, TextCommand, TextRenderError, TextRenderer, WgpuPainter, WgpuRenderer,
 };
-
-
-
-
-
-
-
-
-

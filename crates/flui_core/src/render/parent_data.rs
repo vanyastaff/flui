@@ -37,7 +37,7 @@
 
 use std::fmt;
 
-use downcast_rs::{impl_downcast, DowncastSync};
+use downcast_rs::{DowncastSync, impl_downcast};
 use flui_types::Offset;
 
 /// ParentData - metadata that a parent RenderObject attaches to child elements
@@ -473,7 +473,7 @@ impl<ChildId> ContainerBoxParentData<ChildId> {
 
 impl<ChildId> ParentData for ContainerBoxParentData<ChildId>
 where
-    ChildId: fmt::Debug + Send + Sync + 'static
+    ChildId: fmt::Debug + Send + Sync + 'static,
 {
     fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
         Some(self)
@@ -482,7 +482,7 @@ where
 
 impl<ChildId> ParentDataWithOffset for ContainerBoxParentData<ChildId>
 where
-    ChildId: fmt::Debug + Send + Sync + 'static
+    ChildId: fmt::Debug + Send + Sync + 'static,
 {
     fn offset(&self) -> Offset {
         self.box_data.offset

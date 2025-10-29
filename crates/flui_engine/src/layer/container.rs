@@ -1,8 +1,8 @@
 //! Container layer - holds multiple child layers
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// Container layer that holds multiple child layers
 ///

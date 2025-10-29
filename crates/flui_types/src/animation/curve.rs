@@ -36,7 +36,9 @@ pub trait Curve {
     where
         Self: Sized + Clone,
     {
-        FlippedCurve { curve: self.clone() }
+        FlippedCurve {
+            curve: self.clone(),
+        }
     }
 }
 
@@ -142,8 +144,14 @@ impl<C: Curve> Interval<C> {
     #[inline]
     #[must_use]
     pub fn new(begin: f32, end: f32, curve: C) -> Self {
-        assert!((0.0..=1.0).contains(&begin), "begin must be in range [0.0, 1.0]");
-        assert!((0.0..=1.0).contains(&end), "end must be in range [0.0, 1.0]");
+        assert!(
+            (0.0..=1.0).contains(&begin),
+            "begin must be in range [0.0, 1.0]"
+        );
+        assert!(
+            (0.0..=1.0).contains(&end),
+            "end must be in range [0.0, 1.0]"
+        );
         assert!(end >= begin, "end must be >= begin");
         Self { begin, end, curve }
     }
@@ -190,7 +198,10 @@ impl Threshold {
     #[inline]
     #[must_use]
     pub fn new(threshold: f32) -> Self {
-        assert!((0.0..=1.0).contains(&threshold), "threshold must be in range [0.0, 1.0]");
+        assert!(
+            (0.0..=1.0).contains(&threshold),
+            "threshold must be in range [0.0, 1.0]"
+        );
         Self { threshold }
     }
 }
@@ -422,7 +433,11 @@ impl Curve for CatmullRomCurve {
         let local_t = t_scaled - segment as f32;
 
         // Get the 4 control points for this segment
-        let p0 = if segment > 0 { self.points[segment - 1] } else { self.points[0] };
+        let p0 = if segment > 0 {
+            self.points[segment - 1]
+        } else {
+            self.points[0]
+        };
         let p1 = self.points[segment];
         let p2 = self.points[segment + 1];
         let p3 = if segment + 2 < self.points.len() {
@@ -480,7 +495,11 @@ impl Curve2D for CatmullRomSpline {
         let local_t = t_scaled - segment as f32;
 
         // Get the 4 control points for this segment
-        let p0 = if segment > 0 { self.points[segment - 1] } else { self.points[0] };
+        let p0 = if segment > 0 {
+            self.points[segment - 1]
+        } else {
+            self.points[0]
+        };
         let p1 = self.points[segment];
         let p2 = self.points[segment + 1];
         let p3 = if segment + 2 < self.points.len() {
@@ -755,10 +774,7 @@ mod tests {
 
     #[test]
     fn test_catmull_rom_spline() {
-        let points = vec![
-            Curve2DSample::new(0.0, 0.0),
-            Curve2DSample::new(1.0, 1.0),
-        ];
+        let points = vec![Curve2DSample::new(0.0, 0.0), Curve2DSample::new(1.0, 1.0)];
         let spline = CatmullRomSpline::new(points);
 
         let result = spline.transform(0.5);

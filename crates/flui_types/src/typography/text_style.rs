@@ -148,7 +148,6 @@ pub struct StrutStyle {
     pub force_strut_height: bool,
 }
 
-
 impl StrutStyle {
     /// Creates a new strut style.
     pub fn new() -> Self {
@@ -216,7 +215,6 @@ pub struct TextStyle {
     /// Shadows.
     pub shadows: Vec<TextShadow>,
 }
-
 
 impl TextStyle {
     /// Creates a new text style.
@@ -301,7 +299,10 @@ impl TextStyle {
             letter_spacing: other.letter_spacing.or(self.letter_spacing),
             word_spacing: other.word_spacing.or(self.word_spacing),
             height: other.height.or(self.height),
-            font_family: other.font_family.clone().or_else(|| self.font_family.clone()),
+            font_family: other
+                .font_family
+                .clone()
+                .or_else(|| self.font_family.clone()),
             font_family_fallback: if other.font_family_fallback.is_empty() {
                 self.font_family_fallback.clone()
             } else {

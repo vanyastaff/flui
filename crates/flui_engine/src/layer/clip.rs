@@ -3,9 +3,9 @@
 //! This module provides layers that clip their children to specific regions,
 //! following Flutter's ClipRectLayer and ClipRRectLayer architecture.
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::{Painter, RRect};
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 // ============================================================================
 // ClipRectLayer
@@ -169,7 +169,11 @@ impl Layer for ClipRectLayer {
     }
 
     fn debug_description(&self) -> String {
-        format!("ClipRectLayer(clip_rect: {:?}, children: {})", self.clip_rect, self.children.len())
+        format!(
+            "ClipRectLayer(clip_rect: {:?}, children: {})",
+            self.clip_rect,
+            self.children.len()
+        )
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
@@ -299,7 +303,9 @@ impl Layer for ClipRRectLayer {
             }
         }
 
-        bounds.intersection(&self.clip_rrect.rect).unwrap_or(Rect::ZERO)
+        bounds
+            .intersection(&self.clip_rrect.rect)
+            .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
@@ -324,7 +330,11 @@ impl Layer for ClipRRectLayer {
     }
 
     fn debug_description(&self) -> String {
-        format!("ClipRRectLayer(clip_rrect: {:?}, children: {})", self.clip_rrect, self.children.len())
+        format!(
+            "ClipRRectLayer(clip_rrect: {:?}, children: {})",
+            self.clip_rrect,
+            self.children.len()
+        )
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
@@ -362,9 +372,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_lifecycle() {
-        let mut layer = ClipRectLayer::new(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        );
+        let mut layer = ClipRectLayer::new(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
 
         assert!(!layer.is_disposed());
         assert_eq!(layer.clip_rect(), Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
@@ -375,9 +383,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_children() {
-        let mut layer = ClipRectLayer::new(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-        );
+        let mut layer = ClipRectLayer::new(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
 
         // Add child layers with actual content (so they're visible)
         use crate::layer::PictureLayer;
@@ -399,9 +405,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_layer_update() {
-        let mut layer = ClipRectLayer::new(
-            Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
-        );
+        let mut layer = ClipRectLayer::new(Rect::from_xywh(0.0, 0.0, 50.0, 50.0));
 
         // Update clip rect
         layer.set_clip_rect(Rect::from_xywh(10.0, 10.0, 100.0, 100.0));
@@ -540,7 +544,11 @@ impl Layer for ClipOvalLayer {
     }
 
     fn debug_description(&self) -> String {
-        format!("ClipOvalLayer(clip_rect: {:?}, children: {})", self.clip_rect, self.children.len())
+        format!(
+            "ClipOvalLayer(clip_rect: {:?}, children: {})",
+            self.clip_rect,
+            self.children.len()
+        )
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
@@ -705,9 +713,7 @@ impl Layer for ClipPathLayer {
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed
-            && !self.clip_path.is_empty()
-            && self.children.iter().any(|c| c.is_visible())
+        !self.disposed && !self.clip_path.is_empty() && self.children.iter().any(|c| c.is_visible())
     }
 
     fn mark_needs_paint(&mut self) {

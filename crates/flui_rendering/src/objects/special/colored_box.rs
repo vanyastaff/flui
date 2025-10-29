@@ -1,8 +1,10 @@
 //! RenderColoredBox - simple solid color box
 
-use flui_types::{Color, Size, Rect};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{BoxedLayer, PictureLayer, Paint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
+use flui_engine::{BoxedLayer, Paint, PictureLayer};
+use flui_types::{Color, Rect, Size};
 
 /// RenderObject that paints a solid color background
 ///

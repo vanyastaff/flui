@@ -183,7 +183,10 @@ impl GestureDetectorBuilder {
     }
 
     /// Set the child widget
-    pub fn child(mut self, child: impl Widget + 'static) -> Self {
+    pub fn child<W>(mut self, child: W) -> Self
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
         self
     }

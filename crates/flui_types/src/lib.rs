@@ -72,7 +72,6 @@ pub mod semantics;
 pub mod styling;
 pub mod typography;
 
-
 // Re-exports for convenience
 pub use constraints::{BoxConstraints, SliverConstraints};
 pub use events::{
@@ -81,9 +80,9 @@ pub use events::{
     ScrollEventData, WindowEvent,
 };
 pub use geometry::{
-    arc_position, bezier_point, bezier_tangent_rotation, grid_position, parametric_position,
-    spiral_position, vertical_scale, wave_offset, wave_rotation, CharTransform, Matrix4, Offset,
-    Point, Rect, RRect, Size,
+    CharTransform, Matrix4, Offset, Point, RRect, Rect, Size, arc_position, bezier_point,
+    bezier_tangent_rotation, grid_position, parametric_position, spiral_position, vertical_scale,
+    wave_offset, wave_rotation,
 };
 pub use layout::{
     Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
@@ -91,7 +90,7 @@ pub use layout::{
 };
 pub use styling::{Color, HSLColor, HSVColor, MaterialColors, ParseColorError};
 pub use typography::{
-    FontStyle, FontWeight, TextAlign, TextAlignVertical, TextAffinity, TextBaseline,
+    FontStyle, FontWeight, TextAffinity, TextAlign, TextAlignVertical, TextBaseline,
     TextDecoration, TextDecorationStyle, TextDirection, TextOverflow, TextPosition, TextRange,
     TextSelection, TextSpan, TextStyle,
 };
@@ -100,9 +99,9 @@ pub use typography::{
 pub mod prelude {
     pub use crate::constraints::{BoxConstraints, SliverConstraints};
     pub use crate::geometry::{
-        arc_position, bezier_point, bezier_tangent_rotation, grid_position, parametric_position,
-        spiral_position, vertical_scale, wave_offset, wave_rotation, CharTransform, Matrix4,
-        Offset, Point, Rect, RRect, Size,
+        CharTransform, Matrix4, Offset, Point, RRect, Rect, Size, arc_position, bezier_point,
+        bezier_tangent_rotation, grid_position, parametric_position, spiral_position,
+        vertical_scale, wave_offset, wave_rotation,
     };
     pub use crate::layout::{
         Alignment, Axis, AxisDirection, CrossAxisAlignment, EdgeInsets, MainAxisAlignment,
@@ -110,9 +109,8 @@ pub mod prelude {
     };
     pub use crate::styling::{Color, HSLColor, HSVColor, MaterialColors};
     pub use crate::typography::{
-        FontStyle, FontWeight, TextAlign, TextAlignVertical, TextAffinity, TextBaseline,
+        FontStyle, FontWeight, TextAffinity, TextAlign, TextAlignVertical, TextBaseline,
         TextDecoration, TextDecorationStyle, TextDirection, TextOverflow, TextPosition, TextRange,
         TextSelection, TextSpan, TextStyle,
     };
 }
-

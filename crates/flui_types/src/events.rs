@@ -248,33 +248,94 @@ impl HitTestResult {
 #[allow(missing_docs)]
 pub enum PhysicalKey {
     /// Letter keys
-    KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ,
-    KeyK, KeyL, KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR, KeyS, KeyT,
-    KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+    KeyA,
+    KeyB,
+    KeyC,
+    KeyD,
+    KeyE,
+    KeyF,
+    KeyG,
+    KeyH,
+    KeyI,
+    KeyJ,
+    KeyK,
+    KeyL,
+    KeyM,
+    KeyN,
+    KeyO,
+    KeyP,
+    KeyQ,
+    KeyR,
+    KeyS,
+    KeyT,
+    KeyU,
+    KeyV,
+    KeyW,
+    KeyX,
+    KeyY,
+    KeyZ,
 
     /// Number keys
-    Digit0, Digit1, Digit2, Digit3, Digit4,
-    Digit5, Digit6, Digit7, Digit8, Digit9,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
 
     /// Function keys
-    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 
     /// Navigation keys
-    ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
-    Home, End, PageUp, PageDown,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    Home,
+    End,
+    PageUp,
+    PageDown,
 
     /// Editing keys
-    Backspace, Delete, Insert, Enter, Tab, Escape, Space,
+    Backspace,
+    Delete,
+    Insert,
+    Enter,
+    Tab,
+    Escape,
+    Space,
 
     /// Modifier keys
-    ShiftLeft, ShiftRight,
-    ControlLeft, ControlRight,
-    AltLeft, AltRight,
-    MetaLeft, MetaRight, // Windows/Command key
+    ShiftLeft,
+    ShiftRight,
+    ControlLeft,
+    ControlRight,
+    AltLeft,
+    AltRight,
+    MetaLeft,
+    MetaRight, // Windows/Command key
 
     /// Other common keys
-    CapsLock, NumLock, ScrollLock,
-    PrintScreen, Pause,
+    CapsLock,
+    NumLock,
+    ScrollLock,
+    PrintScreen,
+    Pause,
 
     /// Unidentified key
     Unidentified,
@@ -533,10 +594,7 @@ mod tests {
 
     #[test]
     fn test_key_event() {
-        let data = KeyEventData::new(
-            PhysicalKey::KeyA,
-            LogicalKey::Character("a".to_string()),
-        );
+        let data = KeyEventData::new(PhysicalKey::KeyA, LogicalKey::Character("a".to_string()));
         let event = KeyEvent::Down(data);
 
         assert_eq!(event.physical_key(), PhysicalKey::KeyA);
@@ -556,10 +614,7 @@ mod tests {
 
     #[test]
     fn test_unified_event() {
-        let pointer_data = PointerEventData::new(
-            Offset::new(10.0, 20.0),
-            PointerDeviceKind::Mouse,
-        );
+        let pointer_data = PointerEventData::new(Offset::new(10.0, 20.0), PointerDeviceKind::Mouse);
         let event = Event::pointer(PointerEvent::Down(pointer_data));
 
         assert!(matches!(event, Event::Pointer(_)));

@@ -132,10 +132,7 @@ impl Tolerance {
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.is_finite()
-            && self.distance >= 0.0
-            && self.velocity >= 0.0
-            && self.time >= 0.0
+        self.is_finite() && self.distance >= 0.0 && self.velocity >= 0.0 && self.time >= 0.0
     }
 
     /// Checks if a distance is within this tolerance

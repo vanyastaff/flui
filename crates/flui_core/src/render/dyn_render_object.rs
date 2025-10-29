@@ -51,10 +51,10 @@
 use std::any::Any;
 use std::fmt;
 
-use downcast_rs::{impl_downcast, DowncastSync};
-use flui_types::{Size, Offset};
-use flui_types::constraints::BoxConstraints;
+use downcast_rs::{DowncastSync, impl_downcast};
 use flui_engine::BoxedLayer;
+use flui_types::constraints::BoxConstraints;
+use flui_types::{Offset, Size};
 
 use crate::element::{ElementId, ElementTree};
 
@@ -180,12 +180,7 @@ pub trait DynRenderObject: DowncastSync + fmt::Debug + Send + Sync {
     /// # Returns
     ///
     /// The layer tree produced by this RenderObject
-    fn dyn_paint(
-        &self,
-        tree: &ElementTree,
-        element_id: ElementId,
-        offset: Offset,
-    ) -> BoxedLayer;
+    fn dyn_paint(&self, tree: &ElementTree, element_id: ElementId, offset: Offset) -> BoxedLayer;
 
     // ========== Lifecycle ==========
 
@@ -281,12 +276,7 @@ where
         <T as crate::RenderObject>::layout(self, &mut cx)
     }
 
-    fn dyn_paint(
-        &self,
-        tree: &ElementTree,
-        element_id: ElementId,
-        offset: Offset,
-    ) -> BoxedLayer {
+    fn dyn_paint(&self, tree: &ElementTree, element_id: ElementId, offset: Offset) -> BoxedLayer {
         use crate::render::PaintCx;
         let cx = PaintCx::<T::Arity>::new(tree, element_id, offset);
         <T as crate::RenderObject>::paint(self, &cx)
@@ -304,9 +294,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RenderObject, LeafArity, SingleArity, MultiArity, LayoutCx, PaintCx};
-    use flui_types::Size;
+    use crate::{LayoutCx, LeafArity, MultiArity, PaintCx, RenderObject, SingleArity};
     use flui_engine::{BoxedLayer, ContainerLayer};
+    use flui_types::Size;
 
     // Test RenderObjects
     #[derive(Debug)]

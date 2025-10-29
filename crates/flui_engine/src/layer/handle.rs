@@ -3,8 +3,8 @@
 //! Layers retain resources between frames. A LayerHandle maintains a reference
 //! to a layer and automatically handles cleanup when the handle is dropped.
 
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// A handle to a layer that manages its lifecycle
 ///

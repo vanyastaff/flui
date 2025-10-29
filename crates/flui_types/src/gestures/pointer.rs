@@ -160,7 +160,6 @@ pub enum PointerDeviceKind {
     Unknown,
 }
 
-
 /// Information about a pointer event
 ///
 /// Similar to Flutter's `PointerData`. Contains all the data about

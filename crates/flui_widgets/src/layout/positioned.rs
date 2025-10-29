@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, Widget, ParentDataWidget};
+use flui_core::{BoxedWidget, ParentDataWidget, Widget};
 use flui_rendering::StackParentData;
 
 /// A widget that controls where a child of a Stack is positioned.
@@ -313,14 +313,14 @@ impl Positioned {
         // Check for conflicting horizontal constraints
         if self.left.is_some() && self.right.is_some() && self.width.is_some() {
             return Err(
-                "Cannot specify all of left, right, and width. Choose two at most.".to_string()
+                "Cannot specify all of left, right, and width. Choose two at most.".to_string(),
             );
         }
 
         // Check for conflicting vertical constraints
         if self.top.is_some() && self.bottom.is_some() && self.height.is_some() {
             return Err(
-                "Cannot specify all of top, bottom, and height. Choose two at most.".to_string()
+                "Cannot specify all of top, bottom, and height. Choose two at most.".to_string(),
             );
         }
 
@@ -390,8 +390,7 @@ impl ParentDataWidget for Positioned {
     }
 
     fn child(&self) -> &BoxedWidget {
-        self.child.as_ref()
-            .expect("Positioned must have a child")
+        self.child.as_ref().expect("Positioned must have a child")
     }
 }
 
@@ -605,10 +604,7 @@ mod tests {
         assert!(widget.validate().is_ok());
 
         // Left, right (width determined by space)
-        let widget = Positioned::builder()
-            .left(10.0)
-            .right(10.0)
-            .build();
+        let widget = Positioned::builder().left(10.0).right(10.0).build();
         assert!(widget.validate().is_ok());
 
         // Fill
@@ -711,10 +707,7 @@ mod tests {
 
     #[test]
     fn test_positioned_with_size() {
-        let widget = Positioned::builder()
-            .width(200.0)
-            .height(100.0)
-            .build();
+        let widget = Positioned::builder().width(200.0).height(100.0).build();
 
         assert_eq!(widget.width, Some(200.0));
         assert_eq!(widget.height, Some(100.0));
@@ -739,10 +732,7 @@ mod tests {
     #[test]
     fn test_positioned_negative_values() {
         // Negative values are allowed for overflow effects
-        let widget = Positioned::builder()
-            .left(-10.0)
-            .top(-20.0)
-            .build();
+        let widget = Positioned::builder().left(-10.0).top(-20.0).build();
 
         assert_eq!(widget.left, Some(-10.0));
         assert_eq!(widget.top, Some(-20.0));

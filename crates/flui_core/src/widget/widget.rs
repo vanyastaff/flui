@@ -285,7 +285,6 @@ pub trait WidgetState<W: Widget>: 'static {
     fn dispose(&mut self) {}
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,11 +369,7 @@ mod tests {
                 }
             }
 
-            fn did_update_widget(
-                &mut self,
-                old: &StatefulWidget,
-                new: &StatefulWidget,
-            ) {
+            fn did_update_widget(&mut self, old: &StatefulWidget, new: &StatefulWidget) {
                 if old.initial != new.initial {
                     self.count = new.initial;
                 }

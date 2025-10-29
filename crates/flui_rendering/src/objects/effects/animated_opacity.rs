@@ -1,8 +1,10 @@
 //! RenderAnimatedOpacity - animated opacity transitions
 
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
+use flui_engine::{BoxedLayer, OpacityLayer};
 use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{OpacityLayer, BoxedLayer};
 
 /// RenderObject that applies animated opacity to its child
 ///
@@ -79,7 +81,10 @@ impl RenderObject for RenderAnimatedOpacity {
         // Skip painting if fully transparent
         if self.opacity <= 0.0 {
             // Return empty layer - use pool for efficiency even in error case
-            return Box::new(OpacityLayer::new(Box::new(flui_engine::layer::pool::acquire_container()), 0.0));
+            return Box::new(OpacityLayer::new(
+                Box::new(flui_engine::layer::pool::acquire_container()),
+                0.0,
+            ));
         }
 
         // Capture child layer

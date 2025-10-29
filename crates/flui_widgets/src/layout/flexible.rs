@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, Widget, ParentDataWidget};
+use flui_core::{BoxedWidget, ParentDataWidget, Widget};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
@@ -262,8 +262,7 @@ impl ParentDataWidget for Flexible {
     }
 
     fn child(&self) -> &BoxedWidget {
-        self.child.as_ref()
-            .expect("Flexible must have a child")
+        self.child.as_ref().expect("Flexible must have a child")
     }
 }
 
@@ -385,10 +384,7 @@ mod tests {
 
     #[test]
     fn test_flexible_builder() {
-        let widget = Flexible::builder()
-            .flex(3)
-            .fit(FlexFit::Tight)
-            .build();
+        let widget = Flexible::builder().flex(3).fit(FlexFit::Tight).build();
 
         assert_eq!(widget.flex, 3);
         assert_eq!(widget.fit, FlexFit::Tight);

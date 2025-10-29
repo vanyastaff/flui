@@ -37,7 +37,10 @@ pub struct RoundedRectangleBorder {
 impl RoundedRectangleBorder {
     /// Creates a rounded rectangle border.
     pub const fn new(side: BorderSide, border_radius: BorderRadius) -> Self {
-        Self { side, border_radius }
+        Self {
+            side,
+            border_radius,
+        }
     }
 
     /// Creates a rounded rectangle border with circular corners.
@@ -83,7 +86,10 @@ pub struct BeveledRectangleBorder {
 impl BeveledRectangleBorder {
     /// Creates a beveled rectangle border.
     pub const fn new(side: BorderSide, border_radius: BorderRadius) -> Self {
-        Self { side, border_radius }
+        Self {
+            side,
+            border_radius,
+        }
     }
 
     /// Creates a beveled rectangle border with uniform bevel.
@@ -309,7 +315,8 @@ impl StarBorder {
         Self {
             side: BorderSide::lerp(a.side, b.side, t),
             points: if t < 0.5 { a.points } else { b.points },
-            inner_radius_ratio: a.inner_radius_ratio + (b.inner_radius_ratio - a.inner_radius_ratio) * t,
+            inner_radius_ratio: a.inner_radius_ratio
+                + (b.inner_radius_ratio - a.inner_radius_ratio) * t,
             rotation: a.rotation + (b.rotation - a.rotation) * t,
             point_rounding: a.point_rounding + (b.point_rounding - a.point_rounding) * t,
             valley_rounding: a.valley_rounding + (b.valley_rounding - a.valley_rounding) * t,
@@ -348,7 +355,10 @@ pub struct ContinuousRectangleBorder {
 impl ContinuousRectangleBorder {
     /// Creates a continuous rectangle border.
     pub const fn new(side: BorderSide, border_radius: BorderRadius) -> Self {
-        Self { side, border_radius }
+        Self {
+            side,
+            border_radius,
+        }
     }
 
     /// Creates a continuous rectangle border with circular corners.

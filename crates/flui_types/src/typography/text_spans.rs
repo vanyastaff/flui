@@ -1,6 +1,6 @@
 //! Text span types for rich text.
 
-use super::{TextStyle, TextBaseline};
+use super::{TextBaseline, TextStyle};
 use std::sync::Arc;
 
 /// Trait for inline spans (text or placeholders).
@@ -11,7 +11,10 @@ pub trait InlineSpanTrait: std::fmt::Debug {
     }
 
     /// Visits this span and its children.
-    fn visit(&self, visitor: &mut dyn FnMut(&dyn InlineSpanTrait) -> bool) where Self: Sized {
+    fn visit(&self, visitor: &mut dyn FnMut(&dyn InlineSpanTrait) -> bool)
+    where
+        Self: Sized,
+    {
         visitor(self);
     }
 
@@ -89,10 +92,9 @@ impl PartialEq for TextSpan {
             && self.children == other.children
             && self.semantics_label == other.semantics_label
             && self.mouse_cursor == other.mouse_cursor
-            // We don't compare callbacks
+        // We don't compare callbacks
     }
 }
-
 
 impl TextSpan {
     /// Creates a new text span.
@@ -257,7 +259,11 @@ impl TextSpan {
     /// ```
     #[must_use]
     pub fn total_span_count(&self) -> usize {
-        1 + self.children.iter().map(|c| c.total_span_count()).sum::<usize>()
+        1 + self
+            .children
+            .iter()
+            .map(|c| c.total_span_count())
+            .sum::<usize>()
     }
 
     /// Returns the text length (character count) of this span and all children.
@@ -655,7 +661,10 @@ mod tests {
 
     #[test]
     fn test_placeholder_alignment_default() {
-        assert_eq!(PlaceholderAlignment::default(), PlaceholderAlignment::Baseline);
+        assert_eq!(
+            PlaceholderAlignment::default(),
+            PlaceholderAlignment::Baseline
+        );
     }
 
     #[test]

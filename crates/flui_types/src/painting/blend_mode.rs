@@ -165,7 +165,6 @@ pub enum BlendMode {
     Luminosity,
 }
 
-
 impl BlendMode {
     /// Returns true if this blend mode is a Porter-Duff mode.
     #[inline]
@@ -210,10 +209,7 @@ impl BlendMode {
     pub const fn can_lighten(&self) -> bool {
         matches!(
             self,
-            BlendMode::Screen
-                | BlendMode::Lighten
-                | BlendMode::ColorDodge
-                | BlendMode::Plus
+            BlendMode::Screen | BlendMode::Lighten | BlendMode::ColorDodge | BlendMode::Plus
         )
     }
 
@@ -223,10 +219,7 @@ impl BlendMode {
     pub const fn can_darken(&self) -> bool {
         matches!(
             self,
-            BlendMode::Darken
-                | BlendMode::ColorBurn
-                | BlendMode::Multiply
-                | BlendMode::Modulate
+            BlendMode::Darken | BlendMode::ColorBurn | BlendMode::Multiply | BlendMode::Modulate
         )
     }
 

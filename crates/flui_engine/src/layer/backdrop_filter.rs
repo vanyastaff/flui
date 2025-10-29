@@ -4,10 +4,10 @@
 //! allowing blur and color adjustments to be applied to content behind an element.
 //! Creates the popular "frosted glass" or "blurred background" effect.
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
-use flui_types::painting::effects::ImageFilter;
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
+use flui_types::painting::effects::ImageFilter;
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// A layer that applies image filters to backdrop content.
 ///
@@ -116,7 +116,10 @@ impl BackdropFilterLayer {
         painter.save();
 
         match &self.filter {
-            ImageFilter::Blur { sigma_x: _, sigma_y: _ } => {
+            ImageFilter::Blur {
+                sigma_x: _,
+                sigma_y: _,
+            } => {
                 // Would apply gaussian blur to backdrop here
             }
             ImageFilter::Color(_color_filter) => {
@@ -172,7 +175,9 @@ impl Layer for BackdropFilterLayer {
         }
 
         // Hit testing passes through to child
-        self.child.as_ref().is_some_and(|c| c.hit_test(position, result))
+        self.child
+            .as_ref()
+            .is_some_and(|c| c.hit_test(position, result))
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -217,8 +222,7 @@ mod tests {
     #[test]
     fn test_backdrop_filter_with_blur() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let layer = BackdropFilterLayer::new(child)
-            .with_filter(ImageFilter::blur(15.0));
+        let layer = BackdropFilterLayer::new(child).with_filter(ImageFilter::blur(15.0));
 
         match layer.filter() {
             ImageFilter::Blur { sigma_x, sigma_y } => {

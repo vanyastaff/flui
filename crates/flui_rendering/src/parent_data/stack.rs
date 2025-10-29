@@ -138,14 +138,7 @@ mod tests {
 
     #[test]
     fn test_stack_parent_data_positioned() {
-        let data = StackParentData::positioned(
-            Some(10.0),
-            Some(20.0),
-            None,
-            None,
-            None,
-            None,
-        );
+        let data = StackParentData::positioned(Some(10.0), Some(20.0), None, None, None, None);
         assert_eq!(data.left, Some(10.0));
         assert_eq!(data.top, Some(20.0));
         assert_eq!(data.right, None);

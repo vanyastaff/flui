@@ -163,7 +163,10 @@ impl AspectRatio {
     /// let mut widget = AspectRatio::new(16.0 / 9.0);
     /// widget.set_child(Image::network(url));
     /// ```
-    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 

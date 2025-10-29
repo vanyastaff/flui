@@ -3,8 +3,8 @@
 //! This module provides types for blur effects and color filters,
 //! similar to CSS filter and backdrop-filter properties.
 
-use std::sync::Arc;
 use super::canvas::{StrokeCap, StrokeJoin};
+use std::sync::Arc;
 
 /// Blur quality/algorithm level.
 ///

@@ -158,15 +158,13 @@ impl LinearGradient {
             .collect();
 
         let stops = match (&a.stops, &b.stops) {
-            (Some(a_stops), Some(b_stops)) if a_stops.len() == b_stops.len() => {
-                Some(
-                    a_stops
-                        .iter()
-                        .zip(b_stops)
-                        .map(|(a_stop, b_stop)| a_stop + (b_stop - a_stop) * t)
-                        .collect(),
-                )
-            }
+            (Some(a_stops), Some(b_stops)) if a_stops.len() == b_stops.len() => Some(
+                a_stops
+                    .iter()
+                    .zip(b_stops)
+                    .map(|(a_stop, b_stop)| a_stop + (b_stop - a_stop) * t)
+                    .collect(),
+            ),
             _ => None,
         };
 
@@ -279,15 +277,13 @@ impl RadialGradient {
             .collect();
 
         let stops = match (&a.stops, &b.stops) {
-            (Some(a_stops), Some(b_stops)) if a_stops.len() == b_stops.len() => {
-                Some(
-                    a_stops
-                        .iter()
-                        .zip(b_stops)
-                        .map(|(a_stop, b_stop)| a_stop + (b_stop - a_stop) * t)
-                        .collect(),
-                )
-            }
+            (Some(a_stops), Some(b_stops)) if a_stops.len() == b_stops.len() => Some(
+                a_stops
+                    .iter()
+                    .zip(b_stops)
+                    .map(|(a_stop, b_stop)| a_stop + (b_stop - a_stop) * t)
+                    .collect(),
+            ),
             _ => None,
         };
 
@@ -401,15 +397,13 @@ impl SweepGradient {
             .collect();
 
         let stops = match (&a.stops, &b.stops) {
-            (Some(a_stops), Some(b_stops)) if a_stops.len() == b_stops.len() => {
-                Some(
-                    a_stops
-                        .iter()
-                        .zip(b_stops)
-                        .map(|(a_stop, b_stop)| a_stop + (b_stop - a_stop) * t)
-                        .collect(),
-                )
-            }
+            (Some(a_stops), Some(b_stops)) if a_stops.len() == b_stops.len() => Some(
+                a_stops
+                    .iter()
+                    .zip(b_stops)
+                    .map(|(a_stop, b_stop)| a_stop + (b_stop - a_stop) * t)
+                    .collect(),
+            ),
             _ => None,
         };
 
@@ -456,11 +450,7 @@ impl GradientTransform for GradientRotation {
         let cos = self.radians.cos();
         let sin = self.radians.sin();
 
-        [
-            [cos, -sin, 0.0],
-            [sin, cos, 0.0],
-            [0.0, 0.0, 1.0],
-        ]
+        [[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]]
     }
 }
 
@@ -592,7 +582,11 @@ mod tests {
         let radial = Gradient::Radial(RadialGradient::centered(0.5, vec![Color::RED]));
         assert_eq!(radial.colors().len(), 1);
 
-        let sweep = Gradient::Sweep(SweepGradient::centered(vec![Color::RED, Color::BLUE, Color::GREEN]));
+        let sweep = Gradient::Sweep(SweepGradient::centered(vec![
+            Color::RED,
+            Color::BLUE,
+            Color::GREEN,
+        ]));
         assert_eq!(sweep.colors().len(), 3);
     }
 

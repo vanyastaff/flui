@@ -82,13 +82,7 @@ impl RRect {
     #[inline]
     #[must_use]
     pub const fn from_rect_and_radius(rect: Rect, radius: Radius) -> Self {
-        Self::new(
-            rect,
-            radius,
-            radius,
-            radius,
-            radius,
-        )
+        Self::new(rect, radius, radius, radius, radius)
     }
 
     /// Creates a rounded rectangle with circular corners
@@ -148,13 +142,7 @@ impl RRect {
     /// * `radius` - Circular corner radius
     #[inline]
     #[must_use]
-    pub fn from_xywh_circular(
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        radius: f32,
-    ) -> Self {
+    pub fn from_xywh_circular(x: f32, y: f32, width: f32, height: f32, radius: f32) -> Self {
         Self::from_rect_circular(Rect::from_xywh(x, y, width, height), radius)
     }
 
@@ -387,11 +375,15 @@ impl RRect {
     #[inline]
     #[must_use]
     pub fn max_radius(&self) -> f32 {
-        let max_x = self.top_left.x
+        let max_x = self
+            .top_left
+            .x
             .max(self.top_right.x)
             .max(self.bottom_right.x)
             .max(self.bottom_left.x);
-        let max_y = self.top_left.y
+        let max_y = self
+            .top_left
+            .y
             .max(self.top_right.y)
             .max(self.bottom_right.y)
             .max(self.bottom_left.y);
@@ -413,9 +405,18 @@ impl RRect {
     pub fn corner_centers(&self) -> [Point; 4] {
         [
             Point::new(self.left() + self.top_left.x, self.top() + self.top_left.y),
-            Point::new(self.right() - self.top_right.x, self.top() + self.top_right.y),
-            Point::new(self.right() - self.bottom_right.x, self.bottom() - self.bottom_right.y),
-            Point::new(self.left() + self.bottom_left.x, self.bottom() - self.bottom_left.y),
+            Point::new(
+                self.right() - self.top_right.x,
+                self.top() + self.top_right.y,
+            ),
+            Point::new(
+                self.right() - self.bottom_right.x,
+                self.bottom() - self.bottom_right.y,
+            ),
+            Point::new(
+                self.left() + self.bottom_left.x,
+                self.bottom() - self.bottom_left.y,
+            ),
         ]
     }
 
@@ -438,7 +439,10 @@ impl RRect {
             self.rect,
             Radius::elliptical(self.top_left.x.min(max_x), self.top_left.y.min(max_y)),
             Radius::elliptical(self.top_right.x.min(max_x), self.top_right.y.min(max_y)),
-            Radius::elliptical(self.bottom_right.x.min(max_x), self.bottom_right.y.min(max_y)),
+            Radius::elliptical(
+                self.bottom_right.x.min(max_x),
+                self.bottom_right.y.min(max_y),
+            ),
             Radius::elliptical(self.bottom_left.x.min(max_x), self.bottom_left.y.min(max_y)),
         )
     }
@@ -460,8 +464,11 @@ impl RRect {
             r.x * r.y * (1.0 - std::f32::consts::FRAC_PI_4)
         };
 
-        rect_area - corner_area(self.top_left) - corner_area(self.top_right)
-            - corner_area(self.bottom_right) - corner_area(self.bottom_left)
+        rect_area
+            - corner_area(self.top_left)
+            - corner_area(self.top_right)
+            - corner_area(self.bottom_right)
+            - corner_area(self.bottom_left)
     }
 
     /// Returns true if this RRect is empty (zero or negative size).
@@ -665,10 +672,10 @@ mod tests {
         let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let rrect = RRect::from_rect_and_corners(
             rect,
-            Radius::circular(5.0),   // top-left
-            Radius::circular(10.0),  // top-right
-            Radius::circular(15.0),  // bottom-right
-            Radius::circular(20.0),  // bottom-left
+            Radius::circular(5.0),  // top-left
+            Radius::circular(10.0), // top-right
+            Radius::circular(15.0), // bottom-right
+            Radius::circular(20.0), // bottom-left
         );
 
         assert_eq!(rrect.top_left, Radius::circular(5.0));

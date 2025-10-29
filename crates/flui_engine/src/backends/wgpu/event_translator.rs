@@ -1,18 +1,15 @@
 //! Event translation from winit to flui events
 
 use flui_types::{
-    Event, KeyEvent, KeyEventData, KeyModifiers, LogicalKey, PhysicalKey, PointerButton,
+    Event, KeyEvent, KeyEventData, KeyModifiers, LogicalKey, Offset, PhysicalKey, PointerButton,
     PointerDeviceKind, PointerEvent, PointerEventData, ScrollDelta, ScrollEventData,
-    WindowEvent as FluiWindowEvent, Offset,
+    WindowEvent as FluiWindowEvent,
 };
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey as WinitPhysicalKey};
 
 /// Translate winit WindowEvent to flui Event
-pub fn translate_window_event(
-    event: &WindowEvent,
-    modifiers: &ModifiersState,
-) -> Option<Event> {
+pub fn translate_window_event(event: &WindowEvent, modifiers: &ModifiersState) -> Option<Event> {
     match event {
         WindowEvent::CursorMoved { position, .. } => {
             let data = PointerEventData::new(
@@ -37,10 +34,7 @@ pub fn translate_window_event(
 
         WindowEvent::MouseWheel { delta, .. } => {
             let scroll_delta = match delta {
-                MouseScrollDelta::LineDelta(x, y) => ScrollDelta::Lines {
-                    x: *x,
-                    y: *y,
-                },
+                MouseScrollDelta::LineDelta(x, y) => ScrollDelta::Lines { x: *x, y: *y },
                 MouseScrollDelta::PixelDelta(pos) => ScrollDelta::Pixels {
                     x: pos.x as f32,
                     y: pos.y as f32,
@@ -56,7 +50,9 @@ pub fn translate_window_event(
             Some(Event::Scroll(scroll_data))
         }
 
-        WindowEvent::KeyboardInput { event: key_event, .. } => {
+        WindowEvent::KeyboardInput {
+            event: key_event, ..
+        } => {
             let physical_key = translate_physical_key(&key_event.physical_key);
             let logical_key = if let Some(text) = &key_event.text {
                 LogicalKey::Character(text.to_string())
@@ -241,9 +237,18 @@ mod tests {
 
     #[test]
     fn test_translate_mouse_button() {
-        assert_eq!(translate_mouse_button(MouseButton::Left), PointerButton::Primary);
-        assert_eq!(translate_mouse_button(MouseButton::Right), PointerButton::Secondary);
-        assert_eq!(translate_mouse_button(MouseButton::Middle), PointerButton::Middle);
+        assert_eq!(
+            translate_mouse_button(MouseButton::Left),
+            PointerButton::Primary
+        );
+        assert_eq!(
+            translate_mouse_button(MouseButton::Right),
+            PointerButton::Secondary
+        );
+        assert_eq!(
+            translate_mouse_button(MouseButton::Middle),
+            PointerButton::Middle
+        );
     }
 
     #[test]

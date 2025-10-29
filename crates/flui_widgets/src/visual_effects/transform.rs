@@ -242,7 +242,10 @@ impl Transform {
     /// let mut widget = Transform::rotate(PI / 4.0);
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 

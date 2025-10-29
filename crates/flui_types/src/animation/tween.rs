@@ -552,7 +552,10 @@ pub struct TweenSequence {
 impl TweenSequence {
     /// Creates a new tween sequence.
     pub fn new(items: Vec<TweenSequenceItem>) -> Self {
-        assert!(!items.is_empty(), "TweenSequence must have at least one item");
+        assert!(
+            !items.is_empty(),
+            "TweenSequence must have at least one item"
+        );
 
         // Validate that weights sum to a positive number
         let total_weight: f32 = items.iter().map(|item| item.weight).sum();
@@ -616,7 +619,6 @@ impl TweenSequenceItem {
         Self { tween, weight }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -247,7 +247,13 @@ impl BoxDecoration {
             (Some(a_color), Some(b_color)) => Some(Color::lerp(a_color, b_color, t)),
             (Some(color), None) | (None, Some(color)) => {
                 let alpha_f32 = color.alpha() as f32 / 255.0;
-                let new_alpha = (alpha_f32 * if t < 0.5 { 1.0 - t * 2.0 } else { (t - 0.5) * 2.0 }).clamp(0.0, 1.0);
+                let new_alpha = (alpha_f32
+                    * if t < 0.5 {
+                        1.0 - t * 2.0
+                    } else {
+                        (t - 0.5) * 2.0
+                    })
+                .clamp(0.0, 1.0);
                 Some(color.with_alpha((new_alpha * 255.0) as u8))
             }
             (None, None) => None,
@@ -328,10 +334,7 @@ mod tests {
 
     #[test]
     fn test_box_decoration_with_gradient() {
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![
-            Color::RED,
-            Color::BLUE,
-        ]));
+        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
         let decoration = BoxDecoration::with_gradient(gradient.clone());
         assert_eq!(decoration.gradient, Some(gradient));
     }
@@ -360,13 +363,14 @@ mod tests {
         let simple = BoxDecoration::with_color(Color::RED);
         assert!(!simple.is_complex());
 
-        let gradient = BoxDecoration::with_gradient(Gradient::Linear(
-            LinearGradient::horizontal(vec![Color::RED, Color::BLUE]),
-        ));
+        let gradient =
+            BoxDecoration::with_gradient(Gradient::Linear(LinearGradient::horizontal(vec![
+                Color::RED,
+                Color::BLUE,
+            ])));
         assert!(gradient.is_complex());
 
-        let with_shadow = BoxDecoration::new()
-            .set_box_shadow(Some(vec![BoxShadow::default()]));
+        let with_shadow = BoxDecoration::new().set_box_shadow(Some(vec![BoxShadow::default()]));
         assert!(with_shadow.is_complex());
     }
 

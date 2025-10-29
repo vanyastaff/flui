@@ -64,10 +64,6 @@ pub mod layout;
 // pub mod gestures;
 // pub mod interaction;
 
-
-
-
-
 // Re-exports for convenient top-level access
 // Essential widgets for Container and Flex layout
 pub use basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox};
@@ -81,13 +77,11 @@ pub use layout::{Column, Expanded, Flexible, Row};
 // pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
-pub use flui_core::{Widget, DynWidget, BoxedWidget};
-pub use flui_types::{BoxConstraints, Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
+pub use flui_core::{BoxedWidget, DynWidget, Widget};
 pub use flui_rendering::DecorationPosition;
 pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
-
-
+pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size};
 
 /// Prelude module for convenient imports
 ///
@@ -109,24 +103,9 @@ pub mod prelude {
 
     // Re-export core types
     pub use flui_core::{BuildContext, Widget};
-    pub use flui_types::BoxConstraints;
     pub use flui_rendering::{FlexFit, StackFit};
-    pub use flui_types::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
     pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
+    pub use flui_types::BoxConstraints;
     pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
-
-
+    pub use flui_types::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

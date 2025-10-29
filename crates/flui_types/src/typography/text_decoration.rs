@@ -260,10 +260,8 @@ mod tests {
 
     #[test]
     fn test_text_decoration_combine() {
-        let decoration = TextDecoration::combine(&[
-            TextDecoration::UNDERLINE,
-            TextDecoration::LINE_THROUGH,
-        ]);
+        let decoration =
+            TextDecoration::combine(&[TextDecoration::UNDERLINE, TextDecoration::LINE_THROUGH]);
         assert!(!decoration.is_none());
         assert!(decoration.has_underline());
         assert!(!decoration.has_overline());

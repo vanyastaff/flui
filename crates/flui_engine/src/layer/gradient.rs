@@ -1,8 +1,8 @@
 //! Gradient layer - renders gradients
 
-use flui_types::{Rect, Offset, Event, HitTestResult, styling::Gradient};
 use crate::layer::Layer;
 use crate::painter::Painter;
+use flui_types::{styling::Gradient, Event, HitTestResult, Offset, Rect};
 
 /// Layer that renders a gradient
 ///
@@ -150,7 +150,13 @@ impl GradientLayer {
             let start_color = Self::color_to_rgba(&radial.colors[0]);
             let end_color = Self::color_to_rgba(radial.colors.last().unwrap());
 
-            painter.radial_gradient_simple(center, inner_radius, outer_radius, start_color, end_color);
+            painter.radial_gradient_simple(
+                center,
+                inner_radius,
+                outer_radius,
+                start_color,
+                end_color,
+            );
         }
     }
 
@@ -211,15 +217,12 @@ impl Layer for GradientLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::styling::{LinearGradient, Color};
+    use flui_types::styling::{Color, LinearGradient};
 
     #[test]
     fn test_gradient_layer_creation() {
         let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![
-            Color::RED,
-            Color::BLUE,
-        ]));
+        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
 
         let layer = GradientLayer::new(rect, gradient);
 
@@ -232,10 +235,7 @@ mod tests {
     fn test_gradient_layer_set_rect() {
         let rect1 = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let rect2 = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![
-            Color::RED,
-            Color::BLUE,
-        ]));
+        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
 
         let mut layer = GradientLayer::new(rect1, gradient);
         assert_eq!(layer.rect(), rect1);
@@ -248,10 +248,7 @@ mod tests {
     #[test]
     fn test_gradient_layer_hit_test() {
         let rect = Rect::from_xywh(10.0, 10.0, 100.0, 100.0);
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![
-            Color::RED,
-            Color::BLUE,
-        ]));
+        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
 
         let layer = GradientLayer::new(rect, gradient);
         let mut result = HitTestResult::new();
@@ -266,10 +263,7 @@ mod tests {
     #[test]
     fn test_gradient_layer_empty_rect() {
         let rect = Rect::ZERO;
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![
-            Color::RED,
-            Color::BLUE,
-        ]));
+        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
 
         let layer = GradientLayer::new(rect, gradient);
         assert!(!layer.is_visible());

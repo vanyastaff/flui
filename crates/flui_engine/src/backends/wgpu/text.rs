@@ -4,9 +4,8 @@
 
 use glam::Mat4;
 use glyphon::{
-    Attrs, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer,
-    Viewport,
+    Attrs, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
+    TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport,
 };
 use wgpu::{Device, MultisampleState, Queue};
 
@@ -54,7 +53,14 @@ impl TextRenderer {
         viewport_width: u32,
         viewport_height: u32,
     ) -> Self {
-        Self::new_with_msaa(device, queue, surface_format, viewport_width, viewport_height, 1)
+        Self::new_with_msaa(
+            device,
+            queue,
+            surface_format,
+            viewport_width,
+            viewport_height,
+            1,
+        )
     }
 
     /// Create a new text renderer with MSAA
@@ -126,20 +132,11 @@ impl TextRenderer {
 
             // Set text with default attributes
             let attrs = Attrs::new().family(Family::SansSerif);
-            buffer.set_text(
-                &mut self.font_system,
-                &cmd.text,
-                &attrs,
-                Shaping::Advanced,
-            );
+            buffer.set_text(&mut self.font_system, &cmd.text, &attrs, Shaping::Advanced);
 
             // Set buffer dimensions
             if let Some(max_width) = cmd.max_width {
-                buffer.set_size(
-                    &mut self.font_system,
-                    Some(max_width),
-                    None,
-                );
+                buffer.set_size(&mut self.font_system, Some(max_width), None);
             }
 
             // Shape the buffer
@@ -149,7 +146,9 @@ impl TextRenderer {
         }
 
         // Create text areas referencing the stored buffers
-        let text_areas: Vec<TextArea> = self.buffers.iter()
+        let text_areas: Vec<TextArea> = self
+            .buffers
+            .iter()
             .zip(commands.iter())
             .map(|(buffer, cmd)| {
                 let color = Color::rgba(
@@ -208,13 +207,7 @@ impl TextRenderer {
     pub fn resize(&mut self, queue: &Queue, width: u32, height: u32) {
         self.viewport_width = width;
         self.viewport_height = height;
-        self.viewport.update(
-            queue,
-            Resolution {
-                width,
-                height,
-            },
-        );
+        self.viewport.update(queue, Resolution { width, height });
     }
 
     /// Trim the atlas to free unused space

@@ -36,9 +36,9 @@
 //! Container (RenderObject with parent_data: FlexParentData)
 //! ```
 
-use std::fmt;
-use std::any::Any;
 use crate::widget::BoxedWidget;
+use std::any::Any;
+use std::fmt;
 
 /// ParentDataWidget - widget that attaches parent data to descendants
 ///
@@ -287,7 +287,7 @@ pub trait ParentDataWidget: Clone + fmt::Debug + Send + Sync + 'static {
     /// }
     /// ```
     fn debug_validate_parent_data(&self, _parent: &()) -> bool {
-        true  // Default: accept any parent
+        true // Default: accept any parent
     }
 }
 
@@ -448,8 +448,8 @@ mod tests {
 
             fn apply_parent_data(&self, render_object: &mut dyn RenderObject) {
                 // Downcast to MockRenderObject for testing
-                if let Some(mock) = (render_object as &mut dyn Any)
-                    .downcast_mut::<MockRenderObject>()
+                if let Some(mock) =
+                    (render_object as &mut dyn Any).downcast_mut::<MockRenderObject>()
                 {
                     if let Some(parent_data) = mock
                         .parent_data_mut()

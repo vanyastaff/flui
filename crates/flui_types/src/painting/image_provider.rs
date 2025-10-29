@@ -7,10 +7,10 @@ use crate::geometry::Size;
 use crate::painting::{Image, ImageConfiguration};
 use std::error::Error;
 use std::fmt;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::pin::Pin;
 use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 /// Error type for image loading operations.
 #[derive(Debug, Clone)]
@@ -78,7 +78,10 @@ pub trait ImageProvider: Send + Sync {
     /// to load (e.g., for different device pixel ratios).
     ///
     /// This is typically called by the framework when an image needs to be displayed.
-    fn load(&self, configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>>;
+    fn load(
+        &self,
+        configuration: &ImageConfiguration,
+    ) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>>;
 
     /// Returns a key that uniquely identifies this provider.
     ///
@@ -212,18 +215,24 @@ impl MemoryImage {
 }
 
 impl ImageProvider for MemoryImage {
-    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+    fn load(
+        &self,
+        _configuration: &ImageConfiguration,
+    ) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
         let width = self.width;
         let height = self.height;
         let bytes = self.bytes.clone();
 
-        Box::pin(async move {
-            Ok(Image::from_rgba8(width, height, (*bytes).clone()))
-        })
+        Box::pin(async move { Ok(Image::from_rgba8(width, height, (*bytes).clone())) })
     }
 
     fn key(&self) -> String {
-        format!("MemoryImage({:p}, {}x{})", Arc::as_ptr(&self.bytes), self.width, self.height)
+        format!(
+            "MemoryImage({:p}, {}x{})",
+            Arc::as_ptr(&self.bytes),
+            self.width,
+            self.height
+        )
     }
 }
 
@@ -298,7 +307,10 @@ impl AssetImage {
 }
 
 impl ImageProvider for AssetImage {
-    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+    fn load(
+        &self,
+        _configuration: &ImageConfiguration,
+    ) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
         #[cfg(feature = "image-loading")]
         {
             let asset_name = self.asset_name.clone();
@@ -306,66 +318,73 @@ impl ImageProvider for AssetImage {
             let scale = self.scale;
 
             Box::pin(async move {
-            use tokio::fs::File;
-            use tokio::io::AsyncReadExt;
-            use std::path::PathBuf;
+                use std::path::PathBuf;
+                use tokio::fs::File;
+                use tokio::io::AsyncReadExt;
 
-            // Construct asset path
-            // In a real application, this would use an asset bundle system
-            // For now, we assume assets are in an "assets" directory
-            let mut asset_path = PathBuf::from("assets");
+                // Construct asset path
+                // In a real application, this would use an asset bundle system
+                // For now, we assume assets are in an "assets" directory
+                let mut asset_path = PathBuf::from("assets");
 
-            if let Some(ref pkg) = package {
-                asset_path.push("packages");
-                asset_path.push(pkg);
-            }
-
-            asset_path.push(&asset_name);
-
-            // Try to find scaled variant (e.g., 2.0x, 3.0x)
-            // Flutter convention: image.png, image@2x.png, image@3x.png
-            let mut found_path = None;
-
-            if scale != 1.0 {
-                // Try scaled version
-                let base_name = asset_path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                let extension = asset_path.extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-
-                let scaled_name = format!("{}@{}x.{}", base_name, scale, extension);
-                let scaled_path = asset_path.with_file_name(scaled_name);
-
-                if tokio::fs::metadata(&scaled_path).await.is_ok() {
-                    found_path = Some(scaled_path);
+                if let Some(ref pkg) = package {
+                    asset_path.push("packages");
+                    asset_path.push(pkg);
                 }
-            }
 
-            // Fall back to base asset
-            let final_path = found_path.unwrap_or(asset_path);
+                asset_path.push(&asset_name);
 
-            // Read file
-            let mut file = File::open(&final_path)
-                .await
-                .map_err(|e| ImageError::NotFound(format!("Asset not found: {} ({})", final_path.display(), e)))?;
+                // Try to find scaled variant (e.g., 2.0x, 3.0x)
+                // Flutter convention: image.png, image@2x.png, image@3x.png
+                let mut found_path = None;
 
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)
-                .await
-                .map_err(|e| ImageError::LoadFailed(format!("Failed to read asset: {}", e)))?;
+                if scale != 1.0 {
+                    // Try scaled version
+                    let base_name = asset_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    let extension = asset_path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
 
-            // Decode image
-            let img = image::load_from_memory(&buffer)
-                .map_err(|e| ImageError::DecodeFailed(format!("Failed to decode asset: {}", e)))?;
+                    let scaled_name = format!("{}@{}x.{}", base_name, scale, extension);
+                    let scaled_path = asset_path.with_file_name(scaled_name);
 
-            // Convert to RGBA8
-            let rgba = img.to_rgba8();
-            let (width, height) = rgba.dimensions();
-            let data = rgba.into_raw();
+                    if tokio::fs::metadata(&scaled_path).await.is_ok() {
+                        found_path = Some(scaled_path);
+                    }
+                }
 
-            Ok(Image::from_rgba8(width, height, data))
+                // Fall back to base asset
+                let final_path = found_path.unwrap_or(asset_path);
+
+                // Read file
+                let mut file = File::open(&final_path).await.map_err(|e| {
+                    ImageError::NotFound(format!(
+                        "Asset not found: {} ({})",
+                        final_path.display(),
+                        e
+                    ))
+                })?;
+
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer)
+                    .await
+                    .map_err(|e| ImageError::LoadFailed(format!("Failed to read asset: {}", e)))?;
+
+                // Decode image
+                let img = image::load_from_memory(&buffer).map_err(|e| {
+                    ImageError::DecodeFailed(format!("Failed to decode asset: {}", e))
+                })?;
+
+                // Convert to RGBA8
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let data = rgba.into_raw();
+
+                Ok(Image::from_rgba8(width, height, data))
             })
         }
 
@@ -381,7 +400,10 @@ impl ImageProvider for AssetImage {
 
     fn key(&self) -> String {
         match &self.package {
-            Some(package) => format!("AssetImage({}, {}, scale={})", package, self.asset_name, self.scale),
+            Some(package) => format!(
+                "AssetImage({}, {}, scale={})",
+                package, self.asset_name, self.scale
+            ),
             None => format!("AssetImage({}, scale={})", self.asset_name, self.scale),
         }
     }
@@ -441,35 +463,39 @@ impl FileImage {
 }
 
 impl ImageProvider for FileImage {
-    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+    fn load(
+        &self,
+        _configuration: &ImageConfiguration,
+    ) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
         #[cfg(feature = "image-loading")]
         {
             let path = self.path.clone();
 
             Box::pin(async move {
-            use tokio::fs::File;
-            use tokio::io::AsyncReadExt;
+                use tokio::fs::File;
+                use tokio::io::AsyncReadExt;
 
-            // Read file
-            let mut file = File::open(&path)
-                .await
-                .map_err(|e| ImageError::NotFound(format!("File not found: {}", e)))?;
+                // Read file
+                let mut file = File::open(&path)
+                    .await
+                    .map_err(|e| ImageError::NotFound(format!("File not found: {}", e)))?;
 
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)
-                .await
-                .map_err(|e| ImageError::LoadFailed(format!("Failed to read file: {}", e)))?;
+                let mut buffer = Vec::new();
+                file.read_to_end(&mut buffer)
+                    .await
+                    .map_err(|e| ImageError::LoadFailed(format!("Failed to read file: {}", e)))?;
 
-            // Decode image
-            let img = image::load_from_memory(&buffer)
-                .map_err(|e| ImageError::DecodeFailed(format!("Failed to decode image: {}", e)))?;
+                // Decode image
+                let img = image::load_from_memory(&buffer).map_err(|e| {
+                    ImageError::DecodeFailed(format!("Failed to decode image: {}", e))
+                })?;
 
-            // Convert to RGBA8
-            let rgba = img.to_rgba8();
-            let (width, height) = rgba.dimensions();
-            let data = rgba.into_raw();
+                // Convert to RGBA8
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let data = rgba.into_raw();
 
-            Ok(Image::from_rgba8(width, height, data))
+                Ok(Image::from_rgba8(width, height, data))
             })
         }
 
@@ -560,63 +586,65 @@ impl NetworkImage {
 }
 
 impl ImageProvider for NetworkImage {
-    fn load(&self, _configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+    fn load(
+        &self,
+        _configuration: &ImageConfiguration,
+    ) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
         #[cfg(feature = "network-images")]
         {
             let url = self.url.clone();
             let headers = self.headers.clone();
 
             Box::pin(async move {
-            // Build HTTP client
-            let mut client_builder = reqwest::Client::builder();
+                // Build HTTP client
+                let mut client_builder = reqwest::Client::builder();
 
-            // Set default user agent
-            client_builder = client_builder.user_agent("FLUI/1.0");
+                // Set default user agent
+                client_builder = client_builder.user_agent("FLUI/1.0");
 
-            let client = client_builder
-                .build()
-                .map_err(|e| ImageError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
+                let client = client_builder.build().map_err(|e| {
+                    ImageError::NetworkError(format!("Failed to create HTTP client: {}", e))
+                })?;
 
-            // Build request
-            let mut request = client.get(&url);
+                // Build request
+                let mut request = client.get(&url);
 
-            // Add custom headers
-            if let Some(ref hdrs) = headers {
-                for (key, value) in hdrs {
-                    request = request.header(key, value);
+                // Add custom headers
+                if let Some(ref hdrs) = headers {
+                    for (key, value) in hdrs {
+                        request = request.header(key, value);
+                    }
                 }
-            }
 
-            // Fetch image
-            let response = request
-                .send()
-                .await
-                .map_err(|e| ImageError::NetworkError(format!("Failed to fetch image: {}", e)))?;
+                // Fetch image
+                let response = request.send().await.map_err(|e| {
+                    ImageError::NetworkError(format!("Failed to fetch image: {}", e))
+                })?;
 
-            // Check status
-            if !response.status().is_success() {
-                return Err(ImageError::NetworkError(format!(
-                    "HTTP error: {}",
-                    response.status()
-                )));
-            }
+                // Check status
+                if !response.status().is_success() {
+                    return Err(ImageError::NetworkError(format!(
+                        "HTTP error: {}",
+                        response.status()
+                    )));
+                }
 
-            // Read bytes
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| ImageError::NetworkError(format!("Failed to read response: {}", e)))?;
+                // Read bytes
+                let bytes = response.bytes().await.map_err(|e| {
+                    ImageError::NetworkError(format!("Failed to read response: {}", e))
+                })?;
 
-            // Decode image
-            let img = image::load_from_memory(&bytes)
-                .map_err(|e| ImageError::DecodeFailed(format!("Failed to decode image: {}", e)))?;
+                // Decode image
+                let img = image::load_from_memory(&bytes).map_err(|e| {
+                    ImageError::DecodeFailed(format!("Failed to decode image: {}", e))
+                })?;
 
-            // Convert to RGBA8
-            let rgba = img.to_rgba8();
-            let (width, height) = rgba.dimensions();
-            let data = rgba.into_raw();
+                // Convert to RGBA8
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let data = rgba.into_raw();
 
-            Ok(Image::from_rgba8(width, height, data))
+                Ok(Image::from_rgba8(width, height, data))
             })
         }
 
@@ -686,7 +714,10 @@ impl<F> ImageProvider for TransformedImageProvider<F>
 where
     F: Fn(Image) -> ImageResult<Image> + Send + Sync,
 {
-    fn load(&self, configuration: &ImageConfiguration) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
+    fn load(
+        &self,
+        configuration: &ImageConfiguration,
+    ) -> Pin<Box<dyn Future<Output = ImageResult<Image>> + Send + '_>> {
         let base_future = self.base.load(configuration);
         let transform = &self.transform;
 
@@ -697,7 +728,11 @@ where
     }
 
     fn key(&self) -> String {
-        format!("TransformedImage({}, {})", self.base.key(), self.transform_key)
+        format!(
+            "TransformedImage({}, {})",
+            self.base.key(),
+            self.transform_key
+        )
     }
 }
 

@@ -110,13 +110,11 @@ impl Color {
 
         match hex.len() {
             6 => {
-                let rgb = u32::from_str_radix(hex, 16)
-                    .map_err(|_| ParseColorError::InvalidHex)?;
+                let rgb = u32::from_str_radix(hex, 16).map_err(|_| ParseColorError::InvalidHex)?;
                 Ok(Self::from_argb((0xFF << 24) | rgb))
             }
             8 => {
-                let argb = u32::from_str_radix(hex, 16)
-                    .map_err(|_| ParseColorError::InvalidHex)?;
+                let argb = u32::from_str_radix(hex, 16).map_err(|_| ParseColorError::InvalidHex)?;
                 Ok(Self::from_argb(argb))
             }
             _ => Err(ParseColorError::InvalidLength),
@@ -246,9 +244,7 @@ impl Color {
     /// ```
     pub fn lerp(a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
-        let lerp_u8 = |a: u8, b: u8| {
-            (a as f32 + (b as f32 - a as f32) * t) as u8
-        };
+        let lerp_u8 = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
 
         Color::rgba(
             lerp_u8(a.r, b.r),
@@ -262,10 +258,7 @@ impl Color {
     #[inline]
     #[must_use]
     pub const fn to_argb(&self) -> u32 {
-        ((self.a as u32) << 24)
-            | ((self.r as u32) << 16)
-            | ((self.g as u32) << 8)
-            | (self.b as u32)
+        ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
     /// Converts to a hex string (format: "#AARRGGBB" or "#RRGGBB" if fully opaque).

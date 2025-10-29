@@ -46,37 +46,24 @@ pub mod shadow;
 pub mod shape;
 pub mod text;
 
-
-
-
-
-
-
 // Re-export main painting traits
-pub use decoration::BoxDecorationPainter;
 pub use border::BorderPainter;
+pub use decoration::BoxDecorationPainter;
 pub use gradient::GradientPainter;
-pub use shadow::ShadowPainter;
-pub use text::TextPainter;
 pub use image::ImagePainter;
 pub use path::PathPainter;
+pub use shadow::ShadowPainter;
 pub use shape::ShapePainter;
+pub use text::TextPainter;
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::decoration::BoxDecorationPainter;
     pub use crate::border::BorderPainter;
+    pub use crate::decoration::BoxDecorationPainter;
     pub use crate::gradient::GradientPainter;
-    pub use crate::shadow::ShadowPainter;
-    pub use crate::text::TextPainter;
     pub use crate::image::ImagePainter;
     pub use crate::path::PathPainter;
+    pub use crate::shadow::ShadowPainter;
     pub use crate::shape::ShapePainter;
+    pub use crate::text::TextPainter;
 }
-
-
-
-
-
-
-

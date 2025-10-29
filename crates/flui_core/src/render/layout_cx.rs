@@ -2,12 +2,12 @@
 //!
 //! Universal solution without code duplication (idea.md Chapter 3)
 
-use std::marker::PhantomData;
 use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
+use std::marker::PhantomData;
 
 use crate::element::{ElementId, ElementTree};
-use crate::render::arity::{Arity, SingleArity, MultiArity};
+use crate::render::arity::{Arity, MultiArity, SingleArity};
 
 /// Typed layout context
 ///
@@ -105,10 +105,7 @@ impl<'a, A: Arity> LayoutCx<'a, A> {
     where
         T: crate::render::ParentData + 'static,
     {
-        self.tree
-            .get(child_id)?
-            .parent_data()?
-            .downcast_ref::<T>()
+        self.tree.get(child_id)?.parent_data()?.downcast_ref::<T>()
     }
 }
 
@@ -213,7 +210,7 @@ impl<'a> LayoutCx<'a, MultiArity> {
 mod tests {
     use super::*;
     use crate::render::arity::LeafArity;
-    use crate::{RenderObject, PaintCx};
+    use crate::{PaintCx, RenderObject};
     use flui_engine::{BoxedLayer, ContainerLayer};
 
     // Test RenderObject for tests

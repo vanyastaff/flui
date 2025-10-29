@@ -324,7 +324,7 @@ mod tests {
     // Test that Arity is used correctly in widget definitions
     #[test]
     fn test_arity_in_widget() {
-        use crate::{Widget, Element};
+        use crate::{Element, Widget};
 
         // Just verify that arity types exist and implement Arity trait
         fn assert_arity<A: Arity>() {

@@ -359,7 +359,9 @@ impl DiagnosticsProperty {
     #[must_use]
     #[inline]
     pub fn is_hidden(&self) -> bool {
-        self.default_value.as_ref().is_some_and(|default| &self.value == default)
+        self.default_value
+            .as_ref()
+            .is_some_and(|default| &self.value == default)
     }
 
     /// Checks if this property should be displayed at the given level
@@ -397,7 +399,11 @@ impl DiagnosticsProperty {
 
 impl fmt::Display for DiagnosticsProperty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.format_with_style(DiagnosticsTreeStyle::SingleLine))
+        write!(
+            f,
+            "{}",
+            self.format_with_style(DiagnosticsTreeStyle::SingleLine)
+        )
     }
 }
 
@@ -591,7 +597,12 @@ impl DiagnosticsNode {
     ///
     /// Only adds the property if the condition is true.
     #[must_use]
-    pub fn flag(mut self, name: impl Into<String>, condition: bool, value: impl fmt::Display) -> Self {
+    pub fn flag(
+        mut self,
+        name: impl Into<String>,
+        condition: bool,
+        value: impl fmt::Display,
+    ) -> Self {
         if condition {
             self.properties.push(DiagnosticsProperty::new(name, value));
         }
@@ -807,9 +818,18 @@ mod tests {
 
     #[test]
     fn test_diagnostic_level_from_str() {
-        assert_eq!("info".parse::<DiagnosticLevel>().unwrap(), DiagnosticLevel::Info);
-        assert_eq!("ERROR".parse::<DiagnosticLevel>().unwrap(), DiagnosticLevel::Error);
-        assert_eq!("warn".parse::<DiagnosticLevel>().unwrap(), DiagnosticLevel::Warning);
+        assert_eq!(
+            "info".parse::<DiagnosticLevel>().unwrap(),
+            DiagnosticLevel::Info
+        );
+        assert_eq!(
+            "ERROR".parse::<DiagnosticLevel>().unwrap(),
+            DiagnosticLevel::Error
+        );
+        assert_eq!(
+            "warn".parse::<DiagnosticLevel>().unwrap(),
+            DiagnosticLevel::Warning
+        );
         assert!("invalid".parse::<DiagnosticLevel>().is_err());
     }
 
@@ -824,13 +844,19 @@ mod tests {
 
     #[test]
     fn test_diagnostics_tree_style_default() {
-        assert_eq!(DiagnosticsTreeStyle::default(), DiagnosticsTreeStyle::Sparse);
+        assert_eq!(
+            DiagnosticsTreeStyle::default(),
+            DiagnosticsTreeStyle::Sparse
+        );
     }
 
     #[test]
     fn test_diagnostics_tree_style_display() {
         assert_eq!(format!("{}", DiagnosticsTreeStyle::Sparse), "sparse");
-        assert_eq!(format!("{}", DiagnosticsTreeStyle::SingleLine), "singleline");
+        assert_eq!(
+            format!("{}", DiagnosticsTreeStyle::SingleLine),
+            "singleline"
+        );
     }
 
     #[test]
@@ -995,14 +1021,8 @@ mod tests {
     fn test_diagnostics_node_builder_with_children() {
         let node = DiagnosticsNode::new("Parent")
             .property("id", 1)
-            .child(
-                DiagnosticsNode::new("Child1")
-                    .property("name", "first")
-            )
-            .child(
-                DiagnosticsNode::new("Child2")
-                    .property("name", "second")
-            );
+            .child(DiagnosticsNode::new("Child1").property("name", "first"))
+            .child(DiagnosticsNode::new("Child2").property("name", "second"));
 
         assert_eq!(node.children().len(), 2);
         assert_eq!(node.children()[0].name().unwrap(), "Child1");
@@ -1019,12 +1039,12 @@ mod tests {
                 DiagnosticsNode::new("Row")
                     .property("spacing", 8)
                     .child(DiagnosticsNode::new("Text").property("content", "Hello"))
-                    .child(DiagnosticsNode::new("Button").property("label", "Click"))
+                    .child(DiagnosticsNode::new("Button").property("label", "Click")),
             )
             .child(
                 DiagnosticsNode::new("Column")
                     .property("alignment", "center")
-                    .child(DiagnosticsNode::new("Image").property("src", "logo.png"))
+                    .child(DiagnosticsNode::new("Image").property("src", "logo.png")),
             );
 
         assert_eq!(tree.name().unwrap(), "Container");

@@ -117,7 +117,10 @@ impl Tesselator {
     /// * `transform` - Transform matrix to apply
     pub fn tesselate_rrect(&mut self, rrect: RRect, color: [f32; 4], transform: Mat4) {
         let rect = rrect.rect;
-        let radius = rrect.corner_radius.min(rect.width() * 0.5).min(rect.height() * 0.5);
+        let radius = rrect
+            .corner_radius
+            .min(rect.width() * 0.5)
+            .min(rect.height() * 0.5);
 
         if radius <= 0.0 {
             // Degenerate to regular rect
@@ -156,10 +159,7 @@ impl Tesselator {
             Point::new(rect.max.x - radius, rect.min.y + radius),
             -std::f32::consts::FRAC_PI_2,
         ); // Top-right
-        add_corner_arc(
-            Point::new(rect.max.x - radius, rect.max.y - radius),
-            0.0,
-        ); // Bottom-right
+        add_corner_arc(Point::new(rect.max.x - radius, rect.max.y - radius), 0.0); // Bottom-right
         add_corner_arc(
             Point::new(rect.min.x + radius, rect.max.y - radius),
             std::f32::consts::FRAC_PI_2,
@@ -170,8 +170,8 @@ impl Tesselator {
         for i in 0..perimeter_vertices {
             let next = (i + 1) % perimeter_vertices;
             self.indices.extend_from_slice(&[
-                base_index,         // Center
-                base_index + i + 1, // Current perimeter vertex
+                base_index,            // Center
+                base_index + i + 1,    // Current perimeter vertex
                 base_index + next + 1, // Next perimeter vertex
             ]);
         }
@@ -203,10 +203,7 @@ impl Tesselator {
         if len < 0.001 {
             // Degenerate line - draw a point as small rect
             self.tesselate_rect(
-                Rect::from_center_size(
-                    p1,
-                    flui_types::Size::new(width, width),
-                ),
+                Rect::from_center_size(p1, flui_types::Size::new(width, width)),
                 color,
                 transform,
             );

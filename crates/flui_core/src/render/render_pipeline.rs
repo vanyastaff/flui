@@ -42,9 +42,9 @@
 //! - `flush_layout()` processes dirty nodes, sorted by depth (parents before children)
 //! - `flush_paint()` processes dirty nodes for incremental rendering
 
-use flui_types::{Size, Offset};
-use flui_types::constraints::BoxConstraints;
 use flui_engine::{BoxedLayer, ContainerLayer};
+use flui_types::constraints::BoxConstraints;
+use flui_types::{Offset, Size};
 
 use crate::element::{ElementId, ElementTree, RenderElement};
 use crate::widget::RenderObjectWidget;
@@ -84,7 +84,10 @@ impl std::fmt::Debug for RenderPipeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderPipeline")
             .field("root_id", &self.root_id)
-            .field("nodes_needing_layout_count", &self.nodes_needing_layout.len())
+            .field(
+                "nodes_needing_layout_count",
+                &self.nodes_needing_layout.len(),
+            )
             .field("nodes_needing_paint_count", &self.nodes_needing_paint.len())
             .finish()
     }
@@ -304,7 +307,9 @@ impl RenderPipeline {
         self.nodes_needing_paint.clear();
 
         // Paint the root (which recursively paints children)
-        let layer = self.tree.paint_render_object(root_id, Offset::ZERO)
+        let layer = self
+            .tree
+            .paint_render_object(root_id, Offset::ZERO)
             .unwrap_or_else(|| Box::new(ContainerLayer::new()));
 
         // Clear paint flag in RenderState
@@ -325,8 +330,8 @@ impl Default for RenderPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RenderObject, Widget, DynWidget, RenderObjectWidget};
-    use crate::{LeafArity, SingleArity, LayoutCx, PaintCx};
+    use crate::{DynWidget, RenderObject, RenderObjectWidget, Widget};
+    use crate::{LayoutCx, LeafArity, PaintCx, SingleArity};
     use flui_engine::ContainerLayer;
 
     // Test Widgets

@@ -200,7 +200,11 @@ pub struct ScrollNotification {
 impl ScrollNotification {
     /// Create new scroll notification
     pub const fn new(delta: f64, position: f64, max_extent: f64) -> Self {
-        Self { delta, position, max_extent }
+        Self {
+            delta,
+            position,
+            max_extent,
+        }
     }
 
     /// Get scroll percentage (0.0 to 1.0)
@@ -283,8 +287,16 @@ pub struct SizeChangedNotification {
 
 impl SizeChangedNotification {
     /// Create new size changed notification
-    pub const fn new(element_id: ElementId, old_size: flui_types::Size, new_size: flui_types::Size) -> Self {
-        Self { element_id, old_size, new_size }
+    pub const fn new(
+        element_id: ElementId,
+        old_size: flui_types::Size,
+        new_size: flui_types::Size,
+    ) -> Self {
+        Self {
+            element_id,
+            old_size,
+            new_size,
+        }
     }
 
     /// Get size delta (new - old)
@@ -366,7 +378,10 @@ pub struct FocusChangedNotification {
 impl FocusChangedNotification {
     /// Create new focus changed notification
     pub const fn new(element_id: ElementId, has_focus: bool) -> Self {
-        Self { element_id, has_focus }
+        Self {
+            element_id,
+            has_focus,
+        }
     }
 
     /// Check if focus was gained
@@ -530,11 +545,8 @@ mod tests {
         // Should be able to have different notification types
         let scroll = ScrollNotification::new(1.0, 2.0, 3.0);
         let layout = LayoutChangedNotification::new(42);
-        let size_changed = SizeChangedNotification::new(
-            43,
-            Size::new(10.0, 20.0),
-            Size::new(30.0, 40.0),
-        );
+        let size_changed =
+            SizeChangedNotification::new(43, Size::new(10.0, 20.0), Size::new(30.0, 40.0));
 
         // Store in vec of trait objects
         let notifications: Vec<&dyn DynNotification> = vec![&scroll, &layout, &size_changed];

@@ -25,9 +25,9 @@
 //! }
 //! ```
 
-use std::collections::VecDeque;
 use instant::Instant;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// Maximum number of snapshots to keep in history
 const DEFAULT_MAX_HISTORY: usize = 300; // 5 minutes at 1 snapshot/second
@@ -130,7 +130,8 @@ impl MemoryProfiler {
 
     /// Get peak memory usage from history
     pub fn peak_memory(&self) -> Option<MemorySnapshot> {
-        self.history.iter()
+        self.history
+            .iter()
             .max_by_key(|s| s.allocated_bytes)
             .cloned()
     }
@@ -141,9 +142,7 @@ impl MemoryProfiler {
             return 0.0;
         }
 
-        let sum: usize = self.history.iter()
-            .map(|s| s.allocated_bytes)
-            .sum();
+        let sum: usize = self.history.iter().map(|s| s.allocated_bytes).sum();
 
         (sum as f64 / self.history.len() as f64) / (1024.0 * 1024.0)
     }
@@ -163,8 +162,16 @@ impl MemoryProfiler {
         }
 
         // Simple heuristic: check if last 3 samples are all higher than first 3
-        let first_avg: usize = recent[7..10].iter().map(|s| s.allocated_bytes).sum::<usize>() / 3;
-        let last_avg: usize = recent[0..3].iter().map(|s| s.allocated_bytes).sum::<usize>() / 3;
+        let first_avg: usize = recent[7..10]
+            .iter()
+            .map(|s| s.allocated_bytes)
+            .sum::<usize>()
+            / 3;
+        let last_avg: usize = recent[0..3]
+            .iter()
+            .map(|s| s.allocated_bytes)
+            .sum::<usize>()
+            / 3;
 
         // Consider it a leak if growth is > 20%
         last_avg > first_avg && (last_avg - first_avg) as f64 / first_avg as f64 > 0.2
@@ -207,7 +214,9 @@ impl MemoryProfiler {
 
     #[cfg(target_os = "windows")]
     fn get_memory_usage() -> usize {
-        use windows_sys::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
         use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
         unsafe {

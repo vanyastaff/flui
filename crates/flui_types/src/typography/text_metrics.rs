@@ -1,7 +1,7 @@
 //! Text metrics types.
 
-use crate::geometry::Rect;
 use super::TextAffinity;
+use crate::geometry::Rect;
 
 /// Position in text (offset and affinity).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -416,7 +416,7 @@ impl TextSelection {
         };
         Self::new(
             TextPosition::new(new_start, self.base.affinity),
-            TextPosition::new(new_end, self.extent.affinity)
+            TextPosition::new(new_end, self.extent.affinity),
         )
     }
 

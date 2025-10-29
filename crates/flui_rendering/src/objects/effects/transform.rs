@@ -1,8 +1,10 @@
 //! RenderTransform - applies matrix transformation to child
 
-use flui_types::{Size, Offset};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{TransformLayer, Transform, BoxedLayer};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
+use flui_engine::{BoxedLayer, Transform, TransformLayer};
+use flui_types::{Offset, Size};
 
 /// RenderObject that applies a transformation to its child
 ///
@@ -85,10 +87,8 @@ mod tests {
 
     #[test]
     fn test_render_transform_with_alignment() {
-        let transform = RenderTransform::with_alignment(
-            Transform::Scale(2.0),
-            Offset::new(0.5, 0.5)
-        );
+        let transform =
+            RenderTransform::with_alignment(Transform::Scale(2.0), Offset::new(0.5, 0.5));
         assert!(matches!(transform.transform, Transform::Scale(_)));
         assert_eq!(transform.alignment, Offset::new(0.5, 0.5));
     }

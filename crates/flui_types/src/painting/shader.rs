@@ -226,10 +226,7 @@ impl ImageShader {
     /// Creates a new image shader with filter quality.
     #[inline]
     #[must_use]
-    pub const fn with_filter_quality(
-        mut self,
-        quality: crate::painting::FilterQuality,
-    ) -> Self {
+    pub const fn with_filter_quality(mut self, quality: crate::painting::FilterQuality) -> Self {
         self.filter_quality = Some(quality);
         self
     }
@@ -330,7 +327,10 @@ impl MaskFilter {
     #[inline]
     #[must_use]
     pub const fn affects_exterior(&self) -> bool {
-        matches!(self.style, BlurStyle::Normal | BlurStyle::Outer | BlurStyle::Solid)
+        matches!(
+            self.style,
+            BlurStyle::Normal | BlurStyle::Outer | BlurStyle::Solid
+        )
     }
 }
 
@@ -349,7 +349,9 @@ mod tests {
         );
 
         match shader {
-            Shader::LinearGradient { from, to, colors, .. } => {
+            Shader::LinearGradient {
+                from, to, colors, ..
+            } => {
                 assert_eq!(from, Offset::ZERO);
                 assert_eq!(to, Offset::new(100.0, 100.0));
                 assert_eq!(colors.len(), 2);
@@ -426,8 +428,7 @@ mod tests {
     #[test]
     fn test_image_shader_with_transform() {
         let transform = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        let shader = ImageShader::new(TileMode::Repeat, TileMode::Repeat)
-            .with_transform(transform);
+        let shader = ImageShader::new(TileMode::Repeat, TileMode::Repeat).with_transform(transform);
 
         assert_eq!(shader.transform, Some(transform));
     }

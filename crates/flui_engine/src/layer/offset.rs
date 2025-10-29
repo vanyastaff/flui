@@ -14,9 +14,9 @@
 //!     .with_offset(Offset::new(100.0, 50.0));
 //! ```
 
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
-use flui_types::{Rect, Offset, Event, HitTestResult};
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// A layer that shifts its children by a fixed offset.
 ///
@@ -136,10 +136,8 @@ impl Layer for OffsetLayer {
         };
 
         // Transform the position by subtracting the offset
-        let local_position = Offset::new(
-            position.dx - self.offset.dx,
-            position.dy - self.offset.dy,
-        );
+        let local_position =
+            Offset::new(position.dx - self.offset.dx, position.dy - self.offset.dy);
 
         child.hit_test(local_position, result)
     }
@@ -201,8 +199,7 @@ mod tests {
     fn test_offset_layer_with_offset() {
         let picture = PictureLayer::new();
         let offset = Offset::new(100.0, 50.0);
-        let offset_layer = OffsetLayer::new(Box::new(picture))
-            .with_offset(offset);
+        let offset_layer = OffsetLayer::new(Box::new(picture)).with_offset(offset);
 
         assert_eq!(offset_layer.offset(), offset);
     }
@@ -225,8 +222,7 @@ mod tests {
         // (In real usage, picture would have actual drawing commands)
 
         let offset = Offset::new(50.0, 30.0);
-        let offset_layer = OffsetLayer::new(Box::new(picture))
-            .with_offset(offset);
+        let offset_layer = OffsetLayer::new(Box::new(picture)).with_offset(offset);
 
         let bounds = offset_layer.bounds();
         // Bounds should be translated by offset
@@ -249,8 +245,8 @@ mod tests {
 
     #[test]
     fn test_offset_layer_visibility() {
-        use crate::painter::Paint;
         use crate::layer::DrawCommand;
+        use crate::painter::Paint;
 
         let mut picture = PictureLayer::new();
         // Add some content to make it visible

@@ -3,4 +3,4 @@
 pub mod paragraph;
 
 // Re-exports
-pub use paragraph::{RenderParagraph, ParagraphData};
+pub use paragraph::{ParagraphData, RenderParagraph};

@@ -1,8 +1,13 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use flui_types::{Size, Rect, Point, styling::{BoxDecoration, BorderPosition}};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{BoxedLayer, layer::pool, PictureLayer, Paint, RRect};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
+use flui_engine::{BoxedLayer, Paint, PictureLayer, RRect, layer::pool};
+use flui_types::{
+    Point, Rect, Size,
+    styling::{BorderPosition, BoxDecoration},
+};
 
 /// Position of the decoration relative to the child
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,9 +164,12 @@ impl RenderDecoratedBox {
     }
 
     /// Paint border on picture layer
-    fn paint_border(picture: &mut PictureLayer, rect: Rect, border: &flui_types::styling::Border, border_radius: Option<f32>) {
-        
-
+    fn paint_border(
+        picture: &mut PictureLayer,
+        rect: Rect,
+        border: &flui_types::styling::Border,
+        border_radius: Option<f32>,
+    ) {
         // Paint each side that exists
         if let Some(top) = border.top {
             if top.is_visible() {
@@ -171,13 +179,25 @@ impl RenderDecoratedBox {
 
         if let Some(right) = border.right {
             if right.is_visible() {
-                Self::paint_border_side(picture, rect, &right, BorderPosition::Right, border_radius);
+                Self::paint_border_side(
+                    picture,
+                    rect,
+                    &right,
+                    BorderPosition::Right,
+                    border_radius,
+                );
             }
         }
 
         if let Some(bottom) = border.bottom {
             if bottom.is_visible() {
-                Self::paint_border_side(picture, rect, &bottom, BorderPosition::Bottom, border_radius);
+                Self::paint_border_side(
+                    picture,
+                    rect,
+                    &bottom,
+                    BorderPosition::Bottom,
+                    border_radius,
+                );
             }
         }
 
@@ -350,9 +370,18 @@ mod tests {
     #[test]
     fn test_decoration_position_variants() {
         // Test enum variants
-        assert_eq!(DecorationPosition::Background, DecorationPosition::Background);
-        assert_eq!(DecorationPosition::Foreground, DecorationPosition::Foreground);
-        assert_ne!(DecorationPosition::Background, DecorationPosition::Foreground);
+        assert_eq!(
+            DecorationPosition::Background,
+            DecorationPosition::Background
+        );
+        assert_eq!(
+            DecorationPosition::Foreground,
+            DecorationPosition::Foreground
+        );
+        assert_ne!(
+            DecorationPosition::Background,
+            DecorationPosition::Foreground
+        );
     }
 
     #[test]
@@ -380,7 +409,8 @@ mod tests {
             gradient: None,
             image: None,
         };
-        let data = DecoratedBoxData::with_position(decoration.clone(), DecorationPosition::Foreground);
+        let data =
+            DecoratedBoxData::with_position(decoration.clone(), DecorationPosition::Foreground);
         assert_eq!(data.decoration, decoration);
         assert_eq!(data.position, DecorationPosition::Foreground);
     }

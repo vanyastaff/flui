@@ -71,7 +71,10 @@ impl Shadow {
 
     /// Creates a copy of this shadow with the given blur radius.
     pub const fn with_blur_radius(self, blur_radius: f32) -> Self {
-        Self { blur_radius, ..self }
+        Self {
+            blur_radius,
+            ..self
+        }
     }
 
     /// Linearly interpolate between two shadows.
@@ -241,7 +244,10 @@ impl BoxShadow {
 
     /// Creates a copy of this box shadow with the given blur radius.
     pub const fn with_blur_radius(self, blur_radius: f32) -> Self {
-        Self { blur_radius, ..self }
+        Self {
+            blur_radius,
+            ..self
+        }
     }
 
     /// Creates a copy of this box shadow with the given spread radius.
@@ -409,9 +415,7 @@ mod tests {
 
     #[test]
     fn test_shadow_lerp_list() {
-        let a = vec![
-            Shadow::new(Color::BLACK, Offset::ZERO, 0.0),
-        ];
+        let a = vec![Shadow::new(Color::BLACK, Offset::ZERO, 0.0)];
         let b = vec![
             Shadow::new(Color::WHITE, Offset::new(10.0, 10.0), 10.0),
             Shadow::new(Color::RED, Offset::new(5.0, 5.0), 5.0),

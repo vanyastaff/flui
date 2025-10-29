@@ -40,12 +40,12 @@
 //! }
 //! ```
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use parking_lot::RwLock;
 
-use crate::element::{ElementTree, ElementId, Element};
+use crate::element::{Element, ElementId, ElementTree};
 
 #[cfg(debug_assertions)]
 use crate::debug_println;
@@ -93,10 +93,18 @@ impl BuildBatcher {
         if self.pending.insert(element_id, depth).is_some() {
             self.builds_saved += 1;
             #[cfg(debug_assertions)]
-            debug_println!(PRINT_SCHEDULE_BUILD, "Build batched: element {:?} already in batch (saved 1 build)", element_id);
+            debug_println!(
+                PRINT_SCHEDULE_BUILD,
+                "Build batched: element {:?} already in batch (saved 1 build)",
+                element_id
+            );
         } else {
             #[cfg(debug_assertions)]
-            debug_println!(PRINT_SCHEDULE_BUILD, "Build batched: added element {:?} to batch", element_id);
+            debug_println!(
+                PRINT_SCHEDULE_BUILD,
+                "Build batched: added element {:?} to batch",
+                element_id
+            );
         }
     }
 
@@ -261,7 +269,10 @@ impl PipelineOwner {
         if let Some(ref batcher) = self.batcher {
             let (batches, saved) = batcher.stats();
             #[cfg(debug_assertions)]
-            println!("Disabling build batching (flushed {} batches, saved {} builds)", batches, saved);
+            println!(
+                "Disabling build batching (flushed {} batches, saved {} builds)",
+                batches, saved
+            );
         }
         self.batcher = None;
     }
@@ -273,7 +284,10 @@ impl PipelineOwner {
 
     /// Check if batch is ready to flush
     pub fn should_flush_batch(&self) -> bool {
-        self.batcher.as_ref().map(|b| b.should_flush()).unwrap_or(false)
+        self.batcher
+            .as_ref()
+            .map(|b| b.should_flush())
+            .unwrap_or(false)
     }
 
     /// Flush the current batch
@@ -284,7 +298,11 @@ impl PipelineOwner {
             let pending = batcher.take_pending();
             if !pending.is_empty() {
                 #[cfg(debug_assertions)]
-                debug_println!(PRINT_SCHEDULE_BUILD, "Flushing batch: {} elements", pending.len());
+                debug_println!(
+                    PRINT_SCHEDULE_BUILD,
+                    "Flushing batch: {} elements",
+                    pending.len()
+                );
 
                 for (element_id, depth) in pending {
                     // Add to dirty elements (bypass batching)
@@ -358,7 +376,10 @@ impl PipelineOwner {
     pub fn schedule_build_for(&mut self, element_id: ElementId, depth: usize) {
         if self.build_locked {
             #[cfg(debug_assertions)]
-            eprintln!("Warning: Attempted to schedule build while locked (element {:?})", element_id);
+            eprintln!(
+                "Warning: Attempted to schedule build while locked (element {:?})",
+                element_id
+            );
             return;
         }
 
@@ -377,12 +398,21 @@ impl PipelineOwner {
         // Check if already scheduled
         if self.dirty_elements.iter().any(|(id, _)| *id == element_id) {
             #[cfg(debug_assertions)]
-            debug_println!(PRINT_SCHEDULE_BUILD, "Element {:?} already scheduled for rebuild", element_id);
+            debug_println!(
+                PRINT_SCHEDULE_BUILD,
+                "Element {:?} already scheduled for rebuild",
+                element_id
+            );
             return;
         }
 
         #[cfg(debug_assertions)]
-        debug_println!(PRINT_SCHEDULE_BUILD, "Scheduling element {:?} for rebuild (depth {})", element_id, depth);
+        debug_println!(
+            PRINT_SCHEDULE_BUILD,
+            "Scheduling element {:?} for rebuild (depth {})",
+            element_id,
+            depth
+        );
 
         self.dirty_elements.push((element_id, depth));
 
@@ -496,7 +526,12 @@ impl PipelineOwner {
         // Rebuild each element
         for (element_id, depth) in dirty.drain(..) {
             #[cfg(debug_assertions)]
-            debug_println!(PRINT_BUILD_SCOPE, "  Rebuilding element {:?} at depth {}", element_id, depth);
+            debug_println!(
+                PRINT_BUILD_SCOPE,
+                "  Rebuilding element {:?} at depth {}",
+                element_id,
+                depth
+            );
 
             // Clone the Arc for passing to rebuild()
             let tree_ref = std::sync::Arc::clone(&self.tree);
@@ -521,7 +556,10 @@ impl PipelineOwner {
                 children
             } else {
                 #[cfg(debug_assertions)]
-                eprintln!("  Warning: Element {:?} was removed before rebuild", element_id);
+                eprintln!(
+                    "  Warning: Element {:?} was removed before rebuild",
+                    element_id
+                );
                 Vec::new()
             };
 
@@ -589,7 +627,10 @@ impl PipelineOwner {
                 debug_println!(PRINT_BUILD_SCOPE, "finalize_tree: tree is clean");
             } else {
                 #[cfg(debug_assertions)]
-                eprintln!("Warning: finalize_tree: {} dirty elements remaining", owner.dirty_elements.len());
+                eprintln!(
+                    "Warning: finalize_tree: {} dirty elements remaining",
+                    owner.dirty_elements.len()
+                );
             }
         });
     }
@@ -607,7 +648,11 @@ impl PipelineOwner {
     pub fn request_layout(&mut self, _node_id: ElementId) {
         // TODO: Implement dirty tracking for layout
         #[cfg(debug_assertions)]
-        debug_println!(PRINT_LAYOUT, "PipelineOwner: requested layout for {:?}", _node_id);
+        debug_println!(
+            PRINT_LAYOUT,
+            "PipelineOwner: requested layout for {:?}",
+            _node_id
+        );
     }
 
     /// Request paint for a RenderObject
@@ -617,7 +662,11 @@ impl PipelineOwner {
     pub fn request_paint(&mut self, _node_id: ElementId) {
         // TODO: Implement dirty tracking for paint
         #[cfg(debug_assertions)]
-        debug_println!(PRINT_LAYOUT, "PipelineOwner: requested paint for {:?}", _node_id);
+        debug_println!(
+            PRINT_LAYOUT,
+            "PipelineOwner: requested paint for {:?}",
+            _node_id
+        );
     }
 
     /// Flush the layout phase
@@ -636,7 +685,10 @@ impl PipelineOwner {
     ///
     /// This is a stub implementation. Full layout pipeline will be added
     /// when RenderObject system is fully integrated.
-    pub fn flush_layout(&mut self, _constraints: flui_types::constraints::BoxConstraints) -> Option<flui_types::Size> {
+    pub fn flush_layout(
+        &mut self,
+        _constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
         #[cfg(debug_assertions)]
         debug_println!(PRINT_LAYOUT, "PipelineOwner::flush_layout called (stub)");
 
@@ -690,8 +742,12 @@ impl PipelineOwner {
     ///
     /// An Element enum variant ready to be inserted into the tree
     fn inflate_widget(&self, widget: crate::BoxedWidget) -> Element {
-        use crate::widget::{StatelessWidget, StatefulWidget, InheritedWidget, RenderObjectWidget, ParentDataWidget};
-        use crate::element::{ComponentElement, StatefulElement, InheritedElement, RenderElement, ParentDataElement};
+        use crate::element::{
+            ComponentElement, InheritedElement, ParentDataElement, RenderElement, StatefulElement,
+        };
+        use crate::widget::{
+            InheritedWidget, ParentDataWidget, RenderObjectWidget, StatefulWidget, StatelessWidget,
+        };
 
         // Try each widget type in order
         // Note: We can't directly check traits, so we use a heuristic:
@@ -713,9 +769,9 @@ impl Default for PipelineOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::element::{ComponentElement, Element};
-    use crate::widget::{StatelessWidget, BoxedWidget};
     use crate::BuildContext;
+    use crate::element::{ComponentElement, Element};
+    use crate::widget::{BoxedWidget, StatelessWidget};
 
     // Test widget for testing
     #[derive(Debug, Clone)]
@@ -936,9 +992,7 @@ mod tests {
     fn test_build_scope_returns_result() {
         let mut owner = PipelineOwner::new();
 
-        let result = owner.build_scope(|_| {
-            42
-        });
+        let result = owner.build_scope(|_| 42);
 
         assert_eq!(result, 42);
     }

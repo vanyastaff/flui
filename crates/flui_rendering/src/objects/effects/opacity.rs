@@ -1,8 +1,10 @@
 //! RenderOpacity - applies opacity to a child using OpacityLayer
 
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
+use flui_engine::{BoxedLayer, OpacityLayer};
 use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{OpacityLayer, BoxedLayer};
 
 /// RenderObject that applies opacity to its child
 ///
@@ -26,7 +28,7 @@ impl RenderOpacity {
     /// Create new RenderOpacity
     pub fn new(opacity: f32) -> Self {
         Self {
-            opacity: opacity.clamp(0.0, 1.0)
+            opacity: opacity.clamp(0.0, 1.0),
         }
     }
 

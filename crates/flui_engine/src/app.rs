@@ -3,7 +3,6 @@
 //! This module provides a backend-agnostic API for creating applications.
 //! The backend (WGPU, Egui, etc.) is selected automatically based on configuration.
 
-
 /// Backend type for rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Backend {
@@ -230,13 +229,21 @@ impl App {
         let backend = match self.config.backend {
             Backend::Auto => {
                 #[cfg(feature = "wgpu")]
-                { Backend::Wgpu }
+                {
+                    Backend::Wgpu
+                }
 
                 #[cfg(all(feature = "egui", not(feature = "wgpu")))]
-                { Backend::Egui }
+                {
+                    Backend::Egui
+                }
 
                 #[cfg(not(any(feature = "wgpu", feature = "egui")))]
-                { return Err("No backend available. Enable 'wgpu' or 'egui' feature.".to_string()); }
+                {
+                    return Err(
+                        "No backend available. Enable 'wgpu' or 'egui' feature.".to_string()
+                    );
+                }
             }
             backend => backend,
         };

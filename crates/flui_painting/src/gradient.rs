@@ -1,7 +1,10 @@
 //! Gradient painting implementation
 
-use flui_types::{Rect, Point, styling::{Gradient, LinearGradient, RadialGradient, SweepGradient}};
 use flui_engine::Painter;
+use flui_types::{
+    Point, Rect,
+    styling::{Gradient, LinearGradient, RadialGradient, SweepGradient},
+};
 
 /// Painter for gradients
 pub struct GradientPainter;
@@ -14,11 +17,7 @@ impl GradientPainter {
     /// * `painter` - The backend-agnostic painter to draw with
     /// * `rect` - The rectangle to paint the gradient in
     /// * `gradient` - The gradient to paint
-    pub fn paint(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        gradient: &Gradient,
-    ) {
+    pub fn paint(painter: &mut dyn Painter, rect: Rect, gradient: &Gradient) {
         match gradient {
             Gradient::Linear(linear) => Self::paint_linear(painter, rect, linear),
             Gradient::Radial(radial) => Self::paint_radial(painter, rect, radial),
@@ -37,11 +36,7 @@ impl GradientPainter {
     }
 
     /// Paint a linear gradient
-    fn paint_linear(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        gradient: &LinearGradient,
-    ) {
+    fn paint_linear(painter: &mut dyn Painter, rect: Rect, gradient: &LinearGradient) {
         if gradient.colors.is_empty() {
             return;
         }
@@ -83,11 +78,7 @@ impl GradientPainter {
     }
 
     /// Paint a radial gradient
-    fn paint_radial(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        gradient: &RadialGradient,
-    ) {
+    fn paint_radial(painter: &mut dyn Painter, rect: Rect, gradient: &RadialGradient) {
         if gradient.colors.is_empty() {
             return;
         }
@@ -120,11 +111,7 @@ impl GradientPainter {
     }
 
     /// Paint a sweep gradient (conical gradient)
-    fn paint_sweep(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        _gradient: &SweepGradient,
-    ) {
+    fn paint_sweep(painter: &mut dyn Painter, rect: Rect, _gradient: &SweepGradient) {
         // TODO: Implement sweep gradients
         // For now, just fill with first color as a fallback
         if let Some(first_color) = _gradient.colors.first() {
@@ -192,10 +179,7 @@ mod tests {
     #[test]
     fn test_gradient_enum_linear() {
         // Test Gradient enum with linear
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![
-            Color::RED,
-            Color::BLUE,
-        ]));
+        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
 
         match gradient {
             Gradient::Linear(linear) => {

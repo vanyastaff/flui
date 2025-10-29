@@ -3,9 +3,11 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use flui_types::{Size, painting::BlendMode};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::{Size, painting::BlendMode};
 
 // ===== Data Structure =====
 
@@ -175,7 +177,6 @@ impl RenderObject for RenderBackdropFilter {
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         // Capture child layer
         let child = cx.child();
-        
 
         // Note: Full backdrop filtering requires compositor support
         // In production, this would:
@@ -294,8 +295,7 @@ mod tests {
 
     #[test]
     fn test_render_backdrop_filter_with_blend_mode() {
-        let filter = RenderBackdropFilter::blur(10.0)
-            .with_blend_mode(BlendMode::Multiply);
+        let filter = RenderBackdropFilter::blur(10.0).with_blend_mode(BlendMode::Multiply);
         assert_eq!(filter.blend_mode(), BlendMode::Multiply);
     }
 }

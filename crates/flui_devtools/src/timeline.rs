@@ -33,11 +33,11 @@
 //! // Load trace.json in chrome://tracing
 //! ```
 
-use std::sync::Arc;
-use parking_lot::Mutex;
 use instant::{Duration, Instant};
-use serde::{Serialize, Deserialize};
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
 
 /// Category for timeline events
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -71,11 +71,11 @@ impl EventCategory {
     /// Returns a color in hex format suitable for Chrome DevTools.
     pub fn color(&self) -> &str {
         match self {
-            EventCategory::Frame => "#FF6B6B",     // Red
-            EventCategory::Build => "#4ECDC4",     // Teal
-            EventCategory::Layout => "#FFE66D",    // Yellow
-            EventCategory::Paint => "#95E1D3",     // Mint
-            EventCategory::Custom => "#A8E6CF",    // Light green
+            EventCategory::Frame => "#FF6B6B",  // Red
+            EventCategory::Build => "#4ECDC4",  // Teal
+            EventCategory::Layout => "#FFE66D", // Yellow
+            EventCategory::Paint => "#95E1D3",  // Mint
+            EventCategory::Custom => "#A8E6CF", // Light green
         }
     }
 }

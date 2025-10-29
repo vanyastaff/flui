@@ -52,25 +52,9 @@ pub mod parent_data;
 
 // Re-export from flui_core - the new unified RenderObject architecture
 pub use flui_core::render::{
-    RenderObject,
-    Arity,
-    LeafArity,
-    SingleArity,
-    MultiArity,
-    LayoutCx,
-    PaintCx,
-    SingleChild,
-    MultiChild,
-    SingleChildPaint,
-    MultiChildPaint,
-    DynRenderObject,
-    BoxedRenderObject,
-    RenderState,
-    RenderFlags,
-    RenderPipeline,
-    RenderContext,
-    ParentData,
-    ParentDataWithOffset,
+    Arity, BoxedRenderObject, DynRenderObject, LayoutCx, LeafArity, MultiArity, MultiChild,
+    MultiChildPaint, PaintCx, ParentData, ParentDataWithOffset, RenderContext, RenderFlags,
+    RenderObject, RenderPipeline, RenderState, SingleArity, SingleChild, SingleChildPaint,
 };
 
 // Re-export from flui_engine for Layer types
@@ -84,50 +68,47 @@ pub use parent_data::{FlexParentData, StackParentData};
 
 // Re-export all RenderObjects
 pub use objects::{
+    DecoratedBoxData,
+    DecorationPosition,
+    MouseCallbacks,
+
+    ParagraphData,
+    RRectShape,
+    RectShape,
+    // Interaction objects
+    RenderAbsorbPointer,
     // Layout objects
     RenderAlign,
-    RenderPadding,
-    RenderConstrainedBox,
     RenderAspectRatio,
-    RenderLimitedBox,
-    RenderFractionallySizedBox,
-    RenderPositionedBox,
+    RenderClipRRect,
+    RenderClipRect,
+    RenderConstrainedBox,
+    RenderDecoratedBox,
     RenderFlex,
-    RenderStack,
+    RenderFractionallySizedBox,
+    RenderIgnorePointer,
     RenderIndexedStack,
+
+    RenderLimitedBox,
+    RenderMouseRegion,
+    RenderOffstage,
 
     // Effects objects
     RenderOpacity,
-    RenderDecoratedBox, DecoratedBoxData, DecorationPosition,
-    RenderTransform,
-    RenderClipRect, RectShape,
-    RenderClipRRect, RRectShape,
-    RenderOffstage,
-
-    // Interaction objects
-    RenderAbsorbPointer,
-    RenderIgnorePointer,
-    RenderMouseRegion,
-    RenderPointerListener,
-    MouseCallbacks,
-
+    RenderPadding,
     // Text objects
-    RenderParagraph, ParagraphData,
+    RenderParagraph,
+    RenderPointerListener,
+    RenderPositionedBox,
+    RenderStack,
+    RenderTransform,
 };
 
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        RenderObject,
-        DynRenderObject,
-        BoxedRenderObject,
-        RenderState,
-        RenderFlags,
-        LeafArity,
-        SingleArity,
-        MultiArity,
-        LayoutCx,
-        PaintCx,
+        BoxedRenderObject, DynRenderObject, LayoutCx, LeafArity, MultiArity, PaintCx, RenderFlags,
+        RenderObject, RenderState, SingleArity,
     };
 
     pub use crate::objects::*;

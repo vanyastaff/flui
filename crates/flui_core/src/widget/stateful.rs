@@ -51,8 +51,8 @@
 //! // Widget and DynWidget are automatic!
 //! ```
 
-use std::fmt;
 use crate::BoxedWidget;
+use std::fmt;
 
 /// StatefulWidget - widget that creates a State object
 ///
@@ -494,7 +494,6 @@ pub trait State<W: StatefulWidget>: Send + Sync + 'static {
 //
 // Use: #[derive(StatefulWidget)] on your widget type
 
-
 // DynWidget comes automatically via blanket impl in mod.rs!
 
 // Wrapper to make State → DynState conversion explicit
@@ -518,7 +517,11 @@ where
     W: StatefulWidget + 'static,
     W::State: fmt::Debug,
 {
-    fn build(&mut self, widget: &dyn crate::DynWidget, context: &crate::element::BuildContext) -> crate::BoxedWidget {
+    fn build(
+        &mut self,
+        widget: &dyn crate::DynWidget,
+        context: &crate::element::BuildContext,
+    ) -> crate::BoxedWidget {
         // Downcast widget to concrete type W
         if let Some(concrete_widget) = (widget as &dyn std::any::Any).downcast_ref::<W>() {
             // Call the concrete State::build()
@@ -529,7 +532,11 @@ where
         }
     }
 
-    fn did_update_widget(&mut self, old_widget: &dyn crate::DynWidget, new_widget: &dyn crate::DynWidget) {
+    fn did_update_widget(
+        &mut self,
+        old_widget: &dyn crate::DynWidget,
+        new_widget: &dyn crate::DynWidget,
+    ) {
         if let (Some(old), Some(new)) = (
             (old_widget as &dyn std::any::Any).downcast_ref::<W>(),
             (new_widget as &dyn std::any::Any).downcast_ref::<W>(),
@@ -640,11 +647,7 @@ mod tests {
                 Box::new(MockWidget)
             }
 
-            fn did_update_widget(
-                &mut self,
-                _old: &LifecycleWidget,
-                _new: &LifecycleWidget,
-            ) {
+            fn did_update_widget(&mut self, _old: &LifecycleWidget, _new: &LifecycleWidget) {
                 self.update_called = true;
             }
 

@@ -137,7 +137,10 @@ impl ClipBehavior {
     #[inline]
     #[must_use]
     pub const fn is_anti_aliased(self) -> bool {
-        matches!(self, ClipBehavior::AntiAlias | ClipBehavior::AntiAliasWithSaveLayer)
+        matches!(
+            self,
+            ClipBehavior::AntiAlias | ClipBehavior::AntiAliasWithSaveLayer
+        )
     }
 }
 

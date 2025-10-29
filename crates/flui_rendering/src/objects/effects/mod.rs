@@ -16,45 +16,18 @@ pub mod repaint_boundary;
 pub mod shader_mask;
 pub mod transform;
 
-
-
-
-
-
-
-
-
-
-
-
-
 // Re-exports
 pub use animated_opacity::RenderAnimatedOpacity;
-pub use backdrop_filter::{RenderBackdropFilter, ImageFilter};
+pub use backdrop_filter::{ImageFilter, RenderBackdropFilter};
 pub use clip_oval::RenderClipOval;
-pub use clip_path::{RenderClipPath, PathClipper};
-pub use clip_rect::{RenderClipRect, RectShape};
-pub use clip_rrect::{RenderClipRRect, RRectShape};
+pub use clip_path::{PathClipper, RenderClipPath};
+pub use clip_rect::{RectShape, RenderClipRect};
+pub use clip_rrect::{RRectShape, RenderClipRRect};
 pub use custom_paint::RenderCustomPaint;
-pub use decorated_box::{RenderDecoratedBox, DecorationPosition, DecoratedBoxData};
+pub use decorated_box::{DecoratedBoxData, DecorationPosition, RenderDecoratedBox};
 pub use offstage::RenderOffstage;
 pub use opacity::RenderOpacity;
-pub use physical_model::{RenderPhysicalModel, PhysicalShape};
+pub use physical_model::{PhysicalShape, RenderPhysicalModel};
 pub use repaint_boundary::RenderRepaintBoundary;
 pub use shader_mask::{RenderShaderMask, ShaderSpec};
 pub use transform::RenderTransform;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

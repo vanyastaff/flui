@@ -4,12 +4,10 @@
 //! including brightness, contrast, saturation, hue rotation, grayscale, sepia,
 //! and custom color matrix transforms.
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
-use flui_types::painting::effects::{
-    ColorFilter as EffectColorFilter, ColorMatrix
-};
+use flui_types::painting::effects::{ColorFilter as EffectColorFilter, ColorMatrix};
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// A filter layer that applies color transformations
 pub struct FilterLayer {
@@ -184,7 +182,9 @@ impl Layer for FilterLayer {
             return false;
         }
 
-        self.child.as_ref().is_some_and(|c| c.hit_test(position, result))
+        self.child
+            .as_ref()
+            .is_some_and(|c| c.hit_test(position, result))
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {

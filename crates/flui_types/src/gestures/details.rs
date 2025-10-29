@@ -3,9 +3,9 @@
 //! This module provides detail types for various gestures like tap, drag,
 //! scale, long press, and force press.
 
-use crate::geometry::Offset;
 use super::pointer::{OffsetPair, PointerDeviceKind};
 use super::velocity::Velocity;
+use crate::geometry::Offset;
 use std::time::Duration;
 
 // ============================================================================
@@ -581,12 +581,8 @@ mod tests {
 
     #[test]
     fn test_force_press_details() {
-        let details = ForcePressDetails::new(
-            Offset::new(100.0, 200.0),
-            Offset::new(10.0, 20.0),
-            0.8,
-            1.0,
-        );
+        let details =
+            ForcePressDetails::new(Offset::new(100.0, 200.0), Offset::new(10.0, 20.0), 0.8, 1.0);
 
         assert_eq!(details.pressure, 0.8);
         assert_eq!(details.max_pressure, 1.0);

@@ -53,8 +53,8 @@
 //! // Widget and DynWidget are automatic!
 //! ```
 
-use std::fmt;
 use crate::RenderObject;
+use std::fmt;
 
 /// RenderObjectWidget - widget that creates a render object
 ///
@@ -471,10 +471,7 @@ mod tests {
                 MockRenderObject { value: self.value }
             }
 
-            fn update_render_object(
-                &self,
-                render_object: &mut Self::RenderObject,
-            ) {
+            fn update_render_object(&self, render_object: &mut Self::RenderObject) {
                 render_object.value = self.value;
             }
         }
@@ -506,10 +503,7 @@ mod tests {
                 MockRenderObject { value: self.value }
             }
 
-            fn update_render_object(
-                &self,
-                render_object: &mut Self::RenderObject,
-            ) {
+            fn update_render_object(&self, render_object: &mut Self::RenderObject) {
                 render_object.value = self.value;
             }
         }
@@ -542,10 +536,7 @@ mod tests {
                 }
             }
 
-            fn update_render_object(
-                &self,
-                render_object: &mut Self::RenderObject,
-            ) {
+            fn update_render_object(&self, render_object: &mut Self::RenderObject) {
                 render_object.value = self.data.len() as i32;
             }
         }
@@ -573,10 +564,7 @@ mod tests {
                 MockRenderObject { value: 0 }
             }
 
-            fn update_render_object(
-                &self,
-                _render_object: &mut Self::RenderObject,
-            ) {
+            fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
                 // Update logic
             }
         }

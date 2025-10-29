@@ -1,6 +1,6 @@
 //! Test derive macros
 
-use flui_core::{Widget, StatelessWidget, BoxedWidget, DeriveStatelessWidget};
+use flui_core::{BoxedWidget, DeriveStatelessWidget, StatelessWidget, Widget};
 
 #[derive(DeriveStatelessWidget, Debug, Clone)]
 struct MyWidget {
@@ -10,7 +10,9 @@ struct MyWidget {
 impl StatelessWidget for MyWidget {
     fn build(&self) -> BoxedWidget {
         // Return a placeholder for now
-        Box::new(MyWidget { value: self.value + 1 })
+        Box::new(MyWidget {
+            value: self.value + 1,
+        })
     }
 }
 

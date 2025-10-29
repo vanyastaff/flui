@@ -3,8 +3,8 @@
 //! This module provides type-safe rectangle types for representing bounding boxes,
 //! clip regions, and layout bounds.
 
-use std::fmt;
 use crate::{Point, Size};
+use std::fmt;
 
 /// Rectangle defined by two corner points.
 ///
@@ -206,10 +206,10 @@ impl Rect {
     #[must_use]
     pub const fn corners(&self) -> [Point; 4] {
         [
-            self.min,                                           // top_left
-            Point::new(self.max.x, self.min.y),               // top_right
-            self.max,                                          // bottom_right
-            Point::new(self.min.x, self.max.y),               // bottom_left
+            self.min,                           // top_left
+            Point::new(self.max.x, self.min.y), // top_right
+            self.max,                           // bottom_right
+            Point::new(self.min.x, self.max.y), // bottom_left
         ]
     }
 

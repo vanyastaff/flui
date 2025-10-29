@@ -101,8 +101,8 @@ impl Elevation {
         // Material Design assumes light from top-left at ~45 degrees
         // Vertical offset increases more than horizontal
         Offset::new(
-            elevation * 0.2,      // Slight horizontal offset
-            elevation * 0.4,      // More pronounced vertical offset
+            elevation * 0.2, // Slight horizontal offset
+            elevation * 0.4, // More pronounced vertical offset
         )
     }
 

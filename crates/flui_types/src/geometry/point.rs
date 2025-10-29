@@ -3,7 +3,7 @@
 //! This module provides type-safe point types representing absolute positions in 2D space.
 
 use std::fmt;
-use std::ops::{Add, Sub, Mul, Div, Neg};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// Represents a point in 2D space with absolute coordinates.
 ///

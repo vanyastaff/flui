@@ -29,7 +29,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::{
+    BoxedWidget, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget,
+};
 use flui_rendering::{RenderPadding, SingleArity};
 use flui_types::EdgeInsets;
 
@@ -125,15 +127,21 @@ impl Padding {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
     /// Validates padding configuration.
     pub fn validate(&self) -> Result<(), String> {
         // Padding values should be non-negative
-        if self.padding.left < 0.0 || self.padding.right < 0.0
-            || self.padding.top < 0.0 || self.padding.bottom < 0.0 {
+        if self.padding.left < 0.0
+            || self.padding.right < 0.0
+            || self.padding.top < 0.0
+            || self.padding.bottom < 0.0
+        {
             return Err("Padding values must be non-negative".to_string());
         }
 
@@ -216,8 +224,6 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    
-
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {
             // Simple mock - returns a RenderPadding as placeholder
@@ -260,9 +266,7 @@ mod tests {
 
     #[test]
     fn test_padding_builder() {
-        let padding = Padding::builder()
-            .padding(EdgeInsets::all(10.0))
-            .build();
+        let padding = Padding::builder().padding(EdgeInsets::all(10.0)).build();
         assert_eq!(padding.padding, EdgeInsets::all(10.0));
     }
 

@@ -1,8 +1,10 @@
 //! RenderPositionedBox - positions child with explicit coordinates
 
-use flui_types::{Offset, Size};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, TransformLayer};
+use flui_types::{Offset, Size};
 
 /// RenderObject that positions child with explicit coordinates
 ///
@@ -125,10 +127,7 @@ impl RenderObject for RenderPositionedBox {
         let child_layer = cx.capture_child_layer(child);
 
         // Calculate paint offset based on positioning
-        let offset = Offset::new(
-            self.left.unwrap_or(0.0),
-            self.top.unwrap_or(0.0),
-        );
+        let offset = Offset::new(self.left.unwrap_or(0.0), self.top.unwrap_or(0.0));
 
         // Use TransformLayer to position child
         Box::new(TransformLayer::translate(child_layer, offset))

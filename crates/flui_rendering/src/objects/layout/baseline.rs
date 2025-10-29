@@ -1,8 +1,10 @@
 //! RenderBaseline - aligns child based on baseline
 
-use flui_types::{Size, Offset, TextBaseline};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, TransformLayer};
+use flui_types::{Offset, Size, TextBaseline};
 
 /// Data for RenderBaseline
 #[derive(Debug, Clone, Copy, PartialEq)]

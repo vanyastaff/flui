@@ -2,12 +2,12 @@
 //!
 //! Implementation from idea.md Chapter 2.3
 
-use flui_types::Size;
 use flui_engine::BoxedLayer;
+use flui_types::Size;
 
-use crate::render::arity::Arity;
 use super::layout_cx::LayoutCx;
 use super::paint_cx::PaintCx;
+use crate::render::arity::Arity;
 
 /// Typed RenderObject with compile-time arity guarantees
 ///
@@ -210,8 +210,8 @@ mod tests {
     use crate::render::arity::{LeafArity, SingleArity};
     use crate::render::layout_cx::SingleChild;
     use crate::render::paint_cx::SingleChildPaint;
-    use flui_types::constraints::BoxConstraints;
     use flui_engine::ContainerLayer;
+    use flui_types::constraints::BoxConstraints;
 
     // Example Leaf RenderObject
     #[derive(Debug)]

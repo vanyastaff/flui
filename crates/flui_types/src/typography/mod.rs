@@ -15,10 +15,8 @@ pub mod text_style;
 pub use font_family::*;
 pub use font_loader::*;
 pub use font_provider::*;
-pub use text_style::*;
 pub use text_alignment::*;
 pub use text_decoration::*;
 pub use text_metrics::*;
 pub use text_spans::*;
-
-
+pub use text_style::*;

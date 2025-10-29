@@ -1,8 +1,8 @@
 //! Transform layer - applies matrix transform to child layer
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// Type of transform to apply
 #[derive(Debug, Clone, Copy)]
@@ -30,12 +30,12 @@ pub enum Transform {
     /// | b  d  ty |
     /// | 0  0  1  |
     Matrix {
-        a: f32,   // x scale / horizontal stretch
-        b: f32,   // vertical skew
-        c: f32,   // horizontal skew
-        d: f32,   // y scale / vertical stretch
-        tx: f32,  // x translation
-        ty: f32,  // y translation
+        a: f32,  // x scale / horizontal stretch
+        b: f32,  // vertical skew
+        c: f32,  // horizontal skew
+        d: f32,  // y scale / vertical stretch
+        tx: f32, // x translation
+        ty: f32, // y translation
     },
 
     /// Trapezoid/Perspective transform - applies vertical gradient scaling
@@ -43,10 +43,7 @@ pub enum Transform {
     /// - `top_scale`: horizontal scale factor at the top (1.0 = normal width)
     /// - `bottom_scale`: horizontal scale factor at the bottom (1.0 = normal width)
     /// Example: top_scale=0.5, bottom_scale=1.0 creates pyramid (narrow top, wide bottom)
-    Trapezoid {
-        top_scale: f32,
-        bottom_scale: f32,
-    },
+    Trapezoid { top_scale: f32, bottom_scale: f32 },
 }
 
 /// Layer that applies a transform to its child
@@ -72,10 +69,7 @@ pub struct TransformLayer {
 impl TransformLayer {
     /// Create a new transform layer
     pub fn new(child: BoxedLayer, transform: Transform) -> Self {
-        Self {
-            child,
-            transform,
-        }
+        Self { child, transform }
     }
 
     /// Create a translation transform layer
@@ -105,12 +99,24 @@ impl TransformLayer {
 
     /// Create a skew X transform layer (horizontal skew only)
     pub fn skew_x(child: BoxedLayer, angle: f32) -> Self {
-        Self::new(child, Transform::Skew { skew_x: angle, skew_y: 0.0 })
+        Self::new(
+            child,
+            Transform::Skew {
+                skew_x: angle,
+                skew_y: 0.0,
+            },
+        )
     }
 
     /// Create a skew Y transform layer (vertical skew only)
     pub fn skew_y(child: BoxedLayer, angle: f32) -> Self {
-        Self::new(child, Transform::Skew { skew_x: 0.0, skew_y: angle })
+        Self::new(
+            child,
+            Transform::Skew {
+                skew_x: 0.0,
+                skew_y: angle,
+            },
+        )
     }
 
     /// Create a matrix transform layer
@@ -123,7 +129,13 @@ impl TransformLayer {
     /// - `bottom_scale`: horizontal scale at the bottom (> 1.0 makes bottom wide)
     /// Example: trapezoid(child, 0.5, 1.0) creates pyramid (narrow top, wide bottom)
     pub fn trapezoid(child: BoxedLayer, top_scale: f32, bottom_scale: f32) -> Self {
-        Self::new(child, Transform::Trapezoid { top_scale, bottom_scale })
+        Self::new(
+            child,
+            Transform::Trapezoid {
+                top_scale,
+                bottom_scale,
+            },
+        )
     }
 
     /// Get the transform
@@ -261,10 +273,7 @@ impl Layer for TransformLayer {
                     return false; // Degenerate transform
                 }
                 let inv_det = 1.0 / det;
-                Offset::new(
-                    (d * px - c * py) * inv_det,
-                    (-b * px + a * py) * inv_det,
-                )
+                Offset::new((d * px - c * py) * inv_det, (-b * px + a * py) * inv_det)
             }
             Transform::Trapezoid { .. } => {
                 // Trapezoid transform is complex (non-linear gradient)

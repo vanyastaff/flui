@@ -4,10 +4,10 @@
 //! shadow generation based on elevation. Simulates the Material Design concept
 //! of layered surfaces floating at different heights.
 
-use flui_types::{Rect, Offset, Event, HitTestResult, Color};
-use flui_types::styling::{PhysicalShape, MaterialType, Elevation, BorderRadius};
-use crate::layer::{Layer, BoxedLayer};
-use crate::painter::{Painter, Paint, RRect};
+use crate::layer::{BoxedLayer, Layer};
+use crate::painter::{Paint, Painter, RRect};
+use flui_types::styling::{BorderRadius, Elevation, MaterialType, PhysicalShape};
+use flui_types::{Color, Event, HitTestResult, Offset, Rect};
 
 /// A layer that renders Material Design elevation with automatic shadows.
 ///
@@ -276,7 +276,7 @@ impl PhysicalModelLayer {
                             center,
                             blur_bounds.width() / 2.0,
                             blur_bounds.height() / 2.0,
-                            &blur_paint
+                            &blur_paint,
                         );
                     }
                 }
@@ -307,7 +307,7 @@ impl PhysicalModelLayer {
                         center,
                         shadow_bounds.width() / 2.0,
                         shadow_bounds.height() / 2.0,
-                        &shadow_paint
+                        &shadow_paint,
                     );
                 }
             }
@@ -352,7 +352,7 @@ impl PhysicalModelLayer {
                     center,
                     bounds.width() / 2.0,
                     bounds.height() / 2.0,
-                    &surface_paint
+                    &surface_paint,
                 );
             }
         }
@@ -512,8 +512,7 @@ mod tests {
     #[test]
     fn test_physical_model_with_elevation() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let layer = PhysicalModelLayer::new(child)
-            .with_elevation(Elevation::LEVEL_3);
+        let layer = PhysicalModelLayer::new(child).with_elevation(Elevation::LEVEL_3);
 
         assert_eq!(layer.elevation(), Elevation::LEVEL_3);
     }
@@ -521,8 +520,7 @@ mod tests {
     #[test]
     fn test_physical_model_with_shape() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let layer = PhysicalModelLayer::new(child)
-            .with_shape(PhysicalShape::Circle);
+        let layer = PhysicalModelLayer::new(child).with_shape(PhysicalShape::Circle);
 
         assert_eq!(layer.shape(), PhysicalShape::Circle);
     }
@@ -531,8 +529,7 @@ mod tests {
     fn test_physical_model_with_color() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
         let blue = Color::rgb(33, 150, 243);
-        let layer = PhysicalModelLayer::new(child)
-            .with_color(blue);
+        let layer = PhysicalModelLayer::new(child).with_color(blue);
 
         assert_eq!(layer.color(), blue);
     }
@@ -540,8 +537,7 @@ mod tests {
     #[test]
     fn test_physical_model_shadow_extent() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let layer = PhysicalModelLayer::new(child)
-            .with_elevation(Elevation::LEVEL_4);
+        let layer = PhysicalModelLayer::new(child).with_elevation(Elevation::LEVEL_4);
 
         let (left, top, right, bottom) = layer.calculate_shadow_extent();
 
@@ -555,8 +551,7 @@ mod tests {
     #[test]
     fn test_physical_model_no_shadow_at_zero_elevation() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let layer = PhysicalModelLayer::new(child)
-            .with_elevation(0.0);
+        let layer = PhysicalModelLayer::new(child).with_elevation(0.0);
 
         let (left, top, right, bottom) = layer.calculate_shadow_extent();
 
@@ -582,14 +577,12 @@ mod tests {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
 
         // Test max clamping
-        let layer_high = PhysicalModelLayer::new(child)
-            .with_elevation(100.0);
+        let layer_high = PhysicalModelLayer::new(child).with_elevation(100.0);
         assert_eq!(layer_high.elevation(), Elevation::MAX);
 
         // Test min clamping
         let child2 = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let layer_low = PhysicalModelLayer::new(child2)
-            .with_elevation(-5.0);
+        let layer_low = PhysicalModelLayer::new(child2).with_elevation(-5.0);
         assert_eq!(layer_low.elevation(), 0.0);
     }
 }

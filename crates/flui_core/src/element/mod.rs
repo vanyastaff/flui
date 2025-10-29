@@ -40,7 +40,6 @@
 
 // Modules
 pub mod build_context;
-pub mod pipeline_owner;
 pub mod component;
 pub mod dependency;
 pub mod dyn_element;
@@ -48,29 +47,22 @@ pub mod element;
 pub mod element_tree;
 pub mod inherited;
 pub mod parent_data_element;
+pub mod pipeline_owner;
 pub mod render_object_element;
 pub mod stateful;
 
-
-
-
-
-
-
-
-
 // Re-exports
-pub use element::Element;
-pub use dyn_element::{DynElement, BoxedElement, ElementLifecycle};
+pub use build_context::BuildContext;
 pub use component::ComponentElement;
-pub use stateful::{StatefulElement, DynState, BoxedState};
+pub use dependency::{DependencyInfo, DependencyTracker};
+pub use dyn_element::{BoxedElement, DynElement, ElementLifecycle};
+pub use element::Element;
+pub use element_tree::ElementTree;
 pub use inherited::InheritedElement;
 pub use parent_data_element::ParentDataElement;
-pub use render_object_element::RenderElement;
-pub use element_tree::ElementTree;
-pub use build_context::BuildContext;
 pub use pipeline_owner::PipelineOwner;
-pub use dependency::{DependencyInfo, DependencyTracker};
+pub use render_object_element::RenderElement;
+pub use stateful::{BoxedState, DynState, StatefulElement};
 
 /// Element ID - stable index into the ElementTree slab
 ///
@@ -78,11 +70,3 @@ pub use dependency::{DependencyInfo, DependencyTracker};
 /// ElementIds are reused after removal (slab behavior), so don't store them long-term
 /// without verifying the element still exists.
 pub type ElementId = usize;
-
-
-
-
-
-
-
-

@@ -8,41 +8,16 @@ pub mod key;
 pub mod notification;
 pub mod slot;
 
-
-
-
-
-
-pub use key::{Key, KeyRef};
-pub use diagnostics::{
-    DiagnosticLevel,
-    DiagnosticsTreeStyle,
-    DiagnosticsProperty,
-    DiagnosticsNode,
-    Diagnosticable,
-    DiagnosticsBuilder,
-};
 pub use change_notifier::{
-    Listenable,
-    ListenerId,
-    ListenerCallback,
-    ChangeNotifier,
-    ValueNotifier,
-    MergedListenable,
+    ChangeNotifier, Listenable, ListenerCallback, ListenerId, MergedListenable, ValueNotifier,
+};
+pub use diagnostics::{
+    DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
+    DiagnosticsTreeStyle,
+};
+pub use key::{Key, KeyRef};
+pub use notification::{
+    DynNotification, FocusChangedNotification, KeepAliveNotification, LayoutChangedNotification,
+    Notification, ScrollNotification, SizeChangedNotification,
 };
 pub use slot::Slot;
-pub use notification::{
-    Notification,
-    DynNotification,
-    ScrollNotification,
-    LayoutChangedNotification,
-    SizeChangedNotification,
-    KeepAliveNotification,
-    FocusChangedNotification,
-};
-
-
-
-
-
-

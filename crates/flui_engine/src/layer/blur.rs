@@ -3,10 +3,10 @@
 //! This module provides blur effects similar to CSS backdrop-filter and filter: blur(),
 //! supporting various blur algorithms with configurable quality and radius.
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
-use flui_types::painting::effects::{BlurQuality, BlurMode};
+use flui_types::painting::effects::{BlurMode, BlurQuality};
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// A layer that applies gaussian blur to its child or backdrop.
 ///
@@ -243,7 +243,9 @@ impl Layer for BlurLayer {
         }
 
         // Hit testing considers child, blur doesn't affect hit testing
-        self.child.as_ref().is_some_and(|c| c.hit_test(position, result))
+        self.child
+            .as_ref()
+            .is_some_and(|c| c.hit_test(position, result))
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {

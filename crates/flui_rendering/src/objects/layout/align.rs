@@ -1,8 +1,10 @@
 //! RenderAlign - aligns child within available space
 
-use flui_types::{Alignment, Offset, Size};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, TransformLayer};
+use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject that aligns its child within the available space
 ///

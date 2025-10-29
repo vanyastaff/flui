@@ -1,7 +1,10 @@
 //! Border painting implementation
 
-use flui_types::{Rect, Point, styling::{Border, BorderRadius}};
-use flui_engine::{Painter, Paint, RRect};
+use flui_engine::{Paint, Painter, RRect};
+use flui_types::{
+    Point, Rect,
+    styling::{Border, BorderRadius},
+};
 
 /// Painter for borders
 pub struct BorderPainter;

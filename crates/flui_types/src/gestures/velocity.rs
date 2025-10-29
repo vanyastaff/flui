@@ -625,20 +625,12 @@ mod tests {
 
     #[test]
     fn test_velocity_estimate_reliable() {
-        let reliable = VelocityEstimate::new(
-            Offset::ZERO,
-            Offset::ZERO,
-            Duration::from_millis(16),
-            0.8,
-        );
+        let reliable =
+            VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::from_millis(16), 0.8);
         assert!(reliable.is_reliable());
 
-        let unreliable = VelocityEstimate::new(
-            Offset::ZERO,
-            Offset::ZERO,
-            Duration::from_millis(16),
-            0.3,
-        );
+        let unreliable =
+            VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::from_millis(16), 0.3);
         assert!(!unreliable.is_reliable());
     }
 }

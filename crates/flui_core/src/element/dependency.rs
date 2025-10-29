@@ -41,10 +41,7 @@ impl DependencyInfo {
     /// Creates a new dependency info with optional aspect
     #[must_use]
     #[inline]
-    pub const fn new(
-        dependent_id: ElementId,
-        aspect: Option<Box<dyn Any + Send + Sync>>,
-    ) -> Self {
+    pub const fn new(dependent_id: ElementId, aspect: Option<Box<dyn Any + Send + Sync>>) -> Self {
         Self {
             dependent_id,
             aspect,
@@ -394,7 +391,9 @@ impl PartialEq for DependencyTracker {
             return false;
         }
 
-        self.dependents.keys().all(|key| other.dependents.contains_key(key))
+        self.dependents
+            .keys()
+            .all(|key| other.dependents.contains_key(key))
     }
 }
 

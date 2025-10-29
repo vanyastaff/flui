@@ -153,7 +153,10 @@ mod tests {
 
         // Event not handled (no bounds)
         assert!(!handled);
-        assert_eq!(router.last_pointer_position(), Some(Offset::new(10.0, 20.0)));
+        assert_eq!(
+            router.last_pointer_position(),
+            Some(Offset::new(10.0, 20.0))
+        );
     }
 
     #[test]

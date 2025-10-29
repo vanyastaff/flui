@@ -111,8 +111,15 @@ struct TestPainter;
 impl Painter for TestPainter {
     fn rect(&mut self, _rect: flui_types::Rect, _paint: &crate::painter::Paint) {}
     fn rrect(&mut self, _rrect: crate::painter::RRect, _paint: &crate::painter::Paint) {}
-    fn circle(&mut self, _center: flui_types::Point, _radius: f32, _paint: &crate::painter::Paint) {}
-    fn line(&mut self, _p1: flui_types::Point, _p2: flui_types::Point, _paint: &crate::painter::Paint) {}
+    fn circle(&mut self, _center: flui_types::Point, _radius: f32, _paint: &crate::painter::Paint) {
+    }
+    fn line(
+        &mut self,
+        _p1: flui_types::Point,
+        _p2: flui_types::Point,
+        _paint: &crate::painter::Paint,
+    ) {
+    }
     fn save(&mut self) {}
     fn restore(&mut self) {}
     fn translate(&mut self, _offset: flui_types::Offset) {}

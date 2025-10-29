@@ -1,8 +1,8 @@
 //! Test #[widget] attribute macro
 
-use flui_core::{Widget, StatelessWidget, BoxedWidget, widget};
+use flui_core::{BoxedWidget, StatelessWidget, Widget, widget};
 
-#[widget]  // Автоматически добавляет Debug, Clone и генерирует Widget/DynWidget
+#[widget] // Автоматически добавляет Debug, Clone и генерирует Widget/DynWidget
 struct MyWidget {
     value: i32,
 }
@@ -10,7 +10,9 @@ struct MyWidget {
 impl StatelessWidget for MyWidget {
     fn build(&self) -> BoxedWidget {
         // Return a placeholder for now
-        Box::new(MyWidget { value: self.value + 1 })
+        Box::new(MyWidget {
+            value: self.value + 1,
+        })
     }
 }
 

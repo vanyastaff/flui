@@ -1,8 +1,10 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
+use flui_engine::{BoxedLayer, Paint, PictureLayer};
 use flui_types::{Color, Size};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{BoxedLayer, PictureLayer, Paint};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,11 +196,7 @@ mod tests {
 
     #[test]
     fn test_render_physical_model_new() {
-        let model = RenderPhysicalModel::new(
-            PhysicalShape::Rectangle,
-            4.0,
-            Color::WHITE,
-        );
+        let model = RenderPhysicalModel::new(PhysicalShape::Rectangle, 4.0, Color::WHITE);
         assert_eq!(model.shape, PhysicalShape::Rectangle);
         assert_eq!(model.elevation, 4.0);
         assert_eq!(model.color, Color::WHITE);

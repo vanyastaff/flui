@@ -1,8 +1,8 @@
 //! Opacity layer - applies opacity to child layer
 
-use flui_types::{Rect, Offset, Event, HitTestResult};
-use crate::layer::{Layer, BoxedLayer};
+use crate::layer::{BoxedLayer, Layer};
 use crate::painter::Painter;
+use flui_types::{Event, HitTestResult, Offset, Rect};
 
 /// Layer that applies opacity to its child
 ///
@@ -31,7 +31,10 @@ impl OpacityLayer {
     /// * `child` - The child layer to apply opacity to
     /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque)
     pub fn new(child: BoxedLayer, opacity: f32) -> Self {
-        debug_assert!((0.0..=1.0).contains(&opacity), "Opacity must be between 0.0 and 1.0");
+        debug_assert!(
+            (0.0..=1.0).contains(&opacity),
+            "Opacity must be between 0.0 and 1.0"
+        );
 
         Self {
             child,

@@ -2,11 +2,11 @@
 //!
 //! Migrated from flui_core_old with performance optimizations
 
-use parking_lot::RwLock;
-use flui_types::{Size, Offset};
 use flui_types::constraints::BoxConstraints;
+use flui_types::{Offset, Size};
+use parking_lot::RwLock;
 
-use super::render_flags::{RenderFlags, AtomicRenderFlags};
+use super::render_flags::{AtomicRenderFlags, RenderFlags};
 
 /// State for a RenderObject
 ///

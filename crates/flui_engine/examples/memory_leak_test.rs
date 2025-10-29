@@ -19,8 +19,8 @@ fn main() {
 #[cfg(all(feature = "egui", feature = "devtools", feature = "memory-profiler"))]
 fn run_leak_test() {
     use eframe::egui;
-    use flui_engine::{*, DevToolsLayout};
-    use flui_types::{Size, Rect, Offset};
+    use flui_engine::{DevToolsLayout, *};
+    use flui_types::{Offset, Rect, Size};
     use std::sync::{Arc, Mutex};
 
     // Create profilers
@@ -44,10 +44,8 @@ fn run_leak_test() {
             },
         );
 
-        let transform = TransformLayer::translate(
-            Box::new(picture),
-            Offset::new(i as f32 * 5.0, 0.0),
-        );
+        let transform =
+            TransformLayer::translate(Box::new(picture), Offset::new(i as f32 * 5.0, 0.0));
 
         scene.add_layer(Box::new(transform));
     }
@@ -72,7 +70,8 @@ fn run_leak_test() {
                 leak_rate: 100, // KB per second
             }))
         }),
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 #[cfg(all(feature = "egui", feature = "devtools", feature = "memory-profiler"))]
@@ -134,7 +133,7 @@ impl eframe::App for LeakTestApp {
                 &profiler_guard,
                 Some(&memory_guard),
                 &mut painter,
-                viewport_size
+                viewport_size,
             );
 
             // Display memory info and controls
@@ -146,26 +145,29 @@ impl eframe::App for LeakTestApp {
                     ui.label(format!("📈 Peak: {:.2} MB", peak.total_mb()));
                 }
 
-                ui.label(format!("📊 Average: {:.2} MB", memory_guard.average_memory_mb()));
+                ui.label(format!(
+                    "📊 Average: {:.2} MB",
+                    memory_guard.average_memory_mb()
+                ));
 
                 // Calculate leaked amount
                 let leaked_mb = (self.leaked_memory.len() * self.leak_rate) as f64 / 1024.0;
-                ui.label(format!("💥 Intentionally Leaked: {:.2} MB ({} chunks)",
-                    leaked_mb, self.leaked_memory.len()));
+                ui.label(format!(
+                    "💥 Intentionally Leaked: {:.2} MB ({} chunks)",
+                    leaked_mb,
+                    self.leaked_memory.len()
+                ));
 
                 ui.separator();
 
                 // LEAK DETECTION WARNING
                 if memory_guard.is_leaking() {
-                    ui.colored_label(
-                        egui::Color32::RED,
-                        "⚠⚠⚠ MEMORY LEAK DETECTED! ⚠⚠⚠"
-                    );
+                    ui.colored_label(egui::Color32::RED, "⚠⚠⚠ MEMORY LEAK DETECTED! ⚠⚠⚠");
                     ui.label("The profiler detected increasing memory usage!");
                 } else {
                     ui.colored_label(
                         egui::Color32::YELLOW,
-                        "Waiting for leak detection... (needs ~10 seconds)"
+                        "Waiting for leak detection... (needs ~10 seconds)",
                     );
                 }
 
@@ -209,7 +211,10 @@ impl eframe::App for LeakTestApp {
                 ui.horizontal(|ui| {
                     ui.label("BG:");
                     let mut opacity = self.devtools_layout.global_opacity;
-                    if ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0).step_by(0.05)).changed() {
+                    if ui
+                        .add(egui::Slider::new(&mut opacity, 0.0..=1.0).step_by(0.05))
+                        .changed()
+                    {
                         self.devtools_layout.set_opacity(opacity);
                     }
                 });
@@ -217,7 +222,10 @@ impl eframe::App for LeakTestApp {
                 ui.horizontal(|ui| {
                     ui.label("Text:");
                     let mut text_opacity = self.devtools_layout.performance_overlay.text_opacity;
-                    if ui.add(egui::Slider::new(&mut text_opacity, 0.0..=1.0).step_by(0.05)).changed() {
+                    if ui
+                        .add(egui::Slider::new(&mut text_opacity, 0.0..=1.0).step_by(0.05))
+                        .changed()
+                    {
                         self.devtools_layout.set_text_opacity(text_opacity);
                     }
                 });
@@ -227,7 +235,14 @@ impl eframe::App for LeakTestApp {
                 // Memory Leak Controls
                 ui.heading("🧪 Memory Leak Test");
                 ui.horizontal(|ui| {
-                    if ui.button(if self.leak_enabled { "⏸ Stop & Free" } else { "▶ Start Leak" }).clicked() {
+                    if ui
+                        .button(if self.leak_enabled {
+                            "⏸ Stop & Free"
+                        } else {
+                            "▶ Start Leak"
+                        })
+                        .clicked()
+                    {
                         if self.leak_enabled {
                             // Stop leaking AND free memory
                             self.leaked_memory.clear();
@@ -247,7 +262,9 @@ impl eframe::App for LeakTestApp {
                 });
 
                 ui.separator();
-                ui.label("💡 Tip: Watch the blue line grow, then press 'Stop & Free' to see it drop!");
+                ui.label(
+                    "💡 Tip: Watch the blue line grow, then press 'Stop & Free' to see it drop!",
+                );
             });
         });
 

@@ -6,9 +6,5 @@
 pub mod painter;
 pub mod window;
 
-
-
 // Re-export main types
 pub use painter::EguiPainter;
-
-

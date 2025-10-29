@@ -672,10 +672,7 @@ mod tests {
         let notifier1 = ChangeNotifier::new();
         let notifier2 = ChangeNotifier::new();
 
-        let mut merged = MergedListenable::new(vec![
-            Box::new(notifier1),
-            Box::new(notifier2),
-        ]);
+        let mut merged = MergedListenable::new(vec![Box::new(notifier1), Box::new(notifier2)]);
 
         assert_eq!(merged.source_count(), 2);
         assert!(merged.is_empty());

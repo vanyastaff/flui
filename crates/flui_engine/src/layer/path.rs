@@ -3,15 +3,13 @@
 //! This module provides a specialized layer for rendering vector paths with
 //! advanced stroke and fill options.
 
-use flui_types::{Rect, Offset, Event, HitTestResult, Point};
 use flui_types::painting::path::Path;
+use flui_types::{Event, HitTestResult, Offset, Point, Rect};
 
 use crate::layer::Layer;
-use crate::painter::{Painter, Paint};
-use flui_types::painting::effects::{StrokeOptions, PathPaintMode};
+use crate::painter::{Paint, Painter};
+use flui_types::painting::effects::{PathPaintMode, StrokeOptions};
 use std::sync::Arc;
-
-
 
 /// A layer that renders an arbitrary vector path.
 ///
@@ -246,8 +244,8 @@ impl Layer for PathLayer {
 impl PathLayer {
     /// Helper method to paint path as fill
     fn paint_path_fill(&self, painter: &mut dyn Painter) {
-        use flui_types::painting::path::PathCommand;
         use flui_types::geometry::Point;
+        use flui_types::painting::path::PathCommand;
 
         let commands = self.path.commands();
         if commands.is_empty() {
@@ -288,7 +286,7 @@ impl PathLayer {
                         rect.center(),
                         rect.width() / 2.0,
                         rect.height() / 2.0,
-                        &self.paint
+                        &self.paint,
                     );
                 }
                 PathCommand::AddArc(rect, start_angle, sweep_angle) => {
@@ -297,7 +295,7 @@ impl PathLayer {
                         rect.width().max(rect.height()) / 2.0,
                         *start_angle,
                         start_angle + sweep_angle,
-                        &self.paint
+                        &self.paint,
                     );
                 }
                 // TODO: Implement bezier curve rendering
@@ -402,8 +400,7 @@ mod tests {
     #[test]
     fn test_path_layer_with_stroke() {
         let path = Path::new();
-        let layer = PathLayer::new(path)
-            .with_stroke(StrokeOptions::new().with_width(2.0));
+        let layer = PathLayer::new(path).with_stroke(StrokeOptions::new().with_width(2.0));
 
         assert_eq!(layer.paint_mode(), PathPaintMode::Stroke);
         assert!(layer.stroke_options.is_some());
@@ -412,8 +409,8 @@ mod tests {
     #[test]
     fn test_path_layer_fill_and_stroke() {
         let path = Path::new();
-        let layer = PathLayer::new(path)
-            .with_stroke_paint(Paint::stroke(2.0, [0.0, 0.0, 0.0, 1.0]));
+        let layer =
+            PathLayer::new(path).with_stroke_paint(Paint::stroke(2.0, [0.0, 0.0, 0.0, 1.0]));
 
         assert_eq!(layer.paint_mode(), PathPaintMode::FillAndStroke);
         assert!(layer.stroke_paint.is_some());

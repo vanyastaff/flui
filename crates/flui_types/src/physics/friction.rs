@@ -547,7 +547,12 @@ mod tests {
         for i in 0..100 {
             let time = i as f32 * 0.1;
             let pos = sim.position(time);
-            assert!(pos <= 50.0, "Position {} exceeded boundary at time {}", pos, time);
+            assert!(
+                pos <= 50.0,
+                "Position {} exceeded boundary at time {}",
+                pos,
+                time
+            );
         }
     }
 
@@ -572,7 +577,12 @@ mod tests {
         for i in 0..100 {
             let time = i as f32 * 0.1;
             let pos = sim.position(time);
-            assert!(pos >= -50.0, "Position {} went below boundary at time {}", pos, time);
+            assert!(
+                pos >= -50.0,
+                "Position {} went below boundary at time {}",
+                pos,
+                time
+            );
         }
     }
 

@@ -7,10 +7,7 @@
 //! **Note**: Backend implementations have been moved to the `crate::backends` module.
 //! Use `crate::backends::egui::EguiPainter` or `crate::backends::wgpu::WgpuPainter`.
 
-use flui_types::{Offset, Rect, Point};
-
-
-
+use flui_types::{Offset, Point, Rect};
 
 /// Paint style information
 #[derive(Debug, Clone)]
@@ -288,16 +285,26 @@ pub trait Painter {
     /// - `text`: The text string to draw
     /// - `position`: Top-left position of the text
     /// - `style`: Text style (font, size, color, etc.)
-    fn text_styled(&mut self, text: &str, position: Point, style: &flui_types::typography::TextStyle) {
+    fn text_styled(
+        &mut self,
+        text: &str,
+        position: Point,
+        style: &flui_types::typography::TextStyle,
+    ) {
         // Default: extract font size and delegate to simple text()
         let font_size = style.font_size.unwrap_or(14.0) as f32;
         let paint = Paint {
-            color: style.color.map(|c| [
-                c.red() as f32 / 255.0,
-                c.green() as f32 / 255.0,
-                c.blue() as f32 / 255.0,
-                c.alpha() as f32 / 255.0,
-            ]).unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            color: style
+                .color
+                .map(|c| {
+                    [
+                        c.red() as f32 / 255.0,
+                        c.green() as f32 / 255.0,
+                        c.blue() as f32 / 255.0,
+                        c.alpha() as f32 / 255.0,
+                    ]
+                })
+                .unwrap_or([0.0, 0.0, 0.0, 1.0]),
             ..Default::default()
         };
         self.text(text, position, font_size, &paint);
@@ -507,8 +514,14 @@ pub trait Painter {
                         let mt2 = mt * mt;
                         let mt3 = mt2 * mt;
 
-                        let x = mt3 * current_pos.x + 3.0 * mt2 * t * c1.x + 3.0 * mt * t2 * c2.x + t3 * end.x;
-                        let y = mt3 * current_pos.y + 3.0 * mt2 * t * c1.y + 3.0 * mt * t2 * c2.y + t3 * end.y;
+                        let x = mt3 * current_pos.x
+                            + 3.0 * mt2 * t * c1.x
+                            + 3.0 * mt * t2 * c2.x
+                            + t3 * end.x;
+                        let y = mt3 * current_pos.y
+                            + 3.0 * mt2 * t * c1.y
+                            + 3.0 * mt * t2 * c2.y
+                            + t3 * end.y;
 
                         let point = Point::new(x, y);
                         self.line(prev, point, paint);
@@ -528,8 +541,14 @@ pub trait Painter {
                         let mt2 = mt * mt;
                         let mt3 = mt2 * mt;
 
-                        let x = mt3 * current_pos.x + 3.0 * mt2 * t * c1.x + 3.0 * mt * t2 * c2.x + t3 * end.x;
-                        let y = mt3 * current_pos.y + 3.0 * mt2 * t * c1.y + 3.0 * mt * t2 * c2.y + t3 * end.y;
+                        let x = mt3 * current_pos.x
+                            + 3.0 * mt2 * t * c1.x
+                            + 3.0 * mt * t2 * c2.x
+                            + t3 * end.x;
+                        let y = mt3 * current_pos.y
+                            + 3.0 * mt2 * t * c1.y
+                            + 3.0 * mt * t2 * c2.y
+                            + t3 * end.y;
 
                         let point = Point::new(x, y);
                         self.line(prev, point, paint);
@@ -590,10 +609,8 @@ pub trait Painter {
 
                     for i in 1..=SEGMENTS {
                         let angle = start_angle + angle_step * i as f32;
-                        let current = Point::new(
-                            center_x + rx * angle.cos(),
-                            center_y + ry * angle.sin(),
-                        );
+                        let current =
+                            Point::new(center_x + rx * angle.cos(), center_y + ry * angle.sin());
                         self.line(prev, current, paint);
                         prev = current;
                     }
@@ -722,10 +739,7 @@ pub trait Painter {
         shadow_color: [f32; 4],
     ) {
         // Draw shadow
-        let shadow_pos = Point::new(
-            position.x + shadow_offset.dx,
-            position.y + shadow_offset.dy,
-        );
+        let shadow_pos = Point::new(position.x + shadow_offset.dx, position.y + shadow_offset.dy);
         self.text(
             text,
             shadow_pos,
@@ -763,7 +777,13 @@ pub trait Painter {
             let x = rect.left() + i as f32 * step_width;
             let strip = Rect::from_xywh(x, rect.top(), step_width, rect.height());
 
-            self.rect(strip, &Paint { color, ..Default::default() });
+            self.rect(
+                strip,
+                &Paint {
+                    color,
+                    ..Default::default()
+                },
+            );
         }
     }
 
@@ -790,7 +810,13 @@ pub trait Painter {
             let y = rect.top() + i as f32 * step_height;
             let strip = Rect::from_xywh(rect.left(), y, rect.width(), step_height);
 
-            self.rect(strip, &Paint { color, ..Default::default() });
+            self.rect(
+                strip,
+                &Paint {
+                    color,
+                    ..Default::default()
+                },
+            );
         }
     }
 
@@ -825,7 +851,14 @@ pub trait Painter {
 
             let radius = inner_radius + t * (outer_radius - inner_radius);
 
-            self.circle(center, radius, &Paint { color, ..Default::default() });
+            self.circle(
+                center,
+                radius,
+                &Paint {
+                    color,
+                    ..Default::default()
+                },
+            );
         }
     }
 
@@ -881,7 +914,3 @@ pub trait Painter {
         self.rrect(rrect, paint);
     }
 }
-
-
-
-

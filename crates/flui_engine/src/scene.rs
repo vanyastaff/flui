@@ -3,10 +3,10 @@
 //! A Scene represents a complete frame of rendering. It contains a root layer
 //! and metadata about the scene that can be used for optimization and debugging.
 
-use crate::layer::{Layer, ContainerLayer, BoxedLayer};
-use crate::painter::Painter;
 use crate::event_router::EventRouter;
-use flui_types::{Rect, Size, Event};
+use crate::layer::{BoxedLayer, ContainerLayer, Layer};
+use crate::painter::Painter;
+use flui_types::{Event, Rect, Size};
 
 /// A complete rendering scene
 ///

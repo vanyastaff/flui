@@ -3,12 +3,12 @@
 //! Provides painting functionality for text rendering with alignment,
 //! direction, overflow handling, and multi-line support.
 
+use flui_engine::{Paint, Painter};
 use flui_types::{
-    Rect, Point,
+    Point, Rect,
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextSpan, TextStyle},
 };
-use flui_engine::{Painter, Paint};
 
 /// Text painter - handles text rendering with layout and styling
 pub struct TextPainter;
@@ -37,8 +37,8 @@ impl TextPainter {
         text_align: TextAlign,
         _text_direction: TextDirection, // TODO: implement RTL support
         _max_lines: Option<usize>,      // TODO: implement max lines
-        _overflow: TextOverflow,         // TODO: implement overflow
-        _soft_wrap: bool,                // TODO: implement soft wrap
+        _overflow: TextOverflow,        // TODO: implement overflow
+        _soft_wrap: bool,               // TODO: implement soft wrap
     ) {
         // Convert color
         let paint_color = [
@@ -58,19 +58,13 @@ impl TextPainter {
         // TODO: This is a simplified implementation - proper text layout
         // should measure text width and position accordingly
         let position = match text_align {
-            TextAlign::Left | TextAlign::Start => {
-                Point::new(rect.left(), rect.top())
-            }
+            TextAlign::Left | TextAlign::Start => Point::new(rect.left(), rect.top()),
             TextAlign::Center => {
                 // Approximate center (would need actual text measurement)
                 Point::new(rect.left() + rect.width() / 2.0, rect.top())
             }
-            TextAlign::Right | TextAlign::End => {
-                Point::new(rect.right(), rect.top())
-            }
-            TextAlign::Justify => {
-                Point::new(rect.left(), rect.top())
-            }
+            TextAlign::Right | TextAlign::End => Point::new(rect.right(), rect.top()),
+            TextAlign::Justify => Point::new(rect.left(), rect.top()),
         };
 
         // Use the painter's text method
@@ -116,7 +110,14 @@ impl TextPainter {
         let position = Point::new(rect.left(), rect.top());
 
         // Use painter's built-in shadow support
-        painter.text_with_shadow(text, position, font_size, &paint, shadow_offset, shadow_rgba);
+        painter.text_with_shadow(
+            text,
+            position,
+            font_size,
+            &paint,
+            shadow_offset,
+            shadow_rgba,
+        );
     }
 
     /// Paint a TextSpan with rich text support (recursive)
@@ -142,18 +143,10 @@ impl TextPainter {
         text_align: TextAlign,
     ) -> Point {
         let mut current_pos = match text_align {
-            TextAlign::Left | TextAlign::Start => {
-                Point::new(rect.left(), rect.top())
-            }
-            TextAlign::Center => {
-                Point::new(rect.left() + rect.width() / 2.0, rect.top())
-            }
-            TextAlign::Right | TextAlign::End => {
-                Point::new(rect.right(), rect.top())
-            }
-            TextAlign::Justify => {
-                Point::new(rect.left(), rect.top())
-            }
+            TextAlign::Left | TextAlign::Start => Point::new(rect.left(), rect.top()),
+            TextAlign::Center => Point::new(rect.left() + rect.width() / 2.0, rect.top()),
+            TextAlign::Right | TextAlign::End => Point::new(rect.right(), rect.top()),
+            TextAlign::Justify => Point::new(rect.left(), rect.top()),
         };
 
         Self::paint_span_recursive(painter, span, base_style, &mut current_pos);

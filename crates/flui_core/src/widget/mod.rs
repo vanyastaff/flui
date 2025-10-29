@@ -107,23 +107,20 @@ pub mod stateful;
 pub mod stateless;
 pub mod widget;
 
-
 // Re-exports
-pub use widget::{Widget, WidgetState};
-pub use dyn_widget::{DynWidget, BoxedWidget, SharedWidget};
-pub use stateless::{StatelessWidget, KeyedStatelessWidget, with_key};
-pub use stateful::{StatefulWidget, State};
-pub use inherited::{InheritedWidget, InheritedModel};
-pub use render_object_widget::{
-    RenderObjectWidget,
-    SingleChildRenderObjectWidget,
-    MultiChildRenderObjectWidget,
-};
-pub use parent_data_widget::{ParentDataWidget, ParentData};
+pub use dyn_widget::{BoxedWidget, DynWidget, SharedWidget};
+pub use inherited::{InheritedModel, InheritedWidget};
 pub use notification_listener::NotificationListener;
+pub use parent_data_widget::{ParentData, ParentDataWidget};
+pub use render_object_widget::{
+    MultiChildRenderObjectWidget, RenderObjectWidget, SingleChildRenderObjectWidget,
+};
+pub use stateful::{State, StatefulWidget};
+pub use stateless::{KeyedStatelessWidget, StatelessWidget, with_key};
+pub use widget::{Widget, WidgetState};
 
-use std::fmt;
 use crate::KeyRef;
+use std::fmt;
 
 // ========== Blanket Implementation: Widget → DynWidget ==========
 
@@ -239,7 +236,7 @@ pub fn shared<W: DynWidget + 'static>(widget: W) -> SharedWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Key, Element};
+    use crate::{Element, Key};
 
     // Mock element for testing
     #[derive(Debug)]
@@ -375,11 +372,8 @@ mod tests {
         }
 
         // Different widget types in same vec!
-        let widgets: Vec<BoxedWidget> = vec![
-            Box::new(WidgetA),
-            Box::new(WidgetB),
-            Box::new(WidgetA),
-        ];
+        let widgets: Vec<BoxedWidget> =
+            vec![Box::new(WidgetA), Box::new(WidgetB), Box::new(WidgetA)];
 
         assert_eq!(widgets.len(), 3);
         assert!(widgets[0].is::<WidgetA>());

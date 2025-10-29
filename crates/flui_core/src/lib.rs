@@ -237,8 +237,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 // Re-export external types
-pub use flui_types::{Size, Offset};
 pub use flui_engine::BoxedLayer;
+pub use flui_types::{Offset, Size};
 // ============================================================================
 // Debug Infrastructure
 // ============================================================================
@@ -267,123 +267,119 @@ pub use error::{CoreError, Result};
 
 // Re-export foundation types
 pub use foundation::{
-    Key,
-    KeyRef,
-    Slot,
+    ChangeNotifier,
     // Diagnostics
     DiagnosticLevel,
-    DiagnosticsTreeStyle,
-    DiagnosticsProperty,
-    DiagnosticsNode,
     Diagnosticable,
     DiagnosticsBuilder,
+    DiagnosticsNode,
+    DiagnosticsProperty,
+    DiagnosticsTreeStyle,
+    DynNotification,
+    FocusChangedNotification,
+    KeepAliveNotification,
+    Key,
+    KeyRef,
+    LayoutChangedNotification,
     // Change notification
     Listenable,
-    ListenerId,
     ListenerCallback,
-    ChangeNotifier,
-    ValueNotifier,
+    ListenerId,
     MergedListenable,
     // Notifications (bubbling events)
     Notification,
-    DynNotification,
     ScrollNotification,
-    LayoutChangedNotification,
     SizeChangedNotification,
-    KeepAliveNotification,
-    FocusChangedNotification,
+    Slot,
+    ValueNotifier,
 };
 
 // ============================================================================
 // Widget System
 // ============================================================================
 
-
 // Re-export widget types
 pub use widget::{
+    // Type aliases
+    BoxedWidget,
+    DynWidget,
+
+    InheritedModel,
+    InheritedWidget,
+    // Helper types
+    KeyedStatelessWidget,
+    MultiChildRenderObjectWidget,
+    NotificationListener,
+
+    ParentData,
+
+    ParentDataWidget,
+    RenderObjectWidget,
+    SharedWidget,
+
+    SingleChildRenderObjectWidget,
+    State,
+    StatefulWidget,
+    // Widget types
+    StatelessWidget,
     // Core traits
     Widget,
     WidgetState,
-    DynWidget,
-
-    // Type aliases
-    BoxedWidget,
-    SharedWidget,
-
-    // Widget types
-    StatelessWidget,
-    StatefulWidget,
-    State,
-    InheritedWidget,
-    InheritedModel,
-    RenderObjectWidget,
-    ParentDataWidget,
-    NotificationListener,
-
-    // Helper types
-    KeyedStatelessWidget,
-    SingleChildRenderObjectWidget,
-    MultiChildRenderObjectWidget,
-    ParentData,
-
-    // Helper functions
-    with_key,
     boxed,
     shared,
+    // Helper functions
+    with_key,
 };
 
 // ============================================================================
 // Element System
 // ============================================================================
 
-
 // Re-export element types
 pub use element::{
-    // Core traits
-    Element,
-    DynElement,
-
-    // Element types
-    ComponentElement,
-    StatefulElement,
-    InheritedElement,
-    RenderElement,
-    ParentDataElement,
-
     // Type aliases
     BoxedElement,
-    ElementTree,
-
     // Context types
     BuildContext,
-    PipelineOwner,
-    ElementId,
-
+    // Element types
+    ComponentElement,
     // Dependency tracking
     DependencyInfo,
     DependencyTracker,
+    DynElement,
+
+    // Core traits
+    Element,
+    ElementId,
+
+    ElementTree,
+
+    InheritedElement,
+    ParentDataElement,
+
+    PipelineOwner,
+    RenderElement,
+    StatefulElement,
 };
 
 // ============================================================================
 // Render System
 // ============================================================================
 
-
-
 // Re-export render types
 pub use render::{
-    RenderObject,
-    DynRenderObject,
-    BoxedRenderObject,
-    RenderState,
-    LayoutCx,
-    PaintCx,
-
     // Arity types
     Arity,
+    BoxedRenderObject,
+    DynRenderObject,
+    LayoutCx,
     LeafArity,
-    SingleArity,
     MultiArity,
+    PaintCx,
+
+    RenderObject,
+    RenderState,
+    SingleArity,
 };
 
 // ============================================================================
@@ -407,32 +403,13 @@ pub mod prelude {
     pub use crate::foundation::{Key, KeyRef};
 
     pub use crate::widget::{
-        Widget,
-        DynWidget,
-        BoxedWidget,
-        SharedWidget,
-        StatelessWidget,
-        StatefulWidget,
-        State,
-        InheritedWidget,
-        RenderObjectWidget,
-        ParentDataWidget,
-        with_key,
-        boxed,
-        shared,
+        BoxedWidget, DynWidget, InheritedWidget, ParentDataWidget, RenderObjectWidget,
+        SharedWidget, State, StatefulWidget, StatelessWidget, Widget, boxed, shared, with_key,
     };
 
-    pub use crate::element::{
-        Element,
-        BuildContext,
-    };
+    pub use crate::element::{BuildContext, Element};
 
-    pub use crate::render::{
-        RenderObject,
-        LeafArity,
-        SingleArity,
-        MultiArity,
-    };
+    pub use crate::render::{LeafArity, MultiArity, RenderObject, SingleArity};
 }
 
 // ============================================================================

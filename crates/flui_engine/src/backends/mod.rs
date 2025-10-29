@@ -36,4 +36,4 @@ pub mod wgpu;
 pub use egui::EguiPainter;
 
 #[cfg(feature = "wgpu")]
-pub use wgpu::{WgpuPainter, WgpuRenderer, TextRenderer, TextCommand, TextAlign, TextRenderError};
+pub use wgpu::{TextAlign, TextCommand, TextRenderError, TextRenderer, WgpuPainter, WgpuRenderer};

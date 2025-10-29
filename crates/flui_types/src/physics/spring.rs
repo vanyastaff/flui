@@ -525,7 +525,10 @@ impl SpringSimulation {
         let s = -w0 * (zeta + (zeta * zeta - 1.0).sqrt());
 
         let a = self.start - self.end;
-        let b = ((s * a - self.initial_velocity) / (s - r), (self.initial_velocity - r * a) / (s - r));
+        let b = (
+            (s * a - self.initial_velocity) / (s - r),
+            (self.initial_velocity - r * a) / (s - r),
+        );
 
         self.end + b.0 * (r * time).exp() + b.1 * (s * time).exp()
     }
@@ -542,7 +545,10 @@ impl SpringSimulation {
         let s = -w0 * (zeta + (zeta * zeta - 1.0).sqrt());
 
         let a = self.start - self.end;
-        let b = ((s * a - self.initial_velocity) / (s - r), (self.initial_velocity - r * a) / (s - r));
+        let b = (
+            (s * a - self.initial_velocity) / (s - r),
+            (self.initial_velocity - r * a) / (s - r),
+        );
 
         b.0 * r * (r * time).exp() + b.1 * s * (s * time).exp()
     }
@@ -572,8 +578,7 @@ impl Simulation for SpringSimulation {
         let pos = self.position(time);
         let vel = self.velocity(time);
 
-        (pos - self.end).abs() < self.tolerance.distance
-            && vel.abs() < self.tolerance.velocity
+        (pos - self.end).abs() < self.tolerance.distance && vel.abs() < self.tolerance.velocity
     }
 
     #[inline]

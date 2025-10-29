@@ -284,7 +284,7 @@ pub trait DynWidget: fmt::Debug + Any + Send + Sync + 'static {
     /// assert!(text.parent_data_child().is_none());
     /// ```
     fn parent_data_child(&self) -> Option<&crate::widget::BoxedWidget> {
-        None  // Default: not a ParentDataWidget
+        None // Default: not a ParentDataWidget
     }
 
     /// Clone this widget into a new boxed instance
@@ -494,7 +494,7 @@ pub type SharedWidget = Arc<dyn DynWidget>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Widget, Key};
+    use crate::{Key, Widget};
 
     // Mock widget for testing
     #[derive(Debug)]

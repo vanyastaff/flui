@@ -1,8 +1,8 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-use flui_types::{Offset, Size, constraints::BoxConstraints, Axis};
-use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, layer::pool, TransformLayer};
+use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_engine::{BoxedLayer, TransformLayer, layer::pool};
+use flui_types::{Axis, Offset, Size, constraints::BoxConstraints};
 
 /// Alignment for runs in wrap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,7 +263,9 @@ mod tests {
 
     #[test]
     fn test_wrap_with_spacing() {
-        let wrap = RenderWrap::horizontal().with_spacing(10.0).with_run_spacing(5.0);
+        let wrap = RenderWrap::horizontal()
+            .with_spacing(10.0)
+            .with_run_spacing(5.0);
         assert_eq!(wrap.spacing, 10.0);
         assert_eq!(wrap.run_spacing, 5.0);
     }

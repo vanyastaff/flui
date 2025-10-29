@@ -6,13 +6,13 @@
 //! - Paint (recursive)
 //! - Layer composition
 
-use flui_core::*;
 use flui_core::constraints::BoxConstraints;
+use flui_core::*;
 use flui_engine::ContainerLayer;
 
 // Import extension traits once at the top - no need to repeat in each function!
 // These traits provide arity-specific methods for LayoutCx and PaintCx.
-use flui_core::{SingleChild, MultiChild, SingleChildPaint, MultiChildPaint};
+use flui_core::{MultiChild, MultiChildPaint, SingleChild, SingleChildPaint};
 
 // ========== Test RenderObjects ==========
 
@@ -84,8 +84,12 @@ impl RenderObject for SimpleContainer {
             child_size.height + 2.0 * self.padding,
         );
 
-        tracing::debug!("SimpleContainer::layout padding={} child={:?} size={:?}",
-            self.padding, child_size, size);
+        tracing::debug!(
+            "SimpleContainer::layout padding={} child={:?} size={:?}",
+            self.padding,
+            child_size,
+            size
+        );
 
         size
     }
@@ -132,7 +136,11 @@ impl RenderObject for SimpleColumn {
 
         let size = Size::new(max_width, total_height);
 
-        tracing::debug!("SimpleColumn::layout {} children -> {:?}", children.len(), size);
+        tracing::debug!(
+            "SimpleColumn::layout {} children -> {:?}",
+            children.len(),
+            size
+        );
 
         size
     }

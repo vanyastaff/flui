@@ -2,7 +2,7 @@
 //!
 //! Provides Path structure for creating complex shapes with lines, curves, and arcs.
 
-use crate::geometry::{Point, Rect, Offset};
+use crate::geometry::{Offset, Point, Rect};
 use crate::painting::PathFillType;
 
 /// A command in a path.
@@ -152,7 +152,8 @@ impl Path {
     /// * `end` - The end point
     #[inline]
     pub fn cubic_to(&mut self, control1: Point, control2: Point, end: Point) {
-        self.commands.push(PathCommand::CubicTo(control1, control2, end));
+        self.commands
+            .push(PathCommand::CubicTo(control1, control2, end));
         self.bounds = None;
     }
 
@@ -201,7 +202,8 @@ impl Path {
     /// * `sweep_angle` - The sweep angle in radians
     #[inline]
     pub fn add_arc(&mut self, rect: Rect, start_angle: f32, sweep_angle: f32) {
-        self.commands.push(PathCommand::AddArc(rect, start_angle, sweep_angle));
+        self.commands
+            .push(PathCommand::AddArc(rect, start_angle, sweep_angle));
         self.bounds = None;
     }
 
@@ -261,7 +263,9 @@ impl Path {
                     max_x = max_x.max(c1.x).max(c2.x).max(e.x);
                     max_y = max_y.max(c1.y).max(c2.y).max(e.y);
                 }
-                PathCommand::AddRect(r) | PathCommand::AddOval(r) | PathCommand::AddArc(r, _, _) => {
+                PathCommand::AddRect(r)
+                | PathCommand::AddOval(r)
+                | PathCommand::AddArc(r, _, _) => {
                     min_x = min_x.min(r.left());
                     min_y = min_y.min(r.top());
                     max_x = max_x.max(r.right());
@@ -290,10 +294,16 @@ impl Path {
     /// Transforms the path by translating it.
     #[must_use]
     pub fn translate(&self, offset: Offset) -> Self {
-        let commands = self.commands.iter().map(|cmd| {
-            match *cmd {
-                PathCommand::MoveTo(p) => PathCommand::MoveTo(Point::new(p.x + offset.dx, p.y + offset.dy)),
-                PathCommand::LineTo(p) => PathCommand::LineTo(Point::new(p.x + offset.dx, p.y + offset.dy)),
+        let commands = self
+            .commands
+            .iter()
+            .map(|cmd| match *cmd {
+                PathCommand::MoveTo(p) => {
+                    PathCommand::MoveTo(Point::new(p.x + offset.dx, p.y + offset.dy))
+                }
+                PathCommand::LineTo(p) => {
+                    PathCommand::LineTo(Point::new(p.x + offset.dx, p.y + offset.dy))
+                }
                 PathCommand::QuadraticTo(c, e) => PathCommand::QuadraticTo(
                     Point::new(c.x + offset.dx, c.y + offset.dy),
                     Point::new(e.x + offset.dx, e.y + offset.dy),
@@ -309,10 +319,12 @@ impl Path {
                     radius,
                 ),
                 PathCommand::AddOval(r) => PathCommand::AddOval(r.translate(offset.dx, offset.dy)),
-                PathCommand::AddArc(r, start, sweep) => PathCommand::AddArc(r.translate(offset.dx, offset.dy), start, sweep),
+                PathCommand::AddArc(r, start, sweep) => {
+                    PathCommand::AddArc(r.translate(offset.dx, offset.dy), start, sweep)
+                }
                 PathCommand::Close => PathCommand::Close,
-            }
-        }).collect();
+            })
+            .collect();
 
         Self {
             commands,

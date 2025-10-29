@@ -144,7 +144,10 @@ impl<'a> RenderContext<'a> {
 
     /// Get write access to RenderState for a child element
     #[inline]
-    pub fn child_render_state_mut(&self, child_id: ElementId) -> Option<RwLockWriteGuard<RenderState>> {
+    pub fn child_render_state_mut(
+        &self,
+        child_id: ElementId,
+    ) -> Option<RwLockWriteGuard<RenderState>> {
         self.tree.render_state_mut(child_id)
     }
 
@@ -187,9 +190,9 @@ impl<'a> RenderContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RenderObject, LeafArity, LayoutCx, PaintCx};
-    use flui_types::Size;
+    use crate::{LayoutCx, LeafArity, PaintCx, RenderObject};
     use flui_engine::{BoxedLayer, ContainerLayer};
+    use flui_types::Size;
 
     #[derive(Debug)]
     struct TestRender;

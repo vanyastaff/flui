@@ -95,7 +95,10 @@ impl AbsorbPointer {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 }

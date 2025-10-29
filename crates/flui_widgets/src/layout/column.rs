@@ -33,7 +33,7 @@
 
 use bon::Builder;
 use flui_core::{BoxedWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::{RenderFlex, MultiArity};
+use flui_rendering::{MultiArity, RenderFlex};
 use flui_types::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 /// A widget that displays its children in a vertical array.
@@ -121,7 +121,7 @@ impl Column {
     /// column.add_child(Text::new("World"));
     /// ```
     pub fn add_child<W: Widget + 'static>(&mut self, child: W) {
-        self.children.push(Box::new(child));
+        self.children.push(BoxedWidget::new(child));
     }
 
     /// Sets all children at once.
@@ -230,14 +230,12 @@ macro_rules! column {
 mod tests {
     use super::*;
     use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
     use flui_rendering::RenderPadding;
+    use flui_types::EdgeInsets;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
     struct MockWidget;
-
-    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {
@@ -310,7 +308,6 @@ mod tests {
         assert_eq!(column.children.len(), 2);
     }
 
-
     #[test]
     fn test_column_add_child() {
         let mut column = Column::new();
@@ -363,9 +360,7 @@ mod tests {
             MainAxisAlignment::SpaceAround,
             MainAxisAlignment::SpaceEvenly,
         ] {
-            let column = Column::builder()
-                .main_axis_alignment(alignment)
-                .build();
+            let column = Column::builder().main_axis_alignment(alignment).build();
             assert_eq!(column.main_axis_alignment, alignment);
         }
     }
@@ -378,9 +373,7 @@ mod tests {
             CrossAxisAlignment::Center,
             CrossAxisAlignment::Stretch,
         ] {
-            let column = Column::builder()
-                .cross_axis_alignment(alignment)
-                .build();
+            let column = Column::builder().cross_axis_alignment(alignment).build();
             assert_eq!(column.cross_axis_alignment, alignment);
         }
     }

@@ -4,11 +4,11 @@
 //! incrementally. This matches Flutter's SceneBuilder pattern.
 
 use crate::layer::{
-    Layer, BoxedLayer, ContainerLayer, TransformLayer, OpacityLayer, ClipRectLayer, ClipRRectLayer,
+    BoxedLayer, ClipRRectLayer, ClipRectLayer, ContainerLayer, Layer, OpacityLayer, TransformLayer,
 };
-use crate::scene::Scene;
 use crate::painter::RRect;
-use flui_types::{Size, Rect, Offset};
+use crate::scene::Scene;
+use flui_types::{Offset, Rect, Size};
 
 /// A layer entry on the scene builder stack
 enum StackEntry {
@@ -48,7 +48,12 @@ impl StackEntry {
 
     fn into_layer(self) -> BoxedLayer {
         match self {
-            StackEntry::Transform { offset, rotation, scale, children } => {
+            StackEntry::Transform {
+                offset,
+                rotation,
+                scale,
+                children,
+            } => {
                 let mut container = ContainerLayer::new();
                 for child in children {
                     container.add_child(child);

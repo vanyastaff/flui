@@ -15,15 +15,6 @@ pub mod radius;
 pub mod shadow;
 pub mod shape_border;
 
-
-
-
-
-
-
-
-
-
 // Re-exports for convenience
 pub use border::{BorderPosition, BorderSide, BorderStyle};
 pub use border_radius::{BorderRadius, BorderRadiusDirectional};
@@ -45,14 +36,3 @@ pub use shape_border::{
     BeveledRectangleBorder, CircleBorder, ContinuousRectangleBorder, LinearBorder,
     LinearBorderEdges, OvalBorder, RoundedRectangleBorder, ShapeBorder, StadiumBorder, StarBorder,
 };
-
-
-
-
-
-
-
-
-
-
-

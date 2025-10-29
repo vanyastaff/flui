@@ -392,10 +392,12 @@ impl ImageConfiguration {
     #[inline]
     #[must_use]
     pub fn physical_size(&self) -> Option<Size> {
-        self.size.map(|s| Size::new(
-            s.width * self.effective_device_pixel_ratio(),
-            s.height * self.effective_device_pixel_ratio(),
-        ))
+        self.size.map(|s| {
+            Size::new(
+                s.width * self.effective_device_pixel_ratio(),
+                s.height * self.effective_device_pixel_ratio(),
+            )
+        })
     }
 }
 
@@ -549,7 +551,7 @@ impl ColorFilter {
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // R = luminance
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // G = luminance
             0.2126, 0.7152, 0.0722, 0.0, 0.0, // B = luminance
-            0.0, 0.0, 0.0, 1.0, 0.0,          // A = unchanged
+            0.0, 0.0, 0.0, 1.0, 0.0, // A = unchanged
         ])
     }
 
@@ -558,10 +560,8 @@ impl ColorFilter {
     #[must_use]
     pub const fn sepia() -> Self {
         ColorFilter::Matrix([
-            0.393, 0.769, 0.189, 0.0, 0.0,
-            0.349, 0.686, 0.168, 0.0, 0.0,
-            0.272, 0.534, 0.131, 0.0, 0.0,
-            0.0, 0.0, 0.0, 1.0, 0.0,
+            0.393, 0.769, 0.189, 0.0, 0.0, 0.349, 0.686, 0.168, 0.0, 0.0, 0.272, 0.534, 0.131, 0.0,
+            0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
         ])
     }
 
@@ -570,9 +570,7 @@ impl ColorFilter {
     #[must_use]
     pub const fn invert() -> Self {
         ColorFilter::Matrix([
-            -1.0, 0.0, 0.0, 0.0, 255.0,
-            0.0, -1.0, 0.0, 0.0, 255.0,
-            0.0, 0.0, -1.0, 0.0, 255.0,
+            -1.0, 0.0, 0.0, 0.0, 255.0, 0.0, -1.0, 0.0, 0.0, 255.0, 0.0, 0.0, -1.0, 0.0, 255.0,
             0.0, 0.0, 0.0, 1.0, 0.0,
         ])
     }

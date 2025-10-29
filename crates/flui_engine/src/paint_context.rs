@@ -190,7 +190,7 @@ impl<'a> PaintContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::painter::{Painter, Paint};
+    use crate::painter::{Paint, Painter};
     use flui_types::Point;
 
     struct MockPainter {

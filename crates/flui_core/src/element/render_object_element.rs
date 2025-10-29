@@ -3,14 +3,13 @@
 //! This element type is created by RenderObjectWidget and owns a RenderObject.
 //! It bridges the Widget tree to the RenderObject tree.
 
-
-use std::cell::RefCell;
 use parking_lot::RwLock;
+use std::cell::RefCell;
 
-use crate::element::ElementId;
-use crate::widget::{DynWidget, BoxedWidget};
-use crate::render::{DynRenderObject, RenderState};
 use super::dyn_element::ElementLifecycle;
+use crate::element::ElementId;
+use crate::render::{DynRenderObject, RenderState};
+use crate::widget::{BoxedWidget, DynWidget};
 
 /// Element for RenderObjectWidget (type-erased)
 ///
@@ -199,14 +198,18 @@ impl RenderElement {
     #[inline]
     #[must_use]
     pub fn parent_data(&self) -> Option<&dyn crate::render::ParentData> {
-        self.parent_data.as_ref().map(|pd| &**pd as &dyn crate::render::ParentData)
+        self.parent_data
+            .as_ref()
+            .map(|pd| &**pd as &dyn crate::render::ParentData)
     }
 
     /// Get mutable parent data attached to this element
     #[inline]
     #[must_use]
     pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::render::ParentData> {
-        self.parent_data.as_mut().map(|pd| &mut **pd as &mut dyn crate::render::ParentData)
+        self.parent_data
+            .as_mut()
+            .map(|pd| &mut **pd as &mut dyn crate::render::ParentData)
     }
 
     /// Set parent data for this element
@@ -362,7 +365,7 @@ impl RenderElement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RenderObject, LayoutCx, PaintCx, LeafArity, BoxedLayer};
+    use crate::{BoxedLayer, LayoutCx, LeafArity, PaintCx, RenderObject};
     use flui_types::Size;
 
     // Test RenderObject with LeafArity
@@ -395,8 +398,12 @@ mod tests {
 
     #[test]
     fn test_render_element_creation() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let element = RenderElement::new(widget, render);
 
         assert_eq!(element.children().len(), 0);
@@ -406,8 +413,12 @@ mod tests {
 
     #[test]
     fn test_render_element_mount() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let mut element = RenderElement::new(widget, render);
 
         element.mount(Some(0), 0);
@@ -418,13 +429,19 @@ mod tests {
 
     #[test]
     fn test_render_element_update() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let mut element = RenderElement::new(widget, render);
         element.mount(Some(0), 0);
 
         // Update with new widget
-        let new_widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(200.0, 100.0) });
+        let new_widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(200.0, 100.0),
+        });
         element.update(new_widget);
 
         assert!(element.is_dirty());
@@ -432,8 +449,12 @@ mod tests {
 
     #[test]
     fn test_render_element_unmount() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let mut element = RenderElement::new(widget, render);
         element.mount(Some(0), 0);
 
@@ -445,8 +466,12 @@ mod tests {
 
     #[test]
     fn test_render_element_lifecycle() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let mut element = RenderElement::new(widget, render);
 
         // Initial
@@ -472,8 +497,12 @@ mod tests {
 
     #[test]
     fn test_render_element_dirty_flag() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let mut element = RenderElement::new(widget, render);
 
         // Initially dirty
@@ -490,8 +519,12 @@ mod tests {
 
     #[test]
     fn test_render_element_children_management() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let mut element = RenderElement::new(widget, render);
 
         // No children initially
@@ -518,8 +551,12 @@ mod tests {
 
     #[test]
     fn test_render_element_render_object_access() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let element = RenderElement::new(widget, render);
 
         // Test render object access
@@ -529,8 +566,12 @@ mod tests {
 
     #[test]
     fn test_render_element_render_state_access() {
-        let widget: BoxedWidget = Box::new(TestLeafWidget { size: Size::new(100.0, 50.0) });
-        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender { size: Size::new(100.0, 50.0) });
+        let widget: BoxedWidget = Box::new(TestLeafWidget {
+            size: Size::new(100.0, 50.0),
+        });
+        let render: Box<dyn DynRenderObject> = Box::new(TestLeafRender {
+            size: Size::new(100.0, 50.0),
+        });
         let element = RenderElement::new(widget, render);
 
         // Test render state access

@@ -2,8 +2,8 @@
 //!
 //! Provides efficient O(1) access to elements via slab allocation.
 
-use slab::Slab;
 use flui_types::constraints::BoxConstraints;
+use slab::Slab;
 
 use crate::element::{Element, ElementId};
 use crate::render::RenderState;
@@ -88,9 +88,7 @@ impl ElementTree {
     /// let tree = ElementTree::new();
     /// ```
     pub fn new() -> Self {
-        Self {
-            nodes: Slab::new(),
-        }
+        Self { nodes: Slab::new() }
     }
 
     /// Create an element tree with pre-allocated capacity
@@ -304,7 +302,10 @@ impl ElementTree {
     /// }
     /// ```
     #[inline]
-    pub fn render_state(&self, element_id: ElementId) -> Option<parking_lot::RwLockReadGuard<RenderState>> {
+    pub fn render_state(
+        &self,
+        element_id: ElementId,
+    ) -> Option<parking_lot::RwLockReadGuard<RenderState>> {
         self.get(element_id).and_then(|element| {
             element.render_state_ptr().map(|ptr| unsafe {
                 // SAFETY: The pointer is valid for the lifetime of the element
@@ -328,7 +329,10 @@ impl ElementTree {
     /// }
     /// ```
     #[inline]
-    pub fn render_state_mut(&self, element_id: ElementId) -> Option<parking_lot::RwLockWriteGuard<RenderState>> {
+    pub fn render_state_mut(
+        &self,
+        element_id: ElementId,
+    ) -> Option<parking_lot::RwLockWriteGuard<RenderState>> {
         self.get(element_id).and_then(|element| {
             element.render_state_ptr().map(|ptr| unsafe {
                 // SAFETY: The pointer is valid for the lifetime of the element
@@ -357,7 +361,11 @@ impl ElementTree {
     /// # Panics
     ///
     /// Panics if the render object is already borrowed mutably (indicates a layout cycle).
-    pub fn layout_render_object(&self, element_id: ElementId, constraints: BoxConstraints) -> Option<flui_types::Size> {
+    pub fn layout_render_object(
+        &self,
+        element_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Option<flui_types::Size> {
         // Check element exists and is a render element
         let element = self.get(element_id)?;
         let render_element = element.as_render()?;
@@ -407,7 +415,11 @@ impl ElementTree {
     /// # Returns
     ///
     /// The layer tree, or None if element is not a RenderObjectElement
-    pub fn paint_render_object(&self, element_id: ElementId, offset: crate::Offset) -> Option<crate::BoxedLayer> {
+    pub fn paint_render_object(
+        &self,
+        element_id: ElementId,
+        offset: crate::Offset,
+    ) -> Option<crate::BoxedLayer> {
         // Get render element
         let element = self.get(element_id)?;
         let render_element = element.as_render()?;
@@ -603,7 +615,10 @@ impl ElementTree {
     ///
     /// `Some(&HashSet<ElementId>)` if the element exists and is an InheritedElement,
     /// `None` otherwise.
-    pub fn get_dependents(&self, inherited_id: ElementId) -> Option<&std::collections::HashSet<ElementId>> {
+    pub fn get_dependents(
+        &self,
+        inherited_id: ElementId,
+    ) -> Option<&std::collections::HashSet<ElementId>> {
         if let Some(Element::Inherited(inherited)) = self.get(inherited_id) {
             Some(inherited.dependents())
         } else {
@@ -622,10 +637,10 @@ impl Default for ElementTree {
 #[cfg(all(test, disabled))]
 mod tests {
     use super::*;
-    use crate::{RenderObject, Widget, DynWidget, RenderObjectWidget};
-    use crate::{LeafArity, SingleArity, LayoutCx, PaintCx};
-    use flui_types::Size;
+    use crate::{DynWidget, RenderObject, RenderObjectWidget, Widget};
+    use crate::{LayoutCx, LeafArity, PaintCx, SingleArity};
     use flui_engine::{BoxedLayer, ContainerLayer};
+    use flui_types::Size;
 
     // Test Widgets and RenderObjects
     #[derive(Debug, Clone)]
@@ -633,7 +648,9 @@ mod tests {
 
     impl Widget for TestLeafWidget {}
     impl DynWidget for TestLeafWidget {
-        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     impl RenderObjectWidget for TestLeafWidget {
@@ -667,7 +684,9 @@ mod tests {
 
     impl Widget for TestSingleWidget {}
     impl DynWidget for TestSingleWidget {
-        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     impl RenderObjectWidget for TestSingleWidget {

@@ -63,7 +63,10 @@ impl BoxFit {
     #[inline]
     #[must_use]
     pub const fn may_clip(&self) -> bool {
-        matches!(self, BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight | BoxFit::None)
+        matches!(
+            self,
+            BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight | BoxFit::None
+        )
     }
 
     /// Returns true if this fit mode always maintains aspect ratio.
@@ -91,21 +94,39 @@ impl BoxFit {
     #[inline]
     #[must_use]
     pub const fn may_scale_down(&self) -> bool {
-        matches!(self, BoxFit::Contain | BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight | BoxFit::ScaleDown | BoxFit::Fill)
+        matches!(
+            self,
+            BoxFit::Contain
+                | BoxFit::Cover
+                | BoxFit::FitWidth
+                | BoxFit::FitHeight
+                | BoxFit::ScaleDown
+                | BoxFit::Fill
+        )
     }
 
     /// Returns true if this fit mode fills the entire target area.
     #[inline]
     #[must_use]
     pub const fn fills_target(&self) -> bool {
-        matches!(self, BoxFit::Fill | BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight)
+        matches!(
+            self,
+            BoxFit::Fill | BoxFit::Cover | BoxFit::FitWidth | BoxFit::FitHeight
+        )
     }
 
     /// Returns true if this fit mode leaves empty space.
     #[inline]
     #[must_use]
     pub const fn may_leave_space(&self) -> bool {
-        matches!(self, BoxFit::Contain | BoxFit::None | BoxFit::ScaleDown | BoxFit::FitWidth | BoxFit::FitHeight)
+        matches!(
+            self,
+            BoxFit::Contain
+                | BoxFit::None
+                | BoxFit::ScaleDown
+                | BoxFit::FitWidth
+                | BoxFit::FitHeight
+        )
     }
 }
 

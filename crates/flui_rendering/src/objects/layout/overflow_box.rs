@@ -1,8 +1,10 @@
 //! RenderOverflowBox - allows child to overflow constraints
 
-use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, TransformLayer};
+use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that allows child to overflow parent constraints
 ///
@@ -124,10 +126,7 @@ impl RenderObject for RenderOverflowBox {
 
         // Our size is determined by parent constraints
         // We constrain ourselves, but let child overflow
-        let size = constraints.constrain(Size::new(
-            constraints.max_width,
-            constraints.max_height,
-        ));
+        let size = constraints.constrain(Size::new(constraints.max_width, constraints.max_height));
 
         // Store sizes for paint
         self.child_size = child_size;
@@ -168,12 +167,8 @@ mod tests {
 
     #[test]
     fn test_render_overflow_box_with_constraints() {
-        let overflow = RenderOverflowBox::with_constraints(
-            Some(10.0),
-            Some(100.0),
-            Some(20.0),
-            Some(200.0),
-        );
+        let overflow =
+            RenderOverflowBox::with_constraints(Some(10.0), Some(100.0), Some(20.0), Some(200.0));
         assert_eq!(overflow.min_width, Some(10.0));
         assert_eq!(overflow.max_width, Some(100.0));
         assert_eq!(overflow.min_height, Some(20.0));

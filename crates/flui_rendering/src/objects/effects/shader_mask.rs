@@ -3,9 +3,11 @@
 //! This render object applies a shader (gradient, pattern, etc.) as a mask
 //! to its child, controlling which parts are visible.
 
-use flui_types::{Size, painting::BlendMode};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::{Size, painting::BlendMode};
 
 // ===== Data Structure =====
 
@@ -45,11 +47,7 @@ pub struct ShaderMaskData {
 
 impl ShaderMaskData {
     /// Create new shader mask with linear gradient
-    pub fn linear_gradient(
-        start: (f32, f32),
-        end: (f32, f32),
-        colors: Vec<egui::Color32>,
-    ) -> Self {
+    pub fn linear_gradient(start: (f32, f32), end: (f32, f32), colors: Vec<egui::Color32>) -> Self {
         Self {
             shader: ShaderSpec::LinearGradient { start, end, colors },
             blend_mode: BlendMode::default(),
@@ -120,11 +118,7 @@ pub struct RenderShaderMask {
 
 impl RenderShaderMask {
     /// Create new shader mask with linear gradient
-    pub fn linear_gradient(
-        start: (f32, f32),
-        end: (f32, f32),
-        colors: Vec<egui::Color32>,
-    ) -> Self {
+    pub fn linear_gradient(start: (f32, f32), end: (f32, f32), colors: Vec<egui::Color32>) -> Self {
         Self {
             shader: ShaderSpec::LinearGradient { start, end, colors },
             blend_mode: BlendMode::default(),
@@ -192,7 +186,6 @@ impl RenderObject for RenderShaderMask {
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         // Capture child layer
         let child = cx.child();
-        
 
         // Note: Full shader masking requires compositor support
         // For now, we'll paint child normally
@@ -213,14 +206,15 @@ mod tests {
 
     #[test]
     fn test_shader_mask_data_linear_gradient() {
-        let colors = vec![
-            egui::Color32::WHITE,
-            egui::Color32::BLACK,
-        ];
+        let colors = vec![egui::Color32::WHITE, egui::Color32::BLACK];
         let data = ShaderMaskData::linear_gradient((0.0, 0.0), (1.0, 1.0), colors.clone());
 
         match data.shader {
-            ShaderSpec::LinearGradient { start, end, colors: c } => {
+            ShaderSpec::LinearGradient {
+                start,
+                end,
+                colors: c,
+            } => {
                 assert_eq!(start, (0.0, 0.0));
                 assert_eq!(end, (1.0, 1.0));
                 assert_eq!(c.len(), 2);
@@ -263,8 +257,7 @@ mod tests {
 
     #[test]
     fn test_shader_mask_data_with_blend_mode() {
-        let data = ShaderMaskData::solid(egui::Color32::WHITE)
-            .with_blend_mode(BlendMode::Multiply);
+        let data = ShaderMaskData::solid(egui::Color32::WHITE).with_blend_mode(BlendMode::Multiply);
 
         assert_eq!(data.blend_mode, BlendMode::Multiply);
     }
@@ -312,8 +305,8 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_with_blend_mode() {
-        let mask = RenderShaderMask::solid(egui::Color32::WHITE)
-            .with_blend_mode(BlendMode::Multiply);
+        let mask =
+            RenderShaderMask::solid(egui::Color32::WHITE).with_blend_mode(BlendMode::Multiply);
         assert_eq!(mask.blend_mode(), BlendMode::Multiply);
     }
 

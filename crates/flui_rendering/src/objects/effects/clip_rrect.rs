@@ -1,7 +1,7 @@
 //! RenderClipRRect - clips child to rounded rectangle
 
-use flui_types::{Rect, Size, styling::BorderRadius, painting::Clip};
-use flui_engine::{ClipRRectLayer, BoxedLayer, painter::RRect};
+use flui_engine::{BoxedLayer, ClipRRectLayer, painter::RRect};
+use flui_types::{Rect, Size, painting::Clip, styling::BorderRadius};
 
 use super::clip_base::{ClipShape, RenderClip};
 
@@ -30,8 +30,11 @@ impl ClipShape for RRectShape {
 
         // Calculate average radius from all corners
         // TODO: Support per-corner radii when RRect supports it
-        let avg_radius = (self.border_radius.top_left.x + self.border_radius.top_right.x +
-                         self.border_radius.bottom_right.x + self.border_radius.bottom_left.x) / 4.0;
+        let avg_radius = (self.border_radius.top_left.x
+            + self.border_radius.top_right.x
+            + self.border_radius.bottom_right.x
+            + self.border_radius.bottom_left.x)
+            / 4.0;
 
         let rrect = RRect {
             rect,

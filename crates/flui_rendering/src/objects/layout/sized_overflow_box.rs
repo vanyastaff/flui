@@ -1,8 +1,10 @@
 //! RenderSizedOverflowBox - fixed size with child overflow
 
-use flui_types::{Size, Offset, Alignment, constraints::BoxConstraints};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, TransformLayer};
+use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
 /// Data for RenderSizedOverflowBox
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -267,11 +269,8 @@ mod tests {
 
     #[test]
     fn test_sized_overflow_box_data_with_alignment() {
-        let data = SizedOverflowBoxData::with_alignment(
-            Some(50.0),
-            Some(75.0),
-            Alignment::TOP_LEFT,
-        );
+        let data =
+            SizedOverflowBoxData::with_alignment(Some(50.0), Some(75.0), Alignment::TOP_LEFT);
         assert_eq!(data.alignment, Alignment::TOP_LEFT);
     }
 
@@ -317,11 +316,8 @@ mod tests {
 
     #[test]
     fn test_render_sized_overflow_box_with_alignment() {
-        let sized_overflow = RenderSizedOverflowBox::with_alignment(
-            Some(50.0),
-            Some(75.0),
-            Alignment::TOP_LEFT,
-        );
+        let sized_overflow =
+            RenderSizedOverflowBox::with_alignment(Some(50.0), Some(75.0), Alignment::TOP_LEFT);
         assert_eq!(sized_overflow.alignment, Alignment::TOP_LEFT);
     }
 }

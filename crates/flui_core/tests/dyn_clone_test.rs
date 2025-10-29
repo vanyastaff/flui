@@ -13,7 +13,9 @@ struct SimpleWidget {
 // StatelessWidget automatically implements Widget and DynWidget
 impl StatelessWidget for SimpleWidget {
     fn build(&self) -> BoxedWidget {
-        Box::new(SimpleWidget { value: self.value + 1 })
+        Box::new(SimpleWidget {
+            value: self.value + 1,
+        })
     }
 }
 

@@ -44,7 +44,10 @@ impl WrapAlignment {
     #[inline]
     #[must_use]
     pub const fn uses_spacing(&self) -> bool {
-        matches!(self, WrapAlignment::SpaceBetween | WrapAlignment::SpaceAround | WrapAlignment::SpaceEvenly)
+        matches!(
+            self,
+            WrapAlignment::SpaceBetween | WrapAlignment::SpaceAround | WrapAlignment::SpaceEvenly
+        )
     }
 
     /// Returns true if this alignment is edge-aligned.

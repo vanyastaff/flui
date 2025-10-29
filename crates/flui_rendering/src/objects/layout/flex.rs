@@ -1,10 +1,13 @@
 //! RenderFlex - flex layout container (Row/Column)
 
-use flui_types::{Offset, Size, constraints::BoxConstraints, Axis, MainAxisAlignment, CrossAxisAlignment, MainAxisSize, TextBaseline};
-use flui_core::element::ElementId;
-use flui_core::render::{RenderObject, MultiArity, LayoutCx, PaintCx, MultiChild, MultiChildPaint};
-use flui_engine::{BoxedLayer, layer::pool};
 use crate::utils::layout_utils::apply_offset_transform;
+use flui_core::element::ElementId;
+use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_engine::{BoxedLayer, layer::pool};
+use flui_types::{
+    Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize, Offset, Size, TextBaseline,
+    constraints::BoxConstraints,
+};
 
 /// RenderObject for flex layout (Row/Column)
 ///
@@ -280,22 +283,18 @@ impl RenderObject for RenderFlex {
                         cross_constraints.1,
                     )
                 }
-                (Axis::Vertical, flui_types::layout::FlexFit::Tight) => {
-                    BoxConstraints::new(
-                        cross_constraints.0,
-                        cross_constraints.1,
-                        allocated_space,
-                        allocated_space,
-                    )
-                }
-                (Axis::Vertical, flui_types::layout::FlexFit::Loose) => {
-                    BoxConstraints::new(
-                        cross_constraints.0,
-                        cross_constraints.1,
-                        0.0,
-                        allocated_space,
-                    )
-                }
+                (Axis::Vertical, flui_types::layout::FlexFit::Tight) => BoxConstraints::new(
+                    cross_constraints.0,
+                    cross_constraints.1,
+                    allocated_space,
+                    allocated_space,
+                ),
+                (Axis::Vertical, flui_types::layout::FlexFit::Loose) => BoxConstraints::new(
+                    cross_constraints.0,
+                    cross_constraints.1,
+                    0.0,
+                    allocated_space,
+                ),
             };
 
             let child_size = cx.layout_child(*child, child_constraints);
@@ -324,7 +323,10 @@ impl RenderObject for RenderFlex {
                 } else {
                     total_main_size.min(constraints.max_width)
                 };
-                Size::new(width, max_cross_size.clamp(constraints.min_height, constraints.max_height))
+                Size::new(
+                    width,
+                    max_cross_size.clamp(constraints.min_height, constraints.max_height),
+                )
             }
             Axis::Vertical => {
                 let height = if main_axis_size.is_max() {
@@ -332,7 +334,10 @@ impl RenderObject for RenderFlex {
                 } else {
                     total_main_size.min(constraints.max_height)
                 };
-                Size::new(max_cross_size.clamp(constraints.min_width, constraints.max_width), height)
+                Size::new(
+                    max_cross_size.clamp(constraints.min_width, constraints.max_width),
+                    height,
+                )
             }
         };
 
@@ -344,14 +349,17 @@ impl RenderObject for RenderFlex {
         };
 
         // Calculate main axis spacing
-        let (leading_space, between_space) = self.main_axis_alignment.calculate_spacing(
-            available_space.max(0.0),
-            children.len(),
-        );
+        let (leading_space, between_space) = self
+            .main_axis_alignment
+            .calculate_spacing(available_space.max(0.0), children.len());
 
         // For baseline alignment, calculate baselines for all children
-        let child_baselines: Vec<f32> = if self.cross_axis_alignment == CrossAxisAlignment::Baseline {
-            child_sizes.iter().map(|&size| self.estimate_baseline(size)).collect()
+        let child_baselines: Vec<f32> = if self.cross_axis_alignment == CrossAxisAlignment::Baseline
+        {
+            child_sizes
+                .iter()
+                .map(|&size| self.estimate_baseline(size))
+                .collect()
         } else {
             Vec::new()
         };
@@ -452,7 +460,6 @@ mod tests {
         let flex = flex.with_direction(Axis::Vertical);
         assert_eq!(flex.direction(), Axis::Vertical);
     }
-
 
     #[test]
     fn test_render_flex_with_main_axis_alignment() {

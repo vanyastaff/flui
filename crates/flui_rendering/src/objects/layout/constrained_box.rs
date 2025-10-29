@@ -1,8 +1,10 @@
 //! RenderConstrainedBox - applies additional constraints to a child
 
-use flui_types::{Size, constraints::BoxConstraints};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::{Size, constraints::BoxConstraints};
 
 /// RenderObject that applies additional constraints to its child
 ///
@@ -79,7 +81,10 @@ mod tests {
     #[test]
     fn test_render_constrained_box_default() {
         let constrained = RenderConstrainedBox::default();
-        assert_eq!(constrained.additional_constraints, BoxConstraints::UNCONSTRAINED);
+        assert_eq!(
+            constrained.additional_constraints,
+            BoxConstraints::UNCONSTRAINED
+        );
     }
 
     #[test]

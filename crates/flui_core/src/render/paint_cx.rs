@@ -2,12 +2,12 @@
 //!
 //! Universal solution without code duplication (idea.md Chapter 3)
 
-use std::marker::PhantomData;
-use flui_types::{Offset, Size};
 use flui_engine::BoxedLayer;
+use flui_types::{Offset, Size};
+use std::marker::PhantomData;
 
 use crate::element::{ElementId, ElementTree};
-use crate::render::arity::{Arity, SingleArity, MultiArity};
+use crate::render::arity::{Arity, MultiArity, SingleArity};
 
 /// Typed paint context
 ///
@@ -128,7 +128,8 @@ impl<'a> PaintCx<'a, SingleArity> {
         // so painting different elements doesn't cause aliasing.
         // The ElementTree reference is shared immutably, which is safe since
         // paint operations are read-only on the tree structure itself.
-        self.tree.paint_render_object(child_id, self.offset)
+        self.tree
+            .paint_render_object(child_id, self.offset)
             .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
     }
 }
@@ -173,7 +174,8 @@ impl<'a> PaintCx<'a, MultiArity> {
         // so painting different elements doesn't cause aliasing.
         // The ElementTree reference is shared immutably, which is safe since
         // paint operations are read-only on the tree structure itself.
-        self.tree.paint_render_object(child_id, self.offset)
+        self.tree
+            .paint_render_object(child_id, self.offset)
             .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
     }
 }
@@ -182,9 +184,9 @@ impl<'a> PaintCx<'a, MultiArity> {
 mod tests {
     use super::*;
     use crate::render::arity::LeafArity;
-    use crate::{RenderObject, LayoutCx};
-    use flui_types::Size;
+    use crate::{LayoutCx, RenderObject};
     use flui_engine::{BoxedLayer, ContainerLayer};
+    use flui_types::Size;
 
     // Test RenderObject for tests
     #[derive(Debug)]

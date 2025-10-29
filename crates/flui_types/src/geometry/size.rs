@@ -1,7 +1,7 @@
 //! Size type for 2D dimensions
 
 use std::fmt;
-use std::ops::{Add, Sub, Mul, Div};
+use std::ops::{Add, Div, Mul, Sub};
 
 /// A 2D size with width and height
 ///

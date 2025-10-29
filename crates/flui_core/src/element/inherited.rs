@@ -5,8 +5,8 @@
 use std::collections::HashSet;
 
 use crate::ElementId;
-use crate::widget::{DynWidget, BoxedWidget};
 use crate::element::ElementLifecycle;
+use crate::widget::{BoxedWidget, DynWidget};
 
 /// Element for InheritedWidget
 ///

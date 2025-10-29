@@ -29,7 +29,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::{
+    BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget,
+    Widget,
+};
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
 
@@ -175,7 +178,10 @@ impl DecoratedBox {
     /// let mut decorated = DecoratedBox::new(decoration);
     /// decorated.set_child(Text::new("Hello"));
     /// ```
-    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
@@ -292,15 +298,13 @@ macro_rules! decorated_box {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::{Alignment, Color, Offset, EdgeInsets};
-    use flui_types::styling::{BorderRadius, BoxShadow, Gradient, LinearGradient, TileMode};
     use flui_core::LeafRenderObjectElement;
     use flui_rendering::RenderPadding;
+    use flui_types::styling::{BorderRadius, BoxShadow, Gradient, LinearGradient, TileMode};
+    use flui_types::{Alignment, Color, EdgeInsets, Offset};
 
     #[derive(Debug, Clone)]
     struct MockWidget;
-
-    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {
@@ -408,12 +412,11 @@ mod tests {
         let shadow = BoxShadow::new(
             Color::rgba(0, 0, 0, 64),
             Offset::new(0.0, 4.0),
-            8.0,    // blur_radius
-            0.0,    // spread_radius
+            8.0, // blur_radius
+            0.0, // spread_radius
         );
 
-        let decoration = BoxDecoration::default()
-            .set_box_shadow(Some(vec![shadow]));
+        let decoration = BoxDecoration::default().set_box_shadow(Some(vec![shadow]));
 
         let widget = DecoratedBox::new(decoration.clone());
         assert_eq!(widget.decoration, decoration);

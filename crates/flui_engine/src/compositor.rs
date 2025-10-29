@@ -7,8 +7,8 @@
 //! - Performance tracking
 //! - Frame synchronization
 
-use crate::scene::Scene;
 use crate::painter::Painter;
+use crate::scene::Scene;
 use flui_types::Rect;
 use std::time::{Duration, Instant};
 
@@ -216,10 +216,10 @@ impl Default for Compositor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::Scene;
     use crate::layer::PictureLayer;
     use crate::painter::{Paint, Painter};
-    use flui_types::{Size, Point, Offset};
+    use crate::scene::Scene;
+    use flui_types::{Offset, Point, Size};
 
     // Mock painter for testing
     struct MockPainter {
@@ -279,10 +279,7 @@ mod tests {
 
         // Add a layer with content
         let mut picture = PictureLayer::new();
-        picture.draw_rect(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            Paint::default()
-        );
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
         scene.add_layer(Box::new(picture));
 
         let mut painter = MockPainter { call_count: 0 };

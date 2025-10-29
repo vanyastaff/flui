@@ -179,41 +179,6 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
-# Standalone example using only flui_core + flui_engine
-[[example]]
-name = "standalone_demo"
-path = "examples/standalone_demo.rs"
-required-features = []  # Doesn't need flui_app or flui_widgets
-
-# Window demo - shows actual rendered content in a window!
-[[example]]
-name = "window_demo"
-path = "examples/window_demo.rs"
-required-features = []  # Uses flui_core + flui_engine + eframe
-
-# WGPU demo - GPU-accelerated rendering with standalone wgpu backend
-[[example]]
-name = "wgpu_demo"
-path = "examples/wgpu_demo.rs"
-required-features = []  # Standalone wgpu + winit
-
-# Egui demo - CPU rendering with egui backend (for comparison)
-[[example]]
-name = "egui_demo"
-path = "examples/egui_demo.rs"
-required-features = []  # Uses flui_engine/egui + eframe
-
-# Unified App - Backend-agnostic API (automatically selects backend)
-[[example]]
-name = "unified_app"
-path = "examples/unified_app.rs"
-required-features = []  # Auto-selects backend based on features
-
-# Minimal high-level app - no flui_widgets dependency
-[[example]]
-name = "minimal_app"
-path = "examples/minimal_app.rs"
-required-features = ["flui_app"]  # Only needs flui_app, not flui_widgets
 
 # High-level Widget API example - demonstrates StatelessWidget pattern
 [[example]]

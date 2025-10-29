@@ -94,7 +94,10 @@ impl Center {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
@@ -171,13 +174,11 @@ macro_rules! center {
 mod tests {
     use super::*;
     use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
     use flui_rendering::RenderPadding;
+    use flui_types::EdgeInsets;
 
     #[derive(Debug, Clone)]
     struct MockWidget;
-
-    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {
@@ -212,9 +213,7 @@ mod tests {
 
     #[test]
     fn test_center_builder_with_child() {
-        let center = Center::builder()
-            .child(MockWidget)
-            .build();
+        let center = Center::builder().child(MockWidget).build();
         assert!(center.child.is_some());
     }
 
@@ -251,9 +250,7 @@ mod tests {
 
     #[test]
     fn test_center_validate_ok() {
-        let center = Center::builder()
-            .width_factor(1.5)
-            .build();
+        let center = Center::builder().width_factor(1.5).build();
         assert!(center.validate().is_ok());
     }
 
@@ -277,9 +274,7 @@ mod tests {
 
     #[test]
     fn test_center_widget_trait() {
-        let widget = Center::builder()
-            .child(MockWidget)
-            .build();
+        let widget = Center::builder().child(MockWidget).build();
 
         // Test that it implements Widget and can create an element
         let _element = widget.into_element();
@@ -303,11 +298,7 @@ impl RenderObjectWidget for Center {
     type Arity = SingleArity;
 
     fn create_render_object(&self) -> Self::RenderObject {
-        RenderAlign::with_factors(
-            Alignment::CENTER,
-            self.width_factor,
-            self.height_factor,
-        )
+        RenderAlign::with_factors(Alignment::CENTER, self.width_factor, self.height_factor)
     }
 
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {

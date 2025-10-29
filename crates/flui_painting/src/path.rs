@@ -2,9 +2,9 @@
 //!
 //! Provides PathPainter for rendering vector paths with various fill and stroke styles.
 
+use flui_engine::painter::{Paint, Painter};
 use flui_types::painting::path::Path;
 use flui_types::styling::Color;
-use flui_engine::painter::{Paint, Painter};
 
 /// Painter for rendering vector paths.
 ///
@@ -37,11 +37,7 @@ impl PathPainter {
     /// * `painter` - The painter to draw with
     /// * `path` - The path to fill
     /// * `color` - The fill color
-    pub fn fill(
-        painter: &mut dyn Painter,
-        path: &Path,
-        color: Color,
-    ) {
+    pub fn fill(painter: &mut dyn Painter, path: &Path, color: Color) {
         let paint_color = [
             color.red() as f32 / 255.0,
             color.green() as f32 / 255.0,
@@ -66,12 +62,7 @@ impl PathPainter {
     /// * `path` - The path to stroke
     /// * `color` - The stroke color
     /// * `stroke_width` - The width of the stroke
-    pub fn stroke(
-        painter: &mut dyn Painter,
-        path: &Path,
-        color: Color,
-        stroke_width: f32,
-    ) {
+    pub fn stroke(painter: &mut dyn Painter, path: &Path, color: Color, stroke_width: f32) {
         let paint_color = [
             color.red() as f32 / 255.0,
             color.green() as f32 / 255.0,
@@ -96,12 +87,7 @@ impl PathPainter {
     /// * `path` - The path to paint
     /// * `paint` - The paint settings
     /// * `_is_stroke` - Whether this is a stroke operation (unused, stroke info is in paint)
-    fn paint_path(
-        painter: &mut dyn Painter,
-        path: &Path,
-        paint: &Paint,
-        _is_stroke: bool,
-    ) {
+    fn paint_path(painter: &mut dyn Painter, path: &Path, paint: &Paint, _is_stroke: bool) {
         // Use the native path() method which has a default implementation
         // that decomposes paths into primitives. Backends can override this
         // for more efficient native path rendering.

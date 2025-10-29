@@ -3,13 +3,13 @@
 //! Provides painting functionality for images with fit, repeat, alignment,
 //! and color filtering support.
 
+use flui_engine::{Paint, Painter};
 use flui_types::{
-    Rect, Point,
+    Point, Rect,
     layout::Alignment,
-    painting::{Image, BoxFit, ImageRepeat, ColorFilter},
+    painting::{BoxFit, ColorFilter, Image, ImageRepeat},
     styling::DecorationImage,
 };
-use flui_engine::{Painter, Paint};
 
 /// Painter for images
 ///
@@ -24,11 +24,7 @@ impl ImagePainter {
     /// * `painter` - The backend-agnostic painter to draw with
     /// * `rect` - The rectangle to paint the image into
     /// * `decoration_image` - The decoration image configuration
-    pub fn paint(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        decoration_image: &DecorationImage,
-    ) {
+    pub fn paint(painter: &mut dyn Painter, rect: Rect, decoration_image: &DecorationImage) {
         let image = &decoration_image.image;
         let fit = decoration_image.fit.unwrap_or(BoxFit::Contain);
         let alignment = decoration_image.alignment;
@@ -39,24 +35,34 @@ impl ImagePainter {
         // Paint based on repeat mode
         match repeat {
             ImageRepeat::NoRepeat => {
-                Self::paint_single(
-                    painter,
-                    rect,
-                    image,
-                    fit,
-                    alignment,
-                    opacity,
-                    color_filter,
-                );
+                Self::paint_single(painter, rect, image, fit, alignment, opacity, color_filter);
             }
             ImageRepeat::Repeat => {
                 Self::paint_repeated(painter, rect, image, fit, opacity, color_filter, true, true);
             }
             ImageRepeat::RepeatX => {
-                Self::paint_repeated(painter, rect, image, fit, opacity, color_filter, true, false);
+                Self::paint_repeated(
+                    painter,
+                    rect,
+                    image,
+                    fit,
+                    opacity,
+                    color_filter,
+                    true,
+                    false,
+                );
             }
             ImageRepeat::RepeatY => {
-                Self::paint_repeated(painter, rect, image, fit, opacity, color_filter, false, true);
+                Self::paint_repeated(
+                    painter,
+                    rect,
+                    image,
+                    fit,
+                    opacity,
+                    color_filter,
+                    false,
+                    true,
+                );
             }
         }
     }
@@ -170,14 +176,8 @@ impl ImagePainter {
     /// Simple helper to paint an image with basic settings
     ///
     /// This is a convenience method for common use cases.
-    pub fn paint_simple(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        image: &Image,
-        fit: BoxFit,
-    ) {
-        let decoration_image = DecorationImage::new(image.clone())
-            .with_fit(fit);
+    pub fn paint_simple(painter: &mut dyn Painter, rect: Rect, image: &Image, fit: BoxFit) {
+        let decoration_image = DecorationImage::new(image.clone()).with_fit(fit);
 
         Self::paint(painter, rect, &decoration_image);
     }

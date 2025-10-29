@@ -46,11 +46,11 @@
 //! profiler.print_frame_summary();
 //! ```
 
-use std::collections::VecDeque;
-use std::sync::Arc;
+use crate::common::DevToolsConfig;
 use instant::{Duration, Instant};
 use parking_lot::Mutex;
-use crate::common::DevToolsConfig;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Frame rendering phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -370,21 +370,23 @@ impl Profiler {
         println!("=== Frame Performance Summary ===");
         println!("Total frames: {}", inner.total_frames);
         println!("Average FPS: {:.2}", inner.average_fps());
-        println!("Jank frames: {} ({:.2}%)", inner.jank_frames, inner.jank_percentage());
+        println!(
+            "Jank frames: {} ({:.2}%)",
+            inner.jank_frames,
+            inner.jank_percentage()
+        );
 
         if let Some(stats) = inner.frame_stats() {
             println!("\nLast frame:");
-            println!("  Frame #{}: {:.2}ms{}",
+            println!(
+                "  Frame #{}: {:.2}ms{}",
                 stats.frame_number,
                 stats.total_time_ms(),
                 if stats.is_jank { " (JANK)" } else { "" }
             );
 
             for phase in &stats.phases {
-                println!("    {}: {:.2}ms",
-                    phase.phase.name(),
-                    phase.duration_ms()
-                );
+                println!("    {}: {:.2}ms", phase.phase.name(), phase.duration_ms());
             }
         }
 
@@ -392,7 +394,8 @@ impl Profiler {
         if inner.frame_history.len() > 1 {
             println!("\nRecent frames:");
             for stats in inner.frame_history.iter().rev().take(5) {
-                println!("  Frame #{}: {:.2}ms{}",
+                println!(
+                    "  Frame #{}: {:.2}ms{}",
                     stats.frame_number,
                     stats.total_time_ms(),
                     if stats.is_jank { " (JANK)" } else { "" }

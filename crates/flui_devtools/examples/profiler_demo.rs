@@ -20,41 +20,45 @@ fn simulate_paint_phase() {
 
 fn main() {
     println!("🎯 FLUI DevTools - Performance Profiler Demo\n");
-    
+
     let profiler = Profiler::new();
-    
+
     // Simulate 10 frames
     for i in 0..10 {
         profiler.begin_frame();
-        
+
         // Profile build phase
         {
             let _guard = profiler.profile_phase(FramePhase::Build);
             simulate_build_phase();
         }
-        
+
         // Profile layout phase
         {
             let _guard = profiler.profile_phase(FramePhase::Layout);
             simulate_layout_phase();
         }
-        
+
         // Profile paint phase
         {
             let _guard = profiler.profile_phase(FramePhase::Paint);
             simulate_paint_phase();
         }
-        
+
         // Simulate jank on frame 5
         if i == 5 {
             thread::sleep(Duration::from_millis(20));
         }
-        
+
         profiler.end_frame();
-        
+
         // Print frame summary
         if let Some(stats) = profiler.frame_stats() {
-            print!("Frame #{}: {:.2}ms ", stats.frame_number, stats.total_time_ms());
+            print!(
+                "Frame #{}: {:.2}ms ",
+                stats.frame_number,
+                stats.total_time_ms()
+            );
 
             if stats.is_jank {
                 println!("⚠️  JANK DETECTED!");
@@ -65,14 +69,19 @@ fn main() {
             // Calculate percentages manually
             let total = stats.total_time_ms();
             for phase in &stats.phases {
-                let percent = if total > 0.0 { (phase.duration_ms() / total) * 100.0 } else { 0.0 };
+                let percent = if total > 0.0 {
+                    (phase.duration_ms() / total) * 100.0
+                } else {
+                    0.0
+                };
                 let icon = match phase.phase {
                     FramePhase::Build => "🔨",
                     FramePhase::Layout => "📐",
                     FramePhase::Paint => "🎨",
                     FramePhase::Custom(_) => "⚙️",
                 };
-                println!("  {} {}: {:.2}ms ({:.1}%)",
+                println!(
+                    "  {} {}: {:.2}ms ({:.1}%)",
                     icon,
                     phase.phase.name(),
                     phase.duration_ms(),

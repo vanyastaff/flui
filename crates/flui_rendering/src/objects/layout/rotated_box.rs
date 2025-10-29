@@ -1,8 +1,10 @@
 //! RenderRotatedBox - rotates child by quarter turns (90°, 180°, 270°)
 
-use flui_types::{Size, Offset, constraints::BoxConstraints};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, TransformLayer};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// Quarter turns for rotation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,8 +234,14 @@ mod tests {
     #[test]
     fn test_rotated_box_data_helpers() {
         assert_eq!(RotatedBoxData::rotate_90().quarter_turns, QuarterTurns::One);
-        assert_eq!(RotatedBoxData::rotate_180().quarter_turns, QuarterTurns::Two);
-        assert_eq!(RotatedBoxData::rotate_270().quarter_turns, QuarterTurns::Three);
+        assert_eq!(
+            RotatedBoxData::rotate_180().quarter_turns,
+            QuarterTurns::Two
+        );
+        assert_eq!(
+            RotatedBoxData::rotate_270().quarter_turns,
+            QuarterTurns::Three
+        );
     }
 
     #[test]

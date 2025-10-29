@@ -129,8 +129,8 @@ impl Brightness {
     #[must_use]
     pub const fn foreground_color(&self) -> Color {
         match self {
-            Self::Light => Color::rgba(0, 0, 0, 255),       // Black
-            Self::Dark => Color::rgba(255, 255, 255, 255),  // White
+            Self::Light => Color::rgba(0, 0, 0, 255),      // Black
+            Self::Dark => Color::rgba(255, 255, 255, 255), // White
         }
     }
 

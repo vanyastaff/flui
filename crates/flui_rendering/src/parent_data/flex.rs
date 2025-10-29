@@ -1,7 +1,7 @@
 //! Flex parent data - stores flex factor, fit, and offset for children
 
-use flui_types::layout::FlexFit;
 use flui_types::Offset;
+use flui_types::layout::FlexFit;
 
 /// Parent data for children of RenderFlex (Row/Column)
 ///

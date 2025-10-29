@@ -3,7 +3,7 @@
 //! This is a Leaf RenderObject that renders multi-line text with styling,
 //! line breaks, and text wrapping.
 
-use flui_core::render::{RenderObject, LeafArity, LayoutCx, PaintCx};
+use flui_core::render::{LayoutCx, LeafArity, PaintCx, RenderObject};
 use flui_engine::{BoxedLayer, PictureLayer};
 use flui_types::{
     Point, Size,
@@ -113,10 +113,7 @@ pub struct RenderParagraph {
 impl RenderParagraph {
     /// Create new RenderParagraph
     pub fn new(data: ParagraphData) -> Self {
-        Self {
-            data,
-            size: None,
-        }
+        Self { data, size: None }
     }
 
     /// Get reference to data
@@ -216,7 +213,8 @@ impl RenderObject for RenderParagraph {
         // Text should only take as much width as needed, not expand to fill
         let actual_text_width = (text_len * char_width).min(max_width);
 
-        let width = if self.data.soft_wrap && max_width.is_finite() && actual_text_width > max_width {
+        let width = if self.data.soft_wrap && max_width.is_finite() && actual_text_width > max_width
+        {
             // Only expand to max_width if text is too long and needs wrapping
             max_width
         } else {

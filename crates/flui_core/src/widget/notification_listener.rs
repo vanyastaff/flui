@@ -10,7 +10,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::foundation::notification::{Notification, DynNotification};
+use crate::foundation::notification::{DynNotification, Notification};
 use crate::widget::BoxedWidget;
 
 /// Widget that listens for notifications of type T bubbling up the tree
@@ -181,9 +181,9 @@ impl<T: Notification + Clone + 'static> NotificationListener<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::foundation::notification::{ScrollNotification, FocusChangedNotification};
-    use crate::widget::StatelessWidget;
     use crate::BuildContext;
+    use crate::foundation::notification::{FocusChangedNotification, ScrollNotification};
+    use crate::widget::StatelessWidget;
 
     // Test notification type
     #[derive(Debug, Clone)]
@@ -211,7 +211,9 @@ mod tests {
         );
 
         // Callback exists and can be called
-        let test = TestNotification { message: "test".to_string() };
+        let test = TestNotification {
+            message: "test".to_string(),
+        };
         assert!(listener.handle_notification(&test));
     }
 
@@ -253,10 +255,8 @@ mod tests {
 
     #[test]
     fn test_notification_listener_debug() {
-        let listener = NotificationListener::<TestNotification>::new(
-            |_| false,
-            Box::new(ChildWidget),
-        );
+        let listener =
+            NotificationListener::<TestNotification>::new(|_| false, Box::new(ChildWidget));
 
         let debug_str = format!("{:?}", listener);
         assert!(debug_str.contains("NotificationListener"));
@@ -288,10 +288,8 @@ mod tests {
 
     #[test]
     fn test_handle_dyn_notification_wrong_type() {
-        let listener = NotificationListener::<TestNotification>::new(
-            |_| true,
-            Box::new(ChildWidget),
-        );
+        let listener =
+            NotificationListener::<TestNotification>::new(|_| true, Box::new(ChildWidget));
 
         let scroll = ScrollNotification::new(10.0, 100.0, 1000.0);
 
@@ -303,24 +301,26 @@ mod tests {
     #[test]
     fn test_handle_dyn_notification_callback_result() {
         // Test with callback returning false (continue bubbling)
-        let listener_continue = NotificationListener::<TestNotification>::new(
-            |_| false,
-            Box::new(ChildWidget),
-        );
+        let listener_continue =
+            NotificationListener::<TestNotification>::new(|_| false, Box::new(ChildWidget));
 
         let notification = TestNotification {
             message: "test".to_string(),
         };
 
-        assert_eq!(listener_continue.handle_dyn_notification(&notification), Some(false));
-
-        // Test with callback returning true (stop bubbling)
-        let listener_stop = NotificationListener::<TestNotification>::new(
-            |_| true,
-            Box::new(ChildWidget),
+        assert_eq!(
+            listener_continue.handle_dyn_notification(&notification),
+            Some(false)
         );
 
-        assert_eq!(listener_stop.handle_dyn_notification(&notification), Some(true));
+        // Test with callback returning true (stop bubbling)
+        let listener_stop =
+            NotificationListener::<TestNotification>::new(|_| true, Box::new(ChildWidget));
+
+        assert_eq!(
+            listener_stop.handle_dyn_notification(&notification),
+            Some(true)
+        );
     }
 
     #[test]
@@ -353,10 +353,7 @@ mod tests {
     #[test]
     fn test_child_accessor() {
         let child = Box::new(ChildWidget);
-        let listener = NotificationListener::<TestNotification>::new(
-            |_| false,
-            child.clone(),
-        );
+        let listener = NotificationListener::<TestNotification>::new(|_| false, child.clone());
 
         // Should be able to access child
         let child_ref = listener.child();

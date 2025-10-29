@@ -76,8 +76,8 @@
 //! // Works without Clone on StateProvider itself!
 //! ```
 
-use std::fmt;
 use crate::BoxedWidget;
+use std::fmt;
 
 /// InheritedWidget - widget that provides data to descendants
 ///
@@ -376,8 +376,8 @@ pub trait InheritedModel<Aspect>: InheritedWidget {
 #[cfg(all(test, disabled))]
 mod tests {
     use super::*;
+    use crate::{BoxedWidget, DynWidget, Widget};
     use std::sync::Arc;
-    use crate::{Widget, DynWidget, BoxedWidget};
 
     #[test]
     fn test_inherited_widget_without_clone() {
@@ -445,7 +445,7 @@ mod tests {
             child: Box::new(MockWidget),
         };
 
-        assert!(w1.update_should_notify(&w2));  // Different value
+        assert!(w1.update_should_notify(&w2)); // Different value
         assert!(!w1.update_should_notify(&w3)); // Same value
     }
 

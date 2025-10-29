@@ -12,19 +12,23 @@ pub mod image_provider;
 pub mod path;
 pub mod shader;
 
-
-
-
 // Re-exports for convenience
 pub use blend_mode::BlendMode;
 pub use canvas::{
     BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, StrokeCap, StrokeJoin,
     TileMode, VertexMode,
 };
-pub use clipping::{AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape};
+pub use clipping::{
+    AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape,
+};
 pub use effects::{
-    BlurQuality, BlurMode, ColorMatrix, ImageFilter, PathPaintMode, StrokeOptions,
-    ColorFilter as EffectColorFilter,  // Renamed to avoid conflict with image::ColorFilter
+    BlurMode,
+    BlurQuality,
+    ColorFilter as EffectColorFilter, // Renamed to avoid conflict with image::ColorFilter
+    ColorMatrix,
+    ImageFilter,
+    PathPaintMode,
+    StrokeOptions,
 };
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
 pub use image_provider::{
@@ -32,6 +36,3 @@ pub use image_provider::{
     ResolvedImageProvider, TransformedImageProvider,
 };
 pub use shader::{ImageShader, MaskFilter, Shader};
-
-
-

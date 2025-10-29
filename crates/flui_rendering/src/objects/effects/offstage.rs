@@ -1,8 +1,10 @@
 //! RenderOffstage - hides widget from display
 
-use flui_types::Size;
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::{BoxedLayer, layer::pool};
+use flui_types::Size;
 
 /// RenderObject that hides its child from display
 ///

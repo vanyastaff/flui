@@ -3,8 +3,8 @@
 //! This module provides the FluiApp struct, which manages the application lifecycle,
 //! element tree, and rendering pipeline integration with egui.
 
-use flui_core::{BoxConstraints, Offset, PipelineOwner, Size, DynWidget};
-use flui_types::events::{PointerEvent, PointerEventData, PointerDeviceKind, PointerButton};
+use flui_core::{BoxConstraints, DynWidget, Offset, PipelineOwner, Size};
+use flui_types::events::{PointerButton, PointerDeviceKind, PointerEvent, PointerEventData};
 
 /// Performance statistics for debugging and optimization
 #[derive(Debug, Default)]
@@ -90,8 +90,7 @@ impl FluiApp {
     /// Ignores sub-pixel changes to avoid unnecessary layouts
     fn size_changed(&self, new_size: Size) -> bool {
         self.last_size.map_or(true, |last| {
-            (last.width - new_size.width).abs() > 1.0
-                || (last.height - new_size.height).abs() > 1.0
+            (last.width - new_size.width).abs() > 1.0 || (last.height - new_size.height).abs() > 1.0
         })
     }
 
@@ -166,7 +165,11 @@ impl FluiApp {
         let dirty_count = self.pipeline.tree().read().dirty_element_count();
         if dirty_count > 0 {
             self.stats.rebuild_count += 1;
-            tracing::debug!("Frame {}: Rebuilding {} dirty elements", self.stats.frame_count, dirty_count);
+            tracing::debug!(
+                "Frame {}: Rebuilding {} dirty elements",
+                self.stats.frame_count,
+                dirty_count
+            );
             self.pipeline.flush_build();
         }
 
@@ -174,8 +177,13 @@ impl FluiApp {
         let current_size = Size::new(ui.available_size().x, ui.available_size().y);
         let needs_layout = dirty_count > 0 || self.size_changed(current_size);
 
-        tracing::debug!("Frame {}: needs_layout={} (dirty_count={}, size_changed={})",
-            self.stats.frame_count, needs_layout, dirty_count, self.size_changed(current_size));
+        tracing::debug!(
+            "Frame {}: needs_layout={} (dirty_count={}, size_changed={})",
+            self.stats.frame_count,
+            needs_layout,
+            dirty_count,
+            self.size_changed(current_size)
+        );
 
         if needs_layout {
             tracing::debug!("Frame {}: Calling flush_layout", self.stats.frame_count);
@@ -184,7 +192,10 @@ impl FluiApp {
                 self.stats.layout_count += 1;
                 self.last_size = Some(current_size);
             } else {
-                tracing::warn!("Frame {}: flush_layout returned None!", self.stats.frame_count);
+                tracing::warn!(
+                    "Frame {}: flush_layout returned None!",
+                    self.stats.frame_count
+                );
             }
         }
 
@@ -215,7 +226,7 @@ impl eframe::App for FluiApp {
     /// Called by eframe once per frame.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none())  // Remove default padding/margin
+            .frame(egui::Frame::none()) // Remove default padding/margin
             .show(ctx, |ui| {
                 FluiApp::update(self, ctx, ui);
             });

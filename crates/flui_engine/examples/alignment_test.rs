@@ -3,8 +3,8 @@
 //! Simple test to verify that alignment calculations work correctly.
 //! Shows all 9 standard alignments with clear visual positioning.
 
-use flui_engine::{App, AppConfig, AppLogic, Painter, Paint};
-use flui_types::{Event, Rect, Point, Alignment, Size};
+use flui_engine::{App, AppConfig, AppLogic, Paint, Painter};
+use flui_types::{Alignment, Event, Point, Rect, Size};
 
 struct AlignmentTestDemo;
 
@@ -30,7 +30,10 @@ impl AlignmentTestDemo {
             label,
             Point::new(x, y),
             12.0,
-            &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() }
+            &Paint {
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Default::default()
+            },
         );
 
         // Draw container background
@@ -62,7 +65,7 @@ impl AlignmentTestDemo {
                 x + offset.dx,
                 y + 20.0 + offset.dy,
                 child_size.width,
-                child_size.height
+                child_size.height,
             ),
             &Paint {
                 color: [0.8, 0.2, 0.2, 1.0],
@@ -128,14 +131,20 @@ impl AppLogic for AlignmentTestDemo {
             "Alignment Calculation Test",
             Point::new(400.0, 30.0),
             24.0,
-            &Paint { color: [0.2, 0.3, 0.4, 1.0], ..Default::default() }
+            &Paint {
+                color: [0.2, 0.3, 0.4, 1.0],
+                ..Default::default()
+            },
         );
 
         painter.text(
             "Red boxes should be positioned according to their alignment",
             Point::new(350.0, 60.0),
             14.0,
-            &Paint { color: [0.5, 0.5, 0.5, 1.0], ..Default::default() }
+            &Paint {
+                color: [0.5, 0.5, 0.5, 1.0],
+                ..Default::default()
+            },
         );
 
         // Row 1: Top alignments
@@ -146,26 +155,59 @@ impl AppLogic for AlignmentTestDemo {
         // Row 2: Center alignments
         self.draw_alignment(painter, 50.0, 260.0, "CENTER_LEFT", Alignment::CENTER_LEFT);
         self.draw_alignment(painter, 220.0, 260.0, "CENTER", Alignment::CENTER);
-        self.draw_alignment(painter, 390.0, 260.0, "CENTER_RIGHT", Alignment::CENTER_RIGHT);
+        self.draw_alignment(
+            painter,
+            390.0,
+            260.0,
+            "CENTER_RIGHT",
+            Alignment::CENTER_RIGHT,
+        );
 
         // Row 3: Bottom alignments
         self.draw_alignment(painter, 50.0, 420.0, "BOTTOM_LEFT", Alignment::BOTTOM_LEFT);
-        self.draw_alignment(painter, 220.0, 420.0, "BOTTOM_CENTER", Alignment::BOTTOM_CENTER);
-        self.draw_alignment(painter, 390.0, 420.0, "BOTTOM_RIGHT", Alignment::BOTTOM_RIGHT);
+        self.draw_alignment(
+            painter,
+            220.0,
+            420.0,
+            "BOTTOM_CENTER",
+            Alignment::BOTTOM_CENTER,
+        );
+        self.draw_alignment(
+            painter,
+            390.0,
+            420.0,
+            "BOTTOM_RIGHT",
+            Alignment::BOTTOM_RIGHT,
+        );
 
         // Show calculation formula
         painter.text(
             "Formula: offset = (container_size - child_size) * (alignment + 1) / 2",
             Point::new(600.0, 200.0),
             14.0,
-            &Paint { color: [0.3, 0.3, 0.3, 1.0], ..Default::default() }
+            &Paint {
+                color: [0.3, 0.3, 0.3, 1.0],
+                ..Default::default()
+            },
         );
 
         // Example calculations
         let examples = [
-            ("TOP_LEFT (-1, -1):", "x = (120-40) * (-1+1) / 2 = 0", "y = (100-30) * (-1+1) / 2 = 0"),
-            ("CENTER (0, 0):", "x = (120-40) * (0+1) / 2 = 40", "y = (100-30) * (0+1) / 2 = 35"),
-            ("BOTTOM_RIGHT (1, 1):", "x = (120-40) * (1+1) / 2 = 80", "y = (100-30) * (1+1) / 2 = 70"),
+            (
+                "TOP_LEFT (-1, -1):",
+                "x = (120-40) * (-1+1) / 2 = 0",
+                "y = (100-30) * (-1+1) / 2 = 0",
+            ),
+            (
+                "CENTER (0, 0):",
+                "x = (120-40) * (0+1) / 2 = 40",
+                "y = (100-30) * (0+1) / 2 = 35",
+            ),
+            (
+                "BOTTOM_RIGHT (1, 1):",
+                "x = (120-40) * (1+1) / 2 = 80",
+                "y = (100-30) * (1+1) / 2 = 70",
+            ),
         ];
 
         for (i, (title, calc_x, calc_y)) in examples.iter().enumerate() {
@@ -175,21 +217,30 @@ impl AppLogic for AlignmentTestDemo {
                 title,
                 Point::new(600.0, y_base),
                 12.0,
-                &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() }
+                &Paint {
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    ..Default::default()
+                },
             );
 
             painter.text(
                 calc_x,
                 Point::new(620.0, y_base + 20.0),
                 11.0,
-                &Paint { color: [0.4, 0.4, 0.4, 1.0], ..Default::default() }
+                &Paint {
+                    color: [0.4, 0.4, 0.4, 1.0],
+                    ..Default::default()
+                },
             );
 
             painter.text(
                 calc_y,
                 Point::new(620.0, y_base + 40.0),
                 11.0,
-                &Paint { color: [0.4, 0.4, 0.4, 1.0], ..Default::default() }
+                &Paint {
+                    color: [0.4, 0.4, 0.4, 1.0],
+                    ..Default::default()
+                },
             );
         }
     }
@@ -213,7 +264,8 @@ fn main() {
         .title("Alignment Test")
         .size(1200, 600);
 
-    app.run(AlignmentTestDemo::new()).expect("Failed to run app");
+    app.run(AlignmentTestDemo::new())
+        .expect("Failed to run app");
 }
 
 #[cfg(not(feature = "egui"))]

@@ -2,8 +2,8 @@
 //!
 //! This module provides a Painter implementation backed by egui's rendering system.
 
-use crate::painter::{Painter, Paint, RRect};
-use flui_types::{Point, Rect, Offset};
+use crate::painter::{Paint, Painter, RRect};
+use flui_types::{Offset, Point, Rect};
 use glam::{Mat4, Vec3};
 
 use crate::text::VectorTextRenderer;
@@ -161,8 +161,14 @@ impl<'a> EguiPainter<'a> {
 
         let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
         let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-        let max_x = corners.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
-        let max_y = corners.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+        let max_x = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let max_y = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f32::NEG_INFINITY, f32::max);
 
         Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y))
     }
@@ -261,10 +267,8 @@ impl<'a> EguiPainter<'a> {
         }
 
         // Transform all points
-        let transformed_points: Vec<Point> = points
-            .iter()
-            .map(|&p| self.transform_point(p))
-            .collect();
+        let transformed_points: Vec<Point> =
+            points.iter().map(|&p| self.transform_point(p)).collect();
 
         // Create center vertex (transformed center)
         let transformed_center = self.transform_point(center);
@@ -391,10 +395,8 @@ impl<'a> Painter for EguiPainter<'a> {
     }
 
     fn circle(&mut self, center: Point, radius: f32, paint: &Paint) {
-        let bounds = Rect::from_center_size(
-            center,
-            flui_types::Size::new(radius * 2.0, radius * 2.0),
-        );
+        let bounds =
+            Rect::from_center_size(center, flui_types::Size::new(radius * 2.0, radius * 2.0));
 
         if !self.is_visible(bounds) {
             return;
@@ -419,7 +421,11 @@ impl<'a> Painter for EguiPainter<'a> {
             let egui_center = Self::to_egui_pos(transformed_center);
 
             // Scale the radius (uniform scale)
-            let scale = self.current_state.transform.to_scale_rotation_translation().0;
+            let scale = self
+                .current_state
+                .transform
+                .to_scale_rotation_translation()
+                .0;
             let scaled_radius = radius * scale.x.max(scale.y);
 
             self.with_clip(|painter| {
@@ -439,10 +445,7 @@ impl<'a> Painter for EguiPainter<'a> {
         let max_x = p1.x.max(p2.x);
         let max_y = p1.y.max(p2.y);
 
-        let bounds = Rect::from_min_max(
-            Point::new(min_x, min_y),
-            Point::new(max_x, max_y),
-        );
+        let bounds = Rect::from_min_max(Point::new(min_x, min_y), Point::new(max_x, max_y));
 
         if !self.is_visible(bounds) {
             return;
@@ -457,7 +460,10 @@ impl<'a> Painter for EguiPainter<'a> {
 
         self.with_clip(|painter| {
             painter.line_segment(
-                [Self::to_egui_pos(transformed_p1), Self::to_egui_pos(transformed_p2)],
+                [
+                    Self::to_egui_pos(transformed_p1),
+                    Self::to_egui_pos(transformed_p2),
+                ],
                 stroke,
             );
         });
@@ -482,21 +488,27 @@ impl<'a> Painter for EguiPainter<'a> {
                 let letter_spacing = 0.0;
                 let word_spacing = 0.0;
 
-                match renderer.render(text, position, font_size, color, &self.current_state.transform, letter_spacing, word_spacing) {
+                match renderer.render(
+                    text,
+                    position,
+                    font_size,
+                    color,
+                    &self.current_state.transform,
+                    letter_spacing,
+                    word_spacing,
+                ) {
                     Ok((vertices, indices)) => {
                         // Convert TextVertex to egui::epaint::Vertex
-                        let egui_vertices: Vec<egui::epaint::Vertex> = vertices.iter().map(|v| {
-                            egui::epaint::Vertex {
+                        let egui_vertices: Vec<egui::epaint::Vertex> = vertices
+                            .iter()
+                            .map(|v| egui::epaint::Vertex {
                                 pos: egui::pos2(v.x, v.y),
                                 uv: egui::pos2(0.0, 0.0),
                                 color: egui::Color32::from_rgba_unmultiplied(
-                                    v.color.r,
-                                    v.color.g,
-                                    v.color.b,
-                                    v.color.a,
+                                    v.color.r, v.color.g, v.color.b, v.color.a,
                                 ),
-                            }
-                        }).collect();
+                            })
+                            .collect();
 
                         // Create mesh from vertices and indices
                         // Vector text renderer already provides transformed vertices and proper indices
@@ -510,7 +522,10 @@ impl<'a> Painter for EguiPainter<'a> {
                         return; // Successfully rendered with vector text
                     }
                     Err(e) => {
-                        tracing::warn!("Vector text rendering failed: {:?}, falling back to raster", e);
+                        tracing::warn!(
+                            "Vector text rendering failed: {:?}, falling back to raster",
+                            e
+                        );
                         // Fall through to raster rendering
                     }
                 }
@@ -524,14 +539,17 @@ impl<'a> Painter for EguiPainter<'a> {
         let pos = Self::to_egui_pos(transformed_pos);
 
         // Extract rotation and scale from transform matrix
-        let (scale, rotation, _translation) = self.current_state.transform.to_scale_rotation_translation();
+        let (scale, rotation, _translation) =
+            self.current_state.transform.to_scale_rotation_translation();
         let angle = rotation.to_euler(glam::EulerRot::ZYX).0; // Get Z-axis rotation
         let scale_factor = scale.x.max(scale.y); // Use max scale for font size
 
         // Apply scale to font size
         let scaled_font_size = font_size * scale_factor;
         let font_id = egui::FontId::proportional(scaled_font_size);
-        let galley = self.painter.layout_no_wrap(text.to_string(), font_id, color);
+        let galley = self
+            .painter
+            .layout_no_wrap(text.to_string(), font_id, color);
 
         // Create text shape with rotation using egui 0.28+ API
         let mut text_shape = egui::epaint::TextShape::new(pos, galley, color);
@@ -542,26 +560,37 @@ impl<'a> Painter for EguiPainter<'a> {
         self.add_shape(egui::Shape::Text(text_shape));
     }
 
-    fn text_styled(&mut self, text: &str, position: Point, style: &flui_types::typography::TextStyle) {
+    fn text_styled(
+        &mut self,
+        text: &str,
+        position: Point,
+        style: &flui_types::typography::TextStyle,
+    ) {
         // Extract styling parameters
         let font_size = style.font_size.unwrap_or(14.0) as f32;
         let letter_spacing = style.letter_spacing.unwrap_or(0.0) as f32;
         let word_spacing = style.word_spacing.unwrap_or(0.0) as f32;
 
         let paint = Paint {
-            color: style.color.map(|c| [
-                c.red() as f32 / 255.0,
-                c.green() as f32 / 255.0,
-                c.blue() as f32 / 255.0,
-                c.alpha() as f32 / 255.0,
-            ]).unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            color: style
+                .color
+                .map(|c| {
+                    [
+                        c.red() as f32 / 255.0,
+                        c.green() as f32 / 255.0,
+                        c.blue() as f32 / 255.0,
+                        c.alpha() as f32 / 255.0,
+                    ]
+                })
+                .unwrap_or([0.0, 0.0, 0.0, 1.0]),
             ..Default::default()
         };
 
         // Check if we need vector rendering (complex transform or custom spacing)
-        let needs_vector = crate::text::VectorTextRenderer::needs_vector_rendering(&self.current_state.transform)
-            || letter_spacing.abs() > 0.001
-            || word_spacing.abs() > 0.001;
+        let needs_vector =
+            crate::text::VectorTextRenderer::needs_vector_rendering(&self.current_state.transform)
+                || letter_spacing.abs() > 0.001
+                || word_spacing.abs() > 0.001;
 
         if needs_vector {
             // Use vector rendering with spacing support
@@ -573,21 +602,27 @@ impl<'a> Painter for EguiPainter<'a> {
                     a: (paint.color[3] * 255.0) as u8,
                 };
 
-                match renderer.render(text, position, font_size, color, &self.current_state.transform, letter_spacing, word_spacing) {
+                match renderer.render(
+                    text,
+                    position,
+                    font_size,
+                    color,
+                    &self.current_state.transform,
+                    letter_spacing,
+                    word_spacing,
+                ) {
                     Ok((vertices, indices)) => {
                         // Convert TextVertex to egui::epaint::Vertex
-                        let egui_vertices: Vec<egui::epaint::Vertex> = vertices.iter().map(|v| {
-                            egui::epaint::Vertex {
+                        let egui_vertices: Vec<egui::epaint::Vertex> = vertices
+                            .iter()
+                            .map(|v| egui::epaint::Vertex {
                                 pos: egui::pos2(v.x, v.y),
                                 uv: egui::pos2(0.0, 0.0),
                                 color: egui::Color32::from_rgba_unmultiplied(
-                                    v.color.r,
-                                    v.color.g,
-                                    v.color.b,
-                                    v.color.a,
+                                    v.color.r, v.color.g, v.color.b, v.color.a,
                                 ),
-                            }
-                        }).collect();
+                            })
+                            .collect();
 
                         let mesh = egui::epaint::Mesh {
                             indices,
@@ -599,7 +634,10 @@ impl<'a> Painter for EguiPainter<'a> {
                         return;
                     }
                     Err(e) => {
-                        tracing::warn!("Vector text rendering failed: {:?}, falling back to raster", e);
+                        tracing::warn!(
+                            "Vector text rendering failed: {:?}, falling back to raster",
+                            e
+                        );
                         // Fall through to raster rendering
                     }
                 }
@@ -625,7 +663,8 @@ impl<'a> Painter for EguiPainter<'a> {
 
     fn translate(&mut self, offset: Offset) {
         // Apply translation to transform matrix
-        self.current_state.transform *= Mat4::from_translation(Vec3::new(offset.dx, offset.dy, 0.0));
+        self.current_state.transform *=
+            Mat4::from_translation(Vec3::new(offset.dx, offset.dy, 0.0));
     }
 
     fn rotate(&mut self, angle: f32) {
@@ -645,10 +684,10 @@ impl<'a> Painter for EguiPainter<'a> {
         // | b  d  ty |
         // | 0  0  1  |
         let matrix = Mat4::from_cols(
-            Vec3::new(a, b, 0.0).extend(0.0),   // First column
-            Vec3::new(c, d, 0.0).extend(0.0),   // Second column
+            Vec3::new(a, b, 0.0).extend(0.0),     // First column
+            Vec3::new(c, d, 0.0).extend(0.0),     // Second column
             Vec3::new(0.0, 0.0, 1.0).extend(0.0), // Third column (Z axis, unused in 2D)
-            Vec3::new(tx, ty, 0.0).extend(1.0),  // Translation column
+            Vec3::new(tx, ty, 0.0).extend(1.0),   // Translation column
         );
 
         // Multiply current transform with this matrix
@@ -662,11 +701,12 @@ impl<'a> Painter for EguiPainter<'a> {
 
     fn clip_rect(&mut self, rect: Rect) {
         // Update clip rect (intersect with current clip)
-        self.current_state.clip_rect = Some(if let Some(current_clip) = self.current_state.clip_rect {
-            current_clip.intersection(&rect).unwrap_or(Rect::ZERO)
-        } else {
-            rect
-        });
+        self.current_state.clip_rect =
+            Some(if let Some(current_clip) = self.current_state.clip_rect {
+                current_clip.intersection(&rect).unwrap_or(Rect::ZERO)
+            } else {
+                rect
+            });
     }
 
     fn clip_rrect(&mut self, rrect: RRect) {

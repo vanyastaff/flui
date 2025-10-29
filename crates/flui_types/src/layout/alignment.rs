@@ -350,7 +350,6 @@ impl Alignment {
         let t = t.clamp(0.0, 1.0);
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
     }
-
 }
 
 impl Default for Alignment {
@@ -639,7 +638,8 @@ impl AlignmentGeometry {
 
     /// Calculate offset for a child within a parent, respecting text direction.
     pub fn calculate_offset(&self, child_size: Size, parent_size: Size, is_ltr: bool) -> Offset {
-        self.resolve(is_ltr).calculate_offset(child_size, parent_size)
+        self.resolve(is_ltr)
+            .calculate_offset(child_size, parent_size)
     }
 }
 

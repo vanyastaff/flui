@@ -142,7 +142,6 @@ pub struct Container {
     // /// If non-null, the container will be wrapped in a Transform widget.
     // /// The transformation is applied OUTSIDE all other effects (decoration, alignment, etc).
     // pub transform: Option<Matrix4>,
-
     /// The child contained by the container.
     ///
     /// If null, the container will size itself according to other properties.
@@ -362,7 +361,7 @@ impl StatelessWidget for Container {
 }
 
 // Import bon builder traits for custom setters
-use container_builder::{State, IsUnset, SetChild};
+use container_builder::{IsUnset, SetChild, State};
 
 // Custom builder methods for ergonomic API
 impl<S: State> ContainerBuilder<S>
@@ -459,10 +458,7 @@ mod tests {
 
     #[test]
     fn test_container_builder() {
-        let container = Container::builder()
-            .width(100.0)
-            .height(200.0)
-            .build();
+        let container = Container::builder().width(100.0).height(200.0).build();
 
         assert_eq!(container.width, Some(100.0));
         assert_eq!(container.height, Some(200.0));
@@ -494,9 +490,7 @@ mod tests {
 
     #[test]
     fn test_container_builder_alignment() {
-        let container = Container::builder()
-            .alignment(Alignment::CENTER)
-            .build();
+        let container = Container::builder().alignment(Alignment::CENTER).build();
 
         assert_eq!(container.alignment, Some(Alignment::CENTER));
     }
@@ -504,18 +498,14 @@ mod tests {
     #[test]
     fn test_container_builder_constraints() {
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let container = Container::builder()
-            .constraints(constraints)
-            .build();
+        let container = Container::builder().constraints(constraints).build();
 
         assert_eq!(container.constraints, Some(constraints));
     }
 
     #[test]
     fn test_container_builder_key() {
-        let container = Container::builder()
-            .key("my-container")
-            .build();
+        let container = Container::builder().key("my-container").build();
 
         assert_eq!(container.key, Some("my-container".to_string()));
     }
@@ -552,9 +542,7 @@ mod tests {
             color: Some(green),
             ..Default::default()
         };
-        let container = Container::builder()
-            .decoration(decoration.clone())
-            .build();
+        let container = Container::builder().decoration(decoration.clone()).build();
 
         assert_eq!(container.decoration, Some(decoration));
     }
@@ -562,9 +550,7 @@ mod tests {
     #[test]
     fn test_container_get_decoration_from_color() {
         let green = Color::rgb(0, 255, 0);
-        let container = Container::builder()
-            .color(green)
-            .build();
+        let container = Container::builder().color(green).build();
 
         let decoration = container.get_decoration();
         assert!(decoration.is_some());
@@ -573,10 +559,7 @@ mod tests {
 
     #[test]
     fn test_container_validate_ok() {
-        let container = Container::builder()
-            .width(100.0)
-            .height(200.0)
-            .build();
+        let container = Container::builder().width(100.0).height(200.0).build();
 
         assert!(container.validate().is_ok());
     }

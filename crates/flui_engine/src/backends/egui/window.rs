@@ -35,30 +35,26 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
         ..Default::default()
     };
 
-    eframe::run_simple_native(
-        &config.title,
-        native_options,
-        move |ctx, _frame| {
-            // Calculate delta time
-            let now = Instant::now();
-            let delta_time = now.duration_since(last_frame_time).as_secs_f32();
-            last_frame_time = now;
+    eframe::run_simple_native(&config.title, native_options, move |ctx, _frame| {
+        // Calculate delta time
+        let now = Instant::now();
+        let delta_time = now.duration_since(last_frame_time).as_secs_f32();
+        last_frame_time = now;
 
-            // Update logic
-            logic.update(delta_time);
+        // Update logic
+        logic.update(delta_time);
 
-            // Render
-            egui::CentralPanel::default()
-                .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(25, 25, 25)))
-                .show(ctx, |ui| {
-                    let painter = ui.painter();
-                    let mut flui_painter = EguiPainter::new(painter);
-                    logic.render(&mut flui_painter);
-                });
+        // Render
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(25, 25, 25)))
+            .show(ctx, |ui| {
+                let painter = ui.painter();
+                let mut flui_painter = EguiPainter::new(painter);
+                logic.render(&mut flui_painter);
+            });
 
-            // Request continuous repainting
-            ctx.request_repaint();
-        },
-    )
+        // Request continuous repainting
+        ctx.request_repaint();
+    })
     .map_err(|e| format!("Egui error: {}", e))
 }

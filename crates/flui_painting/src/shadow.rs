@@ -1,7 +1,7 @@
 //! Shadow painting implementation
 
-use flui_types::{ Rect, styling::BoxShadow};
-use flui_engine::{Painter, Paint, RRect};
+use flui_engine::{Paint, Painter, RRect};
+use flui_types::{Rect, styling::BoxShadow};
 
 /// Painter for box shadows
 pub struct ShadowPainter;

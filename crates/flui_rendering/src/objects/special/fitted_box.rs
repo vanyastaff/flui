@@ -1,8 +1,10 @@
 //! RenderFittedBox - scales and positions child according to BoxFit
 
-use flui_types::{Alignment, Offset, Size};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::{Alignment, Offset, Size};
 
 /// How a box should be inscribed into another box
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,15 +67,12 @@ impl FittedBoxData {
     }
 
     /// Calculate fitted size and offset
-    pub fn calculate_fit(
-        &self,
-        child_size: Size,
-        container_size: Size,
-    ) -> (Size, Offset) {
+    pub fn calculate_fit(&self, child_size: Size, container_size: Size) -> (Size, Offset) {
         let scale = match self.fit {
-            BoxFit::Fill => {
-                (container_size.width / child_size.width, container_size.height / child_size.height)
-            }
+            BoxFit::Fill => (
+                container_size.width / child_size.width,
+                container_size.height / child_size.height,
+            ),
             BoxFit::Cover => {
                 let scale = (container_size.width / child_size.width)
                     .max(container_size.height / child_size.height);
@@ -101,10 +100,7 @@ impl FittedBoxData {
             }
         };
 
-        let fitted_size = Size::new(
-            child_size.width * scale.0,
-            child_size.height * scale.1,
-        );
+        let fitted_size = Size::new(child_size.width * scale.0, child_size.height * scale.1);
 
         // Calculate offset based on alignment
         // Alignment: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
@@ -191,7 +187,8 @@ impl RenderObject for RenderFittedBox {
 
         // Layout child with unbounded constraints to get natural size
         let child = cx.child();
-        let child_constraints = flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
+        let child_constraints =
+            flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
         cx.layout_child(child, child_constraints);
 
         size
@@ -200,7 +197,6 @@ impl RenderObject for RenderFittedBox {
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
         // Get child layer and calculate fit
         let child = cx.child();
-        
 
         // TODO: Apply transform for scaling based on self.data.calculate_fit()
         // For now, just return child layer as-is

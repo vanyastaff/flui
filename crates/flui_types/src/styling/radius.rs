@@ -39,7 +39,10 @@ impl Radius {
     ///
     /// * `radius` - The radius value for both x and y axes
     pub const fn circular(radius: f32) -> Self {
-        Self { x: radius, y: radius }
+        Self {
+            x: radius,
+            y: radius,
+        }
     }
 
     /// Creates an elliptical radius with different x and y values.

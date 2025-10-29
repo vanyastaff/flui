@@ -36,7 +36,6 @@ mod stateless;
 mod utils;
 mod widget_attr;
 
-
 /// Derive StatelessWidget
 ///
 /// Auto-implements: `Widget`, `DynWidget`

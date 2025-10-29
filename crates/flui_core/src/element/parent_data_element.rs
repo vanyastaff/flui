@@ -2,10 +2,9 @@
 //!
 //! Manages a single child and applies parent data to descendant RenderObjects.
 
-
 use crate::ElementId;
-use crate::widget::{DynWidget, BoxedWidget};
 use crate::element::ElementLifecycle;
+use crate::widget::{BoxedWidget, DynWidget};
 
 /// Element for ParentDataWidget
 ///

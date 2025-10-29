@@ -1,8 +1,8 @@
 //! BoxDecoration painting implementation
 
-use flui_types::{Rect, styling::BoxDecoration};
-use flui_engine::{Painter, Paint, RRect};
 use crate::{BorderPainter, GradientPainter, ShadowPainter};
+use flui_engine::{Paint, Painter, RRect};
+use flui_types::{Rect, styling::BoxDecoration};
 
 /// Painter for BoxDecoration
 ///
@@ -27,11 +27,7 @@ impl BoxDecorationPainter {
     /// 1. Box shadows (behind everything)
     /// 2. Background color or gradient
     /// 3. Border (on top)
-    pub fn paint(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        decoration: &BoxDecoration,
-    ) {
+    pub fn paint(painter: &mut dyn Painter, rect: Rect, decoration: &BoxDecoration) {
         let border_radius = decoration.border_radius.map(|r| r.top_left.x);
 
         // 1. Paint box shadows (if any)
@@ -80,11 +76,7 @@ impl BoxDecorationPainter {
     /// Paint just the background (color or gradient) without shadows or border
     ///
     /// Useful for optimizations when shadows/border are not needed
-    pub fn paint_background(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        decoration: &BoxDecoration,
-    ) {
+    pub fn paint_background(painter: &mut dyn Painter, rect: Rect, decoration: &BoxDecoration) {
         let border_radius = decoration.border_radius.map(|r| r.top_left.x);
 
         if let Some(ref gradient) = decoration.gradient {
@@ -118,11 +110,7 @@ impl BoxDecorationPainter {
     /// Paint just the border without background or shadows
     ///
     /// Useful for optimizations when only border is needed
-    pub fn paint_border(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        decoration: &BoxDecoration,
-    ) {
+    pub fn paint_border(painter: &mut dyn Painter, rect: Rect, decoration: &BoxDecoration) {
         if let Some(ref border) = decoration.border {
             BorderPainter::paint(painter, rect, border, decoration.border_radius);
         }
@@ -131,11 +119,7 @@ impl BoxDecorationPainter {
     /// Paint just the shadows without background or border
     ///
     /// Useful for optimizations when only shadows are needed
-    pub fn paint_shadows(
-        painter: &mut dyn Painter,
-        rect: Rect,
-        decoration: &BoxDecoration,
-    ) {
+    pub fn paint_shadows(painter: &mut dyn Painter, rect: Rect, decoration: &BoxDecoration) {
         if let Some(ref shadows) = decoration.box_shadow {
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
             ShadowPainter::paint(painter, rect, shadows, border_radius);
@@ -228,10 +212,7 @@ mod tests {
     #[test]
     fn test_box_decoration_with_gradient() {
         // Test decoration with gradient
-        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![
-            Color::RED,
-            Color::BLUE,
-        ]));
+        let gradient = Gradient::Linear(LinearGradient::horizontal(vec![Color::RED, Color::BLUE]));
 
         let decoration = BoxDecoration {
             color: Some(Color::WHITE), // Color should be ignored when gradient is present

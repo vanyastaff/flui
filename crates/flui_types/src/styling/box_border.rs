@@ -137,22 +137,38 @@ impl Border {
         Self {
             top: match (a.top, b.top) {
                 (Some(a_side), Some(b_side)) => Some(BorderSide::lerp(a_side, b_side, t)),
-                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 { 1.0 - t * 2.0 } else { (t - 0.5) * 2.0 })),
+                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 {
+                    1.0 - t * 2.0
+                } else {
+                    (t - 0.5) * 2.0
+                })),
                 (None, None) => None,
             },
             right: match (a.right, b.right) {
                 (Some(a_side), Some(b_side)) => Some(BorderSide::lerp(a_side, b_side, t)),
-                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 { 1.0 - t * 2.0 } else { (t - 0.5) * 2.0 })),
+                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 {
+                    1.0 - t * 2.0
+                } else {
+                    (t - 0.5) * 2.0
+                })),
                 (None, None) => None,
             },
             bottom: match (a.bottom, b.bottom) {
                 (Some(a_side), Some(b_side)) => Some(BorderSide::lerp(a_side, b_side, t)),
-                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 { 1.0 - t * 2.0 } else { (t - 0.5) * 2.0 })),
+                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 {
+                    1.0 - t * 2.0
+                } else {
+                    (t - 0.5) * 2.0
+                })),
                 (None, None) => None,
             },
             left: match (a.left, b.left) {
                 (Some(a_side), Some(b_side)) => Some(BorderSide::lerp(a_side, b_side, t)),
-                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 { 1.0 - t * 2.0 } else { (t - 0.5) * 2.0 })),
+                (Some(side), None) | (None, Some(side)) => Some(side.scale(if t < 0.5 {
+                    1.0 - t * 2.0
+                } else {
+                    (t - 0.5) * 2.0
+                })),
                 (None, None) => None,
             },
         }

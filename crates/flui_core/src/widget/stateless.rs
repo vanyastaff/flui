@@ -28,8 +28,8 @@
 //! // Widget and DynWidget are automatic!
 //! ```
 
+use crate::{BoxedWidget, BuildContext, DynWidget, Widget};
 use std::fmt;
-use crate::{Widget, DynWidget, BoxedWidget, BuildContext};
 
 /// StatelessWidget - pure functional widget
 ///

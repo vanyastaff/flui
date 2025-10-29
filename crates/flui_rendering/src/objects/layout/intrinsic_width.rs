@@ -1,8 +1,10 @@
 //! RenderIntrinsicWidth - sizes child to its intrinsic width
 
-use flui_types::{Size, constraints::BoxConstraints};
-use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
+use flui_core::render::{
+    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
+};
 use flui_engine::BoxedLayer;
+use flui_types::{Size, constraints::BoxConstraints};
 
 /// RenderObject that sizes child to its intrinsic width
 ///
