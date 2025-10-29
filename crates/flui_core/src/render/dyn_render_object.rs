@@ -245,7 +245,7 @@ pub type BoxedRender = Box<dyn DynRender>;
 /// DynRender API.
 impl<T> DynRender for T
 where
-    T: crate::Render + fmt::Debug,
+    T: crate::render::RenderObjectTrait + fmt::Debug,
 {
     fn arity(&self) -> Option<usize> {
         // Arity no longer has CHILD_COUNT constant

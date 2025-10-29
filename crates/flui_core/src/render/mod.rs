@@ -51,7 +51,7 @@ pub use parent_data::{
 };
 pub use render_context::RenderContext;
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
-pub use render_object::Render;
+pub use render_object::Render as RenderObjectTrait;
 pub use render_pipeline::RenderPipeline;
 pub use render_state::RenderState;
 

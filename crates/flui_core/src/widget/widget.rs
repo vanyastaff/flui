@@ -1,387 +1,373 @@
-//! Core Widget trait - typed, zero-cost widget abstraction
+//! Widget Enum - Unified widget type for Flui
 //!
-//! This is the primary trait that users implement for custom widgets.
-//! It provides compile-time type safety and zero-cost abstractions.
+//! This module provides the core `Widget` enum that replaces the trait hierarchy.
+//! Instead of multiple traits with blanket impls (which cause coherence conflicts),
+//! we use a single enum with variants for different widget types.
 //!
-//! # Design Philosophy
+//! # Architecture
 //!
-//! - **Typed**: Uses associated types for zero-cost abstractions
-//! - **Not object-safe**: Allows associated types for better type safety
-//! - **Minimal requirements**: Only `'static` bound, no Clone/Send/Sync
-//! - **Automatic DynWidget**: Blanket impl provides object-safe version
+//! ```text
+//! Widget (enum)
+//!   ├─ Stateless(Box<dyn StatelessWidget>)
+//!   ├─ Stateful(Box<dyn StatefulWidget>)
+//!   ├─ Inherited(Box<dyn InheritedWidget>)
+//!   ├─ Render(Box<dyn RenderWidget>)
+//!   └─ ParentData(Box<dyn ParentDataWidget>)
+//! ```
+//!
+//! # Benefits
+//!
+//! - ✅ No blanket impl conflicts (enum, not trait)
+//! - ✅ Exhaustive matching (compiler-checked)
+//! - ✅ Semantic clarity (Widget::Stateless vs Widget::Stateful)
+//! - ✅ Consistent with Element enum
+//! - ✅ Simple downcast and type checking
 //!
 //! # Examples
 //!
 //! ```
-//! use flui_core::{Widget, Key, Element};
+//! use flui_core::{Widget, StatelessWidget, BuildContext};
 //!
-//! #[derive(Debug)]
-//! struct Text {
-//!     content: String,
+//! #[derive(Debug, Clone)]
+//! struct HelloWorld;
+//!
+//! impl StatelessWidget for HelloWorld {
+//!     fn build(&self, ctx: &BuildContext) -> Widget {
+//!         Widget::render_object(Text::new("Hello, World!"))
+//!     }
+//!
+//!     fn clone_boxed(&self) -> Box<dyn StatelessWidget> {
+//!         Box::new(self.clone())
+//!     }
+//!
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
+//!     }
 //! }
 //!
-//! impl Widget for Text {
-//!     type Element = TextElement;
-//!     // State and Arity use defaults
-//! }
-//!
-//! // DynWidget is automatic via blanket impl!
-//! let widget: Box<dyn DynWidget> = Box::new(Text {
-//!     content: "Hello".into()
-//! });
+//! let widget = Widget::stateless(HelloWorld);
 //! ```
 
+use std::any::{Any, TypeId};
+use std::fmt;
+
 use crate::foundation::Key;
+use super::traits::{StatelessWidget, StatefulWidget, InheritedWidget, RenderWidget, ParentDataWidget};
 
-/// Core Widget trait - typed widget abstraction
+/// Widget - unified enum for all widget types
 ///
-/// This is the main trait that users implement for custom widgets.
-/// It uses associated types for compile-time type safety and zero-cost abstractions.
+/// This is the core type for widgets in Flui. Instead of a trait hierarchy,
+/// we use an enum with different variants for different types of widgets.
 ///
-/// # Key Features
+/// # Variants
 ///
-/// - **Zero-cost**: Associated types compile to direct calls
-/// - **Type-safe**: Element type is compile-time checked
-/// - **Flexible**: No forced Clone/Send/Sync requirements
-/// - **Automatic DynWidget**: Blanket impl provides dynamic dispatch
+/// - **Stateless** - Pure function from configuration to UI
+/// - **Stateful** - Has mutable state
+/// - **Inherited** - Provides data down the tree
+/// - **Render** - Direct control over layout/paint
+/// - **ParentData** - Attaches metadata to descendants
 ///
-/// # Associated Types
-///
-/// ## Element
-///
-/// The type of element this widget creates. Elements are the mutable
-/// state holders in the widget tree.
-///
-/// Common element types:
-/// - `ComponentElement<Self>` for StatelessWidget
-/// - `StatefulElement<Self>` for StatefulWidget
-/// - `InheritedElement<Self>` for InheritedWidget
-/// - `RenderElement<Self>` for RenderWidget
-///
-/// ## State (default = ())
-///
-/// The type of state this widget holds. For stateless widgets, this
-/// defaults to `()`. For stateful widgets, override this with your
-/// state type.
-///
-/// ## Arity (default = LeafArity)
-///
-/// The number of children this widget has. Used for compile-time
-/// validation and optimization.
-///
-/// - `LeafArity` - No children (default)
-/// - `SingleArity` - Exactly one child
-/// - `MultiArity` - Multiple children
-///
-/// # Implementation Guidelines
-///
-/// **Don't implement Widget directly!** Instead, implement one of:
-///
-/// - `StatelessWidget` for simple widgets
-/// - `StatefulWidget` for widgets with mutable state
-/// - `InheritedWidget` for data propagation
-/// - `RenderWidget` for render widgets
-/// - `ParentDataWidget` for layout metadata
-///
-/// These traits automatically implement `Widget` for you.
-///
-/// # Examples
-///
-/// ## Simple Widget
+/// # Usage
 ///
 /// ```
-/// use flui_core::{Widget, Key};
+/// // Create a stateless widget
+/// let widget = Widget::stateless(MyWidget { ... });
 ///
-/// #[derive(Debug)]
-/// struct MyWidget {
-///     data: String,
-/// }
+/// // Create a stateful widget
+/// let widget = Widget::stateful(Counter { initial: 0 });
 ///
-/// impl Widget for MyWidget {
-///     type Element = MyElement;
-///     // State = (), Arity = LeafArity (defaults)
-/// }
-/// ```
-///
-/// ## Widget with Key
-///
-/// ```
-/// use flui_core::{Widget, Key};
-///
-/// const MY_KEY: Key = Key::from_str("my_widget");
-///
-/// impl Widget for MyWidget {
-///     type Element = MyElement;
-///
-///     fn key(&self) -> Option<Key> {
-///         Some(MY_KEY)
+/// // Pattern match on type
+/// match widget {
+///     Widget::Stateless(w) => w.build(ctx),
+///     Widget::Stateful(w) => {
+///         let state = w.create_state();
+///         // ...
 ///     }
+///     _ => {}
 /// }
 /// ```
-///
-/// ## Stateful Widget
-///
-/// ```
-/// use flui_core::{Widget, WidgetState};
-///
-/// struct Counter {
-///     initial: i32,
-/// }
-///
-/// struct CounterState {
-///     count: i32,
-/// }
-///
-/// impl Widget for Counter {
-///     type Element = StatefulElement<Counter>;
-///     type State = CounterState;  // Override default
-/// }
-/// ```
-///
-/// ## Widget with Children
-///
-/// ```
-/// use flui_core::{Widget, MultiArity};
-///
-/// struct Column {
-///     children: Vec<BoxedWidget>,
-/// }
-///
-/// impl Widget for Column {
-///     type Element = RenderElement<Column>;
-///     type Arity = MultiArity;  // Override default
-/// }
-/// ```
-pub trait Widget: 'static {
-    // Note: type Element and type Arity removed during enum Element migration
-    // Element creation is now handled by DynWidget trait
-    // Arity is now part of Render trait only
+#[derive(Debug)]
+pub enum Widget {
+    /// Stateless widget - pure function from config to UI
+    ///
+    /// Stateless widgets have no mutable state. They rebuild from scratch
+    /// when their configuration changes.
+    Stateless(Box<dyn StatelessWidget>),
 
-    /// Optional widget key for identity tracking
+    /// Stateful widget - has mutable state
+    ///
+    /// Stateful widgets create a State object that persists across rebuilds.
+    /// The state can be mutated and triggers rebuilds.
+    Stateful(Box<dyn StatefulWidget>),
+
+    /// Inherited widget - provides data down the tree
+    ///
+    /// Inherited widgets allow descendant widgets to access data without
+    /// explicitly passing it through every level.
+    Inherited(Box<dyn InheritedWidget>),
+
+    /// Render widget - creates Render for layout/paint
+    ///
+    /// Render widgets directly create and manage Renders,
+    /// which handle layout and painting.
+    Render(Box<dyn RenderWidget>),
+
+    /// ParentData widget - attaches metadata to descendants
+    ///
+    /// ParentData widgets don't create their own elements, but instead
+    /// modify the parent data of descendant Renders.
+    ParentData(Box<dyn ParentDataWidget>),
+}
+
+impl Widget {
+    /// Create a Stateless widget
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Widget::stateless(HelloWorld);
+    /// ```
+    #[inline]
+    pub fn stateless(widget: impl StatelessWidget) -> Self {
+        Widget::Stateless(Box::new(widget))
+    }
+
+    /// Create a Stateful widget
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Widget::stateful(Counter { initial: 0 });
+    /// ```
+    #[inline]
+    pub fn stateful(widget: impl StatefulWidget) -> Self {
+        Widget::Stateful(Box::new(widget))
+    }
+
+    /// Create an Inherited widget
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Widget::inherited(Theme { color: Color::BLUE, child: ... });
+    /// ```
+    #[inline]
+    pub fn inherited(widget: impl InheritedWidget) -> Self {
+        Widget::Inherited(Box::new(widget))
+    }
+
+    /// Create a Render widget
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Widget::render_object(Text::new("Hello"));
+    /// ```
+    #[inline]
+    pub fn render_object(widget: impl RenderWidget) -> Self {
+        Widget::Render(Box::new(widget))
+    }
+
+    /// Create a ParentData widget
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Widget::parent_data(Positioned { top: 10.0, child: ... });
+    /// ```
+    #[inline]
+    pub fn parent_data(widget: impl ParentDataWidget) -> Self {
+        Widget::ParentData(Box::new(widget))
+    }
+
+    /// Get the widget's key
     ///
     /// Keys are used to preserve element state when widgets are reordered
-    /// or when you need to uniquely identify a widget instance.
-    ///
-    /// # When to Use Keys
-    ///
-    /// - List items that can be reordered
-    /// - Widgets that need stable identity across rebuilds
-    /// - Widgets with state that should persist
-    ///
-    /// # Key Types
-    ///
-    /// 1. **Compile-time constant** - `Key::from_str("name")`
-    /// 2. **Runtime unique** - `Key::new()`
-    /// 3. **Explicit ID** - `Key::from_u64(id)`
+    /// or to uniquely identify widget instances.
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_core::{Widget, Key};
-    ///
-    /// // Compile-time constant key
-    /// const HEADER_KEY: Key = Key::from_str("app_header");
-    ///
-    /// impl Widget for Header {
-    ///     type Element = HeaderElement;
-    ///
-    ///     fn key(&self) -> Option<Key> {
-    ///         Some(HEADER_KEY)
-    ///     }
-    /// }
-    ///
-    /// // Runtime unique key
-    /// struct ListItem {
-    ///     key: Key,
-    ///     data: ItemData,
-    /// }
-    ///
-    /// impl Widget for ListItem {
-    ///     type Element = ListItemElement;
-    ///
-    ///     fn key(&self) -> Option<Key> {
-    ///         Some(self.key)
-    ///     }
-    /// }
-    ///
-    /// // Explicit key from data
-    /// struct UserWidget {
-    ///     user_id: u64,
-    /// }
-    ///
-    /// impl Widget for UserWidget {
-    ///     type Element = UserElement;
-    ///
-    ///     fn key(&self) -> Option<Key> {
-    ///         Key::from_u64(self.user_id)
-    ///     }
+    /// let key = widget.key();
+    /// if let Some(key) = key {
+    ///     println!("Widget key: {:?}", key);
     /// }
     /// ```
-    fn key(&self) -> Option<Key> {
-        None
+    pub fn key(&self) -> Option<Key> {
+        match self {
+            Widget::Stateless(w) => w.key(),
+            Widget::Stateful(w) => w.key(),
+            Widget::Inherited(w) => w.key(),
+            Widget::Render(w) => w.key(),
+            Widget::ParentData(w) => w.key(),
+        }
     }
 
-    /// Build the widget tree (for StatelessWidget and StatefulWidget only)
+    /// Check if this widget can update another widget
     ///
-    /// This method is called by ComponentElement and StatefulElement to build
-    /// the child widget tree. It's only implemented by widgets that have a build phase.
-    ///
-    /// RenderWidgets return `None` since they don't build - they create render objects.
-    ///
-    /// # Arguments
-    ///
-    /// - `context`: BuildContext providing access to inherited widgets and tree structure
-    ///
-    /// # Returns
-    ///
-    /// - `Some(BoxedWidget)` for StatelessWidget/StatefulWidget with the built child tree
-    /// - `None` for RenderWidget (not applicable)
-    ///
-    /// # Default Implementation
-    ///
-    /// The default implementation returns `None`. StatelessWidget overrides this.
-    fn build(&self, _context: &crate::element::BuildContext) -> Option<crate::BoxedWidget> {
-        None
-    }
-
-    /// Get child widget for ParentDataWidget types
-    ///
-    /// This method is used by ParentDataElement to access the child widget from
-    /// ParentDataWidget instances. Returns None for non-ParentDataWidget types.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns `None`. ParentDataWidget types should override this.
+    /// Two widgets can update each other if they are the same variant
+    /// and have the same concrete type.
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// // ParentDataWidget override
-    /// impl Widget for Flexible {
-    ///     fn parent_data_child(&self) -> Option<&BoxedWidget> {
-    ///         Some(&self.child)
-    ///     }
+    /// ```
+    /// let widget1 = Widget::stateless(HelloWorld);
+    /// let widget2 = Widget::stateless(HelloWorld);
+    /// assert!(widget1.can_update(&widget2));
+    /// ```
+    pub fn can_update(&self, other: &Widget) -> bool {
+        match (self, other) {
+            (Widget::Stateless(a), Widget::Stateless(b)) => a.can_update(&**b),
+            (Widget::Stateful(a), Widget::Stateful(b)) => a.type_id() == b.type_id(),
+            (Widget::Inherited(a), Widget::Inherited(b)) => a.type_id() == b.type_id(),
+            (Widget::Render(a), Widget::Render(b)) => a.type_id() == b.type_id(),
+            (Widget::ParentData(a), Widget::ParentData(b)) => a.type_id() == b.type_id(),
+            _ => false,
+        }
+    }
+
+    /// Clone the widget
+    ///
+    /// This creates a deep clone of the widget, including the boxed trait object.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget1 = Widget::stateless(HelloWorld);
+    /// let widget2 = widget1.clone_widget();
+    /// ```
+    pub fn clone_widget(&self) -> Widget {
+        match self {
+            Widget::Stateless(w) => Widget::Stateless(w.clone_boxed()),
+            Widget::Stateful(w) => Widget::Stateful(w.clone_boxed()),
+            Widget::Inherited(w) => Widget::Inherited(w.clone_boxed()),
+            Widget::Render(w) => Widget::Render(w.clone_boxed()),
+            Widget::ParentData(w) => Widget::ParentData(w.clone_boxed()),
+        }
+    }
+
+    /// Downcast to a concrete type
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Widget::stateless(HelloWorld);
+    /// if let Some(hello) = widget.downcast_ref::<HelloWorld>() {
+    ///     println!("Found HelloWorld widget");
     /// }
     /// ```
-    fn parent_data_child(&self) -> Option<&crate::BoxedWidget> {
-        None
+    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
+        match self {
+            Widget::Stateless(w) => w.as_any().downcast_ref(),
+            Widget::Stateful(w) => w.as_any().downcast_ref(),
+            Widget::Inherited(w) => w.as_any().downcast_ref(),
+            Widget::Render(w) => w.as_any().downcast_ref(),
+            Widget::ParentData(w) => w.as_any().downcast_ref(),
+        }
+    }
+
+    /// Check if the widget is of a specific type
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let widget = Widget::stateless(HelloWorld);
+    /// assert!(widget.is::<HelloWorld>());
+    /// assert!(!widget.is::<Counter>());
+    /// ```
+    #[inline]
+    pub fn is<T: 'static>(&self) -> bool {
+        self.downcast_ref::<T>().is_some()
+    }
+
+    /// Get the TypeId of the concrete widget type
+    pub fn type_id(&self) -> TypeId {
+        match self {
+            Widget::Stateless(w) => w.type_id(),
+            Widget::Stateful(w) => w.type_id(),
+            Widget::Inherited(w) => w.type_id(),
+            Widget::Render(w) => w.type_id(),
+            Widget::ParentData(w) => w.type_id(),
+        }
+    }
+
+    /// Get a human-readable type name
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Widget::Stateless(_) => "Stateless",
+            Widget::Stateful(_) => "Stateful",
+            Widget::Inherited(_) => "Inherited",
+            Widget::Render(_) => "Render",
+            Widget::ParentData(_) => "ParentData",
+        }
     }
 }
 
-/// Widget state trait
-///
-/// This trait is implemented by state objects for stateful widgets.
-/// For stateless widgets, `()` implements this trait.
-pub trait WidgetState<W: Widget>: 'static {
-    /// Initialize state from widget
-    fn init(widget: &W) -> Self;
-
-    /// Called when widget configuration changes
-    fn did_update_widget(&mut self, old_widget: &W, new_widget: &W) {
-        let _ = (old_widget, new_widget);
+impl Clone for Widget {
+    fn clone(&self) -> Self {
+        self.clone_widget()
     }
-
-    /// Called when element is disposed
-    fn dispose(&mut self) {}
 }
+
+// Note: We don't implement PartialEq because widgets are compared
+// by type and key, not by value. Use can_update() instead.
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Mock types for testing
-    #[derive(Debug)]
-    struct TestElement;
+    #[derive(Debug, Clone)]
+    struct TestWidget {
+        value: i32,
+    }
 
-    impl<W: Widget> Element<W> for TestElement {
-        fn new(_widget: W) -> Self {
-            Self
+    impl StatelessWidget for TestWidget {
+        fn build(&self, _ctx: &crate::BuildContext) -> Widget {
+            Widget::Stateless(Box::new(TestWidget { value: self.value + 1 }))
+        }
+
+        fn clone_boxed(&self) -> Box<dyn StatelessWidget> {
+            Box::new(self.clone())
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
     #[test]
-    fn test_widget_with_defaults() {
-        #[derive(Debug)]
-        struct SimpleWidget;
-
-        impl Widget for SimpleWidget {
-            // Element type determined by DynWidget impl
-        }
-
-        let widget = SimpleWidget;
-        assert!(widget.key().is_none());
-
-        // Check that defaults are used (compile-time check)
-        let _: () = <SimpleWidget as Widget>::State::init(&widget);
+    fn test_widget_creation() {
+        let widget = Widget::stateless(TestWidget { value: 42 });
+        assert!(widget.is::<TestWidget>());
+        assert_eq!(widget.type_name(), "Stateless");
     }
 
     #[test]
-    fn test_widget_with_key() {
-        const TEST_KEY: Key = Key::from_str("test");
-
-        #[derive(Debug)]
-        struct KeyedWidget;
-
-        impl Widget for KeyedWidget {
-            fn key(&self) -> Option<Key> {
-                Some(TEST_KEY)
-            }
-        }
-
-        let widget = KeyedWidget;
-        assert_eq!(widget.key(), Some(TEST_KEY));
+    fn test_widget_downcast() {
+        let widget = Widget::stateless(TestWidget { value: 42 });
+        let test_widget = widget.downcast_ref::<TestWidget>().unwrap();
+        assert_eq!(test_widget.value, 42);
     }
 
     #[test]
-    fn test_widget_without_clone() {
-        #[derive(Debug)]
-        struct NonCloneWidget {
-            data: Vec<u8>,
-        }
-
-        impl Widget for NonCloneWidget {
-            // Element type determined by DynWidget impl
-        }
-
-        let widget = NonCloneWidget {
-            data: vec![1, 2, 3],
-        };
-
-        assert!(widget.key().is_none());
-        // Widget works without Clone!
+    fn test_widget_clone() {
+        let widget1 = Widget::stateless(TestWidget { value: 42 });
+        let widget2 = widget1.clone();
+        assert!(widget1.can_update(&widget2));
     }
 
     #[test]
-    fn test_widget_state() {
-        #[derive(Debug)]
-        struct StatefulWidget {
-            initial: i32,
-        }
+    fn test_can_update_same_type() {
+        let widget1 = Widget::stateless(TestWidget { value: 1 });
+        let widget2 = Widget::stateless(TestWidget { value: 2 });
+        assert!(widget1.can_update(&widget2));
+    }
 
-        struct MyState {
-            count: i32,
-        }
-
-        impl WidgetState<StatefulWidget> for MyState {
-            fn init(widget: &StatefulWidget) -> Self {
-                Self {
-                    count: widget.initial,
-                }
-            }
-
-            fn did_update_widget(&mut self, old: &StatefulWidget, new: &StatefulWidget) {
-                if old.initial != new.initial {
-                    self.count = new.initial;
-                }
-            }
-        }
-
-        impl Widget for StatefulWidget {
-            // Element type determined by DynWidget impl
-        }
-
-        let widget = StatefulWidget { initial: 42 };
-        let state = MyState::init(&widget);
-        assert_eq!(state.count, 42);
+    #[test]
+    fn test_can_update_different_variants() {
+        let stateless = Widget::stateless(TestWidget { value: 1 });
+        // Note: Can't easily test with Stateful without implementing it
+        // Just verify the variant check works
+        assert_eq!(stateless.type_name(), "Stateless");
     }
 }

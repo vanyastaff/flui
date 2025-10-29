@@ -92,7 +92,9 @@
       "WebFetch(domain:raphlinus.github.io)",
       "WebFetch(domain:github.com)",
       "Bash(rustc:*)",
-      "Read(//c/tmp/**)"
+      "Read(//c/tmp/**)",
+      "Bash(mv:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": []

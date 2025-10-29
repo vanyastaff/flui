@@ -303,32 +303,19 @@ pub use widget::{
     // Type aliases
     BoxedWidget,
     DynWidget,
-
-    InheritedModel,
-    InheritedWidget,
-    // Helper types
-    KeyedStatelessWidget,
-    MultiChildRenderWidget,
-    NotificationListener,
-
-    ParentData,
-
-    ParentDataWidget,
-    RenderWidget,
     SharedWidget,
 
-    SingleChildRenderWidget,
+    // Widget traits
+    InheritedWidget,
+    NotificationListener,
+    ParentDataWidget,
+    RenderWidget,
     State,
     StatefulWidget,
-    // Widget types
     StatelessWidget,
-    // Core traits
+
+    // Core enum
     Widget,
-    WidgetState,
-    boxed,
-    shared,
-    // Helper functions
-    with_key,
 };
 
 // ============================================================================
@@ -404,7 +391,7 @@ pub mod prelude {
 
     pub use crate::widget::{
         BoxedWidget, DynWidget, InheritedWidget, ParentDataWidget, RenderWidget,
-        SharedWidget, State, StatefulWidget, StatelessWidget, Widget, boxed, shared, with_key,
+        SharedWidget, State, StatefulWidget, StatelessWidget, Widget,
     };
 
     pub use crate::element::{BuildContext, Element};

@@ -1,7 +1,7 @@
 //! Widget system - immutable configuration for UI elements
 //!
 //! This module provides the widget layer of FLUI's three-tree architecture:
-//! - **Widget** → Immutable configuration (typed, zero-cost)
+//! - **Widget** → Immutable configuration (enum-based)
 //! - **Element** → Mutable state holder (persists across rebuilds)
 //! - **Render** → Layout and painting (optional, for render widgets)
 //!
@@ -13,380 +13,94 @@
 //! 4. **RenderWidget** - Direct control over layout/paint
 //! 5. **ParentDataWidget** - Attaches metadata to descendants
 //!
-//! # Architecture
+//! # Architecture (Enum-Based)
 //!
 //! ```text
-//! Widget (typed)  ←→  DynWidget (object-safe)
-//!   ↑                       ↑
-//!   └───── Blanket impl ────┘
-//!          (automatic)
+//! Widget (enum)
+//!   ├─ Stateless(Box<dyn StatelessWidget>)
+//!   ├─ Stateful(Box<dyn StatefulWidget>)
+//!   ├─ Inherited(Box<dyn InheritedWidget>)
+//!   ├─ Render(Box<dyn RenderWidget>)
+//!   └─ ParentData(Box<dyn ParentDataWidget>)
 //!
-//! StatelessWidget  ─┐
-//! StatefulWidget   ─┤
-//! InheritedWidget  ─┼→ impl Widget → impl DynWidget (automatic!)
-//! RenderWidget┤
-//! ParentDataWidget ─┘
-//! ```
-//!
-//! # Design Pattern: Two-Trait Approach
-//!
-//! ## Widget (typed, not object-safe)
-//!
-//! - Has associated types (`Element`, `State`, `Arity`)
-//! - Zero-cost abstractions at compile time
-//! - Used when concrete type is known
-//!
-//! ## DynWidget (object-safe)
-//!
-//! - No associated types
-//! - Enables `Box<dyn DynWidget>` for heterogeneous storage
-//! - Used for widget trees with different types
-//!
-//! ## Blanket Implementation
-//!
-//! ```rust,ignore
-//! impl<W> DynWidget for W
-//! where
-//!     W: Widget + fmt::Debug + 'static,
-//!     W::Element: DynElement,
-//! {
-//!     // Automatic bridge between Widget and DynWidget
-//! }
+//! Benefits:
+//! ✅ No trait coherence conflicts
+//! ✅ Exhaustive pattern matching
+//! ✅ Clear semantic variants
+//! ✅ Consistent with Element enum
 //! ```
 //!
 //! # Examples
 //!
-//! ## Simple Widget
+//! ## StatelessWidget
 //!
-//! ```
-//! use flui_core::{Widget, StatelessWidget, BoxedWidget};
+//! ```rust,ignore
+//! use flui_core::{Widget, StatelessWidget, BuildContext};
 //!
-//! #[derive(Debug)]
+//! #[derive(Debug, Clone)]
 //! struct Greeting {
 //!     name: String,
 //! }
 //!
 //! impl StatelessWidget for Greeting {
-//!     fn build(&self) -> BoxedWidget {
-//!         Box::new(Text::new(format!("Hello, {}!", self.name)))
+//!     fn build(&self, ctx: &BuildContext) -> Widget {
+//!         Widget::render_object(Text::new(format!("Hello, {}!", self.name)))
+//!     }
+//!
+//!     fn clone_boxed(&self) -> Box<dyn StatelessWidget> {
+//!         Box::new(self.clone())
+//!     }
+//!
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
 //!     }
 //! }
 //!
-//! // Widget and DynWidget are automatic!
-//! let widget: BoxedWidget = Box::new(Greeting {
+//! // Create widget
+//! let widget = Widget::stateless(Greeting {
 //!     name: "World".into()
 //! });
 //! ```
 //!
-//! ## Widget with Key
+//! ## Pattern Matching
 //!
-//! ```
-//! use flui_core::{Widget, Key};
-//!
-//! const HEADER_KEY: Key = Key::from_str("app_header");
-//!
-//! #[derive(Debug)]
-//! struct Header;
-//!
-//! impl Widget for Header {
-//!     type Element = HeaderElement;
-//!
-//!     fn key(&self) -> Option<Key> {
-//!         Some(HEADER_KEY)
+//! ```rust,ignore
+//! match widget {
+//!     Widget::Stateless(w) => w.build(ctx),
+//!     Widget::Stateful(w) => {
+//!         let state = w.create_state();
+//!         state.build(ctx)
 //!     }
+//!     Widget::Render(w) => {
+//!         w.create_render_object(ctx)
+//!     }
+//!     _ => {}
 //! }
 //! ```
 
 // Submodules
 pub mod dyn_widget;
-// Temporarily disabled due to broken widget trait definitions
-pub mod inherited;
 pub mod notification_listener;
-pub mod parent_data_widget;
-pub mod render_object_widget;
-pub mod stateful;
-pub mod stateless;
 pub mod traits;
 pub mod widget;
-pub mod widget_enum;
 
-
-
-
-// Re-exports
+// Re-exports - New enum-based system
 pub use dyn_widget::{BoxedWidget, DynWidget, SharedWidget};
-pub use inherited::{InheritedModel, InheritedWidget};
 pub use notification_listener::NotificationListener;
-pub use parent_data_widget::{ParentData, ParentDataWidget};
-pub use render_object_widget::{
-    MultiChildRenderWidget, RenderWidget, SingleChildRenderWidget,
+pub use traits::{
+    InheritedWidget, ParentDataWidget, RenderWidget,
+    State, StatefulWidget, StatelessWidget,
 };
-pub use stateful::{State, StatefulWidget};
-pub use stateless::{KeyedStatelessWidget, StatelessWidget, with_key};
-pub use widget::{Widget, WidgetState};
+pub use widget::Widget;
 
-use crate::KeyRef;
-use std::fmt;
+// Widget enum is the main type - no blanket impls needed!
+// The enum already encapsulates all widget types.
 
-// ========== Blanket Implementation: Widget → DynWidget ==========
 
-/// Blanket implementation: All Widget types automatically become DynWidget
-///
-/// This is the magic that connects the typed `Widget` trait with the
-/// object-safe `DynWidget` trait. You implement `Widget`, and you get
-/// `DynWidget` for free!
-///
-/// # Requirements
-///
-/// For a type to automatically get `DynWidget`, it must:
-/// 1. Implement `Widget` (your custom widget logic)
-/// 2. Implement `Debug` (for diagnostics)
-/// 3. Be `'static` (no borrowed data)
-/// 4. Have an `Element` that implements `DynElement`
-///
-/// # Zero-Cost Abstraction
-///
-/// This blanket impl has no runtime cost. When you use a widget
-/// with its concrete type, the compiler generates direct calls.
-/// Dynamic dispatch only happens when you explicitly use `dyn DynWidget`.
-///
-/// # Examples
-///
-/// ```
-/// use flui_core::{Widget, DynWidget, BoxedWidget};
-///
-/// #[derive(Debug)]
-/// struct MyWidget {
-///     data: String,
-/// }
-///
-/// impl Widget for MyWidget {
-///     type Element = MyElement;
-/// }
-///
-/// // DynWidget is automatic!
-/// let widget: BoxedWidget = Box::new(MyWidget {
-///     data: "test".into()
-/// });
-///
-/// // Type-safe operations
-/// assert!(widget.is::<MyWidget>());
-///
-/// // Downcast when needed
-/// if let Some(my_widget) = widget.downcast_ref::<MyWidget>() {
-///     println!("Data: {}", my_widget.data);
-/// }
-/// ```
-impl<W> DynWidget for W
-where
-    W: Widget + fmt::Debug + Send + Sync + Clone + 'static,
-{
-    #[inline]
-    fn key(&self) -> Option<KeyRef> {
-        // Convert Widget::key (Key) to DynWidget::key (KeyRef)
-        Widget::key(self).map(KeyRef::from)
-    }
 
-    #[inline]
-    fn parent_data_child(&self) -> Option<&BoxedWidget> {
-        // Forward to Widget::parent_data_child()
-        Widget::parent_data_child(self)
-    }
 
-    #[inline]
-    fn clone_boxed(&self) -> BoxedWidget {
-        // Clone the concrete type and box it
-        BoxedWidget::new(self.clone())
-    }
 
-    // All other methods (type_id, can_update, type_name, as_any)
-    // use the default implementations from DynWidget trait
-}
 
-// ========== Helper Functions ==========
-
-/// Create a boxed widget from any Widget type
-///
-/// This is a convenience function for boxing widgets.
-///
-/// # Examples
-///
-/// ```
-/// use flui_core::{boxed, Text};
-///
-/// let widget = boxed(Text::new("Hello"));
-/// // Same as: Box::new(Text::new("Hello"))
-/// ```
-#[inline]
-pub fn boxed<W: DynWidget + 'static>(widget: W) -> BoxedWidget {
-    BoxedWidget::new(widget)
-}
-
-/// Create a shared widget from any Widget type
-///
-/// This is a convenience function for Arc-wrapping widgets.
-///
-/// # Examples
-///
-/// ```
-/// use flui_core::{shared, Text};
-///
-/// let widget = shared(Text::new("Shared"));
-/// let clone = widget.clone(); // Cheap Arc clone
-/// ```
-#[inline]
-pub fn shared<W: DynWidget + 'static>(widget: W) -> SharedWidget {
-    std::sync::Arc::new(widget)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Element, Key};
-
-    // Mock element for testing
-    #[derive(Debug)]
-    struct MockElement;
-
-    impl<W: Widget> Element<W> for MockElement {
-        fn new(_widget: W) -> Self {
-            Self
-        }
-    }
-
-    impl DynElement for MockElement {
-        // Mock implementation
-    }
-
-    #[test]
-    fn test_blanket_impl() {
-        #[derive(Debug)]
-        struct TestWidget {
-            value: i32,
-        }
-
-        impl Widget for TestWidget {
-            // Element type determined by framework
-        }
-
-        let widget = TestWidget { value: 42 };
-
-        // Widget automatically implements DynWidget
-        let _: &dyn DynWidget = &widget;
-
-        // Can box as DynWidget
-        let boxed: BoxedWidget = Box::new(widget);
-        assert!(boxed.is::<TestWidget>());
-    }
-
-    #[test]
-    fn test_key_conversion() {
-        #[derive(Debug)]
-        struct KeyedWidget {
-            key: Key,
-        }
-
-        impl Widget for KeyedWidget {
-            // Element type determined by framework
-
-            fn key(&self) -> Option<Key> {
-                Some(self.key)
-            }
-        }
-
-        let key = Key::new();
-        let widget = KeyedWidget { key };
-
-        // Widget::key returns Key
-        assert_eq!(Widget::key(&widget), Some(key));
-
-        // DynWidget::key returns KeyRef (automatic conversion)
-        assert_eq!(DynWidget::key(&widget), Some(KeyRef::from(key)));
-    }
-
-    #[test]
-    fn test_boxed_helper() {
-        #[derive(Debug)]
-        struct SimpleWidget;
-
-        impl Widget for SimpleWidget {
-            // Element type determined by framework
-        }
-
-        let widget = boxed(SimpleWidget);
-        assert!(widget.is::<SimpleWidget>());
-    }
-
-    #[test]
-    fn test_shared_helper() {
-        #[derive(Debug)]
-        struct SharedTestWidget {
-            data: String,
-        }
-
-        impl Widget for SharedTestWidget {
-            // Element type determined by framework
-        }
-
-        let widget = shared(SharedTestWidget {
-            data: "test".into(),
-        });
-
-        let clone1 = widget.clone();
-        let clone2 = widget.clone();
-
-        // All share the same Arc
-        assert!(std::sync::Arc::ptr_eq(&widget, &clone1));
-        assert!(std::sync::Arc::ptr_eq(&widget, &clone2));
-    }
-
-    #[test]
-    fn test_widget_without_clone() {
-        // Important: Widget doesn't require Clone!
-        #[derive(Debug)]
-        struct NonCloneWidget {
-            data: Vec<u8>,
-        }
-
-        impl Widget for NonCloneWidget {
-            // Element type determined by framework
-        }
-
-        let widget = NonCloneWidget {
-            data: vec![1, 2, 3],
-        };
-
-        // Can still box it
-        let boxed: BoxedWidget = Box::new(widget);
-        assert!(boxed.is::<NonCloneWidget>());
-    }
-
-    #[test]
-    fn test_heterogeneous_storage() {
-        #[derive(Debug)]
-        struct WidgetA;
-
-        #[derive(Debug)]
-        struct WidgetB;
-
-        impl Widget for WidgetA {
-            // Element type determined by framework
-        }
-
-        impl Widget for WidgetB {
-            // Element type determined by framework
-        }
-
-        // Different widget types in same vec!
-        let widgets: Vec<BoxedWidget> =
-            vec![Box::new(WidgetA), Box::new(WidgetB), Box::new(WidgetA)];
-
-        assert_eq!(widgets.len(), 3);
-        assert!(widgets[0].is::<WidgetA>());
-        assert!(widgets[1].is::<WidgetB>());
-        assert!(widgets[2].is::<WidgetA>());
-    }
-}
 
 
 

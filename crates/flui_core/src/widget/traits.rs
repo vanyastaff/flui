@@ -10,7 +10,7 @@ use crate::foundation::Key;
 use crate::BuildContext;
 use crate::render::DynRender;
 
-use super::widget_enum::Widget;
+use super::widget::Widget;
 
 // ============================================================================
 // StatelessWidget Trait
