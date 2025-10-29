@@ -116,7 +116,7 @@ impl GradientPainter {
         let start_color = Self::color_to_rgba(&gradient.colors[0]);
         let end_color = Self::color_to_rgba(gradient.colors.last().unwrap());
 
-        painter.radial_gradient(center, inner_radius, outer_radius, start_color, end_color);
+        painter.radial_gradient_simple(center, inner_radius, outer_radius, start_color, end_color);
     }
 
     /// Paint a sweep gradient (conical gradient)

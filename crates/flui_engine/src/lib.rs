@@ -71,6 +71,7 @@ pub mod painter;
 pub mod scene;
 pub mod scene_builder;
 pub mod surface;
+pub mod text;
 
 
 
@@ -87,6 +88,11 @@ pub use layer::{
     ContainerLayer, OpacityLayer, TransformLayer, Transform,
     ClipRectLayer, ClipRRectLayer, ClipOvalLayer, ClipPathLayer,
     PictureLayer, DrawCommand,
+    GradientLayer,
+    PathLayer, StrokeOptions, PathPaintMode,
+    ShadowLayer, Shadow, ShadowQuality,
+    BlurLayer, BlurQuality, BlurMode,
+    FilterLayer, ColorFilter, ColorMatrix,
 };
 pub use painter::{Painter, Paint, RRect};
 pub use paint_context::PaintContext;

@@ -1,8 +1,8 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use flui_types::{Size, Rect, styling::BoxDecoration};
+use flui_types::{Size, Rect, Point, styling::{BoxDecoration, BorderPosition}};
 use flui_core::render::{RenderObject, SingleArity, LayoutCx, PaintCx, SingleChild, SingleChildPaint};
-use flui_engine::{BoxedLayer, ContainerLayer, PictureLayer, Paint, RRect};
+use flui_engine::{BoxedLayer, layer::pool, PictureLayer, Paint, RRect};
 
 /// Position of the decoration relative to the child
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,51 +99,32 @@ impl RenderDecoratedBox {
         self.data.position = position;
     }
 
-    /// Helper function to paint decoration into a PictureLayer
+    /// Paint decoration layers to container
     ///
-    /// This is a simplified version of BoxDecorationPainter that works with PictureLayer
-    /// instead of the Painter trait. It handles:
-    /// - Background color or gradient
-    /// - Borders with rounded corners
-    /// (Note: Box shadows are not yet implemented in this version)
-    fn paint_decoration_to_picture(&self, picture: &mut PictureLayer, rect: Rect) {
-        let decoration = &self.data.decoration;
-        let border_radius = decoration.border_radius.map(|r| r.top_left.x);
+    /// This creates appropriate layers for the decoration:
+    /// - GradientLayer for gradients
+    /// - PictureLayer for solid colors and borders
+    fn paint_decoration(&self, container: &mut flui_engine::ContainerLayer, rect: Rect) {
+        use flui_engine::GradientLayer;
 
-        // TODO: Paint box shadows when shadow support is added to PictureLayer
+        let decoration = &self.data.decoration;
+
+        // TODO: Paint box shadows when shadow support is added
         // For now, we skip shadows. A full implementation would:
         // 1. Extract shadow parameters from decoration.box_shadow
-        // 2. Create shadow draw commands
-        // 3. Add them to the picture before the background
+        // 2. Create ShadowLayer
+        // 3. Add it to the container before the background
 
-        // Paint background (color or gradient)
-        if let Some(ref _gradient) = decoration.gradient {
-            // TODO: Implement gradient support
-            // For now, we skip gradients and just paint solid color if available
-            if let Some(color) = decoration.color {
-                let paint = Paint {
-                    color: [
-                        color.red() as f32 / 255.0,
-                        color.green() as f32 / 255.0,
-                        color.blue() as f32 / 255.0,
-                        color.alpha() as f32 / 255.0,
-                    ],
-                    stroke_width: 0.0,
-                    anti_alias: true,
-                };
-
-                if let Some(radius) = border_radius {
-                    let rrect = RRect {
-                        rect,
-                        corner_radius: radius,
-                    };
-                    picture.draw_rrect(rrect, paint);
-                } else {
-                    picture.draw_rect(rect, paint);
-                }
-            }
+        // Paint background (gradient or solid color)
+        if let Some(ref gradient) = decoration.gradient {
+            // Create GradientLayer for gradient background
+            let gradient_layer = GradientLayer::new(rect, gradient.clone());
+            container.add_child(Box::new(gradient_layer));
         } else if let Some(color) = decoration.color {
-            // Solid color background
+            // Create PictureLayer for solid color background
+            let mut picture = PictureLayer::new();
+            let border_radius = decoration.border_radius.map(|r| r.top_left.x);
+
             let paint = Paint {
                 color: [
                     color.red() as f32 / 255.0,
@@ -164,13 +145,102 @@ impl RenderDecoratedBox {
             } else {
                 picture.draw_rect(rect, paint);
             }
+
+            container.add_child(Box::new(picture));
         }
 
-        // TODO: Paint border
-        // For now, we skip borders. A full implementation would:
-        // 1. Extract border parameters from decoration.border
-        // 2. Use BorderPainter or create border draw commands
-        // 3. Add them to the picture after the background
+        // Paint border (if gradient or color was present, border goes on top)
+        if let Some(ref border) = decoration.border {
+            let mut picture = PictureLayer::new();
+            let border_radius = decoration.border_radius.map(|r| r.top_left.x);
+            Self::paint_border(&mut picture, rect, border, border_radius);
+            container.add_child(Box::new(picture));
+        }
+    }
+
+    /// Paint border on picture layer
+    fn paint_border(picture: &mut PictureLayer, rect: Rect, border: &flui_types::styling::Border, border_radius: Option<f32>) {
+        
+
+        // Paint each side that exists
+        if let Some(top) = border.top {
+            if top.is_visible() {
+                Self::paint_border_side(picture, rect, &top, BorderPosition::Top, border_radius);
+            }
+        }
+
+        if let Some(right) = border.right {
+            if right.is_visible() {
+                Self::paint_border_side(picture, rect, &right, BorderPosition::Right, border_radius);
+            }
+        }
+
+        if let Some(bottom) = border.bottom {
+            if bottom.is_visible() {
+                Self::paint_border_side(picture, rect, &bottom, BorderPosition::Bottom, border_radius);
+            }
+        }
+
+        if let Some(left) = border.left {
+            if left.is_visible() {
+                Self::paint_border_side(picture, rect, &left, BorderPosition::Left, border_radius);
+            }
+        }
+    }
+
+    /// Paint a single border side
+    fn paint_border_side(
+        picture: &mut PictureLayer,
+        rect: Rect,
+        side: &flui_types::styling::BorderSide,
+        position: BorderPosition,
+        border_radius: Option<f32>,
+    ) {
+        let paint = Paint {
+            color: [
+                side.color.red() as f32 / 255.0,
+                side.color.green() as f32 / 255.0,
+                side.color.blue() as f32 / 255.0,
+                side.color.alpha() as f32 / 255.0,
+            ],
+            stroke_width: side.width,
+            anti_alias: true,
+        };
+
+        // If we have rounded corners, draw using rounded rect
+        if let Some(radius) = border_radius {
+            // For rounded borders, we need to draw the full rounded rect outline
+            // and then optionally mask individual sides (future enhancement)
+            let rrect = RRect {
+                rect,
+                corner_radius: radius,
+            };
+            picture.draw_rrect(rrect, paint);
+        } else {
+            // For straight borders, draw individual lines for each side
+            match position {
+                BorderPosition::Top => {
+                    let p1 = Point::new(rect.left(), rect.top() + side.width / 2.0);
+                    let p2 = Point::new(rect.right(), rect.top() + side.width / 2.0);
+                    picture.draw_line(p1, p2, paint);
+                }
+                BorderPosition::Right => {
+                    let p1 = Point::new(rect.right() - side.width / 2.0, rect.top());
+                    let p2 = Point::new(rect.right() - side.width / 2.0, rect.bottom());
+                    picture.draw_line(p1, p2, paint);
+                }
+                BorderPosition::Bottom => {
+                    let p1 = Point::new(rect.left(), rect.bottom() - side.width / 2.0);
+                    let p2 = Point::new(rect.right(), rect.bottom() - side.width / 2.0);
+                    picture.draw_line(p1, p2, paint);
+                }
+                BorderPosition::Left => {
+                    let p1 = Point::new(rect.left() + side.width / 2.0, rect.top());
+                    let p2 = Point::new(rect.left() + side.width / 2.0, rect.bottom());
+                    picture.draw_line(p1, p2, paint);
+                }
+            }
+        }
     }
 }
 
@@ -193,14 +263,12 @@ impl RenderObject for RenderDecoratedBox {
     }
 
     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let mut container = ContainerLayer::new();
+        let mut container = pool::acquire_container();
         let rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
 
         // Paint decoration in background position
         if self.data.position == DecorationPosition::Background {
-            let mut picture = PictureLayer::new();
-            self.paint_decoration_to_picture(&mut picture, rect);
-            container.add_child(Box::new(picture));
+            self.paint_decoration(&mut container, rect);
         }
 
         // Paint child on top
@@ -210,9 +278,7 @@ impl RenderObject for RenderDecoratedBox {
 
         // Paint decoration in foreground position
         if self.data.position == DecorationPosition::Foreground {
-            let mut picture = PictureLayer::new();
-            self.paint_decoration_to_picture(&mut picture, rect);
-            container.add_child(Box::new(picture));
+            self.paint_decoration(&mut container, rect);
         }
 
         Box::new(container)
@@ -232,6 +298,7 @@ mod tests {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            image: None,
         };
         let decorated = RenderDecoratedBox::new(DecoratedBoxData::new(decoration.clone()));
         assert_eq!(decorated.decoration(), &decoration);
@@ -246,6 +313,7 @@ mod tests {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            image: None,
         };
         let mut decorated = RenderDecoratedBox::new(DecoratedBoxData::new(decoration1));
 
@@ -256,6 +324,7 @@ mod tests {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            image: None,
         };
         decorated.set_decoration(decoration2.clone());
         assert_eq!(decorated.decoration(), &decoration2);
@@ -269,6 +338,7 @@ mod tests {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            image: None,
         };
         let mut decorated = RenderDecoratedBox::new(DecoratedBoxData::new(decoration));
 
@@ -293,6 +363,7 @@ mod tests {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            image: None,
         };
         let data = DecoratedBoxData::new(decoration.clone());
         assert_eq!(data.decoration, decoration);
@@ -307,6 +378,7 @@ mod tests {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            image: None,
         };
         let data = DecoratedBoxData::with_position(decoration.clone(), DecorationPosition::Foreground);
         assert_eq!(data.decoration, decoration);

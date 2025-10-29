@@ -74,6 +74,7 @@ pub mod blur;
 pub mod clip;
 pub mod container;
 pub mod filter;
+pub mod gradient;
 pub mod handle;
 pub mod offset;
 pub mod opacity;
@@ -83,6 +84,8 @@ pub mod picture;
 pub mod pool;
 pub mod shadow;
 pub mod transform;
+
+
 
 
 
@@ -106,6 +109,9 @@ pub use transform::{TransformLayer, Transform};
 // Clip layers
 pub use clip::{ClipRectLayer, ClipRRectLayer, ClipOvalLayer, ClipPathLayer};
 pub use picture::{PictureLayer, DrawCommand};
+
+// Gradient layer
+pub use gradient::GradientLayer;
 
 // Path layer
 pub use path::PathLayer;
@@ -134,6 +140,9 @@ pub use flui_types::styling::{PhysicalShape, MaterialType, Elevation};
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
+
+
 
 
 
