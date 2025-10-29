@@ -75,7 +75,7 @@ pub mod typography;
 // Re-exports for convenience - Most commonly used types
 pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
 pub use layout::{Alignment, Axis, EdgeInsets};
-pub use styling::Color;
+pub use styling::{Color, Color32};
 
 /// Prelude module for convenient glob imports
 ///
@@ -91,7 +91,7 @@ pub mod prelude {
     };
 
     // Styling - Essential
-    pub use crate::styling::{Color, HSLColor, HSVColor};
+    pub use crate::styling::{Color, Color32, HSLColor, HSVColor};
 
     // Constraints - Common
     pub use crate::constraints::BoxConstraints;
