@@ -10,6 +10,7 @@ pub mod decoration;
 pub mod gradient;
 pub mod hsl_hsv;
 pub mod material_colors;
+pub mod physical_model;
 pub mod radius;
 pub mod shadow;
 pub mod shape_border;
@@ -37,6 +38,7 @@ pub use gradient::{
 };
 pub use hsl_hsv::{HSLColor, HSVColor};
 pub use material_colors::MaterialColors;
+pub use physical_model::{Elevation, MaterialType, PhysicalShape};
 pub use radius::Radius;
 pub use shadow::{BoxShadow, Shadow, ShadowQuality};
 pub use shape_border::{

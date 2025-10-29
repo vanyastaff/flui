@@ -77,10 +77,12 @@ pub mod filter;
 pub mod handle;
 pub mod opacity;
 pub mod path;
+pub mod physical_model;
 pub mod picture;
 pub mod pool;
 pub mod shadow;
 pub mod transform;
+
 
 
 
@@ -120,11 +122,16 @@ pub use flui_types::painting::effects::{ColorFilter, ColorMatrix};
 pub use backdrop_filter::BackdropFilterLayer;
 pub use flui_types::painting::effects::ImageFilter;
 
+// Physical model layer (Material Design elevation)
+pub use physical_model::PhysicalModelLayer;
+pub use flui_types::styling::{PhysicalShape, MaterialType, Elevation};
+
 /// Type-erased layer (for dynamic dispatch)
 ///
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
 
 
 
