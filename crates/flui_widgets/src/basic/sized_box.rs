@@ -29,7 +29,7 @@
 //!     height: 50.0,
 //! }
 use bon::Builder;
-use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement, LeafRenderObjectWidget, LeafRenderObjectElement};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement, LeafRenderObjectWidget, LeafRenderObjectElement};
 use flui_rendering::RenderConstrainedBox;
 
 /// A box with a specified size.
@@ -87,7 +87,7 @@ pub struct SizedBox {
     ///
     /// If null, the box will be empty with the specified dimensions.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn DynWidget>>,
+    pub child: Option<BoxedWidget>,
 }
 
 impl SizedBox {
@@ -150,7 +150,7 @@ impl SizedBox {
     /// sized_box.set_child(some_widget);
     /// ```
     pub fn set_child(&mut self, child: impl Widget + 'static) {
-        self.child = Some(Box::new(child));
+        self.child = Some(BoxedWidget::new(child));
     }
 
     /// Validates SizedBox configuration.
@@ -204,7 +204,7 @@ where
     ///     .build()
     /// ```
     pub fn child<W: Widget + 'static>(self, child: W) -> SizedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
+        self.child_internal(BoxedWidget::new(child))
     }
 }
 

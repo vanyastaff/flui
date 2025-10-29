@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
 use flui_rendering::RenderTransform;
 
 // Use Matrix4 from rendering module
@@ -141,7 +141,7 @@ pub struct Transform {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn DynWidget>>,
+    pub child: Option<BoxedWidget>,
 }
 
 impl Transform {
@@ -243,7 +243,7 @@ impl Transform {
     /// widget.set_child(Container::new());
     /// ```
     pub fn set_child<W: Widget + 'static>(&mut self, child: W) {
-        self.child = Some(Box::new(child));
+        self.child = Some(BoxedWidget::new(child));
     }
 
     /// Validates Transform configuration.
@@ -338,7 +338,7 @@ where
     ///     .build()
     /// ```
     pub fn child<W: Widget + 'static>(self, child: W) -> TransformBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
+        self.child_internal(BoxedWidget::new(child))
     }
 }
 

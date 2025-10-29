@@ -165,11 +165,11 @@ impl RenderPipeline {
     /// ```
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where
-        W: RenderObjectWidget + crate::Widget + 'static,
+        W: RenderObjectWidget + crate::Widget + Clone + 'static,
         W::RenderObject: std::fmt::Debug,
     {
         let render = widget.create_render_object();
-        let widget_boxed: crate::widget::BoxedWidget = Box::new(widget);
+        let widget_boxed: crate::widget::BoxedWidget = crate::widget::BoxedWidget::new(widget);
         let render_boxed: Box<dyn crate::render::DynRenderObject> = Box::new(render);
         let render_element = RenderElement::new(widget_boxed, render_boxed);
         let element = crate::element::Element::Render(render_element);

@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
+use flui_core::{BoxedWidget, DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
 use flui_rendering::StackParentData;
 
 /// A widget that controls where a child of a Stack is positioned.
@@ -179,7 +179,7 @@ pub struct Positioned {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn DynWidget>>,
+    pub child: Option<BoxedWidget>,
 }
 
 impl Positioned {
@@ -297,7 +297,7 @@ impl Positioned {
     /// widget.set_child(Container::new());
     /// ```
     pub fn set_child(&mut self, child: impl Widget + 'static) {
-        self.child = Some(Box::new(child));
+        self.child = Some(BoxedWidget::new(child));
     }
 
     /// Validates Positioned configuration.
@@ -427,7 +427,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl Widget + 'static) -> PositionedBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
+        self.child_internal(BoxedWidget::new(child))
     }
 }
 

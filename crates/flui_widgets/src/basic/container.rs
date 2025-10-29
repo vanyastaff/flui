@@ -37,7 +37,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxConstraints, Context, DynWidget, StatelessWidget, Widget};
+use flui_core::{BoxedWidget, BoxConstraints, Context, DynWidget, StatelessWidget, Widget};
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
 
@@ -149,7 +149,7 @@ pub struct Container {
     /// If null, the container will size itself according to other properties.
     /// Use the custom `.child()` setter in the builder.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn DynWidget>>,
+    pub child: Option<BoxedWidget>,
 }
 
 impl Container {
@@ -187,7 +187,7 @@ impl Container {
     /// container.set_child(some_widget);
     /// ```
     pub fn set_child(&mut self, child: impl Widget + 'static) {
-        self.child = Some(Box::new(child));
+        self.child = Some(BoxedWidget::new(child));
     }
 
     /// Gets the final decoration, considering both decoration and color shorthand.
@@ -379,7 +379,7 @@ where
     pub fn child(self, child: impl Widget + 'static) -> ContainerBuilder<SetChild<S>> {
         // bon's generated setter takes Box directly, not Option
         // bon wraps it in Option internally
-        self.child_internal(Box::new(child) as Box<dyn DynWidget>)
+        self.child_internal(BoxedWidget::new(child))
     }
 }
 

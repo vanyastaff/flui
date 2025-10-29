@@ -123,7 +123,7 @@ use crate::KeyRef;
 ///     println!("Content: {}", text.content);
 /// }
 /// ```
-pub trait DynWidget: fmt::Debug + Any + 'static {
+pub trait DynWidget: fmt::Debug + Any + Send + Sync + 'static {
     /// Get widget key for identity tracking
     ///
     /// Keys are used to preserve element state across rebuilds.
@@ -267,6 +267,39 @@ pub trait DynWidget: fmt::Debug + Any + 'static {
         }
     }
 
+    /// Get child widget for ParentDataWidget types
+    ///
+    /// This method is used by ParentDataElement to access the child widget
+    /// from type-erased ParentDataWidget instances. Returns None for non-ParentDataWidget types.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // For ParentDataWidget (e.g., Flexible, Positioned)
+    /// let flexible = Flexible::new(flex: 2, child: Container::new());
+    /// assert!(flexible.parent_data_child().is_some());
+    ///
+    /// // For other widgets
+    /// let text = Text::new("Hello");
+    /// assert!(text.parent_data_child().is_none());
+    /// ```
+    fn parent_data_child(&self) -> Option<&crate::widget::BoxedWidget> {
+        None  // Default: not a ParentDataWidget
+    }
+
+    /// Clone this widget into a new boxed instance
+    ///
+    /// This method enables cloning of type-erased widgets. All Widget types
+    /// must implement Clone, so this is always available via the blanket impl.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let widget: &dyn DynWidget = &Text::new("Hello");
+    /// let cloned: BoxedWidget = widget.clone_boxed();
+    /// ```
+    fn clone_boxed(&self) -> crate::widget::BoxedWidget;
+
     /// Build the widget tree (for StatelessWidget and StatefulWidget only)
     ///
     /// This method is called by ComponentElement and StatefulElement to build
@@ -347,21 +380,95 @@ impl dyn DynWidget {
     }
 }
 
-/// Boxed widget trait object
+/// Boxed widget trait object with Clone support
 ///
-/// Commonly used for heterogeneous collections of widgets.
+/// This is a newtype wrapper around `Box<dyn DynWidget>` that implements `Clone`
+/// by using the `clone_boxed()` method from `DynWidget`.
+///
+/// This allows widgets to derive Clone even when they contain child widgets.
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust,ignore
 /// use flui_core::BoxedWidget;
 ///
+/// // Can be used in collections
 /// let widgets: Vec<BoxedWidget> = vec![
-///     Box::new(Text::new("Hello")),
-///     Box::new(Container::new()),
+///     BoxedWidget::new(Text::new("Hello")),
+///     BoxedWidget::new(Container::new()),
 /// ];
+///
+/// // Supports Clone through clone_boxed()
+/// let cloned_widgets = widgets.clone();
+///
+/// // Transparent conversion from Box<dyn DynWidget>
+/// let widget: BoxedWidget = Box::new(Text::new("Hello")).into();
 /// ```
-pub type BoxedWidget = Box<dyn DynWidget>;
+#[derive(Debug)]
+pub struct BoxedWidget(Box<dyn DynWidget>);
+
+impl BoxedWidget {
+    /// Create a new BoxedWidget from any Widget type
+    pub fn new<W>(widget: W) -> Self
+    where
+        W: DynWidget,
+    {
+        Self(Box::new(widget))
+    }
+
+    /// Get a reference to the inner widget
+    pub fn as_ref(&self) -> &dyn DynWidget {
+        &*self.0
+    }
+
+    /// Get a mutable reference to the inner widget
+    pub fn as_mut(&mut self) -> &mut dyn DynWidget {
+        &mut *self.0
+    }
+
+    /// Convert into the inner Box<dyn DynWidget>
+    pub fn into_inner(self) -> Box<dyn DynWidget> {
+        self.0
+    }
+}
+
+impl Clone for BoxedWidget {
+    fn clone(&self) -> Self {
+        self.0.clone_boxed()
+    }
+}
+
+impl From<Box<dyn DynWidget>> for BoxedWidget {
+    fn from(widget: Box<dyn DynWidget>) -> Self {
+        Self(widget)
+    }
+}
+
+impl std::ops::Deref for BoxedWidget {
+    type Target = dyn DynWidget;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl std::ops::DerefMut for BoxedWidget {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
+    }
+}
+
+impl AsRef<dyn DynWidget> for BoxedWidget {
+    fn as_ref(&self) -> &dyn DynWidget {
+        &*self.0
+    }
+}
+
+impl AsMut<dyn DynWidget> for BoxedWidget {
+    fn as_mut(&mut self) -> &mut dyn DynWidget {
+        &mut *self.0
+    }
+}
 
 /// Shared widget trait object (reference-counted)
 ///

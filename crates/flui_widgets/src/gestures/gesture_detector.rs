@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use flui_core::{DynWidget, StatelessWidget, Widget};
+use flui_core::{BoxedWidget, DynWidget, StatelessWidget, Widget};
 use flui_types::events::{PointerEvent, PointerEventData};
 use parking_lot::RwLock;
 
@@ -184,7 +184,7 @@ impl GestureDetectorBuilder {
 
     /// Set the child widget
     pub fn child(mut self, child: impl Widget + 'static) -> Self {
-        self.child = Some(Box::new(child));
+        self.child = Some(BoxedWidget::new(child));
         self
     }
 

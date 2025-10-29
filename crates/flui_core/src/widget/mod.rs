@@ -176,12 +176,24 @@ use crate::KeyRef;
 /// ```
 impl<W> DynWidget for W
 where
-    W: Widget + fmt::Debug + 'static,
+    W: Widget + fmt::Debug + Send + Sync + Clone + 'static,
 {
     #[inline]
     fn key(&self) -> Option<KeyRef> {
         // Convert Widget::key (Key) to DynWidget::key (KeyRef)
         Widget::key(self).map(KeyRef::from)
+    }
+
+    #[inline]
+    fn parent_data_child(&self) -> Option<&BoxedWidget> {
+        // Forward to Widget::parent_data_child()
+        Widget::parent_data_child(self)
+    }
+
+    #[inline]
+    fn clone_boxed(&self) -> BoxedWidget {
+        // Clone the concrete type and box it
+        BoxedWidget::new(self.clone())
     }
 
     // All other methods (type_id, can_update, type_name, as_any)
@@ -204,7 +216,7 @@ where
 /// ```
 #[inline]
 pub fn boxed<W: DynWidget + 'static>(widget: W) -> BoxedWidget {
-    Box::new(widget)
+    BoxedWidget::new(widget)
 }
 
 /// Create a shared widget from any Widget type
