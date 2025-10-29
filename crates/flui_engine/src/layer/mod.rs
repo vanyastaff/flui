@@ -68,6 +68,7 @@
 //! ```
 
 // Core layer infrastructure
+pub mod backdrop_filter;
 pub mod base;
 pub mod blur;
 pub mod clip;
@@ -80,6 +81,7 @@ pub mod picture;
 pub mod pool;
 pub mod shadow;
 pub mod transform;
+
 
 
 
@@ -114,11 +116,16 @@ pub use flui_types::painting::effects::{BlurQuality, BlurMode};
 pub use filter::FilterLayer;
 pub use flui_types::painting::effects::{ColorFilter, ColorMatrix};
 
+// Backdrop filter layer
+pub use backdrop_filter::BackdropFilterLayer;
+pub use flui_types::painting::effects::ImageFilter;
+
 /// Type-erased layer (for dynamic dispatch)
 ///
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
 
 
 

@@ -23,7 +23,7 @@ pub use canvas::{
 };
 pub use clipping::{AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape};
 pub use effects::{
-    BlurQuality, BlurMode, ColorMatrix, PathPaintMode, StrokeOptions,
+    BlurQuality, BlurMode, ColorMatrix, ImageFilter, PathPaintMode, StrokeOptions,
     ColorFilter as EffectColorFilter,  // Renamed to avoid conflict with image::ColorFilter
 };
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};

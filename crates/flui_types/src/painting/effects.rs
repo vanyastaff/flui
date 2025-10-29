@@ -455,6 +455,74 @@ pub enum PathPaintMode {
     FillAndStroke,
 }
 
+/// Image filter for backdrop and content effects.
+///
+/// Combines blur and color filters into a single enum for use with
+/// backdrop-filter and filter effects. Similar to CSS filter functions.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_types::painting::effects::{ImageFilter, ColorFilter};
+///
+/// // Blur filter
+/// let blur = ImageFilter::Blur {
+///     sigma_x: 5.0,
+///     sigma_y: 5.0,
+/// };
+///
+/// // Color filter
+/// let grayscale = ImageFilter::Color(ColorFilter::Grayscale(1.0));
+///
+/// // Combined filters
+/// let filters = vec![
+///     ImageFilter::Blur { sigma_x: 3.0, sigma_y: 3.0 },
+///     ImageFilter::Color(ColorFilter::Brightness(0.1)),
+/// ];
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ImageFilter {
+    /// Gaussian blur with horizontal and vertical sigma.
+    ///
+    /// Similar to CSS `blur()` function.
+    Blur {
+        /// Horizontal blur radius (sigma)
+        sigma_x: f32,
+        /// Vertical blur radius (sigma)
+        sigma_y: f32,
+    },
+
+    /// Color manipulation filter.
+    ///
+    /// Applies brightness, contrast, saturation, or other color adjustments.
+    Color(ColorFilter),
+
+    /// Combined filters (applied in order).
+    ///
+    /// Allows chaining multiple image filters together.
+    Compose(Vec<ImageFilter>),
+}
+
+impl ImageFilter {
+    /// Create a blur filter with the same sigma for both axes.
+    #[inline]
+    #[must_use]
+    pub fn blur(sigma: f32) -> Self {
+        Self::Blur {
+            sigma_x: sigma,
+            sigma_y: sigma,
+        }
+    }
+
+    /// Create a blur filter with different horizontal and vertical sigma.
+    #[inline]
+    #[must_use]
+    pub fn blur_directional(sigma_x: f32, sigma_y: f32) -> Self {
+        Self::Blur { sigma_x, sigma_y }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
