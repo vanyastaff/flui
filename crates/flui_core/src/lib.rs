@@ -396,7 +396,7 @@ pub mod prelude {
 
     pub use crate::element::{BuildContext, Element};
 
-    pub use crate::render::{LeafArity, MultiArity, Render, SingleArity};
+    pub use crate::render::{LeafArity, MultiArity, RenderNode, SingleArity};
 }
 
 // ============================================================================

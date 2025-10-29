@@ -25,10 +25,10 @@ use flui_types::{Offset, Size, constraints::BoxConstraints};
 use crate::element::{ElementId, ElementTree};
 use crate::render::{
     LeafArity, SingleArity, MultiArity,
-    LayoutCx, PaintCx, RenderObjectTrait,
+    LayoutCx, PaintCx, Render,
 };
 
-use super::render_enum::Render;
+use super::render_node::RenderNode;
 use super::render_traits::{LeafRender, SingleRender, MultiRender};
 
 // ========== Leaf Adapter ==========
@@ -53,7 +53,7 @@ impl<T> LeafAdapter<T> {
 
 impl<T> LeafRender for LeafAdapter<T>
 where
-    T: RenderObjectTrait<Arity = LeafArity> + Send + Sync + std::fmt::Debug + 'static,
+    T: Render<Arity = LeafArity> + Send + Sync + std::fmt::Debug + 'static,
 {
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
         // Create a fake ElementTree and ElementId for the old API
@@ -108,7 +108,7 @@ impl<T> SingleAdapter<T> {
 
 impl<T> SingleRender for SingleAdapter<T>
 where
-    T: RenderObjectTrait<Arity = SingleArity> + Send + Sync + std::fmt::Debug + 'static,
+    T: Render<Arity = SingleArity> + Send + Sync + std::fmt::Debug + 'static,
 {
     fn layout(
         &mut self,
@@ -160,7 +160,7 @@ impl<T> MultiAdapter<T> {
 
 impl<T> MultiRender for MultiAdapter<T>
 where
-    T: RenderObjectTrait<Arity = MultiArity> + Send + Sync + std::fmt::Debug + 'static,
+    T: Render<Arity = MultiArity> + Send + Sync + std::fmt::Debug + 'static,
 {
     fn layout(
         &mut self,
@@ -195,7 +195,7 @@ where
 
 // ========== Render Extension Methods ==========
 
-impl Render {
+impl RenderNode {
     /// Create Render from a legacy LeafArity Render
     ///
     /// # Example
@@ -205,7 +205,7 @@ impl Render {
     /// ```
     pub fn from_legacy_leaf<T>(render_object: T) -> Self
     where
-        T: RenderObjectTrait<Arity = LeafArity> + Send + Sync + std::fmt::Debug + 'static,
+        T: Render<Arity = LeafArity> + Send + Sync + std::fmt::Debug + 'static,
     {
         Self::new_leaf(Box::new(LeafAdapter::new(render_object)))
     }
@@ -220,7 +220,7 @@ impl Render {
     /// ```
     pub fn from_legacy_single<T>(render_object: T, child: ElementId) -> Self
     where
-        T: RenderObjectTrait<Arity = SingleArity> + Send + Sync + std::fmt::Debug + 'static,
+        T: Render<Arity = SingleArity> + Send + Sync + std::fmt::Debug + 'static,
     {
         Self::new_single(Box::new(SingleAdapter::new(render_object)), child)
     }
@@ -235,7 +235,7 @@ impl Render {
     /// ```
     pub fn from_legacy_multi<T>(render_object: T, children: Vec<ElementId>) -> Self
     where
-        T: RenderObjectTrait<Arity = MultiArity> + Send + Sync + std::fmt::Debug + 'static,
+        T: Render<Arity = MultiArity> + Send + Sync + std::fmt::Debug + 'static,
     {
         Self::new_multi(Box::new(MultiAdapter::new(render_object)), children)
     }

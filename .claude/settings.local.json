@@ -94,7 +94,8 @@
       "Bash(rustc:*)",
       "Read(//c/tmp/**)",
       "Bash(mv:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(awk:*)"
     ],
     "deny": [],
     "ask": []

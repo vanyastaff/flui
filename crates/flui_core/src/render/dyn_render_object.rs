@@ -245,7 +245,7 @@ pub type BoxedRender = Box<dyn DynRender>;
 /// DynRender API.
 impl<T> DynRender for T
 where
-    T: crate::render::RenderObjectTrait + fmt::Debug,
+    T: crate::render::Render + fmt::Debug,
 {
     fn arity(&self) -> Option<usize> {
         // Arity no longer has CHILD_COUNT constant
@@ -254,15 +254,15 @@ where
     }
 
     fn debug_name(&self) -> &'static str {
-        <T as crate::render::RenderObjectTrait>::debug_name(self)
+        <T as crate::render::Render>::debug_name(self)
     }
 
     fn intrinsic_width(&self, height: Option<f32>) -> Option<f32> {
-        <T as crate::render::RenderObjectTrait>::intrinsic_width(self, height)
+        <T as crate::render::Render>::intrinsic_width(self, height)
     }
 
     fn intrinsic_height(&self, width: Option<f32>) -> Option<f32> {
-        <T as crate::render::RenderObjectTrait>::intrinsic_height(self, width)
+        <T as crate::render::Render>::intrinsic_height(self, width)
     }
 
     fn dyn_layout(
@@ -273,13 +273,13 @@ where
     ) -> Size {
         use crate::render::LayoutCx;
         let mut cx = LayoutCx::<T::Arity>::new(tree, element_id, constraints);
-        <T as crate::render::RenderObjectTrait>::layout(self, &mut cx)
+        <T as crate::render::Render>::layout(self, &mut cx)
     }
 
     fn dyn_paint(&self, tree: &ElementTree, element_id: ElementId, offset: Offset) -> BoxedLayer {
         use crate::render::PaintCx;
         let cx = PaintCx::<T::Arity>::new(tree, element_id, offset);
-        <T as crate::render::RenderObjectTrait>::paint(self, &cx)
+        <T as crate::render::Render>::paint(self, &cx)
     }
 
     fn as_any(&self) -> &dyn Any {

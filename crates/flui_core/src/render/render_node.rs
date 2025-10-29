@@ -1,6 +1,6 @@
-//! Render enum - unified render object type
+//! RenderNode - unified render tree node
 //!
-//! Defines the `Render` enum which wraps three object-safe traits:
+//! Defines the `RenderNode` enum which wraps three object-safe traits:
 //! - LeafRender
 //! - SingleRender
 //! - MultiRender
@@ -11,7 +11,7 @@ use flui_types::{Offset, Size, constraints::BoxConstraints};
 use super::render_traits::{LeafRender, MultiRender, SingleRender};
 use crate::element::{ElementId, ElementTree};
 
-/// Unified render object enum
+/// Unified render tree node enum
 ///
 /// Three variants for three child count patterns:
 /// - `Leaf`: No children
@@ -21,16 +21,16 @@ use crate::element::{ElementId, ElementTree};
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_core::render::{Render, LeafRender};
+/// use flui_core::render::{RenderNode, LeafRender};
 ///
 /// let paragraph = Paragraph::new("Hello");
-/// let render = Render::new_leaf(Box::new(paragraph));
+/// let render = RenderNode::new_leaf(Box::new(paragraph));
 ///
 /// let size = render.layout(tree, constraints);
 /// let layer = render.paint(tree, offset);
 /// ```
 #[derive(Debug)]
-pub enum Render {
+pub enum RenderNode {
     /// Leaf (no children)
     Leaf(Box<dyn LeafRender>),
 
@@ -47,7 +47,7 @@ pub enum Render {
     },
 }
 
-impl Render {
+impl RenderNode {
     // ========== Constructors ==========
 
     /// Create leaf render
