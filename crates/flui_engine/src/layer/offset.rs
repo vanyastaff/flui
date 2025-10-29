@@ -58,6 +58,7 @@ impl OffsetLayer {
     /// Sets the offset for this layer.
     ///
     /// This determines how far the child content is shifted.
+    #[must_use]
     pub fn with_offset(mut self, offset: Offset) -> Self {
         self.offset = offset;
         self.cached_bounds = None;
