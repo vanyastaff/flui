@@ -47,7 +47,7 @@ use flui_types::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 
 use crate::element::{ElementId, ElementTree, RenderElement};
-use crate::widget::RenderWidget;
+use crate::widget::{RenderWidget, BoxedWidget, DynWidget};
 
 /// RenderPipeline - orchestrates the rendering pipeline
 ///
@@ -168,12 +168,18 @@ impl RenderPipeline {
     /// ```
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where
-        W: RenderWidget + crate::Widget + Clone + 'static,
-        W::Render: std::fmt::Debug,
+        W: RenderWidget + Clone + Send + Sync + std::fmt::Debug + DynWidget + 'static,
     {
-        let render = widget.create_render_object();
-        let widget_boxed: crate::widget::BoxedWidget = crate::widget::BoxedWidget::new(widget);
-        let render_boxed: Box<dyn crate::render::DynRender> = Box::new(render);
+        // Create a dummy BuildContext for root widget
+        // TODO: This should be properly constructed
+        use crate::element::BuildContext;
+        let ctx = unsafe { std::mem::zeroed::<BuildContext>() };
+
+        let render_boxed = widget.create_render_object(&ctx);
+
+        // Box the widget (it implements DynWidget)
+        let widget_boxed = BoxedWidget::new(widget);
+
         let render_element = RenderElement::new(widget_boxed, render_boxed);
         let element = crate::element::Element::Render(render_element);
         let id = self.tree.insert(element);

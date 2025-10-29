@@ -254,15 +254,15 @@ where
     }
 
     fn debug_name(&self) -> &'static str {
-        <T as crate::Render>::debug_name(self)
+        <T as crate::render::RenderObjectTrait>::debug_name(self)
     }
 
     fn intrinsic_width(&self, height: Option<f32>) -> Option<f32> {
-        <T as crate::Render>::intrinsic_width(self, height)
+        <T as crate::render::RenderObjectTrait>::intrinsic_width(self, height)
     }
 
     fn intrinsic_height(&self, width: Option<f32>) -> Option<f32> {
-        <T as crate::Render>::intrinsic_height(self, width)
+        <T as crate::render::RenderObjectTrait>::intrinsic_height(self, width)
     }
 
     fn dyn_layout(
@@ -273,13 +273,13 @@ where
     ) -> Size {
         use crate::render::LayoutCx;
         let mut cx = LayoutCx::<T::Arity>::new(tree, element_id, constraints);
-        <T as crate::Render>::layout(self, &mut cx)
+        <T as crate::render::RenderObjectTrait>::layout(self, &mut cx)
     }
 
     fn dyn_paint(&self, tree: &ElementTree, element_id: ElementId, offset: Offset) -> BoxedLayer {
         use crate::render::PaintCx;
         let cx = PaintCx::<T::Arity>::new(tree, element_id, offset);
-        <T as crate::Render>::paint(self, &cx)
+        <T as crate::render::RenderObjectTrait>::paint(self, &cx)
     }
 
     fn as_any(&self) -> &dyn Any {
