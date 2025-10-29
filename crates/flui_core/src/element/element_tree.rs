@@ -273,7 +273,6 @@ impl ElementTree {
     /// # Returns
     ///
     /// `Some(&RenderNode)` if the element is a RenderElement, `None` otherwise
-    ///
     // Note: render_object() and render_object_mut() methods removed
     // because they cannot work with RefCell guards (lifetime issues).
     // Instead, use: tree.get(element_id)?.render_object()?
