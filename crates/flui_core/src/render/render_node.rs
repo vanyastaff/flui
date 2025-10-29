@@ -96,31 +96,14 @@ impl RenderNode {
     ///
     /// Returns `Some(ElementId)` if this is a Single variant, `None` otherwise.
     ///
-    /// # Panics
-    ///
-    /// This method panics if called on non-Single variant.
-    /// Consider using `try_child()` for non-panicking version.
-    pub fn child(&self) -> ElementId {
-        match self {
-            Self::Single { child, .. } => *child,
-            _ => panic!("child() called on non-Single RenderNode (use try_child() for safe access)"),
-        }
-    }
-
-    /// Try to get child (Single only) - non-panicking version
-    ///
-    /// # Returns
-    ///
-    /// Returns `Some(ElementId)` if this is a Single variant, `None` otherwise.
-    ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// if let Some(child_id) = render.try_child() {
+    /// if let Some(child_id) = render.child() {
     ///     // Process child
     /// }
     /// ```
-    pub fn try_child(&self) -> Option<ElementId> {
+    pub fn child(&self) -> Option<ElementId> {
         match self {
             Self::Single { child, .. } => Some(*child),
             _ => None,
@@ -129,23 +112,18 @@ impl RenderNode {
 
     /// Set child (Single only)
     ///
-    /// # Panics
-    ///
-    /// This method panics if called on non-Single variant.
-    /// Consider using `try_set_child()` for non-panicking version.
-    pub fn set_child(&mut self, new_child: ElementId) {
-        match self {
-            Self::Single { child, .. } => *child = new_child,
-            _ => panic!("set_child() called on non-Single RenderNode (use try_set_child() for safe access)"),
-        }
-    }
-
-    /// Try to set child (Single only) - non-panicking version
-    ///
     /// # Returns
     ///
     /// Returns `true` if child was set (Single variant), `false` otherwise.
-    pub fn try_set_child(&mut self, new_child: ElementId) -> bool {
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if render.set_child(new_child_id) {
+    ///     // Child was set successfully
+    /// }
+    /// ```
+    pub fn set_child(&mut self, new_child: ElementId) -> bool {
         match self {
             Self::Single { child, .. } => {
                 *child = new_child;
@@ -157,19 +135,6 @@ impl RenderNode {
 
     /// Get children (Multi only)
     ///
-    /// # Panics
-    ///
-    /// This method panics if called on non-Multi variant.
-    /// Consider using `try_children()` for non-panicking version.
-    pub fn children(&self) -> &[ElementId] {
-        match self {
-            Self::Multi { children, .. } => children,
-            _ => panic!("children() called on non-Multi RenderNode (use try_children() for safe access)"),
-        }
-    }
-
-    /// Try to get children (Multi only) - non-panicking version
-    ///
     /// # Returns
     ///
     /// Returns `Some(&[ElementId])` if this is a Multi variant, `None` otherwise.
@@ -177,13 +142,13 @@ impl RenderNode {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// if let Some(children) = render.try_children() {
+    /// if let Some(children) = render.children() {
     ///     for child_id in children {
     ///         // Process each child
     ///     }
     /// }
     /// ```
-    pub fn try_children(&self) -> Option<&[ElementId]> {
+    pub fn children(&self) -> Option<&[ElementId]> {
         match self {
             Self::Multi { children, .. } => Some(children),
             _ => None,
@@ -192,23 +157,18 @@ impl RenderNode {
 
     /// Set children (Multi only)
     ///
-    /// # Panics
-    ///
-    /// This method panics if called on non-Multi variant.
-    /// Consider using `try_set_children()` for non-panicking version.
-    pub fn set_children(&mut self, new_children: Vec<ElementId>) {
-        match self {
-            Self::Multi { children, .. } => *children = new_children,
-            _ => panic!("set_children() called on non-Multi RenderNode (use try_set_children() for safe access)"),
-        }
-    }
-
-    /// Try to set children (Multi only) - non-panicking version
-    ///
     /// # Returns
     ///
     /// Returns `true` if children were set (Multi variant), `false` otherwise.
-    pub fn try_set_children(&mut self, new_children: Vec<ElementId>) -> bool {
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if render.set_children(new_children) {
+    ///     // Children were set successfully
+    /// }
+    /// ```
+    pub fn set_children(&mut self, new_children: Vec<ElementId>) -> bool {
         match self {
             Self::Multi { children, .. } => {
                 *children = new_children;
@@ -364,7 +324,7 @@ mod tests {
         let render = RenderNode::new_single(Box::new(TestSingle), 1);
         assert!(render.is_single());
         assert_eq!(render.arity(), Some(1));
-        assert_eq!(render.child(), 1);
+        assert_eq!(render.child(), Some(1));
     }
 
     #[test]
@@ -373,22 +333,22 @@ mod tests {
         let render = RenderNode::new_multi(Box::new(TestMulti), children.clone());
         assert!(render.is_multi());
         assert_eq!(render.arity(), None);
-        assert_eq!(render.children(), &children[..]);
+        assert_eq!(render.children(), Some(&children[..]));
     }
 
     #[test]
     fn test_set_child() {
         let mut render = RenderNode::new_single(Box::new(TestSingle), 1);
-        render.set_child(2);
-        assert_eq!(render.child(), 2);
+        assert!(render.set_child(2));
+        assert_eq!(render.child(), Some(2));
     }
 
     #[test]
     fn test_set_children() {
         let mut render = RenderNode::new_multi(Box::new(TestMulti), vec![]);
         let new_children = vec![1];
-        render.set_children(new_children.clone());
-        assert_eq!(render.children(), &new_children[..]);
+        assert!(render.set_children(new_children.clone()));
+        assert_eq!(render.children(), Some(&new_children[..]));
     }
 
     #[test]
