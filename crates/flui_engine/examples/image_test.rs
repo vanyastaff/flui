@@ -1,14 +1,18 @@
 //! Image rendering test - demonstrates image drawing capabilities
 //!
 //! This example shows:
-//! - Loading and displaying images
+//! - Loading and displaying images from network using NetworkImage
 //! - Scaling images to fit different rectangles
 //! - Applying opacity and transformations
 //! - Partial image rendering (source rectangles)
 
 use flui_engine::{App, AppLogic, Paint, Painter};
-use flui_types::{events::Event, painting::Image, Color, Offset, Point, Rect};
-use std::sync::Arc;
+use flui_types::{
+    events::Event,
+    painting::{Image, ImageConfiguration, ImageError, ImageProvider, NetworkImage},
+    Color, Offset, Point, Rect,
+};
+use std::sync::{mpsc, Arc};
 
 struct ImageTestApp {
     /// The cat image loaded from URL
@@ -16,53 +20,41 @@ struct ImageTestApp {
 
     /// Loading state
     loading: bool,
+
+    /// Receiver for async image loading
+    image_receiver: Option<mpsc::Receiver<Result<Image, ImageError>>>,
 }
 
 impl ImageTestApp {
     fn new() -> Self {
+        println!("Starting cat image download...");
+
+        let url = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Stray_kitten_Rambo002.jpg/1200px-Stray_kitten_Rambo002.jpg";
+
+        // Use NetworkImage provider from flui_types
+        let provider = NetworkImage::new(url);
+        let config = ImageConfiguration::new();
+
+        // Create channel for async communication
+        let (tx, rx) = mpsc::channel();
+
+        // Spawn async task to load the image
+        std::thread::spawn(move || {
+            // Create tokio runtime for async operations
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let result = provider.load(&config).await;
+                if let Ok(ref image) = result {
+                    println!("Image loaded: {}x{}", image.width(), image.height());
+                }
+                tx.send(result).ok();
+            });
+        });
+
         Self {
             cat_image: None,
             loading: true,
-        }
-    }
-
-    /// Download and decode the cat image
-    fn load_cat_image(&mut self) {
-        println!("Downloading cat image...");
-
-        // Download the image
-        let url = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Stray_kitten_Rambo002.jpg/1200px-Stray_kitten_Rambo002.jpg";
-
-        match ureq::get(url).call() {
-            Ok(response) => {
-                let mut bytes = Vec::new();
-                if let Ok(_) = response.into_reader().read_to_end(&mut bytes) {
-                    // Decode JPEG to RGBA8
-                    match image::load_from_memory(&bytes) {
-                        Ok(img) => {
-                            let rgba = img.to_rgba8();
-                            let (width, height) = rgba.dimensions();
-
-                            println!("Image loaded: {}x{}", width, height);
-
-                            self.cat_image = Some(Arc::new(Image::from_rgba8(
-                                width,
-                                height,
-                                rgba.into_raw(),
-                            )));
-                            self.loading = false;
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to decode image: {}", e);
-                            self.loading = false;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to download image: {}", e);
-                self.loading = false;
-            }
+            image_receiver: Some(rx),
         }
     }
 }
@@ -81,9 +73,21 @@ impl AppLogic for ImageTestApp {
     }
 
     fn update(&mut self, _delta_time: f32) {
-        // Load image on first frame
-        if self.loading && self.cat_image.is_none() {
-            self.load_cat_image();
+        // Poll for loaded image
+        if let Some(ref rx) = self.image_receiver {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(image) => {
+                        self.cat_image = Some(Arc::new(image));
+                        self.loading = false;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load image: {}", e);
+                        self.loading = false;
+                    }
+                }
+                self.image_receiver = None; // Done with receiver
+            }
         }
     }
 
@@ -251,8 +255,9 @@ impl AppLogic for ImageTestApp {
 fn main() {
     env_logger::init();
 
-    println!("Starting image test...");
-    println!("This will download a cat image from Wikimedia Commons");
+    println!("=== FLUI Image Rendering Test ===");
+    println!("Demonstrates NetworkImage provider from flui_types");
+    println!();
 
     let app = App::new()
         .title("Image Rendering Test")
