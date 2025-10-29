@@ -791,6 +791,93 @@ impl<'a> Painter for EguiPainter<'a> {
         // Multiply with current opacity (for nested opacity layers)
         self.current_state.opacity *= opacity.clamp(0.0, 1.0);
     }
+
+    fn apply_image_filter(&mut self, filter: &flui_types::painting::effects::ImageFilter, bounds: Rect) {
+        use flui_types::painting::effects::{ColorFilter, ImageFilter};
+
+        // Note: Egui doesn't have built-in blur shader support.
+        // We implement what we can with available primitives:
+        // - ColorFilter: Applied by modifying the opacity/tint in current state
+        // - Blur: Approximated by drawing semi-transparent layers (visual hint)
+        // For proper blur, a GPU backend with shaders is needed.
+
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                // Approximate blur with reduced opacity as a visual hint
+                // Real blur would require rendering to texture and applying convolution
+                let blur_amount = (sigma_x.max(*sigma_y) / 10.0).min(0.5);
+                self.current_state.opacity *= 1.0 - blur_amount;
+
+                // Draw a semi-transparent overlay to simulate blur (very basic)
+                let blur_color = egui::Color32::from_white_alpha((blur_amount * 255.0) as u8);
+                let egui_rect = Self::to_egui_rect(self.transform_rect(bounds));
+                let blur_rect = egui::Shape::rect_filled(egui_rect, 0.0, blur_color);
+                self.add_shape(blur_rect);
+            }
+            ImageFilter::Color(color_filter) => {
+                // Apply color filter by modifying current painter state
+                match color_filter {
+                    ColorFilter::Opacity(opacity) => {
+                        self.current_state.opacity *= opacity.clamp(0.0, 1.0);
+                    }
+                    ColorFilter::Brightness(brightness) => {
+                        // Store brightness adjustment (will be applied during rendering)
+                        // Note: This is a simplified approach
+                        // Real implementation would need per-pixel processing
+                        if *brightness < 0.0 {
+                            // Darken by reducing opacity
+                            self.current_state.opacity *= 1.0 + brightness;
+                        }
+                        // Brightening would require shader support
+                    }
+                    ColorFilter::Grayscale(_amount) => {
+                        // Grayscale requires per-pixel color transformation
+                        // Not directly supported by egui without custom shaders
+                        // This is a placeholder - no visual effect
+                    }
+                    ColorFilter::Sepia(_amount) => {
+                        // Sepia requires per-pixel color transformation
+                        // Placeholder - no effect without shaders
+                    }
+                    ColorFilter::Invert(_amount) => {
+                        // Invert requires per-pixel processing
+                        // Placeholder - no effect without shaders
+                    }
+                    ColorFilter::Saturation(_amount) => {
+                        // Saturation requires HSV transformation
+                        // Placeholder - no effect without shaders
+                    }
+                    ColorFilter::Contrast(_amount) => {
+                        // Contrast adjustment requires per-pixel processing
+                        // Placeholder - no effect without shaders
+                    }
+                    ColorFilter::HueRotate(_degrees) => {
+                        // Hue rotation requires HSV transformation
+                        // Placeholder - no effect without shaders
+                    }
+                    ColorFilter::Matrix(_matrix) => {
+                        // Matrix transformation requires per-pixel multiplication
+                        // Placeholder - no effect without shaders
+                    }
+                }
+            }
+            ImageFilter::Dilate { .. } | ImageFilter::Erode { .. } => {
+                // Morphological operations require pixel-level processing
+                // Not supported in egui without custom rendering
+                // Placeholder - no effect
+            }
+            ImageFilter::Matrix(_) => {
+                // Matrix color transformation requires per-pixel processing
+                // Placeholder - no effect
+            }
+            ImageFilter::Compose(filters) => {
+                // Apply each filter in sequence
+                for f in filters {
+                    self.apply_image_filter(f, bounds);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

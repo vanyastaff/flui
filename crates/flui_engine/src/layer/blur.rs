@@ -156,21 +156,33 @@ impl BlurLayer {
         }
     }
 
-    /// Apply image filter by rendering (placeholder implementation)
-    fn apply_filter(&self, painter: &mut dyn Painter, _bounds: Rect) {
-        // Note: Proper image filter implementation requires offscreen rendering
-        // with GPU shaders or CPU convolution. This is a placeholder that just
-        // renders the child content.
+    /// Apply image filter by rendering with layer composition
+    fn apply_filter(&self, painter: &mut dyn Painter, bounds: Rect) {
+        // Use save_layer to create an offscreen context,
+        // then apply the filter using apply_image_filter()
         //
-        // Production implementation would:
-        // 1. Render child to offscreen texture
-        // 2. Apply filter shader/convolution
-        // 3. Render result to screen
+        // This approach allows backends that support it to:
+        // 1. Render child to offscreen texture (via save_layer)
+        // 2. Apply filter shader/convolution (via apply_image_filter)
+        // 3. Render result to screen (via restore)
         //
-        // For now, we just render the child normally
+        // Backends without full support will fallback gracefully
+
         if let Some(child) = self.base.child() {
             painter.save();
+
+            // Create a layer for filtered rendering
+            painter.save_layer(bounds, &crate::painter::Paint::default());
+
+            // Apply the image filter to the layer
+            painter.apply_image_filter(&self.filter, bounds);
+
+            // Render child content into the filtered layer
             child.paint(painter);
+
+            // Restore the layer (composites with filter applied)
+            painter.restore();
+
             painter.restore();
         }
     }

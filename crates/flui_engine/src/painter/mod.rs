@@ -838,6 +838,37 @@ pub trait Painter {
         self.save();
     }
 
+    /// Apply an image filter to subsequent rendering
+    ///
+    /// This method is used by BlurLayer and FilterLayer to apply visual effects
+    /// like blur, color filters, etc. Should be called after `save_layer()` and
+    /// before rendering the content that needs filtering.
+    ///
+    /// # Parameters
+    /// - `filter`: The image filter to apply
+    /// - `bounds`: The region affected by the filter
+    ///
+    /// # Usage Pattern
+    /// ```rust,ignore
+    /// use flui_types::painting::effects::ImageFilter;
+    ///
+    /// painter.save_layer(bounds, &Paint::default());
+    /// painter.apply_image_filter(&ImageFilter::blur(5.0), bounds);
+    /// // ... draw content ...
+    /// painter.restore(); // Filter is applied when layer is composited
+    /// ```
+    ///
+    /// # Backend Requirements
+    /// Full implementation requires GPU shader support or CPU convolution.
+    /// The default implementation is a no-op (filter is not applied).
+    ///
+    /// # Default Implementation
+    /// Does nothing. Backends should override to implement actual filtering.
+    fn apply_image_filter(&mut self, _filter: &flui_types::painting::effects::ImageFilter, _bounds: Rect) {
+        // Default: no-op
+        // Backends with filter support should override
+    }
+
     // ========== Convenience Methods (Default Implementations) ==========
 
     /// Draw a rectangle with a drop shadow
