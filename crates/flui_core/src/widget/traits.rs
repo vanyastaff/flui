@@ -3,10 +3,11 @@
 //! This module defines the traits used by the Widget enum variants.
 //! All traits are object-safe to enable dynamic dispatch.
 //!
-//! # Auto-Cloning
+//! # Auto-Implementations
 //!
-//! All widget traits automatically implement `clone_boxed()` via blanket implementations.
-//! Users only need to implement `Clone` on their widget types.
+//! All widget traits automatically implement `clone_boxed()` and `as_any()`
+//! via blanket implementations. Users only need to implement `Clone` on their
+//! widget types.
 
 use std::any::{Any, TypeId};
 use std::fmt;
@@ -100,6 +101,28 @@ where
 }
 
 // ============================================================================
+// Auto-AsAny Helper Traits
+// ============================================================================
+
+/// Helper trait for auto-implementing as_any on all widget types.
+///
+/// This trait is automatically implemented for all 'static types.
+/// Users never need to implement this manually.
+trait AsAnyWidget: fmt::Debug + Send + Sync + 'static {
+    fn as_any_widget(&self) -> &dyn Any;
+}
+
+/// Blanket impl: All 'static types get as_any() for free!
+impl<T> AsAnyWidget for T
+where
+    T: fmt::Debug + Send + Sync + 'static,
+{
+    fn as_any_widget(&self) -> &dyn Any {
+        self
+    }
+}
+
+// ============================================================================
 // StatelessWidget Trait
 // ============================================================================
 
@@ -136,16 +159,10 @@ where
 ///         Widget::render_object(Text::new(format!("Hello, {}!", self.name)))
 ///     }
 ///
-///     fn clone_boxed(&self) -> Box<dyn StatelessWidget> {
-///         Box::new(self.clone())
-///     }
-///
-///     fn as_any(&self) -> &dyn std::any::Any {
-///         self
-///     }
+///     // clone_boxed() and as_any() are auto-implemented!
 /// }
 /// ```
-pub trait StatelessWidget: CloneStatelessWidget {
+pub trait StatelessWidget: CloneStatelessWidget + AsAnyWidget {
     /// Build the widget tree
     ///
     /// This method is called whenever the widget needs to rebuild.
@@ -219,17 +236,12 @@ pub trait StatelessWidget: CloneStatelessWidget {
 
     /// Downcast support - get &dyn Any reference
     ///
-    /// This enables downcasting to concrete types.
+    /// **Auto-implemented!** You don't need to implement this manually.
     ///
-    /// # Implementation
-    ///
-    /// Always implement as:
-    /// ```
-    /// fn as_any(&self) -> &dyn std::any::Any {
-    ///     self
-    /// }
-    /// ```
-    fn as_any(&self) -> &dyn Any;
+    /// This method is automatically provided via the `AsAnyWidget` helper trait.
+    fn as_any(&self) -> &dyn Any {
+        self.as_any_widget()
+    }
 
     /// Get TypeId for type checking
     ///
@@ -307,7 +319,7 @@ pub trait StatelessWidget: CloneStatelessWidget {
 ///     }
 /// }
 /// ```
-pub trait StatefulWidget: CloneStatefulWidget {
+pub trait StatefulWidget: CloneStatefulWidget + AsAnyWidget {
     /// Create the initial state
     ///
     /// This is called once when the widget is first created.
@@ -327,7 +339,11 @@ pub trait StatefulWidget: CloneStatefulWidget {
     }
 
     /// Downcast support
-    fn as_any(&self) -> &dyn Any;
+    ///
+    /// **Auto-implemented!** You don't need to implement this manually.
+    fn as_any(&self) -> &dyn Any {
+        self.as_any_widget()
+    }
 
     /// Get TypeId
     fn type_id(&self) -> TypeId {
@@ -509,7 +525,7 @@ pub trait State: fmt::Debug + Send + Sync + 'static {
 ///     }
 /// }
 /// ```
-pub trait InheritedWidget: CloneInheritedWidget {
+pub trait InheritedWidget: CloneInheritedWidget + AsAnyWidget {
     /// Get the child widget
     fn child(&self) -> &Widget;
 
@@ -538,7 +554,11 @@ pub trait InheritedWidget: CloneInheritedWidget {
     }
 
     /// Downcast support
-    fn as_any(&self) -> &dyn Any;
+    ///
+    /// **Auto-implemented!** You don't need to implement this manually.
+    fn as_any(&self) -> &dyn Any {
+        self.as_any_widget()
+    }
 
     /// Get TypeId
     fn type_id(&self) -> TypeId {
@@ -564,7 +584,7 @@ pub trait InheritedWidget: CloneInheritedWidget {
 ///                        ↓
 ///                     paint()
 /// ```
-pub trait RenderWidget: CloneRenderWidget {
+pub trait RenderWidget: CloneRenderWidget + AsAnyWidget {
     /// Create a new RenderNode
     ///
     /// This is called once when the widget is first inserted into the tree.
@@ -602,7 +622,11 @@ pub trait RenderWidget: CloneRenderWidget {
     }
 
     /// Downcast support
-    fn as_any(&self) -> &dyn Any;
+    ///
+    /// **Auto-implemented!** You don't need to implement this manually.
+    fn as_any(&self) -> &dyn Any {
+        self.as_any_widget()
+    }
 
     /// Get TypeId
     fn type_id(&self) -> TypeId {
@@ -624,7 +648,7 @@ pub trait RenderWidget: CloneRenderWidget {
 /// - Positioned (in Stack)
 /// - Flexible (in Row/Column)
 /// - TableCell (in Table)
-pub trait ParentDataWidget: CloneParentDataWidget {
+pub trait ParentDataWidget: CloneParentDataWidget + AsAnyWidget {
     /// Get the child widget
     fn child(&self) -> &Widget;
 
@@ -644,7 +668,11 @@ pub trait ParentDataWidget: CloneParentDataWidget {
     }
 
     /// Downcast support
-    fn as_any(&self) -> &dyn Any;
+    ///
+    /// **Auto-implemented!** You don't need to implement this manually.
+    fn as_any(&self) -> &dyn Any {
+        self.as_any_widget()
+    }
 
     /// Get TypeId
     fn type_id(&self) -> TypeId {

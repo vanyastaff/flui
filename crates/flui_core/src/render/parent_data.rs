@@ -7,7 +7,7 @@
 //! # Architecture
 //!
 //! The `ParentData` trait provides:
-//! - **Type-safe downcasting** via `downcast-rs` for accessing concrete types
+//! - **Type-safe downcasting** via automatic `as_any()` methods
 //! - **Debug formatting** for all implementations
 //! - **Thread safety** (`Send + Sync`) for concurrent rendering
 //!
@@ -29,8 +29,8 @@
 //! // Store as trait object
 //! let boxed: Box<dyn ParentData> = Box::new(data);
 //!
-//! // Downcast to access concrete type
-//! if let Some(box_data) = boxed.downcast_ref::<BoxParentData>() {
+//! // Downcast to access concrete type using as_any()
+//! if let Some(box_data) = boxed.as_any().downcast_ref::<BoxParentData>() {
 //!     println!("Offset: {:?}", box_data.offset());
 //! }
 //! ```
@@ -39,6 +39,38 @@ use std::any::Any;
 use std::fmt;
 
 use flui_types::Offset;
+
+// ============================================================================
+// Helper trait for auto as_any() implementation
+// ============================================================================
+
+/// Helper trait that provides as_any() automatically for all ParentData types.
+///
+/// This trait has a blanket implementation for all types that implement the
+/// main trait bounds, allowing automatic downcasting support without manual
+/// implementation.
+trait AsAnyParentData: fmt::Debug + Send + Sync + 'static {
+    fn as_any_parent_data(&self) -> &dyn Any;
+    fn as_any_parent_data_mut(&mut self) -> &mut dyn Any;
+}
+
+/// Blanket implementation: All 'static types get as_any() for free
+impl<T> AsAnyParentData for T
+where
+    T: fmt::Debug + Send + Sync + 'static,
+{
+    fn as_any_parent_data(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_parent_data_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// ============================================================================
+// Main ParentData trait
+// ============================================================================
 
 /// ParentData - metadata that a parent Render attaches to child elements
 ///
@@ -52,6 +84,11 @@ use flui_types::Offset;
 /// All ParentData implementations must be `Send + Sync` to enable concurrent
 /// rendering operations across threads.
 ///
+/// # Automatic Downcasting
+///
+/// The `as_any()` and `as_any_mut()` methods are provided automatically
+/// through a helper trait. You don't need to implement them manually.
+///
 /// # Example Implementation
 ///
 /// ```rust,ignore
@@ -62,8 +99,7 @@ use flui_types::Offset;
 /// }
 ///
 /// impl ParentData for FlexParentData {
-///     fn as_any(&self) -> &dyn Any { self }
-///     fn as_any_mut(&mut self) -> &mut dyn Any { self }
+///     // No need to implement as_any() - it's automatic!
 /// }
 ///
 /// // Use in layout code:
@@ -73,26 +109,20 @@ use flui_types::Offset;
 ///     }
 /// }
 /// ```
-pub trait ParentData: fmt::Debug + Send + Sync + 'static {
+pub trait ParentData: AsAnyParentData {
     /// Downcast to &dyn Any for type-safe downcasting
     ///
-    /// # Implementation
-    ///
-    /// Always implement as:
-    /// ```ignore
-    /// fn as_any(&self) -> &dyn Any { self }
-    /// ```
-    fn as_any(&self) -> &dyn Any;
+    /// This method is automatically implemented via the helper trait.
+    fn as_any(&self) -> &dyn Any {
+        self.as_any_parent_data()
+    }
 
     /// Downcast to &mut dyn Any for mutable downcasting
     ///
-    /// # Implementation
-    ///
-    /// Always implement as:
-    /// ```ignore
-    /// fn as_any_mut(&mut self) -> &mut dyn Any { self }
-    /// ```
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    /// This method is automatically implemented via the helper trait.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self.as_any_parent_data_mut()
+    }
 
     /// Try to access this ParentData as ParentDataWithOffset
     ///
@@ -161,13 +191,7 @@ pub trait ParentDataWithOffset: ParentData {
 // This allows Renders that don't need parent data to use simple APIs
 // without requiring a dedicated NoParentData type.
 impl ParentData for () {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
+    // as_any() and as_any_mut() are now auto-implemented!
 }
 
 /// Box parent data - stores offset for positioned children
@@ -252,14 +276,6 @@ impl BoxParentData {
 }
 
 impl ParentData for BoxParentData {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
     fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
         Some(self)
     }
@@ -511,14 +527,6 @@ impl<ChildId> ParentData for ContainerBoxParentData<ChildId>
 where
     ChildId: fmt::Debug + Send + Sync + 'static,
 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
     fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
         Some(self)
     }
