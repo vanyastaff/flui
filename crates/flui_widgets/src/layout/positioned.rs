@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, Widget, ParentDataWidget, ParentData};
+use flui_core::{BoxedWidget, Widget, ParentDataWidget};
 use flui_rendering::StackParentData;
 
 /// A widget that controls where a child of a Stack is positioned.
@@ -221,7 +221,7 @@ impl Positioned {
             bottom: Some(0.0),
             width: None,
             height: None,
-            child: Some(Box::new(child)),
+            child: Some(BoxedWidget::new(child)),
         }
     }
 
@@ -254,7 +254,7 @@ impl Positioned {
             bottom: None,
             width: Some(width),
             height: Some(height),
-            child: Some(Box::new(child)),
+            child: Some(BoxedWidget::new(child)),
         }
     }
 
@@ -284,7 +284,7 @@ impl Positioned {
             bottom,
             width: None,
             height: None,
-            child: Some(Box::new(child)),
+            child: Some(BoxedWidget::new(child)),
         }
     }
 
@@ -296,7 +296,10 @@ impl Positioned {
     /// let mut widget = Positioned::new();
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
@@ -376,36 +379,21 @@ impl Default for Positioned {
     }
 }
 
-// ========== ProxyWidget Implementation ==========
-
-impl ProxyWidget for Positioned {
-    fn child(&self) -> &dyn DynWidget {
-        self.child.as_ref()
-            .map(|child| &**child as &dyn DynWidget)
-            .expect("Positioned must have a child")
-    }
-
-    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
-        // TODO: Support keys by wrapping String in ValueKey<String>
-        None
-    }
-}
-
 // ========== ParentDataWidget Implementation ==========
 
-impl ParentDataWidget<StackParentData> for Positioned {
-    fn create_parent_data(&self) -> Box<dyn ParentData> {
-        // Call the method from impl Positioned block (line 361)
-        Box::new(Positioned::create_parent_data(self))
+impl ParentDataWidget for Positioned {
+    type ParentDataType = StackParentData;
+
+    fn apply_parent_data(&self, _render_object: &mut ()) {
+        // TODO: apply_parent_data needs DynRenderObject trait
+        // This will be implemented when the render object trait is ready
     }
 
-    fn debug_typical_ancestor_widget_class(&self) -> &'static str {
-        "Stack"
+    fn child(&self) -> &BoxedWidget {
+        self.child.as_ref()
+            .expect("Positioned must have a child")
     }
 }
-
-// Auto-implement Widget using macro
-impl_widget_for_parent_data!(Positioned, StackParentData);
 
 // bon Builder Extensions
 use positioned_builder::{IsUnset, SetChild, State};

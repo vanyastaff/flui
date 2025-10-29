@@ -40,11 +40,13 @@ impl AppLogic for ClippingTestApp {
         );
 
         // 1. No clipping (baseline)
+        // Expected: Full circle + cross visible
         painter.text("No Clipping", Point::new(50.0, 70.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         self.draw_test_pattern(painter, Point::new(110.0, 120.0));
 
         // 2. Clip Rect
+        // Expected: Circle and cross clipped to rectangular boundary (red outline)
         painter.text("Clip Rect", Point::new(250.0, 70.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         painter.save();
@@ -58,6 +60,7 @@ impl AppLogic for ClippingTestApp {
         );
 
         // 3. Clip Rounded Rect
+        // Expected: Circle and cross clipped to rounded rectangle with 20px corner radius
         painter.text("Clip RRect", Point::new(450.0, 70.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         painter.save();
@@ -77,14 +80,15 @@ impl AppLogic for ClippingTestApp {
         );
 
         // 4. Clip Oval
+        // Expected: Circle and cross clipped to circular/oval boundary
         painter.text("Clip Oval", Point::new(650.0, 70.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         painter.save();
         let oval_rect = Rect::from_xywh(670.0, 90.0, 80.0, 80.0);
         painter.clip_oval(oval_rect);
-        self.draw_test_pattern(painter, Point::new(700.0, 120.0));
+        self.draw_test_pattern(painter, Point::new(710.0, 130.0));
         painter.restore();
-        // Draw clip boundary
+        // Draw clip boundary (center: 670+40=710, 90+40=130)
         painter.circle(
             Point::new(710.0, 130.0),
             40.0,
@@ -92,6 +96,7 @@ impl AppLogic for ClippingTestApp {
         );
 
         // 5. Nested Clipping (rect inside rect)
+        // Expected: Pattern clipped to intersection of two rects (blue inner boundary)
         painter.text("Nested Clip", Point::new(50.0, 220.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         painter.save();
@@ -112,6 +117,7 @@ impl AppLogic for ClippingTestApp {
         );
 
         // 6. Clip with Transform
+        // Expected: Pattern clipped to rotated rectangle (30 degrees)
         painter.text("Clip + Rotate", Point::new(250.0, 220.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         painter.save();
@@ -120,15 +126,25 @@ impl AppLogic for ClippingTestApp {
         painter.clip_rect(Rect::from_xywh(-40.0, -40.0, 80.0, 80.0));
         self.draw_test_pattern(painter, Point::new(-10.0, -10.0));
         painter.restore();
+        // Draw clip boundary (rotated rect)
+        painter.save();
+        painter.translate(flui_types::Offset::new(320.0, 290.0));
+        painter.rotate(std::f32::consts::PI / 6.0);
+        painter.rect(
+            Rect::from_xywh(-40.0, -40.0, 80.0, 80.0),
+            &Paint { color: [1.0, 0.0, 0.0, 1.0], stroke_width: 2.0, anti_alias: true }
+        );
+        painter.restore();
 
         // 7. Multiple Overlapping Clips
+        // Expected: Pattern clipped to intersection of rect and oval (red rect + blue circle)
         painter.text("Overlapping Clips", Point::new(450.0, 220.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         painter.save();
         painter.clip_rect(Rect::from_xywh(480.0, 240.0, 100.0, 100.0));
         painter.save();
         painter.clip_oval(Rect::from_xywh(500.0, 260.0, 80.0, 80.0));
-        self.draw_test_pattern(painter, Point::new(530.0, 280.0));
+        self.draw_test_pattern(painter, Point::new(540.0, 300.0));
         painter.restore();
         painter.restore();
         // Draw clip boundaries
@@ -143,6 +159,7 @@ impl AppLogic for ClippingTestApp {
         );
 
         // 8. Clip with Gradient
+        // Expected: Red-to-blue gradient clipped to rounded rectangle
         painter.text("Clip + Gradient", Point::new(50.0, 390.0), 14.0,
             &Paint { color: [0.0, 0.0, 0.0, 1.0], ..Default::default() });
         painter.save();

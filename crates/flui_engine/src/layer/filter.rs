@@ -176,7 +176,7 @@ impl Layer for FilterLayer {
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed && self.child.as_ref().map_or(false, |c| c.is_visible())
+        !self.disposed && self.child.as_ref().is_some_and(|c| c.is_visible())
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
@@ -184,7 +184,7 @@ impl Layer for FilterLayer {
             return false;
         }
 
-        self.child.as_ref().map_or(false, |c| c.hit_test(position, result))
+        self.child.as_ref().is_some_and(|c| c.hit_test(position, result))
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -192,7 +192,7 @@ impl Layer for FilterLayer {
             return false;
         }
 
-        self.child.as_mut().map_or(false, |c| c.handle_event(event))
+        self.child.as_mut().is_some_and(|c| c.handle_event(event))
     }
 
     fn dispose(&mut self) {

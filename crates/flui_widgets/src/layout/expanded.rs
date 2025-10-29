@@ -17,7 +17,7 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::{BoxedWidget, DynWidget, Widget, ParentDataWidget, ParentData};
+use flui_core::{BoxedWidget, Widget, ParentDataWidget};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
@@ -109,7 +109,7 @@ pub struct Expanded {
     pub flex: i32,
 
     /// The child widget.
-    pub child: Box<dyn DynWidget>,
+    pub child: BoxedWidget,
 }
 
 impl Expanded {
@@ -127,7 +127,7 @@ impl Expanded {
     pub fn new(child: impl Widget + 'static) -> Self {
         Self {
             flex: 1,
-            child: Box::new(child),
+            child: BoxedWidget::new(child),
         }
     }
 
@@ -147,7 +147,7 @@ impl Expanded {
     pub fn with_flex(flex: i32, child: impl Widget + 'static) -> Self {
         Self {
             flex,
-            child: Box::new(child),
+            child: BoxedWidget::new(child),
         }
     }
 
@@ -172,33 +172,20 @@ impl Expanded {
     }
 }
 
-// ========== ProxyWidget Implementation ==========
-
-impl ProxyWidget for Expanded {
-    fn child(&self) -> &dyn DynWidget {
-        &*self.child
-    }
-
-    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
-        None
-    }
-}
-
 // ========== ParentDataWidget Implementation ==========
 
-impl ParentDataWidget<FlexParentData> for Expanded {
-    fn create_parent_data(&self) -> Box<dyn ParentData> {
-        // Call the method from impl Expanded block (line 171)
-        Box::new(Expanded::create_parent_data(self))
+impl ParentDataWidget for Expanded {
+    type ParentDataType = FlexParentData;
+
+    fn apply_parent_data(&self, _render_object: &mut ()) {
+        // TODO: apply_parent_data needs DynRenderObject trait
+        // This will be implemented when the render object trait is ready
     }
 
-    fn debug_typical_ancestor_widget_class(&self) -> &'static str {
-        "Flex"
+    fn child(&self) -> &BoxedWidget {
+        &self.child
     }
 }
-
-// Auto-implement Widget using macro
-impl_widget_for_parent_data!(Expanded, FlexParentData);
 
 /// Macro for creating Expanded with declarative syntax.
 ///

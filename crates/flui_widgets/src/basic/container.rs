@@ -37,12 +37,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, StatelessWidget, Widget};
+use flui_core::{BoxedWidget, BuildContext, DynWidget, StatelessWidget, Widget};
 use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color, EdgeInsets};
-
-// Use the simplified 2D Matrix4 from rendering for transforms
-type Matrix4 = flui_rendering::objects::effects::transform::Matrix4;
+use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets};
+use std::fmt;
 
 /// A convenience widget that combines common painting, positioning, and sizing widgets.
 ///
@@ -138,11 +136,12 @@ pub struct Container {
     /// Width and height constraints override min/max constraints in BoxConstraints.
     pub constraints: Option<BoxConstraints>,
 
-    /// The transformation matrix to apply to the container.
-    ///
-    /// If non-null, the container will be wrapped in a Transform widget.
-    /// The transformation is applied OUTSIDE all other effects (decoration, alignment, etc).
-    pub transform: Option<Matrix4>,
+    // Note: Transform feature is currently disabled
+    // /// The transformation matrix to apply to the container.
+    // ///
+    // /// If non-null, the container will be wrapped in a Transform widget.
+    // /// The transformation is applied OUTSIDE all other effects (decoration, alignment, etc).
+    // pub transform: Option<Matrix4>,
 
     /// The child contained by the container.
     ///
@@ -173,7 +172,7 @@ impl Container {
             width: None,
             height: None,
             constraints: None,
-            transform: None,
+            // transform: None,  // Transform feature is currently disabled
             child: None,
         }
     }
@@ -186,7 +185,10 @@ impl Container {
     /// let mut container = Container::new();
     /// container.set_child(some_widget);
     /// ```
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
@@ -258,7 +260,7 @@ impl Default for Container {
 // Widget trait will be automatically implemented via StatelessWidget trait below
 
 impl StatelessWidget for Container {
-    fn build(&self, _context: &Context) -> Box<dyn DynWidget> {
+    fn build(&self, _context: &BuildContext) -> BoxedWidget {
         // Build widget tree from inside out:
         // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
         //
@@ -270,16 +272,16 @@ impl StatelessWidget for Container {
         //  then the Container tries to expand to fit the parent, and then positions
         //  the child within itself as per the alignment."
 
-        let mut current: Box<dyn DynWidget> = if let Some(child) = &self.child {
+        let mut current: BoxedWidget = if let Some(child) = &self.child {
             child.clone()
         } else {
             // No child - use empty SizedBox
-            Box::new(crate::SizedBox::new())
+            BoxedWidget::new(crate::SizedBox::new())
         };
 
         // Apply padding (inner spacing around child)
         if let Some(padding) = self.padding {
-            current = Box::new(crate::Padding {
+            current = BoxedWidget::new(crate::Padding {
                 key: None,
                 padding,
                 child: Some(current),
@@ -289,7 +291,7 @@ impl StatelessWidget for Container {
         // Apply alignment BEFORE decoration!
         // This allows decoration to be on the outside and receive tight constraints
         if let Some(alignment) = self.alignment {
-            current = Box::new(crate::Align {
+            current = BoxedWidget::new(crate::Align {
                 key: None,
                 alignment,
                 width_factor: None,
@@ -301,7 +303,7 @@ impl StatelessWidget for Container {
         // Apply decoration or color AFTER alignment
         // Decoration will now receive tight constraints from SizedBox/margin
         if let Some(decoration) = &self.decoration {
-            current = Box::new(crate::DecoratedBox {
+            current = BoxedWidget::new(crate::DecoratedBox {
                 key: None,
                 decoration: decoration.clone(),
                 position: crate::DecorationPosition::Background,
@@ -312,7 +314,7 @@ impl StatelessWidget for Container {
                 color: Some(color),
                 ..Default::default()
             };
-            current = Box::new(crate::DecoratedBox {
+            current = BoxedWidget::new(crate::DecoratedBox {
                 key: None,
                 decoration,
                 position: crate::DecorationPosition::Background,
@@ -325,7 +327,7 @@ impl StatelessWidget for Container {
         // Note: margin is implemented using Padding widget (same as Flutter)
         // The semantic difference (margin vs padding) is maintained by the widget order
         if let Some(margin) = self.margin {
-            current = Box::new(crate::Padding {
+            current = BoxedWidget::new(crate::Padding {
                 key: None,
                 padding: margin,
                 child: Some(current),
@@ -335,7 +337,7 @@ impl StatelessWidget for Container {
         // Apply width/height constraints
         // These constraints apply to the TOTAL size (including margin)
         if self.width.is_some() || self.height.is_some() {
-            current = Box::new(crate::SizedBox {
+            current = BoxedWidget::new(crate::SizedBox {
                 key: None,
                 width: self.width,
                 height: self.height,
@@ -343,16 +345,17 @@ impl StatelessWidget for Container {
             });
         }
 
-        // Apply transform LAST (outermost)
-        // Transform is applied OUTSIDE all other effects
-        if let Some(transform) = self.transform {
-            current = Box::new(crate::Transform {
-                key: None,
-                transform,
-                transform_hit_tests: true,
-                child: Some(current),
-            });
-        }
+        // Note: Transform feature is currently disabled
+        // // Apply transform LAST (outermost)
+        // // Transform is applied OUTSIDE all other effects
+        // if let Some(transform) = self.transform {
+        //     current = Box::new(crate::Transform {
+        //         key: None,
+        //         transform,
+        //         transform_hit_tests: true,
+        //         child: Some(current),
+        //     });
+        // }
 
         current
     }
@@ -376,7 +379,10 @@ where
     ///     .child(some_widget)
     ///     .build()
     /// ```
-    pub fn child(self, child: impl Widget + 'static) -> ContainerBuilder<SetChild<S>> {
+    pub fn child<W>(self, child: W) -> ContainerBuilder<SetChild<S>>
+    where
+        W: Widget + fmt::Debug + Send + Sync + Clone + 'static,
+    {
         // bon's generated setter takes Box directly, not Option
         // bon wraps it in Option internally
         self.child_internal(BoxedWidget::new(child))

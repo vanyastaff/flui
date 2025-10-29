@@ -129,7 +129,7 @@ impl Default for Center {
 }
 
 // Implement Widget trait with associated type
-
+impl Widget for Center {}
 
 // bon Builder Extensions
 use center_builder::{IsUnset, SetChild, State};

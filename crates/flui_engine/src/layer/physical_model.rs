@@ -426,7 +426,7 @@ impl Layer for PhysicalModelLayer {
     }
 
     fn is_visible(&self) -> bool {
-        !self.disposed && self.child.as_ref().map_or(false, |c| c.is_visible())
+        !self.disposed && self.child.as_ref().is_some_and(|c| c.is_visible())
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
@@ -472,7 +472,7 @@ impl Layer for PhysicalModelLayer {
             return false;
         }
 
-        self.child.as_mut().map_or(false, |c| c.handle_event(event))
+        self.child.as_mut().is_some_and(|c| c.handle_event(event))
     }
 
     fn dispose(&mut self) {

@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::{BoxedWidget, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
 use flui_rendering::{RenderPadding, SingleArity};
 use flui_types::EdgeInsets;
 
@@ -148,7 +148,7 @@ impl Default for Padding {
 }
 
 // Implement Widget trait with associated type
-
+impl Widget for Padding {}
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Padding {

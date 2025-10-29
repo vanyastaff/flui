@@ -217,7 +217,7 @@ impl Default for Align {
 }
 
 // Implement Widget trait with associated type
-
+impl Widget for Align {}
 
 // bon Builder Extensions
 use align_builder::{IsUnset, SetChild, State};

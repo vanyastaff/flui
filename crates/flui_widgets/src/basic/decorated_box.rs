@@ -196,35 +196,33 @@ impl Default for DecoratedBox {
 }
 
 // Implement Widget trait with associated type
-
+impl Widget for DecoratedBox {}
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for DecoratedBox {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+    type RenderObject = RenderDecoratedBox;
+    type Arity = flui_rendering::SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
         // Create RenderDecoratedBox with current decoration
         use flui_rendering::DecoratedBoxData;
 
         let data = DecoratedBoxData::with_position(self.decoration.clone(), self.position);
-        let render_decorated = RenderDecoratedBox::new(data);
-
-        Box::new(render_decorated)
+        RenderDecoratedBox::new(data)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
         // Update RenderDecoratedBox when decoration or position changes
-        if let Some(decorated) = render_object.downcast_mut::<RenderDecoratedBox>() {
-            decorated.set_decoration(self.decoration.clone());
-            decorated.set_position(self.position);
-        }
+        render_object.set_decoration(self.decoration.clone());
+        render_object.set_position(self.position);
     }
 }
 
 // Implement SingleChildRenderObjectWidget
 impl SingleChildRenderObjectWidget for DecoratedBox {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .unwrap_or_else(|| panic!("DecoratedBox requires a child"))
     }
 }

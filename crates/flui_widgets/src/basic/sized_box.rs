@@ -149,7 +149,10 @@ impl SizedBox {
     /// let mut sized_box = SizedBox::square(100.0);
     /// sized_box.set_child(some_widget);
     /// ```
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
@@ -429,30 +432,31 @@ mod tests {
     }
 }
 
+impl Widget for SizedBox {}
+
 impl RenderObjectWidget for SizedBox {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-        use flui_core::BoxConstraints;
-        use flui_rendering::objects::layout::constrained_box::ConstrainedBoxData;
+    type RenderObject = RenderConstrainedBox;
+    type Arity = flui_rendering::SingleArity;
+
+    fn create_render_object(&self) -> Self::RenderObject {
+        use flui_types::BoxConstraints;
 
         // Create tight constraints for specified dimensions
         let constraints = BoxConstraints::tight_for(self.width, self.height);
-        Box::new(RenderConstrainedBox::new(ConstrainedBoxData::new(constraints)))
+        RenderConstrainedBox::new(constraints)
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        use flui_core::BoxConstraints;
-        if let Some(constrained) = render_object.downcast_mut::<RenderConstrainedBox>() {
-            let constraints = BoxConstraints::tight_for(self.width, self.height);
-            constrained.set_additional_constraints(constraints);
-        }
+    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        use flui_types::BoxConstraints;
+        let constraints = BoxConstraints::tight_for(self.width, self.height);
+        render_object.set_additional_constraints(constraints);
     }
 }
 
 impl SingleChildRenderObjectWidget for SizedBox {
-    fn child(&self) -> &dyn DynWidget {
+    fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
             .expect("SizedBox requires a child widget")
     }
 }

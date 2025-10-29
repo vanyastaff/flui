@@ -357,7 +357,9 @@ impl RenderObjectWidget for MouseRegion {
         };
         render_object.set_callbacks(callbacks);
     }
+}
 
+impl SingleChildRenderObjectWidget for MouseRegion {
     fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()

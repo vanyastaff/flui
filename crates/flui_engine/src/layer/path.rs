@@ -285,7 +285,7 @@ impl PathLayer {
                 }
                 PathCommand::AddOval(rect) => {
                     painter.ellipse(
-                        rect.center().into(),
+                        rect.center(),
                         rect.width() / 2.0,
                         rect.height() / 2.0,
                         &self.paint
@@ -293,7 +293,7 @@ impl PathLayer {
                 }
                 PathCommand::AddArc(rect, start_angle, sweep_angle) => {
                     painter.arc(
-                        rect.center().into(),
+                        rect.center(),
                         rect.width().max(rect.height()) / 2.0,
                         *start_angle,
                         start_angle + sweep_angle,

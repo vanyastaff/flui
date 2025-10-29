@@ -256,7 +256,9 @@ impl RenderObjectWidget for AbsorbPointer {
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
         render_object.set_absorbing(self.absorbing);
     }
+}
 
+impl SingleChildRenderObjectWidget for AbsorbPointer {
     fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()

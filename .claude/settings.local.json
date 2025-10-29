@@ -87,7 +87,8 @@
       "WebFetch(domain:api.flutter.dev)",
       "Bash(taskkill:*)",
       "Bash(pkill:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(cargo clippy:*)"
     ],
     "deny": [],
     "ask": []

@@ -58,20 +58,27 @@
 // Widget modules organized by category
 pub mod basic;
 pub mod layout;
-pub mod visual_effects;
-pub mod gestures;
-pub mod interaction;
+
+// Temporarily disabled - will be fixed later
+// pub mod visual_effects;
+// pub mod gestures;
+// pub mod interaction;
 
 
 
 
 
 // Re-exports for convenient top-level access
-pub use basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox};
-pub use layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
-pub use visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
-pub use gestures::GestureDetector;
-pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+// Essential widgets for Container and Flex layout
+pub use basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox};
+pub use layout::{Column, Expanded, Flexible, Row};
+
+// Temporarily disabled - will be fixed later
+// pub use basic::{AspectRatio, Button, Text};
+// pub use layout::{IndexedStack, Positioned, Stack};
+// pub use visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
+// pub use gestures::GestureDetector;
+// pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
 pub use flui_core::{Widget, DynWidget, BoxedWidget};
@@ -89,12 +96,16 @@ pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
 /// use flui_widgets::prelude::*;
 /// ```
 pub mod prelude {
-    // Re-export all widgets
-    pub use crate::basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox, Text};
-    pub use crate::layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
-    pub use crate::visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
-    pub use crate::gestures::GestureDetector;
-    pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+    // Re-export essential widgets for Container and Flex layout
+    pub use crate::basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox};
+    pub use crate::layout::{Column, Expanded, Flexible, Row};
+
+    // Temporarily disabled
+    // pub use crate::basic::{AspectRatio, Button, Text};
+    // pub use crate::layout::{IndexedStack, Positioned, Stack};
+    // pub use crate::visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
+    // pub use crate::gestures::GestureDetector;
+    // pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
     // Re-export core types
     pub use flui_core::{BuildContext, Widget};

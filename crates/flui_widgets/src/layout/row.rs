@@ -32,7 +32,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
+use flui_core::{BoxedWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
 use flui_rendering::{RenderFlex, MultiArity};
 use flui_types::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
@@ -144,7 +144,7 @@ impl Default for Row {
 }
 
 // Implement Widget trait with associated type
-
+impl Widget for Row {}
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Row {
@@ -163,7 +163,9 @@ impl RenderObjectWidget for Row {
         render_object.cross_axis_alignment = self.cross_axis_alignment;
         render_object.main_axis_size = self.main_axis_size;
     }
+}
 
+impl MultiChildRenderObjectWidget for Row {
     fn children(&self) -> &[BoxedWidget] {
         &self.children
     }

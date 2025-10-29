@@ -256,7 +256,9 @@ impl RenderObjectWidget for IgnorePointer {
     fn update_render_object(&self, render_object: &mut Self::RenderObject) {
         render_object.set_ignoring(self.ignoring);
     }
+}
 
+impl SingleChildRenderObjectWidget for IgnorePointer {
     fn child(&self) -> &BoxedWidget {
         self.child
             .as_ref()

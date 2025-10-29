@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, Widget, ParentDataWidget, ParentData};
+use flui_core::{BoxedWidget, Widget, ParentDataWidget};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
@@ -164,7 +164,7 @@ impl Flexible {
             key: None,
             flex,
             fit: FlexFit::Loose,
-            child: Some(Box::new(child)),
+            child: Some(BoxedWidget::new(child)),
         }
     }
 
@@ -187,7 +187,7 @@ impl Flexible {
             key: None,
             flex,
             fit: FlexFit::Tight,
-            child: Some(Box::new(child)),
+            child: Some(BoxedWidget::new(child)),
         }
     }
 
@@ -199,7 +199,10 @@ impl Flexible {
     /// let mut widget = Flexible::builder().flex(1).build();
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child(&mut self, child: impl Widget + 'static) {
+    pub fn set_child<W>(&mut self, child: W)
+    where
+        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+    {
         self.child = Some(BoxedWidget::new(child));
     }
 
@@ -248,36 +251,21 @@ impl Default for Flexible {
     }
 }
 
-// ========== ProxyWidget Implementation ==========
-
-impl ProxyWidget for Flexible {
-    fn child(&self) -> &dyn DynWidget {
-        self.child.as_ref()
-            .map(|child| &**child as &dyn DynWidget)
-            .expect("Flexible must have a child")
-    }
-
-    fn key(&self) -> Option<&dyn flui_core::foundation::Key> {
-        // TODO: Support keys by wrapping String in ValueKey<String>
-        None
-    }
-}
-
 // ========== ParentDataWidget Implementation ==========
 
-impl ParentDataWidget<FlexParentData> for Flexible {
-    fn create_parent_data(&self) -> Box<dyn ParentData> {
-        // Call the method from impl Flexible block (line 230)
-        Box::new(Flexible::create_parent_data(self))
+impl ParentDataWidget for Flexible {
+    type ParentDataType = FlexParentData;
+
+    fn apply_parent_data(&self, _render_object: &mut ()) {
+        // TODO: apply_parent_data needs DynRenderObject trait
+        // This will be implemented when the render object trait is ready
     }
 
-    fn debug_typical_ancestor_widget_class(&self) -> &'static str {
-        "Flex"
+    fn child(&self) -> &BoxedWidget {
+        self.child.as_ref()
+            .expect("Flexible must have a child")
     }
 }
-
-// Auto-implement Widget using macro
-impl_widget_for_parent_data!(Flexible, FlexParentData);
 
 // bon Builder Extensions
 use flexible_builder::{IsUnset, SetChild, State};

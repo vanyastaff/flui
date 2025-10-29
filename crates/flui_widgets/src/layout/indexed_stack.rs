@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
+use flui_core::{BoxedWidget, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
 use flui_rendering::{RenderIndexedStack, MultiArity};
 use flui_types::layout::{Alignment, StackFit};
 
@@ -254,7 +254,7 @@ impl Default for IndexedStack {
 }
 
 // Implement Widget trait with associated type
-
+impl Widget for IndexedStack {}
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for IndexedStack {
@@ -269,7 +269,9 @@ impl RenderObjectWidget for IndexedStack {
         render_object.set_index(self.index);
         render_object.set_alignment(self.alignment);
     }
+}
 
+impl MultiChildRenderObjectWidget for IndexedStack {
     fn children(&self) -> &[BoxedWidget] {
         &self.children
     }
