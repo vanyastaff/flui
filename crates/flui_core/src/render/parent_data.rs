@@ -190,9 +190,7 @@ pub trait ParentDataWithOffset: ParentData {
 //
 // This allows Renders that don't need parent data to use simple APIs
 // without requiring a dedicated NoParentData type.
-impl ParentData for () {
-    // as_any() and as_any_mut() are now auto-implemented!
-}
+impl ParentData for () {}
 
 /// Box parent data - stores offset for positioned children
 ///

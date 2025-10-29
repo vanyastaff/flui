@@ -350,8 +350,6 @@ mod tests {
         fn dispose(&mut self) {
             // Cleanup
         }
-
-        // as_any() and as_any_mut() are now auto-implemented!
     }
 
     #[test]
