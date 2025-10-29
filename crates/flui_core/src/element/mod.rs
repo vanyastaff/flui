@@ -59,6 +59,7 @@ pub use build_context::BuildContext;
 pub use component::ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
 pub use element::Element;
+pub use lifecycle::ElementLifecycle;
 pub use element_base::ElementBase;
 pub use element_tree::ElementTree;
 pub use inherited::InheritedElement;
@@ -67,18 +68,6 @@ pub use pipeline_owner::PipelineOwner;
 pub use render_object_element::RenderElement;
 pub use stateful::{BoxedState, DynState, StatefulElement};
 
-/// Element lifecycle states
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ElementLifecycle {
-    /// Element created but not yet mounted
-    Initial,
-    /// Element is active in the tree
-    Active,
-    /// Element removed from tree but might be reinserted
-    Inactive,
-    /// Element permanently removed
-    Defunct,
-}
 
 /// Element ID - stable index into the ElementTree slab
 ///

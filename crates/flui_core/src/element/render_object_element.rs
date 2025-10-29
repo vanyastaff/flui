@@ -6,7 +6,7 @@
 use parking_lot::RwLock;
 use std::cell::RefCell;
 
-use super::ElementLifecycle;
+use super::{ElementBase, ElementLifecycle};
 use crate::element::ElementId;
 use crate::render::{RenderNode, RenderState};
 use crate::widget::{Widget};
@@ -54,8 +54,8 @@ use crate::widget::{Widget};
 /// 5. **paint()** - Render paint pass
 /// 6. **unmount()** - Render cleanup
 pub struct RenderElement {
-    /// The widget this element represents (type-erased)
-    widget: Widget,
+    /// Common element data (widget, parent, slot, lifecycle, dirty)
+    base: ElementBase,
 
     /// The render object created by the widget (type-erased)
     ///
@@ -79,35 +79,19 @@ pub struct RenderElement {
     /// position and size this child.
     parent_data: Option<Box<dyn crate::render::ParentData>>,
 
-    /// Parent element ID
-    parent: Option<ElementId>,
-
     /// Child elements (count enforced by Render arity at runtime)
     children: Vec<ElementId>,
-
-    /// Slot position in parent's child list
-    slot: usize,
-
-    /// Lifecycle state
-    lifecycle: ElementLifecycle,
-
-    /// Dirty flag (needs rebuild)
-    dirty: bool,
 }
 
 // Manual Debug implementation because RefCell<Box<dyn Trait>> doesn't auto-derive
 impl std::fmt::Debug for RenderElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderElement")
-            .field("widget", &"<Widget>")
+            .field("base", &self.base)
             .field("render_object", &"<RefCell<RenderNode>>")
             .field("render_state", &self.render_state)
             .field("parent_data", &self.parent_data.is_some())
-            .field("parent", &self.parent)
             .field("children", &self.children)
-            .field("slot", &self.slot)
-            .field("lifecycle", &self.lifecycle)
-            .field("dirty", &self.dirty)
             .finish()
     }
 }
@@ -129,15 +113,11 @@ impl RenderElement {
     /// ```
     pub fn new(widget: Widget, render_object: RenderNode) -> Self {
         Self {
-            widget,
+            base: ElementBase::new(widget),
             render_object: RefCell::new(render_object),
             render_state: RwLock::new(RenderState::new()),
             parent_data: None,
-            parent: None,
             children: Vec::new(),
-            slot: 0,
-            lifecycle: ElementLifecycle::Initial,
-            dirty: true,
         }
     }
 
@@ -147,7 +127,7 @@ impl RenderElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &self.widget
+        self.base.widget()
     }
 
     /// Get reference to the render object
@@ -228,13 +208,13 @@ impl RenderElement {
     ///
     /// The new widget must be compatible (same type and key) with the current widget.
     pub fn update(&mut self, new_widget: Widget) {
-        self.widget = new_widget;
+        self.base.set_widget(new_widget);
 
         // TODO: Call update_render_object to sync config to render object
         // This requires calling a method on the type-erased widget
         // For now, mark dirty to trigger rebuild
 
-        self.dirty = true;
+        self.base.mark_dirty();
     }
 
     /// Set children (enforces arity constraints at runtime)
@@ -263,7 +243,7 @@ impl RenderElement {
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
-        self.parent
+        self.base.parent()
     }
 
     /// Get iterator over child element IDs
@@ -276,7 +256,7 @@ impl RenderElement {
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
+        self.base.lifecycle()
     }
 
     /// Mount element to tree
@@ -284,10 +264,7 @@ impl RenderElement {
     /// Sets parent, slot, and transitions to Active lifecycle state.
     /// Marks element as dirty to trigger initial build.
     pub fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
-        self.parent = parent;
-        self.slot = slot;
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Will rebuild on first frame
+        self.base.mount(parent, slot);
     }
 
     /// Unmount element from tree
@@ -295,7 +272,7 @@ impl RenderElement {
     /// Transitions to Defunct lifecycle state and clears children.
     /// The children will be unmounted by ElementTree separately.
     pub fn unmount(&mut self) {
-        self.lifecycle = ElementLifecycle::Defunct;
+        self.base.unmount();
         // Children will be unmounted by ElementTree
         self.children.clear();
     }
@@ -304,15 +281,14 @@ impl RenderElement {
     ///
     /// Called when element is temporarily deactivated (e.g., moved to cache).
     pub fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
+        self.base.deactivate();
     }
 
     /// Activate element
     ///
     /// Called when element is reactivated. Marks dirty to trigger rebuild.
     pub fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Rebuild when reactivated
+        self.base.activate();
     }
 
     /// Check if element needs rebuild
@@ -321,13 +297,13 @@ impl RenderElement {
     #[inline]
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.base.is_dirty()
     }
 
     /// Mark element as needing rebuild
     #[inline]
     pub fn mark_dirty(&mut self) {
-        self.dirty = true;
+        self.base.mark_dirty();
     }
 
     /// Perform rebuild
@@ -343,7 +319,7 @@ impl RenderElement {
         _element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, Widget, usize)> {
-        self.dirty = false;
+        self.base.clear_dirty();
         Vec::new()
     }
 
@@ -509,7 +485,8 @@ mod tests {
         assert!(element.is_dirty());
 
         // Rebuild clears dirty
-        element.rebuild(1);
+        let tree = std::sync::Arc::new(parking_lot::RwLock::new(super::ElementTree::new()));
+        element.rebuild(1, tree);
         assert!(!element.is_dirty());
 
         // Mark dirty

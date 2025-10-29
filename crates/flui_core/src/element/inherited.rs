@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use crate::ElementId;
-use crate::element::ElementLifecycle;
+use crate::element::{ElementBase, ElementLifecycle};
 use crate::widget::{Widget};
 
 /// Element for InheritedWidget
@@ -17,10 +17,9 @@ use crate::widget::{Widget};
 ///
 /// ```text
 /// InheritedElement
-///   ├─ widget: Widget (type-erased InheritedWidget)
+///   ├─ base: ElementBase (common fields: widget, parent, slot, lifecycle, dirty)
 ///   ├─ dependents: HashSet<ElementId> (who depends on this)
-///   ├─ child_id: ElementId (single child)
-///   └─ parent: Option<ElementId>
+///   └─ child_id: ElementId (single child)
 /// ```
 ///
 /// # Dependency Tracking
@@ -36,8 +35,8 @@ use crate::widget::{Widget};
 /// 3. **unmount()** - Remove from tree, clear dependencies
 #[derive(Debug)]
 pub struct InheritedElement {
-    /// The inherited widget containing data (type-erased)
-    widget: Widget,
+    /// Common element data (widget, parent, slot, lifecycle, dirty)
+    base: ElementBase,
 
     /// Set of elements that depend on this InheritedWidget
     ///
@@ -47,31 +46,15 @@ pub struct InheritedElement {
 
     /// The single child element
     child_id: Option<ElementId>,
-
-    /// Parent element ID
-    parent: Option<ElementId>,
-
-    /// Current lifecycle state
-    lifecycle: ElementLifecycle,
-
-    /// Dirty flag
-    dirty: bool,
-
-    /// Slot in parent
-    slot: usize,
 }
 
 impl InheritedElement {
     /// Create a new InheritedElement
     pub fn new(widget: Widget) -> Self {
         Self {
-            widget,
+            base: ElementBase::new(widget),
             dependents: HashSet::new(),
             child_id: None,
-            parent: None,
-            lifecycle: ElementLifecycle::Initial,
-            dirty: true,
-            slot: 0,
         }
     }
 
@@ -79,7 +62,7 @@ impl InheritedElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &self.widget
+        self.base.widget()
     }
 
     /// Update with a new widget
@@ -88,8 +71,7 @@ impl InheritedElement {
     pub fn update(&mut self, new_widget: Widget) {
         // TODO: Call update_should_notify on the widget to check if dependents should rebuild
         // For now, always mark dependents dirty
-        self.widget = new_widget;
-        self.dirty = true;
+        self.base.set_widget(new_widget);
 
         // Mark all dependents dirty
         // (will be handled by ElementTree)
@@ -131,7 +113,7 @@ impl InheritedElement {
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
-        self.parent
+        self.base.parent()
     }
 
     /// Get iterator over child element IDs
@@ -144,46 +126,42 @@ impl InheritedElement {
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
+        self.base.lifecycle()
     }
 
     /// Mount element to tree
     pub fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
-        self.parent = parent;
-        self.slot = slot;
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true;
+        self.base.mount(parent, slot);
     }
 
     /// Unmount element from tree
     pub fn unmount(&mut self) {
-        self.lifecycle = ElementLifecycle::Defunct;
+        self.base.unmount();
         self.child_id = None;
         self.dependents.clear();
     }
 
     /// Deactivate element
     pub fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
+        self.base.deactivate();
     }
 
     /// Activate element
     pub fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true;
+        self.base.activate();
     }
 
     /// Check if element needs rebuild
     #[inline]
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.base.is_dirty()
     }
 
     /// Mark element as needing rebuild
     #[inline]
     pub fn mark_dirty(&mut self) {
-        self.dirty = true;
+        self.base.mark_dirty();
     }
 
     /// Perform rebuild
@@ -195,11 +173,11 @@ impl InheritedElement {
         _element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, Widget, usize)> {
-        if !self.dirty {
+        if !self.base.is_dirty() {
             return Vec::new();
         }
 
-        self.dirty = false;
+        self.base.clear_dirty();
 
         // InheritedElement doesn't create child widgets during rebuild
         // Child is set during initial mount

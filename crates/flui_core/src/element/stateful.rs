@@ -6,7 +6,7 @@
 use std::any::Any;
 use std::fmt;
 
-use super::ElementLifecycle;
+use super::{ElementBase, ElementLifecycle};
 use crate::{Widget, ElementId};
 
 /// Object-safe State trait
@@ -86,26 +86,14 @@ pub type BoxedState = Box<dyn DynState>;
 /// 6. **dispose()** - State cleanup
 #[derive(Debug)]
 pub struct StatefulElement {
-    /// The widget this element represents (type-erased)
-    widget: Widget,
+    /// Common element data (widget, parent, slot, lifecycle, dirty)
+    base: ElementBase,
 
     /// The state object (type-erased)
     state: BoxedState,
 
-    /// Parent element ID
-    parent: Option<ElementId>,
-
     /// Child element created by State.build()
     child: Option<ElementId>,
-
-    /// Slot position in parent's child list
-    slot: usize,
-
-    /// Lifecycle state
-    lifecycle: ElementLifecycle,
-
-    /// Dirty flag (needs rebuild)
-    dirty: bool,
 
     /// Whether init_state has been called
     initialized: bool,
@@ -120,13 +108,9 @@ impl StatefulElement {
     /// - `state` - State object created by widget
     pub fn new(widget: Widget, state: BoxedState) -> Self {
         Self {
-            widget,
+            base: ElementBase::new(widget),
             state,
-            parent: None,
             child: None,
-            slot: 0,
-            lifecycle: ElementLifecycle::Initial,
-            dirty: true,
             initialized: false,
         }
     }
@@ -135,7 +119,7 @@ impl StatefulElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &self.widget
+        self.base.widget()
     }
 
     /// Get reference to the state (as DynState trait object)
@@ -156,13 +140,14 @@ impl StatefulElement {
     ///
     /// Calls did_update_widget on the state to notify about configuration change.
     pub fn update(&mut self, new_widget: Widget) {
-        let old_widget = std::mem::replace(&mut self.widget, new_widget);
+        let old_widget = self.base.widget().clone();
+        self.base.set_widget(new_widget);
 
         // Call did_update_widget on the state
-        self.state.did_update_widget(&old_widget, &self.widget);
+        self.state.did_update_widget(&old_widget, self.base.widget());
 
         // Mark as dirty to trigger rebuild
-        self.dirty = true;
+        self.base.mark_dirty();
     }
 
     /// Get child element ID
@@ -183,7 +168,7 @@ impl StatefulElement {
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
-        self.parent
+        self.base.parent()
     }
 
     /// Get iterator over child element IDs
@@ -196,20 +181,17 @@ impl StatefulElement {
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
+        self.base.lifecycle()
     }
 
     /// Mount element to tree
     pub fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
-        self.parent = parent;
-        self.slot = slot;
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Will rebuild on first frame
+        self.base.mount(parent, slot);
     }
 
     /// Unmount element from tree
     pub fn unmount(&mut self) {
-        self.lifecycle = ElementLifecycle::Defunct;
+        self.base.unmount();
 
         // Call dispose on state for cleanup
         self.state.dispose();
@@ -220,26 +202,25 @@ impl StatefulElement {
 
     /// Deactivate element
     pub fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
+        self.base.deactivate();
     }
 
     /// Activate element
     pub fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Rebuild when reactivated
+        self.base.activate();
     }
 
     /// Check if element needs rebuild
     #[inline]
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.base.is_dirty()
     }
 
     /// Mark element as needing rebuild
     #[inline]
     pub fn mark_dirty(&mut self) {
-        self.dirty = true;
+        self.base.mark_dirty();
     }
 
     /// Perform rebuild
@@ -251,17 +232,17 @@ impl StatefulElement {
         element_id: ElementId,
         tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, Widget, usize)> {
-        if !self.dirty {
+        if !self.base.is_dirty() {
             return Vec::new();
         }
 
-        self.dirty = false;
+        self.base.clear_dirty();
 
         // Create BuildContext for the build phase
         let context = crate::element::BuildContext::new(tree, element_id);
 
         // Call build() on the state with BuildContext
-        let child_widget = self.state.build(&self.widget, &context);
+        let child_widget = self.state.build(self.base.widget(), &context);
 
         // Clear old child (will be unmounted by caller if needed)
         self.child = None;
@@ -363,7 +344,8 @@ mod tests {
         let mut element = StatefulElement::new(widget, state);
         element.mount(Some(0), 0);
 
-        let children = element.rebuild(1);
+        let tree = std::sync::Arc::new(parking_lot::RwLock::new(super::ElementTree::new()));
+        let children = element.rebuild(1, tree);
 
         assert_eq!(children.len(), 1);
         assert!(!element.is_dirty()); // Should be clean after rebuild

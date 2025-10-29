@@ -3,7 +3,7 @@
 //! Manages a single child and applies parent data to descendant Renders.
 
 use crate::ElementId;
-use crate::element::ElementLifecycle;
+use crate::element::{ElementBase, ElementLifecycle};
 use crate::widget::{Widget};
 
 /// Element for ParentDataWidget
@@ -39,23 +39,11 @@ use crate::widget::{Widget};
 /// 4. **unmount()** - Remove from tree
 #[derive(Debug)]
 pub struct ParentDataElement {
-    /// The parent data widget (type-erased)
-    widget: Widget,
-
-    /// Parent element ID
-    parent: Option<ElementId>,
+    /// Common element data (widget, parent, slot, lifecycle, dirty)
+    base: ElementBase,
 
     /// Child element ID
     child: Option<ElementId>,
-
-    /// Slot position in parent's child list
-    slot: usize,
-
-    /// Current lifecycle state
-    lifecycle: ElementLifecycle,
-
-    /// Dirty flag (needs rebuild)
-    dirty: bool,
 }
 
 impl ParentDataElement {
@@ -75,12 +63,8 @@ impl ParentDataElement {
     /// ```
     pub fn new(widget: Widget) -> Self {
         Self {
-            widget,
-            parent: None,
+            base: ElementBase::new(widget),
             child: None,
-            slot: 0,
-            lifecycle: ElementLifecycle::Initial,
-            dirty: true,
         }
     }
 
@@ -90,15 +74,14 @@ impl ParentDataElement {
     #[inline]
     #[must_use]
     pub fn widget(&self) -> &Widget {
-        &self.widget
+        self.base.widget()
     }
 
     /// Update with a new widget
     ///
     /// The new widget must be compatible (same type and key) with the current widget.
     pub fn update(&mut self, new_widget: Widget) {
-        self.widget = new_widget;
-        self.dirty = true;
+        self.base.set_widget(new_widget);
     }
 
     /// Get child element ID
@@ -133,7 +116,7 @@ impl ParentDataElement {
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
-        self.parent
+        self.base.parent()
     }
 
     /// Get iterator over child element IDs
@@ -146,7 +129,7 @@ impl ParentDataElement {
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
+        self.base.lifecycle()
     }
 
     /// Mount element to tree
@@ -154,10 +137,7 @@ impl ParentDataElement {
     /// Sets parent, slot, and transitions to Active lifecycle state.
     /// Marks element as dirty to trigger initial build.
     pub fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
-        self.parent = parent;
-        self.slot = slot;
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Will rebuild on first frame
+        self.base.mount(parent, slot);
     }
 
     /// Unmount element from tree
@@ -165,7 +145,7 @@ impl ParentDataElement {
     /// Transitions to Defunct lifecycle state and clears child reference.
     /// The child element will be unmounted by ElementTree separately.
     pub fn unmount(&mut self) {
-        self.lifecycle = ElementLifecycle::Defunct;
+        self.base.unmount();
         // Child will be unmounted by ElementTree
         self.child = None;
     }
@@ -174,15 +154,14 @@ impl ParentDataElement {
     ///
     /// Called when element is temporarily deactivated (e.g., moved to cache).
     pub fn deactivate(&mut self) {
-        self.lifecycle = ElementLifecycle::Inactive;
+        self.base.deactivate();
     }
 
     /// Activate element
     ///
     /// Called when element is reactivated. Marks dirty to trigger rebuild.
     pub fn activate(&mut self) {
-        self.lifecycle = ElementLifecycle::Active;
-        self.dirty = true; // Rebuild when reactivated
+        self.base.activate();
     }
 
     /// Check if element needs rebuild
@@ -191,13 +170,13 @@ impl ParentDataElement {
     #[inline]
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.base.is_dirty()
     }
 
     /// Mark element as needing rebuild
     #[inline]
     pub fn mark_dirty(&mut self) {
-        self.dirty = true;
+        self.base.mark_dirty();
     }
 
     /// Perform rebuild
@@ -218,14 +197,14 @@ impl ParentDataElement {
         _element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, Widget, usize)> {
-        if !self.dirty {
+        if !self.base.is_dirty() {
             return Vec::new();
         }
 
-        self.dirty = false;
+        self.base.clear_dirty();
 
         // Get child widget from ParentDataWidget via Widget::parent_data_child()
-        if let Some(child_widget_ref) = self.widget.parent_data_child() {
+        if let Some(child_widget_ref) = self.base.widget().parent_data_child() {
             // Mark old child for unmounting
             self.child = None;
 
@@ -234,7 +213,7 @@ impl ParentDataElement {
 
             // Return child to be mounted
             // Note: Parent should be set when this element was mounted
-            vec![(self.parent.unwrap_or(0), child_widget, 0)]
+            vec![(self.base.parent().unwrap_or(0), child_widget, 0)]
         } else {
             // Not a ParentDataWidget or no child
             Vec::new()
@@ -343,7 +322,8 @@ mod tests {
         assert!(element.is_dirty());
 
         // Rebuild clears dirty
-        element.rebuild(1);
+        let tree = std::sync::Arc::new(parking_lot::RwLock::new(super::ElementTree::new()));
+        element.rebuild(1, tree);
         assert!(!element.is_dirty());
 
         // Mark dirty
@@ -380,14 +360,15 @@ mod tests {
         element.mount(Some(0), 0);
 
         // Rebuild when dirty
-        let children = element.rebuild(1);
+        let tree = std::sync::Arc::new(parking_lot::RwLock::new(super::ElementTree::new()));
+        let children = element.rebuild(1, tree.clone());
 
         // Currently returns empty vec (TODO implementation)
         assert_eq!(children.len(), 0);
         assert!(!element.is_dirty()); // Should be clean after rebuild
 
         // Rebuild when not dirty should be no-op
-        let children = element.rebuild(1);
+        let children = element.rebuild(1, tree);
         assert_eq!(children.len(), 0);
     }
 }
