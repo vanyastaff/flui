@@ -8,11 +8,14 @@ These tests provide comprehensive coverage of engine features with clear visual 
 
 ### Core Rendering Tests
 - **alignment_test.rs** - Layout alignment and positioning
+- **antialiasing_test.rs** - Anti-aliasing quality (edges, lines, circles, blending)
 - **clipping_test.rs** - Clipping (rect, rrect, oval, nested, with transform)
 - **gradient_test.rs** - Gradient rendering (horizontal, vertical, radial)
 - **opacity_test.rs** - Opacity and transparency (alpha blending, layering, fading)
+- **path_test.rs** - Paths and polygons (stars, arrows, hearts, complex shapes)
 - **shadow_test.rs** - Shadow effects (drop, soft, colored, inner, glow, elevation)
 - **shapes_test.rs** - Basic shapes (rect, circle, line, arc, polygon, oval)
+- **text_test.rs** - Text rendering (sizes, colors, opacity, special characters)
 - **transform_test.rs** - Transformations (translate, scale, rotate, skew, nested)
 
 ### Developer Tests
