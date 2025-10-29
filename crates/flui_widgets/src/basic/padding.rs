@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
 
@@ -148,13 +148,7 @@ impl Default for Padding {
 }
 
 // Implement Widget trait with associated type
-impl Widget for Padding {
-    type Element = SingleChildRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        SingleChildRenderObjectElement::new(self)
-    }
-}
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Padding {
@@ -223,13 +217,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl Widget for MockWidget {
-        type Element = LeafRenderObjectElement<Self>;
-
-        fn into_element(self) -> Self::Element {
-            LeafRenderObjectElement::new(self)
-        }
-    }
+    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

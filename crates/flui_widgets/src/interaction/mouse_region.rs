@@ -16,8 +16,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
-use flui_rendering::{MouseRegionCallbacks, RenderMouseRegion};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_rendering::{RenderMouseRegion};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 
 /// A widget that tracks mouse pointer events.
@@ -100,13 +100,7 @@ impl Default for MouseRegion {
 }
 
 // Implement Widget trait with associated type
-impl Widget for MouseRegion {
-    type Element = SingleChildRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        SingleChildRenderObjectElement::new(self)
-    }
-}
 
 impl Clone for MouseRegion {
     fn clone(&self) -> Self {
@@ -206,13 +200,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl Widget for MockWidget {
-        type Element = LeafRenderObjectElement<Self>;
-
-        fn into_element(self) -> Self::Element {
-            LeafRenderObjectElement::new(self)
-        }
-    }
+    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

@@ -14,7 +14,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
 use flui_rendering::RenderOffstage;
 
 /// A widget that lays out its child as if it was in the tree, but without painting or hit testing.
@@ -100,13 +100,7 @@ impl Default for Offstage {
 }
 
 // Implement Widget trait with associated type
-impl Widget for Offstage {
-    type Element = SingleChildRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        SingleChildRenderObjectElement::new(self)
-    }
-}
 
 // bon Builder Extensions
 use offstage_builder::{IsUnset, SetChild, State};
@@ -175,13 +169,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl Widget for MockWidget {
-        type Element = LeafRenderObjectElement<Self>;
-
-        fn into_element(self) -> Self::Element {
-            LeafRenderObjectElement::new(self)
-        }
-    }
+    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

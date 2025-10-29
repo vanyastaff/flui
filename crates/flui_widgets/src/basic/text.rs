@@ -156,13 +156,7 @@ impl Text {
     }
 }
 
-impl Widget for Text {
-    type Element = LeafRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        LeafRenderObjectElement::new(self)
-    }
-}
 
 impl RenderObjectWidget for Text {
     fn create_render_object(&self) -> Box<dyn DynRenderObject> {

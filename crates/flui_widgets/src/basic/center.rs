@@ -26,7 +26,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -129,13 +129,7 @@ impl Default for Center {
 }
 
 // Implement Widget trait with associated type
-impl Widget for Center {
-    type Element = SingleChildRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        SingleChildRenderObjectElement::new(self)
-    }
-}
 
 // bon Builder Extensions
 use center_builder::{IsUnset, SetChild, State};
@@ -183,13 +177,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl Widget for MockWidget {
-        type Element = LeafRenderObjectElement<Self>;
-
-        fn into_element(self) -> Self::Element {
-            LeafRenderObjectElement::new(self)
-        }
-    }
+    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

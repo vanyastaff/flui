@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
+use flui_core::{BoxedWidget, DynWidget, Widget, ParentDataWidget, ParentData};
 use flui_rendering::StackParentData;
 
 /// A widget that controls where a child of a Stack is positioned.

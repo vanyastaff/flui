@@ -17,7 +17,7 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::{BoxedWidget, DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
+use flui_core::{BoxedWidget, DynWidget, Widget, ParentDataWidget, ParentData};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.

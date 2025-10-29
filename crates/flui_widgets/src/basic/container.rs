@@ -37,7 +37,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, BoxConstraints, Context, DynWidget, StatelessWidget, Widget};
+use flui_core::{BoxedWidget, DynWidget, StatelessWidget, Widget};
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
 

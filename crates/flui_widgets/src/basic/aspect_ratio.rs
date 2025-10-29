@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
 use flui_rendering::RenderAspectRatio;
 
 /// A widget that sizes its child to a specific aspect ratio.
@@ -196,13 +196,7 @@ impl Default for AspectRatio {
 }
 
 // Implement Widget trait with associated type
-impl Widget for AspectRatio {
-    type Element = SingleChildRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        SingleChildRenderObjectElement::new(self)
-    }
-}
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for AspectRatio {
@@ -299,13 +293,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl Widget for MockWidget {
-        type Element = LeafRenderObjectElement<Self>;
-
-        fn into_element(self) -> Self::Element {
-            LeafRenderObjectElement::new(self)
-        }
-    }
+    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

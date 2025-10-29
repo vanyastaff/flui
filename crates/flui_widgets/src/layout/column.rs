@@ -32,7 +32,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{DynRenderObject, DynWidget, MultiChildRenderObjectWidget, MultiChildRenderObjectElement, RenderObjectWidget, Widget};
+use flui_core::{DynRenderObject, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
 use flui_rendering::RenderFlex;
 use flui_types::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
@@ -144,13 +144,7 @@ impl Default for Column {
 }
 
 // Implement Widget trait with associated type
-impl Widget for Column {
-    type Element = MultiChildRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        MultiChildRenderObjectElement::new(self)
-    }
-}
 
 // Implement RenderObjectWidget
 impl RenderObjectWidget for Column {
@@ -241,13 +235,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl Widget for MockWidget {
-        type Element = LeafRenderObjectElement<Self>;
-
-        fn into_element(self) -> Self::Element {
-            LeafRenderObjectElement::new(self)
-        }
-    }
+    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

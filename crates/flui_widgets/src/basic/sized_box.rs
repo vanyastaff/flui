@@ -29,7 +29,7 @@
 //!     height: 50.0,
 //! }
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget, SingleChildRenderObjectElement, LeafRenderObjectWidget, LeafRenderObjectElement};
+use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
 use flui_rendering::RenderConstrainedBox;
 
 /// A box with a specified size.
@@ -177,13 +177,7 @@ impl Default for SizedBox {
     }
 }
 
-impl Widget for SizedBox {
-    type Element = SingleChildRenderObjectElement<Self>;
 
-    fn into_element(self) -> Self::Element {
-        SingleChildRenderObjectElement::new(self)
-    }
-}
 
 // bon Builder Extensions
 use sized_box_builder::{IsUnset, SetChild, State};
@@ -247,13 +241,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl Widget for MockWidget {
-        type Element = LeafRenderObjectElement<Self>;
-
-        fn into_element(self) -> Self::Element {
-            LeafRenderObjectElement::new(self)
-        }
-    }
+    
 
     impl RenderObjectWidget for MockWidget {
         fn create_render_object(&self) -> Box<dyn DynRenderObject> {

@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, Widget, ProxyWidget, ParentDataWidget, ParentData, impl_widget_for_parent_data};
+use flui_core::{BoxedWidget, DynWidget, Widget, ParentDataWidget, ParentData};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
