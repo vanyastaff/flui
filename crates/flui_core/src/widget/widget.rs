@@ -69,7 +69,6 @@
 //! ```
 
 use std::any::{Any, TypeId};
-use std::fmt;
 
 use crate::foundation::Key;
 use super::traits::{StatelessWidget, StatefulWidget, InheritedWidget, RenderWidget, ParentDataWidget};

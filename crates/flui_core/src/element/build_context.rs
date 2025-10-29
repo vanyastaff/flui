@@ -4,9 +4,9 @@
 
 use crate::ElementId;
 use crate::element::ElementTree;
-use crate::widget::{InheritedWidget, Widget};
+use crate::widget::InheritedWidget;
 use parking_lot::RwLock;
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::sync::Arc;
 
 /// BuildContext - provides access to tree during widget build
