@@ -120,21 +120,26 @@ impl<'a> EguiPainter<'a> {
         }
     }
 
-    /// Get a painter with current clip rect applied
-    /// Returns a new painter with clipping if needed, or clone of current painter
-    fn get_painter_with_clip(&self) -> egui::Painter {
+    /// Execute a drawing operation with proper clipping
+    /// Takes a closure that performs drawing operations
+    fn with_clip<F>(&self, f: F)
+    where
+        F: FnOnce(&egui::Painter),
+    {
         if self.current_state.clip_rect.is_some() {
             let clip_rect = self.get_egui_clip_rect();
-            self.painter.with_clip_rect(clip_rect)
+            let clipped = self.painter.with_clip_rect(clip_rect);
+            f(&clipped);
         } else {
-            self.painter.clone()
+            f(self.painter);
         }
     }
 
     /// Add a shape with current clipping applied
     fn add_shape(&self, shape: egui::Shape) {
-        let painter = self.get_painter_with_clip();
-        painter.add(shape);
+        self.with_clip(|painter| {
+            painter.add(shape);
+        });
     }
 
     /// Apply current transformation to a point
@@ -231,14 +236,15 @@ impl<'a> EguiPainter<'a> {
     /// Draw a stroked rectangle using line segments (supports arbitrary transforms)
     fn draw_rect_stroke_mesh(&self, rect: Rect, stroke: egui::Stroke) {
         let corners = self.get_transformed_corners(rect);
-        let painter = self.get_painter_with_clip();
 
-        // Draw 4 line segments connecting the corners
-        for i in 0..4 {
-            let start = Self::to_egui_pos(corners[i]);
-            let end = Self::to_egui_pos(corners[(i + 1) % 4]);
-            painter.line_segment([start, end], stroke);
-        }
+        self.with_clip(|painter| {
+            // Draw 4 line segments connecting the corners
+            for i in 0..4 {
+                let start = Self::to_egui_pos(corners[i]);
+                let end = Self::to_egui_pos(corners[(i + 1) % 4]);
+                painter.line_segment([start, end], stroke);
+            }
+        });
     }
 
     /// Draw a filled circle/ellipse using mesh (supports arbitrary transforms including skew)
@@ -318,14 +324,14 @@ impl<'a> EguiPainter<'a> {
             .map(|&p| Self::to_egui_pos(self.transform_point(p)))
             .collect();
 
-        let painter = self.get_painter_with_clip();
-
-        // Draw line segments connecting the points
-        for i in 0..SEGMENTS {
-            let start = transformed_points[i];
-            let end = transformed_points[(i + 1) % SEGMENTS];
-            painter.line_segment([start, end], stroke);
-        }
+        self.with_clip(|painter| {
+            // Draw line segments connecting the points
+            for i in 0..SEGMENTS {
+                let start = transformed_points[i];
+                let end = transformed_points[(i + 1) % SEGMENTS];
+                painter.line_segment([start, end], stroke);
+            }
+        });
     }
 }
 
@@ -351,14 +357,15 @@ impl<'a> Painter for EguiPainter<'a> {
             // No skew - use simple rect rendering (rotation/scale already in transform)
             let transformed_rect = self.transform_rect(rect);
             let egui_rect = Self::to_egui_rect(transformed_rect);
-            let painter = self.get_painter_with_clip();
 
-            if paint.stroke_width > 0.0 {
-                let stroke = egui::Stroke::new(paint.stroke_width, color);
-                painter.rect_stroke(egui_rect, 0.0, stroke, egui::StrokeKind::Outside);
-            } else {
-                painter.rect_filled(egui_rect, 0.0, color);
-            }
+            self.with_clip(|painter| {
+                if paint.stroke_width > 0.0 {
+                    let stroke = egui::Stroke::new(paint.stroke_width, color);
+                    painter.rect_stroke(egui_rect, 0.0, stroke, egui::StrokeKind::Outside);
+                } else {
+                    painter.rect_filled(egui_rect, 0.0, color);
+                }
+            });
         }
     }
 
@@ -372,14 +379,15 @@ impl<'a> Painter for EguiPainter<'a> {
         let color = self.paint_to_color(paint);
         let egui_rect = Self::to_egui_rect(transformed_rect);
         let rounding = egui::CornerRadius::same(rrect.corner_radius.min(255.0) as u8);
-        let painter = self.get_painter_with_clip();
 
-        if paint.stroke_width > 0.0 {
-            let stroke = egui::Stroke::new(paint.stroke_width, color);
-            painter.rect_stroke(egui_rect, rounding, stroke, egui::StrokeKind::Outside);
-        } else {
-            painter.rect_filled(egui_rect, rounding, color);
-        }
+        self.with_clip(|painter| {
+            if paint.stroke_width > 0.0 {
+                let stroke = egui::Stroke::new(paint.stroke_width, color);
+                painter.rect_stroke(egui_rect, rounding, stroke, egui::StrokeKind::Outside);
+            } else {
+                painter.rect_filled(egui_rect, rounding, color);
+            }
+        });
     }
 
     fn circle(&mut self, center: Point, radius: f32, paint: &Paint) {
@@ -413,14 +421,15 @@ impl<'a> Painter for EguiPainter<'a> {
             // Scale the radius (uniform scale)
             let scale = self.current_state.transform.to_scale_rotation_translation().0;
             let scaled_radius = radius * scale.x.max(scale.y);
-            let painter = self.get_painter_with_clip();
 
-            if paint.stroke_width > 0.0 {
-                let stroke = egui::Stroke::new(paint.stroke_width, color);
-                painter.circle_stroke(egui_center, scaled_radius, stroke);
-            } else {
-                painter.circle_filled(egui_center, scaled_radius, color);
-            }
+            self.with_clip(|painter| {
+                if paint.stroke_width > 0.0 {
+                    let stroke = egui::Stroke::new(paint.stroke_width, color);
+                    painter.circle_stroke(egui_center, scaled_radius, stroke);
+                } else {
+                    painter.circle_filled(egui_center, scaled_radius, color);
+                }
+            });
         }
     }
 
@@ -445,12 +454,13 @@ impl<'a> Painter for EguiPainter<'a> {
 
         let color = self.paint_to_color(paint);
         let stroke = egui::Stroke::new(paint.stroke_width.max(1.0), color);
-        let painter = self.get_painter_with_clip();
 
-        painter.line_segment(
-            [Self::to_egui_pos(transformed_p1), Self::to_egui_pos(transformed_p2)],
-            stroke,
-        );
+        self.with_clip(|painter| {
+            painter.line_segment(
+                [Self::to_egui_pos(transformed_p1), Self::to_egui_pos(transformed_p2)],
+                stroke,
+            );
+        });
     }
 
     fn text(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint) {

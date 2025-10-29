@@ -10,6 +10,8 @@ These tests provide comprehensive coverage of engine features with clear visual 
 - **alignment_test.rs** - Layout alignment and positioning
 - **clipping_test.rs** - Clipping (rect, rrect, oval, nested, with transform)
 - **gradient_test.rs** - Gradient rendering (horizontal, vertical, radial)
+- **opacity_test.rs** - Opacity and transparency (alpha blending, layering, fading)
+- **shadow_test.rs** - Shadow effects (drop, soft, colored, inner, glow, elevation)
 - **shapes_test.rs** - Basic shapes (rect, circle, line, arc, polygon, oval)
 - **transform_test.rs** - Transformations (translate, scale, rotate, skew, nested)
 
