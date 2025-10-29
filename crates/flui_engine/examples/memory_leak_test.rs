@@ -5,6 +5,8 @@
 //! the "⚠ LEAK?" warning appear!
 
 use flui_engine::*;
+#[cfg(all(feature = "egui", feature = "devtools", feature = "memory-profiler"))]
+use flui_engine::DevToolsLayout;
 use flui_types::{Size, Rect, Offset};
 use std::sync::{Arc, Mutex};
 
@@ -26,10 +28,10 @@ fn run_leak_test() {
 
     // Create profilers
     let compositor = ProfiledCompositor::new();
-    let overlay = PerformanceOverlay::new();
-    let timeline_graph = FrameTimelineGraph::new();
     let memory_profiler = Arc::new(Mutex::new(flui_devtools::memory::MemoryProfiler::new()));
-    let memory_graph = MemoryGraph::new();
+
+    // Create DevTools layout (compact preset)
+    let devtools_layout = DevToolsLayout::compact();
 
     // Create a scene
     let mut scene = Scene::new(Size::new(800.0, 600.0));
@@ -62,10 +64,8 @@ fn run_leak_test() {
         Box::new(|_cc| {
             Ok(Box::new(LeakTestApp {
                 compositor,
-                overlay,
-                timeline_graph,
                 memory_profiler,
-                memory_graph,
+                devtools_layout,
                 scene,
                 frame_started: false,
                 frame_count: 0,
@@ -81,10 +81,8 @@ fn run_leak_test() {
 #[cfg(all(feature = "egui", feature = "devtools", feature = "memory-profiler"))]
 struct LeakTestApp {
     compositor: ProfiledCompositor,
-    overlay: PerformanceOverlay,
-    timeline_graph: FrameTimelineGraph,
     memory_profiler: Arc<Mutex<flui_devtools::memory::MemoryProfiler>>,
-    memory_graph: MemoryGraph,
+    devtools_layout: DevToolsLayout,
     scene: Scene,
     frame_started: bool,
     frame_count: u64,
@@ -129,24 +127,21 @@ impl eframe::App for LeakTestApp {
             // Composite the scene
             self.compositor.composite(&self.scene, &mut painter);
 
-            // Draw performance overlay
+            // Render DevTools overlays
             let viewport_size = Size::new(800.0, 600.0);
             let profiler = self.compositor.profiler();
             let profiler_guard = profiler.lock();
-            self.overlay.render(&profiler_guard, &mut painter, viewport_size);
-
-            // Draw frame timeline graph
-            self.timeline_graph.render(&profiler_guard, &mut painter, viewport_size);
-
-            // Draw memory graph
             let memory_guard = self.memory_profiler.lock().unwrap();
-            self.memory_graph.render(&memory_guard, &mut painter, viewport_size);
+
+            self.devtools_layout.render(
+                &profiler_guard,
+                Some(&memory_guard),
+                &mut painter,
+                viewport_size
+            );
 
             // Display memory info and controls
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                ui.heading("🧪 Memory Leak Test");
-                ui.separator();
-
                 let stats = memory_guard.current_stats();
                 ui.label(format!("💾 Current Memory: {:.2} MB", stats.total_mb()));
 
@@ -179,7 +174,61 @@ impl eframe::App for LeakTestApp {
 
                 ui.separator();
 
-                // Controls
+                // DevTools Controls
+                ui.heading("🛠 DevTools");
+
+                // Layout preset selector
+                ui.horizontal(|ui| {
+                    ui.label("Layout:");
+                    if ui.button("Compact").clicked() {
+                        self.devtools_layout = DevToolsLayout::compact();
+                    }
+                    if ui.button("Detailed").clicked() {
+                        self.devtools_layout = DevToolsLayout::detailed();
+                    }
+                    if ui.button("Bottom").clicked() {
+                        self.devtools_layout = DevToolsLayout::bottom_bar();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    if ui.button("Right").clicked() {
+                        self.devtools_layout = DevToolsLayout::right_side();
+                    }
+                    if ui.button("Corners").clicked() {
+                        self.devtools_layout = DevToolsLayout::corners();
+                    }
+                    if ui.button("Minimal").clicked() {
+                        self.devtools_layout = DevToolsLayout::minimal();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.devtools_layout.show_performance, "📊 FPS");
+                    ui.checkbox(&mut self.devtools_layout.show_timeline, "📈 Timeline");
+                    ui.checkbox(&mut self.devtools_layout.show_memory, "💾 Memory");
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("BG:");
+                    let mut opacity = self.devtools_layout.global_opacity;
+                    if ui.add(egui::Slider::new(&mut opacity, 0.0..=1.0).step_by(0.05)).changed() {
+                        self.devtools_layout.set_opacity(opacity);
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Text:");
+                    let mut text_opacity = self.devtools_layout.performance_overlay.text_opacity;
+                    if ui.add(egui::Slider::new(&mut text_opacity, 0.0..=1.0).step_by(0.05)).changed() {
+                        self.devtools_layout.set_text_opacity(text_opacity);
+                    }
+                });
+
+                ui.separator();
+
+                // Memory Leak Controls
+                ui.heading("🧪 Memory Leak Test");
                 ui.horizontal(|ui| {
                     if ui.button(if self.leak_enabled { "⏸ Stop & Free" } else { "▶ Start Leak" }).clicked() {
                         if self.leak_enabled {

@@ -3,6 +3,8 @@
 //! This shows how to track memory usage over time and detect potential leaks.
 
 use flui_engine::*;
+#[cfg(all(feature = "egui", feature = "devtools", feature = "memory-profiler"))]
+use flui_engine::DevToolsLayout;
 use flui_types::{Size, Rect, Offset};
 use std::sync::{Arc, Mutex};
 
