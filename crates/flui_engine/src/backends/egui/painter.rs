@@ -704,6 +704,29 @@ impl<'a> Painter for EguiPainter<'a> {
         self.clip_rect(rrect.rect);
     }
 
+    fn clip_path(&mut self, _path: &flui_types::painting::path::Path, bounds: Rect) {
+        // Egui doesn't have native path clipping support (unlike rect clipping).
+        // We have several options:
+        // 1. Use bounding box (fast but conservative) - current fallback
+        // 2. Use stencil buffer / mask rendering (complex)
+        // 3. Store path and use for hit testing (partial solution)
+        //
+        // For now, we'll use the bounding box approach which is what most
+        // egui-based UIs do. A full implementation would require rendering
+        // to a mask texture and using it as a clip mask.
+        //
+        // Note: The ClipPathLayer already does proper hit testing using
+        // path.contains(), so interaction will be correct even though
+        // rendering uses the conservative bounding box.
+
+        self.clip_rect(bounds);
+
+        // TODO: For a more accurate implementation, we could:
+        // - Render the path to an offscreen texture as a mask
+        // - Use egui's layer system with custom shapes
+        // - Implement stencil-based clipping in a custom backend
+    }
+
     fn set_opacity(&mut self, opacity: f32) {
         // Multiply with current opacity (for nested opacity layers)
         self.current_state.opacity *= opacity.clamp(0.0, 1.0);

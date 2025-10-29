@@ -288,6 +288,7 @@ impl Layer for ClipRRectLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_types::Point;
 
     #[test]
     fn test_clip_rect_layer_lifecycle() {
@@ -449,6 +450,105 @@ mod tests {
         assert!(layer.hit_test(Offset::new(100.0, 0.0), &mut result));
         assert!(layer.hit_test(Offset::new(0.0, 100.0), &mut result));
         assert!(layer.hit_test(Offset::new(100.0, 100.0), &mut result));
+    }
+
+    #[test]
+    fn test_clip_path_layer_circle() {
+        use flui_types::painting::path::Path;
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        // Create a circular path (100x100, radius 50)
+        let mut path = Path::new();
+        path.add_circle(Point::new(50.0, 50.0), 50.0);
+
+        let mut layer = ClipPathLayer::new(path);
+
+        // Add a child that covers the entire area
+        let mut picture = PictureLayer::new();
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
+        layer.add_child(Box::new(picture));
+
+        let mut result = HitTestResult::new();
+
+        // Center should hit
+        assert!(layer.hit_test(Offset::new(50.0, 50.0), &mut result));
+
+        // Points on circle edge should hit
+        assert!(layer.hit_test(Offset::new(50.0, 0.0), &mut result)); // top
+        assert!(layer.hit_test(Offset::new(50.0, 100.0), &mut result)); // bottom
+        assert!(layer.hit_test(Offset::new(0.0, 50.0), &mut result)); // left
+        assert!(layer.hit_test(Offset::new(100.0, 50.0), &mut result)); // right
+
+        // Corners should NOT hit (outside circle)
+        assert!(!layer.hit_test(Offset::new(0.0, 0.0), &mut result));
+        assert!(!layer.hit_test(Offset::new(100.0, 0.0), &mut result));
+        assert!(!layer.hit_test(Offset::new(0.0, 100.0), &mut result));
+        assert!(!layer.hit_test(Offset::new(100.0, 100.0), &mut result));
+    }
+
+    #[test]
+    fn test_clip_path_layer_triangle() {
+        use flui_types::painting::path::Path;
+        use crate::layer::PictureLayer;
+        use crate::painter::Paint;
+
+        // Create a triangle path
+        let mut path = Path::new();
+        path.move_to(Point::new(50.0, 0.0)); // top
+        path.line_to(Point::new(100.0, 100.0)); // bottom right
+        path.line_to(Point::new(0.0, 100.0)); // bottom left
+        path.close();
+
+        let mut layer = ClipPathLayer::new(path);
+
+        // Add a child
+        let mut picture = PictureLayer::new();
+        picture.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), Paint::default());
+        layer.add_child(Box::new(picture));
+
+        let mut result = HitTestResult::new();
+
+        // Center should hit
+        assert!(layer.hit_test(Offset::new(50.0, 50.0), &mut result));
+
+        // Point inside triangle should hit
+        assert!(layer.hit_test(Offset::new(50.0, 60.0), &mut result)); // middle-bottom
+
+        // Top corners should NOT hit (outside triangle)
+        assert!(!layer.hit_test(Offset::new(0.0, 0.0), &mut result));
+        assert!(!layer.hit_test(Offset::new(100.0, 0.0), &mut result));
+    }
+
+    #[test]
+    fn test_clip_path_layer_bounds() {
+        use flui_types::painting::path::Path;
+
+        // Create a path with known bounds
+        let mut path = Path::new();
+        path.add_rect(Rect::from_xywh(10.0, 20.0, 80.0, 60.0));
+
+        let layer = ClipPathLayer::new(path);
+
+        // Layer bounds should match path bounds
+        let bounds = layer.bounds();
+        assert_eq!(bounds, Rect::from_xywh(10.0, 20.0, 80.0, 60.0));
+    }
+
+    #[test]
+    fn test_clip_path_layer_lifecycle() {
+        use flui_types::painting::path::Path;
+
+        let mut path = Path::new();
+        path.add_circle(Point::new(50.0, 50.0), 50.0);
+
+        let mut layer = ClipPathLayer::new(path);
+
+        assert!(!layer.is_disposed());
+        assert!(!layer.clip_path().is_empty());
+
+        layer.dispose();
+        assert!(layer.is_disposed());
     }
 }
 

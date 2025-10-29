@@ -182,6 +182,21 @@ impl Painter for WgpuPainter {
     fn clip_rrect(&mut self, rrect: RRect) {
         self.clip_rect(rrect.rect);
     }
+
+    fn clip_path(&mut self, _path: &flui_types::painting::path::Path, bounds: Rect) {
+        // WGPU backend has the capability for true path clipping via stencil buffer,
+        // but it requires significant rendering pipeline changes:
+        // 1. Enable stencil attachment in render pass
+        // 2. Render path to stencil buffer
+        // 3. Use stencil test for subsequent draws
+        //
+        // For now, we use conservative bounding box clipping.
+        // The ClipPathLayer already handles hit testing correctly via path.contains().
+        //
+        // Future enhancement: Implement stencil-based path clipping for pixel-perfect results.
+        self.clip_rect(bounds);
+    }
+
     fn set_opacity(&mut self, opacity: f32) {
         self.current_state.opacity *= opacity.clamp(0.0, 1.0);
     }
