@@ -29,7 +29,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_rendering::{RenderClipRRect, RRectShape, SingleArity};
 use flui_types::styling::BorderRadius;
 use flui_types::painting::Clip;
@@ -142,7 +144,7 @@ pub struct ClipRRect {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl ClipRRect {
@@ -213,11 +215,8 @@ impl ClipRRect {
     /// let mut widget = ClipRRect::circular(10.0);
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 
     /// Validates ClipRRect configuration.
@@ -297,28 +296,25 @@ impl Default for ClipRRect {
 
 
 // Implement RenderObjectWidget
-impl RenderObjectWidget for ClipRRect {
-    type RenderObject = RenderClipRRect;
-    type Arity = SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderClipRRect::new(
+impl RenderWidget for ClipRRect {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Single(Box::new(RenderClipRRect::new(
             RRectShape::new(self.border_radius),
             self.clip_behavior,
-        )
+        )))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.shape.border_radius = self.border_radius;
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single(render) = render_object {
+            if let Some(obj) = render.downcast_mut::<RenderClipRRect>() {
+                render_object.shape.border_radius = self.border_radius;
         render_object.set_clip_behavior(self.clip_behavior);
+            }
+        }
     }
-}
 
-impl SingleChildRenderObjectWidget for ClipRRect {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("ClipRRect requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }
 
@@ -340,8 +336,8 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child<W: Widget + 'static>(self, child: W) -> ClipRRectBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> ClipRRectBuilder<SetChild<S>> {
+        self.child_internal(child)
     }
 }
 

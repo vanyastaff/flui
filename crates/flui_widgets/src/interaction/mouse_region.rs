@@ -16,7 +16,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_rendering::{RenderMouseRegion, MouseCallbacks, SingleArity};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 
@@ -72,7 +74,7 @@ pub struct MouseRegion {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl MouseRegion {
@@ -88,11 +90,8 @@ impl MouseRegion {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 }
 
@@ -138,8 +137,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child<W: Widget + 'static>(self, child: W) -> MouseRegionBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> MouseRegionBuilder<SetChild<S>> {
+        self.child_internal(child)
     }
 }
 

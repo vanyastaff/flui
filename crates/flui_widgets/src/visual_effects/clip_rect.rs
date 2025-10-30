@@ -14,7 +14,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_rendering::{RenderClipRect, RectShape, SingleArity};
 use flui_types::painting::Clip;
 
@@ -63,7 +65,7 @@ pub struct ClipRect {
 
     /// The child widget to clip
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl ClipRect {
@@ -81,11 +83,8 @@ impl ClipRect {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 }
 
@@ -107,8 +106,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child<W: Widget + 'static>(self, child: W) -> ClipRectBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> ClipRectBuilder<SetChild<S>> {
+        self.child_internal(child)
     }
 }
 
@@ -121,24 +120,21 @@ impl<S: State> ClipRectBuilder<S> {
 }
 
 // Implement RenderObjectWidget
-impl RenderObjectWidget for ClipRect {
-    type RenderObject = RenderClipRect;
-    type Arity = SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderClipRect::new(RectShape, self.clip_behavior)
+impl RenderWidget for ClipRect {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Single(Box::new(RenderClipRect::new(RectShape, self.clip_behavior)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.set_clip_behavior(self.clip_behavior);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single(render) = render_object {
+            if let Some(obj) = render.downcast_mut::<RenderClipRect>() {
+                render_object.set_clip_behavior(self.clip_behavior);
+            }
+        }
     }
-}
 
-impl SingleChildRenderObjectWidget for ClipRect {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("ClipRect requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }
 

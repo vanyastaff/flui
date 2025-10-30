@@ -23,7 +23,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_rendering::{RenderIgnorePointer, SingleArity};
 
 /// A widget that is invisible to pointer events.
@@ -77,7 +79,7 @@ pub struct IgnorePointer {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl IgnorePointer {
@@ -95,11 +97,8 @@ impl IgnorePointer {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 }
 
@@ -121,8 +120,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child<W: Widget + 'static>(self, child: W) -> IgnorePointerBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> IgnorePointerBuilder<SetChild<S>> {
+        self.child_internal(child)
     }
 }
 
@@ -248,23 +247,20 @@ mod tests {
 }
 
 // Implement RenderObjectWidget
-impl RenderObjectWidget for IgnorePointer {
-    type RenderObject = RenderIgnorePointer;
-    type Arity = SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderIgnorePointer::new(self.ignoring)
+impl RenderWidget for IgnorePointer {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Single(Box::new(RenderIgnorePointer::new(self.ignoring)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.set_ignoring(self.ignoring);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single(render) = render_object {
+            if let Some(obj) = render.downcast_mut::<RenderIgnorePointer>() {
+                render_object.set_ignoring(self.ignoring);
+            }
+        }
     }
-}
 
-impl SingleChildRenderObjectWidget for IgnorePointer {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("IgnorePointer requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }
