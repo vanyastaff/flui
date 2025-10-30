@@ -107,7 +107,9 @@
       "Bash(! grep -q \"BoxConstraints\" \"$file\")",
       "Bash(then)",
       "Bash(echo:*)",
-      "Bash(fi)"
+      "Bash(fi)",
+      "Bash(timeout 3 cargo run:*)",
+      "Bash(timeout 5 cargo run:*)"
     ],
     "deny": [],
     "ask": []

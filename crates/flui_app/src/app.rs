@@ -175,9 +175,13 @@ impl FluiApp {
         // ===== Phase 3: Paint =====
         // Note: egui clears screen every frame, so we must paint every frame
         let offset = Offset::new(ui.min_rect().min.x, ui.min_rect().min.y);
-        if let Some(_layer) = self.pipeline.flush_paint(offset) {
+        if let Some(layer) = self.pipeline.flush_paint(offset) {
             self.stats.paint_count += 1;
-            // TODO: Composite layer to screen when backend integration is ready
+
+            // Composite layer to screen using EguiPainter
+            let egui_painter = ui.painter();
+            let mut painter = flui_engine::EguiPainter::new(egui_painter);
+            layer.paint(&mut painter);
         } else {
             tracing::warn!(
                 "Frame {}: flush_paint returned None!",
