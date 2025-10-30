@@ -102,8 +102,13 @@ pub use objects::{
     RenderOverflowBox,
 
     // Effects objects
+    ImageFilter,
+    PhysicalShape,
+    RenderBackdropFilter,
     RenderOpacity,
     RenderPadding,
+    RenderPhysicalModel,
+    RenderRepaintBoundary,
     // Text objects
     RenderParagraph,
     RenderPointerListener,
