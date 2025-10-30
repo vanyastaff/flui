@@ -147,8 +147,8 @@ where
 // Public build() wrapper
 impl<S: State> OpacityBuilder<S> {
     /// Builds the Opacity widget.
-    pub fn build(self) -> Opacity {
-        self.build_opacity()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_opacity())
     }
 }
 

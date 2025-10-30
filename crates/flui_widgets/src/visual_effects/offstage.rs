@@ -121,8 +121,8 @@ where
 // Build wrapper
 impl<S: State> OffstageBuilder<S> {
     /// Builds the Offstage widget.
-    pub fn build(self) -> Offstage {
-        self.build_offstage()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_offstage())
     }
 }
 

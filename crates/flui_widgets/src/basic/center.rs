@@ -152,7 +152,7 @@ impl<S: State> CenterBuilder<S> {
     ///
     /// This automatically wraps the Center in a Widget::render_object() for convenience.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_center())
+        flui_core::Widget::render(self.build_center())
     }
 }
 

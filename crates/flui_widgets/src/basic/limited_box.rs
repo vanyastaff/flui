@@ -129,8 +129,8 @@ where
 
 impl<S: State> LimitedBoxBuilder<S> {
     /// Builds the LimitedBox widget.
-    pub fn build(self) -> LimitedBox {
-        self.build_limited_box()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_limited_box())
     }
 }
 

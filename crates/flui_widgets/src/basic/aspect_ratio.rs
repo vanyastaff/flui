@@ -244,8 +244,8 @@ impl<S: State> AspectRatioBuilder<S> {
     /// Builds the AspectRatio widget.
     ///
     /// Equivalent to calling the generated `build_aspect_ratio()` finishing function.
-    pub fn build(self) -> AspectRatio {
-        self.build_aspect_ratio()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_aspect_ratio())
     }
 }
 

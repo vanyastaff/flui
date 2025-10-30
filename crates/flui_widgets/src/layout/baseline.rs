@@ -178,8 +178,8 @@ where
 
 impl<S: State> BaselineBuilder<S> {
     /// Builds the Baseline widget.
-    pub fn build(self) -> Baseline {
-        self.build_baseline()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_baseline())
     }
 }
 

@@ -205,7 +205,7 @@ where
 impl<S: State> ColumnBuilder<S> {
     /// Builds the Column widget and returns it as a Widget.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_column())
+        flui_core::Widget::render(self.build_column())
     }
 }
 

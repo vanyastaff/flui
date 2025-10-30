@@ -350,8 +350,8 @@ impl<S: State> TransformBuilder<S> {
     /// Builds the Transform widget.
     ///
     /// Equivalent to calling the generated `build_transform()` finishing function.
-    pub fn build(self) -> Transform {
-        self.build_transform()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_transform())
     }
 }
 

@@ -207,7 +207,7 @@ where
 impl<S: State> RowBuilder<S> {
     /// Builds the Row widget and returns it as a Widget.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_row())
+        flui_core::Widget::render(self.build_row())
     }
 }
 

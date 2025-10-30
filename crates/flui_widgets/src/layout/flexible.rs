@@ -293,8 +293,8 @@ impl<S: State> FlexibleBuilder<S> {
     /// Builds the Flexible widget.
     ///
     /// Equivalent to calling the generated `build_flexible()` finishing function.
-    pub fn build(self) -> Flexible {
-        self.build_flexible()
+    pub fn build(self) -> Widget {
+        Widget::parent_data(self.build_flexible())
     }
 }
 

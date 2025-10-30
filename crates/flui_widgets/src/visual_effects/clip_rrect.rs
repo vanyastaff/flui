@@ -346,8 +346,8 @@ impl<S: State> ClipRRectBuilder<S> {
     /// Builds the ClipRRect widget.
     ///
     /// Equivalent to calling the generated `build_clip_rrect()` finishing function.
-    pub fn build(self) -> ClipRRect {
-        self.build_clip_rrect()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_clip_rrect())
     }
 }
 

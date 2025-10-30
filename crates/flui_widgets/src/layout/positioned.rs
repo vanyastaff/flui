@@ -416,8 +416,8 @@ impl<S: State> PositionedBuilder<S> {
     /// Builds the Positioned widget.
     ///
     /// Equivalent to calling the generated `build_positioned()` finishing function.
-    pub fn build(self) -> Positioned {
-        self.build_positioned()
+    pub fn build(self) -> Widget {
+        Widget::parent_data(self.build_positioned())
     }
 }
 

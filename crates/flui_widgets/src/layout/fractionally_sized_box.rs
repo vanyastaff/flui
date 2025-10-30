@@ -188,8 +188,8 @@ where
 
 impl<S: State> FractionallySizedBoxBuilder<S> {
     /// Builds the FractionallySizedBox widget.
-    pub fn build(self) -> FractionallySizedBox {
-        self.build_fractionally_sized_box()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_fractionally_sized_box())
     }
 }
 
