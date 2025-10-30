@@ -32,8 +32,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::{MultiArity, RenderFlex};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
+use flui_rendering::RenderFlex;
 use flui_types::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 /// A widget that displays its children in a vertical array.
@@ -96,7 +98,7 @@ pub struct Column {
     ///
     /// Children are laid out vertically (top-to-bottom) in the order they appear in the vector.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<BoxedWidget>,
+    pub children: Vec<Widget>,
 }
 
 impl Column {
@@ -120,12 +122,12 @@ impl Column {
     /// column.add_child(Text::new("Hello"));
     /// column.add_child(Text::new("World"));
     /// ```
-    pub fn add_child<W: Widget + 'static>(&mut self, child: W) {
-        self.children.push(BoxedWidget::new(child));
+    pub fn add_child(&mut self, child: Widget) {
+        self.children.push(child);
     }
 
     /// Sets all children at once.
-    pub fn set_children(&mut self, children: Vec<BoxedWidget>) {
+    pub fn set_children(&mut self, children: Vec<Widget>) {
         self.children = children;
     }
 
@@ -143,31 +145,33 @@ impl Default for Column {
     }
 }
 
-// Implement Widget trait with associated type
-impl Widget for Column {}
-
-// Implement RenderObjectWidget
-impl RenderObjectWidget for Column {
-    type RenderObject = RenderFlex;
-    type Arity = MultiArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderFlex::column()
+// Implement RenderWidget for Column (multi-child widget)
+impl RenderWidget for Column {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        let render_flex = RenderFlex::column()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
-            .with_main_axis_size(self.main_axis_size)
+            .with_main_axis_size(self.main_axis_size);
+
+        RenderNode::Multi(Box::new(render_flex))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.main_axis_alignment = self.main_axis_alignment;
-        render_object.cross_axis_alignment = self.cross_axis_alignment;
-        render_object.main_axis_size = self.main_axis_size;
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Multi(render) = render_object {
+            if let Some(flex) = render.downcast_mut::<RenderFlex>() {
+                flex.main_axis_alignment = self.main_axis_alignment;
+                flex.cross_axis_alignment = self.cross_axis_alignment;
+                flex.main_axis_size = self.main_axis_size;
+            }
+        }
     }
-}
 
-impl MultiChildRenderObjectWidget for Column {
-    fn children(&self) -> &[BoxedWidget] {
-        &self.children
+    fn child(&self) -> Option<&Widget> {
+        None // Multi-child widgets don't have a single child
+    }
+
+    fn children(&self) -> Option<&[Widget]> {
+        Some(&self.children)
     }
 }
 
@@ -185,13 +189,10 @@ where
     ///
     /// ```rust,ignore
     /// Column::builder()
-    ///     .children(vec![
-    ///         Box::new(widget1),
-    ///         Box::new(widget2),
-    ///     ])
+    ///     .children(vec![widget1, widget2])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<BoxedWidget>) -> ColumnBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Widget>) -> ColumnBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }

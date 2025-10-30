@@ -18,10 +18,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{
-    DynRenderObject, LeafRenderObjectElement, LeafRenderObjectWidget,
-    RenderObjectWidget, Widget,
-};
+use flui_core::widget::RenderWidget;
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_types::{Color, typography::{TextAlign, TextDirection, TextOverflow}};
 use flui_rendering::{RenderParagraph, ParagraphData};
 
@@ -158,8 +157,9 @@ impl Text {
 
 
 
-impl RenderObjectWidget for Text {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+// Implement RenderWidget for Text (Leaf widget - no children)
+impl RenderWidget for Text {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
         let data = ParagraphData::new(&self.data)
             .with_font_size(self.size)
             .with_color(self.color)
@@ -175,27 +175,31 @@ impl RenderObjectWidget for Text {
         data.text_direction = self.text_direction;
         data.soft_wrap = self.soft_wrap;
 
-        Box::new(RenderParagraph::new(data))
+        RenderNode::Leaf(Box::new(RenderParagraph::new(data)))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(paragraph) = render_object.downcast_mut::<RenderParagraph>() {
-            paragraph.set_text(&self.data);
-            paragraph.set_font_size(self.size);
-            paragraph.set_color(self.color);
-            paragraph.set_text_align(self.text_align);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Leaf(render) = render_object {
+            if let Some(paragraph) = render.downcast_mut::<RenderParagraph>() {
+                paragraph.set_text(&self.data);
+                paragraph.set_font_size(self.size);
+                paragraph.set_color(self.color);
+                paragraph.set_text_align(self.text_align);
 
-            // Update data fields directly
-            let data = paragraph.data_mut();
-            data.text_direction = self.text_direction;
-            data.max_lines = self.max_lines;
-            data.overflow = self.overflow;
-            data.soft_wrap = self.soft_wrap;
+                // Update data fields directly
+                let data = paragraph.data_mut();
+                data.text_direction = self.text_direction;
+                data.max_lines = self.max_lines;
+                data.overflow = self.overflow;
+                data.soft_wrap = self.soft_wrap;
+            }
         }
     }
-}
 
-impl LeafRenderObjectWidget for Text {}
+    fn child(&self) -> Option<&flui_core::widget::Widget> {
+        None // Leaf widgets have no children
+    }
+}
 
 /// Declarative macro for creating Text widgets
 ///
