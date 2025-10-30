@@ -36,7 +36,7 @@ pub mod vertical_divider;
 pub use align::Align;
 pub use aspect_ratio::AspectRatio;
 pub use button::Button;
-// pub use card::Card; // TODO: Fix Card widget
+pub use card::Card;
 pub use center::Center;
 pub use colored_box::ColoredBox;
 pub use constrained_box::ConstrainedBox;
