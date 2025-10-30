@@ -113,5 +113,9 @@
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "filesystem"
+  ],
+  "enableAllProjectMcpServers": true
 }

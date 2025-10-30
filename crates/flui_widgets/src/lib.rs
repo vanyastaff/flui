@@ -56,14 +56,16 @@
 #![warn(missing_docs)]
 pub mod basic;
 pub mod error;
+pub mod gestures;
 pub mod layout;
 pub mod visual_effects;
 pub mod interaction;
 
 // Re-exports for convenient top-level access
 // Essential widgets for Container and Flex layout
-pub use basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox, Text};
-pub use layout::{Column, Expanded, Flexible, Row};
+pub use basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox, Text};
+pub use gestures::GestureDetector;
+pub use layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
 pub use visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
@@ -82,8 +84,9 @@ pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offs
 /// ```
 pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
-    pub use crate::basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox, Text};
-    pub use crate::layout::{Column, Expanded, Flexible, Row};
+    pub use crate::basic::{Align, AspectRatio, Button, Center, Container, DecoratedBox, Padding, SizedBox, Text};
+    pub use crate::gestures::GestureDetector;
+    pub use crate::layout::{Column, Expanded, Flexible, IndexedStack, Positioned, Row, Stack};
     pub use crate::visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 

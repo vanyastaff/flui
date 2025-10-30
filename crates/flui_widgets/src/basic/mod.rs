@@ -8,6 +8,8 @@
 //! - Align: Aligns its child with flexible positioning
 
 pub mod align;
+pub mod aspect_ratio;
+pub mod button;
 pub mod center;
 pub mod container;
 pub mod decorated_box;
@@ -15,19 +17,13 @@ pub mod padding;
 pub mod sized_box;
 pub mod text;
 
-// Temporarily disabled
-// pub mod aspect_ratio;
-// pub mod button;
-
 // Re-exports
 pub use align::Align;
+pub use aspect_ratio::AspectRatio;
+pub use button::Button;
 pub use center::Center;
 pub use container::Container;
 pub use decorated_box::DecoratedBox;
 pub use padding::Padding;
 pub use sized_box::SizedBox;
 pub use text::Text;
-
-// Temporarily disabled
-// pub use aspect_ratio::AspectRatio;
-// pub use button::Button;

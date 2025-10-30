@@ -235,7 +235,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: Widget) -> AspectRatioBuilder<SetChild<S>> {
-        self.child_internal(Some(child))
+        self.child_internal(child)
     }
 }
 

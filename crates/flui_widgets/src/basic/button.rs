@@ -86,16 +86,14 @@ impl StatelessWidget for Button {
         // Wrap in GestureDetector for tap handling
         if let Some(on_tap) = &self.on_tap {
             let on_tap_clone = Arc::clone(on_tap);
-            Widget::GestureDetector(
-                GestureDetector::builder()
-                    .child(Widget::Container(container))
-                    .on_tap(move |_data: &PointerEventData| {
-                        on_tap_clone();
-                    })
-                    .build()
-            )
+            Widget::from(GestureDetector::builder()
+                .child(container)
+                .on_tap(move |_data: &PointerEventData| {
+                    on_tap_clone();
+                })
+                .build())
         } else {
-            Widget::Container(container)
+            container
         }
     }
 }
