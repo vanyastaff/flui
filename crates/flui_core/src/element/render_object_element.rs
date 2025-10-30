@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use super::{ElementBase, ElementLifecycle};
 use crate::element::ElementId;
 use crate::render::{RenderNode, RenderState};
-use crate::widget::{Widget};
+use crate::widget::Widget;
 
 /// Element for RenderWidget (type-erased)
 ///
@@ -319,11 +319,30 @@ impl RenderElement {
     /// Always returns empty vec as RenderWidget doesn't have widget children.
     pub fn rebuild(
         &mut self,
-        _element_id: ElementId,
+        element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, Widget, usize)> {
         self.base.clear_dirty();
-        Vec::new()
+
+        // RenderWidget doesn't "build" like StatelessWidget, but it may have children
+        // that need to be mounted in the tree
+        let widget = self.base.widget();
+
+        // Check if widget has children (multi-child widget like Row/Column/Stack)
+        if let Some(children) = widget.render_widget_children() {
+            // Return all children to be mounted
+            children
+                .iter()
+                .enumerate()
+                .map(|(slot, child)| (element_id, child.clone(), slot))
+                .collect()
+        } else if let Some(child) = widget.render_widget_child() {
+            // Single child widget (like Center, Padding, etc.)
+            vec![(element_id, child.clone(), 0)]
+        } else {
+            // Leaf widget (like Text) - no children
+            Vec::new()
+        }
     }
 
     /// Forget child element

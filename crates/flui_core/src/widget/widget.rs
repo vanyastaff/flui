@@ -70,8 +70,10 @@
 
 use std::any::{Any, TypeId};
 
+use super::traits::{
+    InheritedWidget, ParentDataWidget, RenderWidget, StatefulWidget, StatelessWidget,
+};
 use crate::foundation::Key;
-use super::traits::{StatelessWidget, StatefulWidget, InheritedWidget, RenderWidget, ParentDataWidget};
 
 /// Widget - unified enum for all widget types
 ///
@@ -245,6 +247,36 @@ impl Widget {
         }
     }
 
+    /// Get child widget for RenderWidget (single child)
+    ///
+    /// Returns None if this is not a RenderWidget or has no child
+    pub fn render_widget_child(&self) -> Option<&Widget> {
+        match self {
+            Widget::Render(w) => w.child(),
+            _ => None,
+        }
+    }
+
+    /// Get children widgets for RenderWidget (multi-child)
+    ///
+    /// Returns None if this is not a RenderWidget or has no children
+    pub fn render_widget_children(&self) -> Option<&[Widget]> {
+        match self {
+            Widget::Render(w) => w.children(),
+            _ => None,
+        }
+    }
+
+    /// Create render object for RenderWidget
+    ///
+    /// Returns None if this is not a RenderWidget
+    pub fn create_render_object(&self, context: &crate::BuildContext) -> Option<crate::render::RenderNode> {
+        match self {
+            Widget::Render(w) => Some(w.create_render_object(context)),
+            _ => None,
+        }
+    }
+
     /// Clone the widget
     ///
     /// This creates a deep clone of the widget, including the boxed trait object.
@@ -375,6 +407,216 @@ impl Clone for Widget {
 // Note: We don't implement PartialEq because widgets are compared
 // by type and key, not by value. Use can_update() instead.
 
+// ============================================================================
+// IntoWidget Trait - Ergonomic Conversion API
+// ============================================================================
+
+/// Trait for types that can be converted into a Widget
+///
+/// This trait provides ergonomic API for widget construction, eliminating
+/// the need for explicit `Widget::*()` wrappers.
+///
+/// # Why Macro Instead of Blanket Impl?
+///
+/// We cannot use blanket implementations like:
+/// ```ignore
+/// impl<T: StatelessWidget> IntoWidget for T { ... }
+/// impl<T: RenderWidget> IntoWidget for T { ... }
+/// ```
+///
+/// Because Rust's trait coherence rules cannot guarantee that these impls
+/// don't overlap (even though they never do in practice).
+///
+/// Even sealed traits don't help, because the sealed trait itself would
+/// need the same overlapping blanket impls.
+///
+/// # Solution: Batch Macro
+///
+/// Use `impl_into_widget!` macro to generate impls for multiple types at once:
+///
+/// ```ignore
+/// impl_into_widget!(stateless: Container, Align, Padding);
+/// impl_into_widget!(render: Text, Center, SizedBox);
+/// ```
+pub trait IntoWidget {
+    /// Convert self into a Widget
+    fn into_widget(self) -> Widget;
+}
+
+// Widget converts to itself (identity)
+impl IntoWidget for Widget {
+    fn into_widget(self) -> Widget {
+        self
+    }
+}
+
+/// Macro to implement IntoWidget for widget types
+///
+/// # Usage
+///
+/// Single type per invocation (add at end of widget file):
+/// ```ignore
+/// // For StatelessWidget
+/// flui_core::impl_into_widget!(Container, stateless);
+///
+/// // For RenderWidget
+/// flui_core::impl_into_widget!(Text, render);
+///
+/// // For StatefulWidget
+/// flui_core::impl_into_widget!(Counter, stateful);
+///
+/// // For InheritedWidget
+/// flui_core::impl_into_widget!(Theme, inherited);
+///
+/// // For ParentDataWidget
+/// flui_core::impl_into_widget!(Expanded, parent_data);
+/// ```
+#[macro_export]
+macro_rules! impl_into_widget {
+    ($ty:ty, stateless) => {
+        impl $crate::IntoWidget for $ty {
+            fn into_widget(self) -> $crate::Widget {
+                $crate::Widget::stateless(self)
+            }
+        }
+
+        impl From<$ty> for $crate::Widget {
+            fn from(widget: $ty) -> Self {
+                $crate::Widget::stateless(widget)
+            }
+        }
+    };
+    ($ty:ty, render) => {
+        impl $crate::IntoWidget for $ty {
+            fn into_widget(self) -> $crate::Widget {
+                $crate::Widget::render_object(self)
+            }
+        }
+
+        impl From<$ty> for $crate::Widget {
+            fn from(widget: $ty) -> Self {
+                $crate::Widget::render_object(widget)
+            }
+        }
+    };
+    ($ty:ty, stateful) => {
+        impl $crate::IntoWidget for $ty {
+            fn into_widget(self) -> $crate::Widget {
+                $crate::Widget::stateful(self)
+            }
+        }
+
+        impl From<$ty> for $crate::Widget {
+            fn from(widget: $ty) -> Self {
+                $crate::Widget::stateful(widget)
+            }
+        }
+    };
+    ($ty:ty, inherited) => {
+        impl $crate::IntoWidget for $ty {
+            fn into_widget(self) -> $crate::Widget {
+                $crate::Widget::inherited(self)
+            }
+        }
+
+        impl From<$ty> for $crate::Widget {
+            fn from(widget: $ty) -> Self {
+                $crate::Widget::inherited(widget)
+            }
+        }
+    };
+    ($ty:ty, parent_data) => {
+        impl $crate::IntoWidget for $ty {
+            fn into_widget(self) -> $crate::Widget {
+                $crate::Widget::parent_data(self)
+            }
+        }
+
+        impl From<$ty> for $crate::Widget {
+            fn from(widget: $ty) -> Self {
+                $crate::Widget::parent_data(widget)
+            }
+        }
+    };
+
+    // LEGACY BATCH SYNTAX (for backwards compatibility if needed)
+    (stateless: $($ty:ty),+ $(,)?) => {
+        $(
+            impl $crate::IntoWidget for $ty {
+                fn into_widget(self) -> $crate::Widget {
+                    $crate::Widget::stateless(self)
+                }
+            }
+
+            impl From<$ty> for $crate::Widget {
+                fn from(widget: $ty) -> Self {
+                    $crate::Widget::stateless(widget)
+                }
+            }
+        )+
+    };
+    (render: $($ty:ty),+ $(,)?) => {
+        $(
+            impl $crate::IntoWidget for $ty {
+                fn into_widget(self) -> $crate::Widget {
+                    $crate::Widget::render_object(self)
+                }
+            }
+
+            impl From<$ty> for $crate::Widget {
+                fn from(widget: $ty) -> Self {
+                    $crate::Widget::render_object(widget)
+                }
+            }
+        )+
+    };
+    (stateful: $($ty:ty),+ $(,)?) => {
+        $(
+            impl $crate::IntoWidget for $ty {
+                fn into_widget(self) -> $crate::Widget {
+                    $crate::Widget::stateful(self)
+                }
+            }
+
+            impl From<$ty> for $crate::Widget {
+                fn from(widget: $ty) -> Self {
+                    $crate::Widget::stateful(widget)
+                }
+            }
+        )+
+    };
+    (inherited: $($ty:ty),+ $(,)?) => {
+        $(
+            impl $crate::IntoWidget for $ty {
+                fn into_widget(self) -> $crate::Widget {
+                    $crate::Widget::inherited(self)
+                }
+            }
+
+            impl From<$ty> for $crate::Widget {
+                fn from(widget: $ty) -> Self {
+                    $crate::Widget::inherited(widget)
+                }
+            }
+        )+
+    };
+    (parent_data: $($ty:ty),+ $(,)?) => {
+        $(
+            impl $crate::IntoWidget for $ty {
+                fn into_widget(self) -> $crate::Widget {
+                    $crate::Widget::parent_data(self)
+                }
+            }
+
+            impl From<$ty> for $crate::Widget {
+                fn from(widget: $ty) -> Self {
+                    $crate::Widget::parent_data(widget)
+                }
+            }
+        )+
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,7 +628,9 @@ mod tests {
 
     impl StatelessWidget for TestWidget {
         fn build(&self, _ctx: &crate::BuildContext) -> Widget {
-            Widget::Stateless(Box::new(TestWidget { value: self.value + 1 }))
+            Widget::Stateless(Box::new(TestWidget {
+                value: self.value + 1,
+            }))
         }
 
         fn clone_boxed(&self) -> Box<dyn StatelessWidget> {

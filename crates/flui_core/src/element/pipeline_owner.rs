@@ -501,8 +501,6 @@ impl PipelineOwner {
     /// This ensures that parent widgets build before their children.
     pub fn flush_build(&mut self) {
         if self.dirty_elements.is_empty() {
-            #[cfg(debug_assertions)]
-            debug_println!(PRINT_BUILD_SCOPE, "flush_build: no dirty elements");
             return;
         }
 
@@ -578,7 +576,7 @@ impl PipelineOwner {
                 );
 
                 // Inflate widget into element
-                let mut child_element = self.inflate_widget(child_widget);
+                let mut child_element = self.inflate_widget(child_widget.clone());
 
                 // Mount the element (sets parent, slot, lifecycle = Active)
                 child_element.mount(Some(parent_id), slot);
@@ -595,12 +593,28 @@ impl PipelineOwner {
                     slot
                 );
 
-                // Update parent's child reference
-                // For ComponentElement, it has a single child
-                if let Some(Element::Component(parent_component)) = tree_guard.get_mut(parent_id) {
-                    parent_component.set_child(child_id);
+                // Update parent's child reference based on parent element type
+                match tree_guard.get_mut(parent_id) {
+                    Some(Element::Component(parent_component)) => {
+                        parent_component.set_child(child_id);
+                    }
+                    Some(Element::Render(parent_render)) => {
+                        parent_render.add_child(child_id);
+                    }
+                    Some(Element::Stateful(_)) => {
+                        // TODO: Handle StatefulElement children
+                    }
+                    Some(Element::Inherited(_)) => {
+                        // TODO: Handle InheritedElement children
+                    }
+                    Some(Element::ParentData(_)) => {
+                        // TODO: Handle ParentDataElement children
+                    }
+                    None => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("Warning: Parent element {:?} not found", parent_id);
+                    }
                 }
-                // FIXME: Handle other element types (Stateful, Inherited, Render, ParentData)
 
                 drop(tree_guard);
 
@@ -610,8 +624,10 @@ impl PipelineOwner {
             }
         }
 
-        // Put back the (now empty) vector
-        self.dirty_elements = dirty;
+        // Note: Don't overwrite dirty_elements here!
+        // Elements scheduled during rebuild are already in self.dirty_elements
+        // and should be processed in the next flush_build call.
+        // This was the bug that prevented the tree from being fully built!
 
         #[cfg(debug_assertions)]
         debug_println!(PRINT_BUILD_SCOPE, "flush_build #{}: complete", build_num);
@@ -687,16 +703,47 @@ impl PipelineOwner {
     /// when Render system is fully integrated.
     pub fn flush_layout(
         &mut self,
-        _constraints: flui_types::constraints::BoxConstraints,
+        constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
-        #[cfg(debug_assertions)]
-        debug_println!(PRINT_LAYOUT, "PipelineOwner::flush_layout called (stub)");
+        let root_id = self.root_element_id?;
+        let tree = self.tree.read();
 
-        // FIXME: Implement layout phase:
-        // 1. Sort dirty nodes by depth
-        // 2. Layout each node with constraints
-        // 3. Return root size
-        None
+        // Find the first RenderElement by walking down the tree
+        // ComponentElements and StatefulElements don't have layout - they're just wrappers
+        let mut current_id = root_id;
+        let render_id = loop {
+            if let Some(element) = tree.get(current_id) {
+                match element {
+                    crate::element::Element::Render(_) => {
+                        break Some(current_id);
+                    }
+                    crate::element::Element::Component(comp) => {
+                        if let Some(child_id) = comp.child() {
+                            current_id = child_id;
+                        } else {
+                            break None;
+                        }
+                    }
+                    crate::element::Element::Stateful(stateful) => {
+                        if let Some(child_id) = stateful.child() {
+                            current_id = child_id;
+                        } else {
+                            break None;
+                        }
+                    }
+                    _ => {
+                        break None;
+                    }
+                }
+            } else {
+                break None;
+            }
+        };
+
+        let render_id = render_id?;
+
+        // Layout the RenderElement with given constraints
+        tree.layout_render_object(render_id, constraints)
     }
 
     /// Flush the paint phase
@@ -711,14 +758,43 @@ impl PipelineOwner {
     ///
     /// This is a stub implementation. Full paint pipeline will be added
     /// when Render system is fully integrated.
-    pub fn flush_paint(&mut self, _offset: flui_types::Offset) {
-        #[cfg(debug_assertions)]
-        debug_println!(PRINT_LAYOUT, "PipelineOwner::flush_paint called (stub)");
+    pub fn flush_paint(&mut self, offset: flui_types::Offset) -> Option<crate::BoxedLayer> {
+        let root_id = self.root_element_id?;
+        let tree = self.tree.read();
 
-        // FIXME: Implement paint phase:
-        // 1. Paint dirty nodes
-        // 2. Composite layers
-        // 3. Send to backend
+        // Similar to layout, find the first RenderElement
+        let mut current_id = root_id;
+        let render_id = loop {
+            if let Some(element) = tree.get(current_id) {
+                match element {
+                    crate::element::Element::Render(_) => {
+                        break Some(current_id);
+                    }
+                    crate::element::Element::Component(comp) => {
+                        if let Some(child_id) = comp.child() {
+                            current_id = child_id;
+                        } else {
+                            break None;
+                        }
+                    }
+                    crate::element::Element::Stateful(stateful) => {
+                        if let Some(child_id) = stateful.child() {
+                            current_id = child_id;
+                        } else {
+                            break None;
+                        }
+                    }
+                    _ => {
+                        break None;
+                    }
+                }
+            } else {
+                break None;
+            }
+        };
+
+        let render_id = render_id?;
+        tree.paint_render_object(render_id, offset)
     }
 
     // =========================================================================
@@ -742,17 +818,36 @@ impl PipelineOwner {
     ///
     /// An Element enum variant ready to be inserted into the tree
     fn inflate_widget(&self, widget: crate::Widget) -> Element {
-        use crate::element::ComponentElement;
-        
+        use crate::element::{BuildContext, ComponentElement, RenderElement};
+        use crate::Widget;
 
-        // Try each widget type in order
-        // Note: We can't directly check traits, so we use a heuristic:
-        // - If widget.build() returns Some, it's a buildable widget (Stateless/Stateful/Inherited)
-        // - Otherwise it's a RenderWidget or ParentDataWidget
+        // Determine element type based on widget variant
+        match widget {
+            Widget::Stateless(_) => Element::Component(ComponentElement::new(widget)),
+            Widget::Stateful(_) => {
+                // TODO: Create StatefulElement when implemented
+                Element::Component(ComponentElement::new(widget))
+            }
+            Widget::Inherited(_) => {
+                // TODO: Create InheritedElement when implemented
+                Element::Component(ComponentElement::new(widget))
+            }
+            Widget::Render(_) => {
+                // Create a temporary BuildContext for render object creation
+                // We use ElementId 0 as placeholder since element isn't in tree yet
+                let temp_context = BuildContext::new(self.tree.clone(), 0);
 
-        // For now, assume all widgets coming through rebuild() are StatelessWidget
-        // FIXME: Add proper type detection when we support all widget types
-        Element::Component(ComponentElement::new(widget))
+                // Create render object from widget
+                let render_object = widget.create_render_object(&temp_context)
+                    .expect("RenderWidget must have create_render_object");
+
+                Element::Render(RenderElement::new(widget, render_object))
+            }
+            Widget::ParentData(_) => {
+                // TODO: Create ParentDataElement when implemented
+                Element::Component(ComponentElement::new(widget))
+            }
+        }
     }
 }
 
@@ -767,7 +862,7 @@ mod tests {
     use super::*;
     use crate::BuildContext;
     use crate::element::{ComponentElement, Element};
-    use crate::widget::{Widget, StatelessWidget};
+    use crate::widget::{StatelessWidget, Widget};
 
     // Test widget for testing
     #[derive(Debug, Clone)]

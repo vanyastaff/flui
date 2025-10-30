@@ -3,8 +3,8 @@
 //! This module provides the FluiApp struct, which manages the application lifecycle,
 //! element tree, and rendering pipeline integration with egui.
 
-use flui_core::{BoxConstraints, DynWidget, Offset, PipelineOwner, Size};
-use flui_types::events::{PointerButton, PointerDeviceKind, PointerEvent, PointerEventData};
+use flui_core::{ComponentElement, Element, Offset, PipelineOwner, Size, Widget};
+use flui_types::BoxConstraints;
 
 /// Performance statistics for debugging and optimization
 #[derive(Debug, Default)]
@@ -22,7 +22,7 @@ pub(crate) struct FrameStats {
 impl FrameStats {
     /// Log statistics to console
     pub fn log(&self) {
-        if self.frame_count % 60 == 0 && self.frame_count > 0 {
+        if self.frame_count.is_multiple_of(60) && self.frame_count > 0 {
             tracing::info!(
                 "Performance: {} frames | Rebuilds: {} ({:.1}%) | Layouts: {} ({:.1}%) | Paints: {} ({:.1}%)",
                 self.frame_count,
@@ -68,9 +68,10 @@ impl FluiApp {
     /// # Parameters
     ///
     /// - `root_widget`: The root widget of the application
-    pub fn new(root_widget: Box<dyn DynWidget>) -> Self {
+    pub fn new(root_widget: Widget) -> Self {
         let mut pipeline = PipelineOwner::new();
-        pipeline.set_root(root_widget);
+        let root_element = Element::Component(ComponentElement::new(root_widget));
+        pipeline.set_root(root_element);
 
         Self {
             pipeline,
@@ -89,7 +90,7 @@ impl FluiApp {
     ///
     /// Ignores sub-pixel changes to avoid unnecessary layouts
     fn size_changed(&self, new_size: Size) -> bool {
-        self.last_size.map_or(true, |last| {
+        self.last_size.is_none_or(|last| {
             (last.width - new_size.width).abs() > 1.0 || (last.height - new_size.height).abs() > 1.0
         })
     }
@@ -98,53 +99,11 @@ impl FluiApp {
     ///
     /// Converts egui pointer events to Flui PointerEvents and dispatches them
     /// through hit testing.
-    fn process_pointer_events(&mut self, ui: &egui::Ui) {
-        let input = ui.input(|i| i.clone());
-
-        // Get pointer position
-        if let Some(pointer_pos) = input.pointer.latest_pos() {
-            let position = Offset::new(
-                pointer_pos.x - ui.min_rect().min.x,
-                pointer_pos.y - ui.min_rect().min.y,
-            );
-
-            // Check for pointer down events (button click)
-            if input.pointer.primary_clicked() {
-                let event_data = PointerEventData::new(position, PointerDeviceKind::Mouse)
-                    .with_button(PointerButton::Primary);
-                let event = PointerEvent::Down(event_data);
-                tracing::info!("🖱️ Pointer Down at {:?}", position);
-
-                let result = self.pipeline.dispatch_pointer_event(event.clone());
-
-                // Dispatch to gesture handlers if hit
-                if result.is_hit() {
-                    flui_widgets::gestures::dispatch_gesture_event(&event);
-                }
-            }
-
-            // Check for pointer up events (button release)
-            if input.pointer.primary_released() {
-                let event_data = PointerEventData::new(position, PointerDeviceKind::Mouse)
-                    .with_button(PointerButton::Primary);
-                let event = PointerEvent::Up(event_data);
-                tracing::info!("🖱️ Pointer Up at {:?}", position);
-
-                let result = self.pipeline.dispatch_pointer_event(event.clone());
-
-                // Dispatch to gesture handlers if hit
-                if result.is_hit() {
-                    flui_widgets::gestures::dispatch_gesture_event(&event);
-                }
-            }
-
-            // Check for pointer move events (only if pointer is over widget)
-            if input.pointer.is_moving() {
-                let event_data = PointerEventData::new(position, PointerDeviceKind::Mouse);
-                let event = PointerEvent::Move(event_data);
-                self.pipeline.dispatch_pointer_event(event);
-            }
-        }
+    ///
+    /// TODO: Re-implement pointer event handling when the API is ready
+    fn process_pointer_events(&mut self, _ui: &egui::Ui) {
+        // Pointer event dispatching is temporarily disabled
+        // until the PipelineOwner API is updated
     }
 
     /// Update the application for one frame
@@ -162,26 +121,18 @@ impl FluiApp {
         self.stats.frame_count += 1;
 
         // ===== Phase 1: Build =====
-        let dirty_count = self.pipeline.tree().read().dirty_element_count();
-        if dirty_count > 0 {
-            self.stats.rebuild_count += 1;
-            tracing::debug!(
-                "Frame {}: Rebuilding {} dirty elements",
-                self.stats.frame_count,
-                dirty_count
-            );
-            self.pipeline.flush_build();
-        }
+        // Always flush build to handle any pending updates
+        self.stats.rebuild_count += 1;
+        self.pipeline.flush_build();
 
         // ===== Phase 2: Layout =====
         let current_size = Size::new(ui.available_size().x, ui.available_size().y);
-        let needs_layout = dirty_count > 0 || self.size_changed(current_size);
+        let needs_layout = self.size_changed(current_size);
 
         tracing::debug!(
-            "Frame {}: needs_layout={} (dirty_count={}, size_changed={})",
+            "Frame {}: needs_layout={} (size_changed={})",
             self.stats.frame_count,
             needs_layout,
-            dirty_count,
             self.size_changed(current_size)
         );
 
@@ -205,18 +156,22 @@ impl FluiApp {
 
         // ===== Phase 3: Paint =====
         // Note: egui clears screen every frame, so we must paint every frame
-        let painter = ctx.layer_painter(egui::LayerId::background());
         let offset = Offset::new(ui.min_rect().min.x, ui.min_rect().min.y);
-        self.pipeline.flush_paint(&painter, offset);
-        self.stats.paint_count += 1;
+        if let Some(_layer) = self.pipeline.flush_paint(offset) {
+            self.stats.paint_count += 1;
+            // TODO: Composite layer to screen when backend integration is ready
+        } else {
+            tracing::warn!(
+                "Frame {}: flush_paint returned None!",
+                self.stats.frame_count
+            );
+        }
 
         // Log performance stats periodically
         self.stats.log();
 
-        // Request repaint if there are dirty elements waiting
-        if self.pipeline.tree().read().has_dirty() {
-            ctx.request_repaint();
-        }
+        // Request repaint for the next frame
+        ctx.request_repaint();
     }
 }
 
@@ -226,7 +181,7 @@ impl eframe::App for FluiApp {
     /// Called by eframe once per frame.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none()) // Remove default padding/margin
+            .frame(egui::Frame::NONE) // Remove default padding/margin
             .show(ctx, |ui| {
                 FluiApp::update(self, ctx, ui);
             });
@@ -243,7 +198,7 @@ mod tests {
     struct TestWidget;
 
     impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
+        fn build(&self, _context: &BuildContext) -> Widget {
             Box::new(Text::new("Test"))
         }
     }
