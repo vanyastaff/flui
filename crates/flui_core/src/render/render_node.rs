@@ -230,10 +230,7 @@ impl RenderNode {
             Self::Leaf(r) => r.layout(constraints),
             Self::Single {
                 render: r, child, ..
-            } => {
-                eprintln!("        RenderNode::layout (Single): child_id={:?}", child);
-                r.layout(tree, *child, constraints)
-            }
+            } => r.layout(tree, *child, constraints),
             Self::Multi {
                 render: r,
                 children,

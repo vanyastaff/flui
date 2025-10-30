@@ -387,7 +387,6 @@ impl ElementTree {
 
         // Cache miss or needs relayout - compute layout
         let mut render_object = render_element.render_object_mut();
-
         let size = render_object.layout(self, constraints);
 
         // Update RenderState with new size and constraints
@@ -442,42 +441,33 @@ impl ElementTree {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> flui_types::Size {
-        eprintln!("    layout_child called for child_id={:?}", child_id);
-
         // Walk down through ComponentElements to find the first RenderElement
         let mut current_id = child_id;
         let render_id = loop {
             if let Some(element) = self.get(current_id) {
                 match element {
                     crate::element::Element::Render(_) => {
-                        eprintln!("      Found RenderElement at {:?}", current_id);
                         break Some(current_id);
                     }
                     crate::element::Element::Component(comp) => {
-                        eprintln!("      Element {:?} is Component, walking to child", current_id);
                         if let Some(comp_child_id) = comp.child() {
                             current_id = comp_child_id;
                         } else {
-                            eprintln!("      ComponentElement {:?} has no child!", current_id);
                             break None;
                         }
                     }
                     crate::element::Element::Stateful(stateful) => {
-                        eprintln!("      Element {:?} is Stateful, walking to child", current_id);
                         if let Some(stateful_child_id) = stateful.child() {
                             current_id = stateful_child_id;
                         } else {
-                            eprintln!("      StatefulElement {:?} has no child!", current_id);
                             break None;
                         }
                     }
                     _ => {
-                        eprintln!("      Unsupported element type at {:?}", current_id);
                         break None;
                     }
                 }
             } else {
-                eprintln!("      Element {:?} not found in tree!", current_id);
                 break None;
             }
         };
@@ -486,7 +476,6 @@ impl ElementTree {
             self.layout_render_object(render_id, constraints)
                 .unwrap_or(flui_types::Size::ZERO)
         } else {
-            eprintln!("      WARNING: Could not find RenderElement for child {:?}", child_id);
             flui_types::Size::ZERO
         }
     }
