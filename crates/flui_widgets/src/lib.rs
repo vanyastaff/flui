@@ -63,7 +63,7 @@ pub mod interaction;
 
 // Re-exports for convenient top-level access
 // Essential widgets for Container and Flex layout
-pub use basic::{Align, AspectRatio, Button, Center, ColoredBox, ConstrainedBox, Container, DecoratedBox, FittedBox, LimitedBox, Padding, SizedBox, Text};
+pub use basic::{Align, AspectRatio, Button, Center, ColoredBox, ConstrainedBox, Container, DecoratedBox, Divider, FittedBox, LimitedBox, Padding, SizedBox, Text, VerticalDivider};
 pub use gestures::GestureDetector;
 pub use layout::{Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, OverflowBox, Positioned, RotatedBox, Row, Spacer, Stack};
 pub use visual_effects::{ClipOval, ClipRect, ClipRRect, Offstage, Opacity, Transform};
@@ -84,7 +84,7 @@ pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offs
 /// ```
 pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
-    pub use crate::basic::{Align, AspectRatio, Button, Center, ColoredBox, ConstrainedBox, Container, DecoratedBox, FittedBox, LimitedBox, Padding, SizedBox, Text};
+    pub use crate::basic::{Align, AspectRatio, Button, Center, ColoredBox, ConstrainedBox, Container, DecoratedBox, Divider, FittedBox, LimitedBox, Padding, SizedBox, Text, VerticalDivider};
     pub use crate::gestures::GestureDetector;
     pub use crate::layout::{Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, OverflowBox, Positioned, RotatedBox, Row, Spacer, Stack};
     pub use crate::visual_effects::{ClipOval, ClipRect, ClipRRect, Offstage, Opacity, Transform};

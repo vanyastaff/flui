@@ -15,11 +15,15 @@ pub mod colored_box;
 pub mod constrained_box;
 pub mod container;
 pub mod decorated_box;
+pub mod divider;
 pub mod fitted_box;
 pub mod limited_box;
 pub mod padding;
 pub mod sized_box;
 pub mod text;
+pub mod vertical_divider;
+
+
 
 
 
@@ -34,11 +38,15 @@ pub use colored_box::ColoredBox;
 pub use constrained_box::ConstrainedBox;
 pub use container::Container;
 pub use decorated_box::DecoratedBox;
+pub use divider::Divider;
 pub use fitted_box::FittedBox;
 pub use limited_box::LimitedBox;
 pub use padding::Padding;
 pub use sized_box::SizedBox;
 pub use text::Text;
+pub use vertical_divider::VerticalDivider;
+
+
 
 
 
