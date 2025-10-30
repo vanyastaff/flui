@@ -12,7 +12,8 @@
 
 use std::sync::Arc;
 
-use flui_core::{BoxedWidget, DynWidget, StatelessWidget, Widget};
+use flui_core::widget::{Widget, StatelessWidget};
+use flui_core::BuildContext;
 use flui_types::events::{PointerEvent, PointerEventData};
 use parking_lot::RwLock;
 
@@ -94,7 +95,7 @@ pub fn clear_gesture_handlers() {
 #[derive(Clone)]
 pub struct GestureDetector {
     /// Child widget
-    pub child: Box<dyn DynWidget>,
+    pub child: Widget,
 
     /// On tap callback (pointer up)
     pub on_tap: Option<PointerEventCallback>,
@@ -111,7 +112,7 @@ pub struct GestureDetector {
 
 impl GestureDetector {
     /// Create a new GestureDetector with a child
-    pub fn new(child: Box<dyn DynWidget>) -> Self {
+    pub fn new(child: Widget) -> Self {
         Self {
             child,
             on_tap: None,
@@ -140,7 +141,7 @@ impl GestureDetector {
 }
 
 impl StatelessWidget for GestureDetector {
-    fn build(&self, _context: &flui_core::BuildContext) -> Box<dyn DynWidget> {
+    fn build(&self, _context: &BuildContext) -> Widget {
         // Register handlers when building
         self.register();
 
@@ -152,7 +153,7 @@ impl StatelessWidget for GestureDetector {
 impl std::fmt::Debug for GestureDetector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureDetector")
-            .field("child", &self.child.type_name())
+            .field("child", &"<Widget>")
             .field("has_on_tap", &self.on_tap.is_some())
             .field("has_on_tap_down", &self.on_tap_down.is_some())
             .field("has_on_tap_up", &self.on_tap_up.is_some())
@@ -163,7 +164,7 @@ impl std::fmt::Debug for GestureDetector {
 
 /// Builder for GestureDetector
 pub struct GestureDetectorBuilder {
-    child: Option<Box<dyn DynWidget>>,
+    child: Option<Widget>,
     on_tap: Option<PointerEventCallback>,
     on_tap_down: Option<PointerEventCallback>,
     on_tap_up: Option<PointerEventCallback>,
@@ -183,11 +184,8 @@ impl GestureDetectorBuilder {
     }
 
     /// Set the child widget
-    pub fn child<W>(mut self, child: W) -> Self
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn child(mut self, child: Widget) -> Self {
+        self.child = Some(child);
         self
     }
 

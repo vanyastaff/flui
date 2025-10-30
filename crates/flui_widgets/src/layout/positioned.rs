@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, ParentDataWidget, Widget};
+use flui_core::widget::{Widget, ParentDataWidget};
 use flui_rendering::StackParentData;
 
 /// A widget that controls where a child of a Stack is positioned.
@@ -179,7 +179,7 @@ pub struct Positioned {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl Positioned {
@@ -212,7 +212,7 @@ impl Positioned {
     /// ```rust,ignore
     /// let widget = Positioned::fill(Container::new());
     /// ```
-    pub fn fill(child: impl Widget + 'static) -> Self {
+    pub fn fill(child: Widget) -> Self {
         Self {
             key: None,
             left: Some(0.0),
@@ -221,7 +221,7 @@ impl Positioned {
             bottom: Some(0.0),
             width: None,
             height: None,
-            child: Some(BoxedWidget::new(child)),
+            child: Some(child),
         }
     }
 
@@ -244,7 +244,7 @@ impl Positioned {
         top: f32,
         width: f32,
         height: f32,
-        child: impl Widget + 'static,
+        child: Widget,
     ) -> Self {
         Self {
             key: None,
@@ -254,7 +254,7 @@ impl Positioned {
             bottom: None,
             width: Some(width),
             height: Some(height),
-            child: Some(BoxedWidget::new(child)),
+            child: Some(child),
         }
     }
 
@@ -274,7 +274,7 @@ impl Positioned {
         top: Option<f32>,
         end: Option<f32>,
         bottom: Option<f32>,
-        child: impl Widget + 'static,
+        child: Widget,
     ) -> Self {
         Self {
             key: None,
@@ -284,7 +284,7 @@ impl Positioned {
             bottom,
             width: None,
             height: None,
-            child: Some(BoxedWidget::new(child)),
+            child: Some(child),
         }
     }
 
@@ -296,11 +296,8 @@ impl Positioned {
     /// let mut widget = Positioned::new();
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 
     /// Validates Positioned configuration.
@@ -389,7 +386,7 @@ impl ParentDataWidget for Positioned {
         // This will be implemented when the render object trait is ready
     }
 
-    fn child(&self) -> &BoxedWidget {
+    fn child(&self) -> &Widget {
         self.child.as_ref().expect("Positioned must have a child")
     }
 }
@@ -413,11 +410,8 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child<W>(self, child: W) -> PositionedBuilder<SetChild<S>>
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> PositionedBuilder<SetChild<S>> {
+        self.child_internal(child)
     }
 }
 

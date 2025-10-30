@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, ParentDataWidget, Widget};
+use flui_core::widget::{Widget, ParentDataWidget};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
@@ -143,7 +143,7 @@ pub struct Flexible {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl Flexible {
@@ -159,12 +159,12 @@ impl Flexible {
     /// ```rust,ignore
     /// let widget = Flexible::new(1, Container::new());
     /// ```
-    pub fn new(flex: i32, child: impl Widget + 'static) -> Self {
+    pub fn new(flex: i32, child: Widget) -> Self {
         Self {
             key: None,
             flex,
             fit: FlexFit::Loose,
-            child: Some(BoxedWidget::new(child)),
+            child: Some(child),
         }
     }
 
@@ -182,12 +182,12 @@ impl Flexible {
     /// ```rust,ignore
     /// let widget = Flexible::tight(2, Container::new());
     /// ```
-    pub fn tight(flex: i32, child: impl Widget + 'static) -> Self {
+    pub fn tight(flex: i32, child: Widget) -> Self {
         Self {
             key: None,
             flex,
             fit: FlexFit::Tight,
-            child: Some(BoxedWidget::new(child)),
+            child: Some(child),
         }
     }
 
@@ -199,11 +199,8 @@ impl Flexible {
     /// let mut widget = Flexible::builder().flex(1).build();
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 
     /// Validates Flexible configuration.
@@ -261,7 +258,7 @@ impl ParentDataWidget for Flexible {
         // This will be implemented when the render object trait is ready
     }
 
-    fn child(&self) -> &BoxedWidget {
+    fn child(&self) -> &Widget {
         self.child.as_ref().expect("Flexible must have a child")
     }
 }
@@ -284,11 +281,8 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child<W>(self, child: W) -> FlexibleBuilder<SetChild<S>>
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> FlexibleBuilder<SetChild<S>> {
+        self.child_internal(child)
     }
 }
 

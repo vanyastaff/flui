@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use flui_core::{BuildContext, DynWidget, StatelessWidget, Widget};
+use flui_core::widget::{Widget, StatelessWidget};
+use flui_core::BuildContext;
 use flui_types::{Color, EdgeInsets, events::PointerEventData};
 use flui_types::styling::{BorderRadius, BoxDecoration};
 
@@ -71,7 +72,7 @@ impl Button {
 }
 
 impl StatelessWidget for Button {
-    fn build(&self, _context: &BuildContext) -> Box<dyn DynWidget> {
+    fn build(&self, _context: &BuildContext) -> Widget {
         // Create the visual container
         let container = Container::builder()
             .padding(self.padding)
@@ -85,16 +86,16 @@ impl StatelessWidget for Button {
         // Wrap in GestureDetector for tap handling
         if let Some(on_tap) = &self.on_tap {
             let on_tap_clone = Arc::clone(on_tap);
-            Box::new(
+            Widget::GestureDetector(
                 GestureDetector::builder()
-                    .child(container)
+                    .child(Widget::Container(container))
                     .on_tap(move |_data: &PointerEventData| {
                         on_tap_clone();
                     })
                     .build()
             )
         } else {
-            Box::new(container)
+            Widget::Container(container)
         }
     }
 }

@@ -17,7 +17,7 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::{BoxedWidget, ParentDataWidget, Widget};
+use flui_core::widget::{Widget, ParentDataWidget};
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
@@ -109,7 +109,7 @@ pub struct Expanded {
     pub flex: i32,
 
     /// The child widget.
-    pub child: BoxedWidget,
+    pub child: Widget,
 }
 
 impl Expanded {
@@ -124,10 +124,10 @@ impl Expanded {
     /// ```rust,ignore
     /// let widget = Expanded::new(Container::new());
     /// ```
-    pub fn new(child: impl Widget + 'static) -> Self {
+    pub fn new(child: Widget) -> Self {
         Self {
             flex: 1,
-            child: BoxedWidget::new(child),
+            child,
         }
     }
 
@@ -144,10 +144,10 @@ impl Expanded {
     /// // This child gets twice as much space as flex: 1
     /// let widget = Expanded::with_flex(2, Container::new());
     /// ```
-    pub fn with_flex(flex: i32, child: impl Widget + 'static) -> Self {
+    pub fn with_flex(flex: i32, child: Widget) -> Self {
         Self {
             flex,
-            child: BoxedWidget::new(child),
+            child,
         }
     }
 
@@ -182,7 +182,7 @@ impl ParentDataWidget for Expanded {
         // This will be implemented when the render object trait is ready
     }
 
-    fn child(&self) -> &BoxedWidget {
+    fn child(&self) -> &Widget {
         &self.child
     }
 }

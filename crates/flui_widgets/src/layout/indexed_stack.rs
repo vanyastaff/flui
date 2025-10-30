@@ -30,8 +30,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::{MultiArity, RenderIndexedStack};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
+use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that shows only a single child from a list of children.
@@ -156,7 +158,7 @@ pub struct IndexedStack {
     /// Only the child at `index` will be visible, but all children
     /// are laid out to compute the correct size and maintain state.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<BoxedWidget>,
+    pub children: Vec<Widget>,
 }
 
 impl IndexedStack {
@@ -211,8 +213,8 @@ impl IndexedStack {
     /// stack.add_child(Container::new());
     /// stack.add_child(Text::new("Page 2"));
     /// ```
-    pub fn add_child<W: Widget + 'static>(&mut self, child: W) {
-        self.children.push(BoxedWidget::new(child));
+    pub fn add_child(&mut self, child: Widget) {
+        self.children.push(child);
     }
 
     /// Sets the children widgets.
@@ -226,7 +228,7 @@ impl IndexedStack {
     ///     Text::new("Page 2"),
     /// ]);
     /// ```
-    pub fn set_children(&mut self, children: Vec<Box<dyn DynWidget>>) {
+    pub fn set_children(&mut self, children: Vec<Widget>) {
         self.children = children;
     }
 
@@ -253,27 +255,27 @@ impl Default for IndexedStack {
     }
 }
 
-// Implement Widget trait with associated type
-impl Widget for IndexedStack {}
-
-// Implement RenderObjectWidget
-impl RenderObjectWidget for IndexedStack {
-    type RenderObject = RenderIndexedStack;
-    type Arity = MultiArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderIndexedStack::with_alignment(self.index, self.alignment)
+// Implement RenderWidget
+impl RenderWidget for IndexedStack {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Multi(Box::new(RenderIndexedStack::with_alignment(self.index, self.alignment)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.set_index(self.index);
-        render_object.set_alignment(self.alignment);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Multi(render) = render_object {
+            if let Some(indexed_stack) = render.downcast_mut::<RenderIndexedStack>() {
+                indexed_stack.set_index(self.index);
+                indexed_stack.set_alignment(self.alignment);
+            }
+        }
     }
-}
 
-impl MultiChildRenderObjectWidget for IndexedStack {
-    fn children(&self) -> &[BoxedWidget] {
-        &self.children
+    fn child(&self) -> Option<&Widget> {
+        None // Multi-child widgets don't have a single child
+    }
+
+    fn children(&self) -> Option<&[Widget]> {
+        Some(&self.children)
     }
 }
 
@@ -297,13 +299,10 @@ where
     /// ```
     pub fn children(
         self,
-        children: impl IntoIterator<Item = impl Widget + 'static>,
+        children: impl IntoIterator<Item = Widget>,
     ) -> IndexedStackBuilder<SetChildren<S>> {
-        let boxed: Vec<Box<dyn DynWidget>> = children
-            .into_iter()
-            .map(|w| Box::new(w) as Box<dyn DynWidget>)
-            .collect();
-        self.children_internal(boxed)
+        let widgets: Vec<Widget> = children.into_iter().collect();
+        self.children_internal(widgets)
     }
 }
 
