@@ -4,8 +4,10 @@
 //! Similar to Flutter's Opacity widget.
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
-use flui_rendering::{RenderOpacity, SingleArity};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
+use flui_rendering::RenderOpacity;
 
 /// A widget that makes its child partially transparent.
 ///
@@ -51,7 +53,7 @@ pub struct Opacity {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl Opacity {
@@ -80,11 +82,8 @@ impl Opacity {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 
     /// Validates Opacity configuration.
@@ -112,28 +111,22 @@ impl Default for Opacity {
     }
 }
 
-// Implement Widget trait with associated type
-
-
-// Implement RenderObjectWidget
-impl RenderObjectWidget for Opacity {
-    type RenderObject = RenderOpacity;
-    type Arity = SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderOpacity::new(self.opacity)
+// Implement RenderWidget
+impl RenderWidget for Opacity {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Single(Box::new(RenderOpacity::new(self.opacity)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.set_opacity(self.opacity);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single(render) = render_object {
+            if let Some(opacity) = render.downcast_mut::<RenderOpacity>() {
+                opacity.set_opacity(self.opacity);
+            }
+        }
     }
-}
 
-impl SingleChildRenderObjectWidget for Opacity {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("Opacity requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }
 
@@ -146,8 +139,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child<W: Widget + 'static>(self, child: W) -> OpacityBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> OpacityBuilder<SetChild<S>> {
+        self.child_internal(Some(child))
     }
 }
 

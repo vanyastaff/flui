@@ -29,7 +29,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_rendering::RenderTransform;
 
 // Use Matrix4 from rendering module
@@ -141,7 +143,7 @@ pub struct Transform {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl Transform {
@@ -242,11 +244,11 @@ impl Transform {
     /// let mut widget = Transform::rotate(PI / 4.0);
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child<W>(&mut self, child: W)
+    pub fn set_child(&mut self, child: Widget)
     where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
+        
     {
-        self.child = Some(BoxedWidget::new(child));
+        self.child = Some(child);
     }
 
     /// Validates Transform configuration.
@@ -290,29 +292,25 @@ impl Default for Transform {
 // Implement Widget trait with associated type
 
 
-// Implement RenderObjectWidget
-impl RenderObjectWidget for Transform {
-    fn create_render_object(&self) -> Box<dyn DynRenderObject> {
+// Implement RenderWidget
+impl RenderWidget for Transform {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
         use flui_rendering::{SingleRenderBox, objects::effects::transform::TransformData};
         // Note: transform_hit_tests is ignored for now as RenderTransform doesn't support it yet
-        Box::new(SingleRenderBox::new(TransformData::new(self.transform)))
+        RenderNode::Single(Box::new(SingleRenderBox::new(TransformData::new(self.transform))))
     }
 
-    fn update_render_object(&self, render_object: &mut dyn DynRenderObject) {
-        if let Some(transform_render) = render_object.downcast_mut::<RenderTransform>() {
-            transform_render.set_transform(self.transform);
-            // Note: transform_hit_tests is ignored for now as RenderTransform doesn't support it yet
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single(render) = render_object {
+            if let Some(transform_render) = render.downcast_mut::<RenderTransform>() {
+                transform_render.set_transform(self.transform);
+                // Note: transform_hit_tests is ignored for now as RenderTransform doesn't support it yet
+            }
         }
     }
-}
 
-// Implement SingleChildRenderObjectWidget
-impl SingleChildRenderObjectWidget for Transform {
-    fn child(&self) -> &dyn DynWidget {
-        self.child
-            .as_ref()
-            .map(|b| &**b as &dyn DynWidget)
-            .unwrap_or_else(|| panic!("Transform requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }
 
@@ -334,8 +332,8 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child<W: Widget + 'static>(self, child: W) -> TransformBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> TransformBuilder<SetChild<S>> {
+        self.child_internal(Some(child))
     }
 }
 
