@@ -174,7 +174,7 @@ where
 impl<S: State> IntrinsicHeightBuilder<S> {
     /// Builds the IntrinsicHeight widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_intrinsic_height())
+        Widget::render_object(self.build_intrinsic_height())
     }
 }
 

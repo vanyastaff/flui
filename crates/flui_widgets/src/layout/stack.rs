@@ -289,7 +289,7 @@ where
 impl<S: State> StackBuilder<S> {
     /// Builds the Stack widget and returns it as a Widget.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render(self.build_stack())
+        flui_core::Widget::render_object(self.build_stack())
     }
 }
 

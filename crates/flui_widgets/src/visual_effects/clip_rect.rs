@@ -115,7 +115,7 @@ where
 impl<S: State> ClipRectBuilder<S> {
     /// Builds the ClipRect widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_clip_rect())
+        Widget::render_object(self.build_clip_rect())
     }
 }
 

@@ -211,7 +211,7 @@ where
 impl<S: State> OverflowBoxBuilder<S> {
     /// Builds the OverflowBox widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_overflow_box())
+        Widget::render_object(self.build_overflow_box())
     }
 }
 

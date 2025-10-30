@@ -189,7 +189,7 @@ where
 impl<S: State> PaddingBuilder<S> {
     /// Builds the Padding widget and returns it as a Widget.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render(self.build_padding())
+        flui_core::Widget::render_object(self.build_padding())
     }
 }
 

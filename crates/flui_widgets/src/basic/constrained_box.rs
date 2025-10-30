@@ -107,7 +107,7 @@ where
 impl<S: State> ConstrainedBoxBuilder<S> {
     /// Builds the ConstrainedBox widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_constrained_box())
+        Widget::render_object(self.build_constrained_box())
     }
 }
 

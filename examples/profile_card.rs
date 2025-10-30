@@ -120,13 +120,11 @@ impl StatelessWidget for ProfileCardApp {
                                                 Row::builder()
                                                     .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
                                                     .children(vec![
-                                                        Button::builder()
-                                                            .text("Follow")
+                                                        Button::builder("Follow")
                                                             .color(Color::rgb(33, 150, 243))
                                                             .build()
                                                             .into(),
-                                                        Button::builder()
-                                                            .text("Message")
+                                                        Button::builder("Message")
                                                             .color(Color::rgb(156, 39, 176))
                                                             .build()
                                                             .into(),

@@ -175,7 +175,7 @@ where
 impl<S: State> RotatedBoxBuilder<S> {
     /// Builds the RotatedBox widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_rotated_box())
+        Widget::render_object(self.build_rotated_box())
     }
 }
 

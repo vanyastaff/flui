@@ -122,7 +122,7 @@ where
 impl<S: State> OffstageBuilder<S> {
     /// Builds the Offstage widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_offstage())
+        Widget::render_object(self.build_offstage())
     }
 }
 

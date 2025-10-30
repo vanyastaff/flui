@@ -151,7 +151,7 @@ where
 impl<S: State> ClipOvalBuilder<S> {
     /// Builds the ClipOval widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_clip_oval())
+        Widget::render_object(self.build_clip_oval())
     }
 }
 

@@ -174,7 +174,7 @@ where
 impl<S: State> FittedBoxBuilder<S> {
     /// Builds the FittedBox widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_fitted_box())
+        Widget::render_object(self.build_fitted_box())
     }
 }
 

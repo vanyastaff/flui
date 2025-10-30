@@ -315,7 +315,7 @@ where
 impl<S: State> IndexedStackBuilder<S> {
     /// Builds the IndexedStack widget and returns it as a Widget.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render(self.build_indexed_stack())
+        flui_core::Widget::render_object(self.build_indexed_stack())
     }
 }
 

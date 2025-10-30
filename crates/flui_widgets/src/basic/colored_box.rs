@@ -129,7 +129,7 @@ where
 impl<S: State> ColoredBoxBuilder<S> {
     /// Builds the ColoredBox widget.
     pub fn build(self) -> Widget {
-        Widget::render(self.build_colored_box())
+        Widget::render_object(self.build_colored_box())
     }
 }
 

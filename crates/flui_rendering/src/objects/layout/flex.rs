@@ -46,6 +46,12 @@ pub struct RenderFlex {
 
     // Cache for paint
     child_offsets: Vec<Offset>,
+
+    // Debug-only overflow tracking
+    #[cfg(debug_assertions)]
+    overflow_pixels: f32,
+    #[cfg(debug_assertions)]
+    container_size: Size,
 }
 
 impl RenderFlex {
@@ -58,6 +64,10 @@ impl RenderFlex {
             cross_axis_alignment: CrossAxisAlignment::default(),
             text_baseline: TextBaseline::default(),
             child_offsets: Vec::new(),
+            #[cfg(debug_assertions)]
+            overflow_pixels: 0.0,
+            #[cfg(debug_assertions)]
+            container_size: Size::ZERO,
         }
     }
 
@@ -344,6 +354,33 @@ impl MultiRender for RenderFlex {
             }
         };
 
+        // ========== DEBUG: Track overflow ==========
+        #[cfg(debug_assertions)]
+        {
+            let container_main_size = match direction {
+                Axis::Horizontal => size.width,
+                Axis::Vertical => size.height,
+            };
+
+            self.overflow_pixels = (total_main_size - container_main_size).max(0.0);
+            self.container_size = size;
+
+            if self.overflow_pixels > 0.0 {
+                eprintln!(
+                    "⚠️  RenderFlex overflow detected!\n\
+                     └─ Direction: {:?}\n\
+                     └─ Content size: {:.1}px\n\
+                     └─ Container size: {:.1}px\n\
+                     └─ Overflow: {:.1}px\n\
+                     └─ Tip: Use Flexible/Expanded widgets or reduce content size",
+                    direction,
+                    total_main_size,
+                    container_main_size,
+                    self.overflow_pixels
+                );
+            }
+        }
+
         // ========== Calculate child offsets ==========
         // Calculate available space for main axis alignment
         let available_space = match direction {
@@ -429,6 +466,64 @@ impl MultiRender for RenderFlex {
             let child_layer = tree.paint_child(child_id, offset + child_offset);
             container.add_child(child_layer);
         }
+
+        // In debug mode, paint overflow indicator if overflow occurred
+        #[cfg(debug_assertions)]
+        if self.overflow_pixels > 0.0 {
+            return self.paint_with_overflow_indicator(container, offset);
+        }
+
+        Box::new(container)
+    }
+}
+
+#[cfg(debug_assertions)]
+impl RenderFlex {
+    /// Paint overflow indicator (red border for Phase 1)
+    ///
+    /// This creates a visual warning when content overflows the container.
+    /// Only active in debug builds.
+    fn paint_with_overflow_indicator(
+        &self,
+        content_layer: flui_engine::layer::ContainerLayer,
+        offset: Offset,
+    ) -> BoxedLayer {
+        use flui_engine::layer::picture::DrawCommand;
+        use flui_engine::painter::Paint;
+        use flui_types::painting::PaintingStyle;
+        use flui_types::{Rect, Color};
+
+        // Create wrapper container
+        let mut container = pool::acquire_container();
+
+        // Add original content
+        container.add_child(Box::new(content_layer));
+
+        // Create overflow indicator layer
+        let mut indicator = pool::acquire_picture();
+
+        // Red border paint (very visible!)
+        let border_paint = Paint {
+            color: Color::rgb(255, 0, 0), // Bright red
+            style: PaintingStyle::Stroke,
+            stroke_width: 5.0, // Thick border
+            anti_alias: false, // Sharp edges for clarity
+            ..Default::default()
+        };
+
+        // Draw red border around entire container
+        let rect = Rect::from_min_size(
+            offset.to_point(),
+            self.container_size,
+        );
+
+        indicator.add_command(DrawCommand::Rect {
+            rect,
+            paint: border_paint,
+        });
+
+        // Add indicator on top
+        container.add_child(Box::new(indicator));
 
         Box::new(container)
     }

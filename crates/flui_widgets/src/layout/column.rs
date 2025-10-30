@@ -194,10 +194,9 @@ where
     /// ```
     pub fn children(
         self,
-        children: impl IntoIterator<Item = impl flui_core::IntoWidget>,
+        children: Vec<Widget>,
     ) -> ColumnBuilder<SetChildren<S>> {
-        let widgets: Vec<Widget> = children.into_iter().map(|c| c.into_widget()).collect();
-        self.children_internal(widgets)
+        self.children_internal(children)
     }
 }
 
@@ -205,7 +204,7 @@ where
 impl<S: State> ColumnBuilder<S> {
     /// Builds the Column widget and returns it as a Widget.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render(self.build_column())
+        flui_core::Widget::render_object(self.build_column())
     }
 }
 

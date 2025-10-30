@@ -236,7 +236,7 @@ where
 impl<S: State> AlignBuilder<S> {
     /// Builds the Align widget and returns it as a Widget.
     pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render(self.build_align())
+        flui_core::Widget::render_object(self.build_align())
     }
 }
 
