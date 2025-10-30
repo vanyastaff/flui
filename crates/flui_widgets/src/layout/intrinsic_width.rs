@@ -172,8 +172,8 @@ where
 
 impl<S: State> IntrinsicWidthBuilder<S> {
     /// Builds the IntrinsicWidth widget.
-    pub fn build(self) -> IntrinsicWidth {
-        self.build_intrinsic_width()
+    pub fn build(self) -> Widget {
+        Widget::render(self.build_intrinsic_width())
     }
 }
 

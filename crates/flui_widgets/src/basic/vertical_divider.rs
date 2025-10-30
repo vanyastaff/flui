@@ -168,8 +168,8 @@ use vertical_divider_builder::{State};
 
 impl<S: State> VerticalDividerBuilder<S> {
     /// Builds the VerticalDivider widget.
-    pub fn build(self) -> VerticalDivider {
-        self.build_vertical_divider()
+    pub fn build(self) -> Widget {
+        Widget::stateless(self.build_vertical_divider())
     }
 }
 

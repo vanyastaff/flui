@@ -168,8 +168,8 @@ use divider_builder::{State};
 
 impl<S: State> DividerBuilder<S> {
     /// Builds the Divider widget.
-    pub fn build(self) -> Divider {
-        self.build_divider()
+    pub fn build(self) -> Widget {
+        Widget::stateless(self.build_divider())
     }
 }
 
