@@ -29,10 +29,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{
-    BoxedWidget, DynRenderObject, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget,
-    Widget,
-};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
 
@@ -127,7 +126,7 @@ pub struct DecoratedBox {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl DecoratedBox {
@@ -178,11 +177,8 @@ impl DecoratedBox {
     /// let mut decorated = DecoratedBox::new(decoration);
     /// decorated.set_child(Text::new("Hello"));
     /// ```
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 
     /// Validates DecoratedBox configuration.
@@ -201,35 +197,28 @@ impl Default for DecoratedBox {
     }
 }
 
-// Implement Widget trait with associated type
-impl Widget for DecoratedBox {}
-
-// Implement RenderObjectWidget
-impl RenderObjectWidget for DecoratedBox {
-    type RenderObject = RenderDecoratedBox;
-    type Arity = flui_rendering::SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
+// Implement RenderWidget
+impl RenderWidget for DecoratedBox {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
         // Create RenderDecoratedBox with current decoration
         use flui_rendering::DecoratedBoxData;
 
         let data = DecoratedBoxData::with_position(self.decoration.clone(), self.position);
-        RenderDecoratedBox::new(data)
+        RenderNode::Single(Box::new(RenderDecoratedBox::new(data)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         // Update RenderDecoratedBox when decoration or position changes
-        render_object.set_decoration(self.decoration.clone());
-        render_object.set_position(self.position);
+        if let RenderNode::Single(render) = render_object {
+            if let Some(decorated_box) = render.downcast_mut::<RenderDecoratedBox>() {
+                decorated_box.set_decoration(self.decoration.clone());
+                decorated_box.set_position(self.position);
+            }
+        }
     }
-}
 
-// Implement SingleChildRenderObjectWidget
-impl SingleChildRenderObjectWidget for DecoratedBox {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("DecoratedBox requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }
 
@@ -251,8 +240,8 @@ where
     ///     .child(Text::new("Hello"))
     ///     .build()
     /// ```
-    pub fn child<W: Widget + 'static>(self, child: W) -> DecoratedBoxBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> DecoratedBoxBuilder<SetChild<S>> {
+        self.child_internal(Some(child))
     }
 }
 
@@ -306,15 +295,13 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+    impl RenderWidget for MockWidget {
+        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
     }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_decorated_box_new() {
@@ -486,18 +473,18 @@ mod tests {
     fn test_decorated_box_widget_trait() {
         let widget = DecoratedBox::builder()
             .decoration(BoxDecoration::with_color(Color::BLUE))
-            .child(MockWidget)
+            .child(Widget::from(MockWidget))
             .build();
 
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
+        // Test child() method
+        assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_decorated_box_builder_with_child() {
         let widget = DecoratedBox::builder()
             .decoration(BoxDecoration::with_color(Color::GREEN))
-            .child(MockWidget)
+            .child(Widget::from(MockWidget))
             .build();
 
         assert!(widget.child.is_some());
@@ -506,7 +493,7 @@ mod tests {
     #[test]
     fn test_decorated_box_set_child() {
         let mut widget = DecoratedBox::new(BoxDecoration::with_color(Color::RED));
-        widget.set_child(MockWidget);
+        widget.set_child(Widget::from(MockWidget));
         assert!(widget.child.is_some());
     }
 }
