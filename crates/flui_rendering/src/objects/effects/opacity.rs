@@ -1,10 +1,9 @@
 //! RenderOpacity - applies opacity to a child using OpacityLayer
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, OpacityLayer};
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that applies opacity to its child
 ///
@@ -38,19 +37,20 @@ impl RenderOpacity {
     }
 }
 
-impl RenderObject for RenderOpacity {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+impl SingleRender for RenderOpacity {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
         // Layout child with same constraints
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+        tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // Capture child layer
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Paint child
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Wrap in OpacityLayer
         Box::new(OpacityLayer::new(child_layer, self.opacity))
@@ -60,8 +60,6 @@ impl RenderObject for RenderOpacity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::LayoutCx;
-    use flui_types::constraints::BoxConstraints;
 
     #[test]
     fn test_render_opacity_new() {

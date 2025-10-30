@@ -50,11 +50,10 @@ pub mod utils;
 pub mod objects;
 pub mod parent_data;
 
-// Re-export from flui_core - the new unified RenderObject architecture
+// Re-export from flui_core - the new trait-based RenderObject architecture
 pub use flui_core::render::{
-    Arity, BoxedRenderObject, DynRenderObject, LayoutCx, LeafArity, MultiArity, MultiChild,
-    MultiChildPaint, PaintCx, ParentData, ParentDataWithOffset, RenderContext, RenderFlags,
-    RenderObject, RenderPipeline, RenderState, SingleArity, SingleChild, SingleChildPaint,
+    LeafRender, MultiRender, ParentData, ParentDataWithOffset, RenderFlags, RenderPipeline,
+    RenderState, SingleRender,
 };
 
 // Re-export from flui_engine for Layer types
@@ -106,10 +105,7 @@ pub use objects::{
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::{
-        BoxedRenderObject, DynRenderObject, LayoutCx, LeafArity, MultiArity, PaintCx, RenderFlags,
-        RenderObject, RenderState, SingleArity,
-    };
+    pub use crate::{LeafRender, MultiRender, RenderFlags, RenderState, SingleRender};
 
     pub use crate::objects::*;
     pub use crate::parent_data::*;

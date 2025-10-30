@@ -1,10 +1,9 @@
 //! RenderPadding - adds padding around a child
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{EdgeInsets, Offset, Size};
+use flui_types::{EdgeInsets, Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that adds padding around its child
 ///
@@ -38,19 +37,20 @@ impl RenderPadding {
     }
 }
 
-impl RenderObject for RenderPadding {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
+impl SingleRender for RenderPadding {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
         let padding = self.padding;
 
         // Deflate constraints by padding
         let child_constraints = constraints.deflate(&padding);
 
         // Layout child with deflated constraints
-        let child = cx.child();
-        let child_size = cx.layout_child(child, child_constraints);
+        let child_size = tree.layout_child(child_id, child_constraints);
 
         // Add padding to child size
         Size::new(
@@ -59,14 +59,10 @@ impl RenderObject for RenderPadding {
         )
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // Capture child layer
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
-
-        // Apply padding offset via TransformLayer
-        let offset = Offset::new(self.padding.left, self.padding.top);
-        Box::new(TransformLayer::translate(child_layer, offset))
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Apply padding offset and paint child
+        let child_offset = Offset::new(self.padding.left, self.padding.top);
+        tree.paint_child(child_id, offset + child_offset)
     }
 }
 

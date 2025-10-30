@@ -1,10 +1,13 @@
 //! RenderBaseline - aligns child based on baseline
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{Offset, Size, TextBaseline};
+use flui_types::{
+    Offset, Size,
+    constraints::BoxConstraints,
+    typography::TextBaseline,
+};
 
 /// Data for RenderBaseline
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -90,15 +93,15 @@ impl RenderBaseline {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderBaseline {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let child = cx.child();
-        let constraints = cx.constraints();
-
-        // Layout child with same constraints
-        let child_size = cx.layout_child(child, constraints);
+impl SingleRender for RenderBaseline {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                        // Layout child with same constraints
+        let child_size = tree.layout_child(child_id, constraints);
 
         // Our height includes space above baseline and child height
         // For simplicity, we use child height + baseline offset
@@ -108,11 +111,9 @@ impl RenderObject for RenderBaseline {
         )
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-
-        // Capture child layer with baseline offset
-        let child_layer = cx.capture_child_layer(child);
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                // Capture child layer with baseline offset
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Apply baseline offset using TransformLayer
         let offset = Offset::new(0.0, self.baseline);

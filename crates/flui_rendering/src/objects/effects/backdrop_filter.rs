@@ -3,11 +3,10 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, painting::BlendMode};
+use flui_types::{Size, painting::BlendMode, Offset, constraints::BoxConstraints};
 
 // ===== Data Structure =====
 
@@ -165,30 +164,30 @@ impl RenderBackdropFilter {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderBackdropFilter {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        // Layout child with same constraints
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+impl SingleRender for RenderBackdropFilter {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        // Layout child_id with same constraints
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // Capture child layer
-        let child = cx.child();
-
-        // Note: Full backdrop filtering requires compositor support
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Capture child_id layer
+                // Note: Full backdrop filtering requires compositor support
         // In production, this would:
         // 1. Capture the current paint layer content
         // 2. Apply the image filter to that content
         // 3. Paint the filtered result
-        // 4. Paint the child on top
+        // 4. Paint the child_id on top
         //
-        // For now, we just return the child layer
+        // For now, we just return the child_id layer
         // TODO: Implement BackdropFilterLayer when compositor supports it
 
-        (cx.capture_child_layer(child)) as _
+        (tree.paint_child(child_id, offset)) as _
     }
 }
 

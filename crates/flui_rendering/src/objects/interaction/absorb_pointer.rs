@@ -1,10 +1,9 @@
 //! RenderAbsorbPointer - prevents pointer events from reaching children
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that prevents pointer events from reaching its child
 ///
@@ -51,19 +50,20 @@ impl Default for RenderAbsorbPointer {
     }
 }
 
-impl RenderObject for RenderAbsorbPointer {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+impl SingleRender for RenderAbsorbPointer {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
         // Layout child with same constraints
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Paint child normally - absorbing only affects hit testing
-        let child = cx.child();
-        cx.capture_child_layer(child)
+                tree.paint_child(child_id, offset)
 
         // TODO: In a real implementation, we would:
         // 1. Register hit test behavior during hit testing phase

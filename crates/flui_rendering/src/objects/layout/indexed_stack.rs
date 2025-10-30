@@ -1,9 +1,10 @@
 //! RenderIndexedStack - shows only one child by index
 
 use crate::utils::layout_utils::apply_offset_transform_v2;
-use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::MultiRender;
 use flui_engine::{BoxedLayer, layer::pool};
-use flui_types::{Alignment, Size};
+use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that shows only one child from a list
 ///
@@ -70,14 +71,14 @@ impl Default for RenderIndexedStack {
     }
 }
 
-impl RenderObject for RenderIndexedStack {
-    type Arity = MultiArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let children = cx.children();
-        let constraints = cx.constraints();
-
-        if children.is_empty() {
+impl MultiRender for RenderIndexedStack {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_ids: &[ElementId],
+        constraints: BoxConstraints,
+    ) -> Size {
+        if child_ids.is_empty() {
             self.child_sizes.clear();
             return constraints.smallest();
         }
@@ -87,8 +88,8 @@ impl RenderObject for RenderIndexedStack {
         let mut max_height: f32 = 0.0;
         self.child_sizes.clear();
 
-        for child in children.iter().copied() {
-            let child_size = cx.layout_child(child, constraints);
+        for child in child_ids.iter().copied() {
+            let child_size = tree.layout_child(child, constraints);
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -102,21 +103,20 @@ impl RenderObject for RenderIndexedStack {
         self.size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let children = cx.children();
+    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
         let mut container = pool::acquire_container();
 
         // Only paint the selected child
         if let Some(index) = self.index
-            && let (Some(&child), Some(&child_size)) =
-                (children.get(index), self.child_sizes.get(index))
+            && let (Some(&child_id), Some(&child_size)) =
+                (child_ids.get(index), self.child_sizes.get(index))
         {
             // Calculate aligned position
             let child_offset = self.alignment.calculate_offset(child_size, self.size);
 
-            // Capture child layer and apply offset transform
-            let child_layer = cx.capture_child_layer(child);
-            container.add_child(apply_offset_transform_v2(child_layer, child_offset));
+            // Paint child with combined offset
+            let child_layer = tree.paint_child(child_id, offset + child_offset);
+            container.add_child(child_layer);
         }
 
         Box::new(container)

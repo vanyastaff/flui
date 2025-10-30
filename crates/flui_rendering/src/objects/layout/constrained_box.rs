@@ -1,10 +1,9 @@
 //! RenderConstrainedBox - applies additional constraints to a child
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints};
+use flui_types::{Size, constraints::BoxConstraints, Offset};
 
 /// RenderObject that applies additional constraints to its child
 ///
@@ -47,23 +46,21 @@ impl Default for RenderConstrainedBox {
     }
 }
 
-impl RenderObject for RenderConstrainedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let child = cx.child();
-        let constraints = cx.constraints();
-
-        // SingleArity always has exactly one child
+impl SingleRender for RenderConstrainedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
         // Enforce additional constraints
         let child_constraints = constraints.enforce(self.additional_constraints);
-        cx.layout_child(child, child_constraints)
+        tree.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Simply pass through child layer
-        let child = cx.child();
-        cx.capture_child_layer(child)
+        tree.paint_child(child_id, offset)
     }
 }
 

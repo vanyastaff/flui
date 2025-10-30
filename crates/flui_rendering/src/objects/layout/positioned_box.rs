@@ -1,14 +1,13 @@
-//! RenderPositionedBox - positions child with explicit coordinates
+//! RenderPositionedBox - positions child_id with explicit coordinates
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{Offset, Size};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
-/// RenderObject that positions child with explicit coordinates
+/// RenderObject that positions child_id with explicit coordinates
 ///
-/// This is typically used inside a Stack to position a child at specific
+/// This is typically used inside a Stack to position a child_id at specific
 /// coordinates. The coordinates can be absolute (left, top, right, bottom)
 /// or combined with explicit width/height.
 ///
@@ -86,13 +85,14 @@ impl Default for RenderPositionedBox {
     }
 }
 
-impl RenderObject for RenderPositionedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // Calculate child constraints based on positioning
+impl SingleRender for RenderPositionedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // Calculate child_id constraints based on positioning
         let child_constraints = if let (Some(left), Some(right)) = (self.left, self.right) {
             // Width determined by left and right
             let width = (constraints.max_width - left - right).max(0.0);
@@ -117,19 +117,17 @@ impl RenderObject for RenderPositionedBox {
             child_constraints
         };
 
-        // Layout child (SingleArity always has a child)
-        let child = cx.child();
-        cx.layout_child(child, child_constraints)
+        // Layout child_id (SingleArity always has a child_id)
+                tree.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate paint offset based on positioning
         let offset = Offset::new(self.left.unwrap_or(0.0), self.top.unwrap_or(0.0));
 
-        // Use TransformLayer to position child
+        // Use TransformLayer to position child_id
         Box::new(TransformLayer::translate(child_layer, offset))
     }
 }

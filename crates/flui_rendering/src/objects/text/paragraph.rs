@@ -3,10 +3,11 @@
 //! This is a Leaf RenderObject that renders multi-line text with styling,
 //! line breaks, and text wrapping.
 
-use flui_core::render::{LayoutCx, LeafArity, PaintCx, RenderObject};
+use flui_core::render::LeafRender;
 use flui_engine::{BoxedLayer, PictureLayer};
 use flui_types::{
-    Point, Size,
+    Offset, Point, Size,
+    constraints::BoxConstraints,
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextStyle},
 };
@@ -173,11 +174,8 @@ impl RenderParagraph {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderParagraph {
-    type Arity = LeafArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
+impl LeafRender for RenderParagraph {
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
 
         // Calculate text size
         // In production, this would use a proper text layout engine
@@ -232,7 +230,7 @@ impl RenderObject for RenderParagraph {
         size
     }
 
-    fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, _offset: Offset) -> BoxedLayer {
         let mut picture = PictureLayer::new();
 
         if let Some(_size) = self.size {

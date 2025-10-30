@@ -1,13 +1,12 @@
 //! RenderShaderMask - Applies a shader as a mask
 //!
 //! This render object applies a shader (gradient, pattern, etc.) as a mask
-//! to its child, controlling which parts are visible.
+//! to its child_id, controlling which parts are visible.
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, painting::BlendMode};
+use flui_types::{Size, painting::BlendMode, Offset, constraints::BoxConstraints};
 
 // ===== Data Structure =====
 
@@ -83,9 +82,9 @@ impl ShaderMaskData {
 
 // ===== RenderObject =====
 
-/// RenderShaderMask - Applies a shader as a mask to a child
+/// RenderShaderMask - Applies a shader as a mask to a child_id
 ///
-/// Uses a shader (gradient, pattern, etc.) to mask the child's rendering.
+/// Uses a shader (gradient, pattern, etc.) to mask the child_id's rendering.
 /// Common use cases:
 /// - Gradient fades
 /// - Vignette effects
@@ -174,27 +173,27 @@ impl RenderShaderMask {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderShaderMask {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        // Layout child with same constraints
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+impl SingleRender for RenderShaderMask {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        // Layout child_id with same constraints
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // Capture child layer
-        let child = cx.child();
-
-        // Note: Full shader masking requires compositor support
-        // For now, we'll paint child normally
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Capture child_id layer
+                // Note: Full shader masking requires compositor support
+        // For now, we'll paint child_id normally
         // In production, this would use a ShaderMaskLayer with egui's shader system
         // or a custom compositor
         //
         // TODO: Implement ShaderMaskLayer when compositor supports it
 
-        (cx.capture_child_layer(child)) as _
+        (tree.paint_child(child_id, offset)) as _
     }
 }
 

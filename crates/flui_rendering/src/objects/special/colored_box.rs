@@ -1,10 +1,9 @@
 //! RenderColoredBox - simple solid color box
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{Color, Rect, Size};
+use flui_types::{Color, Rect, Size, Offset, constraints::BoxConstraints};
 
 /// RenderObject that paints a solid color background
 ///
@@ -47,22 +46,20 @@ impl Default for RenderColoredBox {
     }
 }
 
-impl RenderObject for RenderColoredBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let child = cx.child();
-        let constraints = cx.constraints();
-
-        // SingleArity always has exactly one child
+impl SingleRender for RenderColoredBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                        // SingleArity always has exactly one child
         // Pass through constraints
-        cx.layout_child(child, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-
-        // Create picture layer for background color
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                // Create picture layer for background color
         let mut picture = PictureLayer::new();
 
         // TODO: Get actual size from layout context instead of using placeholder
@@ -72,14 +69,13 @@ impl RenderObject for RenderColoredBox {
 
         // Create paint for the color
         let mut paint = Paint::default();
-        let (r, g, b, a) = self.color.to_rgba_f32();
-        paint.color = [r, g, b, a];
+        paint.color = self.color;
 
         // Draw the background rectangle
         picture.draw_rect(rect, paint);
 
         // SingleArity always has exactly one child
-        let child_layer = cx.capture_child_layer(child);
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Use ContainerLayer to stack background + child - use pool for efficiency
         let mut container = flui_engine::layer::pool::acquire_container();

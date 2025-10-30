@@ -1,8 +1,7 @@
-//! RenderSizedOverflowBox - fixed size with child overflow
+//! RenderSizedOverflowBox - fixed size with child_id overflow
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
 use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
@@ -13,15 +12,15 @@ pub struct SizedOverflowBoxData {
     pub width: Option<f32>,
     /// Explicit height for this widget
     pub height: Option<f32>,
-    /// Minimum width for child (overrides parent constraints)
+    /// Minimum width for child_id (overrides parent constraints)
     pub child_min_width: Option<f32>,
-    /// Maximum width for child (overrides parent constraints)
+    /// Maximum width for child_id (overrides parent constraints)
     pub child_max_width: Option<f32>,
-    /// Minimum height for child (overrides parent constraints)
+    /// Minimum height for child_id (overrides parent constraints)
     pub child_min_height: Option<f32>,
-    /// Maximum height for child (overrides parent constraints)
+    /// Maximum height for child_id (overrides parent constraints)
     pub child_max_height: Option<f32>,
-    /// How to align the child
+    /// How to align the child_id
     pub alignment: Alignment,
 }
 
@@ -39,7 +38,7 @@ impl SizedOverflowBoxData {
         }
     }
 
-    /// Create with explicit size and child constraints
+    /// Create with explicit size and child_id constraints
     pub fn with_child_constraints(
         width: Option<f32>,
         height: Option<f32>,
@@ -76,19 +75,19 @@ impl Default for SizedOverflowBoxData {
     }
 }
 
-/// RenderObject with fixed size that allows child to overflow
+/// RenderObject with fixed size that allows child_id to overflow
 ///
 /// This is a combination of SizedBox and OverflowBox:
 /// - The widget itself has a specific size (width/height)
-/// - The child can have different constraints, allowing it to overflow
-/// - The child is aligned within this widget
+/// - The child_id can have different constraints, allowing it to overflow
+/// - The child_id is aligned within this widget
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSizedOverflowBox;
 ///
-/// // Create 100x100 box, but allow child to be 200x200
+/// // Create 100x100 box, but allow child_id to be 200x200
 /// let mut sized_overflow = RenderSizedOverflowBox::with_child_constraints(
 ///     Some(100.0), Some(100.0),
 ///     None, Some(200.0),
@@ -101,15 +100,15 @@ pub struct RenderSizedOverflowBox {
     pub width: Option<f32>,
     /// Explicit height for this widget
     pub height: Option<f32>,
-    /// Minimum width for child (overrides parent constraints)
+    /// Minimum width for child_id (overrides parent constraints)
     pub child_min_width: Option<f32>,
-    /// Maximum width for child (overrides parent constraints)
+    /// Maximum width for child_id (overrides parent constraints)
     pub child_max_width: Option<f32>,
-    /// Minimum height for child (overrides parent constraints)
+    /// Minimum height for child_id (overrides parent constraints)
     pub child_min_height: Option<f32>,
-    /// Maximum height for child (overrides parent constraints)
+    /// Maximum height for child_id (overrides parent constraints)
     pub child_max_height: Option<f32>,
-    /// How to align the child
+    /// How to align the child_id
     pub alignment: Alignment,
 
     // Cache for paint
@@ -135,7 +134,7 @@ impl RenderSizedOverflowBox {
         }
     }
 
-    /// Create with explicit size and child constraints
+    /// Create with explicit size and child_id constraints
     pub fn with_child_constraints(
         width: Option<f32>,
         height: Option<f32>,
@@ -190,14 +189,14 @@ impl RenderSizedOverflowBox {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderSizedOverflowBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let child = cx.child();
-        let constraints = cx.constraints();
-
-        // Build child constraints from override values
+impl SingleRender for RenderSizedOverflowBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                        // Build child_id constraints from override values
         let child_min_width = self.child_min_width.unwrap_or(constraints.min_width);
         let child_max_width = self.child_max_width.unwrap_or(constraints.max_width);
         let child_min_height = self.child_min_height.unwrap_or(constraints.min_height);
@@ -210,8 +209,8 @@ impl RenderObject for RenderSizedOverflowBox {
             child_max_height,
         );
 
-        // Layout child with override constraints
-        self.child_size = cx.layout_child(child, child_constraints);
+        // Layout child_id with override constraints
+        self.child_size = tree.layout_child(child_id, child_constraints);
 
         // Our size is the specified size (or constrained by parent)
         let width = self.width.unwrap_or(constraints.max_width);
@@ -221,14 +220,12 @@ impl RenderObject for RenderSizedOverflowBox {
         self.size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-
-        // Calculate aligned position
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                // Calculate aligned position
         let child_offset = self.alignment.calculate_offset(self.child_size, self.size);
 
-        // Capture child layer
-        let child_layer = cx.capture_child_layer(child);
+        // Capture child_id layer
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Apply offset if needed
         if child_offset != Offset::ZERO {

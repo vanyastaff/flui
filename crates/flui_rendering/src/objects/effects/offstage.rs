@@ -1,10 +1,9 @@
 //! RenderOffstage - hides widget from display
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, layer::pool};
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that hides its child from display
 ///
@@ -46,15 +45,15 @@ impl Default for RenderOffstage {
     }
 }
 
-impl RenderObject for RenderOffstage {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // SingleArity always has exactly one child - layout it to maintain state
-        let child = cx.child();
-        let child_size = cx.layout_child(child, constraints);
+impl SingleRender for RenderOffstage {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // SingleArity always has exactly one child - layout it to maintain state
+                let child_size = tree.layout_child(child_id, constraints);
 
         // Report size as zero if offstage, otherwise use child size
         if self.offstage {
@@ -66,11 +65,10 @@ impl RenderObject for RenderOffstage {
         }
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Don't paint if offstage
         if !self.offstage {
-            let child = cx.child();
-            cx.capture_child_layer(child)
+                        tree.paint_child(child_id, offset)
         } else {
             // Return empty container layer when offstage
             Box::new(pool::acquire_container())

@@ -1,14 +1,13 @@
-//! RenderIntrinsicHeight - sizes child to its intrinsic height
+//! RenderIntrinsicHeight - sizes child_id to its intrinsic height
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints};
+use flui_types::{Size, constraints::BoxConstraints, Offset};
 
-/// RenderObject that sizes child to its intrinsic height
+/// RenderObject that sizes child_id to its intrinsic height
 ///
-/// This forces the child to be as tall as it "naturally" wants to be,
+/// This forces the child_id to be as tall as it "naturally" wants to be,
 /// ignoring the parent's height constraints. Useful for making widgets
 /// take up only as much vertical space as needed.
 ///
@@ -78,17 +77,16 @@ impl Default for RenderIntrinsicHeight {
     }
 }
 
-impl RenderObject for RenderIntrinsicHeight {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // SingleArity always has exactly one child
-        // Layout child with infinite height to get intrinsic height
-        let child = cx.child();
-
-        // Get child's intrinsic height by giving it infinite height
+impl SingleRender for RenderIntrinsicHeight {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // SingleArity always has exactly one child_id
+        // Layout child_id with infinite height to get intrinsic height
+                // Get child_id's intrinsic height by giving it infinite height
         let intrinsic_constraints = BoxConstraints::new(
             constraints.min_width,
             constraints.max_width,
@@ -96,7 +94,7 @@ impl RenderObject for RenderIntrinsicHeight {
             f32::INFINITY,
         );
 
-        let child_size = cx.layout_child(child, intrinsic_constraints);
+        let child_size = tree.layout_child(child_id, intrinsic_constraints);
 
         // Apply step width/height if specified
         let width = if let Some(step) = self.step_width {
@@ -115,9 +113,8 @@ impl RenderObject for RenderIntrinsicHeight {
         constraints.constrain(Size::new(width, height))
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-        cx.capture_child_layer(child)
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                tree.paint_child(child_id, offset)
     }
 }
 

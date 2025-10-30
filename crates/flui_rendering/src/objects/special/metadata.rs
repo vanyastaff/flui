@@ -1,10 +1,9 @@
-//! RenderMetaData - attaches metadata to child for parent access
+//! RenderMetaData - attaches metadata to child_id for parent access
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 use std::any::Any;
 
 /// Data for RenderMetaData
@@ -19,7 +18,7 @@ pub struct MetaData {
 /// Hit test behavior for metadata
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitTestBehavior {
-    /// Defer to child
+    /// Defer to child_id
     Defer,
     /// Always include this widget in hit tests
     Opaque,
@@ -59,7 +58,7 @@ impl Default for MetaData {
     }
 }
 
-/// RenderObject that attaches metadata to its child
+/// RenderObject that attaches metadata to its child_id
 ///
 /// This is a transparent widget that stores arbitrary metadata.
 /// Parent widgets can access this metadata during hit testing or layout.
@@ -71,7 +70,7 @@ impl Default for MetaData {
 /// ```rust,ignore
 /// use flui_rendering::RenderMetaData;
 ///
-/// // Attach custom metadata to child
+/// // Attach custom metadata to child_id
 /// #[derive(Debug)]
 /// struct MyMetadata {
 ///     id: i32,
@@ -155,19 +154,20 @@ impl Default for RenderMetaData {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderMetaData {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        // Layout child with same constraints (pass-through)
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+impl SingleRender for RenderMetaData {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        // Layout child_id with same constraints (pass-through)
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // Paint child directly (pass-through)
-        let child = cx.child();
-        cx.capture_child_layer(child)
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Paint child_id directly (pass-through)
+                tree.paint_child(child_id, offset)
     }
 }
 

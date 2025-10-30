@@ -1,15 +1,14 @@
-//! RenderOverflowBox - allows child to overflow constraints
+//! RenderOverflowBox - allows child_id to overflow constraints
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
 use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
-/// RenderObject that allows child to overflow parent constraints
+/// RenderObject that allows child_id to overflow parent constraints
 ///
-/// This widget imposes different constraints on its child than it gets from
-/// its parent, allowing the child to overflow. The child is then aligned
+/// This widget imposes different constraints on its child_id than it gets from
+/// its parent, allowing the child_id to overflow. The child_id is then aligned
 /// within this RenderObject using the alignment property.
 ///
 /// # Example
@@ -17,20 +16,20 @@ use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 /// ```rust,ignore
 /// use flui_rendering::RenderOverflowBox;
 ///
-/// // Allow child to be wider than parent
+/// // Allow child_id to be wider than parent
 /// let overflow = RenderOverflowBox::new();
 /// ```
 #[derive(Debug)]
 pub struct RenderOverflowBox {
-    /// Minimum width for child (overrides parent constraints)
+    /// Minimum width for child_id (overrides parent constraints)
     pub min_width: Option<f32>,
-    /// Maximum width for child (overrides parent constraints)
+    /// Maximum width for child_id (overrides parent constraints)
     pub max_width: Option<f32>,
-    /// Minimum height for child (overrides parent constraints)
+    /// Minimum height for child_id (overrides parent constraints)
     pub min_height: Option<f32>,
-    /// Maximum height for child (overrides parent constraints)
+    /// Maximum height for child_id (overrides parent constraints)
     pub max_height: Option<f32>,
-    /// How to align the overflowing child
+    /// How to align the overflowing child_id
     pub alignment: Alignment,
 
     // Cache for paint
@@ -100,13 +99,14 @@ impl Default for RenderOverflowBox {
     }
 }
 
-impl RenderObject for RenderOverflowBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // Calculate child constraints by overriding parent constraints
+impl SingleRender for RenderOverflowBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // Calculate child_id constraints by overriding parent constraints
         let child_min_width = self.min_width.unwrap_or(constraints.min_width);
         let child_max_width = self.max_width.unwrap_or(constraints.max_width);
         let child_min_height = self.min_height.unwrap_or(constraints.min_height);
@@ -119,13 +119,12 @@ impl RenderObject for RenderOverflowBox {
             child_max_height,
         );
 
-        // SingleArity always has exactly one child
-        // Layout child with overridden constraints
-        let child = cx.child();
-        let child_size = cx.layout_child(child, child_constraints);
+        // SingleArity always has exactly one child_id
+        // Layout child_id with overridden constraints
+                let child_size = tree.layout_child(child_id, child_constraints);
 
         // Our size is determined by parent constraints
-        // We constrain ourselves, but let child overflow
+        // We constrain ourselves, but let child_id overflow
         let size = constraints.constrain(Size::new(constraints.max_width, constraints.max_height));
 
         // Store sizes for paint
@@ -135,9 +134,8 @@ impl RenderObject for RenderOverflowBox {
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate aligned offset
         let available_width = self.container_size.width - self.child_size.width;
@@ -148,7 +146,7 @@ impl RenderObject for RenderOverflowBox {
 
         let offset = Offset::new(aligned_x, aligned_y);
 
-        // Use TransformLayer to position child at aligned offset
+        // Use TransformLayer to position child_id at aligned offset
         Box::new(TransformLayer::translate(child_layer, offset))
     }
 }

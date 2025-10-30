@@ -1,12 +1,14 @@
 //! RenderFlex - flex layout container (Row/Column)
 
 use crate::utils::layout_utils::apply_offset_transform;
-use flui_core::element::ElementId;
-use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::MultiRender;
 use flui_engine::{BoxedLayer, layer::pool};
 use flui_types::{
-    Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize, Offset, Size, TextBaseline,
+    Axis, Offset, Size,
     constraints::BoxConstraints,
+    layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize},
+    typography::TextBaseline,
 };
 
 /// RenderObject for flex layout (Row/Column)
@@ -145,14 +147,14 @@ impl Default for RenderFlex {
     }
 }
 
-impl RenderObject for RenderFlex {
-    type Arity = MultiArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let children = cx.children();
-        let constraints = cx.constraints();
-
-        if children.is_empty() {
+impl MultiRender for RenderFlex {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_ids: &[ElementId],
+        constraints: BoxConstraints,
+    ) -> Size {
+        if child_ids.is_empty() {
             self.child_offsets.clear();
             return constraints.smallest();
         }
@@ -197,15 +199,17 @@ impl RenderObject for RenderFlex {
         let mut flexible_children: Vec<(ElementId, i32, flui_types::layout::FlexFit)> = Vec::new();
         let mut total_flex = 0i32;
 
-        for &child in children.iter() {
-            if let Some(flex_data) = cx.parent_data::<crate::parent_data::FlexParentData>(child) {
-                if flex_data.flex > 0 {
-                    // Child is flexible
-                    flexible_children.push((child, flex_data.flex, flex_data.fit));
-                    total_flex += flex_data.flex;
-                    continue;
-                }
-            }
+        for &child in child_ids.iter() {
+            // TODO: Implement tree.parent_data() method to query parent data from elements
+            // For now, treat all children as inflexible
+            // if let Some(flex_data) = tree.parent_data::<crate::parent_data::FlexParentData>(child) {
+            //     if flex_data.flex > 0 {
+            //         // Child is flexible
+            //         flexible_children.push((child, flex_data.flex, flex_data.fit));
+            //         total_flex += flex_data.flex;
+            //         continue;
+            //     }
+            // }
             // Child is inflexible (no FlexParentData or flex == 0)
             inflexible_children.push((child, Size::ZERO)); // Size will be filled in next step
         }
@@ -235,7 +239,7 @@ impl RenderObject for RenderFlex {
                 ),
             };
 
-            let child_size = cx.layout_child(*child, child_constraints);
+            let child_size = tree.layout_child(*child, child_constraints);
             *size_slot = child_size;
             child_sizes.push(child_size);
 
@@ -297,7 +301,7 @@ impl RenderObject for RenderFlex {
                 ),
             };
 
-            let child_size = cx.layout_child(*child, child_constraints);
+            let child_size = tree.layout_child(*child, child_constraints);
             child_sizes.push(child_size);
 
             let child_main_size = match direction {
@@ -351,7 +355,7 @@ impl RenderObject for RenderFlex {
         // Calculate main axis spacing
         let (leading_space, between_space) = self
             .main_axis_alignment
-            .calculate_spacing(available_space.max(0.0), children.len());
+            .calculate_spacing(available_space.max(0.0), child_ids.len());
 
         // For baseline alignment, calculate baselines for all children
         let child_baselines: Vec<f32> = if self.cross_axis_alignment == CrossAxisAlignment::Baseline
@@ -415,17 +419,16 @@ impl RenderObject for RenderFlex {
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let children = cx.children();
+    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
         let mut container = pool::acquire_container();
 
         // Paint children with their calculated offsets
-        for (i, &child) in children.iter().enumerate() {
-            let offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
+        for (i, &child_id) in child_ids.iter().enumerate() {
+            let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
 
-            // Capture child layer and apply offset transform
-            let child_layer = cx.capture_child_layer(child);
-            container.add_child(apply_offset_transform(child_layer, offset));
+            // Paint child and apply offset transform
+            let child_layer = tree.paint_child(child_id, offset + child_offset);
+            container.add_child(child_layer);
         }
 
         Box::new(container)

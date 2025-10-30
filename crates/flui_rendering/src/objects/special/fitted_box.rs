@@ -1,10 +1,9 @@
-//! RenderFittedBox - scales and positions child according to BoxFit
+//! RenderFittedBox - scales and positions child_id according to BoxFit
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Alignment, Offset, Size};
+use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
 /// How a box should be inscribed into another box
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,9 +27,9 @@ pub enum BoxFit {
 /// Data for RenderFittedBox
 #[derive(Debug, Clone, Copy)]
 pub struct FittedBoxData {
-    /// How to fit child into parent
+    /// How to fit child_id into parent
     pub fit: BoxFit,
-    /// How to align child within parent
+    /// How to align child_id within parent
     pub alignment: Alignment,
     /// Clip behavior
     pub clip_behavior: ClipBehavior,
@@ -117,7 +116,7 @@ impl Default for FittedBoxData {
     }
 }
 
-/// RenderObject that scales and positions its child according to BoxFit
+/// RenderObject that scales and positions its child_id according to BoxFit
 ///
 /// FittedBox is useful for scaling children to fit within constrained spaces
 /// while maintaining aspect ratio.
@@ -128,7 +127,7 @@ impl Default for FittedBoxData {
 /// use flui_rendering::{RenderFittedBox, BoxFit};
 /// use flui_types::Alignment;
 ///
-/// // Scale child to cover the entire box
+/// // Scale child_id to cover the entire box
 /// let mut fitted = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT);
 /// ```
 #[derive(Debug)]
@@ -177,32 +176,31 @@ impl RenderFittedBox {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderFittedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+impl SingleRender for RenderFittedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
         // Our size is determined by constraints (we try to be as large as possible)
-        let constraints = cx.constraints();
-        let size = constraints.biggest();
+                let size = constraints.biggest();
 
-        // Layout child with unbounded constraints to get natural size
-        let child = cx.child();
-        let child_constraints =
+        // Layout child_id with unbounded constraints to get natural size
+                let child_constraints =
             flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-        cx.layout_child(child, child_constraints);
+        tree.layout_child(child_id, child_constraints);
 
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // Get child layer and calculate fit
-        let child = cx.child();
-
-        // TODO: Apply transform for scaling based on self.data.calculate_fit()
-        // For now, just return child layer as-is
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Get child_id layer and calculate fit
+                // TODO: Apply transform for scaling based on self.data.calculate_fit()
+        // For now, just return child_id layer as-is
         // In a real implementation, we'd wrap in a TransformLayer
 
-        (cx.capture_child_layer(child)) as _
+        (tree.paint_child(child_id, offset)) as _
     }
 }
 

@@ -1,10 +1,9 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{Color, Size};
+use flui_types::{Color, Size, Offset, constraints::BoxConstraints};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,15 +110,15 @@ impl Default for RenderPhysicalModel {
     }
 }
 
-impl RenderObject for RenderPhysicalModel {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // SingleArity always has exactly one child
-        let child = cx.child();
-        let size = cx.layout_child(child, constraints);
+impl SingleRender for RenderPhysicalModel {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // SingleArity always has exactly one child_id
+                let size = tree.layout_child(child_id, constraints);
 
         // Store size for paint
         self.size = size;
@@ -127,7 +126,7 @@ impl RenderObject for RenderPhysicalModel {
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Use pool for allocation efficiency
         let mut container = flui_engine::layer::pool::acquire_container();
 
@@ -143,12 +142,7 @@ impl RenderObject for RenderPhysicalModel {
         let size = self.size;
 
         let paint = Paint {
-            color: [
-                self.color.red() as f32 / 255.0,
-                self.color.green() as f32 / 255.0,
-                self.color.blue() as f32 / 255.0,
-                self.color.alpha() as f32 / 255.0,
-            ],
+            color: self.color,
             ..Default::default()
         };
 
@@ -160,10 +154,11 @@ impl RenderObject for RenderPhysicalModel {
                 );
             }
             PhysicalShape::RoundedRectangle => {
-                let rrect = flui_engine::painter::RRect {
-                    rect: flui_types::Rect::from_xywh(0.0, 0.0, size.width, size.height),
-                    corner_radius: self.border_radius,
-                };
+                let radius = flui_types::styling::Radius::circular(self.border_radius);
+                let rrect = flui_engine::painter::RRect::from_rect_and_radius(
+                    flui_types::Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                    radius,
+                );
                 picture.draw_rrect(rrect, paint);
             }
             PhysicalShape::Circle => {
@@ -175,9 +170,8 @@ impl RenderObject for RenderPhysicalModel {
 
         container.add_child(Box::new(picture));
 
-        // Paint child on top
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
+        // Paint child_id on top
+                let child_layer = tree.paint_child(child_id, offset);
         container.add_child(child_layer);
 
         Box::new(container)

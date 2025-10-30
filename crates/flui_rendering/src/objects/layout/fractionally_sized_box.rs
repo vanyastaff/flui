@@ -1,15 +1,14 @@
-//! RenderFractionallySizedBox - sizes child as fraction of parent
+//! RenderFractionallySizedBox - sizes child_id as fraction of parent
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
-/// RenderObject that sizes child as a fraction of available space
+/// RenderObject that sizes child_id as a fraction of available space
 ///
-/// This is useful for making a child take up a percentage of its parent.
-/// For example, width_factor: 0.5 makes the child half the parent's width.
+/// This is useful for making a child_id take up a percentage of its parent.
+/// For example, width_factor: 0.5 makes the child_id half the parent's width.
 ///
 /// # Example
 ///
@@ -92,27 +91,26 @@ impl Default for RenderFractionallySizedBox {
     }
 }
 
-impl RenderObject for RenderFractionallySizedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // Calculate target size based on factors
+impl SingleRender for RenderFractionallySizedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // Calculate target size based on factors
         let target_width = self.width_factor.map(|f| constraints.max_width * f);
         let target_height = self.height_factor.map(|f| constraints.max_height * f);
 
-        // Create child constraints
+        // Create child_id constraints
         let child_constraints = constraints.tighten(target_width, target_height);
 
-        // SingleArity always has exactly one child
-        let child = cx.child();
-        cx.layout_child(child, child_constraints)
+        // SingleArity always has exactly one child_id
+                tree.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-        cx.capture_child_layer(child)
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                tree.paint_child(child_id, offset)
     }
 }
 

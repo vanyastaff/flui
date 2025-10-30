@@ -1,6 +1,7 @@
 //! RenderListBody - simple scrollable list layout
 
-use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::MultiRender;
 use flui_engine::{BoxedLayer, Transform, TransformLayer, layer::pool};
 use flui_types::{Axis, Offset, Size, constraints::BoxConstraints};
 
@@ -73,14 +74,14 @@ impl Default for RenderListBody {
     }
 }
 
-impl RenderObject for RenderListBody {
-    type Arity = MultiArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let children = cx.children();
-        let constraints = cx.constraints();
-
-        if children.is_empty() {
+impl MultiRender for RenderListBody {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_ids: &[ElementId],
+        constraints: BoxConstraints,
+    ) -> Size {
+        if child_ids.is_empty() {
             self.child_sizes.clear();
             return constraints.smallest();
         }
@@ -93,7 +94,7 @@ impl RenderObject for RenderListBody {
                 let mut total_height = 0.0_f32;
                 let mut max_width = 0.0_f32;
 
-                for child in children.iter().copied() {
+                for child in child_ids.iter().copied() {
                     // Child gets parent's width constraints, infinite height
                     let child_constraints = BoxConstraints::new(
                         constraints.min_width,
@@ -102,7 +103,7 @@ impl RenderObject for RenderListBody {
                         f32::INFINITY,
                     );
 
-                    let child_size = cx.layout_child(child, child_constraints);
+                    let child_size = tree.layout_child(child, child_constraints);
                     self.child_sizes.push(child_size);
 
                     total_height += child_size.height;
@@ -110,8 +111,8 @@ impl RenderObject for RenderListBody {
                 }
 
                 // Add spacing between children
-                if !children.is_empty() {
-                    total_height += self.spacing * (children.len() - 1) as f32;
+                if !child_ids.is_empty() {
+                    total_height += self.spacing * (child_ids.len() - 1) as f32;
                 }
 
                 constraints.constrain(Size::new(max_width, total_height))
@@ -120,7 +121,7 @@ impl RenderObject for RenderListBody {
                 let mut total_width = 0.0_f32;
                 let mut max_height = 0.0_f32;
 
-                for child in children.iter().copied() {
+                for child in child_ids.iter().copied() {
                     // Child gets infinite width, parent's height constraints
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -129,7 +130,7 @@ impl RenderObject for RenderListBody {
                         constraints.max_height,
                     );
 
-                    let child_size = cx.layout_child(child, child_constraints);
+                    let child_size = tree.layout_child(child, child_constraints);
                     self.child_sizes.push(child_size);
 
                     total_width += child_size.width;
@@ -137,8 +138,8 @@ impl RenderObject for RenderListBody {
                 }
 
                 // Add spacing between children
-                if !children.is_empty() {
-                    total_width += self.spacing * (children.len() - 1) as f32;
+                if !child_ids.is_empty() {
+                    total_width += self.spacing * (child_ids.len() - 1) as f32;
                 }
 
                 constraints.constrain(Size::new(total_width, max_height))
@@ -146,30 +147,22 @@ impl RenderObject for RenderListBody {
         }
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let children = cx.children();
+    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
         let mut container = pool::acquire_container();
 
         let mut current_offset = 0.0_f32;
 
-        for (i, &child) in children.iter().enumerate() {
+        for (i, &child_id) in child_ids.iter().enumerate() {
             let child_size = self.child_sizes.get(i).copied().unwrap_or(Size::ZERO);
 
-            let offset = match self.main_axis {
+            let child_offset = match self.main_axis {
                 Axis::Vertical => Offset::new(0.0, current_offset),
                 Axis::Horizontal => Offset::new(current_offset, 0.0),
             };
 
-            // Capture child layer and apply offset transform
-            let child_layer = cx.capture_child_layer(child);
-
-            if offset != Offset::ZERO {
-                let transform = Transform::Translate(offset);
-                let transform_layer = TransformLayer::new(child_layer, transform);
-                container.add_child(Box::new(transform_layer));
-            } else {
-                container.add_child(child_layer);
-            }
+            // Paint child with combined offset
+            let child_layer = tree.paint_child(child_id, offset + child_offset);
+            container.add_child(child_layer);
 
             current_offset += match self.main_axis {
                 Axis::Vertical => child_size.height + self.spacing,

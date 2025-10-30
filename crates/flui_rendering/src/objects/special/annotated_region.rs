@@ -3,11 +3,10 @@
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 // ===== Data Structure =====
 
@@ -101,20 +100,21 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 
 // ===== RenderObject Implementation =====
 
-impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderObject for RenderAnnotatedRegion<T> {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        // Layout child with same constraints (pass-through)
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> SingleRender for RenderAnnotatedRegion<T> {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        // Layout child_id with same constraints (pass-through)
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // This is a pass-through - just paint child
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // This is a pass-through - just paint child_id
         // The annotation value is used by ancestors, not painted
-        let child = cx.child();
-        cx.capture_child_layer(child)
+                tree.paint_child(child_id, offset)
     }
 }
 

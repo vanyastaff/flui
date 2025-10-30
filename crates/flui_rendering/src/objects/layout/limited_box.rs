@@ -1,10 +1,9 @@
 //! RenderLimitedBox - limits max width/height
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints};
+use flui_types::{Size, constraints::BoxConstraints, Offset};
 
 /// RenderObject that limits maximum size when unconstrained
 ///
@@ -56,13 +55,14 @@ impl Default for RenderLimitedBox {
     }
 }
 
-impl RenderObject for RenderLimitedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // Apply limits only if constraints are infinite
+impl SingleRender for RenderLimitedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // Apply limits only if constraints are infinite
         let max_width = if constraints.max_width.is_infinite() {
             self.max_width
         } else {
@@ -82,13 +82,11 @@ impl RenderObject for RenderLimitedBox {
         );
 
         // SingleArity always has exactly one child
-        let child = cx.child();
-        cx.layout_child(child, limited_constraints)
+                tree.layout_child(child_id, limited_constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-        cx.capture_child_layer(child)
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                tree.paint_child(child_id, offset)
     }
 }
 

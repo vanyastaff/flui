@@ -1,6 +1,7 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::MultiRender;
 use flui_engine::{BoxedLayer, TransformLayer, layer::pool};
 use flui_types::{Axis, Offset, Size, constraints::BoxConstraints};
 
@@ -114,14 +115,14 @@ impl Default for RenderWrap {
     }
 }
 
-impl RenderObject for RenderWrap {
-    type Arity = MultiArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let children = cx.children();
-        let constraints = cx.constraints();
-
-        if children.is_empty() {
+impl MultiRender for RenderWrap {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_ids: &[ElementId],
+        constraints: BoxConstraints,
+    ) -> Size {
+        if child_ids.is_empty() {
             self.child_offsets.clear();
             return constraints.smallest();
         }
@@ -137,7 +138,7 @@ impl RenderObject for RenderWrap {
                 let mut max_run_height = 0.0_f32;
                 let mut total_width = 0.0_f32;
 
-                for child in children.iter().copied() {
+                for child in child_ids.iter().copied() {
                     // Child gets unconstrained width, constrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -146,7 +147,7 @@ impl RenderObject for RenderWrap {
                         constraints.max_height,
                     );
 
-                    let child_size = cx.layout_child(child, child_constraints);
+                    let child_size = tree.layout_child(child, child_constraints);
 
                     // Check if we need to wrap
                     if current_x + child_size.width > max_width && current_x > 0.0 {
@@ -175,7 +176,7 @@ impl RenderObject for RenderWrap {
                 let mut max_run_width = 0.0_f32;
                 let mut total_height = 0.0_f32;
 
-                for child in children.iter().copied() {
+                for child in child_ids.iter().copied() {
                     // Child gets constrained width, unconstrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -184,7 +185,7 @@ impl RenderObject for RenderWrap {
                         max_height - current_y,
                     );
 
-                    let child_size = cx.layout_child(child, child_constraints);
+                    let child_size = tree.layout_child(child, child_constraints);
 
                     // Check if we need to wrap
                     if current_y + child_size.height > max_height && current_y > 0.0 {
@@ -209,22 +210,15 @@ impl RenderObject for RenderWrap {
         }
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let children = cx.children();
+    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
         let mut container = pool::acquire_container();
 
-        for (i, &child) in children.iter().enumerate() {
-            let offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
+        for (i, &child_id) in child_ids.iter().enumerate() {
+            let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
 
-            // Capture child layer and apply offset transform
-            let child_layer = cx.capture_child_layer(child);
-
-            if offset != Offset::ZERO {
-                let transform_layer = TransformLayer::translate(child_layer, offset);
-                container.add_child(Box::new(transform_layer));
-            } else {
-                container.add_child(child_layer);
-            }
+            // Paint child with combined offset
+            let child_layer = tree.paint_child(child_id, offset + child_offset);
+            container.add_child(child_layer);
         }
 
         Box::new(container)

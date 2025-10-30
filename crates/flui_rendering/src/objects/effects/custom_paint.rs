@@ -1,10 +1,9 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, PictureLayer};
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// Custom painter trait
 ///
@@ -22,15 +21,15 @@ pub trait CustomPainter: std::fmt::Debug + Send + Sync {
 /// Data for RenderCustomPaint
 #[derive(Debug)]
 pub struct CustomPaintData {
-    /// Foreground painter (painted on top of child)
+    /// Foreground painter (painted on top of child_id)
     pub foreground_painter: Option<Box<dyn CustomPainter>>,
-    /// Background painter (painted behind child)
+    /// Background painter (painted behind child_id)
     pub painter: Option<Box<dyn CustomPainter>>,
-    /// Size to use when child is not present
+    /// Size to use when child_id is not present
     pub size: Size,
-    /// Whether child is interactive (if false, hit tests go through)
+    /// Whether child_id is interactive (if false, hit tests go through)
     pub is_complex: bool,
-    /// Whether foreground paints on top of child
+    /// Whether foreground paints on top of child_id
     pub will_change: bool,
 }
 
@@ -93,7 +92,7 @@ impl Default for CustomPaintData {
 /// RenderObject that allows custom painting
 ///
 /// This widget allows you to paint custom graphics before and/or after
-/// the child widget. Useful for drawing custom shapes, decorations, etc.
+/// the child_id widget. Useful for drawing custom shapes, decorations, etc.
 ///
 /// # Example
 ///
@@ -105,15 +104,15 @@ impl Default for CustomPaintData {
 /// ```
 #[derive(Debug)]
 pub struct RenderCustomPaint {
-    /// Foreground painter (painted on top of child)
+    /// Foreground painter (painted on top of child_id)
     pub foreground_painter: Option<Box<dyn CustomPainter>>,
-    /// Background painter (painted behind child)
+    /// Background painter (painted behind child_id)
     pub painter: Option<Box<dyn CustomPainter>>,
-    /// Size to use when child is not present
+    /// Size to use when child_id is not present
     pub size: Size,
-    /// Whether child is interactive (if false, hit tests go through)
+    /// Whether child_id is interactive (if false, hit tests go through)
     pub is_complex: bool,
-    /// Whether foreground paints on top of child
+    /// Whether foreground paints on top of child_id
     pub will_change: bool,
     /// Laid out size (set during layout, used during paint)
     laid_out_size: Size,
@@ -213,21 +212,23 @@ impl Default for RenderCustomPaint {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderCustomPaint {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        // SingleArity always has exactly one child
-        // Layout child with our constraints
-        let child = cx.child();
-        let size = cx.layout_child(child, cx.constraints());
+impl SingleRender for RenderCustomPaint {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        // SingleArity always has exactly one child_id
+        // Layout child_id with our constraints
+                let size = tree.layout_child(child_id, constraints);
 
         // Store the laid out size for use during paint
         self.laid_out_size = size;
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Use the size from layout phase
         let size = self.laid_out_size;
         let mut layers: Vec<BoxedLayer> = Vec::new();
@@ -239,11 +240,10 @@ impl RenderObject for RenderCustomPaint {
             layers.push(Box::new(picture));
         }
 
-        // Paint child - SingleArity always has exactly one child
-        let child = cx.child();
-        layers.push(cx.capture_child_layer(child));
+        // Paint child_id - SingleArity always has exactly one child_id
+                layers.push(tree.paint_child(child_id, offset));
 
-        // Paint foreground painter (on top of child)
+        // Paint foreground painter (on top of child_id)
         if let Some(fg_painter) = &self.foreground_painter {
             let mut picture = PictureLayer::new();
             fg_painter.paint(&mut picture, size);

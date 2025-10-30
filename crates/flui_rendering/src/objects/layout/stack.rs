@@ -1,7 +1,8 @@
 //! RenderStack - layering container
 
 use crate::utils::layout_utils::apply_offset_transform_v2;
-use flui_core::render::{LayoutCx, MultiArity, MultiChild, MultiChildPaint, PaintCx, RenderObject};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::MultiRender;
 use flui_engine::{BoxedLayer, layer::pool};
 use flui_types::layout::StackFit;
 use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
@@ -174,14 +175,14 @@ impl Default for RenderStack {
     }
 }
 
-impl RenderObject for RenderStack {
-    type Arity = MultiArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let children = cx.children();
-        let constraints = cx.constraints();
-
-        if children.is_empty() {
+impl MultiRender for RenderStack {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_ids: &[ElementId],
+        constraints: BoxConstraints,
+    ) -> Size {
+        if child_ids.is_empty() {
             self.child_sizes.clear();
             self.child_offsets.clear();
             return constraints.smallest();
@@ -195,9 +196,10 @@ impl RenderObject for RenderStack {
         let mut max_width: f32 = 0.0;
         let mut max_height: f32 = 0.0;
 
-        for child in children.iter().copied() {
+        for child in child_ids.iter().copied() {
+            // TODO: Implement tree.parent_data() method to query parent data from elements
             // Check if child has StackParentData and is positioned
-            let stack_data = cx.parent_data::<crate::parent_data::StackParentData>(child);
+            let stack_data: Option<&crate::parent_data::StackParentData> = None; // tree.parent_data::<crate::parent_data::StackParentData>(child);
 
             let child_constraints = if let Some(data) = stack_data
                 && data.is_positioned()
@@ -213,7 +215,7 @@ impl RenderObject for RenderStack {
                 }
             };
 
-            let child_size = cx.layout_child(child, child_constraints);
+            let child_size = tree.layout_child(child, child_constraints);
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -229,9 +231,10 @@ impl RenderObject for RenderStack {
         };
 
         // Calculate and save child offsets
-        for (i, &child) in children.iter().enumerate() {
+        for (i, &child) in child_ids.iter().enumerate() {
             let child_size = self.child_sizes[i];
-            let stack_data = cx.parent_data::<crate::parent_data::StackParentData>(child);
+            // TODO: Implement tree.parent_data() method to query parent data from elements
+            let stack_data: Option<&crate::parent_data::StackParentData> = None; // tree.parent_data::<crate::parent_data::StackParentData>(child);
 
             // Use the existing calculate_child_offset function
             let child_offset =
@@ -242,17 +245,16 @@ impl RenderObject for RenderStack {
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let children = cx.children();
+    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
         let mut container = pool::acquire_container();
 
         // Paint children in order (first child in back, last child on top)
-        for (i, &child) in children.iter().enumerate() {
-            let offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
+        for (i, &child_id) in child_ids.iter().enumerate() {
+            let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
 
-            // Capture child layer and apply offset transform
-            let child_layer = cx.capture_child_layer(child);
-            container.add_child(apply_offset_transform_v2(child_layer, offset));
+            // Paint child with combined offset
+            let child_layer = tree.paint_child(child_id, offset + child_offset);
+            container.add_child(child_layer);
         }
 
         Box::new(container)

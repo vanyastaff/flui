@@ -1,12 +1,12 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, Paint, PictureLayer, RRect, layer::pool};
 use flui_types::{
-    Point, Rect, Size,
-    styling::{BorderPosition, BoxDecoration},
+    Offset, Point, Rect, Size,
+    constraints::BoxConstraints,
+    styling::{BorderPosition, BoxDecoration, Radius},
 };
 
 /// Position of the decoration relative to the child
@@ -110,7 +110,7 @@ impl RenderDecoratedBox {
     /// - GradientLayer for gradients
     /// - PictureLayer for solid colors and borders
     fn paint_decoration(&self, container: &mut flui_engine::ContainerLayer, rect: Rect) {
-        use flui_engine::GradientLayer;
+        // use flui_engine::GradientLayer; // TODO: GradientLayer not implemented yet
 
         let decoration = &self.data.decoration;
 
@@ -121,30 +121,26 @@ impl RenderDecoratedBox {
         // 3. Add it to the container before the background
 
         // Paint background (gradient or solid color)
-        if let Some(ref gradient) = decoration.gradient {
-            // Create GradientLayer for gradient background
-            let gradient_layer = GradientLayer::new(rect, gradient.clone());
-            container.add_child(Box::new(gradient_layer));
+        if let Some(ref _gradient) = decoration.gradient {
+            // TODO: GradientLayer not implemented yet in flui_engine
+            // When implemented, create GradientLayer here:
+            // let gradient_layer = GradientLayer::new(rect, gradient.clone());
+            // container.add_child(Box::new(gradient_layer));
         } else if let Some(color) = decoration.color {
             // Create PictureLayer for solid color background
             let mut picture = PictureLayer::new();
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
 
-            let paint = Paint {
-                color: [
-                    color.red() as f32 / 255.0,
-                    color.green() as f32 / 255.0,
-                    color.blue() as f32 / 255.0,
-                    color.alpha() as f32 / 255.0,
-                ],
-                stroke_width: 0.0,
-                anti_alias: true,
-            };
+            let paint = Paint::fill(color);
 
             if let Some(radius) = border_radius {
+                let circular_radius = Radius::circular(radius);
                 let rrect = RRect {
                     rect,
-                    corner_radius: radius,
+                    top_left: circular_radius,
+                    top_right: circular_radius,
+                    bottom_right: circular_radius,
+                    bottom_left: circular_radius,
                 };
                 picture.draw_rrect(rrect, paint);
             } else {
@@ -216,24 +212,19 @@ impl RenderDecoratedBox {
         position: BorderPosition,
         border_radius: Option<f32>,
     ) {
-        let paint = Paint {
-            color: [
-                side.color.red() as f32 / 255.0,
-                side.color.green() as f32 / 255.0,
-                side.color.blue() as f32 / 255.0,
-                side.color.alpha() as f32 / 255.0,
-            ],
-            stroke_width: side.width,
-            anti_alias: true,
-        };
+        let paint = Paint::stroke(side.width, side.color);
 
         // If we have rounded corners, draw using rounded rect
         if let Some(radius) = border_radius {
             // For rounded borders, we need to draw the full rounded rect outline
             // and then optionally mask individual sides (future enhancement)
+            let circular_radius = Radius::circular(radius);
             let rrect = RRect {
                 rect,
-                corner_radius: radius,
+                top_left: circular_radius,
+                top_right: circular_radius,
+                bottom_right: circular_radius,
+                bottom_left: circular_radius,
             };
             picture.draw_rrect(rrect, paint);
         } else {
@@ -266,15 +257,15 @@ impl RenderDecoratedBox {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderDecoratedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // SingleArity always has exactly one child
-        let child = cx.child();
-        let size = cx.layout_child(child, constraints);
+impl SingleRender for RenderDecoratedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // SingleArity always has exactly one child
+                let size = tree.layout_child(child_id, constraints);
 
         // Store size for paint
         self.size = size;
@@ -282,7 +273,7 @@ impl RenderObject for RenderDecoratedBox {
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         let mut container = pool::acquire_container();
         let rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
 
@@ -292,8 +283,7 @@ impl RenderObject for RenderDecoratedBox {
         }
 
         // Paint child on top
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
+                let child_layer = tree.paint_child(child_id, offset);
         container.add_child(child_layer);
 
         // Paint decoration in foreground position

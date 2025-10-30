@@ -1,22 +1,21 @@
 //! RenderSizedBox - enforces exact size
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints};
+use flui_types::{Size, constraints::BoxConstraints, Offset};
 
 /// RenderObject that enforces exact size constraints
 ///
-/// This widget forces its child to have a specific width and/or height,
-/// or acts as an invisible spacer if no child is present.
+/// This widget forces its child_id to have a specific width and/or height,
+/// or acts as an invisible spacer if no child_id is present.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSizedBox;
 ///
-/// // Force child to be exactly 100x100
+/// // Force child_id to be exactly 100x100
 /// let sized = RenderSizedBox::exact(100.0, 100.0);
 ///
 /// // Create a 50 pixel wide spacer
@@ -77,31 +76,30 @@ impl Default for RenderSizedBox {
     }
 }
 
-impl RenderObject for RenderSizedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let child = cx.child();
-        let constraints = cx.constraints();
-
-        // Calculate our size based on explicit width/height
+impl SingleRender for RenderSizedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                        // Calculate our size based on explicit width/height
         let width = self.width.unwrap_or(constraints.max_width);
         let height = self.height.unwrap_or(constraints.max_height);
 
         let size = Size::new(width, height);
 
-        // SingleArity always has exactly one child
+        // SingleArity always has exactly one child_id
         // Lay it out with tight constraints
         let child_constraints = BoxConstraints::tight(size);
-        cx.layout_child(child, child_constraints);
+        tree.layout_child(child_id, child_constraints);
 
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        // Simply pass through child layer (or empty if no child)
-        let child = cx.child();
-        cx.capture_child_layer(child)
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Simply pass through child_id layer (or empty if no child_id)
+                tree.paint_child(child_id, offset)
     }
 }
 

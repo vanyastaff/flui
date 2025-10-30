@@ -435,6 +435,30 @@ impl ElementTree {
         Some(layer)
     }
 
+    // ========== Convenience Aliases for Render Traits ==========
+
+    /// Alias for `layout_render_object` - used by SingleRender/MultiRender traits
+    #[inline]
+    pub fn layout_child(
+        &self,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> flui_types::Size {
+        self.layout_render_object(child_id, constraints)
+            .unwrap_or(flui_types::Size::ZERO)
+    }
+
+    /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
+    #[inline]
+    pub fn paint_child(
+        &self,
+        child_id: ElementId,
+        offset: crate::Offset,
+    ) -> crate::BoxedLayer {
+        self.paint_render_object(child_id, offset)
+            .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
+    }
+
     // ========== Tree Information ==========
 
     /// Get the total number of elements in the tree

@@ -1,10 +1,9 @@
 //! RenderAspectRatio - maintains aspect ratio
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints};
+use flui_types::{Size, constraints::BoxConstraints, Offset};
 
 /// RenderObject that maintains an aspect ratio
 ///
@@ -45,12 +44,14 @@ impl Default for RenderAspectRatio {
     }
 }
 
-impl RenderObject for RenderAspectRatio {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-        let aspect_ratio = self.aspect_ratio;
+impl SingleRender for RenderAspectRatio {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                let aspect_ratio = self.aspect_ratio;
 
         // Calculate size maintaining aspect ratio
         let size = if constraints.is_tight() {
@@ -77,17 +78,14 @@ impl RenderObject for RenderAspectRatio {
 
         // SingleArity always has exactly one child
         // Layout child with tight constraints
-        let child = cx.child();
-        cx.layout_child(child, BoxConstraints::tight(final_size));
+                tree.layout_child(child_id, BoxConstraints::tight(final_size));
 
         final_size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-
-        // Simply return child layer - no transformation needed
-        (cx.capture_child_layer(child)) as _
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                // Simply return child layer - no transformation needed
+        (tree.paint_child(child_id, offset)) as _
     }
 }
 

@@ -1,10 +1,9 @@
 //! RenderBlockSemantics - blocks descendant semantics from being merged
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// Data for RenderBlockSemantics
 #[derive(Debug, Clone, Copy)]
@@ -72,19 +71,20 @@ impl RenderBlockSemantics {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderBlockSemantics {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+impl SingleRender for RenderBlockSemantics {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
         // Layout child with same constraints (pass-through)
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Paint child directly (pass-through)
-        let child = cx.child();
-        cx.capture_child_layer(child)
+                tree.paint_child(child_id, offset)
     }
 }
 

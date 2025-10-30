@@ -1,16 +1,15 @@
-//! RenderAlign - aligns child within available space
+//! RenderAlign - aligns child_id within available space
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{Alignment, Offset, Size};
+use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
-/// RenderObject that aligns its child within the available space
+/// RenderObject that aligns its child_id within the available space
 ///
-/// This widget positions its child according to the alignment parameter.
+/// This widget positions its child_id according to the alignment parameter.
 /// If width_factor or height_factor are specified, the RenderAlign will
-/// size itself to be that factor times the child's size in that dimension.
+/// size itself to be that factor times the child_id's size in that dimension.
 ///
 /// # Example
 ///
@@ -85,18 +84,21 @@ impl Default for RenderAlign {
     }
 }
 
-impl RenderObject for RenderAlign {
-    type Arity = SingleArity;
+impl SingleRender for RenderAlign {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        
+        
 
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let child = cx.child();
-        let constraints = cx.constraints();
+        // SingleArity always has exactly one child_id
+        // Layout child_id with loose constraints to get its natural size
+        let child_size = tree.layout_child(child_id, constraints.loosen());
 
-        // SingleArity always has exactly one child
-        // Layout child with loose constraints to get its natural size
-        let child_size = cx.layout_child(child, constraints.loosen());
-
-        // Store child size for paint
+        // Store child_id size for paint
         self.child_size = child_size;
 
         // Calculate our size based on factors
@@ -123,12 +125,12 @@ impl RenderObject for RenderAlign {
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        
 
-        // SingleArity always has exactly one child
-        // Get child layer
-        let child_layer = cx.capture_child_layer(child);
+        // SingleArity always has exactly one child_id
+        // Get child_id layer
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Use the size from layout phase
         let size = self.size;
@@ -144,7 +146,7 @@ impl RenderObject for RenderAlign {
 
         let offset = Offset::new(aligned_x, aligned_y);
 
-        // Use TransformLayer to position child at aligned offset
+        // Use TransformLayer to position child_id at aligned offset
         Box::new(TransformLayer::translate(child_layer, offset))
     }
 }

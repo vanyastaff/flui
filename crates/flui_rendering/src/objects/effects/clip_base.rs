@@ -29,11 +29,10 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, painting::Clip};
+use flui_types::{Size, painting::Clip, Offset, constraints::BoxConstraints};
 
 /// Trait for defining clip shapes
 ///
@@ -44,12 +43,12 @@ pub trait ClipShape: std::fmt::Debug + Send + Sync {
     ///
     /// # Parameters
     ///
-    /// - `child_layer`: The child layer to be clipped
+    /// - `child_layer`: The child_id layer to be clipped
     /// - `size`: The size of the render object (from layout)
     ///
     /// # Returns
     ///
-    /// A boxed layer that clips the child to this shape
+    /// A boxed layer that clips the child_id to this shape
     fn create_clip_layer(&self, child_layer: BoxedLayer, size: Size) -> BoxedLayer;
 }
 
@@ -65,10 +64,10 @@ pub trait ClipShape: std::fmt::Debug + Send + Sync {
 ///
 /// # Common Behavior
 ///
-/// - Layout: Pass-through to child with same constraints
+/// - Layout: Pass-through to child_id with same constraints
 /// - Paint:
-///   - If `!clip_behavior.clips()`, return child layer directly
-///   - Otherwise, get child layer and wrap it with shape's clip layer
+///   - If `!clip_behavior.clips()`, return child_id layer directly
+///   - Otherwise, get child_id layer and wrap it with shape's clip layer
 ///
 /// # Example
 ///
@@ -117,29 +116,29 @@ impl<S: ClipShape> RenderClip<S> {
     }
 }
 
-impl<S: ClipShape + 'static> RenderObject for RenderClip<S> {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        // Layout child with same constraints (pass-through)
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        // Layout child_id with same constraints (pass-through)
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-
-        // If no clipping needed, just return child layer
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                // If no clipping needed, just return child_id layer
         if !self.clip_behavior.clips() {
-            return cx.capture_child_layer(child);
+            return tree.paint_child(child_id, offset);
         }
 
-        // Get child layer
-        let child_layer = cx.capture_child_layer(child);
+        // Get child_id layer
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Get actual size from layout phase
         // Fall back to ZERO if size is not available (shouldn't happen during normal paint)
-        let size = cx.size().unwrap_or(Size::ZERO);
+        let size = Size::ZERO;
 
         // Let the shape create its specific clip layer
         self.shape.create_clip_layer(child_layer, size)

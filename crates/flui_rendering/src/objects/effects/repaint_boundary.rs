@@ -1,10 +1,9 @@
 //! RenderRepaintBoundary - optimization boundary for repainting
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::Size;
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that creates a repaint boundary
 ///
@@ -56,18 +55,18 @@ impl Default for RenderRepaintBoundary {
     }
 }
 
-impl RenderObject for RenderRepaintBoundary {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let constraints = cx.constraints();
-
-        // SingleArity always has exactly one child
-        let child = cx.child();
-        cx.layout_child(child, constraints)
+impl SingleRender for RenderRepaintBoundary {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                // SingleArity always has exactly one child
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Paint child
         // TODO: In a full implementation with layer caching support:
         // - Create a cached layer if is_repaint_boundary is true
@@ -78,8 +77,7 @@ impl RenderObject for RenderRepaintBoundary {
         // repainting the child if only the parent changes
         //
         // For now, we just paint the child directly
-        let child = cx.child();
-        cx.capture_child_layer(child)
+                tree.paint_child(child_id, offset)
     }
 }
 

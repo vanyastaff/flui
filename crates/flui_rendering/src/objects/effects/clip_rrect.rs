@@ -36,10 +36,8 @@ impl ClipShape for RRectShape {
             + self.border_radius.bottom_left.x)
             / 4.0;
 
-        let rrect = RRect {
-            rect,
-            corner_radius: avg_radius,
-        };
+        let radius = flui_types::styling::Radius::circular(avg_radius);
+        let rrect = RRect::from_rect_and_radius(rect, radius);
 
         let mut clip_layer = ClipRRectLayer::new(rrect);
         clip_layer.add_child(child_layer);

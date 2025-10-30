@@ -1,10 +1,9 @@
 //! RenderTransform - applies matrix transformation to child
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, Transform, TransformLayer};
-use flui_types::{Offset, Size};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that applies a transformation to its child
 ///
@@ -56,19 +55,20 @@ impl RenderTransform {
     }
 }
 
-impl RenderObject for RenderTransform {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+impl SingleRender for RenderTransform {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
         // Layout child with same constraints (transform doesn't affect layout)
-        let child = cx.child();
-        cx.layout_child(child, cx.constraints())
+                tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Capture child layer
-        let child = cx.child();
-        let child_layer = cx.capture_child_layer(child);
+                let child_layer = tree.paint_child(child_id, offset);
 
         // Wrap in TransformLayer
         Box::new(TransformLayer::new(child_layer, self.transform))

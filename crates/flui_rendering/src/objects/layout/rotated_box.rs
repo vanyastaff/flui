@@ -1,8 +1,7 @@
-//! RenderRotatedBox - rotates child by quarter turns (90°, 180°, 270°)
+//! RenderRotatedBox - rotates child_id by quarter turns (90°, 180°, 270°)
 
-use flui_core::render::{
-    LayoutCx, PaintCx, RenderObject, SingleArity, SingleChild, SingleChildPaint,
-};
+use flui_core::element::{ElementId, ElementTree};
+use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
@@ -77,7 +76,7 @@ impl Default for RotatedBoxData {
     }
 }
 
-/// RenderObject that rotates its child by quarter turns
+/// RenderObject that rotates its child_id by quarter turns
 ///
 /// Unlike RenderTransform which can do arbitrary rotations,
 /// RenderRotatedBox only supports 90° increments and properly
@@ -88,7 +87,7 @@ impl Default for RotatedBoxData {
 /// ```rust,ignore
 /// use flui_rendering::RenderRotatedBox;
 ///
-/// // Rotate child 90° clockwise
+/// // Rotate child_id 90° clockwise
 /// let mut rotated = RenderRotatedBox::rotate_90();
 /// ```
 #[derive(Debug)]
@@ -133,14 +132,14 @@ impl RenderRotatedBox {
 
 // ===== RenderObject Implementation =====
 
-impl RenderObject for RenderRotatedBox {
-    type Arity = SingleArity;
-
-    fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-        let child = cx.child();
-        let constraints = cx.constraints();
-
-        // For odd quarter turns (90°, 270°), swap width and height constraints
+impl SingleRender for RenderRotatedBox {
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+                        // For odd quarter turns (90°, 270°), swap width and height constraints
         let child_constraints = if self.quarter_turns.swaps_dimensions() {
             // Manually flip constraints - swap width and height
             BoxConstraints::new(
@@ -153,10 +152,10 @@ impl RenderObject for RenderRotatedBox {
             constraints
         };
 
-        // Layout child
-        let child_size = cx.layout_child(child, child_constraints);
+        // Layout child_id
+        let child_size = tree.layout_child(child_id, child_constraints);
 
-        // Our size is child size with potentially swapped dimensions
+        // Our size is child_id size with potentially swapped dimensions
         let size = if self.quarter_turns.swaps_dimensions() {
             Size::new(child_size.height, child_size.width)
         } else {
@@ -168,31 +167,29 @@ impl RenderObject for RenderRotatedBox {
         size
     }
 
-    fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-        let child = cx.child();
-
-        // Calculate offset based on rotation
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+                // Calculate offset based on rotation
         // Note: For now, this is a simplified implementation
         // TODO: Implement proper rotation transformation
         let offset = match self.quarter_turns {
             QuarterTurns::Zero => Offset::new(0.0, 0.0),
             QuarterTurns::One => {
-                // 90° clockwise: child's top-left becomes our top-right
+                // 90° clockwise: child_id's top-left becomes our top-right
                 Offset::new(self.size.width, 0.0)
             }
             QuarterTurns::Two => {
-                // 180°: child's top-left becomes our bottom-right
+                // 180°: child_id's top-left becomes our bottom-right
                 Offset::new(self.size.width, self.size.height)
             }
             QuarterTurns::Three => {
-                // 270° clockwise: child's top-left becomes our bottom-left
+                // 270° clockwise: child_id's top-left becomes our bottom-left
                 Offset::new(0.0, self.size.height)
             }
         };
 
-        // Capture child layer and apply offset transform
+        // Capture child_id layer and apply offset transform
         // TODO: Add actual rotation transformation when available
-        let child_layer = cx.capture_child_layer(child);
+        let child_layer = tree.paint_child(child_id, offset);
 
         if offset != Offset::ZERO {
             Box::new(TransformLayer::translate(child_layer, offset))
