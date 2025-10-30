@@ -78,18 +78,33 @@ pub use backend::{BackendCapabilities, BackendInfo, RenderBackend};
 pub use compositor::{CompositionStats, Compositor, CompositorOptions};
 pub use event_router::EventRouter;
 pub use layer::{
-    // Core types
-    BoxedLayer, Layer,
-    // Basic composition
-    ContainerLayer, OpacityLayer, OffsetLayer, PictureLayer, Transform, TransformLayer,
-    // Clipping
-    ClipOvalLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
     // Filters
-    BackdropFilterLayer, BlurLayer, FilterLayer,
+    BackdropFilterLayer,
+    BlurLayer,
+    // Filter types from flui_types
+    BlurMode,
+    BlurQuality,
+    // Core types
+    BoxedLayer,
+    // Clipping
+    ClipOvalLayer,
+    ClipPathLayer,
+    ClipRRectLayer,
+    ClipRectLayer,
+    ColorFilter,
+    ColorMatrix,
+    // Basic composition
+    ContainerLayer,
     // Drawing commands
     DrawCommand,
-    // Filter types from flui_types
-    BlurMode, BlurQuality, ColorFilter, ColorMatrix, ImageFilter,
+    FilterLayer,
+    ImageFilter,
+    Layer,
+    OffsetLayer,
+    OpacityLayer,
+    PictureLayer,
+    Transform,
+    TransformLayer,
 };
 pub use paint_context::PaintContext;
 pub use painter::{Paint, Painter, RRect};

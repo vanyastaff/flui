@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints, Offset};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that limits maximum size when unconstrained
 ///
@@ -62,7 +62,7 @@ impl SingleRender for RenderLimitedBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // Apply limits only if constraints are infinite
+        // Apply limits only if constraints are infinite
         let max_width = if constraints.max_width.is_infinite() {
             self.max_width
         } else {
@@ -82,11 +82,11 @@ impl SingleRender for RenderLimitedBox {
         );
 
         // SingleArity always has exactly one child
-                tree.layout_child(child_id, limited_constraints)
+        tree.layout_child(child_id, limited_constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

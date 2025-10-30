@@ -158,13 +158,10 @@ impl<T: Notification + Clone + 'static> NotificationListener<T> {
     /// - `None` - Wrong type, this listener doesn't handle it
     pub fn handle_dyn_notification(&self, notification: &dyn DynNotification) -> Option<bool> {
         // Try to downcast to the specific type T
-        if let Some(typed_notification) = notification.as_any().downcast_ref::<T>() {
-            // Call the callback and return its result
-            Some((self.on_notification)(typed_notification))
-        } else {
-            // Wrong type, this listener doesn't handle it
-            None
-        }
+        notification
+            .as_any()
+            .downcast_ref::<T>()
+            .map(|typed_notification| (self.on_notification)(typed_notification))
     }
 
     /// Get reference to child widget

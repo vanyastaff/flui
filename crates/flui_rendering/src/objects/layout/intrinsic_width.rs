@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints, Offset};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that sizes child_id to its intrinsic width
 ///
@@ -84,9 +84,9 @@ impl SingleRender for RenderIntrinsicWidth {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // SingleArity always has exactly one child_id
+        // SingleArity always has exactly one child_id
         // Layout child_id with infinite width to get intrinsic width
-                // Get child_id's intrinsic width by giving it infinite width
+        // Get child_id's intrinsic width by giving it infinite width
         let intrinsic_constraints = BoxConstraints::new(
             0.0,
             f32::INFINITY,
@@ -114,7 +114,7 @@ impl SingleRender for RenderIntrinsicWidth {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
+use flui_core::widget::{RenderWidget, Widget};
 use flui_core::BuildContext;
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
@@ -218,7 +218,6 @@ impl Default for Align {
     }
 }
 
-
 // bon Builder Extensions
 use align_builder::{IsUnset, SetChild, State};
 
@@ -228,16 +227,16 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> AlignBuilder<SetChild<S>> {
-        self.child_internal(Some(child))
+    pub fn child(self, child: impl flui_core::IntoWidget) -> AlignBuilder<SetChild<S>> {
+        self.child_internal(child.into_widget())
     }
 }
 
 // Build wrapper
 impl<S: State> AlignBuilder<S> {
-    /// Builds the Align widget.
-    pub fn build(self) -> Align {
-        self.build_align()
+    /// Builds the Align widget and returns it as a Widget.
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::render_object(self.build_align())
     }
 }
 
@@ -267,7 +266,7 @@ mod tests {
 
     impl RenderWidget for MockWidget {
         fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
         fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
@@ -426,7 +425,7 @@ mod tests {
 // Implement RenderWidget
 impl RenderWidget for Align {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderAlign::with_factors(
+        RenderNode::single(Box::new(RenderAlign::with_factors(
             self.alignment,
             self.width_factor,
             self.height_factor,
@@ -434,7 +433,7 @@ impl RenderWidget for Align {
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(align) = render.downcast_mut::<RenderAlign>() {
                 align.set_alignment(self.alignment);
                 align.set_width_factor(self.width_factor);
@@ -447,3 +446,6 @@ impl RenderWidget for Align {
         self.child.as_ref()
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Align, render);

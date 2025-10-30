@@ -6,9 +6,9 @@
 
 use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
+use flui_types::events::{Event, HitTestResult};
 use flui_types::painting::effects::{BlurMode, BlurQuality, ImageFilter};
 use flui_types::{Offset, Rect};
-use flui_types::events::{Event, HitTestResult};
 
 /// A layer that applies image filters to its child content or backdrop.
 ///
@@ -147,7 +147,9 @@ impl BlurLayer {
                         // Recursively calculate extent for each filter
                         match f {
                             ImageFilter::Blur { sigma_x, sigma_y } => sigma_x.max(*sigma_y) * 3.0,
-                            ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => *radius,
+                            ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => {
+                                *radius
+                            }
                             _ => 0.0,
                         }
                     })
@@ -307,7 +309,8 @@ mod tests {
     #[test]
     fn test_color_filter_no_extent() {
         let child = Box::new(crate::layer::picture::PictureLayer::new()) as BoxedLayer;
-        let color = BlurLayer::new(child).with_filter(ImageFilter::color(ColorFilter::Brightness(0.5)));
+        let color =
+            BlurLayer::new(child).with_filter(ImageFilter::color(ColorFilter::Brightness(0.5)));
 
         let extent = color.calculate_filter_extent();
         assert_eq!(extent, 0.0);

@@ -7,6 +7,7 @@
 //!
 //! These traits are object-safe and have simple, clean APIs.
 
+use downcast_rs::{Downcast, impl_downcast};
 use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
@@ -50,7 +51,7 @@ use crate::element::{ElementId, ElementTree};
 ///     }
 /// }
 /// ```
-pub trait LeafRender: Send + Sync + std::fmt::Debug + 'static {
+pub trait LeafRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
     /// Compute layout
     fn layout(&mut self, constraints: BoxConstraints) -> Size;
 
@@ -72,6 +73,7 @@ pub trait LeafRender: Send + Sync + std::fmt::Debug + 'static {
         std::any::type_name::<Self>()
     }
 }
+impl_downcast!(LeafRender);
 
 // ========== Single Render ==========
 
@@ -121,7 +123,7 @@ pub trait LeafRender: Send + Sync + std::fmt::Debug + 'static {
 ///     }
 /// }
 /// ```
-pub trait SingleRender: Send + Sync + std::fmt::Debug + 'static {
+pub trait SingleRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
     /// Compute layout
     fn layout(
         &mut self,
@@ -148,6 +150,7 @@ pub trait SingleRender: Send + Sync + std::fmt::Debug + 'static {
         std::any::type_name::<Self>()
     }
 }
+impl_downcast!(SingleRender);
 
 // ========== Multi Render ==========
 
@@ -200,7 +203,7 @@ pub trait SingleRender: Send + Sync + std::fmt::Debug + 'static {
 ///     }
 /// }
 /// ```
-pub trait MultiRender: Send + Sync + std::fmt::Debug + 'static {
+pub trait MultiRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
     /// Compute layout
     fn layout(
         &mut self,
@@ -210,12 +213,7 @@ pub trait MultiRender: Send + Sync + std::fmt::Debug + 'static {
     ) -> Size;
 
     /// Paint to layer
-    fn paint(
-        &self,
-        tree: &ElementTree,
-        children: &[ElementId],
-        offset: Offset,
-    ) -> BoxedLayer;
+    fn paint(&self, tree: &ElementTree, children: &[ElementId], offset: Offset) -> BoxedLayer;
 
     /// Optional: compute intrinsic width
     fn intrinsic_width(&self, _height: Option<f32>) -> Option<f32> {
@@ -232,6 +230,7 @@ pub trait MultiRender: Send + Sync + std::fmt::Debug + 'static {
         std::any::type_name::<Self>()
     }
 }
+impl_downcast!(MultiRender);
 
 #[cfg(test)]
 mod tests {
@@ -264,12 +263,7 @@ mod tests {
             constraints.constrain(Size::new(200.0, 200.0))
         }
 
-        fn paint(
-            &self,
-            _tree: &ElementTree,
-            _child_id: ElementId,
-            _offset: Offset,
-        ) -> BoxedLayer {
+        fn paint(&self, _tree: &ElementTree, _child_id: ElementId, _offset: Offset) -> BoxedLayer {
             Box::new(ContainerLayer::new())
         }
     }

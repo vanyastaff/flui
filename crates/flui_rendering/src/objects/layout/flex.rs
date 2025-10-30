@@ -1,6 +1,5 @@
 //! RenderFlex - flex layout container (Row/Column)
 
-use crate::utils::layout_utils::apply_offset_transform;
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::MultiRender;
 use flui_engine::{BoxedLayer, layer::pool};
@@ -196,8 +195,8 @@ impl MultiRender for RenderFlex {
 
         // Step 1: Separate inflexible and flexible children
         let mut inflexible_children: Vec<(ElementId, Size)> = Vec::new();
-        let mut flexible_children: Vec<(ElementId, i32, flui_types::layout::FlexFit)> = Vec::new();
-        let mut total_flex = 0i32;
+        let flexible_children: Vec<(ElementId, i32, flui_types::layout::FlexFit)> = Vec::new();
+        let total_flex = 0i32;
 
         for &child in child_ids.iter() {
             // TODO: Implement tree.parent_data() method to query parent data from elements

@@ -98,13 +98,11 @@ pub mod picture;
 pub mod pool;
 pub mod transform;
 
-
 // Basic composition layers
 
 // Clipping layers
 
 // Filter layers (compositor effects)
-
 
 // ============================================================================
 // Public API Exports
@@ -116,32 +114,26 @@ pub use handle::LayerHandle;
 
 // Basic composition layers
 pub use container::ContainerLayer;
+pub use offset::OffsetLayer;
+pub use opacity::OpacityLayer;
 pub use picture::{DrawCommand, PictureLayer};
 pub use transform::{Transform, TransformLayer};
-pub use opacity::OpacityLayer;
-pub use offset::OffsetLayer;
 
 // Clipping layers
 pub use clip::{ClipOvalLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer};
 
 // Filter layers
-pub use filter::FilterLayer;
-pub use blur::BlurLayer;
 pub use backdrop_filter::BackdropFilterLayer;
+pub use blur::BlurLayer;
+pub use filter::FilterLayer;
 
 // Re-export filter types from flui_types
-pub use flui_types::painting::effects::{BlurMode, BlurQuality, ColorFilter, ColorMatrix, ImageFilter};
+pub use flui_types::painting::effects::{
+    BlurMode, BlurQuality, ColorFilter, ColorMatrix, ImageFilter,
+};
 
 /// Type-erased layer (for dynamic dispatch)
 ///
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
-
-
-
-
-
-
-
-

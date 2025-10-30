@@ -4,7 +4,7 @@
 //! its child widget tree.
 
 use super::{ElementBase, ElementLifecycle};
-use crate::{Widget, ElementId};
+use crate::{ElementId, Widget};
 
 /// Element for StatelessWidget
 ///
@@ -241,7 +241,9 @@ mod tests {
 
     impl crate::widget::StatelessWidget for TestWidget {
         fn build(&self, _ctx: &crate::element::BuildContext) -> Widget {
-            Widget::stateless(TestWidget { value: self.value + 1 })
+            Widget::stateless(TestWidget {
+                value: self.value + 1,
+            })
         }
 
         fn clone_boxed(&self) -> Box<dyn crate::widget::StatelessWidget> {

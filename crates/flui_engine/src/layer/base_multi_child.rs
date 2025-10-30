@@ -4,7 +4,10 @@
 //! reducing code duplication across ContainerLayer and all clip layers.
 
 use crate::layer::BoxedLayer;
-use flui_types::{events::{Event, HitTestResult}, Offset, Rect};
+use flui_types::{
+    events::{Event, HitTestResult},
+    Offset, Rect,
+};
 
 /// Base struct for layers with multiple children
 ///

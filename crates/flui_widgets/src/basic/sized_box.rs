@@ -29,8 +29,8 @@
 //!     height: 50.0,
 //! }
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
+use flui_core::widget::{RenderWidget, Widget};
 use flui_core::BuildContext;
 use flui_rendering::RenderConstrainedBox;
 
@@ -203,16 +203,16 @@ where
     ///     .child(some_widget)
     ///     .build()
     /// ```
-    pub fn child(self, child: Widget) -> SizedBoxBuilder<SetChild<S>> {
-        self.child_internal(Some(child))
+    pub fn child(self, child: impl flui_core::IntoWidget) -> SizedBoxBuilder<SetChild<S>> {
+        self.child_internal(child.into_widget())
     }
 }
 
 // Build wrapper
 impl<S: State> SizedBoxBuilder<S> {
-    /// Builds the SizedBox widget.
-    pub fn build(self) -> SizedBox {
-        self.build_sized_box()
+    /// Builds the SizedBox widget and returns it as a Widget.
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::render_object(self.build_sized_box())
     }
 }
 
@@ -251,7 +251,7 @@ mod tests {
         fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
             use flui_rendering::RenderPadding;
             use flui_types::EdgeInsets;
-            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
         fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
@@ -329,7 +329,10 @@ mod tests {
 
     #[test]
     fn test_sized_box_builder_with_child() {
-        let sized_box = SizedBox::builder().width(100.0).child(Widget::from(MockWidget)).build();
+        let sized_box = SizedBox::builder()
+            .width(100.0)
+            .child(Widget::from(MockWidget))
+            .build();
         assert!(sized_box.child.is_some());
     }
 
@@ -395,7 +398,10 @@ mod tests {
 
     #[test]
     fn test_widget_trait() {
-        let sized_box = SizedBox::builder().width(100.0).child(Widget::from(MockWidget)).build();
+        let sized_box = SizedBox::builder()
+            .width(100.0)
+            .child(Widget::from(MockWidget))
+            .build();
 
         // Test child() method
         assert!(sized_box.child.is_some());
@@ -403,7 +409,10 @@ mod tests {
 
     #[test]
     fn test_single_child_render_object_widget_trait() {
-        let sized_box = SizedBox::builder().width(100.0).child(Widget::from(MockWidget)).build();
+        let sized_box = SizedBox::builder()
+            .width(100.0)
+            .child(Widget::from(MockWidget))
+            .build();
 
         // Test child() method - returns Option now
         assert!(sized_box.child.is_some());
@@ -417,12 +426,12 @@ impl RenderWidget for SizedBox {
 
         // Create tight constraints for specified dimensions
         let constraints = BoxConstraints::tight_for(self.width, self.height);
-        RenderNode::Single(Box::new(RenderConstrainedBox::new(constraints)))
+        RenderNode::single(Box::new(RenderConstrainedBox::new(constraints)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         use flui_types::constraints::BoxConstraints;
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(constrained_box) = render.downcast_mut::<RenderConstrainedBox>() {
                 let constraints = BoxConstraints::tight_for(self.width, self.height);
                 constrained_box.set_additional_constraints(constraints);
@@ -434,3 +443,6 @@ impl RenderWidget for SizedBox {
         self.child.as_ref()
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(SizedBox, render);

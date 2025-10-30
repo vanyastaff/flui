@@ -62,8 +62,8 @@ impl SingleRender for RenderRepaintBoundary {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // SingleArity always has exactly one child
-                tree.layout_child(child_id, constraints)
+        // SingleArity always has exactly one child
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
@@ -77,7 +77,7 @@ impl SingleRender for RenderRepaintBoundary {
         // repainting the child if only the parent changes
         //
         // For now, we just paint the child directly
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

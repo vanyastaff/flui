@@ -98,7 +98,7 @@ impl SingleRender for RenderFractionallySizedBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // Calculate target size based on factors
+        // Calculate target size based on factors
         let target_width = self.width_factor.map(|f| constraints.max_width * f);
         let target_height = self.height_factor.map(|f| constraints.max_height * f);
 
@@ -106,11 +106,11 @@ impl SingleRender for RenderFractionallySizedBox {
         let child_constraints = constraints.tighten(target_width, target_height);
 
         // SingleArity always has exactly one child_id
-                tree.layout_child(child_id, child_constraints)
+        tree.layout_child(child_id, child_constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

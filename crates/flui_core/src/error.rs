@@ -157,6 +157,23 @@ pub enum CoreError {
         /// Failure reason
         reason: Cow<'static, str>,
     },
+
+    /// Type downcast failed
+    #[error("Type downcast failed: expected {expected}, got {actual}")]
+    DowncastFailed {
+        /// Expected type name
+        expected: &'static str,
+        /// Actual type name
+        actual: &'static str,
+    },
+
+    /// Render tree is invalid
+    #[error("Render tree invalid: {0}")]
+    InvalidRenderTree(Cow<'static, str>),
+
+    /// Cache corruption
+    #[error("Layout cache corrupted for element {0}")]
+    CacheCorrupted(ElementId),
 }
 
 /// Result type for core operations
@@ -303,6 +320,26 @@ impl CoreError {
             element_id,
             reason: reason.into(),
         }
+    }
+
+    /// Create a downcast failed error
+    #[must_use]
+    pub fn downcast_failed(expected: &'static str, actual: &'static str) -> Self {
+        Self::DowncastFailed { expected, actual }
+    }
+
+    /// Create an invalid render tree error
+    ///
+    /// Accepts both static strings (zero-cost) and dynamic strings (allocated).
+    #[must_use]
+    pub fn invalid_render_tree(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self::InvalidRenderTree(reason.into())
+    }
+
+    /// Create a cache corrupted error
+    #[must_use]
+    pub fn cache_corrupted(id: ElementId) -> Self {
+        Self::CacheCorrupted(id)
     }
 }
 

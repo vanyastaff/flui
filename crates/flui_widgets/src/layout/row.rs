@@ -32,11 +32,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
+use flui_core::widget::{RenderWidget, Widget};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
-use flui_types::Axis;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 /// A widget that displays its children in a horizontal array.
@@ -154,11 +153,11 @@ impl RenderWidget for Row {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        RenderNode::Multi(Box::new(render_flex))
+        RenderNode::multi(Box::new(render_flex))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi(render) = render_object {
+        if let RenderNode::Multi { render, .. } = render_object {
             if let Some(flex) = render.downcast_mut::<RenderFlex>() {
                 flex.main_axis_alignment = self.main_axis_alignment;
                 flex.cross_axis_alignment = self.cross_axis_alignment;
@@ -186,23 +185,29 @@ where
 {
     /// Sets the children widgets (works in builder chain).
     ///
+    /// Accepts anything that implements `IntoWidget` for ergonomic API.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// Row::builder()
-    ///     .children(vec![widget1, widget2])
+    ///     .children(vec![Text::new("Hello"), Container::builder().build()])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Widget>) -> RowBuilder<SetChildren<S>> {
-        self.children_internal(children)
+    pub fn children(
+        self,
+        children: impl IntoIterator<Item = impl flui_core::IntoWidget>,
+    ) -> RowBuilder<SetChildren<S>> {
+        let widgets: Vec<Widget> = children.into_iter().map(|c| c.into_widget()).collect();
+        self.children_internal(widgets)
     }
 }
 
 // Build wrapper - available for all states
 impl<S: State> RowBuilder<S> {
-    /// Builds the Row widget.
-    pub fn build(self) -> Row {
-        self.build_row()
+    /// Builds the Row widget and returns it as a Widget.
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::render_object(self.build_row())
     }
 }
 
@@ -403,3 +408,6 @@ mod tests {
         assert_eq!(row.children.len(), 3);
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Row, render);

@@ -139,7 +139,7 @@ impl SingleRender for RenderRotatedBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                        // For odd quarter turns (90°, 270°), swap width and height constraints
+        // For odd quarter turns (90°, 270°), swap width and height constraints
         let child_constraints = if self.quarter_turns.swaps_dimensions() {
             // Manually flip constraints - swap width and height
             BoxConstraints::new(
@@ -167,8 +167,8 @@ impl SingleRender for RenderRotatedBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                // Calculate offset based on rotation
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, _offset: Offset) -> BoxedLayer {
+        // Calculate offset based on rotation
         // Note: For now, this is a simplified implementation
         // TODO: Implement proper rotation transformation
         let offset = match self.quarter_turns {

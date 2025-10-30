@@ -571,9 +571,7 @@ impl<'a> Painter for EguiPainter<'a> {
         let word_spacing = style.word_spacing.unwrap_or(0.0) as f32;
 
         let paint = Paint {
-            color: style
-                .color
-                .unwrap_or(flui_types::Color::BLACK),
+            color: style.color.unwrap_or(flui_types::Color::BLACK),
             ..Default::default()
         };
 
@@ -774,15 +772,11 @@ impl<'a> Painter for EguiPainter<'a> {
         let egui_rect = Self::to_egui_rect(transformed_dst);
 
         // Apply opacity
-        let tint = egui::Color32::WHITE.gamma_multiply(self.current_state.opacity * paint.color.alpha_f32());
+        let tint = egui::Color32::WHITE
+            .gamma_multiply(self.current_state.opacity * paint.color.alpha_f32());
 
         // Create image shape
-        let image_shape = egui::Shape::image(
-            texture_handle.id(),
-            egui_rect,
-            uv,
-            tint,
-        );
+        let image_shape = egui::Shape::image(texture_handle.id(), egui_rect, uv, tint);
 
         self.add_shape(image_shape);
     }
@@ -792,7 +786,11 @@ impl<'a> Painter for EguiPainter<'a> {
         self.current_state.opacity *= opacity.clamp(0.0, 1.0);
     }
 
-    fn apply_image_filter(&mut self, filter: &flui_types::painting::effects::ImageFilter, bounds: Rect) {
+    fn apply_image_filter(
+        &mut self,
+        filter: &flui_types::painting::effects::ImageFilter,
+        bounds: Rect,
+    ) {
         use flui_types::painting::effects::{ColorFilter, ImageFilter};
 
         // Note: Egui doesn't have built-in blur shader support.

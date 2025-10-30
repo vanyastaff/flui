@@ -122,11 +122,11 @@ impl<S: State> ClipRectBuilder<S> {
 // Implement RenderObjectWidget
 impl RenderWidget for ClipRect {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderClipRect::new(RectShape, self.clip_behavior)))
+        RenderNode::single(Box::new(RenderClipRect::new(RectShape, self.clip_behavior)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderClipRect>() {
                 render_object.set_clip_behavior(self.clip_behavior);
             }
@@ -247,3 +247,6 @@ mod tests {
         assert_eq!(clip_render.clip_behavior(), Clip::AntiAlias);
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(ClipRect, render);

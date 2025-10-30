@@ -30,8 +30,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
+use flui_core::widget::{RenderWidget, Widget};
 use flui_core::BuildContext;
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
@@ -258,11 +258,14 @@ impl Default for IndexedStack {
 // Implement RenderWidget
 impl RenderWidget for IndexedStack {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Multi(Box::new(RenderIndexedStack::with_alignment(self.index, self.alignment)))
+        RenderNode::multi(Box::new(RenderIndexedStack::with_alignment(
+            self.index,
+            self.alignment,
+        )))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi(render) = render_object {
+        if let RenderNode::Multi { render, .. } = render_object {
             if let Some(indexed_stack) = render.downcast_mut::<RenderIndexedStack>() {
                 indexed_stack.set_index(self.index);
                 indexed_stack.set_alignment(self.alignment);
@@ -289,30 +292,30 @@ where
 {
     /// Sets the children widgets (works in builder chain).
     ///
+    /// Accepts anything that implements `IntoWidget` for ergonomic API.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// IndexedStack::builder()
     ///     .index(0)
-    ///     .children(vec![widget1, widget2])
+    ///     .children(vec![Text::new("Page 1"), Container::builder().build()])
     ///     .build()
     /// ```
     pub fn children(
         self,
-        children: impl IntoIterator<Item = Widget>,
+        children: impl IntoIterator<Item = impl flui_core::IntoWidget>,
     ) -> IndexedStackBuilder<SetChildren<S>> {
-        let widgets: Vec<Widget> = children.into_iter().collect();
+        let widgets: Vec<Widget> = children.into_iter().map(|c| c.into_widget()).collect();
         self.children_internal(widgets)
     }
 }
 
 // Public build() wrapper
 impl<S: State> IndexedStackBuilder<S> {
-    /// Builds the IndexedStack widget.
-    ///
-    /// Equivalent to calling the generated `build_indexed_stack()` finishing function.
-    pub fn build(self) -> IndexedStack {
-        self.build_indexed_stack()
+    /// Builds the IndexedStack widget and returns it as a Widget.
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::render_object(self.build_indexed_stack())
     }
 }
 
@@ -643,3 +646,6 @@ mod tests {
         assert_eq!(widget.index, Some(1));
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(IndexedStack, render);

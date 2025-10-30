@@ -92,7 +92,7 @@ impl SingleRender for RenderPositionedBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // Calculate child_id constraints based on positioning
+        // Calculate child_id constraints based on positioning
         let child_constraints = if let (Some(left), Some(right)) = (self.left, self.right) {
             // Width determined by left and right
             let width = (constraints.max_width - left - right).max(0.0);
@@ -118,11 +118,11 @@ impl SingleRender for RenderPositionedBox {
         };
 
         // Layout child_id (SingleArity always has a child_id)
-                tree.layout_child(child_id, child_constraints)
+        tree.layout_child(child_id, child_constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                let child_layer = tree.paint_child(child_id, offset);
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate paint offset based on positioning
         let offset = Offset::new(self.left.unwrap_or(0.0), self.top.unwrap_or(0.0));

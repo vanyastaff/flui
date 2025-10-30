@@ -79,12 +79,12 @@ impl SingleRender for RenderPointerListener {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child with same constraints
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Simply paint child - event handling happens elsewhere
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
 
         // TODO: In a real implementation, we would:
         // 1. Register hit test area for pointer events

@@ -30,8 +30,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
+use flui_core::widget::{RenderWidget, Widget};
 use flui_core::BuildContext;
 use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
@@ -237,11 +237,11 @@ impl Default for Stack {
 // Implement RenderWidget for Stack (multi-child widget)
 impl RenderWidget for Stack {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Multi(Box::new(RenderStack::with_alignment(self.alignment)))
+        RenderNode::multi(Box::new(RenderStack::with_alignment(self.alignment)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi(render) = render_object {
+        if let RenderNode::Multi { render, .. } = render_object {
             if let Some(stack) = render.downcast_mut::<RenderStack>() {
                 stack.set_alignment(self.alignment);
                 stack.set_fit(self.fit);
@@ -276,18 +276,20 @@ where
     ///     .children(vec![widget1, widget2])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Widget>) -> StackBuilder<SetChildren<S>> {
-        self.children_internal(children)
+    pub fn children(
+        self,
+        children: impl IntoIterator<Item = impl flui_core::IntoWidget>,
+    ) -> StackBuilder<SetChildren<S>> {
+        let widgets: Vec<Widget> = children.into_iter().map(|c| c.into_widget()).collect();
+        self.children_internal(widgets)
     }
 }
 
 // Public build() wrapper
 impl<S: State> StackBuilder<S> {
-    /// Builds the Stack widget.
-    ///
-    /// Equivalent to calling the generated `build_stack()` finishing function.
-    pub fn build(self) -> Stack {
-        self.build_stack()
+    /// Builds the Stack widget and returns it as a Widget.
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::render_object(self.build_stack())
     }
 }
 
@@ -556,3 +558,6 @@ mod tests {
         assert_eq!(widget.alignment, Alignment::CENTER);
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Stack, render);

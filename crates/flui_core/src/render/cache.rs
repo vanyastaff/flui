@@ -202,7 +202,7 @@ pub fn layout_cache() -> &'static LayoutCache {
     use std::sync::OnceLock;
     static CACHE: OnceLock<LayoutCache> = OnceLock::new();
 
-    CACHE.get_or_init(|| LayoutCache::new())
+    CACHE.get_or_init(LayoutCache::new)
 }
 
 #[cfg(test)]

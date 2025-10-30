@@ -32,7 +32,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, painting::Clip, Offset, constraints::BoxConstraints};
+use flui_types::{Offset, Size, constraints::BoxConstraints, painting::Clip};
 
 /// Trait for defining clip shapes
 ///
@@ -124,11 +124,11 @@ impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child_id with same constraints (pass-through)
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                // If no clipping needed, just return child_id layer
+        // If no clipping needed, just return child_id layer
         if !self.clip_behavior.clips() {
             return tree.paint_child(child_id, offset);
         }

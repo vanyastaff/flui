@@ -121,11 +121,33 @@ impl FluiApp {
         self.stats.frame_count += 1;
 
         // ===== Phase 1: Build =====
-        // Always flush build to handle any pending updates
-        self.stats.rebuild_count += 1;
-        self.pipeline.flush_build();
+        // Keep flushing build until tree is fully built (no more dirty elements)
+        // This allows ComponentElements to recursively build their children
+        eprintln!("=== FRAME {} BUILD PHASE START ===", self.stats.frame_count);
+        let mut iterations = 0;
+        loop {
+            let dirty_count = self.pipeline.dirty_count();
+            eprintln!("  Build iteration {}: dirty_count={}", iterations, dirty_count);
+
+            if dirty_count == 0 {
+                break;
+            }
+
+            self.stats.rebuild_count += 1;
+            self.pipeline.flush_build();
+
+            iterations += 1;
+
+            // Safety check: prevent infinite loops (should never happen in practice)
+            if iterations > 100 {
+                tracing::warn!("Build loop exceeded 100 iterations, breaking");
+                break;
+            }
+        }
+        eprintln!("=== FRAME {} BUILD PHASE COMPLETE ({} iterations) ===", self.stats.frame_count, iterations);
 
         // ===== Phase 2: Layout =====
+        eprintln!("=== FRAME {} LAYOUT PHASE START ===", self.stats.frame_count);
         let current_size = Size::new(ui.available_size().x, ui.available_size().y);
         let needs_layout = self.size_changed(current_size);
 

@@ -200,11 +200,11 @@ impl Default for AspectRatio {
 // Implement RenderWidget
 impl RenderWidget for AspectRatio {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderAspectRatio::new(self.aspect_ratio)))
+        RenderNode::single(Box::new(RenderAspectRatio::new(self.aspect_ratio)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(aspect_ratio) = render.downcast_mut::<RenderAspectRatio>() {
                 aspect_ratio.set_aspect_ratio(self.aspect_ratio);
             }
@@ -289,7 +289,7 @@ mod tests {
 
     impl RenderWidget for MockWidget {
         fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
         fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
@@ -405,7 +405,7 @@ mod tests {
         let context = BuildContext::default();
         let render_node = widget.create_render_object(&context);
 
-        if let RenderNode::Single(render) = render_node {
+        if let RenderNode::Single { render, .. } = render_node {
             assert!(render.downcast_ref::<RenderAspectRatio>().is_some());
         } else {
             panic!("Expected RenderNode::Single");
@@ -422,7 +422,7 @@ mod tests {
         let widget2 = AspectRatio::new(2.0);
         widget2.update_render_object(&context, &mut render_node);
 
-        if let RenderNode::Single(render) = render_node {
+        if let RenderNode::Single { render, .. } = render_node {
             let aspect_ratio_render = render.downcast_ref::<RenderAspectRatio>().unwrap();
             assert_eq!(aspect_ratio_render.aspect_ratio(), 2.0);
         } else {
@@ -485,3 +485,6 @@ mod tests {
         assert!(widget.child.is_some());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(AspectRatio, render);

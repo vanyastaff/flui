@@ -1,6 +1,5 @@
 //! RenderStack - layering container
 
-use crate::utils::layout_utils::apply_offset_transform_v2;
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::MultiRender;
 use flui_engine::{BoxedLayer, layer::pool};
@@ -231,7 +230,7 @@ impl MultiRender for RenderStack {
         };
 
         // Calculate and save child offsets
-        for (i, &child) in child_ids.iter().enumerate() {
+        for (i, &_child) in child_ids.iter().enumerate() {
             let child_size = self.child_sizes[i];
             // TODO: Implement tree.parent_data() method to query parent data from elements
             let stack_data: Option<&crate::parent_data::StackParentData> = None; // tree.parent_data::<crate::parent_data::StackParentData>(child);

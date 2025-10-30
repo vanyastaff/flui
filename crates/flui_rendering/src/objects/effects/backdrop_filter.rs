@@ -6,7 +6,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, painting::BlendMode, Offset, constraints::BoxConstraints};
+use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode};
 
 // ===== Data Structure =====
 
@@ -172,12 +172,12 @@ impl SingleRender for RenderBackdropFilter {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child_id with same constraints
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Capture child_id layer
-                // Note: Full backdrop filtering requires compositor support
+        // Note: Full backdrop filtering requires compositor support
         // In production, this would:
         // 1. Capture the current paint layer content
         // 2. Apply the image filter to that content

@@ -30,7 +30,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, ParentDataWidget};
+use flui_core::widget::{ParentDataWidget, Widget};
+use flui_core::RenderNode;
 use flui_rendering::{FlexFit, FlexParentData};
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
@@ -251,9 +252,7 @@ impl Default for Flexible {
 // ========== ParentDataWidget Implementation ==========
 
 impl ParentDataWidget for Flexible {
-    type ParentDataType = FlexParentData;
-
-    fn apply_parent_data(&self, _render_object: &mut ()) {
+    fn apply_parent_data(&self, _render_object: &mut RenderNode) {
         // TODO: apply_parent_data needs DynRenderObject trait
         // This will be implemented when the render object trait is ready
     }

@@ -7,7 +7,7 @@ use std::any::Any;
 use std::fmt;
 
 use super::{ElementBase, ElementLifecycle};
-use crate::{Widget, ElementId};
+use crate::{ElementId, Widget};
 
 // ============================================================================
 // Sealed helper trait for auto as_any() implementation
@@ -63,11 +63,7 @@ pub trait DynState: sealed::AsAnyState {
     ///
     /// - `widget`: The current widget configuration
     /// - `context`: BuildContext for accessing inherited widgets and tree
-    fn build(
-        &mut self,
-        widget: &Widget,
-        context: &crate::element::BuildContext,
-    ) -> Widget;
+    fn build(&mut self, widget: &Widget, context: &crate::element::BuildContext) -> Widget;
 
     /// Called when widget configuration changes
     ///
@@ -193,7 +189,8 @@ impl StatefulElement {
         self.base.set_widget(new_widget);
 
         // Call did_update_widget on the state
-        self.state.did_update_widget(&old_widget, self.base.widget());
+        self.state
+            .did_update_widget(&old_widget, self.base.widget());
 
         // Mark as dirty to trigger rebuild
         self.base.mark_dirty();
@@ -340,11 +337,7 @@ mod tests {
     }
 
     impl DynState for TestState {
-        fn build(
-            &mut self,
-            _widget: &Widget,
-            _context: &crate::element::BuildContext,
-        ) -> Widget {
+        fn build(&mut self, _widget: &Widget, _context: &crate::element::BuildContext) -> Widget {
             Box::new(TestWidget { value: self.count })
         }
 

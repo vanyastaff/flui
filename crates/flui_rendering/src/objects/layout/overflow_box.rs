@@ -106,7 +106,7 @@ impl SingleRender for RenderOverflowBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // Calculate child_id constraints by overriding parent constraints
+        // Calculate child_id constraints by overriding parent constraints
         let child_min_width = self.min_width.unwrap_or(constraints.min_width);
         let child_max_width = self.max_width.unwrap_or(constraints.max_width);
         let child_min_height = self.min_height.unwrap_or(constraints.min_height);
@@ -121,7 +121,7 @@ impl SingleRender for RenderOverflowBox {
 
         // SingleArity always has exactly one child_id
         // Layout child_id with overridden constraints
-                let child_size = tree.layout_child(child_id, child_constraints);
+        let child_size = tree.layout_child(child_id, child_constraints);
 
         // Our size is determined by parent constraints
         // We constrain ourselves, but let child_id overflow
@@ -135,7 +135,7 @@ impl SingleRender for RenderOverflowBox {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                let child_layer = tree.paint_child(child_id, offset);
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate aligned offset
         let available_width = self.container_size.width - self.child_size.width;

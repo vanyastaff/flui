@@ -16,8 +16,8 @@
 
 use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
-use flui_types::{Offset, Rect};
 use flui_types::events::{Event, HitTestResult};
+use flui_types::{Offset, Rect};
 
 /// A layer that shifts its children by a fixed offset.
 ///
@@ -175,8 +175,7 @@ mod tests {
     #[test]
     fn test_offset_layer_with_offset() {
         let picture = PictureLayer::new();
-        let layer = OffsetLayer::new(Box::new(picture))
-            .with_offset(Offset::new(10.0, 20.0));
+        let layer = OffsetLayer::new(Box::new(picture)).with_offset(Offset::new(10.0, 20.0));
 
         assert_eq!(layer.offset(), Offset::new(10.0, 20.0));
     }

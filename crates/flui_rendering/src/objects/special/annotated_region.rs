@@ -108,13 +108,13 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> SingleRender for Render
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child_id with same constraints (pass-through)
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // This is a pass-through - just paint child_id
         // The annotation value is used by ancestors, not painted
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

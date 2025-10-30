@@ -3,11 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{
-    Offset, Size,
-    constraints::BoxConstraints,
-    typography::TextBaseline,
-};
+use flui_types::{Offset, Size, constraints::BoxConstraints, typography::TextBaseline};
 
 /// Data for RenderBaseline
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -100,7 +96,7 @@ impl SingleRender for RenderBaseline {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                        // Layout child with same constraints
+        // Layout child with same constraints
         let child_size = tree.layout_child(child_id, constraints);
 
         // Our height includes space above baseline and child height
@@ -112,7 +108,7 @@ impl SingleRender for RenderBaseline {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                // Capture child layer with baseline offset
+        // Capture child layer with baseline offset
         let child_layer = tree.paint_child(child_id, offset);
 
         // Apply baseline offset using TransformLayer

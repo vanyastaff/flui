@@ -730,6 +730,6 @@ mod tests {
         let product = Color32::from_rgb(255, 128, 64) * Color32::from_rgb(255, 255, 128);
         assert_eq!(product.r(), 255);
         assert!(product.g() <= 128); // 128 * 255/255 could be 128 due to rounding
-        assert!(product.b() <= 64);  // 64 * 128/255 should be < 64
+        assert!(product.b() <= 64); // 64 * 128/255 should be < 64
     }
 }

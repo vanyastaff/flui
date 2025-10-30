@@ -221,7 +221,7 @@ impl SingleRender for RenderCustomPaint {
     ) -> Size {
         // SingleArity always has exactly one child_id
         // Layout child_id with our constraints
-                let size = tree.layout_child(child_id, constraints);
+        let size = tree.layout_child(child_id, constraints);
 
         // Store the laid out size for use during paint
         self.laid_out_size = size;
@@ -241,7 +241,7 @@ impl SingleRender for RenderCustomPaint {
         }
 
         // Paint child_id - SingleArity always has exactly one child_id
-                layers.push(tree.paint_child(child_id, offset));
+        layers.push(tree.paint_child(child_id, offset));
 
         // Paint foreground painter (on top of child_id)
         if let Some(fg_painter) = &self.foreground_painter {

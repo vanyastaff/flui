@@ -176,10 +176,7 @@ impl AppLogic for BlurFilterApp {
             &Paint::fill(Color::rgb(100, 100, 100)),
         );
         painter.save_layer(rect6, &Paint::default());
-        painter.apply_image_filter(
-            &ImageFilter::color(ColorFilter::Brightness(-0.3)),
-            rect6,
-        );
+        painter.apply_image_filter(&ImageFilter::color(ColorFilter::Brightness(-0.3)), rect6);
         self.draw_sample_content(painter, rect6);
         painter.restore();
         painter.restore();

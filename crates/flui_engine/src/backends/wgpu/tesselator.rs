@@ -119,7 +119,9 @@ impl Tesselator {
         let rect = rrect.rect;
         // Use maximum corner radius for tessellation
         // TODO: Implement proper per-corner radius rendering
-        let radius = rrect.top_left.x
+        let radius = rrect
+            .top_left
+            .x
             .max(rrect.top_left.y)
             .max(rrect.top_right.x)
             .max(rrect.top_right.y)

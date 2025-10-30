@@ -17,8 +17,9 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::widget::{Widget, ParentDataWidget};
-use flui_rendering::{FlexFit, FlexParentData};
+use flui_core::widget::{ParentDataWidget, Widget};
+use flui_core::RenderNode;
+use flui_rendering::FlexParentData;
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
 ///
@@ -125,10 +126,7 @@ impl Expanded {
     /// let widget = Expanded::new(Container::new());
     /// ```
     pub fn new(child: Widget) -> Self {
-        Self {
-            flex: 1,
-            child,
-        }
+        Self { flex: 1, child }
     }
 
     /// Creates an Expanded widget with a custom flex factor.
@@ -145,10 +143,7 @@ impl Expanded {
     /// let widget = Expanded::with_flex(2, Container::new());
     /// ```
     pub fn with_flex(flex: i32, child: Widget) -> Self {
-        Self {
-            flex,
-            child,
-        }
+        Self { flex, child }
     }
 
     /// Validates Expanded configuration.
@@ -175,9 +170,7 @@ impl Expanded {
 // ========== ParentDataWidget Implementation ==========
 
 impl ParentDataWidget for Expanded {
-    type ParentDataType = FlexParentData;
-
-    fn apply_parent_data(&self, _render_object: &mut ()) {
+    fn apply_parent_data(&self, _render_object: &mut RenderNode) {
         // TODO: apply_parent_data needs DynRenderObject trait
         // This will be implemented when the render object trait is ready
     }

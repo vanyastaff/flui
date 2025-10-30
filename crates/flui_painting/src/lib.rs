@@ -39,6 +39,7 @@
 #![warn(missing_docs)]
 pub mod border;
 pub mod decoration;
+pub mod error;
 pub mod gradient;
 pub mod image;
 pub mod path;

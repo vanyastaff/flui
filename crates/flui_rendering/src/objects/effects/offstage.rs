@@ -52,8 +52,8 @@ impl SingleRender for RenderOffstage {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // SingleArity always has exactly one child - layout it to maintain state
-                let child_size = tree.layout_child(child_id, constraints);
+        // SingleArity always has exactly one child - layout it to maintain state
+        let child_size = tree.layout_child(child_id, constraints);
 
         // Report size as zero if offstage, otherwise use child size
         if self.offstage {
@@ -68,7 +68,7 @@ impl SingleRender for RenderOffstage {
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Don't paint if offstage
         if !self.offstage {
-                        tree.paint_child(child_id, offset)
+            tree.paint_child(child_id, offset)
         } else {
             // Return empty container layer when offstage
             Box::new(pool::acquire_container())

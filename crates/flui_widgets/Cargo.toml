@@ -18,6 +18,7 @@ dyn-clone = { workspace = true }
 egui = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

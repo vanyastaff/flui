@@ -12,8 +12,8 @@
 use std::any::{Any, TypeId};
 use std::fmt;
 
-use crate::foundation::Key;
 use crate::BuildContext;
+use crate::foundation::Key;
 use crate::render::RenderNode;
 
 use super::widget::Widget;
@@ -410,12 +410,7 @@ pub trait State: fmt::Debug + Send + Sync + 'static {
     ///
     /// This is called after the widget is updated with a new configuration.
     /// The old widget is provided for comparison.
-    fn did_update_widget(
-        &mut self,
-        _old_widget: &dyn StatefulWidget,
-        _context: &BuildContext,
-    ) {
-    }
+    fn did_update_widget(&mut self, _old_widget: &dyn StatefulWidget, _context: &BuildContext) {}
 
     /// Called when the State is permanently removed
     ///

@@ -1,7 +1,10 @@
 //! Shadow painting implementation
 
 use flui_engine::{Paint, Painter, RRect};
-use flui_types::{Rect, styling::{BoxShadow, Radius}};
+use flui_types::{
+    Rect,
+    styling::{BoxShadow, Radius},
+};
 
 /// Painter for box shadows
 pub struct ShadowPainter;
@@ -80,7 +83,13 @@ impl ShadowPainter {
             let paint = Paint::fill(shadow.color);
 
             let offset = flui_types::Offset::new(0.0, 0.0);
-            painter.rect_with_shadow(shadow_rect, &paint, offset, shadow.blur_radius, shadow.color);
+            painter.rect_with_shadow(
+                shadow_rect,
+                &paint,
+                offset,
+                shadow.blur_radius,
+                shadow.color,
+            );
         }
     }
 }

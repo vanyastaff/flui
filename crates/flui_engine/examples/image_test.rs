@@ -259,9 +259,7 @@ fn main() {
     println!("Demonstrates NetworkImage provider from flui_types");
     println!();
 
-    let app = App::new()
-        .title("Image Rendering Test")
-        .size(1200, 800);
+    let app = App::new().title("Image Rendering Test").size(1200, 800);
 
     let logic = ImageTestApp::new();
 

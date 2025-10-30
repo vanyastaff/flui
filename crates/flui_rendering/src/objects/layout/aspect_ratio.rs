@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints, Offset};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that maintains an aspect ratio
 ///
@@ -51,7 +51,7 @@ impl SingleRender for RenderAspectRatio {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                let aspect_ratio = self.aspect_ratio;
+        let aspect_ratio = self.aspect_ratio;
 
         // Calculate size maintaining aspect ratio
         let size = if constraints.is_tight() {
@@ -78,13 +78,13 @@ impl SingleRender for RenderAspectRatio {
 
         // SingleArity always has exactly one child
         // Layout child with tight constraints
-                tree.layout_child(child_id, BoxConstraints::tight(final_size));
+        tree.layout_child(child_id, BoxConstraints::tight(final_size));
 
         final_size
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                // Simply return child layer - no transformation needed
+        // Simply return child layer - no transformation needed
         (tree.paint_child(child_id, offset)) as _
     }
 }

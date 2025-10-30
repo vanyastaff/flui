@@ -114,11 +114,11 @@ impl Default for Opacity {
 // Implement RenderWidget
 impl RenderWidget for Opacity {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderOpacity::new(self.opacity)))
+        RenderNode::single(Box::new(RenderOpacity::new(self.opacity)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(opacity) = render.downcast_mut::<RenderOpacity>() {
                 opacity.set_opacity(self.opacity);
             }
@@ -361,3 +361,6 @@ mod tests {
         assert!(widget.child.is_some());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Opacity, render);

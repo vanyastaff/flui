@@ -63,12 +63,12 @@ impl SingleRender for RenderTransform {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child with same constraints (transform doesn't affect layout)
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Capture child layer
-                let child_layer = tree.paint_child(child_id, offset);
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Wrap in TransformLayer
         Box::new(TransformLayer::new(child_layer, self.transform))

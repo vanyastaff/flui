@@ -266,3 +266,6 @@ mod tests {
         assert!(detector.on_tap.is_none());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(GestureDetector, stateless);

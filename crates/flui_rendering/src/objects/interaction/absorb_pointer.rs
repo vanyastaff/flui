@@ -58,12 +58,12 @@ impl SingleRender for RenderAbsorbPointer {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child with same constraints
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Paint child normally - absorbing only affects hit testing
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
 
         // TODO: In a real implementation, we would:
         // 1. Register hit test behavior during hit testing phase

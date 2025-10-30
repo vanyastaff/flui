@@ -77,7 +77,9 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
                         event_translator::translate_window_event(&event, &modifiers)
                     {
                         // Update cursor position for pointer events
-                        if let flui_types::events::Event::Pointer(ref mut pointer_event) = flui_event {
+                        if let flui_types::events::Event::Pointer(ref mut pointer_event) =
+                            flui_event
+                        {
                             match pointer_event {
                                 flui_types::events::PointerEvent::Move(data) => {
                                     last_cursor_position = data.position;

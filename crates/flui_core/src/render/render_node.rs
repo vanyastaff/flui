@@ -69,6 +69,31 @@ impl RenderNode {
         Self::Multi { render, children }
     }
 
+    /// Create leaf render (alias for widget convenience)
+    pub fn leaf(render: Box<dyn LeafRender>) -> Self {
+        Self::new_leaf(render)
+    }
+
+    /// Create single-child render without ElementId (for widgets)
+    ///
+    /// The element framework will set the child ElementId later during mounting.
+    pub fn single(render: Box<dyn SingleRender>) -> Self {
+        Self::Single {
+            render,
+            child: ElementId::default(),
+        }
+    }
+
+    /// Create multi-child render without ElementIds (for widgets)
+    ///
+    /// The element framework will set children ElementIds later during mounting.
+    pub fn multi(render: Box<dyn MultiRender>) -> Self {
+        Self::Multi {
+            render,
+            children: Vec::new(),
+        }
+    }
+
     // ========== Queries ==========
 
     /// Get arity
@@ -205,7 +230,10 @@ impl RenderNode {
             Self::Leaf(r) => r.layout(constraints),
             Self::Single {
                 render: r, child, ..
-            } => r.layout(tree, *child, constraints),
+            } => {
+                eprintln!("        RenderNode::layout (Single): child_id={:?}", child);
+                r.layout(tree, *child, constraints)
+            }
             Self::Multi {
                 render: r,
                 children,
@@ -283,12 +311,7 @@ mod tests {
             constraints.constrain(Size::new(200.0, 200.0))
         }
 
-        fn paint(
-            &self,
-            _tree: &ElementTree,
-            _child_id: ElementId,
-            _offset: Offset,
-        ) -> BoxedLayer {
+        fn paint(&self, _tree: &ElementTree, _child_id: ElementId, _offset: Offset) -> BoxedLayer {
             Box::new(ContainerLayer::new())
         }
     }

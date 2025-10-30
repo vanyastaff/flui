@@ -2,8 +2,8 @@
 
 use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
-use flui_types::{Offset, Rect};
 use flui_types::events::{Event, HitTestResult};
+use flui_types::{Offset, Rect};
 
 /// Type of transform to apply
 #[derive(Debug, Clone, Copy)]
@@ -162,9 +162,7 @@ impl TransformLayer {
     /// Apply the transform to a point (forward transform)
     fn transform_point(&self, point: Offset) -> Offset {
         match self.transform {
-            Transform::Translate(offset) => {
-                Offset::new(point.dx + offset.dx, point.dy + offset.dy)
-            }
+            Transform::Translate(offset) => Offset::new(point.dx + offset.dx, point.dy + offset.dy),
             Transform::Rotate(angle) => {
                 let cos = angle.cos();
                 let sin = angle.sin();
@@ -180,10 +178,14 @@ impl TransformLayer {
                 let tan_y = skew_y.tan();
                 Offset::new(point.dx + tan_x * point.dy, tan_y * point.dx + point.dy)
             }
-            Transform::Matrix { a, b, c, d, tx, ty } => {
-                Offset::new(a * point.dx + c * point.dy + tx, b * point.dx + d * point.dy + ty)
-            }
-            Transform::Trapezoid { top_scale, bottom_scale } => {
+            Transform::Matrix { a, b, c, d, tx, ty } => Offset::new(
+                a * point.dx + c * point.dy + tx,
+                b * point.dx + d * point.dy + ty,
+            ),
+            Transform::Trapezoid {
+                top_scale,
+                bottom_scale,
+            } => {
                 // For trapezoid, we need the child bounds to calculate normalized y
                 // For bounds calculation, we'll approximate by using the larger scale
                 // This gives a conservative bounding box

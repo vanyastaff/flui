@@ -4,9 +4,9 @@
 //! gesture and pointer routing system. Events are dispatched through hit testing,
 //! allowing layers to handle events based on their position in the scene graph.
 
-use flui_types::Offset;
 use flui_types::events::{Event, HitTestResult};
 use flui_types::prelude::PointerEvent;
+use flui_types::Offset;
 
 /// Event router for dispatching events through the layer tree
 ///

@@ -3,13 +3,11 @@
 //! This test verifies that the new enum-based Render architecture works correctly
 //! and that backward compatibility with legacy Render trait is maintained.
 
+use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::{
-    Render, LeafRender, SingleRender, MultiRender,
-    LeafAdapter, SingleAdapter, MultiAdapter,
-    Render, LeafArity, SingleArity, MultiArity,
-    LayoutCx, PaintCx,
+    LayoutCx, LeafAdapter, LeafArity, LeafRender, MultiAdapter, MultiArity, MultiRender, PaintCx,
+    Render, Render, SingleAdapter, SingleArity, SingleRender,
 };
-use flui_core::element::{ElementTree, ElementId};
 use flui_engine::{BoxedLayer, ContainerLayer};
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
@@ -69,12 +67,7 @@ impl MultiRender for NewMultiImpl {
         constraints.constrain(Size::new(300.0, 300.0))
     }
 
-    fn paint(
-        &self,
-        _tree: &ElementTree,
-        _children: &[ElementId],
-        _offset: Offset,
-    ) -> BoxedLayer {
+    fn paint(&self, _tree: &ElementTree, _children: &[ElementId], _offset: Offset) -> BoxedLayer {
         Box::new(ContainerLayer::new())
     }
 
@@ -276,17 +269,17 @@ fn test_render_pattern_matching() {
     let multi = Render::new_multi(Box::new(NewMultiImpl), vec![1, 2, 3]);
 
     match leaf {
-        Render::Leaf(_) => {},
+        Render::Leaf(_) => {}
         _ => panic!("Expected Leaf variant"),
     }
 
     match single {
-        Render::Single { .. } => {},
+        Render::Single { .. } => {}
         _ => panic!("Expected Single variant"),
     }
 
     match multi {
-        Render::Multi { .. } => {},
+        Render::Multi { .. } => {}
         _ => panic!("Expected Multi variant"),
     }
 }
@@ -295,8 +288,12 @@ fn test_render_pattern_matching() {
 fn test_mixed_legacy_and_new() {
     // This test verifies that legacy and new implementations can coexist
     let renders: Vec<Render> = vec![
-        Render::new_leaf(Box::new(NewLeafImpl { size: Size::new(10.0, 10.0) })),
-        Render::from_legacy_leaf(LegacyLeafImpl { size: Size::new(20.0, 20.0) }),
+        Render::new_leaf(Box::new(NewLeafImpl {
+            size: Size::new(10.0, 10.0),
+        })),
+        Render::from_legacy_leaf(LegacyLeafImpl {
+            size: Size::new(20.0, 20.0),
+        }),
         Render::new_single(Box::new(NewSingleImpl), 1),
         Render::from_legacy_single(LegacySingleImpl, 2),
         Render::new_multi(Box::new(NewMultiImpl), vec![1]),

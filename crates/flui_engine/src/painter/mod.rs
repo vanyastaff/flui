@@ -8,9 +8,9 @@
 //! Use `crate::backends::egui::EguiPainter` or `crate::backends::wgpu::WgpuPainter`.
 
 use flui_types::{
-    Offset, Point, Rect,
     painting::{BlendMode, PaintingStyle, StrokeCap, StrokeJoin},
     styling::Color,
+    Offset, Point, Rect,
 };
 
 /// Paint style information
@@ -864,7 +864,11 @@ pub trait Painter {
     ///
     /// # Default Implementation
     /// Does nothing. Backends should override to implement actual filtering.
-    fn apply_image_filter(&mut self, _filter: &flui_types::painting::effects::ImageFilter, _bounds: Rect) {
+    fn apply_image_filter(
+        &mut self,
+        _filter: &flui_types::painting::effects::ImageFilter,
+        _bounds: Rect,
+    ) {
         // Default: no-op
         // Backends with filter support should override
     }
@@ -903,7 +907,8 @@ pub trait Painter {
                 rect.size(),
             );
 
-            let shadow_paint = Paint::fill(shadow_color.with_opacity(shadow_color.alpha_f32() * opacity));
+            let shadow_paint =
+                Paint::fill(shadow_color.with_opacity(shadow_color.alpha_f32() * opacity));
 
             self.rect(shadow_rect, &shadow_paint);
         }
@@ -944,11 +949,7 @@ pub trait Painter {
             ]);
 
             let current_radius = radius + (1.0 - eased) * glow_radius;
-            self.circle(
-                center,
-                current_radius,
-                &Paint::fill(glow_color),
-            );
+            self.circle(center, current_radius, &Paint::fill(glow_color));
         }
 
         // Draw solid core
@@ -1090,7 +1091,9 @@ pub trait Painter {
                 bottom_left: rrect.bottom_left,
             };
 
-            let shadow_paint = Paint::fill(shadow_color.with_opacity((shadow_color.alpha_f32() * opacity).min(1.0)));
+            let shadow_paint = Paint::fill(
+                shadow_color.with_opacity((shadow_color.alpha_f32() * opacity).min(1.0)),
+            );
 
             self.rrect(shadow_rrect, &shadow_paint);
         }

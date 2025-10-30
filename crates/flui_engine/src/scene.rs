@@ -6,8 +6,8 @@
 use crate::event_router::EventRouter;
 use crate::layer::{BoxedLayer, ContainerLayer, Layer};
 use crate::painter::Painter;
-use flui_types::{Rect, Size};
 use flui_types::events::Event;
+use flui_types::{Rect, Size};
 
 /// A complete rendering scene
 ///

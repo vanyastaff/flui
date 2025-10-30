@@ -557,8 +557,7 @@ mod tests {
                 FontStyle::Normal,
             );
 
-            let result =
-                FontLoader::load("LoadTest", FontWeight::W400, FontStyle::Normal).await;
+            let result = FontLoader::load("LoadTest", FontWeight::W400, FontStyle::Normal).await;
             assert!(result.is_ok());
         })
         .await;
@@ -567,8 +566,7 @@ mod tests {
     #[tokio::test]
     async fn test_load_nonexistent_family() {
         with_clean_loader_async(|| async {
-            let result =
-                FontLoader::load("NonExistent", FontWeight::W400, FontStyle::Normal).await;
+            let result = FontLoader::load("NonExistent", FontWeight::W400, FontStyle::Normal).await;
             assert!(result.is_err());
         })
         .await;

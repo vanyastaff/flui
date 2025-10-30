@@ -420,10 +420,16 @@ impl Matrix4 {
                 let y_vec = _mm_set_ps(chunk[3].y, chunk[2].y, chunk[1].y, chunk[0].y);
 
                 // x_out = m00 * x + m10 * y + m30
-                let x_out = _mm_add_ps(_mm_add_ps(_mm_mul_ps(m00, x_vec), _mm_mul_ps(m10, y_vec)), m30);
+                let x_out = _mm_add_ps(
+                    _mm_add_ps(_mm_mul_ps(m00, x_vec), _mm_mul_ps(m10, y_vec)),
+                    m30,
+                );
 
                 // y_out = m01 * x + m11 * y + m31
-                let y_out = _mm_add_ps(_mm_add_ps(_mm_mul_ps(m01, x_vec), _mm_mul_ps(m11, y_vec)), m31);
+                let y_out = _mm_add_ps(
+                    _mm_add_ps(_mm_mul_ps(m01, x_vec), _mm_mul_ps(m11, y_vec)),
+                    m31,
+                );
 
                 // Store results
                 let mut x_array = [0.0f32; 4];
@@ -780,9 +786,9 @@ impl Matrix4 {
                 // Which is: self.m[0*4 + row] * rhs.m[col*4 + 0] + self.m[1*4 + row] * rhs.m[col*4 + 1] + ...
 
                 // Load rows from self as columns (since we need self.m[k*4 + row] for all rows at once)
-                let self_col0 = _mm_loadu_ps(&self.m[0]);  // self[0][0..3]
-                let self_col1 = _mm_loadu_ps(&self.m[4]);  // self[1][0..3]
-                let self_col2 = _mm_loadu_ps(&self.m[8]);  // self[2][0..3]
+                let self_col0 = _mm_loadu_ps(&self.m[0]); // self[0][0..3]
+                let self_col1 = _mm_loadu_ps(&self.m[4]); // self[1][0..3]
+                let self_col2 = _mm_loadu_ps(&self.m[8]); // self[2][0..3]
                 let self_col3 = _mm_loadu_ps(&self.m[12]); // self[3][0..3]
 
                 // Broadcast each element of rhs column

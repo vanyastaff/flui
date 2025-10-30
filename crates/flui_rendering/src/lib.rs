@@ -44,11 +44,11 @@
 
 #![warn(missing_docs)]
 
-#[macro_use]
-pub mod utils;
-
+pub mod error;
 pub mod objects;
 pub mod parent_data;
+#[macro_use]
+pub mod utils;
 
 // Re-export from flui_core - the new trait-based RenderObject architecture
 pub use flui_core::render::{

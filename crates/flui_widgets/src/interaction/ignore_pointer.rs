@@ -249,11 +249,11 @@ mod tests {
 // Implement RenderObjectWidget
 impl RenderWidget for IgnorePointer {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderIgnorePointer::new(self.ignoring)))
+        RenderNode::single(Box::new(RenderIgnorePointer::new(self.ignoring)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderIgnorePointer>() {
                 render_object.set_ignoring(self.ignoring);
             }
@@ -264,3 +264,6 @@ impl RenderWidget for IgnorePointer {
         self.child.as_ref()
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(IgnorePointer, render);

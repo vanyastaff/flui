@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use crate::ElementId;
 use crate::element::{ElementBase, ElementLifecycle};
-use crate::widget::{Widget};
+use crate::widget::Widget;
 
 /// Element for InheritedWidget
 ///

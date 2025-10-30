@@ -75,7 +75,7 @@ impl SingleRender for RenderAnimatedOpacity {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child with same constraints
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
@@ -89,7 +89,7 @@ impl SingleRender for RenderAnimatedOpacity {
         }
 
         // Capture child layer
-                let child_layer = tree.paint_child(child_id, offset);
+        let child_layer = tree.paint_child(child_id, offset);
 
         // Paint child directly if fully opaque
         if self.opacity >= 1.0 {

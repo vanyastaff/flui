@@ -167,40 +167,34 @@ impl RenderDecoratedBox {
         border_radius: Option<f32>,
     ) {
         // Paint each side that exists
-        if let Some(top) = border.top {
-            if top.is_visible() {
-                Self::paint_border_side(picture, rect, &top, BorderPosition::Top, border_radius);
-            }
+        if let Some(top) = border.top
+            && top.is_visible()
+        {
+            Self::paint_border_side(picture, rect, &top, BorderPosition::Top, border_radius);
         }
 
-        if let Some(right) = border.right {
-            if right.is_visible() {
-                Self::paint_border_side(
-                    picture,
-                    rect,
-                    &right,
-                    BorderPosition::Right,
-                    border_radius,
-                );
-            }
+        if let Some(right) = border.right
+            && right.is_visible()
+        {
+            Self::paint_border_side(picture, rect, &right, BorderPosition::Right, border_radius);
         }
 
-        if let Some(bottom) = border.bottom {
-            if bottom.is_visible() {
-                Self::paint_border_side(
-                    picture,
-                    rect,
-                    &bottom,
-                    BorderPosition::Bottom,
-                    border_radius,
-                );
-            }
+        if let Some(bottom) = border.bottom
+            && bottom.is_visible()
+        {
+            Self::paint_border_side(
+                picture,
+                rect,
+                &bottom,
+                BorderPosition::Bottom,
+                border_radius,
+            );
         }
 
-        if let Some(left) = border.left {
-            if left.is_visible() {
-                Self::paint_border_side(picture, rect, &left, BorderPosition::Left, border_radius);
-            }
+        if let Some(left) = border.left
+            && left.is_visible()
+        {
+            Self::paint_border_side(picture, rect, &left, BorderPosition::Left, border_radius);
         }
     }
 
@@ -264,8 +258,8 @@ impl SingleRender for RenderDecoratedBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // SingleArity always has exactly one child
-                let size = tree.layout_child(child_id, constraints);
+        // SingleArity always has exactly one child
+        let size = tree.layout_child(child_id, constraints);
 
         // Store size for paint
         self.size = size;
@@ -283,7 +277,7 @@ impl SingleRender for RenderDecoratedBox {
         }
 
         // Paint child on top
-                let child_layer = tree.paint_child(child_id, offset);
+        let child_layer = tree.paint_child(child_id, offset);
         container.add_child(child_layer);
 
         // Paint decoration in foreground position

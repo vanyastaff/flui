@@ -6,9 +6,9 @@
 
 use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
+use flui_types::events::{Event, HitTestResult};
 use flui_types::painting::effects::{ColorFilter as EffectColorFilter, ColorMatrix};
 use flui_types::{Offset, Rect};
-use flui_types::events::{Event, HitTestResult};
 
 /// A filter layer that applies color transformations
 pub struct FilterLayer {

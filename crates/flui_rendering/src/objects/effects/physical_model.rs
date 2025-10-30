@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{Color, Size, Offset, constraints::BoxConstraints};
+use flui_types::{Color, Offset, Size, constraints::BoxConstraints};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,8 +117,8 @@ impl SingleRender for RenderPhysicalModel {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                // SingleArity always has exactly one child_id
-                let size = tree.layout_child(child_id, constraints);
+        // SingleArity always has exactly one child_id
+        let size = tree.layout_child(child_id, constraints);
 
         // Store size for paint
         self.size = size;
@@ -171,7 +171,7 @@ impl SingleRender for RenderPhysicalModel {
         container.add_child(Box::new(picture));
 
         // Paint child_id on top
-                let child_layer = tree.paint_child(child_id, offset);
+        let child_layer = tree.paint_child(child_id, offset);
         container.add_child(child_layer);
 
         Box::new(container)

@@ -134,9 +134,8 @@ impl ElementTree {
         let node = ElementNode { element };
 
         // Insert into slab and get ID
-        let element_id = self.nodes.insert(node);
 
-        element_id
+        self.nodes.insert(node)
     }
 
     /// Remove an element and all its descendants from the tree
@@ -174,10 +173,10 @@ impl ElementTree {
         }
 
         // Remove from parent's children list
-        if let Some(parent_id) = self.get(element_id).and_then(|e| e.parent()) {
-            if let Some(parent_node) = self.nodes.get_mut(parent_id) {
-                parent_node.element.forget_child(element_id);
-            }
+        if let Some(parent_id) = self.get(element_id).and_then(|e| e.parent())
+            && let Some(parent_node) = self.nodes.get_mut(parent_id)
+        {
+            parent_node.element.forget_child(element_id);
         }
 
         // Remove the node itself
@@ -255,7 +254,7 @@ impl ElementTree {
     pub fn children(&self, element_id: ElementId) -> Vec<ElementId> {
         self.get(element_id)
             .map(|element| element.children().collect())
-            .unwrap_or_else(Vec::new)
+            .unwrap_or_default()
     }
 
     /// Get the number of children for an element
@@ -301,11 +300,10 @@ impl ElementTree {
     /// }
     /// ```
     #[inline]
-    #[allow(clippy::needless_lifetimes)]
     pub fn render_state(
         &self,
         element_id: ElementId,
-    ) -> Option<parking_lot::RwLockReadGuard<RenderState>> {
+    ) -> Option<parking_lot::RwLockReadGuard<'_, RenderState>> {
         self.get(element_id).and_then(|element| {
             element.render_state_ptr().map(|ptr| unsafe {
                 // SAFETY: The pointer is valid for the lifetime of the element
@@ -329,11 +327,10 @@ impl ElementTree {
     /// }
     /// ```
     #[inline]
-    #[allow(clippy::needless_lifetimes)]
     pub fn render_state_mut(
         &self,
         element_id: ElementId,
-    ) -> Option<parking_lot::RwLockWriteGuard<RenderState>> {
+    ) -> Option<parking_lot::RwLockWriteGuard<'_, RenderState>> {
         self.get(element_id).and_then(|element| {
             element.render_state_ptr().map(|ptr| unsafe {
                 // SAFETY: The pointer is valid for the lifetime of the element
@@ -378,18 +375,19 @@ impl ElementTree {
         // Try to use cached size if constraints match and no relayout needed
         {
             let state = render_state.read();
-            if state.has_size() && !state.needs_layout() {
-                if let Some(cached_constraints) = state.constraints() {
-                    if cached_constraints == constraints {
-                        // Cache hit! Return cached size without layout computation
-                        return state.size();
-                    }
-                }
+            if state.has_size()
+                && !state.needs_layout()
+                && let Some(cached_constraints) = state.constraints()
+                && cached_constraints == constraints
+            {
+                // Cache hit! Return cached size without layout computation
+                return state.size();
             }
         } // Release read lock
 
         // Cache miss or needs relayout - compute layout
         let mut render_object = render_element.render_object_mut();
+
         let size = render_object.layout(self, constraints);
 
         // Update RenderState with new size and constraints
@@ -444,17 +442,58 @@ impl ElementTree {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> flui_types::Size {
-        self.layout_render_object(child_id, constraints)
-            .unwrap_or(flui_types::Size::ZERO)
+        eprintln!("    layout_child called for child_id={:?}", child_id);
+
+        // Walk down through ComponentElements to find the first RenderElement
+        let mut current_id = child_id;
+        let render_id = loop {
+            if let Some(element) = self.get(current_id) {
+                match element {
+                    crate::element::Element::Render(_) => {
+                        eprintln!("      Found RenderElement at {:?}", current_id);
+                        break Some(current_id);
+                    }
+                    crate::element::Element::Component(comp) => {
+                        eprintln!("      Element {:?} is Component, walking to child", current_id);
+                        if let Some(comp_child_id) = comp.child() {
+                            current_id = comp_child_id;
+                        } else {
+                            eprintln!("      ComponentElement {:?} has no child!", current_id);
+                            break None;
+                        }
+                    }
+                    crate::element::Element::Stateful(stateful) => {
+                        eprintln!("      Element {:?} is Stateful, walking to child", current_id);
+                        if let Some(stateful_child_id) = stateful.child() {
+                            current_id = stateful_child_id;
+                        } else {
+                            eprintln!("      StatefulElement {:?} has no child!", current_id);
+                            break None;
+                        }
+                    }
+                    _ => {
+                        eprintln!("      Unsupported element type at {:?}", current_id);
+                        break None;
+                    }
+                }
+            } else {
+                eprintln!("      Element {:?} not found in tree!", current_id);
+                break None;
+            }
+        };
+
+        if let Some(render_id) = render_id {
+            self.layout_render_object(render_id, constraints)
+                .unwrap_or(flui_types::Size::ZERO)
+        } else {
+            eprintln!("      WARNING: Could not find RenderElement for child {:?}", child_id);
+            flui_types::Size::ZERO
+        }
     }
 
     /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
     #[inline]
-    pub fn paint_child(
-        &self,
-        child_id: ElementId,
-        offset: crate::Offset,
-    ) -> crate::BoxedLayer {
+    pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> crate::BoxedLayer {
         self.paint_render_object(child_id, offset)
             .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
     }
@@ -524,7 +563,7 @@ impl ElementTree {
 
             // Dereference Ref<RenderNode> to get &RenderNode
             // The guard lives for the duration of the visitor call
-            visitor(element_id, &*render_obj_guard, state);
+            visitor(element_id, &render_obj_guard, state);
             // Guard is dropped here
         }
     }
@@ -597,11 +636,11 @@ impl ElementTree {
     /// tree.add_dependent(theme_element_id, widget_element_id);
     /// ```
     pub fn add_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(element) = self.get_mut(inherited_id) {
-            if let Element::Inherited(inherited) = element {
-                inherited.add_dependent(dependent_id);
-                return true;
-            }
+        if let Some(element) = self.get_mut(inherited_id)
+            && let Element::Inherited(inherited) = element
+        {
+            inherited.add_dependent(dependent_id);
+            return true;
         }
         false
     }
@@ -621,11 +660,11 @@ impl ElementTree {
     /// `true` if the dependency was removed successfully, `false` if the inherited_id
     /// doesn't exist or isn't an InheritedElement.
     pub fn remove_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(element) = self.get_mut(inherited_id) {
-            if let Element::Inherited(inherited) = element {
-                inherited.remove_dependent(dependent_id);
-                return true;
-            }
+        if let Some(element) = self.get_mut(inherited_id)
+            && let Element::Inherited(inherited) = element
+        {
+            inherited.remove_dependent(dependent_id);
+            return true;
         }
         false
     }
@@ -661,8 +700,8 @@ impl Default for ElementTree {
 #[cfg(all(test, not(feature = "intentionally_disabled")))]
 mod tests {
     use super::*;
-    use crate::{Render, RenderWidget, Widget};
     use crate::{LayoutCx, LeafArity, PaintCx, SingleArity};
+    use crate::{Render, RenderWidget, Widget};
     use flui_engine::{BoxedLayer, ContainerLayer};
     use flui_types::Size;
 

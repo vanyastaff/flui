@@ -224,11 +224,32 @@ impl RenderElement {
         self.children = children;
     }
 
-    /// Add a child (for MultiArity)
+    /// Add a child (for MultiArity or SingleArity)
+    ///
+    /// NOTE: This should only be called with RenderElement children!
+    /// ComponentElements should not be added as children to RenderElements.
+    /// The element tree building should ensure that RenderElements only have
+    /// RenderElement children (by walking down through ComponentElements).
     #[allow(dead_code)]
     pub(crate) fn add_child(&mut self, child_id: ElementId) {
-        // FIXME: Add arity check via RenderNode::arity() method
+        eprintln!("      RenderElement::add_child called with child_id={:?}", child_id);
+
+        // Add to children list
         self.children.push(child_id);
+
+        // Also update RenderNode's child/children field
+        let mut render = self.render_object.borrow_mut();
+        eprintln!("        RenderNode arity: {:?}", render.arity());
+        if render.arity() == Some(1) {
+            // SingleRender - set the child
+            eprintln!("        Setting SingleRender child to {:?}", child_id);
+            render.set_child(child_id);
+            eprintln!("        Verify: child is now {:?}", render.child());
+        } else {
+            // MultiRender - set children
+            eprintln!("        Setting MultiRender children to {:?}", self.children);
+            render.set_children(self.children.clone());
+        }
     }
 
     /// Remove a child by ID
@@ -322,6 +343,7 @@ impl RenderElement {
         element_id: ElementId,
         _tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
     ) -> Vec<(ElementId, Widget, usize)> {
+        eprintln!("      RenderElement::rebuild called for element {:?}", element_id);
         self.base.clear_dirty();
 
         // RenderWidget doesn't "build" like StatelessWidget, but it may have children
@@ -331,6 +353,7 @@ impl RenderElement {
         // Check if widget has children (multi-child widget like Row/Column/Stack)
         if let Some(children) = widget.render_widget_children() {
             // Return all children to be mounted
+            eprintln!("        Multi-child render widget with {} children", children.len());
             children
                 .iter()
                 .enumerate()
@@ -338,9 +361,11 @@ impl RenderElement {
                 .collect()
         } else if let Some(child) = widget.render_widget_child() {
             // Single child widget (like Center, Padding, etc.)
+            eprintln!("        Single-child render widget, returning 1 child");
             vec![(element_id, child.clone(), 0)]
         } else {
             // Leaf widget (like Text) - no children
+            eprintln!("        Leaf render widget, no children");
             Vec::new()
         }
     }

@@ -196,7 +196,7 @@ impl SingleRender for RenderSizedOverflowBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                        // Build child_id constraints from override values
+        // Build child_id constraints from override values
         let child_min_width = self.child_min_width.unwrap_or(constraints.min_width);
         let child_max_width = self.child_max_width.unwrap_or(constraints.max_width);
         let child_min_height = self.child_min_height.unwrap_or(constraints.min_height);
@@ -221,7 +221,7 @@ impl SingleRender for RenderSizedOverflowBox {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                // Calculate aligned position
+        // Calculate aligned position
         let child_offset = self.alignment.calculate_offset(self.child_size, self.size);
 
         // Capture child_id layer

@@ -70,12 +70,12 @@ impl SingleRender for RenderMergeSemantics {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child with same constraints (pass-through)
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Paint child directly (pass-through)
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

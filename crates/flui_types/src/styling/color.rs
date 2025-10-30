@@ -273,12 +273,7 @@ impl Color {
             let mut out = [0.0f32; 4];
             _mm_storeu_ps(out.as_mut_ptr(), result);
 
-            Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                out[3] as u8,
-            )
+            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
         }
 
         #[cfg(not(target_feature = "sse2"))]
@@ -310,12 +305,7 @@ impl Color {
             let mut out = [0.0f32; 4];
             vst1q_f32(out.as_mut_ptr(), result);
 
-            Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                out[3] as u8,
-            )
+            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
         }
 
         #[cfg(not(target_feature = "neon"))]
@@ -515,7 +505,12 @@ impl Color {
 
             // Load colors as f32 vectors
             let src_vec = _mm_set_ps(self.a as f32, self.b as f32, self.g as f32, self.r as f32);
-            let dst_vec = _mm_set_ps(background.a as f32, background.b as f32, background.g as f32, background.r as f32);
+            let dst_vec = _mm_set_ps(
+                background.a as f32,
+                background.b as f32,
+                background.g as f32,
+                background.r as f32,
+            );
 
             // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) / alpha_out
             let alpha_src_vec = _mm_set1_ps(alpha_src);
@@ -561,8 +556,17 @@ impl Color {
             }
 
             // Load colors as f32 vectors
-            let src_vec = vld1q_f32([self.r as f32, self.g as f32, self.b as f32, self.a as f32].as_ptr());
-            let dst_vec = vld1q_f32([background.r as f32, background.g as f32, background.b as f32, background.a as f32].as_ptr());
+            let src_vec =
+                vld1q_f32([self.r as f32, self.g as f32, self.b as f32, self.a as f32].as_ptr());
+            let dst_vec = vld1q_f32(
+                [
+                    background.r as f32,
+                    background.g as f32,
+                    background.b as f32,
+                    background.a as f32,
+                ]
+                .as_ptr(),
+            );
 
             // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) / alpha_out
             let alpha_src_vec = vdupq_n_f32(alpha_src);

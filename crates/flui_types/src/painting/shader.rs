@@ -223,7 +223,14 @@ impl Shader {
     #[inline]
     #[must_use]
     pub fn simple_sweep(center: Offset, colors: Vec<Color>) -> Self {
-        Self::sweep_gradient(center, colors, None, TileMode::Clamp, 0.0, std::f32::consts::TAU)
+        Self::sweep_gradient(
+            center,
+            colors,
+            None,
+            TileMode::Clamp,
+            0.0,
+            std::f32::consts::TAU,
+        )
     }
 
     /// Returns the number of colors in this shader.

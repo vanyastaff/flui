@@ -4,7 +4,7 @@
 //! for running Flui applications.
 
 use crate::app::FluiApp;
-use flui_core::DynWidget;
+use flui_core::Widget;
 
 /// Run a Flui application
 ///
@@ -33,7 +33,7 @@ use flui_core::DynWidget;
 ///     run_app(Box::new(MyApp)).unwrap();
 /// }
 /// ```
-pub fn run_app(root_widget: Box<dyn DynWidget>) -> Result<(), eframe::Error> {
+pub fn run_app(root_widget: Widget) -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])

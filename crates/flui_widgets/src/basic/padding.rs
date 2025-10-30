@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
+use flui_core::widget::{RenderWidget, Widget};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
@@ -155,11 +155,11 @@ impl Default for Padding {
 // Implement RenderWidget
 impl RenderWidget for Padding {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderPadding::new(self.padding)))
+        RenderNode::single(Box::new(RenderPadding::new(self.padding)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(padding) = render.downcast_mut::<RenderPadding>() {
                 padding.set_padding(self.padding);
             }
@@ -180,16 +180,16 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> PaddingBuilder<SetChild<S>> {
-        self.child_internal(Some(child))
+    pub fn child(self, child: impl flui_core::IntoWidget) -> PaddingBuilder<SetChild<S>> {
+        self.child_internal(child.into_widget())
     }
 }
 
 // Build wrapper
 impl<S: State> PaddingBuilder<S> {
-    /// Builds the Padding widget.
-    pub fn build(self) -> Padding {
-        self.build_padding()
+    /// Builds the Padding widget and returns it as a Widget.
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::render_object(self.build_padding())
     }
 }
 
@@ -217,7 +217,7 @@ mod tests {
 
     impl RenderWidget for MockWidget {
         fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
         fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
@@ -314,3 +314,6 @@ mod tests {
         assert!(padding.child.is_some());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Padding, render);

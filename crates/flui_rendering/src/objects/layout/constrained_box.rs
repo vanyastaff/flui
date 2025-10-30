@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints, Offset};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that applies additional constraints to its child
 ///

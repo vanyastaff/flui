@@ -18,11 +18,14 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::RenderWidget;
 use flui_core::render::RenderNode;
+use flui_core::widget::RenderWidget;
 use flui_core::BuildContext;
-use flui_types::{Color, typography::{TextAlign, TextDirection, TextOverflow}};
-use flui_rendering::{RenderParagraph, ParagraphData};
+use flui_rendering::{ParagraphData, RenderParagraph};
+use flui_types::{
+    typography::{TextAlign, TextDirection, TextOverflow},
+    Color,
+};
 
 /// A widget that displays a string of text with a single style.
 ///
@@ -155,8 +158,6 @@ impl Text {
     }
 }
 
-
-
 // Implement RenderWidget for Text (Leaf widget - no children)
 impl RenderWidget for Text {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
@@ -281,11 +282,11 @@ mod tests {
 
     #[test]
     fn test_text_macro_with_fields() {
-        let text = Text::builder()
-            .data("Test")
-            .size(20.0)
-            .build();
+        let text = Text::builder().data("Test").size(20.0).build();
         assert_eq!(text.data, "Test");
         assert_eq!(text.size, 20.0);
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Text, render);

@@ -176,7 +176,6 @@ impl RenderParagraph {
 
 impl LeafRender for RenderParagraph {
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
-
         // Calculate text size
         // In production, this would use a proper text layout engine
         // For now, use simple estimation based on character count and font size

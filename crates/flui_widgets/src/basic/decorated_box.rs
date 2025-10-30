@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
+use flui_core::widget::{RenderWidget, Widget};
 use flui_core::BuildContext;
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
@@ -204,12 +204,12 @@ impl RenderWidget for DecoratedBox {
         use flui_rendering::DecoratedBoxData;
 
         let data = DecoratedBoxData::with_position(self.decoration.clone(), self.position);
-        RenderNode::Single(Box::new(RenderDecoratedBox::new(data)))
+        RenderNode::single(Box::new(RenderDecoratedBox::new(data)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         // Update RenderDecoratedBox when decoration or position changes
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(decorated_box) = render.downcast_mut::<RenderDecoratedBox>() {
                 decorated_box.set_decoration(self.decoration.clone());
                 decorated_box.set_position(self.position);
@@ -240,18 +240,16 @@ where
     ///     .child(Text::new("Hello"))
     ///     .build()
     /// ```
-    pub fn child(self, child: Widget) -> DecoratedBoxBuilder<SetChild<S>> {
-        self.child_internal(Some(child))
+    pub fn child(self, child: impl flui_core::IntoWidget) -> DecoratedBoxBuilder<SetChild<S>> {
+        self.child_internal(child.into_widget())
     }
 }
 
 // Public build() wrapper
 impl<S: State> DecoratedBoxBuilder<S> {
-    /// Builds the DecoratedBox widget.
-    ///
-    /// Equivalent to calling the generated `build_decorated_box()` finishing function.
-    pub fn build(self) -> DecoratedBox {
-        self.build_decorated_box()
+    /// Builds the DecoratedBox widget and returns it as a Widget.
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::render_object(self.build_decorated_box())
     }
 }
 
@@ -297,7 +295,7 @@ mod tests {
 
     impl RenderWidget for MockWidget {
         fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
         fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
@@ -497,3 +495,6 @@ mod tests {
         assert!(widget.child.is_some());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(DecoratedBox, render);

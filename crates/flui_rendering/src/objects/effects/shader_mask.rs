@@ -6,7 +6,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, painting::BlendMode, Offset, constraints::BoxConstraints};
+use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode};
 
 // ===== Data Structure =====
 
@@ -181,12 +181,12 @@ impl SingleRender for RenderShaderMask {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child_id with same constraints
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Capture child_id layer
-                // Note: Full shader masking requires compositor support
+        // Note: Full shader masking requires compositor support
         // For now, we'll paint child_id normally
         // In production, this would use a ShaderMaskLayer with egui's shader system
         // or a custom compositor

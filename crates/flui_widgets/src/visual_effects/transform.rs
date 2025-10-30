@@ -297,11 +297,11 @@ impl RenderWidget for Transform {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
         use flui_rendering::{SingleRenderBox, objects::effects::transform::TransformData};
         // Note: transform_hit_tests is ignored for now as RenderTransform doesn't support it yet
-        RenderNode::Single(Box::new(SingleRenderBox::new(TransformData::new(self.transform))))
+        RenderNode::single(Box::new(SingleRenderBox::new(TransformData::new(self.transform))))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(transform_render) = render.downcast_mut::<RenderTransform>() {
                 transform_render.set_transform(self.transform);
                 // Note: transform_hit_tests is ignored for now as RenderTransform doesn't support it yet
@@ -629,3 +629,6 @@ mod tests {
         assert!(widget.child.is_some());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Transform, render);

@@ -239,3 +239,6 @@ mod tests {
         assert_eq!(button.min_height, Some(48.0));
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Button, stateless);

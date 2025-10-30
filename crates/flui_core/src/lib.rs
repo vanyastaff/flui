@@ -302,6 +302,7 @@ pub use foundation::{
 pub use widget::{
     // Widget traits
     InheritedWidget,
+    IntoWidget,
     NotificationListener,
     ParentDataWidget,
     RenderWidget,
@@ -346,13 +347,7 @@ pub use element::{
 // ============================================================================
 
 // Re-export render types
-pub use render::{
-    LeafRender,
-    MultiRender,
-    RenderNode,
-    RenderState,
-    SingleRender,
-};
+pub use render::{LeafRender, MultiRender, RenderNode, RenderState, SingleRender};
 
 // ============================================================================
 // Macros
@@ -375,8 +370,8 @@ pub mod prelude {
     pub use crate::foundation::{Key, KeyRef};
 
     pub use crate::widget::{
-        InheritedWidget, ParentDataWidget, RenderWidget,
-        State, StatefulWidget, StatelessWidget, Widget,
+        InheritedWidget, ParentDataWidget, RenderWidget, State, StatefulWidget, StatelessWidget,
+        Widget,
     };
 
     pub use crate::element::{BuildContext, Element};

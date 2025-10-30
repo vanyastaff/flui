@@ -54,9 +54,8 @@
 //! ```
 
 #![warn(missing_docs)]
-
-// Widget modules organized by category
 pub mod basic;
+pub mod error;
 pub mod layout;
 
 // Temporarily disabled - will be fixed later
@@ -66,18 +65,18 @@ pub mod layout;
 
 // Re-exports for convenient top-level access
 // Essential widgets for Container and Flex layout
-pub use basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox};
+pub use basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox, Text};
 pub use layout::{Column, Expanded, Flexible, Row};
 
 // Temporarily disabled - will be fixed later
-// pub use basic::{AspectRatio, Button, Text};
+// pub use basic::{AspectRatio, Button};
 // pub use layout::{IndexedStack, Positioned, Stack};
 // pub use visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
 // pub use gestures::GestureDetector;
 // pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
-pub use flui_core::{BoxedWidget, DynWidget, Widget};
+pub use flui_core::Widget;
 pub use flui_rendering::DecorationPosition;
 pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
@@ -91,11 +90,11 @@ pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offs
 /// ```
 pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
-    pub use crate::basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox};
+    pub use crate::basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox, Text};
     pub use crate::layout::{Column, Expanded, Flexible, Row};
 
     // Temporarily disabled
-    // pub use crate::basic::{AspectRatio, Button, Text};
+    // pub use crate::basic::{AspectRatio, Button};
     // pub use crate::layout::{IndexedStack, Positioned, Stack};
     // pub use crate::visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
     // pub use crate::gestures::GestureDetector;
@@ -103,9 +102,10 @@ pub mod prelude {
 
     // Re-export core types
     pub use flui_core::{BuildContext, Widget};
-    pub use flui_rendering::{FlexFit, StackFit};
+    pub use flui_types::layout::{
+        CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
+    };
     pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
     pub use flui_types::BoxConstraints;
     pub use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Size};
-    pub use flui_types::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 }

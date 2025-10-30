@@ -33,7 +33,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, ParentDataWidget};
+use flui_core::widget::{ParentDataWidget, Widget};
+use flui_core::RenderNode;
 use flui_rendering::StackParentData;
 
 /// A widget that controls where a child of a Stack is positioned.
@@ -239,13 +240,7 @@ impl Positioned {
     /// ```rust,ignore
     /// let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, Container::new());
     /// ```
-    pub fn from_rect(
-        left: f32,
-        top: f32,
-        width: f32,
-        height: f32,
-        child: Widget,
-    ) -> Self {
+    pub fn from_rect(left: f32, top: f32, width: f32, height: f32, child: Widget) -> Self {
         Self {
             key: None,
             left: Some(left),
@@ -379,9 +374,7 @@ impl Default for Positioned {
 // ========== ParentDataWidget Implementation ==========
 
 impl ParentDataWidget for Positioned {
-    type ParentDataType = StackParentData;
-
-    fn apply_parent_data(&self, _render_object: &mut ()) {
+    fn apply_parent_data(&self, _render_object: &mut RenderNode) {
         // TODO: apply_parent_data needs DynRenderObject trait
         // This will be implemented when the render object trait is ready
     }

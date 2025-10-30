@@ -1,11 +1,11 @@
 //! Event translation from winit to flui events
 
-use flui_types::Offset;
 use flui_types::events::{
     Event, KeyEvent, KeyEventData, KeyModifiers, LogicalKey, PhysicalKey, PointerButton,
     PointerDeviceKind, PointerEvent, PointerEventData, ScrollDelta, ScrollEventData,
     WindowEvent as FluiWindowEvent,
 };
+use flui_types::Offset;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey as WinitPhysicalKey};
 

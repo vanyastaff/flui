@@ -6,9 +6,9 @@
 
 use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 use crate::painter::Painter;
+use flui_types::events::{Event, HitTestResult};
 use flui_types::painting::effects::ImageFilter;
 use flui_types::{Offset, Rect};
-use flui_types::events::{Event, HitTestResult};
 
 /// A layer that applies image filters to backdrop content.
 ///

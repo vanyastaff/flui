@@ -86,20 +86,8 @@ pub mod widget;
 // Re-exports - Enum-based system
 pub use notification_listener::NotificationListener;
 pub use traits::{
-    InheritedWidget, ParentDataWidget, RenderWidget,
-    State, StatefulWidget, StatelessWidget,
+    InheritedWidget, ParentDataWidget, RenderWidget, State, StatefulWidget, StatelessWidget,
 };
-pub use widget::Widget;
+pub use widget::{IntoWidget, Widget};
 
 // Widget is an enum - no DynWidget trait needed!
-
-
-
-
-
-
-
-
-
-
-

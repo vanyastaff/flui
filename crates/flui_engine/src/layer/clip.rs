@@ -5,8 +5,8 @@
 
 use crate::layer::{base_multi_child::MultiChildLayerBase, BoxedLayer, Layer};
 use crate::painter::{Painter, RRect};
-use flui_types::{Offset, Rect};
 use flui_types::events::{Event, HitTestResult};
+use flui_types::{Offset, Rect};
 
 // ============================================================================
 // ClipRectLayer
@@ -117,7 +117,9 @@ impl Layer for ClipRectLayer {
 
         // Union of all children bounds, clipped to clip_rect
         let children_bounds = self.base.children_bounds_union();
-        children_bounds.intersection(&self.clip_rect).unwrap_or(Rect::ZERO)
+        children_bounds
+            .intersection(&self.clip_rect)
+            .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
@@ -334,9 +336,9 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_hit_test_center() {
-        use flui_types::geometry::RRect;
         use crate::layer::PictureLayer;
         use crate::painter::Paint;
+        use flui_types::geometry::RRect;
 
         // Create a rounded rect layer (100x100 with 20px corner radius)
         let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
@@ -355,9 +357,9 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_hit_test_corners() {
-        use flui_types::geometry::RRect;
         use crate::layer::PictureLayer;
         use crate::painter::Paint;
+        use flui_types::geometry::RRect;
 
         // Create a rounded rect layer (100x100 with 20px corner radius)
         let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
@@ -382,9 +384,9 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_hit_test_edges() {
-        use flui_types::geometry::RRect;
         use crate::layer::PictureLayer;
         use crate::painter::Paint;
+        use flui_types::geometry::RRect;
 
         // Create a rounded rect layer (100x100 with 20px corner radius)
         let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
@@ -406,9 +408,9 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_hit_test_outside() {
-        use flui_types::geometry::RRect;
         use crate::layer::PictureLayer;
         use crate::painter::Paint;
+        use flui_types::geometry::RRect;
 
         // Create a rounded rect layer (100x100 with 20px corner radius)
         let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
@@ -430,9 +432,9 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_hit_test_no_radius() {
-        use flui_types::geometry::RRect;
         use crate::layer::PictureLayer;
         use crate::painter::Paint;
+        use flui_types::geometry::RRect;
 
         // Create a rect with no rounding (should behave like ClipRectLayer)
         let rrect = RRect::from_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
@@ -454,9 +456,9 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_circle() {
-        use flui_types::painting::path::Path;
         use crate::layer::PictureLayer;
         use crate::painter::Paint;
+        use flui_types::painting::path::Path;
 
         // Create a circular path (100x100, radius 50)
         let mut path = Path::new();
@@ -489,9 +491,9 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_triangle() {
-        use flui_types::painting::path::Path;
         use crate::layer::PictureLayer;
         use crate::painter::Paint;
+        use flui_types::painting::path::Path;
 
         // Create a triangle path
         let mut path = Path::new();
@@ -629,7 +631,9 @@ impl Layer for ClipOvalLayer {
         }
 
         let children_bounds = self.base.children_bounds_union();
-        children_bounds.intersection(&self.clip_rect).unwrap_or(Rect::ZERO)
+        children_bounds
+            .intersection(&self.clip_rect)
+            .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
@@ -777,7 +781,9 @@ impl Layer for ClipPathLayer {
         }
 
         let children_bounds = self.base.children_bounds_union();
-        children_bounds.intersection(&self.path_bounds).unwrap_or(Rect::ZERO)
+        children_bounds
+            .intersection(&self.path_bounds)
+            .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {

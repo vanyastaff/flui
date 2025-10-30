@@ -37,12 +37,11 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, StatelessWidget};
+use flui_core::widget::{StatelessWidget, Widget};
 use flui_core::BuildContext;
+use flui_types::constraints::BoxConstraints;
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
-use flui_types::constraints::BoxConstraints;
-use std::fmt;
 
 /// A convenience widget that combines common painting, positioning, and sizing widgets.
 ///
@@ -109,13 +108,13 @@ pub struct Container {
 
     /// The color to paint behind the child.
     ///
-    /// This property should not be used with [decoration] at the same time.
-    /// Prefer using [decoration.color] instead.
+    /// This property should not be used with [`decoration`](Self::decoration) at the same time.
+    /// Prefer using `decoration.color` instead.
     pub color: Option<Color>,
 
     /// The decoration to paint behind the child.
     ///
-    /// Use the [color] property to specify a simple solid color.
+    /// Use the [`color`](Self::color) property to specify a simple solid color.
     pub decoration: Option<BoxDecoration>,
 
     /// Empty space to surround the decoration and child.
@@ -274,12 +273,12 @@ impl StatelessWidget for Container {
             child.clone()
         } else {
             // No child - use empty SizedBox
-            Widget::SizedBox(crate::SizedBox::new())
+            Widget::render_object(crate::SizedBox::new())
         };
 
         // Apply padding (inner spacing around child)
         if let Some(padding) = self.padding {
-            current = Widget::Padding(crate::Padding {
+            current = Widget::render_object(crate::Padding {
                 key: None,
                 padding,
                 child: Some(current),
@@ -289,7 +288,7 @@ impl StatelessWidget for Container {
         // Apply alignment BEFORE decoration!
         // This allows decoration to be on the outside and receive tight constraints
         if let Some(alignment) = self.alignment {
-            current = Widget::Align(crate::Align {
+            current = Widget::render_object(crate::Align {
                 key: None,
                 alignment,
                 width_factor: None,
@@ -301,7 +300,7 @@ impl StatelessWidget for Container {
         // Apply decoration or color AFTER alignment
         // Decoration will now receive tight constraints from SizedBox/margin
         if let Some(decoration) = &self.decoration {
-            current = Widget::DecoratedBox(crate::DecoratedBox {
+            current = Widget::render_object(crate::DecoratedBox {
                 key: None,
                 decoration: decoration.clone(),
                 position: crate::DecorationPosition::Background,
@@ -312,7 +311,7 @@ impl StatelessWidget for Container {
                 color: Some(color),
                 ..Default::default()
             };
-            current = Widget::DecoratedBox(crate::DecoratedBox {
+            current = Widget::render_object(crate::DecoratedBox {
                 key: None,
                 decoration,
                 position: crate::DecorationPosition::Background,
@@ -325,7 +324,7 @@ impl StatelessWidget for Container {
         // Note: margin is implemented using Padding widget (same as Flutter)
         // The semantic difference (margin vs padding) is maintained by the widget order
         if let Some(margin) = self.margin {
-            current = Widget::Padding(crate::Padding {
+            current = Widget::render_object(crate::Padding {
                 key: None,
                 padding: margin,
                 child: Some(current),
@@ -335,7 +334,7 @@ impl StatelessWidget for Container {
         // Apply width/height constraints
         // These constraints apply to the TOTAL size (including margin)
         if self.width.is_some() || self.height.is_some() {
-            current = Widget::SizedBox(crate::SizedBox {
+            current = Widget::render_object(crate::SizedBox {
                 key: None,
                 width: self.width,
                 height: self.height,
@@ -369,25 +368,35 @@ where
 {
     /// Sets the child widget (works in builder chain).
     ///
+    /// Accepts anything that implements `IntoWidget` for ergonomic API.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// Container::builder()
     ///     .width(100.0)
-    ///     .child(some_widget)
+    ///     .child(Text::new("Hello"))  // No need for Widget::render_object()!
     ///     .build()
     /// ```
-    pub fn child(self, child: Widget) -> ContainerBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl flui_core::IntoWidget) -> ContainerBuilder<SetChild<S>> {
+        self.child_internal(child.into_widget())
     }
 }
 
 impl<S: State> ContainerBuilder<S> {
-    /// Convenience method to build the container.
+    /// Build the container and return it as a Widget.
     ///
-    /// Equivalent to calling the generated `build_container()` finishing function.
-    pub fn build(self) -> Container {
-        self.build_container()
+    /// This automatically wraps the Container in a Widget::stateless() for convenience.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let widget = Container::builder()
+    ///     .width(100.0)
+    ///     .build();  // Returns Widget, not Container!
+    /// ```
+    pub fn build(self) -> flui_core::Widget {
+        flui_core::Widget::stateless(self.build_container())
     }
 }
 
@@ -607,3 +616,6 @@ mod tests {
         assert_eq!(container.color, Some(Color::rgb(255, 0, 0)));
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Container, stateless);

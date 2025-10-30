@@ -298,14 +298,14 @@ impl Default for ClipRRect {
 // Implement RenderObjectWidget
 impl RenderWidget for ClipRRect {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderClipRRect::new(
+        RenderNode::single(Box::new(RenderClipRRect::new(
             RRectShape::new(self.border_radius),
             self.clip_behavior,
         )))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderClipRRect>() {
                 render_object.shape.border_radius = self.border_radius;
         render_object.set_clip_behavior(self.clip_behavior);
@@ -654,3 +654,6 @@ mod tests {
         assert!(widget.child.is_some());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(ClipRRect, render);

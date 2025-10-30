@@ -129,11 +129,11 @@ impl<S: State> OffstageBuilder<S> {
 // Implement RenderObjectWidget
 impl RenderWidget for Offstage {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::Single(Box::new(RenderOffstage::new(self.offstage)))
+        RenderNode::single(Box::new(RenderOffstage::new(self.offstage)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single(render) = render_object {
+        if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderOffstage>() {
                 render_object.set_offstage(self.offstage);
             }
@@ -265,3 +265,6 @@ mod tests {
         assert!(!offstage_render.offstage());
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Offstage, render);

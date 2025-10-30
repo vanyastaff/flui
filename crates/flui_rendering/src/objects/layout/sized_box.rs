@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Size, constraints::BoxConstraints, Offset};
+use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that enforces exact size constraints
 ///
@@ -83,7 +83,7 @@ impl SingleRender for RenderSizedBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                        // Calculate our size based on explicit width/height
+        // Calculate our size based on explicit width/height
         let width = self.width.unwrap_or(constraints.max_width);
         let height = self.height.unwrap_or(constraints.max_height);
 
@@ -99,7 +99,7 @@ impl SingleRender for RenderSizedBox {
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Simply pass through child_id layer (or empty if no child_id)
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

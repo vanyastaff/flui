@@ -162,12 +162,12 @@ impl SingleRender for RenderMetaData {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child_id with same constraints (pass-through)
-                tree.layout_child(child_id, constraints)
+        tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Paint child_id directly (pass-through)
-                tree.paint_child(child_id, offset)
+        tree.paint_child(child_id, offset)
     }
 }
 

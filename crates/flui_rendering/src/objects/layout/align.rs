@@ -91,9 +91,6 @@ impl SingleRender for RenderAlign {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-        
-        
-
         // SingleArity always has exactly one child_id
         // Layout child_id with loose constraints to get its natural size
         let child_size = tree.layout_child(child_id, constraints.loosen());
@@ -126,8 +123,6 @@ impl SingleRender for RenderAlign {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-        
-
         // SingleArity always has exactly one child_id
         // Get child_id layer
         let child_layer = tree.paint_child(child_id, offset);

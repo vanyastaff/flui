@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{Color, Rect, Size, Offset, constraints::BoxConstraints};
+use flui_types::{Color, Offset, Rect, Size, constraints::BoxConstraints};
 
 /// RenderObject that paints a solid color background
 ///
@@ -53,13 +53,13 @@ impl SingleRender for RenderColoredBox {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-                        // SingleArity always has exactly one child
+        // SingleArity always has exactly one child
         // Pass through constraints
         tree.layout_child(child_id, constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-                // Create picture layer for background color
+        // Create picture layer for background color
         let mut picture = PictureLayer::new();
 
         // TODO: Get actual size from layout context instead of using placeholder

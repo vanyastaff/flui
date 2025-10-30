@@ -303,7 +303,11 @@ impl Path {
                 tr.x * 2.0,
                 tr.y * 2.0,
             );
-            path.add_arc(corner_rect, -std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+            path.add_arc(
+                corner_rect,
+                -std::f32::consts::FRAC_PI_2,
+                std::f32::consts::FRAC_PI_2,
+            );
         }
 
         // Right edge
@@ -331,7 +335,11 @@ impl Path {
                 bl.x * 2.0,
                 bl.y * 2.0,
             );
-            path.add_arc(corner_rect, std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2);
+            path.add_arc(
+                corner_rect,
+                std::f32::consts::FRAC_PI_2,
+                std::f32::consts::FRAC_PI_2,
+            );
         }
 
         // Left edge
@@ -339,13 +347,12 @@ impl Path {
 
         // Top-left corner
         if tl.x > 0.0 || tl.y > 0.0 {
-            let corner_rect = Rect::from_xywh(
-                rect.left(),
-                rect.top(),
-                tl.x * 2.0,
-                tl.y * 2.0,
+            let corner_rect = Rect::from_xywh(rect.left(), rect.top(), tl.x * 2.0, tl.y * 2.0);
+            path.add_arc(
+                corner_rect,
+                std::f32::consts::PI,
+                std::f32::consts::FRAC_PI_2,
             );
-            path.add_arc(corner_rect, std::f32::consts::PI, std::f32::consts::FRAC_PI_2);
         }
 
         path.close();
@@ -856,14 +863,7 @@ impl Path {
     }
 
     /// Winding number for cubic curve.
-    fn curve_winding_cubic(
-        &self,
-        point: Point,
-        p0: Point,
-        p1: Point,
-        p2: Point,
-        p3: Point,
-    ) -> i32 {
+    fn curve_winding_cubic(&self, point: Point, p0: Point, p1: Point, p2: Point, p3: Point) -> i32 {
         let t_values = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
         let mut winding = 0;
 

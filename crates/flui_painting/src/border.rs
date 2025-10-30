@@ -29,7 +29,7 @@ impl BorderPainter {
             && border.right == border.bottom
             && border.bottom == border.left;
 
-        if is_uniform && border.top.map_or(false, |s| s.is_visible()) {
+        if is_uniform && border.top.is_some_and(|s| s.is_visible()) {
             // Simple uniform border
             Self::paint_uniform(painter, rect, border, border_radius);
         } else {
@@ -98,55 +98,55 @@ impl BorderPainter {
         // handle corners and stroke alignment more carefully
 
         // Top
-        if let Some(top) = border.top {
-            if top.is_visible() {
-                let paint = Paint::stroke(top.width, top.color);
+        if let Some(top) = border.top
+            && top.is_visible()
+        {
+            let paint = Paint::stroke(top.width, top.color);
 
-                painter.line(
-                    Point::new(rect.left(), rect.top()),
-                    Point::new(rect.right(), rect.top()),
-                    &paint,
-                );
-            }
+            painter.line(
+                Point::new(rect.left(), rect.top()),
+                Point::new(rect.right(), rect.top()),
+                &paint,
+            );
         }
 
         // Right
-        if let Some(right) = border.right {
-            if right.is_visible() {
-                let paint = Paint::stroke(right.width, right.color);
+        if let Some(right) = border.right
+            && right.is_visible()
+        {
+            let paint = Paint::stroke(right.width, right.color);
 
-                painter.line(
-                    Point::new(rect.right(), rect.top()),
-                    Point::new(rect.right(), rect.bottom()),
-                    &paint,
-                );
-            }
+            painter.line(
+                Point::new(rect.right(), rect.top()),
+                Point::new(rect.right(), rect.bottom()),
+                &paint,
+            );
         }
 
         // Bottom
-        if let Some(bottom) = border.bottom {
-            if bottom.is_visible() {
-                let paint = Paint::stroke(bottom.width, bottom.color);
+        if let Some(bottom) = border.bottom
+            && bottom.is_visible()
+        {
+            let paint = Paint::stroke(bottom.width, bottom.color);
 
-                painter.line(
-                    Point::new(rect.right(), rect.bottom()),
-                    Point::new(rect.left(), rect.bottom()),
-                    &paint,
-                );
-            }
+            painter.line(
+                Point::new(rect.right(), rect.bottom()),
+                Point::new(rect.left(), rect.bottom()),
+                &paint,
+            );
         }
 
         // Left
-        if let Some(left) = border.left {
-            if left.is_visible() {
-                let paint = Paint::stroke(left.width, left.color);
+        if let Some(left) = border.left
+            && left.is_visible()
+        {
+            let paint = Paint::stroke(left.width, left.color);
 
-                painter.line(
-                    Point::new(rect.left(), rect.bottom()),
-                    Point::new(rect.left(), rect.top()),
-                    &paint,
-                );
-            }
+            painter.line(
+                Point::new(rect.left(), rect.bottom()),
+                Point::new(rect.left(), rect.top()),
+                &paint,
+            );
         }
 
         // TODO: Properly handle rounded corners when sides differ

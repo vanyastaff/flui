@@ -5,7 +5,10 @@
 //! FilterLayer, and BackdropFilterLayer.
 
 use crate::layer::BoxedLayer;
-use flui_types::{events::{Event, HitTestResult}, Offset, Rect};
+use flui_types::{
+    events::{Event, HitTestResult},
+    Offset, Rect,
+};
 
 /// Base struct for layers with a single child
 ///
@@ -123,7 +126,9 @@ impl SingleChildLayerBase {
         if self.disposed {
             return false;
         }
-        self.child.as_ref().is_some_and(|c| c.hit_test(position, result))
+        self.child
+            .as_ref()
+            .is_some_and(|c| c.hit_test(position, result))
     }
 
     /// Default event handling - delegates to child
@@ -143,4 +148,3 @@ impl SingleChildLayerBase {
         self.cached_bounds = None;
     }
 }
-

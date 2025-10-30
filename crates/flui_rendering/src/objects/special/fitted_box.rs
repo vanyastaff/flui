@@ -184,10 +184,10 @@ impl SingleRender for RenderFittedBox {
         constraints: BoxConstraints,
     ) -> Size {
         // Our size is determined by constraints (we try to be as large as possible)
-                let size = constraints.biggest();
+        let size = constraints.biggest();
 
         // Layout child_id with unbounded constraints to get natural size
-                let child_constraints =
+        let child_constraints =
             flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
         tree.layout_child(child_id, child_constraints);
 
@@ -196,7 +196,7 @@ impl SingleRender for RenderFittedBox {
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Get child_id layer and calculate fit
-                // TODO: Apply transform for scaling based on self.data.calculate_fit()
+        // TODO: Apply transform for scaling based on self.data.calculate_fit()
         // For now, just return child_id layer as-is
         // In a real implementation, we'd wrap in a TransformLayer
 
