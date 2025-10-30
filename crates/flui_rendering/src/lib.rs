@@ -67,11 +67,13 @@ pub use parent_data::{FlexParentData, StackParentData};
 
 // Re-export all RenderObjects
 pub use objects::{
+    BoxFit,
     DecoratedBoxData,
     DecorationPosition,
     MouseCallbacks,
 
     ParagraphData,
+    QuarterTurns,
     RRectShape,
     RectShape,
     // Interaction objects
@@ -83,6 +85,7 @@ pub use objects::{
     RenderClipRect,
     RenderConstrainedBox,
     RenderDecoratedBox,
+    RenderFittedBox,
     RenderFlex,
     RenderFractionallySizedBox,
     RenderIgnorePointer,
@@ -100,6 +103,7 @@ pub use objects::{
     RenderParagraph,
     RenderPointerListener,
     RenderPositionedBox,
+    RenderRotatedBox,
     RenderStack,
     RenderTransform,
 };

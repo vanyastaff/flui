@@ -13,8 +13,10 @@ pub mod fractionally_sized_box;
 pub mod indexed_stack;
 pub mod overflow_box;
 pub mod positioned;
+pub mod rotated_box;
 pub mod row;
 pub mod stack;
+
 
 
 
@@ -26,7 +28,9 @@ pub use fractionally_sized_box::FractionallySizedBox;
 pub use indexed_stack::IndexedStack;
 pub use overflow_box::OverflowBox;
 pub use positioned::Positioned;
+pub use rotated_box::RotatedBox;
 pub use row::Row;
 pub use stack::Stack;
+
 
 

@@ -35,7 +35,7 @@ pub use list_body::RenderListBody;
 pub use overflow_box::RenderOverflowBox;
 pub use padding::RenderPadding;
 pub use positioned_box::RenderPositionedBox;
-pub use rotated_box::RenderRotatedBox;
+pub use rotated_box::{QuarterTurns, RenderRotatedBox};
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
 pub use stack::RenderStack;
