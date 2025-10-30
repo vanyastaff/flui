@@ -14,8 +14,10 @@ FLUI provides a declarative, widget-based API for building high-performance user
 - 🚀 **High Performance** - Enum-based dispatch (3-4x faster than Box<dyn> trait objects)
 - ♻️ **Automatic Reactivity** - Smart rebuilding only when state actually changes
 - 🎨 **Flexible Rendering** - Clean separation between widgets, state, and rendering
-- 🔧 **Zero Boilerplate** - Auto-implemented `clone_boxed()` and `as_any()` via blanket impls
+- 🔧 **Zero Boilerplate** - `impl_into_widget!` macro for seamless widget integration
+- 🏗️ **Ergonomic Builders** - Fluent builder pattern for all widgets
 - 📦 **Efficient Memory** - Slab-based element tree with O(1) access
+- 🔌 **Composable** - `IntoWidget` trait for automatic widget conversion
 
 ## Quick Start
 
@@ -34,9 +36,59 @@ use flui_core::prelude::*;
 #[derive(Debug, Clone)]
 struct HelloWorld;
 
+// Use the impl_into_widget! macro to automatically implement IntoWidget
+flui_core::impl_into_widget!(HelloWorld, stateless);
+
 impl StatelessWidget for HelloWorld {
     fn build(&self, ctx: &BuildContext) -> Widget {
-        Widget::render_object(Text::new("Hello, World!"))
+        Text::builder()
+            .data("Hello, World!")
+            .size(24.0)
+            .build()
+    }
+}
+```
+
+The `impl_into_widget!` macro generates implementations of `IntoWidget` trait and `From<T> for Widget`, allowing seamless conversion between your widget types and the `Widget` enum.
+
+### Complete Example with Builder Pattern
+
+```rust
+use flui_core::prelude::*;
+use flui_widgets::prelude::*;
+
+#[derive(Debug, Clone)]
+struct WelcomeScreen;
+
+flui_core::impl_into_widget!(WelcomeScreen, stateless);
+
+impl StatelessWidget for WelcomeScreen {
+    fn build(&self, _ctx: &BuildContext) -> Widget {
+        Container::builder()
+            .padding(EdgeInsets::all(40.0))
+            .color(Color::rgb(245, 245, 245))
+            .child(
+                Center::builder()
+                    .child(
+                        Container::builder()
+                            .padding(EdgeInsets::all(24.0))
+                            .decoration(BoxDecoration {
+                                color: Some(Color::rgb(66, 165, 245)),
+                                border_radius: Some(BorderRadius::circular(12.0)),
+                                ..Default::default()
+                            })
+                            .child(
+                                Text::builder()
+                                    .data("Welcome to FLUI!")
+                                    .size(32.0)
+                                    .color(Color::WHITE)
+                                    .build()
+                            )
+                            .build()
+                    )
+                    .build()
+            )
+            .build()
     }
 }
 ```
@@ -50,6 +102,9 @@ use flui_core::prelude::*;
 struct Counter {
     initial: i32,
 }
+
+// Use the macro for stateful widgets
+flui_core::impl_into_widget!(Counter, stateful);
 
 struct CounterState {
     count: i32,
@@ -65,8 +120,11 @@ impl StatefulWidget for Counter {
 
 impl State<Counter> for CounterState {
     fn build(&mut self, widget: &Counter) -> Widget {
-        // Build UI with current count
-        Widget::render_object(Text::new(format!("Count: {}", self.count)))
+        // Build UI with current count using builder pattern
+        Text::builder()
+            .data(format!("Count: {}", self.count))
+            .size(32.0)
+            .build()
     }
 
     fn set_state<F: FnOnce(&mut Self)>(&mut self, f: F) {
@@ -141,9 +199,15 @@ struct Greeting {
     name: String,
 }
 
+// Macro to implement IntoWidget for this type
+flui_core::impl_into_widget!(Greeting, stateless);
+
 impl StatelessWidget for Greeting {
     fn build(&self, ctx: &BuildContext) -> Widget {
-        Widget::render_object(Text::new(format!("Hello, {}!", self.name)))
+        Text::builder()
+            .data(format!("Hello, {}!", self.name))
+            .size(18.0)
+            .build()
     }
 }
 ```
@@ -160,6 +224,8 @@ struct Toggle {
     initial: bool,
 }
 
+flui_core::impl_into_widget!(Toggle, stateful);
+
 struct ToggleState {
     enabled: bool,
 }
@@ -175,7 +241,9 @@ impl StatefulWidget for Toggle {
 impl State<Toggle> for ToggleState {
     fn build(&mut self, widget: &Toggle) -> Widget {
         // Build UI based on self.enabled
-        Widget::render_object(Checkbox::new(self.enabled))
+        Checkbox::builder()
+            .value(self.enabled)
+            .build()
     }
 }
 ```
@@ -192,6 +260,8 @@ struct Theme {
     color: Color,
     child: Widget,
 }
+
+flui_core::impl_into_widget!(Theme, inherited);
 
 impl InheritedWidget for Theme {
     fn update_should_notify(&self, old: &Self) -> bool {
@@ -221,6 +291,8 @@ struct CustomBox {
     height: f32,
     color: Color,
 }
+
+flui_core::impl_into_widget!(CustomBox, render);
 
 impl RenderWidget for CustomBox {
     type Render = RenderCustomBox;
@@ -266,6 +338,8 @@ struct Positioned {
     left: Option<f32>,
     child: Widget,
 }
+
+flui_core::impl_into_widget!(Positioned, parent_data);
 
 impl ParentDataWidget for Positioned {
     type ParentDataType = StackParentData;
@@ -397,6 +471,76 @@ impl MultiRender for RenderRow {
 
 ## Key Features Explained
 
+### 🎯 The `impl_into_widget!` Macro
+
+FLUI provides a convenient macro to automatically implement the `IntoWidget` trait and `From<T> for Widget` conversion for your widget types:
+
+```rust
+// For StatelessWidget
+flui_core::impl_into_widget!(MyWidget, stateless);
+
+// For StatefulWidget
+flui_core::impl_into_widget!(MyCounter, stateful);
+
+// For RenderWidget
+flui_core::impl_into_widget!(MyCustomBox, render);
+
+// For InheritedWidget
+flui_core::impl_into_widget!(MyTheme, inherited);
+
+// For ParentDataWidget
+flui_core::impl_into_widget!(MyPositioned, parent_data);
+```
+
+This macro generates:
+- `impl IntoWidget for T` - allows calling `.into_widget()` on your type
+- `impl From<T> for Widget` - enables automatic conversion via `.into()`
+
+**Benefits**:
+- No more manual `Widget::stateless()` or `Widget::render_object()` calls
+- Cleaner, more ergonomic API
+- Works seamlessly with builder patterns
+- Type-safe widget composition
+
+### 🏗️ Builder Pattern
+
+Most widgets in FLUI support the builder pattern for ergonomic construction:
+
+```rust
+// Old verbose way (still works):
+let text = Widget::render_object(Text {
+    data: "Hello".to_string(),
+    size: 24.0,
+    color: Color::WHITE,
+});
+
+// New builder way (recommended):
+let text = Text::builder()
+    .data("Hello")
+    .size(24.0)
+    .color(Color::WHITE)
+    .build();
+
+// Complex example with Container:
+Container::builder()
+    .width(300.0)
+    .height(200.0)
+    .padding(EdgeInsets::all(20.0))
+    .decoration(BoxDecoration {
+        color: Some(Color::BLUE),
+        border_radius: Some(BorderRadius::circular(16.0)),
+        ..Default::default()
+    })
+    .child(
+        Text::builder()
+            .data("Nested content")
+            .build()
+    )
+    .build()
+```
+
+The builder pattern automatically handles `IntoWidget` conversions, making widget composition feel natural and fluent.
+
 ### 🎯 Object-Safe Traits
 
 All traits are object-safe from the start - no need for wrapper traits:
@@ -426,21 +570,30 @@ element.build()  // Box<dyn Element>
 
 ### 🔧 Zero Boilerplate
 
-Auto-implementation via blanket impls means you only implement what matters:
+The `impl_into_widget!` macro eliminates boilerplate code:
 
 ```rust
 #[derive(Debug, Clone)]
 struct MyWidget;
 
+// Just one line to get full Widget integration!
+flui_core::impl_into_widget!(MyWidget, stateless);
+
 impl StatelessWidget for MyWidget {
     fn build(&self, ctx: &BuildContext) -> Widget {
-        // ...
+        Text::builder()
+            .data("Hello")
+            .build()
     }
-    // ✅ clone_boxed() - auto-implemented!
-    // ✅ as_any() - auto-implemented!
-    // ✅ type_id() - auto-implemented!
 }
+
+// Now you can use it anywhere a Widget is expected:
+let widget = MyWidget;
+let as_widget: Widget = widget.into_widget();  // ✅ Via IntoWidget
+let also_widget: Widget = MyWidget.into();      // ✅ Via From<T>
 ```
+
+Combined with builder patterns, widget composition becomes extremely ergonomic with minimal boilerplate.
 
 ### 📦 Slab-Based Element Tree
 
@@ -475,11 +628,42 @@ FLUI is designed for high performance:
 
 See the [examples](../../examples/) directory for complete applications:
 
+- **[widget_hello_world](../../examples/widget_hello_world.rs)** - Modern builder pattern with `impl_into_widget!`
 - **[hello_world](../../examples/hello_world.rs)** - Basic StatelessWidget
 - **[counter](../../examples/counter.rs)** - StatefulWidget with state management
 - **[theme](../../examples/theme.rs)** - InheritedWidget for data propagation
 - **[custom_render](../../examples/custom_render.rs)** - Custom RenderWidget
 - **[layout](../../examples/layout.rs)** - Flex layout system
+
+### Widget Composition Example
+
+```rust
+use flui_core::prelude::*;
+use flui_widgets::prelude::*;
+
+// Create widgets using the builder pattern
+let my_ui = Column::builder()
+    .main_axis_alignment(MainAxisAlignment::Center)
+    .children(vec![
+        Text::builder()
+            .data("Title")
+            .size(32.0)
+            .color(Color::BLACK)
+            .build()
+            .into(),  // Convert to Widget
+        Container::builder()
+            .padding(EdgeInsets::symmetric(10.0, 20.0))
+            .child(
+                Text::builder()
+                    .data("Subtitle")
+                    .size(16.0)
+                    .build()
+            )
+            .build()
+            .into(),
+    ])
+    .build();
+```
 
 ## Testing
 
