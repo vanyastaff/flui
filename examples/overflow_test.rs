@@ -98,18 +98,15 @@ impl StatelessWidget for OverflowTestApp {
                                     Row::builder()
                                         .main_axis_alignment(MainAxisAlignment::SpaceBetween)
                                         .children(vec![
-                                            Button::builder()
-                                                .text("Save")
+                                            Button::builder("Save")
                                                 .color(Color::rgb(76, 175, 80))
                                                 .build()
                                                 .into(),
-                                            Button::builder()
-                                                .text("Cancel")
+                                            Button::builder("Cancel")
                                                 .color(Color::rgb(158, 158, 158))
                                                 .build()
                                                 .into(),
-                                            Button::builder()
-                                                .text("Delete")
+                                            Button::builder("Delete")
                                                 .color(Color::rgb(244, 67, 54))
                                                 .build()
                                                 .into(),
