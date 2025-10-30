@@ -269,26 +269,28 @@ impl SingleRender for RenderDecoratedBox {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-        let mut container = pool::acquire_container();
+        // Use pooled container for automatic return to pool on drop
+        let mut pooled = flui_engine::layer::PooledContainerLayer::new(pool::acquire_container());
         // Paint decoration in LOCAL coordinates (0, 0)
         let rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
 
         // Paint decoration in background position
         if self.data.position == DecorationPosition::Background {
-            self.paint_decoration(&mut container, rect);
+            self.paint_decoration(pooled.as_mut(), rect);
         }
 
         // Paint child in LOCAL coordinates (child will be at 0,0 relative to this box)
         let child_layer = tree.paint_child(child_id, Offset::ZERO);
-        container.add_child(child_layer);
+        pooled.as_mut().add_child(child_layer);
 
         // Paint decoration in foreground position
         if self.data.position == DecorationPosition::Foreground {
-            self.paint_decoration(&mut container, rect);
+            self.paint_decoration(pooled.as_mut(), rect);
         }
 
         // Wrap entire container in TransformLayer to apply offset
-        let container_layer: BoxedLayer = Box::new(container);
+        // When pooled is boxed and later dropped, it will return to pool automatically
+        let container_layer: BoxedLayer = Box::new(pooled);
         if offset != Offset::ZERO {
             Box::new(flui_engine::TransformLayer::translate(container_layer, offset))
         } else {

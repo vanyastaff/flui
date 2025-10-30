@@ -24,6 +24,8 @@ impl FrameStats {
     pub fn log(&self) {
         if self.frame_count.is_multiple_of(60) && self.frame_count > 0 {
             let pool_stats = flui_engine::layer::pool::get_stats();
+            let (cache_hits, _cache_misses, cache_total, cache_hit_rate) =
+                flui_core::render::cache::layout_cache().detailed_stats();
 
             println!(
                 "Performance: {} frames | Rebuilds: {} ({:.1}%) | Layouts: {} ({:.1}%) | Paints: {} ({:.1}%)",
@@ -34,6 +36,14 @@ impl FrameStats {
                 (self.layout_count as f64 / self.frame_count as f64) * 100.0,
                 self.paint_count,
                 (self.paint_count as f64 / self.frame_count as f64) * 100.0,
+            );
+
+            println!(
+                "  Layout Cache: {}/{} ({:.1}%) | Entries: {}",
+                cache_hits,
+                cache_total,
+                cache_hit_rate,
+                flui_core::render::cache::layout_cache().entry_count(),
             );
 
             println!(

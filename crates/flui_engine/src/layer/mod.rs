@@ -96,7 +96,9 @@ pub mod offset;
 pub mod opacity;
 pub mod picture;
 pub mod pool;
+pub mod pooled;
 pub mod transform;
+
 
 // Basic composition layers
 
@@ -111,6 +113,7 @@ pub mod transform;
 // Core types
 pub use base::{AnyLayer, Layer, LayerState};
 pub use handle::LayerHandle;
+pub use pooled::{PooledContainerLayer, PooledClipRectLayer, acquire_pooled_container, acquire_pooled_clip_rect};
 
 // Basic composition layers
 pub use container::ContainerLayer;
@@ -137,3 +140,4 @@ pub use flui_types::painting::effects::{
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
