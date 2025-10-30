@@ -91,6 +91,7 @@ pub use objects::{
     RenderLimitedBox,
     RenderMouseRegion,
     RenderOffstage,
+    RenderOverflowBox,
 
     // Effects objects
     RenderOpacity,
