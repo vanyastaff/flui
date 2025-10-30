@@ -6,6 +6,7 @@
 //! - Stack: Layered positioning (future)
 //! - Wrap: Flowing layout (future)
 
+pub mod baseline;
 pub mod column;
 pub mod expanded;
 pub mod flexible;
@@ -20,7 +21,9 @@ pub mod stack;
 
 
 
+
 // Re-exports
+pub use baseline::Baseline;
 pub use column::Column;
 pub use expanded::Expanded;
 pub use flexible::Flexible;
@@ -31,6 +34,7 @@ pub use positioned::Positioned;
 pub use rotated_box::RotatedBox;
 pub use row::Row;
 pub use stack::Stack;
+
 
 
 

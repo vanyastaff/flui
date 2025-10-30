@@ -81,8 +81,10 @@ pub use objects::{
     // Layout objects
     RenderAlign,
     RenderAspectRatio,
+    RenderBaseline,
     RenderClipRRect,
     RenderClipRect,
+    RenderColoredBox,
     RenderConstrainedBox,
     RenderDecoratedBox,
     RenderFittedBox,
