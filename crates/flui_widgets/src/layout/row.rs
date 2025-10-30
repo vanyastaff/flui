@@ -36,7 +36,8 @@ use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
-use flui_types::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+use flui_types::Axis;
+use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 /// A widget that displays its children in a horizontal array.
 ///

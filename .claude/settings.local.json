@@ -97,7 +97,17 @@
       "Bash(rm:*)",
       "Bash(awk:*)",
       "Bash(cargo doc:*)",
-      "mcp__sequential-thinking__sequentialthinking"
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(for file in app.rs compositor.rs devtools.rs backend.rs)",
+      "Bash(do echo \"=== $file ===\")",
+      "Bash(for file in transform.rs clip.rs blur.rs filter.rs)",
+      "Bash(for file in crates/flui_rendering/src/objects/interaction/pointer_listener.rs crates/flui_rendering/src/objects/layout/fractionally_sized_box.rs crates/flui_rendering/src/objects/special/annotated_region.rs crates/flui_rendering/src/objects/special/block_semantics.rs crates/flui_rendering/src/objects/special/exclude_semantics.rs crates/flui_rendering/src/objects/special/merge_semantics.rs crates/flui_rendering/src/objects/special/metadata.rs)",
+      "Bash(do)",
+      "Bash(if grep -q \"use flui_core::render::SingleRender\" \"$file\")",
+      "Bash(! grep -q \"BoxConstraints\" \"$file\")",
+      "Bash(then)",
+      "Bash(echo:*)",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []

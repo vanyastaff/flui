@@ -413,7 +413,7 @@ mod tests {
 // Implement RenderWidget
 impl RenderWidget for SizedBox {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        use flui_types::BoxConstraints;
+        use flui_types::constraints::BoxConstraints;
 
         // Create tight constraints for specified dimensions
         let constraints = BoxConstraints::tight_for(self.width, self.height);
@@ -421,7 +421,7 @@ impl RenderWidget for SizedBox {
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        use flui_types::BoxConstraints;
+        use flui_types::constraints::BoxConstraints;
         if let RenderNode::Single(render) = render_object {
             if let Some(constrained_box) = render.downcast_mut::<RenderConstrainedBox>() {
                 let constraints = BoxConstraints::tight_for(self.width, self.height);

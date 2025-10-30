@@ -40,7 +40,8 @@ use bon::Builder;
 use flui_core::widget::{Widget, StatelessWidget};
 use flui_core::BuildContext;
 use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets};
+use flui_types::{Alignment, Color, EdgeInsets};
+use flui_types::constraints::BoxConstraints;
 use std::fmt;
 
 /// A convenience widget that combines common painting, positioning, and sizing widgets.
