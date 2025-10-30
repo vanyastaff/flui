@@ -140,7 +140,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: Widget) -> OpacityBuilder<SetChild<S>> {
-        self.child_internal(Some(child))
+        self.child_internal(child)
     }
 }
 

@@ -32,7 +32,7 @@ use bon::Builder;
 use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
 use flui_core::BuildContext;
-use flui_rendering::{RenderClipRRect, RRectShape, SingleArity};
+use flui_rendering::{RenderClipRRect, RRectShape};
 use flui_types::styling::BorderRadius;
 use flui_types::painting::Clip;
 
@@ -307,8 +307,8 @@ impl RenderWidget for ClipRRect {
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderClipRRect>() {
-                render_object.shape.border_radius = self.border_radius;
-        render_object.set_clip_behavior(self.clip_behavior);
+                obj.set_border_radius(self.border_radius);
+                obj.set_clip_behavior(self.clip_behavior);
             }
         }
     }

@@ -26,7 +26,7 @@ use bon::Builder;
 use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
 use flui_core::BuildContext;
-use flui_rendering::{RenderAbsorbPointer, SingleArity};
+use flui_rendering::RenderAbsorbPointer;
 
 /// A widget that absorbs pointer events during hit testing.
 ///
@@ -255,7 +255,7 @@ impl RenderWidget for AbsorbPointer {
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderAbsorbPointer>() {
-                render_object.set_absorbing(self.absorbing);
+                obj.set_absorbing(self.absorbing);
             }
         }
     }

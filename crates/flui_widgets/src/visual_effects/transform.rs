@@ -33,9 +33,7 @@ use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
 use flui_core::BuildContext;
 use flui_rendering::RenderTransform;
-
-// Use Matrix4 from rendering module
-type Matrix4 = flui_rendering::objects::effects::transform::Matrix4;
+use flui_types::Matrix4;
 
 /// A widget that applies a transformation matrix before painting its child.
 ///
@@ -185,7 +183,7 @@ impl Transform {
     /// let widget = Transform::translate(50.0, 30.0);
     /// ```
     pub fn translate(x: f32, y: f32) -> Self {
-        Self::new(Matrix4::translation(x, y))
+        Self::new(Matrix4::translation(x, y, 0.0))
     }
 
     /// Creates a Transform that rotates its child around the Z axis.
@@ -206,7 +204,7 @@ impl Transform {
     /// let widget = Transform::rotate(PI / 2.0);
     /// ```
     pub fn rotate(radians: f32) -> Self {
-        Self::new(Matrix4::rotation(radians))
+        Self::new(Matrix4::rotation_z(radians))
     }
 
     /// Creates a Transform that scales its child.
@@ -226,7 +224,7 @@ impl Transform {
     /// let widget = Transform::scale(-1.0, 1.0);
     /// ```
     pub fn scale(x: f32, y: f32) -> Self {
-        Self::new(Matrix4::scale(x, y))
+        Self::new(Matrix4::scaling(x, y, 1.0))
     }
 
     /// Creates a Transform with identity matrix (no transformation).
@@ -255,26 +253,18 @@ impl Transform {
     ///
     /// Returns an error if the transformation matrix is invalid (contains NaN or infinity).
     pub fn validate(&self) -> Result<(), String> {
-        // Check if any matrix field is NaN or infinite
-        let fields = [
-            ("translate_x", self.transform.translate_x),
-            ("translate_y", self.transform.translate_y),
-            ("scale_x", self.transform.scale_x),
-            ("scale_y", self.transform.scale_y),
-            ("rotation", self.transform.rotation),
-        ];
-
-        for (name, value) in &fields {
+        // Check if any matrix element is NaN or infinite
+        for (i, &value) in self.transform.m.iter().enumerate() {
             if value.is_nan() {
                 return Err(format!(
-                    "Invalid transform: field '{}' contains NaN",
-                    name
+                    "Invalid transform: matrix element [{}] contains NaN",
+                    i
                 ));
             }
             if value.is_infinite() {
                 return Err(format!(
-                    "Invalid transform: field '{}' contains infinity",
-                    name
+                    "Invalid transform: matrix element [{}] contains infinity",
+                    i
                 ));
             }
         }
@@ -295,16 +285,34 @@ impl Default for Transform {
 // Implement RenderWidget
 impl RenderWidget for Transform {
     fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        use flui_rendering::{SingleRenderBox, objects::effects::transform::TransformData};
-        // Note: transform_hit_tests is ignored for now as RenderTransform doesn't support it yet
-        RenderNode::single(Box::new(SingleRenderBox::new(TransformData::new(self.transform))))
+        use flui_engine::layer::Transform;
+        // Convert Matrix4 to Transform::Matrix struct variant
+        let m = &self.transform.m;
+        let transform = Transform::Matrix {
+            a: m[0],
+            b: m[1],
+            c: m[4],
+            d: m[5],
+            tx: m[12],
+            ty: m[13],
+        };
+        RenderNode::single(Box::new(RenderTransform::new(transform)))
     }
 
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         if let RenderNode::Single { render, .. } = render_object {
             if let Some(transform_render) = render.downcast_mut::<RenderTransform>() {
-                transform_render.set_transform(self.transform);
-                // Note: transform_hit_tests is ignored for now as RenderTransform doesn't support it yet
+                use flui_engine::layer::Transform;
+                let m = &self.transform.m;
+                let transform = Transform::Matrix {
+                    a: m[0],
+                    b: m[1],
+                    c: m[4],
+                    d: m[5],
+                    tx: m[12],
+                    ty: m[13],
+                };
+                transform_render.set_transform(transform);
             }
         }
     }
@@ -333,7 +341,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: Widget) -> TransformBuilder<SetChild<S>> {
-        self.child_internal(Some(child))
+        self.child_internal(child)
     }
 }
 

@@ -19,7 +19,7 @@ use bon::Builder;
 use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
 use flui_core::BuildContext;
-use flui_rendering::{RenderMouseRegion, MouseCallbacks, SingleArity};
+use flui_rendering::{RenderMouseRegion, MouseCallbacks};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 
 /// A widget that tracks mouse pointer events.
@@ -333,12 +333,9 @@ mod tests {
     }
 }
 
-// Implement RenderObjectWidget
-impl RenderObjectWidget for MouseRegion {
-    type RenderObject = RenderMouseRegion;
-    type Arity = SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
+// Implement RenderWidget
+impl RenderWidget for MouseRegion {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
         // TODO: RenderMouseRegion currently uses fn() callbacks as placeholders
         // The widget's Arc<dyn Fn> callbacks will be properly supported when
         // event handling infrastructure is implemented
@@ -347,24 +344,24 @@ impl RenderObjectWidget for MouseRegion {
             on_exit: None,
             on_hover: None,
         };
-        RenderMouseRegion::new(callbacks)
+        RenderNode::single(Box::new(RenderMouseRegion::new(callbacks)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        // TODO: Update callbacks when event handling is implemented
-        let callbacks = MouseCallbacks {
-            on_enter: None,
-            on_exit: None,
-            on_hover: None,
-        };
-        render_object.set_callbacks(callbacks);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single { render, .. } = render_object {
+            if let Some(mouse_region) = render.downcast_mut::<RenderMouseRegion>() {
+                // TODO: Update callbacks when event handling is implemented
+                let callbacks = MouseCallbacks {
+                    on_enter: None,
+                    on_exit: None,
+                    on_hover: None,
+                };
+                mouse_region.set_callbacks(callbacks);
+            }
+        }
     }
-}
 
-impl SingleChildRenderObjectWidget for MouseRegion {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("MouseRegion requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }

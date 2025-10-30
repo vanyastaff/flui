@@ -26,7 +26,7 @@ use bon::Builder;
 use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
 use flui_core::BuildContext;
-use flui_rendering::{RenderIgnorePointer, SingleArity};
+use flui_rendering::RenderIgnorePointer;
 
 /// A widget that is invisible to pointer events.
 ///
@@ -255,7 +255,7 @@ impl RenderWidget for IgnorePointer {
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderIgnorePointer>() {
-                render_object.set_ignoring(self.ignoring);
+                obj.set_ignoring(self.ignoring);
             }
         }
     }

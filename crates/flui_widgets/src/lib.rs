@@ -57,23 +57,15 @@
 pub mod basic;
 pub mod error;
 pub mod layout;
-
-// Temporarily disabled - will be fixed later
-// pub mod visual_effects;
-// pub mod gestures;
-// pub mod interaction;
+pub mod visual_effects;
+pub mod interaction;
 
 // Re-exports for convenient top-level access
 // Essential widgets for Container and Flex layout
 pub use basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox, Text};
 pub use layout::{Column, Expanded, Flexible, Row};
-
-// Temporarily disabled - will be fixed later
-// pub use basic::{AspectRatio, Button};
-// pub use layout::{IndexedStack, Positioned, Stack};
-// pub use visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
-// pub use gestures::GestureDetector;
-// pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+pub use visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
+pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
 pub use flui_core::Widget;
@@ -92,13 +84,8 @@ pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
     pub use crate::basic::{Align, Center, Container, DecoratedBox, Padding, SizedBox, Text};
     pub use crate::layout::{Column, Expanded, Flexible, Row};
-
-    // Temporarily disabled
-    // pub use crate::basic::{AspectRatio, Button};
-    // pub use crate::layout::{IndexedStack, Positioned, Stack};
-    // pub use crate::visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
-    // pub use crate::gestures::GestureDetector;
-    // pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
+    pub use crate::visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
+    pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
     // Re-export core types
     pub use flui_core::{BuildContext, Widget};

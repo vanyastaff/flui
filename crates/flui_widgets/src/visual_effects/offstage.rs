@@ -17,7 +17,7 @@ use bon::Builder;
 use flui_core::widget::{Widget, RenderWidget};
 use flui_core::render::RenderNode;
 use flui_core::BuildContext;
-use flui_rendering::{RenderOffstage, SingleArity};
+use flui_rendering::RenderOffstage;
 
 /// A widget that lays out its child as if it was in the tree, but without painting or hit testing.
 ///
@@ -135,7 +135,7 @@ impl RenderWidget for Offstage {
     fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
         if let RenderNode::Single { render, .. } = render_object {
             if let Some(obj) = render.downcast_mut::<RenderOffstage>() {
-                render_object.set_offstage(self.offstage);
+                obj.set_offstage(self.offstage);
             }
         }
     }
