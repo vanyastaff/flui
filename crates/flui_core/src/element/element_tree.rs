@@ -483,8 +483,44 @@ impl ElementTree {
     /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
     #[inline]
     pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> crate::BoxedLayer {
-        self.paint_render_object(child_id, offset)
-            .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
+        // Walk down through ComponentElements to find the first RenderElement
+        // (same logic as layout_child)
+        let mut current_id = child_id;
+        let render_id = loop {
+            if let Some(element) = self.get(current_id) {
+                match element {
+                    crate::element::Element::Render(_) => {
+                        break Some(current_id);
+                    }
+                    crate::element::Element::Component(comp) => {
+                        if let Some(comp_child_id) = comp.child() {
+                            current_id = comp_child_id;
+                        } else {
+                            break None;
+                        }
+                    }
+                    crate::element::Element::Stateful(stateful) => {
+                        if let Some(stateful_child_id) = stateful.child() {
+                            current_id = stateful_child_id;
+                        } else {
+                            break None;
+                        }
+                    }
+                    _ => {
+                        break None;
+                    }
+                }
+            } else {
+                break None;
+            }
+        };
+
+        if let Some(render_id) = render_id {
+            self.paint_render_object(render_id, offset)
+                .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
+        } else {
+            Box::new(flui_engine::ContainerLayer::new())
+        }
     }
 
     // ========== Tree Information ==========

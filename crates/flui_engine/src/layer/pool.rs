@@ -32,12 +32,21 @@
 
 use super::{ClipRectLayer, ContainerLayer};
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Maximum number of layers to keep in each pool
 ///
 /// Prevents unbounded growth in memory usage. In practice, most UI trees
 /// have < 100 layers per type per frame, so 128 is a good balance.
 const MAX_POOL_SIZE: usize = 128;
+
+// ========== Performance Metrics ==========
+
+/// Global counters for pool performance metrics
+static CONTAINER_ACQUIRES: AtomicUsize = AtomicUsize::new(0);
+static CONTAINER_POOL_HITS: AtomicUsize = AtomicUsize::new(0);
+static CLIP_RECT_ACQUIRES: AtomicUsize = AtomicUsize::new(0);
+static CLIP_RECT_POOL_HITS: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     /// Thread-local pool for ContainerLayer objects
@@ -65,7 +74,15 @@ thread_local! {
 /// assert!(container.children().is_empty());
 /// ```
 pub fn acquire_container() -> ContainerLayer {
-    CONTAINER_POOL.with(|pool| pool.borrow_mut().pop().unwrap_or_else(ContainerLayer::new))
+    CONTAINER_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+
+    CONTAINER_POOL.with(|pool| {
+        let result = pool.borrow_mut().pop();
+        if result.is_some() {
+            CONTAINER_POOL_HITS.fetch_add(1, Ordering::Relaxed);
+        }
+        result.unwrap_or_else(ContainerLayer::new)
+    })
 }
 
 /// Release a ContainerLayer back to the pool
@@ -100,10 +117,14 @@ pub fn release_container(mut container: ContainerLayer) {
 /// If the pool is empty, creates a new ClipRectLayer with empty clip rect.
 /// The returned layer is guaranteed to be in a clean state (no children).
 pub fn acquire_clip_rect() -> ClipRectLayer {
+    CLIP_RECT_ACQUIRES.fetch_add(1, Ordering::Relaxed);
+
     CLIP_RECT_POOL.with(|pool| {
-        pool.borrow_mut()
-            .pop()
-            .unwrap_or_else(|| ClipRectLayer::new(flui_types::Rect::ZERO))
+        let result = pool.borrow_mut().pop();
+        if result.is_some() {
+            CLIP_RECT_POOL_HITS.fetch_add(1, Ordering::Relaxed);
+        }
+        result.unwrap_or_else(|| ClipRectLayer::new(flui_types::Rect::ZERO))
     })
 }
 
@@ -160,6 +181,61 @@ pub fn clip_rect_pool_size() -> usize {
 pub fn clear_all_pools() {
     CONTAINER_POOL.with(|pool| pool.borrow_mut().clear());
     CLIP_RECT_POOL.with(|pool| pool.borrow_mut().clear());
+}
+
+// ========== Performance Metrics API ==========
+
+/// Pool performance statistics
+#[derive(Debug, Clone, Copy)]
+pub struct PoolStats {
+    /// Total ContainerLayer acquisitions
+    pub container_acquires: usize,
+    /// ContainerLayer pool hits (reused from pool)
+    pub container_hits: usize,
+    /// ContainerLayer pool hit rate (0.0 - 1.0)
+    pub container_hit_rate: f64,
+    /// Total ClipRectLayer acquisitions
+    pub clip_rect_acquires: usize,
+    /// ClipRectLayer pool hits (reused from pool)
+    pub clip_rect_hits: usize,
+    /// ClipRectLayer pool hit rate (0.0 - 1.0)
+    pub clip_rect_hit_rate: f64,
+    /// Current pool sizes
+    pub pool_sizes: (usize, usize),
+}
+
+/// Get pool performance statistics
+pub fn get_stats() -> PoolStats {
+    let container_acquires = CONTAINER_ACQUIRES.load(Ordering::Relaxed);
+    let container_hits = CONTAINER_POOL_HITS.load(Ordering::Relaxed);
+    let clip_rect_acquires = CLIP_RECT_ACQUIRES.load(Ordering::Relaxed);
+    let clip_rect_hits = CLIP_RECT_POOL_HITS.load(Ordering::Relaxed);
+
+    PoolStats {
+        container_acquires,
+        container_hits,
+        container_hit_rate: if container_acquires > 0 {
+            container_hits as f64 / container_acquires as f64
+        } else {
+            0.0
+        },
+        clip_rect_acquires,
+        clip_rect_hits,
+        clip_rect_hit_rate: if clip_rect_acquires > 0 {
+            clip_rect_hits as f64 / clip_rect_acquires as f64
+        } else {
+            0.0
+        },
+        pool_sizes: pool_sizes(),
+    }
+}
+
+/// Reset performance counters
+pub fn reset_stats() {
+    CONTAINER_ACQUIRES.store(0, Ordering::Relaxed);
+    CONTAINER_POOL_HITS.store(0, Ordering::Relaxed);
+    CLIP_RECT_ACQUIRES.store(0, Ordering::Relaxed);
+    CLIP_RECT_POOL_HITS.store(0, Ordering::Relaxed);
 }
 
 #[cfg(test)]

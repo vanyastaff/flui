@@ -84,6 +84,9 @@ pub struct RenderClip<S: ClipShape> {
 
     /// The shape to clip to
     pub shape: S,
+
+    /// Cached size from layout
+    size: Size,
 }
 
 impl<S: ClipShape> RenderClip<S> {
@@ -92,6 +95,7 @@ impl<S: ClipShape> RenderClip<S> {
         Self {
             shape,
             clip_behavior,
+            size: Size::ZERO,
         }
     }
 
@@ -124,7 +128,10 @@ impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
         constraints: BoxConstraints,
     ) -> Size {
         // Layout child_id with same constraints (pass-through)
-        tree.layout_child(child_id, constraints)
+        let size = tree.layout_child(child_id, constraints);
+        // Cache size for paint
+        self.size = size;
+        size
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
@@ -133,12 +140,13 @@ impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
             return tree.paint_child(child_id, offset);
         }
 
-        // Get child_id layer
+        // Get child_id layer (already painted at correct offset)
         let child_layer = tree.paint_child(child_id, offset);
 
-        // Get actual size from layout phase
-        // Fall back to ZERO if size is not available (shouldn't happen during normal paint)
-        let size = Size::ZERO;
+        // Use cached size from layout phase
+        // Note: Clip rect is at (0,0) in child's local coordinate space,
+        // since child_layer has already been painted at the correct offset
+        let size = self.size;
 
         // Let the shape create its specific clip layer
         self.shape.create_clip_layer(child_layer, size)

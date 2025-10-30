@@ -23,7 +23,9 @@ impl FrameStats {
     /// Log statistics to console
     pub fn log(&self) {
         if self.frame_count.is_multiple_of(60) && self.frame_count > 0 {
-            tracing::info!(
+            let pool_stats = flui_engine::layer::pool::get_stats();
+
+            println!(
                 "Performance: {} frames | Rebuilds: {} ({:.1}%) | Layouts: {} ({:.1}%) | Paints: {} ({:.1}%)",
                 self.frame_count,
                 self.rebuild_count,
@@ -32,6 +34,17 @@ impl FrameStats {
                 (self.layout_count as f64 / self.frame_count as f64) * 100.0,
                 self.paint_count,
                 (self.paint_count as f64 / self.frame_count as f64) * 100.0,
+            );
+
+            println!(
+                "  Layer Pool: Container hits: {}/{} ({:.1}%) | ClipRect hits: {}/{} ({:.1}%) | Pool sizes: {:?}",
+                pool_stats.container_hits,
+                pool_stats.container_acquires,
+                pool_stats.container_hit_rate * 100.0,
+                pool_stats.clip_rect_hits,
+                pool_stats.clip_rect_acquires,
+                pool_stats.clip_rect_hit_rate * 100.0,
+                pool_stats.pool_sizes,
             );
         }
     }

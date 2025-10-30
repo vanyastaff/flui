@@ -2,7 +2,7 @@
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
-use flui_engine::{BoxedLayer, TransformLayer};
+use flui_engine::BoxedLayer;
 use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that aligns its child_id within the available space
@@ -124,14 +124,11 @@ impl SingleRender for RenderAlign {
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // SingleArity always has exactly one child_id
-        // Get child_id layer
-        let child_layer = tree.paint_child(child_id, offset);
-
         // Use the size from layout phase
         let size = self.size;
         let child_size = self.child_size;
 
-        // Calculate aligned offset
+        // Calculate aligned offset IN LOCAL COORDINATES
         // Alignment: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
         let available_width = size.width - child_size.width;
         let available_height = size.height - child_size.height;
@@ -139,10 +136,17 @@ impl SingleRender for RenderAlign {
         let aligned_x = (available_width * (self.alignment.x + 1.0)) / 2.0;
         let aligned_y = (available_height * (self.alignment.y + 1.0)) / 2.0;
 
-        let offset = Offset::new(aligned_x, aligned_y);
+        let local_child_offset = Offset::new(aligned_x, aligned_y);
 
-        // Use TransformLayer to position child_id at aligned offset
-        Box::new(TransformLayer::translate(child_layer, offset))
+        // Paint child at local alignment offset
+        let child_layer = tree.paint_child(child_id, local_child_offset);
+
+        // Wrap in TransformLayer to apply parent offset
+        if offset != Offset::ZERO {
+            Box::new(flui_engine::TransformLayer::translate(child_layer, offset))
+        } else {
+            child_layer
+        }
     }
 }
 

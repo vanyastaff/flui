@@ -229,10 +229,10 @@ impl LeafRender for RenderParagraph {
         size
     }
 
-    fn paint(&self, _offset: Offset) -> BoxedLayer {
+    fn paint(&self, offset: Offset) -> BoxedLayer {
         let mut picture = PictureLayer::new();
 
-        if let Some(_size) = self.size {
+        if let Some(size) = self.size {
             // Create text style from paragraph data
             let style = TextStyle {
                 font_size: Some(self.data.font_size as f64),
@@ -240,14 +240,20 @@ impl LeafRender for RenderParagraph {
                 ..Default::default()
             };
 
-            // Position at top-left of the laid-out area
+            // Paint in LOCAL coordinates (0, 0) - transform will be applied by parent
             let position = Point::new(0.0, 0.0);
 
             // Draw text to picture layer
             picture.draw_text(&self.data.text, position, style);
         }
 
-        Box::new(picture)
+        // Wrap in TransformLayer to apply offset
+        let picture_layer: BoxedLayer = Box::new(picture);
+        if offset != Offset::ZERO {
+            Box::new(flui_engine::TransformLayer::translate(picture_layer, offset))
+        } else {
+            picture_layer
+        }
     }
 }
 

@@ -137,7 +137,7 @@ impl SingleRender for RenderPhysicalModel {
         // 2. Create a BoxShadowLayer with appropriate blur and offset
         // 3. Add it before the background shape
 
-        // Paint background shape
+        // Paint background shape at the offset position
         let mut picture = PictureLayer::new();
         let size = self.size;
 
@@ -149,28 +149,31 @@ impl SingleRender for RenderPhysicalModel {
         match self.shape {
             PhysicalShape::Rectangle => {
                 picture.draw_rect(
-                    flui_types::Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                    flui_types::Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
                     paint,
                 );
             }
             PhysicalShape::RoundedRectangle => {
                 let radius = flui_types::styling::Radius::circular(self.border_radius);
                 let rrect = flui_engine::painter::RRect::from_rect_and_radius(
-                    flui_types::Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                    flui_types::Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
                     radius,
                 );
                 picture.draw_rrect(rrect, paint);
             }
             PhysicalShape::Circle => {
                 let radius = size.width.min(size.height) / 2.0;
-                let center = flui_types::Point::new(size.width / 2.0, size.height / 2.0);
+                let center = flui_types::Point::new(
+                    offset.dx + size.width / 2.0,
+                    offset.dy + size.height / 2.0,
+                );
                 picture.draw_circle(center, radius, paint);
             }
         }
 
         container.add_child(Box::new(picture));
 
-        // Paint child_id on top
+        // Paint child_id on top at same offset
         let child_layer = tree.paint_child(child_id, offset);
         container.add_child(child_layer);
 

@@ -110,6 +110,7 @@ impl RenderDecoratedBox {
     /// - GradientLayer for gradients
     /// - PictureLayer for solid colors and borders
     fn paint_decoration(&self, container: &mut flui_engine::ContainerLayer, rect: Rect) {
+
         // use flui_engine::GradientLayer; // TODO: GradientLayer not implemented yet
 
         let decoration = &self.data.decoration;
@@ -269,6 +270,7 @@ impl SingleRender for RenderDecoratedBox {
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         let mut container = pool::acquire_container();
+        // Paint decoration in LOCAL coordinates (0, 0)
         let rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
 
         // Paint decoration in background position
@@ -276,8 +278,8 @@ impl SingleRender for RenderDecoratedBox {
             self.paint_decoration(&mut container, rect);
         }
 
-        // Paint child on top
-        let child_layer = tree.paint_child(child_id, offset);
+        // Paint child in LOCAL coordinates (child will be at 0,0 relative to this box)
+        let child_layer = tree.paint_child(child_id, Offset::ZERO);
         container.add_child(child_layer);
 
         // Paint decoration in foreground position
@@ -285,7 +287,13 @@ impl SingleRender for RenderDecoratedBox {
             self.paint_decoration(&mut container, rect);
         }
 
-        Box::new(container)
+        // Wrap entire container in TransformLayer to apply offset
+        let container_layer: BoxedLayer = Box::new(container);
+        if offset != Offset::ZERO {
+            Box::new(flui_engine::TransformLayer::translate(container_layer, offset))
+        } else {
+            container_layer
+        }
     }
 }
 

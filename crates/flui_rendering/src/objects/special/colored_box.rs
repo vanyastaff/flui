@@ -26,12 +26,17 @@ use flui_types::{Color, Offset, Rect, Size, constraints::BoxConstraints};
 pub struct RenderColoredBox {
     /// Background color
     pub color: Color,
+    /// Cached size from layout
+    size: Size,
 }
 
 impl RenderColoredBox {
     /// Create new RenderColoredBox with specified color
     pub fn new(color: Color) -> Self {
-        Self { color }
+        Self {
+            color,
+            size: Size::ZERO,
+        }
     }
 
     /// Set new color
@@ -55,21 +60,21 @@ impl SingleRender for RenderColoredBox {
     ) -> Size {
         // SingleArity always has exactly one child
         // Pass through constraints
-        tree.layout_child(child_id, constraints)
+        let size = tree.layout_child(child_id, constraints);
+        // Cache size for paint
+        self.size = size;
+        size
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Create picture layer for background color
         let mut picture = PictureLayer::new();
 
-        // TODO: Get actual size from layout context instead of using placeholder
-        // The PaintCx should provide access to the laid-out size from the layout phase
-        let size = 1000.0;
-        let rect = Rect::from_xywh(0.0, 0.0, size, size);
+        // Paint background at the offset position with actual size from layout
+        let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
 
         // Create paint for the color
-        let mut paint = Paint::default();
-        paint.color = self.color;
+        let paint = Paint::fill(self.color);
 
         // Draw the background rectangle
         picture.draw_rect(rect, paint);

@@ -167,11 +167,11 @@ impl SingleRender for RenderRotatedBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, _offset: Offset) -> BoxedLayer {
-        // Calculate offset based on rotation
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        // Calculate rotation offset based on quarter turns
         // Note: For now, this is a simplified implementation
         // TODO: Implement proper rotation transformation
-        let offset = match self.quarter_turns {
+        let rotation_offset = match self.quarter_turns {
             QuarterTurns::Zero => Offset::new(0.0, 0.0),
             QuarterTurns::One => {
                 // 90° clockwise: child_id's top-left becomes our top-right
@@ -187,12 +187,15 @@ impl SingleRender for RenderRotatedBox {
             }
         };
 
-        // Capture child_id layer and apply offset transform
-        // TODO: Add actual rotation transformation when available
-        let child_layer = tree.paint_child(child_id, offset);
+        // Combine parent offset with rotation offset
+        let combined_offset = offset + rotation_offset;
 
-        if offset != Offset::ZERO {
-            Box::new(TransformLayer::translate(child_layer, offset))
+        // Capture child_id layer and apply combined offset transform
+        // TODO: Add actual rotation transformation when available
+        let child_layer = tree.paint_child(child_id, combined_offset);
+
+        if rotation_offset != Offset::ZERO {
+            Box::new(TransformLayer::translate(child_layer, combined_offset))
         } else {
             child_layer
         }
