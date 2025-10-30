@@ -4,7 +4,7 @@
 //! line breaks, and text wrapping.
 
 use flui_core::render::LeafRender;
-use flui_engine::{BoxedLayer, PictureLayer};
+use flui_engine::{BoxedLayer, layer::pool};
 use flui_types::{
     Offset, Point, Size,
     constraints::BoxConstraints,
@@ -230,7 +230,7 @@ impl LeafRender for RenderParagraph {
     }
 
     fn paint(&self, offset: Offset) -> BoxedLayer {
-        let mut picture = PictureLayer::new();
+        let mut pooled = flui_engine::PooledPictureLayer::new(pool::acquire_picture());
 
         if let Some(size) = self.size {
             // Create text style from paragraph data
@@ -244,11 +244,11 @@ impl LeafRender for RenderParagraph {
             let position = Point::new(0.0, 0.0);
 
             // Draw text to picture layer
-            picture.draw_text(&self.data.text, position, style);
+            pooled.as_mut().draw_text(&self.data.text, position, style);
         }
 
         // Wrap in TransformLayer to apply offset
-        let picture_layer: BoxedLayer = Box::new(picture);
+        let picture_layer: BoxedLayer = Box::new(pooled);
         if offset != Offset::ZERO {
             Box::new(flui_engine::TransformLayer::translate(picture_layer, offset))
         } else {

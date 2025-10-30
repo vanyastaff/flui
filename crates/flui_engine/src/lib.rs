@@ -103,6 +103,10 @@ pub use layer::{
     OffsetLayer,
     OpacityLayer,
     PictureLayer,
+    // Pooled layers
+    PooledClipRectLayer,
+    PooledContainerLayer,
+    PooledPictureLayer,
     Transform,
     TransformLayer,
 };

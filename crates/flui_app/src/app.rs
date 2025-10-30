@@ -47,13 +47,16 @@ impl FrameStats {
             );
 
             println!(
-                "  Layer Pool: Container hits: {}/{} ({:.1}%) | ClipRect hits: {}/{} ({:.1}%) | Pool sizes: {:?}",
+                "  Layer Pool: Container: {}/{} ({:.1}%) | ClipRect: {}/{} ({:.1}%) | Picture: {}/{} ({:.1}%) | Sizes: {:?}",
                 pool_stats.container_hits,
                 pool_stats.container_acquires,
                 pool_stats.container_hit_rate * 100.0,
                 pool_stats.clip_rect_hits,
                 pool_stats.clip_rect_acquires,
                 pool_stats.clip_rect_hit_rate * 100.0,
+                pool_stats.picture_hits,
+                pool_stats.picture_acquires,
+                pool_stats.picture_hit_rate * 100.0,
                 pool_stats.pool_sizes,
             );
         }

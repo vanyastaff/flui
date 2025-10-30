@@ -113,7 +113,10 @@ pub mod transform;
 // Core types
 pub use base::{AnyLayer, Layer, LayerState};
 pub use handle::LayerHandle;
-pub use pooled::{PooledContainerLayer, PooledClipRectLayer, acquire_pooled_container, acquire_pooled_clip_rect};
+pub use pooled::{
+    PooledContainerLayer, PooledClipRectLayer, PooledPictureLayer,
+    acquire_pooled_container, acquire_pooled_clip_rect, acquire_pooled_picture,
+};
 
 // Basic composition layers
 pub use container::ContainerLayer;

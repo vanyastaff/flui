@@ -2,7 +2,7 @@
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
-use flui_engine::{BoxedLayer, Paint, PictureLayer, RRect, layer::pool};
+use flui_engine::{BoxedLayer, Paint, RRect, layer::pool};
 use flui_types::{
     Offset, Point, Rect, Size,
     constraints::BoxConstraints,
@@ -128,8 +128,8 @@ impl RenderDecoratedBox {
             // let gradient_layer = GradientLayer::new(rect, gradient.clone());
             // container.add_child(Box::new(gradient_layer));
         } else if let Some(color) = decoration.color {
-            // Create PictureLayer for solid color background
-            let mut picture = PictureLayer::new();
+            // Create pooled PictureLayer for solid color background
+            let mut pooled = flui_engine::PooledPictureLayer::new(pool::acquire_picture());
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
 
             let paint = Paint::fill(color);
@@ -143,26 +143,26 @@ impl RenderDecoratedBox {
                     bottom_right: circular_radius,
                     bottom_left: circular_radius,
                 };
-                picture.draw_rrect(rrect, paint);
+                pooled.as_mut().draw_rrect(rrect, paint);
             } else {
-                picture.draw_rect(rect, paint);
+                pooled.as_mut().draw_rect(rect, paint);
             }
 
-            container.add_child(Box::new(picture));
+            container.add_child(Box::new(pooled));
         }
 
         // Paint border (if gradient or color was present, border goes on top)
         if let Some(ref border) = decoration.border {
-            let mut picture = PictureLayer::new();
+            let mut pooled = flui_engine::PooledPictureLayer::new(pool::acquire_picture());
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
-            Self::paint_border(&mut picture, rect, border, border_radius);
-            container.add_child(Box::new(picture));
+            Self::paint_border(pooled.as_mut(), rect, border, border_radius);
+            container.add_child(Box::new(pooled));
         }
     }
 
     /// Paint border on picture layer
     fn paint_border(
-        picture: &mut PictureLayer,
+        picture: &mut flui_engine::PictureLayer,
         rect: Rect,
         border: &flui_types::styling::Border,
         border_radius: Option<f32>,
@@ -201,7 +201,7 @@ impl RenderDecoratedBox {
 
     /// Paint a single border side
     fn paint_border_side(
-        picture: &mut PictureLayer,
+        picture: &mut flui_engine::PictureLayer,
         rect: Rect,
         side: &flui_types::styling::BorderSide,
         position: BorderPosition,

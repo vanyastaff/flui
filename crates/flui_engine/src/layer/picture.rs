@@ -91,6 +91,14 @@ impl PictureLayer {
         }
     }
 
+    /// Clear all drawing commands
+    ///
+    /// Used by the pool to reset layers before reuse.
+    pub fn clear(&mut self) {
+        self.commands.clear();
+        self.bounds = Rect::ZERO;
+    }
+
     /// Add a drawing command
     pub fn add_command(&mut self, command: DrawCommand) {
         // Update bounds
