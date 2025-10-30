@@ -16,7 +16,9 @@ pub mod overflow_box;
 pub mod positioned;
 pub mod rotated_box;
 pub mod row;
+pub mod spacer;
 pub mod stack;
+
 
 
 
@@ -33,7 +35,9 @@ pub use overflow_box::OverflowBox;
 pub use positioned::Positioned;
 pub use rotated_box::RotatedBox;
 pub use row::Row;
+pub use spacer::Spacer;
 pub use stack::Stack;
+
 
 
 

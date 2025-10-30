@@ -82,6 +82,7 @@ pub use objects::{
     RenderAlign,
     RenderAspectRatio,
     RenderBaseline,
+    RenderClipOval,
     RenderClipRRect,
     RenderClipRect,
     RenderColoredBox,

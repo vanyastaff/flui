@@ -65,8 +65,8 @@ pub mod interaction;
 // Essential widgets for Container and Flex layout
 pub use basic::{Align, AspectRatio, Button, Center, ColoredBox, ConstrainedBox, Container, DecoratedBox, FittedBox, LimitedBox, Padding, SizedBox, Text};
 pub use gestures::GestureDetector;
-pub use layout::{Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, OverflowBox, Positioned, RotatedBox, Row, Stack};
-pub use visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
+pub use layout::{Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, OverflowBox, Positioned, RotatedBox, Row, Spacer, Stack};
+pub use visual_effects::{ClipOval, ClipRect, ClipRRect, Offstage, Opacity, Transform};
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
@@ -86,8 +86,8 @@ pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
     pub use crate::basic::{Align, AspectRatio, Button, Center, ColoredBox, ConstrainedBox, Container, DecoratedBox, FittedBox, LimitedBox, Padding, SizedBox, Text};
     pub use crate::gestures::GestureDetector;
-    pub use crate::layout::{Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, OverflowBox, Positioned, RotatedBox, Row, Stack};
-    pub use crate::visual_effects::{ClipRect, ClipRRect, Offstage, Opacity, Transform};
+    pub use crate::layout::{Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, OverflowBox, Positioned, RotatedBox, Row, Spacer, Stack};
+    pub use crate::visual_effects::{ClipOval, ClipRect, ClipRRect, Offstage, Opacity, Transform};
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
     // Re-export core types
