@@ -365,3 +365,6 @@ impl RenderWidget for MouseRegion {
         self.child.as_ref()
     }
 }
+
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(MouseRegion, render);

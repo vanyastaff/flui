@@ -180,6 +180,9 @@ impl ParentDataWidget for Expanded {
     }
 }
 
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Expanded, parent_data);
+
 /// Macro for creating Expanded with declarative syntax.
 ///
 /// # Examples

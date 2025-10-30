@@ -384,6 +384,9 @@ impl ParentDataWidget for Positioned {
     }
 }
 
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Positioned, parent_data);
+
 // bon Builder Extensions
 use positioned_builder::{IsUnset, SetChild, State};
 

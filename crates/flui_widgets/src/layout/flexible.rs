@@ -262,6 +262,9 @@ impl ParentDataWidget for Flexible {
     }
 }
 
+// Implement IntoWidget for ergonomic API
+flui_core::impl_into_widget!(Flexible, parent_data);
+
 // bon Builder Extensions
 use flexible_builder::{IsUnset, SetChild, State};
 
