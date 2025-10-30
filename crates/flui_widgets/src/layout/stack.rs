@@ -30,8 +30,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, DynWidget, MultiChildRenderObjectWidget, RenderObjectWidget, Widget};
-use flui_rendering::{MultiArity, RenderStack};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
+use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
 
 /// A widget that positions its children relative to the edges of its box.
@@ -170,7 +172,7 @@ pub struct Stack {
     /// Children are painted in order, with the first child at the bottom
     /// and subsequent children painted on top.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<BoxedWidget>,
+    pub children: Vec<Widget>,
 }
 
 impl Stack {
@@ -199,8 +201,8 @@ impl Stack {
     /// stack.add_child(Container::new());
     /// stack.add_child(Text::new("Overlay"));
     /// ```
-    pub fn add_child<W: Widget + 'static>(&mut self, child: W) {
-        self.children.push(BoxedWidget::new(child));
+    pub fn add_child(&mut self, child: Widget) {
+        self.children.push(child);
     }
 
     /// Sets the children widgets.
@@ -214,7 +216,7 @@ impl Stack {
     ///     Text::new("Overlay"),
     /// ]);
     /// ```
-    pub fn set_children(&mut self, children: Vec<Box<dyn DynWidget>>) {
+    pub fn set_children(&mut self, children: Vec<Widget>) {
         self.children = children;
     }
 
@@ -232,27 +234,27 @@ impl Default for Stack {
     }
 }
 
-// Implement Widget trait with associated type
-impl Widget for Stack {}
-
-// Implement RenderObjectWidget
-impl RenderObjectWidget for Stack {
-    type RenderObject = RenderStack;
-    type Arity = MultiArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderStack::with_alignment(self.alignment)
+// Implement RenderWidget for Stack (multi-child widget)
+impl RenderWidget for Stack {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Multi(Box::new(RenderStack::with_alignment(self.alignment)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.set_alignment(self.alignment);
-        render_object.set_fit(self.fit);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Multi(render) = render_object {
+            if let Some(stack) = render.downcast_mut::<RenderStack>() {
+                stack.set_alignment(self.alignment);
+                stack.set_fit(self.fit);
+            }
+        }
     }
-}
 
-impl MultiChildRenderObjectWidget for Stack {
-    fn children(&self) -> &[BoxedWidget] {
-        &self.children
+    fn child(&self) -> Option<&Widget> {
+        None // Multi-child widgets don't have a single child
+    }
+
+    fn children(&self) -> Option<&[Widget]> {
+        Some(&self.children)
     }
 }
 
@@ -274,15 +276,8 @@ where
     ///     .children(vec![widget1, widget2])
     ///     .build()
     /// ```
-    pub fn children(
-        self,
-        children: impl IntoIterator<Item = impl Widget + 'static>,
-    ) -> StackBuilder<SetChildren<S>> {
-        let boxed: Vec<Box<dyn DynWidget>> = children
-            .into_iter()
-            .map(|w| Box::new(w) as Box<dyn DynWidget>)
-            .collect();
-        self.children_internal(boxed)
+    pub fn children(self, children: Vec<Widget>) -> StackBuilder<SetChildren<S>> {
+        self.children_internal(children)
     }
 }
 
