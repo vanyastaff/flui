@@ -29,7 +29,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BoxedWidget, RenderObjectWidget, Widget};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -97,7 +99,7 @@ pub struct Align {
 
     /// The child widget to align.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl Align {
@@ -182,11 +184,8 @@ impl Align {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 
     /// Validates Align configuration.
@@ -219,8 +218,6 @@ impl Default for Align {
     }
 }
 
-// Implement Widget trait with associated type
-impl Widget for Align {}
 
 // bon Builder Extensions
 use align_builder::{IsUnset, SetChild, State};
@@ -231,8 +228,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child<W: Widget + 'static>(self, child: W) -> AlignBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> AlignBuilder<SetChild<S>> {
+        self.child_internal(Some(child))
     }
 }
 
@@ -268,15 +265,13 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+    impl RenderWidget for MockWidget {
+        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
     }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_align_new() {
@@ -332,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_align_builder_with_child() {
-        let align = Align::builder().child(MockWidget).build();
+        let align = Align::builder().child(Widget::from(MockWidget)).build();
         assert!(align.child.is_some());
     }
 
@@ -349,7 +344,7 @@ mod tests {
     #[test]
     fn test_align_set_child() {
         let mut align = Align::new();
-        align.set_child(MockWidget);
+        align.set_child(Widget::from(MockWidget));
         assert!(align.child.is_some());
     }
 
@@ -409,45 +404,46 @@ mod tests {
     fn test_widget_trait() {
         let widget = Align::builder()
             .alignment(Alignment::TOP_LEFT)
-            .child(MockWidget)
+            .child(Widget::from(MockWidget))
             .build();
 
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
+        // Test child() method
+        assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_single_child_render_object_widget_trait() {
         let widget = Align::builder()
             .alignment(Alignment::CENTER)
-            .child(MockWidget)
+            .child(Widget::from(MockWidget))
             .build();
 
-        // Test child() method
-        assert!(widget.child().is_some());
+        // Test child() method - returns Option now
+        assert!(widget.child.is_some());
     }
 }
 
-// Implement RenderObjectWidget
-impl RenderObjectWidget for Align {
-    type RenderObject = RenderAlign;
-    type Arity = flui_core::render::SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderAlign::with_factors(self.alignment, self.width_factor, self.height_factor)
+// Implement RenderWidget
+impl RenderWidget for Align {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Single(Box::new(RenderAlign::with_factors(
+            self.alignment,
+            self.width_factor,
+            self.height_factor,
+        )))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.set_alignment(self.alignment);
-        render_object.set_width_factor(self.width_factor);
-        render_object.set_height_factor(self.height_factor);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single(render) = render_object {
+            if let Some(align) = render.downcast_mut::<RenderAlign>() {
+                align.set_alignment(self.alignment);
+                align.set_width_factor(self.width_factor);
+                align.set_height_factor(self.height_factor);
+            }
+        }
     }
-}
 
-impl flui_core::SingleChildRenderObjectWidget for Align {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("Align requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }

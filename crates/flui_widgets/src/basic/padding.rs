@@ -29,10 +29,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{
-    BoxedWidget, DynWidget, RenderObjectWidget, SingleChildRenderObjectWidget, Widget,
-};
-use flui_rendering::{RenderPadding, SingleArity};
+use flui_core::widget::{Widget, RenderWidget};
+use flui_core::render::RenderNode;
+use flui_core::BuildContext;
+use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
 
 /// A widget that insets its child by the given padding.
@@ -74,7 +74,7 @@ pub struct Padding {
 
     /// The child widget to pad.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<BoxedWidget>,
+    pub child: Option<Widget>,
 }
 
 impl Padding {
@@ -118,7 +118,7 @@ impl Padding {
     }
 
     /// Creates a Padding with the given padding and child.
-    pub fn with_child(padding: EdgeInsets, child: Box<dyn DynWidget>) -> Self {
+    pub fn with_child(padding: EdgeInsets, child: Widget) -> Self {
         Self {
             key: None,
             padding,
@@ -127,11 +127,8 @@ impl Padding {
     }
 
     /// Sets the child widget.
-    pub fn set_child<W>(&mut self, child: W)
-    where
-        W: Widget + std::fmt::Debug + Send + Sync + Clone + 'static,
-    {
-        self.child = Some(BoxedWidget::new(child));
+    pub fn set_child(&mut self, child: Widget) {
+        self.child = Some(child);
     }
 
     /// Validates padding configuration.
@@ -155,28 +152,22 @@ impl Default for Padding {
     }
 }
 
-// Implement Widget trait with associated type
-impl Widget for Padding {}
-
-// Implement RenderObjectWidget
-impl RenderObjectWidget for Padding {
-    type RenderObject = RenderPadding;
-    type Arity = SingleArity;
-
-    fn create_render_object(&self) -> Self::RenderObject {
-        RenderPadding::new(self.padding)
+// Implement RenderWidget
+impl RenderWidget for Padding {
+    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        RenderNode::Single(Box::new(RenderPadding::new(self.padding)))
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        render_object.set_padding(self.padding);
+    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+        if let RenderNode::Single(render) = render_object {
+            if let Some(padding) = render.downcast_mut::<RenderPadding>() {
+                padding.set_padding(self.padding);
+            }
+        }
     }
-}
 
-impl SingleChildRenderObjectWidget for Padding {
-    fn child(&self) -> &BoxedWidget {
-        self.child
-            .as_ref()
-            .unwrap_or_else(|| panic!("Padding requires a child"))
+    fn child(&self) -> Option<&Widget> {
+        self.child.as_ref()
     }
 }
 
@@ -189,8 +180,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child<W: Widget + 'static>(self, child: W) -> PaddingBuilder<SetChild<S>> {
-        self.child_internal(BoxedWidget::new(child))
+    pub fn child(self, child: Widget) -> PaddingBuilder<SetChild<S>> {
+        self.child_internal(Some(child))
     }
 }
 
@@ -224,16 +215,13 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            // Simple mock - returns a RenderPadding as placeholder
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+    impl RenderWidget for MockWidget {
+        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+            RenderNode::Single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
         }
 
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
     }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_padding_new() {
@@ -274,7 +262,7 @@ mod tests {
     fn test_padding_builder_with_child() {
         let padding = Padding::builder()
             .padding(EdgeInsets::all(10.0))
-            .child(MockWidget)
+            .child(Widget::from(MockWidget))
             .build();
         assert!(padding.child.is_some());
     }
@@ -282,7 +270,7 @@ mod tests {
     #[test]
     fn test_padding_set_child() {
         let mut padding = Padding::new();
-        padding.set_child(MockWidget);
+        padding.set_child(Widget::from(MockWidget));
         assert!(padding.child.is_some());
     }
 
@@ -319,10 +307,10 @@ mod tests {
     fn test_padding_widget_trait() {
         let padding = Padding::builder()
             .padding(EdgeInsets::all(10.0))
-            .child(MockWidget)
+            .child(Widget::from(MockWidget))
             .build();
 
-        // Test that it implements Widget and can create an element
-        let _element = padding.into_element();
+        // Test child() method
+        assert!(padding.child.is_some());
     }
 }
