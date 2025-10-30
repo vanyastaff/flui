@@ -39,4 +39,4 @@ pub use rotated_box::{QuarterTurns, RenderRotatedBox};
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
 pub use stack::RenderStack;
-pub use wrap::RenderWrap;
+pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};

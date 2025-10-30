@@ -110,6 +110,9 @@ pub use objects::{
     RenderRotatedBox,
     RenderStack,
     RenderTransform,
+    RenderWrap,
+    WrapAlignment,
+    WrapCrossAlignment,
 };
 
 /// Prelude module for convenient imports
