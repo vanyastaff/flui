@@ -93,7 +93,8 @@ pub use objects::{
     RenderFractionallySizedBox,
     RenderIgnorePointer,
     RenderIndexedStack,
-
+    RenderIntrinsicHeight,
+    RenderIntrinsicWidth,
     RenderLimitedBox,
     RenderMouseRegion,
     RenderOffstage,
