@@ -210,15 +210,16 @@ impl<T: Clone> TripleBuffer<T> {
 ```
 
 **Performance**:
-- Write: ~5ns (atomic store)
-- Read: ~5ns (atomic load + swap)
-- Publish: ~10ns (atomic swap)
-- Zero allocations after init
+- Write: ~50ns (RwLock write acquisition)
+- Read: ~50ns (RwLock read acquisition)
+- Swap: ~10ns (3 atomic stores)
+- Zero contention between read and write operations
 
 **Design Notes**:
-- Packs write/swap/read indices + flag into single `AtomicU8`
+- Uses `parking_lot::RwLock` for each buffer (already a project dependency)
+- Supports true concurrent read/write (compositor reads while renderer writes)
+- 3 independent atomic indices (read_idx, write_idx, swap_idx)
 - Safe for single producer + single consumer
-- NOT safe for multiple producers or consumers
 
 ---
 
@@ -326,9 +327,9 @@ All features include:
 | CancellationToken | Check | ~2ns | 24 bytes |
 | ErrorRecovery | Handle error | ~50ns | 40 bytes |
 | PipelineMetrics | Record frame | ~10ns | 480 bytes |
-| TripleBuffer | Swap | ~5ns | 3×T size |
+| TripleBuffer | Read/Write | ~50ns | 3×T size + locks |
 
-**Total overhead**: ~550 bytes + 3×layer size
+**Total overhead**: ~550 bytes + 3×layer size + RwLock overhead
 
 ---
 
@@ -348,9 +349,9 @@ All features include:
 2. `crates/flui_core/src/pipeline/error.rs` (229 lines)
 3. `crates/flui_core/src/pipeline/recovery.rs` (422 lines)
 4. `crates/flui_core/src/pipeline/metrics.rs` (721 lines)
-5. `crates/flui_core/src/pipeline/triple_buffer.rs` (597 lines)
+5. `crates/flui_core/src/pipeline/triple_buffer.rs` (474 lines)
 
-**Total**: 2,291 lines of production-ready code
+**Total**: 2,168 lines of production-ready code
 
 ---
 
