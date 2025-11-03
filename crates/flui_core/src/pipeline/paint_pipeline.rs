@@ -24,6 +24,10 @@
 use crate::element::ElementId;
 use crate::pipeline::dirty_tracking::LockFreeDirtySet;
 use crate::pipeline::element_tree::ElementTree;
+use crate::pipeline::PipelineError;
+
+/// Result type for paint operations
+pub type PaintResult<T> = Result<T, PipelineError>;
 
 /// Paint pipeline manages layer generation phase.
 ///
@@ -92,7 +96,11 @@ impl PaintPipeline {
     /// Processes render objects top-down, calling paint methods and
     /// building the layer tree.
     ///
-    /// Returns the number of render objects painted.
+    /// # Returns
+    ///
+    /// `Ok(count)` where count is the number of render objects painted.
+    ///
+    /// `Err(PipelineError)` if paint fails for any element.
     ///
     /// # Implementation
     ///
@@ -103,16 +111,22 @@ impl PaintPipeline {
     /// 4. Store generated layer (currently discarded, will be used for composition)
     /// 5. Clear needs_paint flag
     ///
+    /// # Error Handling
+    ///
+    /// If paint fails for an element, the error is returned immediately and
+    /// processing stops. Use error recovery policy in PipelineOwner to handle
+    /// paint errors gracefully.
+    ///
     /// # Note on Layer Optimization
     ///
     /// Layer optimization (merging compatible layers, batching operations) will be
     /// implemented in a future update. Currently, layers are generated but not optimized.
-    pub fn generate_layers(&mut self, tree: &mut ElementTree) -> usize {
+    pub fn generate_layers(&mut self, tree: &mut ElementTree) -> PaintResult<usize> {
         let dirty_ids = self.dirty.drain();
         let count = dirty_ids.len();
 
         if count == 0 {
-            return 0;
+            return Ok(0);
         }
 
         #[cfg(debug_assertions)]
@@ -162,16 +176,30 @@ impl PaintPipeline {
                 }
 
                 crate::render::RenderNode::Single { child, .. } => {
-                    let child_id = child.expect("Single render node must have child");
+                    // Handle case where Single node doesn't have child yet (mounting phase)
+                    let child_id_copy = *child;
 
-                    // Drop read guard to access trait object
-                    drop(render_object);
-                    let render_object = render_elem.render_object();
+                    match child_id_copy {
+                        Some(child_id) => {
+                            // Drop read guard to access trait object
+                            drop(render_object);
+                            let render_object = render_elem.render_object();
 
-                    if let crate::render::RenderNode::Single { render, .. } = &*render_object {
-                        render.paint(tree, child_id, offset)
-                    } else {
-                        unreachable!("RenderNode variant changed during paint")
+                            if let crate::render::RenderNode::Single { render, .. } = &*render_object {
+                                render.paint(tree, child_id, offset)
+                            } else {
+                                unreachable!("RenderNode variant changed during paint")
+                            }
+                        }
+                        None => {
+                            #[cfg(debug_assertions)]
+                            tracing::warn!(
+                                "Paint: Single render node {:?} has no child (not mounted yet), returning empty layer",
+                                id
+                            );
+                            // Return empty container layer
+                            Box::new(flui_engine::ContainerLayer::new())
+                        }
                     }
                 }
 
@@ -196,7 +224,7 @@ impl PaintPipeline {
 
             // Clear needs_paint flag
             let render_state_lock = render_elem.render_state();
-            let mut render_state = render_state_lock.write();
+            let render_state = render_state_lock.write();
             render_state.clear_needs_paint();
 
             #[cfg(debug_assertions)]
@@ -215,7 +243,7 @@ impl PaintPipeline {
         #[cfg(debug_assertions)]
         tracing::debug!("generate_layers: Complete ({} objects painted)", count);
 
-        count
+        Ok(count)
     }
 
     /// Clears all dirty render objects without painting.

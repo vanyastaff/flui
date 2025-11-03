@@ -29,7 +29,11 @@
 use crate::element::ElementId;
 use crate::pipeline::dirty_tracking::LockFreeDirtySet;
 use crate::pipeline::element_tree::ElementTree;
+use crate::pipeline::PipelineError;
 use flui_types::constraints::BoxConstraints;
+
+/// Result type for layout operations
+pub type LayoutResult<T> = Result<T, PipelineError>;
 
 /// Layout pipeline manages size computation phase.
 ///
@@ -98,7 +102,11 @@ impl LayoutPipeline {
     /// Processes render objects top-down, computing sizes and positions.
     /// Uses parallel execution for independent subtrees if enabled.
     ///
-    /// Returns the number of render objects laid out.
+    /// # Returns
+    ///
+    /// `Ok(count)` where count is the number of render objects laid out.
+    ///
+    /// `Err(PipelineError)` if layout fails for any element.
     ///
     /// # Implementation
     ///
@@ -109,6 +117,12 @@ impl LayoutPipeline {
     /// 4. Store computed size in RenderState
     /// 5. Clear needs_layout flag
     ///
+    /// # Error Handling
+    ///
+    /// If layout fails for an element, the error is returned immediately and
+    /// processing stops. Use error recovery policy in PipelineOwner to handle
+    /// layout errors gracefully.
+    ///
     /// # Note on Parallelization
     ///
     /// Currently implemented as sequential layout. Parallel layout will be added
@@ -117,12 +131,12 @@ impl LayoutPipeline {
         &mut self,
         tree: &mut ElementTree,
         constraints: BoxConstraints,
-    ) -> usize {
+    ) -> LayoutResult<usize> {
         let dirty_ids = self.dirty.drain();
         let count = dirty_ids.len();
 
         if count == 0 {
-            return 0;
+            return Ok(0);
         }
 
         #[cfg(debug_assertions)]
@@ -187,16 +201,30 @@ impl LayoutPipeline {
                 }
 
                 crate::render::RenderNode::Single { child, .. } => {
-                    let child_id = child.expect("Single render node must have child");
+                    // Handle case where Single node doesn't have child yet (mounting phase)
+                    let child_id_copy = *child;
 
-                    // Drop read guard to get write guard
-                    drop(render_object);
-                    let mut render_object_mut = render_elem.render_object_mut();
+                    match child_id_copy {
+                        Some(child_id) => {
+                            // Drop read guard to get write guard
+                            drop(render_object);
+                            let mut render_object_mut = render_elem.render_object_mut();
 
-                    if let crate::render::RenderNode::Single { render, .. } = &mut *render_object_mut {
-                        render.layout(tree, child_id, layout_constraints)
-                    } else {
-                        unreachable!("RenderNode variant changed during layout")
+                            if let crate::render::RenderNode::Single { render, .. } = &mut *render_object_mut {
+                                render.layout(tree, child_id, layout_constraints)
+                            } else {
+                                unreachable!("RenderNode variant changed during layout")
+                            }
+                        }
+                        None => {
+                            #[cfg(debug_assertions)]
+                            tracing::warn!(
+                                "Layout: Single render node {:?} has no child (not mounted yet), returning zero size",
+                                id
+                            );
+                            // Return zero size constrained by layout_constraints
+                            layout_constraints.constrain(flui_types::Size::ZERO)
+                        }
                     }
                 }
 
@@ -233,7 +261,7 @@ impl LayoutPipeline {
         #[cfg(debug_assertions)]
         tracing::debug!("compute_layout: Complete ({} objects processed)", count);
 
-        count
+        Ok(count)
     }
 
     /// Clears all dirty render objects without laying out.

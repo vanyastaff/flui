@@ -824,11 +824,11 @@ impl PipelineOwner {
     pub fn flush_layout(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
-    ) -> Option<flui_types::Size> {
+    ) -> Result<Option<flui_types::Size>, super::PipelineError> {
         let mut tree = self.tree.write();
 
         // Process all dirty render objects
-        let _count = self.layout.compute_layout(&mut tree, constraints);
+        let _count = self.layout.compute_layout(&mut tree, constraints)?;
 
         #[cfg(debug_assertions)]
         if _count > 0 {
@@ -836,17 +836,24 @@ impl PipelineOwner {
         }
 
         // Get root element's computed size
-        let root_id = self.root_element_id?;
-        let root_element = tree.get(root_id)?;
+        let root_id = match self.root_element_id {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        let root_element = match tree.get(root_id) {
+            Some(elem) => elem,
+            None => return Ok(None),
+        };
 
         // Only return size if root is a RenderElement
         if let crate::element::Element::Render(render_elem) = root_element {
             let render_state_lock = render_elem.render_state();
             let render_state = render_state_lock.read();
-            render_state.size()
+            Ok(render_state.size())
         } else {
             // Root is ComponentElement or ProviderElement - no size
-            None
+            Ok(None)
         }
     }
 
@@ -862,11 +869,11 @@ impl PipelineOwner {
     ///
     /// Currently generates layers but returns a stub empty layer.
     /// Full layer tree composition will be implemented in a future update.
-    pub fn flush_paint(&mut self) -> Option<crate::BoxedLayer> {
+    pub fn flush_paint(&mut self) -> Result<Option<crate::BoxedLayer>, super::PipelineError> {
         let mut tree = self.tree.write();
 
         // Process all dirty render objects
-        let _count = self.paint.generate_layers(&mut tree);
+        let _count = self.paint.generate_layers(&mut tree)?;
 
         #[cfg(debug_assertions)]
         if _count > 0 {
@@ -874,8 +881,15 @@ impl PipelineOwner {
         }
 
         // Get root element's layer
-        let root_id = self.root_element_id?;
-        let root_element = tree.get(root_id)?;
+        let root_id = match self.root_element_id {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        let root_element = match tree.get(root_id) {
+            Some(elem) => elem,
+            None => return Ok(None),
+        };
 
         // Only paint if root is a RenderElement
         if let crate::element::Element::Render(render_elem) = root_element {
@@ -887,12 +901,12 @@ impl PipelineOwner {
             let render_object = render_elem.render_object();
 
             // Generate root layer
-            Some(render_object.paint(&tree, offset))
+            Ok(Some(render_object.paint(&tree, offset)))
         } else {
             // Root is ComponentElement or ProviderElement
             // Walk tree to find first RenderElement and paint from there
             // For now, return empty container layer
-            Some(Box::new(flui_engine::ContainerLayer::new()))
+            Ok(Some(Box::new(flui_engine::ContainerLayer::new())))
         }
     }
 
@@ -934,7 +948,7 @@ impl PipelineOwner {
     pub fn build_frame(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
-    ) -> Option<crate::BoxedLayer> {
+    ) -> Result<Option<crate::BoxedLayer>, super::PipelineError> {
         #[cfg(debug_assertions)]
         tracing::debug!("build_frame: Starting frame with constraints {:?}", constraints);
 
@@ -950,7 +964,7 @@ impl PipelineOwner {
         }
 
         // Phase 2: Layout (compute sizes and positions)
-        let _root_size = self.flush_layout(constraints);
+        let _root_size = self.flush_layout(constraints)?;
 
         #[cfg(debug_assertions)]
         if let Some(size) = _root_size {
@@ -958,14 +972,14 @@ impl PipelineOwner {
         }
 
         // Phase 3: Paint (generate layer tree)
-        let layer = self.flush_paint();
+        let layer = self.flush_paint()?;
 
         #[cfg(debug_assertions)]
         if layer.is_some() {
             tracing::debug!("build_frame: Paint phase generated layer tree");
         }
 
-        layer
+        Ok(layer)
     }
 
     // =========================================================================
