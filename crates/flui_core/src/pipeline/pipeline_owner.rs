@@ -114,6 +114,13 @@ pub struct PipelineOwner {
     /// Enables timeout support for long-running operations
     /// Overhead: ~24 bytes memory
     cancellation: Option<super::CancellationToken>,
+
+    /// Triple buffer for lock-free frame exchange (optional)
+    ///
+    /// When enabled, allows compositor to read frames while renderer writes
+    /// Uses Arc<BoxedLayer> to enable cloning for TripleBuffer
+    /// Overhead: 3× Arc size + layer size + RwLock overhead
+    frame_buffer: Option<super::TripleBuffer<Arc<crate::BoxedLayer>>>,
 }
 
 impl std::fmt::Debug for PipelineOwner {
@@ -127,6 +134,7 @@ impl std::fmt::Debug for PipelineOwner {
             .field("has_metrics", &self.metrics.is_some())
             .field("has_recovery", &self.recovery.is_some())
             .field("has_cancellation", &self.cancellation.is_some())
+            .field("has_frame_buffer", &self.frame_buffer.is_some())
             .finish()
     }
 }
@@ -136,9 +144,10 @@ impl PipelineOwner {
     ///
     /// Creates a basic pipeline without production features.
     /// Use builder methods to enable optional features:
-    /// - `with_metrics()` for performance monitoring
-    /// - `with_error_recovery()` for graceful degradation
-    /// - `with_cancellation()` for timeout support
+    /// - `enable_metrics()` for performance monitoring
+    /// - `enable_error_recovery()` for graceful degradation
+    /// - `enable_cancellation()` for timeout support
+    /// - `enable_frame_buffer()` for lock-free frame exchange
     pub fn new() -> Self {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
 
@@ -152,6 +161,7 @@ impl PipelineOwner {
             metrics: None,
             recovery: None,
             cancellation: None,
+            frame_buffer: None,
         }
     }
 
@@ -294,6 +304,82 @@ impl PipelineOwner {
     /// Get reference to cancellation token (if enabled)
     pub fn cancellation_token(&self) -> Option<&super::CancellationToken> {
         self.cancellation.as_ref()
+    }
+
+    // =========================================================================
+    // Frame Buffer
+    // =========================================================================
+
+    /// Enable triple buffer for lock-free frame exchange
+    ///
+    /// Creates a TripleBuffer initialized with an empty layer.
+    /// This allows the compositor thread to read frames while the renderer
+    /// thread writes new frames without blocking.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_engine::ContainerLayer;
+    /// use std::sync::Arc;
+    ///
+    /// let mut owner = PipelineOwner::new();
+    /// let initial = Arc::new(Box::new(ContainerLayer::new()) as crate::BoxedLayer);
+    /// owner.enable_frame_buffer(initial);
+    ///
+    /// // Renderer thread
+    /// if let Some(layer) = owner.build_frame(constraints) {
+    ///     owner.publish_frame(layer);
+    /// }
+    ///
+    /// // Compositor thread
+    /// if let Some(buffer) = owner.frame_buffer() {
+    ///     let layer_arc = buffer.read();
+    ///     let layer = layer_arc.read();
+    ///     compositor.present(&*layer);
+    /// }
+    /// ```
+    pub fn enable_frame_buffer(&mut self, initial: Arc<crate::BoxedLayer>) {
+        self.frame_buffer = Some(super::TripleBuffer::new(initial));
+    }
+
+    /// Disable frame buffer
+    pub fn disable_frame_buffer(&mut self) {
+        self.frame_buffer = None;
+    }
+
+    /// Get reference to frame buffer (if enabled)
+    pub fn frame_buffer(&self) -> Option<&super::TripleBuffer<Arc<crate::BoxedLayer>>> {
+        self.frame_buffer.as_ref()
+    }
+
+    /// Get mutable reference to frame buffer (if enabled)
+    pub fn frame_buffer_mut(&mut self) -> Option<&mut super::TripleBuffer<Arc<crate::BoxedLayer>>> {
+        self.frame_buffer.as_mut()
+    }
+
+    /// Publish a frame to the triple buffer (convenience method)
+    ///
+    /// Writes the layer to the write buffer and swaps to make it available.
+    /// Does nothing if frame buffer is not enabled.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(layer) = owner.build_frame(constraints) {
+    ///     owner.publish_frame(layer);
+    /// }
+    /// ```
+    pub fn publish_frame(&mut self, layer: crate::BoxedLayer) {
+        if let Some(buffer) = self.frame_buffer.as_mut() {
+            // Get write buffer and update it
+            let write_buf = buffer.write();
+            let mut write_guard = write_buf.write();
+            *write_guard = Arc::new(layer);
+            drop(write_guard);
+
+            // Swap to publish
+            buffer.swap();
+        }
     }
 
     // =========================================================================
@@ -726,7 +812,7 @@ impl PipelineOwner {
 
     /// Flush the layout phase
     ///
-    /// Performs layout on all Renders in the tree.
+    /// Performs layout on all dirty render objects in the tree.
     ///
     /// # Parameters
     ///
@@ -734,43 +820,80 @@ impl PipelineOwner {
     ///
     /// # Returns
     ///
-    /// The size of the root render object, or None if no root
-    ///
-    /// # Note
-    ///
-    /// This is a stub implementation. Full layout pipeline will be added
-    /// when Render system is fully integrated.
+    /// The size of the root render object, or None if no root element exists
     pub fn flush_layout(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<flui_types::Size> {
         let mut tree = self.tree.write();
-        self.layout.compute_layout(&mut tree, constraints);
 
-        // TODO(2025-11): Return actual root size when layout is fully implemented
-        // For now, return None as stub
-        None
+        // Process all dirty render objects
+        let _count = self.layout.compute_layout(&mut tree, constraints);
+
+        #[cfg(debug_assertions)]
+        if _count > 0 {
+            tracing::debug!("flush_layout: Laid out {} render objects", _count);
+        }
+
+        // Get root element's computed size
+        let root_id = self.root_element_id?;
+        let root_element = tree.get(root_id)?;
+
+        // Only return size if root is a RenderElement
+        if let crate::element::Element::Render(render_elem) = root_element {
+            let render_state_lock = render_elem.render_state();
+            let render_state = render_state_lock.read();
+            render_state.size()
+        } else {
+            // Root is ComponentElement or ProviderElement - no size
+            None
+        }
     }
 
     /// Flush the paint phase
     ///
-    /// Paints all Renders to the given painter.
+    /// Generates paint layers for all dirty render objects.
     ///
-    /// # Parameters
+    /// # Returns
     ///
-    /// - `offset`: Global offset for painting
+    /// The root layer for composition, or None if no root element exists.
     ///
     /// # Note
     ///
-    /// This is a stub implementation. Full paint pipeline will be added
-    /// when Render system is fully integrated.
-    pub fn flush_paint(&mut self, _offset: flui_types::Offset) -> Option<crate::BoxedLayer> {
+    /// Currently generates layers but returns a stub empty layer.
+    /// Full layer tree composition will be implemented in a future update.
+    pub fn flush_paint(&mut self) -> Option<crate::BoxedLayer> {
         let mut tree = self.tree.write();
-        self.paint.generate_layers(&mut tree);
 
-        // TODO(2025-11): Return actual root layer when paint is fully implemented
-        // For now, return None as stub
-        None
+        // Process all dirty render objects
+        let _count = self.paint.generate_layers(&mut tree);
+
+        #[cfg(debug_assertions)]
+        if _count > 0 {
+            tracing::debug!("flush_paint: Painted {} render objects", _count);
+        }
+
+        // Get root element's layer
+        let root_id = self.root_element_id?;
+        let root_element = tree.get(root_id)?;
+
+        // Only paint if root is a RenderElement
+        if let crate::element::Element::Render(render_elem) = root_element {
+            let render_state_lock = render_elem.render_state();
+            let render_state = render_state_lock.read();
+            let offset = render_state.offset();
+            drop(render_state); // Drop before calling paint
+
+            let render_object = render_elem.render_object();
+
+            // Generate root layer
+            Some(render_object.paint(&tree, offset))
+        } else {
+            // Root is ComponentElement or ProviderElement
+            // Walk tree to find first RenderElement and paint from there
+            // For now, return empty container layer
+            Some(Box::new(flui_engine::ContainerLayer::new()))
+        }
     }
 
     /// Build a complete frame
@@ -780,39 +903,69 @@ impl PipelineOwner {
     ///
     /// # Parameters
     ///
-    /// - `constraints`: Root layout constraints
+    /// - `constraints`: Root layout constraints (typically screen size)
     ///
     /// # Returns
     ///
     /// The root layer for the compositor, or None if no root element exists.
     ///
+    /// # Pipeline Flow
+    ///
+    /// 1. **Build Phase**: Rebuilds all dirty widgets (ComponentElements)
+    /// 2. **Layout Phase**: Computes sizes for all dirty RenderElements
+    /// 3. **Paint Phase**: Generates paint layers for all dirty RenderElements
+    ///
     /// # Example
     ///
     /// ```rust,ignore
     /// use flui_core::PipelineOwner;
-    /// use flui_types::constraints::BoxConstraints;
+    /// use flui_types::{Size, constraints::BoxConstraints};
     ///
     /// let mut owner = PipelineOwner::new();
-    /// owner.set_root(my_widget);
+    /// owner.set_root(my_element);
     ///
-    /// // Build complete frame
+    /// // Build complete frame at 800x600
     /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
     /// if let Some(layer) = owner.build_frame(constraints) {
     ///     // Compositor can now render the layer
+    ///     compositor.present(layer);
     /// }
     /// ```
     pub fn build_frame(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Option<crate::BoxedLayer> {
+        #[cfg(debug_assertions)]
+        tracing::debug!("build_frame: Starting frame with constraints {:?}", constraints);
+
         // Phase 1: Build (rebuild dirty widgets)
+        #[cfg(debug_assertions)]
+        let build_count = self.build.dirty_count();
+
         self.flush_build();
 
+        #[cfg(debug_assertions)]
+        if build_count > 0 {
+            tracing::debug!("build_frame: Build phase rebuilt {} widgets", build_count);
+        }
+
         // Phase 2: Layout (compute sizes and positions)
-        self.flush_layout(constraints)?;
+        let _root_size = self.flush_layout(constraints);
+
+        #[cfg(debug_assertions)]
+        if let Some(size) = _root_size {
+            tracing::debug!("build_frame: Layout phase computed root size {:?}", size);
+        }
 
         // Phase 3: Paint (generate layer tree)
-        self.flush_paint(flui_types::Offset::ZERO)
+        let layer = self.flush_paint();
+
+        #[cfg(debug_assertions)]
+        if layer.is_some() {
+            tracing::debug!("build_frame: Paint phase generated layer tree");
+        }
+
+        layer
     }
 
     // =========================================================================

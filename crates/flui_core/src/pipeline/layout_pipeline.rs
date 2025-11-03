@@ -99,10 +99,24 @@ impl LayoutPipeline {
     /// Uses parallel execution for independent subtrees if enabled.
     ///
     /// Returns the number of render objects laid out.
+    ///
+    /// # Implementation
+    ///
+    /// For each dirty render object:
+    /// 1. Get RenderElement from tree
+    /// 2. Get constraints from RenderState (or use provided constraints)
+    /// 3. Call appropriate layout() method based on RenderNode variant
+    /// 4. Store computed size in RenderState
+    /// 5. Clear needs_layout flag
+    ///
+    /// # Note on Parallelization
+    ///
+    /// Currently implemented as sequential layout. Parallel layout will be added
+    /// in a future update using rayon for independent subtrees.
     pub fn compute_layout(
         &mut self,
         tree: &mut ElementTree,
-        _constraints: BoxConstraints,
+        constraints: BoxConstraints,
     ) -> usize {
         let dirty_ids = self.dirty.drain();
         let count = dirty_ids.len();
@@ -114,52 +128,106 @@ impl LayoutPipeline {
         #[cfg(debug_assertions)]
         tracing::debug!("compute_layout: Processing {} dirty render objects", count);
 
-        // TODO(2025-02): Implement actual layout logic.
-        // For each dirty render object:
-        // 1. Get render object from tree
-        // 2. Call render_object.perform_layout(constraints)
-        // 3. Update cached size
-        // 4. Mark children dirty if size changed
-        //
-        // TODO(2025-02): Implement parallel layout.
-        // Use rayon to parallelize independent subtrees:
-        // 1. Build dependency graph
-        // 2. Identify independent subtrees
-        // 3. Use rayon::scope to layout in parallel
-        //
-        // See docs/PIPELINE_ARCHITECTURE.md for detailed algorithm.
+        // Process each dirty render object
+        // Note: Parallel layout disabled for now - will be enabled in future update
+        for id in dirty_ids {
+            // Get element from tree
+            let Some(element) = tree.get(id) else {
+                #[cfg(debug_assertions)]
+                tracing::warn!("Element {:?} not found during layout", id);
+                continue;
+            };
 
-        if self.parallel_enabled {
-            // Parallel layout path
-            // TODO(2025-02): Use rayon for parallel processing
-            for id in dirty_ids {
-                // Verify element exists
-                if tree.get(id).is_none() {
-                    #[cfg(debug_assertions)]
-                    tracing::warn!("Render object {:?} not found during layout", id);
-                    continue;
+            // Only layout RenderElements
+            let crate::element::Element::Render(render_elem) = element else {
+                #[cfg(debug_assertions)]
+                tracing::trace!("Element {:?} is not a RenderElement, skipping", id);
+                continue;
+            };
+
+            // Check if layout is actually needed (atomic check - very fast)
+            let render_state_lock = render_elem.render_state();
+            let render_state = render_state_lock.read();
+
+            if !render_state.needs_layout() {
+                #[cfg(debug_assertions)]
+                tracing::trace!("Element {:?} already laid out, skipping", id);
+                continue;
+            }
+
+            #[cfg(debug_assertions)]
+            tracing::trace!("Layout: Processing render object {:?}", id);
+
+            // Use stored constraints if available, otherwise use provided constraints
+            let layout_constraints = render_state.constraints().unwrap_or(constraints);
+
+            // Drop read guard before acquiring write lock
+            drop(render_state);
+
+            // Perform layout based on RenderNode variant
+            let render_object = render_elem.render_object();
+            let computed_size = match &*render_object {
+                crate::render::RenderNode::Leaf(leaf) => {
+                    // SAFETY: We need mutable access to call layout(), but we only have &self.
+                    // We use interior mutability through RwLock in the render object.
+                    // This is safe because:
+                    // 1. We're calling layout() which requires &mut self
+                    // 2. RwLock ensures exclusive access during layout
+                    // 3. No other code can access this render object during layout
+
+                    // Drop read guard to get write guard
+                    drop(render_object);
+                    let mut render_object_mut = render_elem.render_object_mut();
+
+                    if let crate::render::RenderNode::Leaf(leaf) = &mut *render_object_mut {
+                        leaf.layout(layout_constraints)
+                    } else {
+                        unreachable!("RenderNode variant changed during layout")
+                    }
                 }
 
-                #[cfg(debug_assertions)]
-                tracing::trace!("Layout (parallel): Processing render object {:?}", id);
+                crate::render::RenderNode::Single { child, .. } => {
+                    let child_id = child.expect("Single render node must have child");
 
-                // Placeholder: actual layout would call perform_layout() here
-            }
-        } else {
-            // Sequential layout path
-            for id in dirty_ids {
-                // Verify element exists
-                if tree.get(id).is_none() {
-                    #[cfg(debug_assertions)]
-                    tracing::warn!("Render object {:?} not found during layout", id);
-                    continue;
+                    // Drop read guard to get write guard
+                    drop(render_object);
+                    let mut render_object_mut = render_elem.render_object_mut();
+
+                    if let crate::render::RenderNode::Single { render, .. } = &mut *render_object_mut {
+                        render.layout(tree, child_id, layout_constraints)
+                    } else {
+                        unreachable!("RenderNode variant changed during layout")
+                    }
                 }
 
-                #[cfg(debug_assertions)]
-                tracing::trace!("Layout (sequential): Processing render object {:?}", id);
+                crate::render::RenderNode::Multi { children, .. } => {
+                    let children_ids = children.clone();
 
-                // Placeholder: actual layout would call perform_layout() here
-            }
+                    // Drop read guard to get write guard
+                    drop(render_object);
+                    let mut render_object_mut = render_elem.render_object_mut();
+
+                    if let crate::render::RenderNode::Multi { render, .. } = &mut *render_object_mut {
+                        render.layout(tree, &children_ids, layout_constraints)
+                    } else {
+                        unreachable!("RenderNode variant changed during layout")
+                    }
+                }
+            };
+
+            // Store computed size in RenderState
+            let render_state_lock = render_elem.render_state();
+            let mut render_state = render_state_lock.write();
+            render_state.set_size(computed_size);
+            render_state.set_constraints(layout_constraints);
+            render_state.clear_needs_layout();
+
+            #[cfg(debug_assertions)]
+            tracing::trace!(
+                "Layout: Element {:?} computed size {:?}",
+                id,
+                computed_size
+            );
         }
 
         #[cfg(debug_assertions)]

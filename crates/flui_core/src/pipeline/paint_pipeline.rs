@@ -93,6 +93,20 @@ impl PaintPipeline {
     /// building the layer tree.
     ///
     /// Returns the number of render objects painted.
+    ///
+    /// # Implementation
+    ///
+    /// For each dirty render object:
+    /// 1. Get RenderElement from tree
+    /// 2. Get offset from RenderState
+    /// 3. Call appropriate paint() method based on RenderNode variant
+    /// 4. Store generated layer (currently discarded, will be used for composition)
+    /// 5. Clear needs_paint flag
+    ///
+    /// # Note on Layer Optimization
+    ///
+    /// Layer optimization (merging compatible layers, batching operations) will be
+    /// implemented in a future update. Currently, layers are generated but not optimized.
     pub fn generate_layers(&mut self, tree: &mut ElementTree) -> usize {
         let dirty_ids = self.dirty.drain();
         let count = dirty_ids.len();
@@ -104,40 +118,96 @@ impl PaintPipeline {
         #[cfg(debug_assertions)]
         tracing::debug!("generate_layers: Processing {} dirty render objects", count);
 
-        // TODO(2025-02): Implement actual paint logic.
-        // For each dirty render object:
-        // 1. Get render object from tree
-        // 2. Create paint context
-        // 3. Call render_object.paint(context)
-        // 4. Build layer tree from paint operations
-        //
-        // TODO(2025-02): Implement layer optimization.
-        // If optimize_layers is true:
-        // 1. Merge compatible layers
-        // 2. Remove redundant operations
-        // 3. Batch similar operations
-        //
-        // See docs/PIPELINE_ARCHITECTURE.md for detailed algorithm.
-
+        // Process each dirty render object
         for id in dirty_ids {
-            // Verify element exists
-            if tree.get(id).is_none() {
+            // Get element from tree
+            let Some(element) = tree.get(id) else {
                 #[cfg(debug_assertions)]
-                tracing::warn!("Render object {:?} not found during paint", id);
+                tracing::warn!("Element {:?} not found during paint", id);
+                continue;
+            };
+
+            // Only paint RenderElements
+            let crate::element::Element::Render(render_elem) = element else {
+                #[cfg(debug_assertions)]
+                tracing::trace!("Element {:?} is not a RenderElement, skipping", id);
+                continue;
+            };
+
+            // Check if paint is actually needed (atomic check - very fast)
+            let render_state_lock = render_elem.render_state();
+            let render_state = render_state_lock.read();
+
+            if !render_state.needs_paint() {
+                #[cfg(debug_assertions)]
+                tracing::trace!("Element {:?} already painted, skipping", id);
                 continue;
             }
 
             #[cfg(debug_assertions)]
             tracing::trace!("Paint: Processing render object {:?}", id);
 
-            // Placeholder: actual paint would:
-            // - Create PaintContext
-            // - Call render_object.paint(context)
-            // - Collect paint operations into layer
+            // Get offset from RenderState
+            let offset = render_state.offset();
+
+            // Drop read guard before paint
+            drop(render_state);
+
+            // Perform paint based on RenderNode variant
+            let render_object = render_elem.render_object();
+            let _layer = match &*render_object {
+                crate::render::RenderNode::Leaf(leaf) => {
+                    // Paint leaf render object
+                    leaf.paint(offset)
+                }
+
+                crate::render::RenderNode::Single { child, .. } => {
+                    let child_id = child.expect("Single render node must have child");
+
+                    // Drop read guard to access trait object
+                    drop(render_object);
+                    let render_object = render_elem.render_object();
+
+                    if let crate::render::RenderNode::Single { render, .. } = &*render_object {
+                        render.paint(tree, child_id, offset)
+                    } else {
+                        unreachable!("RenderNode variant changed during paint")
+                    }
+                }
+
+                crate::render::RenderNode::Multi { children, .. } => {
+                    let children_ids = children.clone();
+
+                    // Drop read guard to access trait object
+                    drop(render_object);
+                    let render_object = render_elem.render_object();
+
+                    if let crate::render::RenderNode::Multi { render, .. } = &*render_object {
+                        render.paint(tree, &children_ids, offset)
+                    } else {
+                        unreachable!("RenderNode variant changed during paint")
+                    }
+                }
+            };
+
+            // TODO(future): Store layer for composition
+            // For now, we just generate and discard layers
+            // In the future, we'll build a layer tree and return it
+
+            // Clear needs_paint flag
+            let render_state_lock = render_elem.render_state();
+            let mut render_state = render_state_lock.write();
+            render_state.clear_needs_paint();
+
+            #[cfg(debug_assertions)]
+            tracing::trace!("Paint: Element {:?} painted successfully", id);
         }
 
         if self.optimize_layers {
-            // TODO(2025-02): Optimize layer tree
+            // TODO(future): Implement layer optimization
+            // - Merge compatible layers
+            // - Remove redundant operations
+            // - Batch similar operations
             #[cfg(debug_assertions)]
             tracing::trace!("Paint: Layer optimization enabled (not yet implemented)");
         }
