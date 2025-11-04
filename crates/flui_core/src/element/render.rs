@@ -268,18 +268,18 @@ impl RenderElement {
 
         // Also update RenderNode's child/children field
         // We MUST do this so the render object knows which children to layout/paint!
-        // Clone children before getting mutable reference to avoid borrow conflict
-        let children_clone = self.children.clone();
 
-        // Use direct mutable access to avoid RwLock lock contention
-        let render = self.render_object_mut_direct();
+        // Access render_object directly to allow simultaneous borrow of children
+        // (using the method would borrow all of &mut self)
+        let render = self.render_object.get_mut();
 
         if render.arity() == Some(1) {
-            // SingleRender - set the child
             render.set_child(child_id);
         } else {
-            // MultiRender - set children
-            render.set_children(children_clone);
+            // Pass slice reference - no clone needed!
+            // This works because we borrow self.render_object mutably
+            // and self.children immutably (different fields)
+            render.set_children(&self.children);
         }
     }
 

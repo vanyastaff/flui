@@ -204,14 +204,15 @@ impl RenderNode {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// if render.set_children(new_children) {
+    /// if render.set_children(&new_children) {
     ///     // Children were set successfully
     /// }
     /// ```
-    pub fn set_children(&mut self, new_children: Vec<ElementId>) -> bool {
+    pub fn set_children(&mut self, new_children: &[ElementId]) -> bool {
         match self {
             Self::Multi { children, .. } => {
-                *children = new_children;
+                children.clear();
+                children.extend_from_slice(new_children);
                 true
             }
             _ => false,
@@ -412,7 +413,7 @@ mod tests {
     fn test_set_children() {
         let mut render = RenderNode::new_multi(Box::new(TestMulti), vec![]);
         let new_children = vec![1];
-        assert!(render.set_children(new_children.clone()));
+        assert!(render.set_children(&new_children));
         assert_eq!(render.children(), Some(&new_children[..]));
     }
 

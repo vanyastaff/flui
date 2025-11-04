@@ -229,15 +229,15 @@ impl LayoutPipeline {
                     }
                 }
 
-                crate::render::RenderNode::Multi { children, .. } => {
-                    let children_ids = children.clone();
-
+                crate::render::RenderNode::Multi { .. } => {
                     // Drop read guard to get write guard
                     drop(render_object);
                     let mut render_object_mut = render_elem.render_object_mut();
 
-                    if let crate::render::RenderNode::Multi { render, .. } = &mut *render_object_mut {
-                        render.layout(tree, &children_ids, layout_constraints)
+                    if let crate::render::RenderNode::Multi { render, children } = &mut *render_object_mut {
+                        // Borrow children directly from RenderNode instead of cloning
+                        // This eliminates allocation + memcpy in layout hot path
+                        render.layout(tree, children, layout_constraints)
                     } else {
                         unreachable!("RenderNode variant changed during layout")
                     }
