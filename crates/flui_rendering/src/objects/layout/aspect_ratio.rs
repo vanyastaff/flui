@@ -45,6 +45,9 @@ impl Default for RenderAspectRatio {
 }
 
 impl SingleRender for RenderAspectRatio {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

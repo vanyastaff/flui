@@ -47,19 +47,22 @@ impl Default for RenderConstrainedBox {
 }
 
 impl SingleRender for RenderConstrainedBox {
+    /// No metadata needed for RenderConstrainedBox
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-        // Enforce additional constraints
+        // Enforce additional constraints by intersecting with incoming constraints
         let child_constraints = constraints.enforce(self.additional_constraints);
         tree.layout_child(child_id, child_constraints)
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-        // Simply pass through child layer
+        // Pass-through: child painted at our offset
         tree.paint_child(child_id, offset)
     }
 }

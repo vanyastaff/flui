@@ -1,4 +1,4 @@
-//! RenderSizedBox - enforces exact size
+//! RenderSizedBox - enforces exact size constraints
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
@@ -7,19 +7,29 @@ use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 /// RenderObject that enforces exact size constraints
 ///
-/// This widget forces its child_id to have a specific width and/or height,
-/// or acts as an invisible spacer if no child_id is present.
+/// This render object forces its child to have a specific width and/or height.
+/// If width or height is None, that dimension uses the constraint's max value.
+///
+/// # Layout Behavior
+///
+/// - **Both specified**: Forces exact size (tight constraints)
+/// - **Width only**: Sets width, height fills constraint
+/// - **Height only**: Sets height, width fills constraint
+/// - **Neither specified**: Fills max constraints (same as unconstrained child)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderSizedBox;
 ///
-/// // Force child_id to be exactly 100x100
+/// // Force child to be exactly 100x100
 /// let sized = RenderSizedBox::exact(100.0, 100.0);
 ///
-/// // Create a 50 pixel wide spacer
-/// let spacer = RenderSizedBox::width(50.0);
+/// // Set width only, height flexible
+/// let wide = RenderSizedBox::width(200.0);
+///
+/// // Set height only, width flexible
+/// let tall = RenderSizedBox::height(150.0);
 /// ```
 #[derive(Debug)]
 pub struct RenderSizedBox {
@@ -77,6 +87,9 @@ impl Default for RenderSizedBox {
 }
 
 impl SingleRender for RenderSizedBox {
+    /// No metadata needed for RenderSizedBox
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
@@ -84,13 +97,13 @@ impl SingleRender for RenderSizedBox {
         constraints: BoxConstraints,
     ) -> Size {
         // Calculate our size based on explicit width/height
+        // If not specified, use constraint's max (fill available space)
         let width = self.width.unwrap_or(constraints.max_width);
         let height = self.height.unwrap_or(constraints.max_height);
 
         let size = Size::new(width, height);
 
-        // SingleArity always has exactly one child_id
-        // Lay it out with tight constraints
+        // Force child to be exactly this size with tight constraints
         let child_constraints = BoxConstraints::tight(size);
         tree.layout_child(child_id, child_constraints);
 
@@ -98,7 +111,7 @@ impl SingleRender for RenderSizedBox {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-        // Simply pass through child_id layer (or empty if no child_id)
+        // Pass-through: child painted at our offset
         tree.paint_child(child_id, offset)
     }
 }

@@ -78,6 +78,9 @@ impl Default for RenderIntrinsicWidth {
 }
 
 impl SingleRender for RenderIntrinsicWidth {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

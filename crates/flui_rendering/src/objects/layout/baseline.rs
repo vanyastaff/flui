@@ -90,6 +90,9 @@ impl RenderBaseline {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderBaseline {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

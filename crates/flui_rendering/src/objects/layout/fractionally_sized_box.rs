@@ -92,6 +92,9 @@ impl Default for RenderFractionallySizedBox {
 }
 
 impl SingleRender for RenderFractionallySizedBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

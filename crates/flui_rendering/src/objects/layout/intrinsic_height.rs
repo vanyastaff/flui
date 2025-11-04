@@ -78,6 +78,9 @@ impl Default for RenderIntrinsicHeight {
 }
 
 impl SingleRender for RenderIntrinsicHeight {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

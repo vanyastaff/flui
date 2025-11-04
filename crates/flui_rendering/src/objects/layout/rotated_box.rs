@@ -133,6 +133,9 @@ impl RenderRotatedBox {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderRotatedBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

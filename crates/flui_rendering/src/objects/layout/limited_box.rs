@@ -56,6 +56,9 @@ impl Default for RenderLimitedBox {
 }
 
 impl SingleRender for RenderLimitedBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

@@ -190,6 +190,9 @@ impl RenderSizedOverflowBox {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderSizedOverflowBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

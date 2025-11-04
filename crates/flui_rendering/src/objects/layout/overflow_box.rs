@@ -100,6 +100,9 @@ impl Default for RenderOverflowBox {
 }
 
 impl SingleRender for RenderOverflowBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

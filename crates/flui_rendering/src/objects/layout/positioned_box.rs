@@ -86,6 +86,9 @@ impl Default for RenderPositionedBox {
 }
 
 impl SingleRender for RenderPositionedBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
