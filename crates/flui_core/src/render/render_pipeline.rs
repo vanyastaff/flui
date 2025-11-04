@@ -47,7 +47,7 @@ use flui_types::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 
 use crate::element::ElementId;
-use crate::pipeline::ElementTree;
+use crate::element::ElementTree;
 
 /// RenderPipeline - orchestrates the rendering pipeline
 ///

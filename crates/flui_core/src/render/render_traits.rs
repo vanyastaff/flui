@@ -11,7 +11,7 @@ use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 use crate::element::ElementId;
-use crate::pipeline::ElementTree;
+use crate::element::ElementTree;
 
 // ========== Leaf Render ==========
 

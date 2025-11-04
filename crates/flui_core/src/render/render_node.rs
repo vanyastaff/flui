@@ -10,7 +10,7 @@ use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 use super::render_traits::{LeafRender, MultiRender, SingleRender};
 use crate::element::ElementId;
-use crate::pipeline::ElementTree;
+use crate::element::ElementTree;
 
 /// Unified render tree node enum
 ///

@@ -46,7 +46,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::element::ElementId;
-use crate::pipeline::element_tree::ElementTree;
+use crate::element::ElementTree;
 
 #[cfg(debug_assertions)]
 use crate::debug_println;

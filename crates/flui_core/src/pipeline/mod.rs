@@ -70,7 +70,6 @@
 pub mod build_pipeline;
 pub mod cancellation;
 pub mod dirty_tracking;
-pub mod element_tree;
 pub mod error;
 pub mod frame_coordinator;
 pub mod frame_coordinator_tests;
@@ -102,7 +101,8 @@ pub mod triple_buffer;
 pub use build_pipeline::BuildPipeline;
 pub use cancellation::CancellationToken;
 pub use dirty_tracking::LockFreeDirtySet;
-pub use element_tree::ElementTree;
+// ElementTree moved to element module (breaking circular dependency)
+pub use crate::element::ElementTree;
 pub use error::{PipelineError, PipelinePhase, TimeoutDuration, InvalidError, InvalidDuration};
 pub use frame_coordinator::FrameCoordinator;
 pub use frame_scheduler::{FrameScheduler, FrameSkipPolicy};
@@ -114,6 +114,7 @@ pub use pipeline_owner::PipelineOwner;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use root_manager::RootManager;
 pub use triple_buffer::TripleBuffer;
+
 
 
 

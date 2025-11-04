@@ -6,7 +6,7 @@
 use rayon::prelude::*;
 
 use crate::element::ElementId;
-use crate::pipeline::element_tree::ElementTree;
+use crate::element::ElementTree;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

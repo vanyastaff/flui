@@ -329,6 +329,9 @@ pub use element::{
     Element,
     // Note: ElementId is now exported from foundation (see above)
 
+    // ElementTree (moved from pipeline to break circular dependency - Issue #21)
+    ElementTree,
+
     InheritedElement,
 
     RenderElement,
@@ -338,7 +341,8 @@ pub use element::{
 pub use view::BuildContext;
 
 // Re-export pipeline types (moved in Phase 1)
-pub use pipeline::{ElementTree, PipelineBuilder, PipelineOwner};
+// Note: ElementTree moved to element module (Issue #21)
+pub use pipeline::{PipelineBuilder, PipelineOwner};
 
 // ============================================================================
 // Render System

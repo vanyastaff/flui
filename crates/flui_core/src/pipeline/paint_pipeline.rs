@@ -23,7 +23,7 @@
 
 use crate::element::ElementId;
 use crate::pipeline::dirty_tracking::LockFreeDirtySet;
-use crate::pipeline::element_tree::ElementTree;
+use crate::element::ElementTree;
 use crate::pipeline::PipelineError;
 
 /// Result type for paint operations
