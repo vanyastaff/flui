@@ -21,9 +21,29 @@ struct EffectInner {
     ran_once: RefCell<bool>,
 }
 
+impl std::fmt::Debug for EffectInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectInner")
+            .field("effect_fn", &"<function>")
+            .field("cleanup_fn", &"<cleanup>")
+            .field("dependencies", &self.dependencies)
+            .field("prev_deps", &self.prev_deps)
+            .field("ran_once", &self.ran_once)
+            .finish()
+    }
+}
+
 /// Effect wrapper that manages side effects.
 pub struct Effect {
     inner: Rc<EffectInner>,
+}
+
+impl std::fmt::Debug for Effect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Effect")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 impl Effect {
@@ -86,9 +106,18 @@ pub struct EffectState {
     inner: Rc<EffectInner>,
 }
 
+impl std::fmt::Debug for EffectState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectState")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 /// Effect hook implementation.
 ///
 /// This hook runs side effects after rendering completes.
+#[derive(Debug)]
 pub struct EffectHook<F>(PhantomData<F>);
 
 impl<F> Hook for EffectHook<F>

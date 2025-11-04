@@ -29,6 +29,7 @@ impl Default for SignalId {
 }
 
 /// Inner signal state shared between Signal instances.
+#[derive(Debug)]
 struct SignalInner<T> {
     value: Rc<RefCell<T>>,
     id: SignalId,
@@ -47,6 +48,7 @@ struct SignalInner<T> {
 /// count.set(42);
 /// count.update(|n| n + 1);
 /// ```
+#[derive(Debug)]
 pub struct Signal<T> {
     inner: Rc<SignalInner<T>>,
 }
@@ -133,6 +135,7 @@ impl<T> Clone for Signal<T> {
 }
 
 /// Hook state for SignalHook.
+#[derive(Debug)]
 pub struct SignalState<T> {
     value: Rc<RefCell<T>>,
     id: SignalId,
@@ -141,6 +144,7 @@ pub struct SignalState<T> {
 /// Signal hook implementation.
 ///
 /// This hook creates a reactive signal that can be read and updated.
+#[derive(Debug)]
 pub struct SignalHook<T>(PhantomData<T>);
 
 impl<T: Clone + 'static> Hook for SignalHook<T> {

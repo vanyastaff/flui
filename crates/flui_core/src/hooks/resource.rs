@@ -25,6 +25,7 @@ use std::rc::Rc;
 ///     (false, None) => Text::new("Error loading user"),
 /// }
 /// ```
+#[derive(Debug)]
 pub struct Resource<T, E = String> {
     /// Whether the resource is currently loading.
     pub loading: Signal<bool>,
@@ -98,6 +99,7 @@ impl<T: Clone + 'static, E: Clone + 'static> Clone for Resource<T, E> {
 }
 
 /// Hook state for ResourceHook.
+#[derive(Debug)]
 pub struct ResourceState<T, E> {
     resource: Resource<T, E>,
 }
@@ -108,6 +110,7 @@ pub struct ResourceState<T, E> {
 ///
 /// TODO(2025-03): Implement actual async fetching.
 /// Current implementation provides the structure but requires async runtime integration.
+#[derive(Debug)]
 pub struct ResourceHook<T, E, F, Fut>(PhantomData<(T, E, F, Fut)>);
 
 impl<T, E, F, Fut> Hook for ResourceHook<T, E, F, Fut>

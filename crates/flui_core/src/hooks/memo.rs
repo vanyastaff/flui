@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::marker::PhantomData;
 
 /// Inner state for a memoized value.
+#[derive(Debug)]
 struct MemoInner<T> {
     cached: RefCell<Option<T>>,
     dependencies: RefCell<Vec<DependencyId>>,
@@ -28,6 +29,15 @@ struct MemoInner<T> {
 pub struct Memo<T> {
     inner: Rc<MemoInner<T>>,
     compute: Rc<dyn Fn() -> T>,
+}
+
+impl<T> std::fmt::Debug for Memo<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Memo")
+            .field("inner", &"<MemoInner>")
+            .field("compute", &"<function>")
+            .finish()
+    }
 }
 
 impl<T> Memo<T> {
@@ -98,9 +108,19 @@ pub struct MemoState<T> {
     compute: Rc<dyn Fn() -> T>,
 }
 
+impl<T> std::fmt::Debug for MemoState<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoState")
+            .field("inner", &"<MemoInner>")
+            .field("compute", &"<function>")
+            .finish()
+    }
+}
+
 /// Memo hook implementation.
 ///
 /// This hook creates a memoized computation that only runs when dependencies change.
+#[derive(Debug)]
 pub struct MemoHook<T, F>(PhantomData<(T, F)>);
 
 impl<T, F> Hook for MemoHook<T, F>

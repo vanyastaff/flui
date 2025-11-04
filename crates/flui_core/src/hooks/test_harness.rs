@@ -31,6 +31,7 @@ use std::marker::PhantomData;
 ///     assert_eq!(signal.get(), 42);
 /// }
 /// ```
+#[derive(Debug)]
 pub struct HookTestHarness<H: Hook> {
     context: HookContext,
     component_id: ComponentId,
@@ -124,6 +125,7 @@ impl<H: Hook> Default for HookTestHarness<H> {
 ///     });
 /// }
 /// ```
+#[derive(Debug)]
 pub struct MultiHookTestHarness {
     context: HookContext,
     component_id: ComponentId,
