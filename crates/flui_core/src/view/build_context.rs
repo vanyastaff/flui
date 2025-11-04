@@ -156,6 +156,25 @@ impl BuildContext {
     /// This is the primary way for hooks to access their context.
     /// Uses interior mutability via RefCell.
     ///
+    /// # Panics
+    ///
+    /// Panics if the hook context is already borrowed mutably. This typically
+    /// happens when trying to call hooks from within hook callbacks:
+    ///
+    /// ```rust,ignore
+    /// // ❌ WRONG: Nested hook calls will panic
+    /// ctx.with_hook_context_mut(|_| {
+    ///     let signal = use_signal(&ctx, 0);  // PANIC: Double borrow
+    /// });
+    ///
+    /// // ✅ CORRECT: Call hooks sequentially at the same level
+    /// let signal = use_signal(ctx, 0);
+    /// let memo = use_memo(ctx, |hook_ctx| {
+    ///     // Inside memo, use hook_ctx directly, not ctx
+    ///     signal.get() * 2
+    /// });
+    /// ```
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -169,7 +188,35 @@ impl BuildContext {
     where
         F: FnOnce(&mut HookContext) -> R,
     {
-        f(&mut self.hook_context.borrow_mut())
+        match self.hook_context.try_borrow_mut() {
+            Ok(mut hook_ctx) => f(&mut hook_ctx),
+            Err(_) => {
+                panic!(
+                    "BuildContext hook context is already borrowed!\n\
+                    \n\
+                    This typically occurs when:\n\
+                    1. Calling hooks from within hook callbacks (nested hook calls)\n\
+                    2. Holding a hook context borrow across a hook call\n\
+                    \n\
+                    Example of the problem:\n\
+                    ```\n\
+                    ctx.with_hook_context_mut(|_| {{\n\
+                        let signal = use_signal(&ctx, 0);  // ← Double borrow!\n\
+                    }});\n\
+                    ```\n\
+                    \n\
+                    Solution: Call hooks sequentially at the component level, not nested:\n\
+                    ```\n\
+                    let signal = use_signal(ctx, 0);  // ← Correct\n\
+                    let memo = use_memo(ctx, |hook_ctx| {{\n\
+                        signal.get() * 2  // Use hook_ctx, not ctx\n\
+                    }});\n\
+                    ```\n\
+                    \n\
+                    For more details, see the hook documentation."
+                )
+            }
+        }
     }
 
     /// Get the shared hook context
