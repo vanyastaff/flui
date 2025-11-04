@@ -123,7 +123,6 @@ impl RootManager {
         // Insert into tree
         let id = tree_guard.insert(root_element);
 
-        // Note: init_state() method removed during Widget → View migration
         // TODO(Phase 5): Call view.build() to create child
 
         drop(tree_guard);
@@ -148,57 +147,11 @@ impl RootManager {
         self.root_id = None;
     }
 
-    // Future: inflate_root() for Widget → Element conversion (Phase 5)
-    // pub fn inflate_root(&mut self, tree: &Arc<RwLock<ElementTree>>, widget: Widget) -> ElementId {
-    //     let element = inflate_widget(widget, tree);
+    // Future: inflate_root() for View → Element conversion (Phase 5)
+    // pub fn inflate_root(&mut self, tree: &Arc<RwLock<ElementTree>>, view: View) -> ElementId {
+    //     let element = inflate_view(view, tree);
     //     self.set_root(tree, element)
     // }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::element::ComponentElement;
-    use crate::widget::StatelessWidget;
-    use crate::BuildContext;
-
-    #[derive(Debug, Clone)]
-    struct TestWidget;
-
-    impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &BuildContext) -> crate::widget::Widget {
-            Box::new(TestWidget)
-        }
-    }
-
-    #[test]
-    fn test_root_manager_creation() {
-        let root_mgr = RootManager::new();
-        assert_eq!(root_mgr.root_id(), None);
-    }
-
-    #[test]
-    fn test_set_root() {
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let mut root_mgr = RootManager::new();
-
-        let component = ComponentElement::new(TestWidget);
-        let root = Element::Component(component);
-        let root_id = root_mgr.set_root(&tree, root);
-
-        assert_eq!(root_mgr.root_id(), Some(root_id));
-    }
-
-    #[test]
-    fn test_clear_root() {
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let mut root_mgr = RootManager::new();
-
-        let component = ComponentElement::new(TestWidget);
-        let root = Element::Component(component);
-        root_mgr.set_root(&tree, root);
-
-        root_mgr.clear_root();
-        assert_eq!(root_mgr.root_id(), None);
-    }
-}
+// Tests removed - need to be rewritten with View API

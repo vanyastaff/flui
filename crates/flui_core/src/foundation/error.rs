@@ -103,10 +103,10 @@ pub enum CoreError {
     #[error("Element tree in invalid state: {0}")]
     InvalidTreeState(Cow<'static, str>),
 
-    /// Widget build failed with source error
-    #[error("Failed to build widget '{widget_type}' (element {element_id}): {source}")]
+    /// View build failed with source error
+    #[error("Failed to build view '{widget_type}' (element {element_id}): {source}")]
     BuildFailed {
-        /// Widget type name
+        /// View type name
         widget_type: &'static str,
         /// Element ID
         element_id: ElementId,
@@ -129,12 +129,12 @@ pub enum CoreError {
         operation: &'static str,
     },
 
-    /// InheritedWidget not found
+    /// Provider not found
     #[error(
-        "No InheritedWidget of type '{widget_type}' found in ancestor tree of element {context_element_id}. Did you forget to wrap your app with the widget?"
+        "No Provider of type '{widget_type}' found in ancestor tree of element {context_element_id}. Did you forget to wrap your app with the provider?"
     )]
     InheritedWidgetNotFound {
-        /// Widget type name
+        /// Provider type name
         widget_type: &'static str,
         /// Context element ID
         context_element_id: ElementId,

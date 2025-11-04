@@ -6,18 +6,18 @@
 
 **Core framework for FLUI - A reactive UI framework for Rust inspired by Flutter**
 
-FLUI provides a declarative, widget-based API for building high-performance user interfaces in Rust with automatic state management and efficient rendering.
+FLUI provides a declarative, view-based API for building high-performance user interfaces in Rust with automatic state management and efficient rendering.
 
 ## Features
 
-- 🎯 **Type-Safe Widget System** - Compile-time widget type checking with zero runtime overhead
+- 🎯 **Type-Safe View System** - Compile-time view type checking with zero runtime overhead
 - 🚀 **High Performance** - Enum-based dispatch (3-4x faster than Box<dyn> trait objects)
-- ♻️ **Automatic Reactivity** - Smart rebuilding only when state actually changes
-- 🎨 **Flexible Rendering** - Clean separation between widgets, state, and rendering
-- 🔧 **Zero Boilerplate** - `impl_into_widget!` macro for seamless widget integration
-- 🏗️ **Ergonomic Builders** - Fluent builder pattern for all widgets
+- ♻️ **Automatic Reactivity** - Smart rebuilding only when state actually changes with hooks
+- 🎨 **Flexible Rendering** - Clean separation between views, state, and rendering
+- 🔧 **Modern Hooks API** - Use signals, effects, and memos for reactive state
+- 🏗️ **Component-Based** - Composable views with clean interfaces
 - 📦 **Efficient Memory** - Slab-based element tree with O(1) access
-- 🔌 **Composable** - `IntoWidget` trait for automatic widget conversion
+- 🔌 **Provider Pattern** - Efficient data propagation with automatic dependency tracking
 
 ## Quick Start
 
@@ -36,11 +36,8 @@ use flui_core::prelude::*;
 #[derive(Debug, Clone)]
 struct HelloWorld;
 
-// Use the impl_into_widget! macro to automatically implement IntoWidget
-flui_core::impl_into_widget!(HelloWorld, stateless);
-
-impl StatelessWidget for HelloWorld {
-    fn build(&self, ctx: &BuildContext) -> Widget {
+impl Component for HelloWorld {
+    fn build(&self, ctx: &BuildContext) -> View {
         Text::builder()
             .data("Hello, World!")
             .size(24.0)
@@ -49,7 +46,7 @@ impl StatelessWidget for HelloWorld {
 }
 ```
 
-The `impl_into_widget!` macro generates implementations of `IntoWidget` trait and `From<T> for Widget`, allowing seamless conversion between your widget types and the `Widget` enum.
+Components are composable views that build UIs from other views. They can optionally manage state using hooks or the State type parameter.
 
 ### Complete Example with Builder Pattern
 
@@ -60,10 +57,8 @@ use flui_widgets::prelude::*;
 #[derive(Debug, Clone)]
 struct WelcomeScreen;
 
-flui_core::impl_into_widget!(WelcomeScreen, stateless);
-
-impl StatelessWidget for WelcomeScreen {
-    fn build(&self, _ctx: &BuildContext) -> Widget {
+impl Component for WelcomeScreen {
+    fn build(&self, _ctx: &BuildContext) -> View {
         Container::builder()
             .padding(EdgeInsets::all(40.0))
             .color(Color::rgb(245, 245, 245))
@@ -93,43 +88,34 @@ impl StatelessWidget for WelcomeScreen {
 }
 ```
 
-### Stateful Counter
+### Counter with Hooks
 
 ```rust
 use flui_core::prelude::*;
+use flui_core::hooks::use_signal;
 
 #[derive(Debug, Clone)]
 struct Counter {
     initial: i32,
 }
 
-// Use the macro for stateful widgets
-flui_core::impl_into_widget!(Counter, stateful);
+impl Component for Counter {
+    fn build(&self, ctx: &BuildContext) -> View {
+        // Reactive state with hooks
+        let count = use_signal(ctx, || self.initial);
 
-struct CounterState {
-    count: i32,
-}
-
-impl StatefulWidget for Counter {
-    type State = CounterState;
-
-    fn create_state(&self) -> Self::State {
-        CounterState { count: self.initial }
-    }
-}
-
-impl State<Counter> for CounterState {
-    fn build(&mut self, widget: &Counter) -> Widget {
-        // Build UI with current count using builder pattern
-        Text::builder()
-            .data(format!("Count: {}", self.count))
-            .size(32.0)
+        Column::builder()
+            .children(vec![
+                Text::builder()
+                    .data(format!("Count: {}", count.get()))
+                    .size(32.0)
+                    .build(),
+                Button::builder()
+                    .label("Increment")
+                    .on_press(move || count.update(|c| *c += 1))
+                    .build(),
+            ])
             .build()
-    }
-
-    fn set_state<F: FnOnce(&mut Self)>(&mut self, f: F) {
-        f(self);
-        // Triggers rebuild
     }
 }
 ```
@@ -140,38 +126,37 @@ FLUI uses a **three-tree architecture** for optimal performance:
 
 ```text
 ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│  Widget Tree    │      │  Element Tree   │      │  Render Tree    │
+│  View Tree      │      │  Element Tree   │      │  Render Tree    │
 │                 │      │                 │      │                 │
 │  (Immutable     │ ───> │  (Mutable       │ ───> │  (Layout &      │
 │   Configuration)│      │   State)        │      │   Paint)        │
 └─────────────────┘      └─────────────────┘      └─────────────────┘
 ```
 
-### Widget Tree (Immutable Configuration)
+### View Tree (Immutable Configuration)
 
-Widgets are lightweight, immutable descriptions of what the UI should look like:
+Views are lightweight, immutable descriptions of what the UI should look like:
 
 ```rust
-pub enum Widget {
-    Stateless(Box<dyn StatelessWidget>),    // Pure functional widgets
-    Stateful(Box<dyn StatefulWidget>),      // Widgets with mutable state
-    Inherited(Box<dyn InheritedWidget>),    // Data propagation
-    Render(Box<dyn RenderWidget>),          // Custom layout/paint
-    ParentData(Box<dyn ParentDataWidget>),  // Layout metadata
+pub trait AnyView {
+    fn build(&self, ctx: &BuildContext) -> Element;
 }
+
+// Three core view types:
+// - Component: Composable views with optional state (hooks or State<T>)
+// - Provider: Data propagation with dependency tracking
+// - Render: Custom layout and painting
 ```
 
 ### Element Tree (Mutable State)
 
-Elements hold the living state and lifecycle of widgets. They persist across rebuilds:
+Elements hold the living state and lifecycle of views. They persist across rebuilds:
 
 ```rust
 pub enum Element {
-    Component(ComponentElement),      // StatelessWidget instance
-    Stateful(StatefulElement),       // StatefulWidget + State
-    Inherited(InheritedElement),     // Inherited data provider
-    Render(RenderElement),           // Bridge to render tree
-    ParentData(ParentDataElement),   // Parent data attachment
+    Component(ComponentElement),      // Component view instance with optional state
+    Provider(InheritedElement),       // Provider for data propagation
+    Render(RenderElement),            // Bridge to render tree
 }
 ```
 
@@ -187,104 +172,98 @@ pub enum RenderNode {
 }
 ```
 
-## Widget Types
+## View Types
 
-### StatelessWidget
+FLUI provides three core view types for building UIs:
 
-Pure functional widgets with no mutable state:
+### Component Views
+
+Composable views that build UIs from other views. They can have optional state managed via hooks or the State type parameter:
 
 ```rust
+use flui_core::prelude::*;
+use flui_core::hooks::use_signal;
+
 #[derive(Debug, Clone)]
 struct Greeting {
     name: String,
 }
 
-// Macro to implement IntoWidget for this type
-flui_core::impl_into_widget!(Greeting, stateless);
-
-impl StatelessWidget for Greeting {
-    fn build(&self, ctx: &BuildContext) -> Widget {
+impl Component for Greeting {
+    fn build(&self, ctx: &BuildContext) -> View {
         Text::builder()
             .data(format!("Hello, {}!", self.name))
             .size(18.0)
             .build()
     }
 }
-```
 
-**When to use**: Display-only widgets, pure transformations, compositions.
-
-### StatefulWidget
-
-Widgets that manage mutable state:
-
-```rust
+// With state using hooks:
 #[derive(Debug, Clone)]
 struct Toggle {
     initial: bool,
 }
 
-flui_core::impl_into_widget!(Toggle, stateful);
+impl Component for Toggle {
+    fn build(&self, ctx: &BuildContext) -> View {
+        let enabled = use_signal(ctx, || self.initial);
 
-struct ToggleState {
-    enabled: bool,
-}
-
-impl StatefulWidget for Toggle {
-    type State = ToggleState;
-
-    fn create_state(&self) -> Self::State {
-        ToggleState { enabled: self.initial }
-    }
-}
-
-impl State<Toggle> for ToggleState {
-    fn build(&mut self, widget: &Toggle) -> Widget {
-        // Build UI based on self.enabled
         Checkbox::builder()
-            .value(self.enabled)
+            .value(enabled.get())
+            .on_change(move |val| enabled.set(val))
             .build()
     }
 }
 ```
 
-**When to use**: User interactions, animations, form inputs, timers.
+**When to use**: Display components, user interactions, animations, form inputs, most UI composition.
 
-### InheritedWidget
+**State management options**:
+- Hooks: `use_signal`, `use_effect`, `use_memo` for reactive state
+- State type parameter: Traditional approach similar to Flutter's StatefulWidget
 
-Efficient data propagation down the widget tree:
+### Provider Views
+
+Efficient data propagation with automatic dependency tracking:
 
 ```rust
+use flui_core::prelude::*;
+
 #[derive(Debug, Clone)]
 struct Theme {
     color: Color,
-    child: Widget,
+    child: View,
 }
 
-flui_core::impl_into_widget!(Theme, inherited);
-
-impl InheritedWidget for Theme {
-    fn update_should_notify(&self, old: &Self) -> bool {
+impl Provider for Theme {
+    fn should_notify(&self, old: &Self) -> bool {
         self.color != old.color
     }
 
-    fn child(&self) -> Widget {
+    fn child(&self) -> View {
         self.child.clone()
     }
 }
 
 // Access from descendants:
-let theme = ctx.depend_on_inherited_widget::<Theme>()?;
+let theme = ctx.get_provider::<Theme>()?;
 let color = theme.color;
 ```
 
 **When to use**: Themes, localization, configuration, app-wide state.
 
-### RenderWidget
+**Key features**:
+- Automatic dependency tracking
+- Only rebuilds dependents when data changes
+- Type-safe access via generics
 
-Direct control over layout and painting:
+### Render Views
+
+Direct control over layout and painting for custom render objects:
 
 ```rust
+use flui_core::prelude::*;
+
 #[derive(Debug, Clone)]
 struct CustomBox {
     width: f32,
@@ -292,12 +271,10 @@ struct CustomBox {
     color: Color,
 }
 
-flui_core::impl_into_widget!(CustomBox, render);
+impl Render for CustomBox {
+    type RenderObject = RenderCustomBox;
 
-impl RenderWidget for CustomBox {
-    type Render = RenderCustomBox;
-
-    fn create_render_object(&self) -> Self::Render {
+    fn create_render(&self) -> Self::RenderObject {
         RenderCustomBox {
             width: self.width,
             height: self.height,
@@ -305,7 +282,7 @@ impl RenderWidget for CustomBox {
         }
     }
 
-    fn update_render_object(&self, render: &mut Self::Render) {
+    fn update_render(&self, render: &mut Self::RenderObject) {
         render.width = self.width;
         render.height = self.height;
         render.color = self.color;
@@ -319,45 +296,12 @@ impl LeafRender for RenderCustomBox {
     }
 
     fn paint(&self, offset: Offset) -> BoxedLayer {
-        // Create layer for rendering
         Box::new(PictureLayer::new(/* ... */))
     }
 }
 ```
 
 **When to use**: Custom layouts, complex drawing, performance-critical rendering.
-
-### ParentDataWidget
-
-Attach metadata to children for parent's layout algorithm:
-
-```rust
-#[derive(Debug, Clone)]
-struct Positioned {
-    top: Option<f32>,
-    left: Option<f32>,
-    child: Widget,
-}
-
-flui_core::impl_into_widget!(Positioned, parent_data);
-
-impl ParentDataWidget for Positioned {
-    type ParentDataType = StackParentData;
-
-    fn apply_parent_data(&self, render: &mut dyn Any) {
-        if let Some(parent_data) = render.downcast_mut::<StackParentData>() {
-            parent_data.top = self.top;
-            parent_data.left = self.left;
-        }
-    }
-
-    fn child(&self) -> &Widget {
-        &self.child
-    }
-}
-```
-
-**When to use**: Positioned (for Stack), Flexible (for Flex), custom layout parameters.
 
 ## Render Traits
 
@@ -471,57 +415,49 @@ impl MultiRender for RenderRow {
 
 ## Key Features Explained
 
-### 🎯 The `impl_into_widget!` Macro
+### 🎯 Type-Safe View Composition
 
-FLUI provides a convenient macro to automatically implement the `IntoWidget` trait and `From<T> for Widget` conversion for your widget types:
+FLUI uses trait-based view composition for type safety and ergonomics:
 
 ```rust
-// For StatelessWidget
-flui_core::impl_into_widget!(MyWidget, stateless);
+// Component views
+impl Component for MyView {
+    fn build(&self, ctx: &BuildContext) -> View { /* ... */ }
+}
 
-// For StatefulWidget
-flui_core::impl_into_widget!(MyCounter, stateful);
+// Provider views
+impl Provider for MyTheme {
+    fn should_notify(&self, old: &Self) -> bool { /* ... */ }
+    fn child(&self) -> View { /* ... */ }
+}
 
-// For RenderWidget
-flui_core::impl_into_widget!(MyCustomBox, render);
-
-// For InheritedWidget
-flui_core::impl_into_widget!(MyTheme, inherited);
-
-// For ParentDataWidget
-flui_core::impl_into_widget!(MyPositioned, parent_data);
+// Render views
+impl Render for MyCustomBox {
+    type RenderObject = RenderMyCustomBox;
+    fn create_render(&self) -> Self::RenderObject { /* ... */ }
+    fn update_render(&self, render: &mut Self::RenderObject) { /* ... */ }
+}
 ```
 
-This macro generates:
-- `impl IntoWidget for T` - allows calling `.into_widget()` on your type
-- `impl From<T> for Widget` - enables automatic conversion via `.into()`
-
 **Benefits**:
-- No more manual `Widget::stateless()` or `Widget::render_object()` calls
+- Compile-time type checking for view composition
 - Cleaner, more ergonomic API
 - Works seamlessly with builder patterns
-- Type-safe widget composition
+- Zero-cost abstractions
 
 ### 🏗️ Builder Pattern
 
-Most widgets in FLUI support the builder pattern for ergonomic construction:
+Most built-in views in FLUI support the builder pattern for ergonomic construction:
 
 ```rust
-// Old verbose way (still works):
-let text = Widget::render_object(Text {
-    data: "Hello".to_string(),
-    size: 24.0,
-    color: Color::WHITE,
-});
-
-// New builder way (recommended):
+// Simple text view:
 let text = Text::builder()
     .data("Hello")
     .size(24.0)
     .color(Color::WHITE)
     .build();
 
-// Complex example with Container:
+// Complex nested composition:
 Container::builder()
     .width(300.0)
     .height(200.0)
@@ -539,7 +475,7 @@ Container::builder()
     .build()
 ```
 
-The builder pattern automatically handles `IntoWidget` conversions, making widget composition feel natural and fluent.
+The builder pattern provides a fluent, ergonomic API for view composition with compile-time type checking.
 
 ### 🎯 Object-Safe Traits
 
@@ -560,40 +496,54 @@ Using enums instead of `Box<dyn>` provides **3-4x performance improvement**:
 // Match-based dispatch (fast!)
 match element {
     Element::Component(c) => c.build(),
-    Element::Stateful(s) => s.build(),
-    // ... compiler can optimize this heavily
+    Element::Provider(p) => p.propagate(),
+    Element::Render(r) => r.layout(),
 }
 
-// vs. virtual function calls (slower)
-element.build()  // Box<dyn Element>
+// Compiler can heavily optimize enum dispatch with:
+// - Inline optimizations
+// - Better cache locality
+// - No virtual function overhead
 ```
 
-### 🔧 Zero Boilerplate
+### 🔧 Modern Hooks API
 
-The `impl_into_widget!` macro eliminates boilerplate code:
+FLUI provides a hooks-based API for reactive state management:
 
 ```rust
+use flui_core::hooks::*;
+
 #[derive(Debug, Clone)]
-struct MyWidget;
+struct MyCounter;
 
-// Just one line to get full Widget integration!
-flui_core::impl_into_widget!(MyWidget, stateless);
+impl Component for MyCounter {
+    fn build(&self, ctx: &BuildContext) -> View {
+        // Reactive state
+        let count = use_signal(ctx, || 0);
 
-impl StatelessWidget for MyWidget {
-    fn build(&self, ctx: &BuildContext) -> Widget {
-        Text::builder()
-            .data("Hello")
+        // Side effects
+        use_effect(ctx, || {
+            println!("Count changed: {}", count.get());
+        }, &[count.get()]);
+
+        // Memoized computation
+        let doubled = use_memo(ctx, || count.get() * 2, &[count.get()]);
+
+        Column::builder()
+            .children(vec![
+                Text::builder()
+                    .data(format!("Count: {} (doubled: {})", count.get(), doubled))
+                    .build(),
+                Button::builder()
+                    .on_press(move || count.update(|c| *c += 1))
+                    .build(),
+            ])
             .build()
     }
 }
-
-// Now you can use it anywhere a Widget is expected:
-let widget = MyWidget;
-let as_widget: Widget = widget.into_widget();  // ✅ Via IntoWidget
-let also_widget: Widget = MyWidget.into();      // ✅ Via From<T>
 ```
 
-Combined with builder patterns, widget composition becomes extremely ergonomic with minimal boilerplate.
+Hooks provide a clean, composable way to manage state without boilerplate.
 
 ### 📦 Slab-Based Element Tree
 
@@ -615,7 +565,7 @@ FLUI is designed for high performance:
 | Operation | Complexity | Notes |
 |-----------|------------|-------|
 | Element lookup | O(1) | Slab-based indexing |
-| Widget dispatch | O(1) | Enum match (inline-able) |
+| Element dispatch | O(1) | Enum match (inline-able) |
 | State updates | O(affected) | Only rebuilds dirty subtree |
 | Layout cache | O(1) | Constraint-based memoization |
 
@@ -628,20 +578,20 @@ FLUI is designed for high performance:
 
 See the [examples](../../examples/) directory for complete applications:
 
-- **[widget_hello_world](../../examples/widget_hello_world.rs)** - Modern builder pattern with `impl_into_widget!`
-- **[hello_world](../../examples/hello_world.rs)** - Basic StatelessWidget
-- **[counter](../../examples/counter.rs)** - StatefulWidget with state management
-- **[theme](../../examples/theme.rs)** - InheritedWidget for data propagation
-- **[custom_render](../../examples/custom_render.rs)** - Custom RenderWidget
+- **[hello_world](../../examples/hello_world.rs)** - Basic Component view
+- **[counter_signal](../../examples/counter_signal.rs)** - Component with hooks (use_signal)
+- **[counter_set_state](../../examples/counter_set_state.rs)** - Component with State type parameter
+- **[theme](../../examples/theme.rs)** - Provider for data propagation
+- **[custom_render](../../examples/custom_render.rs)** - Custom Render view
 - **[layout](../../examples/layout.rs)** - Flex layout system
 
-### Widget Composition Example
+### View Composition Example
 
 ```rust
 use flui_core::prelude::*;
 use flui_widgets::prelude::*;
 
-// Create widgets using the builder pattern
+// Composing views with the builder pattern
 let my_ui = Column::builder()
     .main_axis_alignment(MainAxisAlignment::Center)
     .children(vec![
@@ -649,8 +599,7 @@ let my_ui = Column::builder()
             .data("Title")
             .size(32.0)
             .color(Color::BLACK)
-            .build()
-            .into(),  // Convert to Widget
+            .build(),
         Container::builder()
             .padding(EdgeInsets::symmetric(10.0, 20.0))
             .child(
@@ -659,8 +608,7 @@ let my_ui = Column::builder()
                     .size(16.0)
                     .build()
             )
-            .build()
-            .into(),
+            .build(),
     ])
     .build();
 ```
@@ -712,10 +660,10 @@ at your option.
 | Feature | Flutter | FLUI |
 |---------|---------|------|
 | Language | Dart | Rust |
-| Widget tree | Runtime | Enum-based compile-time |
-| State | Inherited | Owned by Element |
+| View tree | Runtime Widget tree | Enum-based compile-time |
+| State | StatefulWidget | Hooks or State<T> |
 | Rendering | Skia | Pluggable backends |
 | Hot reload | ✅ Yes | 🚧 Planned |
 | FFI | C/C++ | Native Rust |
 
-FLUI takes inspiration from Flutter's architecture but leverages Rust's type system for additional safety and performance.
+FLUI takes inspiration from Flutter's architecture but leverages Rust's type system for additional safety and performance. The view-based API provides a modern, reactive approach to UI development.

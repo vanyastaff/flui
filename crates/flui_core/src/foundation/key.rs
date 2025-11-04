@@ -1,6 +1,6 @@
-//! Widget keys with niche optimization and compile-time constant support
+//! View keys with niche optimization and compile-time constant support
 //!
-//! This module provides the `Key` type for widget identity tracking with:
+//! This module provides the `Key` type for view identity tracking with:
 //! - Compile-time constant keys via FNV-1a hash
 //! - Runtime unique key generation via atomic counter
 //! - Explicit keys from external IDs
@@ -26,10 +26,10 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Widget key with niche optimization
+/// View key with niche optimization
 ///
 /// Thanks to `NonZeroU64`, `Option<Key>` is only 8 bytes instead of 16.
-/// This saves memory and improves cache locality when storing many widgets.
+/// This saves memory and improves cache locality when storing many views.
 ///
 /// # Memory Layout
 ///
@@ -202,10 +202,10 @@ impl Hash for Key {
     }
 }
 
-/// Key reference for DynWidget trait
+/// Key reference for DynView trait
 ///
 /// This is a lightweight wrapper around `Key` that can be used
-/// in the object-safe `DynWidget` trait. It's essentially the same
+/// in the object-safe `DynView` trait. It's essentially the same
 /// as `Key` but semantically represents a reference.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

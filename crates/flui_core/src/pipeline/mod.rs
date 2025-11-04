@@ -10,9 +10,10 @@
 //! PipelineOwner (thin facade)
 //!   ├─ tree: Arc<RwLock<ElementTree>>  // Element storage
 //!   ├─ coordinator: FrameCoordinator   // Phase orchestration
-//!   │   ├─ build: BuildPipeline        // Widget rebuild
+//!   │   ├─ build: BuildPipeline        // View rebuild (with parallel support)
 //!   │   ├─ layout: LayoutPipeline      // Size computation
-//!   │   └─ paint: PaintPipeline        // Layer generation
+//!   │   ├─ paint: PaintPipeline        // Layer generation
+//!   │   └─ scheduler: FrameScheduler   // Frame timing & budget
 //!   ├─ root_mgr: RootManager           // Root element tracking
 //!   └─ Optional features:
 //!       ├─ metrics: PipelineMetrics
@@ -28,6 +29,8 @@
 //!    - `RootManager`: Manages root element
 //!    - `ElementTree`: Stores elements
 //!    - `BuildPipeline`, `LayoutPipeline`, `PaintPipeline`: Phase-specific logic
+//!    - `FrameScheduler`: Manages frame timing and budget
+//!    - `parallel_build`: Parallel execution of independent subtrees
 //!
 //! 2. **Open/Closed**: Easy to extend with new features without modifying core
 //!
@@ -61,6 +64,8 @@
 //! - Cancellation (timeout support)
 //! - Error recovery (graceful degradation)
 //! - Frame buffer (lock-free frame exchange)
+//! - Parallel build (multi-threaded widget rebuilds)
+//! - Frame scheduling (frame budget management)
 
 pub mod build_pipeline;
 pub mod cancellation;
@@ -68,14 +73,20 @@ pub mod dirty_tracking;
 pub mod element_tree;
 pub mod error;
 pub mod frame_coordinator;
+pub mod frame_coordinator_tests;
+pub mod frame_scheduler;
 pub mod layout_pipeline;
 pub mod metrics;
 pub mod paint_pipeline;
+pub mod parallel_build;
 pub mod pipeline_builder;
 pub mod pipeline_owner;
 pub mod recovery;
 pub mod root_manager;
 pub mod triple_buffer;
+
+
+
 
 
 
@@ -94,6 +105,7 @@ pub use dirty_tracking::LockFreeDirtySet;
 pub use element_tree::ElementTree;
 pub use error::{PipelineError, PipelinePhase};
 pub use frame_coordinator::FrameCoordinator;
+pub use frame_scheduler::{FrameScheduler, FrameSkipPolicy};
 pub use layout_pipeline::LayoutPipeline;
 pub use metrics::PipelineMetrics;
 pub use paint_pipeline::PaintPipeline;
@@ -102,6 +114,9 @@ pub use pipeline_owner::PipelineOwner;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use root_manager::RootManager;
 pub use triple_buffer::TripleBuffer;
+
+
+
 
 
 

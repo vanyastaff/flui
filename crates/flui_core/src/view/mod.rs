@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! fn build(&self, ctx: &mut BuildContext) -> Widget {
+//! fn build(&self, ctx: &mut BuildContext) -> View {
 //!     // Use BuildContext to build children
 //!     Text::new("Hello, World!").into()
 //! }

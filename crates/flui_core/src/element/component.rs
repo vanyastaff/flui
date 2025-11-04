@@ -8,8 +8,8 @@
 //!
 //! # Architecture
 //!
-//! ComponentElement replaces both StatelessWidget and StatefulWidget elements.
-//! The View system handles both cases:
+//! ComponentElement handles all component views.
+//! The View system handles both stateless and stateful cases:
 //! - View with State=() → stateless behavior
 //! - View with State=T → stateful behavior
 

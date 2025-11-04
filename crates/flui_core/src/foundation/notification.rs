@@ -1,16 +1,16 @@
-//! Notification system for bubbling events up the widget tree
+//! Notification system for bubbling events up the view tree
 //!
 //! This module provides Flutter's notification system - a mechanism for propagating
-//! events **up** through the widget tree, similar to DOM event bubbling.
+//! events **up** through the view tree, similar to DOM event bubbling.
 //!
 //! # Architecture
 //!
 //! ```text
-//! Child Widget
+//! Child View
 //!     ↓ dispatch_notification()
-//! Parent Widget
+//! Parent View
 //!     ↓ (continues bubbling)
-//! Ancestor Widget (NotificationListener)
+//! Ancestor View (NotificationListener)
 //!     ↓ handle notification
 //! Stop or Continue bubbling
 //! ```
@@ -125,7 +125,7 @@ pub trait Notification: Any + Send + Sync + fmt::Debug {
 ///
 /// # Design Pattern
 ///
-/// This follows the same pattern as Widget/DynWidget and Render/RenderNode:
+/// This follows the same pattern as View/DynView and Render/RenderNode:
 /// - `Notification` - Has associated types, not object-safe
 /// - `DynNotification` - Object-safe for `&dyn DynNotification`
 pub trait DynNotification: Send + Sync + fmt::Debug {

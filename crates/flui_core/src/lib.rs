@@ -21,186 +21,101 @@
 //! what the UI should look like. When configuration changes, you create
 //! new view instances.
 //!
-//! ```rust
-//! use flui_core::{StatelessWidget, Widget, BuildContext};
+//! ```rust,ignore
+//! use flui_core::{Component, View, BuildContext};
 //!
 //! #[derive(Debug)]
 //! struct Greeting {
 //!     name: String,
 //! }
 //!
-//! impl StatelessWidget for Greeting {
-//!     fn build(&self, context: &BuildContext) -> Widget {
-//!         Box::new(Text::new(format!("Hello, {}!", self.name)))
+//! impl Component for Greeting {
+//!     fn build(&self, context: &BuildContext) -> View {
+//!         Text::new(format!("Hello, {}!", self.name)).into()
 //!     }
 //! }
 //! ```
 //!
 //! ## Element Tree (Mutable State)
 //!
-//! Elements hold the mutable state and lifecycle of widgets. They persist
-//! across rebuilds and manage the widget-to-render-object relationship.
+//! Elements hold the mutable state and lifecycle of views. They persist
+//! across rebuilds and manage the view-to-render-object relationship.
 //!
 //! ## Render Tree (Layout & Paint)
 //!
 //! Renders perform layout calculations and painting. They form the
 //! actual visual representation that gets displayed.
 //!
-//! # Widget Types
+//! # View Types
 //!
-//! FLUI provides five core widget types:
+//! FLUI provides three core view types:
 //!
-//! ## StatelessWidget
+//! ## Component Views
 //!
-//! Pure functional widgets without mutable state.
-//!
-//! ```rust
-//! # use flui_core::{StatelessWidget, Widget, BuildContext};
-//! #[derive(Debug)]
-//! struct HelloWorld;
-//!
-//! impl StatelessWidget for HelloWorld {
-//!     fn build(&self, context: &BuildContext) -> Widget {
-//!         Box::new(Text::new("Hello, World!"))
-//!     }
-//! }
-//! ```
-//!
-//! ## StatefulWidget
-//!
-//! Widgets with persistent mutable state. FLUI offers two approaches for managing
-//! state in StatefulWidgets:
-//!
-//! ### Approach 1: Using `ctx.set_state()` (Flutter-style)
-//!
-//! For simple widgets and familiar Flutter-like API:
+//! Component views are composable, building UIs from other views.
+//! They can have optional state managed via hooks or the State type parameter.
 //!
 //! ```rust,ignore
-//! # use flui_core::{StatefulWidget, State, Widget, BuildContext};
-//! struct CounterState {
-//!     count: i32,
-//! }
+//! use flui_core::{Component, View, BuildContext};
+//! use flui_core::hooks::use_signal;
 //!
-//! impl State for CounterState {
-//!     fn build(&mut self, ctx: &BuildContext) -> Widget {
+//! #[derive(Debug)]
+//! struct Counter;
+//!
+//! impl Component for Counter {
+//!     fn build(&self, ctx: &BuildContext) -> View {
+//!         let count = use_signal(ctx, 0);
+//!
 //!         column![
-//!             text(format!("Count: {}", self.count)),
-//!             button("+").on_press({
-//!                 let ctx = ctx.clone();  // Cheap Arc clone
-//!                 move |_| {
-//!                     ctx.set_state(|state: &mut CounterState| {
-//!                         state.count += 1;
-//!                     });
-//!                 }
-//!             })
-//!         ]
+//!             text(format!("Count: {}", count.get())),
+//!             button("+").on_press(move || count.update(|n| n + 1))
+//!         ].into()
 //!     }
 //! }
 //! ```
 //!
-//! ### Approach 2: Using `Signal<T>` (Fine-grained reactivity)
+//! ## Provider Views (formerly InheritedWidget)
 //!
-//! For high-performance, fine-grained updates:
+//! Provider views enable efficient data propagation down the view tree with automatic
+//! dependency tracking.
 //!
 //! ```rust,ignore
-//! # use flui_core::{StatefulWidget, State, Widget, BuildContext, Signal};
-//! struct CounterState {
-//!     count: Signal<i32>,  // Signal is Copy (8 bytes)
-//! }
+//! use flui_core::{Provider, View};
 //!
-//! impl State for CounterState {
-//!     fn build(&mut self, ctx: &BuildContext) -> Widget {
-//!         column![
-//!             // Only this text rebuilds when count changes
-//!             text(format!("Count: {}", self.count.get())),
-//!             button("+").on_press({
-//!                 let count = self.count;  // Copy, not clone!
-//!                 move |_| count.increment()
-//!             })
-//!         ]
-//!     }
-//! }
-//! ```
-//!
-//! **When to use each:**
-//!
-//! - **`ctx.set_state()`**: Simple widgets, few state changes, Flutter familiarity
-//! - **`Signal<T>`**: High-frequency updates, animations, maximum performance
-//!
-//! ## InheritedWidget
-//!
-//! Efficient data propagation down the widget tree.
-//!
-//! ```rust
-//! # use flui_core::{InheritedWidget, Widget};
-//! # use std::sync::Arc;
-//! #[derive(Debug)]
+//! #[derive(Debug, Clone)]
 //! struct Theme {
-//!     colors: Arc<ColorScheme>,
-//!     child: Widget,
+//!     primary_color: Color,
 //! }
 //!
-//! impl InheritedWidget for Theme {
-//!     fn update_should_notify(&self, old: &Self) -> bool {
-//!         !Arc::ptr_eq(&self.colors, &old.colors)
-//!     }
-//!
-//!     fn child(&self) -> Widget {
-//!         self.child.clone()
+//! impl Provider for Theme {
+//!     fn should_notify(&self, old: &Self) -> bool {
+//!         self.primary_color != old.primary_color
 //!     }
 //! }
 //! ```
 //!
-//! ## RenderWidget
+//! ## Render Views
 //!
-//! Widgets that create render objects for custom layout/paint.
+//! Render views create custom render objects for layout and painting.
 //!
-//! ```rust
-//! # use flui_core::{RenderWidget, Render};
+//! ```rust,ignore
+//! use flui_core::{Render, View, LayoutCx, PaintCx, LeafArity};
+//!
 //! #[derive(Debug)]
-//! struct Container {
+//! struct CustomBox {
 //!     width: f64,
 //!     height: f64,
 //! }
 //!
-//! impl RenderWidget for Container {
-//!     type Render = RenderContainer;
+//! impl Render for CustomBox {
+//!     type Arity = LeafArity;
 //!
-//!     fn create_render_object(&self) -> Self::Render {
-//!         RenderContainer {
-//!             width: self.width,
-//!             height: self.height,
-//!         }
+//!     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+//!         Size::new(self.width, self.height)
 //!     }
 //!
-//!     fn update_render_object(&self, render_object: &mut Self::Render) {
-//!         render_object.width = self.width;
-//!         render_object.height = self.height;
-//!     }
-//! }
-//! ```
-//!
-//! ## ParentDataWidget
-//!
-//! Widgets that attach layout metadata to descendants.
-//!
-//! ```rust
-//! # use flui_core::{ParentDataWidget, Widget, Render};
-//! #[derive(Debug)]
-//! struct Flexible {
-//!     flex: i32,
-//!     child: Widget,
-//! }
-//!
-//! impl ParentDataWidget for Flexible {
-//!     type ParentDataType = FlexParentData;
-//!
-//!     fn apply_parent_data(&self, render_object: &mut dyn Render) {
-//!         // Apply flex data to child's render object
-//!     }
-//!
-//!     fn child(&self) -> &Widget {
-//!         &self.child
+//!     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+//!         // Custom painting code
 //!     }
 //! }
 //! ```
@@ -269,31 +184,31 @@
 //! - ✅ Direct state access
 //! - ✅ Automatic rebuilds
 //!
-//! ## Automatic DynWidget
+//! ## Type-Erased Views
 //!
-//! All widgets automatically get object-safe `DynWidget` trait via blanket impl:
+//! All views can be type-erased via the `AnyView` trait for heterogeneous storage:
 //!
-//! ```rust
-//! # use flui_core::{StatelessWidget, Widget, DynWidget, BuildContext};
+//! ```rust,ignore
+//! use flui_core::{Component, View, BuildContext};
+//!
 //! #[derive(Debug)]
-//! struct MyWidget;
+//! struct MyView;
 //!
-//! impl StatelessWidget for MyWidget {
-//!     fn build(&self, context: &BuildContext) -> Widget {
-//!         Box::new(Text::new("Test"))
+//! impl Component for MyView {
+//!     fn build(&self, context: &BuildContext) -> View {
+//!         Text::new("Test").into()
 //!     }
 //! }
 //!
-//! // DynWidget is automatic!
-//! let widget: Widget = Box::new(MyWidget);
+//! // AnyView enables heterogeneous view collections
+//! let view: Box<dyn AnyView> = Box::new(MyView);
 //! ```
 //!
 //! ## No Forced Clone
 //!
-//! Widgets don't require Clone, enabling use of closures and non-Clone types:
+//! Views don't require Clone, enabling use of closures and non-Clone types:
 //!
-//! ```rust
-//! # use flui_core::{Widget, Widget};
+//! ```rust,ignore
 //! #[derive(Debug)]
 //! struct Button<F> {
 //!     label: String,
@@ -305,7 +220,7 @@
 //!
 //! ## Compile-Time Keys
 //!
-//! Widget keys can be compile-time constants:
+//! View keys can be compile-time constants:
 //!
 //! ```rust
 //! use flui_core::Key;

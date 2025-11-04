@@ -21,8 +21,8 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust,ignore
-/// impl StatelessWidget for MyWidget {
-///     fn build(&self, context: &BuildContext) -> Widget {
+/// impl Component for MyView {
+///     fn build(&self, context: &BuildContext) -> View {
 ///         // Access theme with dependency (auto-rebuild on change)
 ///         let theme = context.depend_on::<Theme>().unwrap();
 ///

@@ -32,6 +32,7 @@ slab = "0.4"
 # Optional features
 serde = { workspace = true, optional = true }
 puffin = { version = "0.19", optional = true }
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
@@ -40,15 +41,9 @@ criterion.workspace = true
 default = []
 serde = ["dep:serde"]
 profiling = ["dep:puffin"]
+parallel = ["dep:rayon"]
 
 [lib]
 name = "flui_core"
 path = "src/lib.rs"
 
-[[bench]]
-name = "element_enum"
-harness = false
-
-[[bench]]
-name = "element_id_bench"
-harness = false

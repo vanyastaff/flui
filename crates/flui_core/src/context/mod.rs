@@ -24,7 +24,7 @@
 //! );
 //!
 //! // Consume context
-//! fn build(&self, ctx: &mut BuildContext) -> Widget {
+//! fn build(&self, ctx: &mut BuildContext) -> View {
 //!     let theme = ctx.read_context::<Theme>()?;
 //!     // Use theme...
 //! }

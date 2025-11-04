@@ -195,7 +195,7 @@ impl<T: Clone + 'static> Hook for SignalHook<T> {
 /// struct Counter;
 ///
 /// impl Component for Counter {
-///     fn build(&self, ctx: &BuildContext) -> Widget {
+///     fn build(&self, ctx: &BuildContext) -> View {
 ///         let count = use_signal(ctx, 0);
 ///
 ///         Button::new("Increment")

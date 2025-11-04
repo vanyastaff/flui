@@ -175,7 +175,7 @@ where
 /// struct ExpensiveComponent;
 ///
 /// impl Component for ExpensiveComponent {
-///     fn build(&self, ctx: &BuildContext) -> Widget {
+///     fn build(&self, ctx: &BuildContext) -> View {
 ///         let count = use_signal(ctx, 0);
 ///
 ///         // This expensive computation only runs when count changes

@@ -168,7 +168,7 @@ where
 /// }
 ///
 /// impl Component for UserProfile {
-///     fn build(&self, ctx: &BuildContext) -> Widget {
+///     fn build(&self, ctx: &BuildContext) -> View {
 ///         let user_id = self.user_id.clone();
 ///
 ///         let user = use_resource(ctx, move || async move {

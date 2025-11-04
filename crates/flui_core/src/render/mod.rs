@@ -8,7 +8,7 @@
 //! # Pattern
 //!
 //! ```text
-//! Widget (enum) → Element (enum) → RenderNode (enum)
+//! View (trait) → Element (enum) → RenderNode (enum)
 //!                                      ↓
 //!                                  LeafRender/SingleRender/MultiRender traits
 //! ```

@@ -53,10 +53,8 @@
 //! ```rust
 //! match element {
 //!     Element::Component(c) => { /* ... */ }
-//!     Element::Stateful(s) => { /* ... */ }
-//!     Element::Inherited(i) => { /* ... */ }
+//!     Element::Provider(p) => { /* ... */ }
 //!     Element::Render(r) => { /* ... */ }
-//!     Element::ParentData(p) => { /* ... */ }
 //!     // Compiler error if any variant missing!
 //! }
 //! ```
@@ -101,9 +99,9 @@ pub use crate::element::provider::InheritedElement as Provider;
 ///
 /// # Variants (3 total - matches Flutter architecture)
 ///
-/// - **Component** - StatelessWidget AND StatefulWidget → calls `build()` to produce child widget tree
-/// - **Render** - RenderWidget → owns Render for layout and painting
-/// - **Provider** - InheritedWidget → propagates data down tree with dependency tracking
+/// - **Component** - Component views with optional state → calls `build()` to produce child view tree
+/// - **Render** - Render views → owns RenderObject for layout and painting
+/// - **Provider** - Provider views → propagates data down tree with dependency tracking
 ///
 /// # Why 3 variants?
 ///
@@ -117,8 +115,8 @@ pub use crate::element::provider::InheritedElement as Provider;
 /// ## Why enum over `Box<dyn>`?
 ///
 /// **1. Known, Closed Set**
-/// - FLUI has exactly 5 element types (fixed by framework)
-/// - Users don't add new element types (they create Widgets, not Elements)
+/// - FLUI has exactly 3 element types (fixed by framework)
+/// - Users don't add new element types (they create Views, not Elements)
 /// - Perfect fit for enum!
 ///
 /// **2. Performance**
@@ -157,23 +155,23 @@ pub use crate::element::provider::InheritedElement as Provider;
 /// but the enum wrapper is 100% safe.
 #[derive(Debug)]
 pub enum Element {
-    /// Component element - manages widget build lifecycle
+    /// Component element - manages view build lifecycle
     ///
-    /// Created by **StatelessWidget** and **StatefulWidget**.
-    /// Handles both widget types:
-    /// - StatelessWidget: Pure build() function, no state
-    /// - StatefulWidget: Manages State object across rebuilds
+    /// Created by **Component views**.
+    /// Handles components with optional state:
+    /// - Pure components: build() function with no state
+    /// - Stateful components: Uses hooks (use_signal, etc.) or State<T> type parameter
     ///
     /// # Lifecycle
     ///
-    /// **StatelessWidget:**
+    /// **Pure component:**
     /// ```text
-    /// mount() → widget.build() → child widget → rebuild on update
+    /// mount() → view.build() → child view → rebuild on update
     /// ```
     ///
-    /// **StatefulWidget:**
+    /// **Stateful component (with hooks or State<T>):**
     /// ```text
-    /// mount() → create_state() → state.build() → rebuild on setState()
+    /// mount() → build with state → rebuild on state changes
     /// ```
     ///
     /// # Implementation
@@ -185,9 +183,9 @@ pub enum Element {
 
     /// Render element - performs layout and paint
     ///
-    /// Created by **RenderWidget**.
+    /// Created by **Render Views**.
     /// Owns RenderObject that does actual layout/paint work.
-    /// This is the bridge between Widget tree and Render tree.
+    /// This is the bridge between View tree and Render tree.
     ///
     /// # Lifecycle
     ///
@@ -329,7 +327,7 @@ impl Element {
 
     /// Check if this is a Component element
     ///
-    /// Returns true for both StatelessWidget and StatefulWidget elements.
+    /// Returns true for Component view elements (both pure and stateful).
     #[inline]
     #[must_use]
     pub fn is_component(&self) -> bool {
@@ -485,9 +483,9 @@ impl Element {
         }
     }
 
-    // Note: widget() method removed - Widget type no longer exists
-    // Elements now store Box<dyn AnyView> instead
-    // TODO(Phase 5): Add view() method once View integration is complete
+    // Note: View access available via each element type
+    // ComponentElement and InheritedElement store Box<dyn AnyView>
+    // RenderElement doesn't store view (created from RenderObject directly)
 
     /// Get render object if this is a render element
     ///
@@ -585,7 +583,7 @@ impl Element {
         }
     }
 
-    // NOTE: rebuild() method temporarily removed during Widget → View migration
+    // NOTE: rebuild() method temporarily removed
     // TODO(Phase 5): Implement View-based rebuild:
     // pub fn rebuild(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags
     //

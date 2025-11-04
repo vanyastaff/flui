@@ -1792,6 +1792,7 @@ dependencies = [
  "moka",
  "parking_lot",
  "puffin",
+ "rayon",
  "serde",
  "slab",
  "smallvec",

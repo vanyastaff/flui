@@ -8,10 +8,10 @@
 //!
 //! # Design
 //!
-//! The build phase processes widgets top-down:
+//! The build phase processes views top-down:
 //! 1. Identify dirty elements (marked for rebuild)
-//! 2. Call `Widget::build()` for each dirty element
-//! 3. Reconcile old and new widget trees
+//! 2. Call `View::build()` for each dirty element
+//! 3. Reconcile old and new view trees
 //! 4. Update element tree accordingly
 //!
 //! # Build Batching
@@ -477,6 +477,57 @@ impl BuildPipeline {
         debug_println!(PRINT_BUILD_SCOPE, "rebuild_dirty #{}: complete ({} elements processed)", build_num, dirty_count);
 
         dirty_count
+    }
+
+    /// Rebuilds all dirty elements using parallel execution (when feature enabled)
+    ///
+    /// This is an alternative to `rebuild_dirty()` that works with `Arc<RwLock<ElementTree>>`
+    /// for thread-safe parallel execution.
+    ///
+    /// # Strategy
+    ///
+    /// - When `parallel` feature is enabled and element count > threshold: parallel execution
+    /// - Otherwise: sequential execution
+    ///
+    /// Returns the number of elements rebuilt.
+    pub fn rebuild_dirty_parallel(&mut self, tree: &std::sync::Arc<parking_lot::RwLock<super::ElementTree>>) -> usize {
+        if self.dirty_elements.is_empty() {
+            return 0;
+        }
+
+        self.build_count += 1;
+        let build_num = self.build_count;
+        let dirty_count = self.dirty_elements.len();
+
+        #[cfg(debug_assertions)]
+        debug_println!(
+            PRINT_BUILD_SCOPE,
+            "rebuild_dirty_parallel #{}: rebuilding {} dirty elements",
+            build_num,
+            dirty_count
+        );
+
+        // Sort by depth (parents before children)
+        self.dirty_elements.sort_by_key(|(_, depth)| *depth);
+
+        // Deduplicate - remove any duplicate ElementIds while preserving depth order
+        self.dirty_elements.dedup_by_key(|(id, _)| *id);
+
+        // Take the dirty list to avoid borrow conflicts
+        let dirty = std::mem::take(&mut self.dirty_elements);
+
+        // Call parallel build implementation
+        let count = super::parallel_build::rebuild_dirty_parallel(tree, dirty);
+
+        #[cfg(debug_assertions)]
+        debug_println!(
+            PRINT_BUILD_SCOPE,
+            "rebuild_dirty_parallel #{}: complete ({} elements processed)",
+            build_num,
+            count
+        );
+
+        count
     }
 
     /// Clears all dirty elements without rebuilding.

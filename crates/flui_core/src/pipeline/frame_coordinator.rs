@@ -29,7 +29,7 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use super::{BuildPipeline, LayoutPipeline, PaintPipeline, PipelineError, ElementTree};
+use super::{BuildPipeline, LayoutPipeline, PaintPipeline, PipelineError, ElementTree, FrameScheduler};
 use crate::element::ElementId;
 use flui_types::constraints::BoxConstraints;
 
@@ -68,6 +68,9 @@ pub struct FrameCoordinator {
 
     /// Paint pipeline - manages layer generation phase
     paint: PaintPipeline,
+
+    /// Frame scheduler - manages frame timing and budget
+    scheduler: FrameScheduler,
 }
 
 impl FrameCoordinator {
@@ -83,6 +86,7 @@ impl FrameCoordinator {
             build: BuildPipeline::new(),
             layout: LayoutPipeline::new(),
             paint: PaintPipeline::new(),
+            scheduler: FrameScheduler::new(),
         }
     }
 
@@ -114,6 +118,16 @@ impl FrameCoordinator {
     /// Get mutable reference to paint pipeline
     pub fn paint_mut(&mut self) -> &mut PaintPipeline {
         &mut self.paint
+    }
+
+    /// Get reference to frame scheduler
+    pub fn scheduler(&self) -> &FrameScheduler {
+        &self.scheduler
+    }
+
+    /// Get mutable reference to frame scheduler
+    pub fn scheduler_mut(&mut self) -> &mut FrameScheduler {
+        &mut self.scheduler
     }
 
     /// Build a complete frame
@@ -157,21 +171,37 @@ impl FrameCoordinator {
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<crate::BoxedLayer>, PipelineError> {
+        // Start frame and get budget
+        let _frame_budget = self.scheduler.start_frame();
+
         #[cfg(debug_assertions)]
-        tracing::debug!("build_frame: Starting frame with constraints {:?}", constraints);
+        tracing::debug!(
+            "build_frame: Starting frame with constraints {:?}, budget {:?}",
+            constraints,
+            _frame_budget
+        );
 
         // Phase 1: Build (rebuild dirty widgets)
         #[cfg(debug_assertions)]
         let build_count = self.build.dirty_count();
 
-        {
-            let mut tree_guard = tree.write();
-            self.build.rebuild_dirty(&mut tree_guard);
-        }
+        // Use parallel build (automatically falls back to sequential if appropriate)
+        self.build.rebuild_dirty_parallel(tree);
 
         #[cfg(debug_assertions)]
         if build_count > 0 {
             tracing::debug!("build_frame: Build phase rebuilt {} widgets", build_count);
+        }
+
+        // Check if we're approaching deadline after build phase
+        #[cfg(debug_assertions)]
+        if self.scheduler.is_deadline_near() {
+            if let Some(remaining) = self.scheduler.remaining() {
+                tracing::warn!(
+                    "build_frame: Approaching deadline after build, remaining {:?}",
+                    remaining
+                );
+            }
         }
 
         // Phase 2: Layout (compute sizes and positions)
@@ -206,6 +236,17 @@ impl FrameCoordinator {
             tracing::debug!("build_frame: Root size {:?}", size);
         }
 
+        // Check if we're approaching deadline after layout phase
+        #[cfg(debug_assertions)]
+        if self.scheduler.is_deadline_near() {
+            if let Some(remaining) = self.scheduler.remaining() {
+                tracing::warn!(
+                    "build_frame: Approaching deadline after layout, remaining {:?}",
+                    remaining
+                );
+            }
+        }
+
         // Phase 3: Paint (generate layer tree)
         let layer = {
             let mut tree_guard = tree.write();
@@ -236,9 +277,18 @@ impl FrameCoordinator {
             }
         };
 
+        // Finish frame and update metrics
+        self.scheduler.finish_frame();
+
         #[cfg(debug_assertions)]
         if layer.is_some() {
             tracing::debug!("build_frame: Frame complete");
+            if self.scheduler.is_deadline_missed() {
+                tracing::warn!(
+                    "build_frame: Frame deadline missed (consecutive misses: {})",
+                    self.scheduler.consecutive_misses()
+                );
+            }
         }
 
         Ok(layer)
@@ -246,10 +296,9 @@ impl FrameCoordinator {
 
     /// Flush the build phase
     ///
-    /// Rebuilds all dirty elements in depth order.
+    /// Rebuilds all dirty elements in depth order (with parallel execution when enabled).
     pub fn flush_build(&mut self, tree: &Arc<RwLock<ElementTree>>) {
-        let mut tree_guard = tree.write();
-        self.build.rebuild_dirty(&mut tree_guard);
+        self.build.rebuild_dirty_parallel(tree);
     }
 
     /// Flush the layout phase
@@ -342,3 +391,7 @@ impl Default for FrameCoordinator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "frame_coordinator_tests.rs"]
+mod frame_coordinator_tests;

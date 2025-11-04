@@ -26,7 +26,7 @@
 //! struct Counter;
 //!
 //! impl Component for Counter {
-//!     fn build(&self, ctx: &mut BuildContext) -> Widget {
+//!     fn build(&self, ctx: &mut BuildContext) -> View {
 //!         let count = use_signal(0);
 //!
 //!         use_effect(move || {

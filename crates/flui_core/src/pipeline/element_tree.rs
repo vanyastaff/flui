@@ -124,7 +124,7 @@ impl ElementTree {
     ///
     /// # Arguments
     ///
-    /// - `element`: The Element enum (Component, Stateful, Inherited, Render, or ParentData)
+    /// - `element`: The Element enum (Component, Provider, or Render)
     ///
     /// # Returns
     ///
@@ -821,7 +821,7 @@ impl ElementTree {
 
     /// Visit all elements in the tree
     ///
-    /// This visits all elements (Component, Stateful, Inherited, Render, and ParentData).
+    /// This visits all elements (Component, Provider, and Render).
     ///
     /// # Example
     ///

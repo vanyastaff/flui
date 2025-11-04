@@ -182,7 +182,7 @@ where
 /// struct Logger;
 ///
 /// impl Component for Logger {
-///     fn build(&self, ctx: &BuildContext) -> Widget {
+///     fn build(&self, ctx: &BuildContext) -> View {
 ///         let count = use_signal(ctx, 0);
 ///
 ///         use_effect(ctx, move || {
@@ -222,7 +222,7 @@ where
 /// struct Logger;
 ///
 /// impl Component for Logger {
-///     fn build(&self, ctx: &BuildContext) -> Widget {
+///     fn build(&self, ctx: &BuildContext) -> View {
 ///         let count = use_signal(ctx, 0);
 ///
 ///         use_effect_simple(ctx, move || {

@@ -535,19 +535,6 @@ impl Default for PipelineOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BuildContext;
-    use crate::element::ComponentElement;
-    use crate::widget::StatelessWidget;
-
-    // Test widget for testing
-    #[derive(Debug, Clone)]
-    struct TestWidget;
-
-    impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &BuildContext) -> crate::widget::Widget {
-            Box::new(TestWidget)
-        }
-    }
 
     #[test]
     fn test_build_owner_creation() {

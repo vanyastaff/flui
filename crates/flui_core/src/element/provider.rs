@@ -207,9 +207,8 @@ impl InheritedElement {
     }
 }
 
-// TODO(Phase 5): Add tests using View instead of Widget
+// TODO(Phase 5): Add tests using View API
 #[cfg(test)]
 mod tests {
-    // Tests temporarily removed during Widget → View migration
-    // Will be restored once View system is fully integrated
+    // Tests removed - need to be rewritten with View API
 }

@@ -25,9 +25,9 @@
 //! # Architecture
 //!
 //! RenderPipeline works with the three-tree architecture:
-//! - Widget → RenderElement → Render
+//! - View → RenderElement → Render
 //! - ElementTree stores RenderElements (not bare Renders)
-//! - Widgets are immutable configuration, Elements manage lifecycle
+//! - Views are immutable configuration, Elements manage lifecycle
 //!
 //! # Phases
 //!
