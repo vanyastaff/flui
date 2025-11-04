@@ -147,45 +147,6 @@ impl RenderPipeline {
         self.root_id
     }
 
-    // ========== Tree Construction ==========
-
-    // NOTE: insert_root() temporarily removed during Widget → View migration
-    // TODO(Phase 5): Reimplement using View system
-    //
-    // Creates the root of the render tree by wrapping the widget in a RenderElement.
-    /*
-    pub fn insert_root<W>(&mut self, widget: W) -> ElementId
-    where
-        W: RenderWidget + Clone + Send + Sync + std::fmt::Debug + 'static,
-    {
-        // Create a temporary BuildContext for root widget creation
-        // Use an empty temporary tree since root has no parent context
-        use crate::view::BuildContext;
-        use crate::pipeline::ElementTree;
-        use parking_lot::RwLock;
-        use std::sync::Arc;
-
-        let temp_tree = Arc::new(RwLock::new(ElementTree::new()));
-        let ctx = BuildContext::new(temp_tree, 0);
-
-        let render_boxed = widget.create_render_object(&ctx);
-
-        // Box the widget (it implements RenderWidget)
-        let widget_boxed = Widget::render_object(widget);
-
-        let render_element = RenderElement::new(widget_boxed, render_boxed);
-        let element = crate::element::Element::Render(render_element);
-        let id = self.tree.insert(element);
-        self.root_id = Some(id);
-
-        // Mark root as needing layout and paint
-        self.request_layout(id);
-        self.request_paint(id);
-
-        id
-    }
-    */
-
     // ========== Dirty Tracking API ==========
 
     /// Request layout for a Render

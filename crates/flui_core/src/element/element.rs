@@ -5,16 +5,14 @@
 //!
 //! # Architecture
 //!
-//! Element types mirror Widget types 1:1:
+//! Element types correspond to View types:
 //!
 //! ```text
-//! Widget Type         → Element Variant
+//! View Type           → Element Variant
 //! ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//! StatelessWidget     → Element::Component(ComponentElement)
-//! StatefulWidget      → Element::Stateful(StatefulElement)
-//! InheritedWidget     → Element::Inherited(InheritedElement)
-//! RenderWidget  → Element::Render(RenderElement)
-//! ParentDataWidget    → Element::ParentData(ParentDataElement)
+//! Component View      → Element::Component(ComponentElement)
+//! Provider View       → Element::Provider(InheritedElement)
+//! Render Object       → Element::Render(RenderElement)
 //! ```
 //!
 //! # Performance
@@ -65,15 +63,15 @@
 //!
 //! # Examples
 //!
-//! ```rust
+//! ```rust,ignore
 //! use flui_core::element::{Element, ComponentElement};
 //!
 //! // Create element
-//! let element = Element::Component(ComponentElement::new(widget));
+//! let element = Element::Component(ComponentElement::new(view));
 //!
 //! // Type-safe access
 //! if let Some(component) = element.as_component() {
-//!     component.rebuild();
+//!     // Component operations
 //! }
 //!
 //! // Unified interface

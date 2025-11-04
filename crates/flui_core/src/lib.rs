@@ -1,7 +1,7 @@
 //! FLUI Core - Reactive UI framework for Rust
 //!
 //! FLUI is a declarative UI framework inspired by Flutter, built for Rust.
-//! It provides a powerful widget system with efficient reactivity and
+//! It provides a powerful View system with efficient reactivity and
 //! high-performance rendering.
 //!
 //! # Architecture
@@ -9,17 +9,17 @@
 //! FLUI uses a three-tree architecture:
 //!
 //! ```text
-//! Widget Tree          Element Tree         Render Tree
+//! View Tree            Element Tree         Render Tree
 //! (immutable)          (mutable state)      (layout/paint)
 //!     ↓                      ↓                    ↓
 //! Configuration  ←→  State Management  ←→  Visual Output
 //! ```
 //!
-//! ## Widget Tree (Immutable)
+//! ## View Tree (Immutable)
 //!
-//! Widgets are lightweight, immutable configuration objects that describe
+//! Views are lightweight, immutable configuration objects that describe
 //! what the UI should look like. When configuration changes, you create
-//! new widget instances.
+//! new view instances.
 //!
 //! ```rust
 //! use flui_core::{StatelessWidget, Widget, BuildContext};

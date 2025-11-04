@@ -1,28 +1,24 @@
-//! Element system - Widget lifecycle and tree management
+//! Element system - View lifecycle and tree management
 //!
 //! This module provides the Element layer of the three-tree architecture:
-//! - **Widget** → Immutable configuration (recreated each rebuild)
+//! - **View** → Immutable configuration (recreated each rebuild)
 //! - **Element** → Mutable state holder (persists across rebuilds)
-//! - **Render** → Layout and painting (optional, for render widgets)
+//! - **Render** → Layout and painting (optional, for render objects)
 //!
 //! # Element Types
 //!
-//! 1. **ComponentElement** - For StatelessWidget (calls build())
-//! 2. **StatefulElement** - For StatefulWidget (manages State object)
-//! 3. **InheritedElement** - For InheritedWidget (data propagation + dependency tracking)
-//! 4. **ParentDataElement** - For ParentDataWidget (attaches metadata to children)
-//! 5. **RenderElement** - For RenderWidget (owns Render)
+//! 1. **ComponentElement** - For component views (calls build())
+//! 2. **InheritedElement** - For provider views (data propagation + dependency tracking)
+//! 3. **RenderElement** - For render objects (owns Render)
 //!
 //! # Architecture
 //!
 //! ```text
-//! Widget → Element → Render (optional)
+//! View → Element → Render (optional)
 //!
-//! StatelessWidget     → ComponentElement  → build() → child widget
-//! StatefulWidget      → StatefulElement   → State.build() → child widget
-//! InheritedWidget     → InheritedElement  → (data + dependents) → child widget
-//! ParentDataWidget    → ParentDataElement → (attach data) → child widget
-//! RenderWidget  → RenderElement     → Render (type-erased)
+//! Component View  → ComponentElement  → build() → child views
+//! Provider View   → InheritedElement  → (data + dependents) → child view
+//! Render Object   → RenderElement     → Render (type-erased)
 //! ```
 //!
 //! # ElementTree
