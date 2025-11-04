@@ -810,8 +810,6 @@ impl PipelineOwner {
     // =========================================================================
     // Layout & Paint Phases
     // =========================================================================
-    // FIXME: Implement full rendering pipeline (layout/paint phases)
-    // when Render layout/paint system is fully integrated.
 
     /// Request layout for a Render
     ///

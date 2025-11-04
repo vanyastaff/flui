@@ -688,7 +688,6 @@ impl ElementTree {
     /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
     #[inline]
     pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> crate::BoxedLayer {
-        // TODO(2025-01): Add bounds checking for child_id to ensure it exists in the tree
 
         // Walk down through ComponentElements to find the first RenderElement
         // (same logic as layout_child)
