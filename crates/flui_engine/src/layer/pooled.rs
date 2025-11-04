@@ -3,7 +3,7 @@
 //! This module provides wrapper types that automatically return layers
 //! to the pool when they're dropped, improving pool hit rates.
 
-use super::{BoxedLayer, ContainerLayer, Layer, ClipRectLayer, PictureLayer, pool};
+use super::{ContainerLayer, Layer, ClipRectLayer, PictureLayer, pool};
 use crate::painter::Painter;
 use flui_types::{Rect, Offset};
 use flui_types::events::{Event, HitTestResult};

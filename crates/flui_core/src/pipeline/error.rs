@@ -41,8 +41,11 @@ pub enum PipelineError {
     /// Occurs when an operation exceeds its deadline.
     /// Typically recoverable by using last good frame.
     Timeout {
+        /// Pipeline phase that timed out
         phase: PipelinePhase,
+        /// Actual elapsed time in milliseconds
         elapsed_ms: u64,
+        /// Deadline that was exceeded in milliseconds
         deadline_ms: u64,
     },
 
@@ -51,7 +54,9 @@ pub enum PipelineError {
     /// Occurs during layout phase (size computation, constraint violation).
     /// Recoverable by skipping frame or showing error widget.
     LayoutError {
+        /// Element that caused the layout error
         element_id: crate::element::ElementId,
+        /// Error message describing what went wrong
         message: String,
     },
 
@@ -60,7 +65,9 @@ pub enum PipelineError {
     /// Occurs during paint phase (layer generation failure).
     /// Recoverable by using last good frame.
     PaintError {
+        /// Element that caused the paint error
         element_id: crate::element::ElementId,
+        /// Error message describing what went wrong
         message: String,
     },
 
@@ -69,7 +76,9 @@ pub enum PipelineError {
     /// Occurs during build phase (widget rebuild failure).
     /// Recoverable by showing error widget.
     BuildError {
+        /// Element that caused the build error
         element_id: crate::element::ElementId,
+        /// Error message describing what went wrong
         message: String,
     },
 
@@ -78,6 +87,7 @@ pub enum PipelineError {
     /// Fatal error - element tree is in invalid state.
     /// Not recoverable - must panic in development.
     TreeCorruption {
+        /// Description of the tree corruption
         message: String,
     },
 
@@ -86,6 +96,7 @@ pub enum PipelineError {
     /// Fatal error - pipeline is in invalid state.
     /// Not recoverable - must panic in development.
     InvalidState {
+        /// Description of the invalid state
         message: String,
     },
 }

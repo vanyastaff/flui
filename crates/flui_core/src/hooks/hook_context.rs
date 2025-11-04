@@ -16,7 +16,9 @@ pub struct HookIndex(pub usize);
 /// Unique identifier for a hook instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HookId {
+    /// Component that owns this hook
     pub component: ComponentId,
+    /// Index of this hook within the component
     pub index: HookIndex,
 }
 
@@ -30,6 +32,7 @@ pub struct HookState {
 }
 
 impl HookState {
+    /// Create a new hook state with the given value
     pub fn new<T: 'static>(state: T) -> Self {
         Self {
             state: Box::new(state),
@@ -38,6 +41,7 @@ impl HookState {
         }
     }
 
+    /// Get a mutable reference to the hook state if the type matches
     pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
         if self.type_id == TypeId::of::<T>() {
             self.state.downcast_mut()
@@ -61,6 +65,7 @@ pub struct HookContext {
 }
 
 impl HookContext {
+    /// Create a new hook context
     pub fn new() -> Self {
         Self {
             current_component: None,
@@ -73,11 +78,13 @@ impl HookContext {
         }
     }
 
+    /// Begin rendering a component, resetting hook index
     pub fn begin_component(&mut self, id: ComponentId) {
         self.current_component = Some(id);
         self.current_hook_index = 0;
     }
 
+    /// End component rendering
     pub fn end_component(&mut self) {
         self.current_component = None;
         self.current_hook_index = 0;
@@ -90,6 +97,7 @@ impl HookContext {
         }
     }
 
+    /// Use a hook, creating or updating its state
     pub fn use_hook<H: Hook>(&mut self, input: H::Input) -> H::Output {
         use std::collections::hash_map::Entry;
 
@@ -116,34 +124,40 @@ impl HookContext {
         }
     }
 
+    /// Track a dependency during reactive tracking
     pub fn track_dependency(&mut self, dep: DependencyId) {
         if self.is_tracking {
             self.current_dependencies.push(dep);
         }
     }
 
+    /// Start tracking dependencies
     pub fn start_tracking(&mut self) {
         self.is_tracking = true;
         self.current_dependencies.clear();
     }
 
+    /// End tracking and return collected dependencies
     pub fn end_tracking(&mut self) -> Vec<DependencyId> {
         self.is_tracking = false;
         std::mem::take(&mut self.current_dependencies)
     }
 
+    /// Schedule an effect to run after rendering
     pub fn schedule_effect(&mut self, hook_id: HookId) {
         if !self.effect_queue.contains(&hook_id) {
             self.effect_queue.push(hook_id);
         }
     }
 
+    /// Flush all pending effects
     pub fn flush_effects(&mut self) {
         for _hook_id in std::mem::take(&mut self.effect_queue) {
             // TODO(2025-03): Run pending effects
         }
     }
 
+    /// Clean up all hooks for a component
     pub fn cleanup_component(&mut self, component_id: ComponentId) {
         self.hooks.retain(|id, _state| {
             id.component != component_id
@@ -161,6 +175,10 @@ thread_local! {
     static HOOK_CONTEXT: RefCell<HookContext> = RefCell::new(HookContext::new());
 }
 
+/// Access the thread-local hook context
+///
+/// Provides mutable access to the hook context for the current thread.
+/// Used internally by hook implementations to manage state.
 pub fn with_hook_context<F, R>(f: F) -> R
 where
     F: FnOnce(&mut HookContext) -> R,
