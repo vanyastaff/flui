@@ -417,16 +417,19 @@ impl ElementTree {
         element_id: ElementId,
         constraints: BoxConstraints,
     ) -> Option<flui_types::Size> {
-        // Check element exists and is a render element
-        let element = self.get(element_id)?;
-        let render_element = element.as_render()?;
+        // SAFETY: Re-fetch element references after each scope to avoid use-after-free
+        // if the tree is modified during layout (Issue #3)
 
-        // **Optimization**: Check RenderState cache before computing layout
-        // This avoids expensive dyn_layout() calls when constraints haven't changed
-        let render_state = render_element.render_state();
-
-        // Try to use cached size if constraints match and no relayout needed
+        // Scope 1: Check cache (read-only, safe)
         {
+            let element = self.get(element_id)?;
+            let render_element = element.as_render()?;
+
+            // **Optimization**: Check RenderState cache before computing layout
+            // This avoids expensive dyn_layout() calls when constraints haven't changed
+            let render_state = render_element.render_state();
+
+            // Try to use cached size if constraints match and no relayout needed
             let state = render_state.read();
             if state.has_size()
                 && !state.needs_layout()
@@ -436,7 +439,7 @@ impl ElementTree {
                 // Cache hit! Return cached size without layout computation
                 return state.size();
             }
-        } // Release read lock
+        } // All borrows dropped here - safe to proceed
 
         // Cache miss or needs relayout - compute layout
 
@@ -473,7 +476,11 @@ impl ElementTree {
             eprintln!("  This element is trying to layout itself - this is a bug in the render object implementation!");
             #[cfg(debug_assertions)]
             self.layout_depth.set(self.layout_depth.get().saturating_sub(1));
-            // Return cached size if available, otherwise zero size
+
+            // Re-fetch to get cached size safely (Issue #3)
+            let element = self.get(element_id)?;
+            let render_element = element.as_render()?;
+            let render_state = render_element.render_state();
             return render_state.read().size();
         }
 
@@ -482,7 +489,12 @@ impl ElementTree {
             stack.borrow_mut().push(element_id);
         });
 
-        let size = render_element.render_object_mut().layout(self, constraints);
+        // Scope 2: Perform layout (re-fetch element to avoid use-after-free - Issue #3)
+        let size = {
+            let element = self.get(element_id)?;
+            let render_element = element.as_render()?;
+            render_element.render_object_mut().layout(self, constraints)
+        }; // Drop all borrows before pop/cleanup
 
         // Pop element from layout stack
         Self::LAYOUT_STACK.with(|stack| {
@@ -493,8 +505,11 @@ impl ElementTree {
         #[cfg(debug_assertions)]
         self.layout_depth.set(self.layout_depth.get().saturating_sub(1));
 
-        // Update RenderState with new size and constraints
+        // Scope 3: Update state (re-fetch again to be safe - Issue #3)
         {
+            let element = self.get(element_id)?;
+            let render_element = element.as_render()?;
+            let render_state = render_element.render_state();
             let state = render_state.write();
             state.set_size(size);
             state.set_constraints(constraints);
