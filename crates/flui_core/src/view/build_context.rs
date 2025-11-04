@@ -335,10 +335,22 @@ impl BuildContext {
 
     /// Dispatch a notification up the tree
     ///
+    /// **⚠️ This method is currently unimplemented and does nothing.**
+    ///
     /// The notification bubbles up from this element to the root,
     /// allowing ancestor NotificationListener widgets to intercept it.
     ///
-    /// # Example
+    /// # Implementation Status
+    ///
+    /// This is a stub API that exists for compatibility but is not yet implemented.
+    /// Calling this method currently has no effect.
+    ///
+    /// For notification bubbling to work, the following is required:
+    /// 1. Element enum must expose notification handling
+    /// 2. NotificationListener widget must be properly integrated
+    /// 3. Tree walking with handler invocation must be implemented
+    ///
+    /// # Example (when implemented)
     ///
     /// ```rust,ignore
     /// use flui_core::ScrollNotification;
@@ -346,17 +358,14 @@ impl BuildContext {
     /// let notification = ScrollNotification::new(10.0, 100.0, 1000.0);
     /// context.dispatch_notification(&notification);
     /// ```
+    #[deprecated(
+        since = "0.1.0",
+        note = "This method is unimplemented and currently does nothing. \
+                Do not rely on it until notification bubbling is fully implemented."
+    )]
     pub fn dispatch_notification(&self, _notification: &dyn crate::foundation::DynNotification) {
+        // Stub: This method does nothing until notification system is implemented
         // FIXME: Implement notification bubbling - walk up tree calling handlers
-        // This requires:
-        // 1. Walk up the tree from current element to root
-        // 2. For each ancestor, check if it's a NotificationListener
-        // 3. If so, call its handler and check if it stops bubbling
-        // 4. Continue until stopped or reach root
-
-        // For now, this is a stub. Full implementation requires:
-        // - Element enum to expose notification handling
-        // - NotificationListener to be properly integrated
     }
 
     // ========== Utility Methods ==========

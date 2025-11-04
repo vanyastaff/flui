@@ -68,7 +68,10 @@ impl ElementId {
     ///
     /// # Panics
     ///
-    /// Panics if `id` is 0.
+    /// Panics if `id` is 0. Zero is reserved for sentinel values
+    /// and cannot be used as a valid ElementId.
+    ///
+    /// If you need to handle 0, use [`new_checked()`](ElementId::new_checked) instead.
     ///
     /// # Examples
     ///
@@ -79,8 +82,23 @@ impl ElementId {
     /// assert_eq!(id.get(), 1);
     /// ```
     #[inline]
+    #[track_caller]
     pub fn new(id: usize) -> Self {
-        Self(NonZeroUsize::new(id).expect("ElementId cannot be 0"))
+        Self(NonZeroUsize::new(id).unwrap_or_else(|| {
+            panic!(
+                "ElementId::new() called with 0, which is not a valid ElementId.\n\
+                \n\
+                ElementId uses NonZeroUsize internally, so 0 is reserved for sentinel values.\n\
+                \n\
+                To handle potentially-zero values, use ElementId::new_checked() instead:\n\
+                ```\n\
+                match ElementId::new_checked(id) {{\n\
+                    Some(element_id) => /* use element_id */,\n\
+                    None => /* handle zero case */,\n\
+                }}\n\
+                ```"
+            )
+        }))
     }
 
     /// Create a new ElementId from a usize, returning None if 0.
@@ -211,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "ElementId cannot be 0")]
+    #[should_panic(expected = "ElementId::new() called with 0")]
     fn test_element_id_new_zero_panics() {
         let _ = ElementId::new(0);
     }

@@ -390,6 +390,65 @@ impl<T> Signal<T> {
     }
 }
 
+/// Clone implementation for Signal.
+///
+/// # ⚠️ Shared Value Semantics
+///
+/// **Cloning a Signal creates a NEW handle to the SAME shared value.**
+///
+/// ```rust,ignore
+/// let signal1 = use_signal(ctx, 0);
+/// let signal2 = signal1.clone();
+///
+/// signal1.set(42);
+/// assert_eq!(signal2.get(), 42);  // ✅ Same value!
+/// ```
+///
+/// Both `signal1` and `signal2` point to the same underlying `Rc<RefCell<T>>`,
+/// so changes made through one are immediately visible through the other.
+///
+/// # When to Use Clone
+///
+/// Signal cloning is useful when you need to:
+/// 1. **Pass signals into closures** (event handlers, effects)
+/// 2. **Share signals between components** (parent → child)
+/// 3. **Store signals in collections** (Vec, HashMap)
+///
+/// # Example: Event Handler
+///
+/// ```rust,ignore
+/// let count = use_signal(ctx, 0);
+///
+/// Button::new("Increment", {
+///     let count = count.clone();  // ← Clone for closure
+///     move |_| {
+///         count.update(|n| n + 1);
+///     }
+/// })
+/// ```
+///
+/// # Performance
+///
+/// Cloning a Signal is very cheap:
+/// - Only clones an `Rc<SignalInner>` (just increments a reference count)
+/// - O(1) time complexity
+/// - No data is copied
+///
+/// # Not Like Rust Copy
+///
+/// Unlike `Copy` types (e.g., `i32`), Signal clones share state:
+///
+/// ```rust,ignore
+/// // Copy types: Independent values
+/// let x = 5;
+/// let y = x;
+/// x = 10;  // y is still 5
+///
+/// // Signal: Shared value
+/// let s1 = use_signal(ctx, 5);
+/// let s2 = s1.clone();
+/// s1.set(10);  // s2 also sees 10!
+/// ```
 impl<T> Clone for Signal<T> {
     fn clone(&self) -> Self {
         Self {
