@@ -1,43 +1,78 @@
 //! BuildContext - context for building widgets
 //!
-//! Provides access to the element tree, InheritedWidgets, and hooks during build phase.
+//! Provides read-only access to the element tree, InheritedWidgets, and hooks during build phase.
+//!
+//! # Design Philosophy
+//!
+//! BuildContext is intentionally **read-only** during the build phase. It represents
+//! the context in which a view is being built, not the ability to schedule future builds.
+//! This design:
+//!
+//! - Enables parallel builds (multiple components can build concurrently)
+//! - Matches Flutter's BuildContext semantics (immutable context)
+//! - Prevents lock contention during the build phase
+//! - Makes the build phase truly side-effect-free
+//!
+//! # Rebuild Scheduling
+//!
+//! State changes that trigger rebuilds should NOT go through BuildContext.
+//! Instead, use hooks and signals which manage their own rebuild callbacks:
+//!
+//! ```rust,ignore
+//! // ✅ Correct: Signal handles rebuild scheduling internally
+//! let signal = use_signal(ctx, 0);
+//! signal.set(42);  // Triggers rebuild via callback
+//!
+//! // ❌ Wrong: Don't schedule rebuilds during build
+//! // ctx.schedule_rebuild();  // This method was removed!
+//! ```
 
 use crate::ElementId;
 use crate::hooks::HookContext;
-use crate::pipeline::{ElementTree, PipelineOwner};
+use crate::pipeline::ElementTree;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-/// BuildContext - provides access to tree and pipeline during widget build
+/// BuildContext - read-only context for building views
 ///
-/// BuildContext is passed to `build()` methods and allows widgets to:
-/// - Access InheritedWidgets from ancestors
-/// - Register dependencies for automatic rebuilds
-/// - Query tree structure
-/// - Trigger state updates via `set_state()`
-/// - Schedule rebuilds via the pipeline
+/// BuildContext is passed to `build()` methods and provides read-only access to:
+/// - Element tree (for inherited widgets and tree queries)
+/// - Hook context (for state management via hooks)
+/// - Current element ID (for dependency tracking)
+///
+/// # Design
+///
+/// BuildContext is intentionally minimal and read-only. It does NOT provide
+/// the ability to schedule rebuilds - that happens via hooks/signals which
+/// store callbacks executed after the build phase completes.
+///
+/// This design enables:
+/// - Parallel builds (no write locks needed)
+/// - Better performance (smaller, cache-friendly struct)
+/// - Clearer semantics (build is read-only, state changes happen elsewhere)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// impl Component for MyView {
-///     fn build(&self, context: &BuildContext) -> View {
-///         // Access theme with dependency (auto-rebuild on change)
-///         let theme = context.depend_on::<Theme>().unwrap();
+/// impl View for MyView {
+///     fn build(self, ctx: &BuildContext) -> (Self::Element, Self::State) {
+///         // Access inherited data (read-only)
+///         let theme = ctx.depend_on::<Theme>().unwrap();
 ///
-///         // Use theme data
-///         Box::new(Text::new(format!("Color: {:?}", theme.color)))
+///         // Use hooks for state (hooks manage rebuild scheduling)
+///         let count = use_signal(ctx, 0);
+///
+///         // Build child view
+///         let child = Text::new(format!("Count: {}", count.get()));
+///         (child.into_element(), ())
 ///     }
 /// }
 /// ```
 #[derive(Clone)]
 pub struct BuildContext {
-    /// Shared reference to the element tree (with interior mutability for dependency tracking)
+    /// Shared reference to the element tree (for inherited widgets and queries)
     tree: Arc<RwLock<ElementTree>>,
-
-    /// Shared reference to the pipeline owner for scheduling rebuilds
-    pipeline: Arc<RwLock<PipelineOwner>>,
 
     /// ID of the current element being built
     element_id: ElementId,
@@ -62,16 +97,22 @@ impl BuildContext {
     /// # Arguments
     ///
     /// - `tree`: Shared reference to the element tree
-    /// - `pipeline`: Shared reference to the pipeline owner
     /// - `element_id`: ID of the element being built
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = BuildContext::new(
+    ///     tree.clone(),
+    ///     element_id,
+    /// );
+    /// ```
     pub fn new(
         tree: Arc<RwLock<ElementTree>>,
-        pipeline: Arc<RwLock<PipelineOwner>>,
         element_id: ElementId,
     ) -> Self {
         Self {
             tree,
-            pipeline,
             element_id,
             hook_context: Arc::new(RefCell::new(HookContext::new())),
         }
@@ -85,18 +126,26 @@ impl BuildContext {
     /// # Arguments
     ///
     /// - `tree`: Shared reference to the element tree
-    /// - `pipeline`: Shared reference to the pipeline owner
     /// - `element_id`: ID of the element being built
     /// - `hook_context`: Shared hook context
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Preserve hook state across rebuild
+    /// let ctx = BuildContext::with_hook_context(
+    ///     tree.clone(),
+    ///     element_id,
+    ///     existing_hook_context.clone(),
+    /// );
+    /// ```
     pub fn with_hook_context(
         tree: Arc<RwLock<ElementTree>>,
-        pipeline: Arc<RwLock<PipelineOwner>>,
         element_id: ElementId,
         hook_context: Arc<RefCell<HookContext>>,
     ) -> Self {
         Self {
             tree,
-            pipeline,
             element_id,
             hook_context,
         }
@@ -139,54 +188,13 @@ impl BuildContext {
     ///
     /// Returns the `Arc<RwLock<ElementTree>>` for more complex operations.
     /// Most methods should use the convenience methods on BuildContext instead.
+    ///
+    /// # Note
+    ///
+    /// The tree reference is read-only during build phase. Use hooks/signals
+    /// for state changes that trigger rebuilds.
     pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
         Arc::clone(&self.tree)
-    }
-
-    /// Schedule a rebuild for this element
-    ///
-    /// This schedules the element for rebuild in the next frame.
-    /// The element will be marked dirty and added to the build pipeline.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // In a button click handler
-    /// ctx.schedule_rebuild();
-    /// ```
-    pub fn schedule_rebuild(&self) {
-        let depth = self.depth();
-        let mut pipeline = self.pipeline.write();
-        pipeline.schedule_build_for(self.element_id, depth);
-    }
-
-    /// Schedule a rebuild for a specific element
-    ///
-    /// This allows scheduling rebuilds for child elements or other elements in the tree.
-    ///
-    /// # Parameters
-    ///
-    /// - `element_id`: ID of the element to rebuild
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Schedule rebuild for a child element
-    /// ctx.schedule_rebuild_for(child_id);
-    /// ```
-    pub fn schedule_rebuild_for(&self, element_id: ElementId) {
-        // Calculate depth for the target element
-        let tree = self.tree.read();
-        let mut depth = 0;
-        let mut current = element_id;
-        while let Some(parent) = tree.parent(current) {
-            depth += 1;
-            current = parent;
-        }
-        drop(tree);
-
-        let mut pipeline = self.pipeline.write();
-        pipeline.schedule_build_for(element_id, depth);
     }
 
     // ========== Tree Traversal ==========

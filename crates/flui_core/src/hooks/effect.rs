@@ -93,10 +93,17 @@ impl Effect {
 
 impl Drop for Effect {
     fn drop(&mut self) {
-        // Run cleanup on drop
-        if let Some(cleanup) = self.inner.cleanup_fn.borrow_mut().take() {
-            cleanup();
+        // Run cleanup on drop, with panic safety
+        // Use try_borrow_mut to avoid double panic if already borrowed
+        if let Ok(mut cleanup_ref) = self.inner.cleanup_fn.try_borrow_mut() {
+            if let Some(cleanup) = cleanup_ref.take() {
+                // Catch panics in cleanup to prevent double panic during unwinding
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cleanup();
+                }));
+            }
         }
+        // If borrow fails, skip cleanup (already in bad state)
     }
 }
 

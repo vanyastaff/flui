@@ -105,25 +105,24 @@ impl Key {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if u64::MAX keys have been created (practically impossible).
+    /// Panics if u64::MAX keys have been created (practically impossible).
     /// This prevents undefined behavior from NonZeroU64::new_unchecked(0) after overflow.
     #[inline]
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
 
-        #[cfg(debug_assertions)]
+        // Always check for overflow, even in release mode
+        // UB is never acceptable, even in "impossible" cases
         if id == u64::MAX {
             panic!(
                 "Key counter overflow! Created {} keys. \
-                 This is theoretically impossible in practice.",
+                 This should never happen in practice, but UB is never acceptable.",
                 u64::MAX
             );
         }
 
-        // SAFETY: Counter starts at 1 and we check for overflow in debug builds.
-        // In release, after u64::MAX the counter wraps to 0, but this would require
-        // creating 18 quintillion keys which is impossible in practice.
+        // SAFETY: We just verified id != u64::MAX, and counter starts at 1
         Self(unsafe { NonZeroU64::new_unchecked(id) })
     }
 

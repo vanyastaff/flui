@@ -203,8 +203,14 @@ impl<T> Memo<T> {
             impl<T> Drop for PanicGuard<'_, T> {
                 fn drop(&mut self) {
                     if std::thread::panicking() {
-                        *self.inner.is_poisoned.borrow_mut() = true;
-                        *self.inner.is_computing.borrow_mut() = false;
+                        // Use try_borrow_mut to avoid double panic
+                        // If borrow fails, we're already in a bad state - just continue unwinding
+                        if let Ok(mut poisoned) = self.inner.is_poisoned.try_borrow_mut() {
+                            *poisoned = true;
+                        }
+                        if let Ok(mut computing) = self.inner.is_computing.try_borrow_mut() {
+                            *computing = false;
+                        }
                     }
                 }
             }

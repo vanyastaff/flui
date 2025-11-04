@@ -24,17 +24,16 @@ impl SubscriptionId {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if u64::MAX subscriptions have been created (practically impossible).
+    /// Panics if u64::MAX subscriptions have been created (practically impossible).
     pub fn new() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
 
-        #[cfg(debug_assertions)]
+        // Always check for overflow
         if id == u64::MAX {
             panic!(
-                "SubscriptionId counter overflow! Created {} subscriptions. \
-                 This is theoretically impossible in practice.",
+                "SubscriptionId counter overflow! Created {} subscriptions.",
                 u64::MAX
             );
         }
@@ -54,17 +53,16 @@ impl SignalId {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if u64::MAX signals have been created (practically impossible).
+    /// Panics if u64::MAX signals have been created (practically impossible).
     pub fn new() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
 
-        #[cfg(debug_assertions)]
+        // Always check for overflow
         if id == u64::MAX {
             panic!(
-                "SignalId counter overflow! Created {} signals. \
-                 This is theoretically impossible in practice.",
+                "SignalId counter overflow! Created {} signals.",
                 u64::MAX
             );
         }

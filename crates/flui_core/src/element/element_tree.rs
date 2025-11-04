@@ -311,46 +311,14 @@ impl ElementTree {
     ///     }
     /// }
     /// ```
-    ///
-    /// # Safety
-    ///
-    /// This method uses unsafe to dereference a raw pointer. It is sound because:
-    ///
-    /// 1. **Pointer Validity**: The pointer comes from `render_state_ptr()` which returns
-    ///    `*const RwLock<RenderState>` that points to data owned by a RenderElement
-    ///    stored in the slab.
-    ///
-    /// 2. **Lifetime Guarantees**: We hold a reference `&self` to the ElementTree for the
-    ///    entire duration of this function. The slab owns the ElementNode which owns the
-    ///    Element which owns the RenderElement which owns the RwLock<RenderState>.
-    ///    The returned guard is tied to lifetime `'_` (same as `&self`), preventing
-    ///    the tree from being mutated while the guard exists.
-    ///
-    /// 3. **No Concurrent Removal**: The element cannot be removed from the slab while
-    ///    we hold a reference to it via `get()`. The slab is behind `self` which is
-    ///    borrowed immutably.
-    ///
-    /// 4. **RwLock Safety**: `RwLock::read()` is always safe to call on a valid RwLock
-    ///    reference, and provides interior mutability correctly.
-    ///
-    /// 5. **Initialization**: The RenderState is created along with the RenderElement
-    ///    and is always properly initialized before any pointer is handed out.
-    ///
-    /// **INVARIANTS REQUIRED**:
-    /// - Element must exist in tree (checked by `get()`)
-    /// - Element must not be removed while reference exists (enforced by Rust borrow checker)
-    /// - RenderState must be valid for the lifetime of RenderElement (true by construction)
     #[inline]
     pub fn render_state(
         &self,
         element_id: ElementId,
     ) -> Option<parking_lot::RwLockReadGuard<'_, RenderState>> {
-        self.get(element_id).and_then(|element| {
-            element.render_state_ptr().map(|ptr| unsafe {
-                // SAFETY: See extensive safety documentation above
-                (*ptr).read()
-            })
-        })
+        self.get(element_id)
+            .and_then(|element| element.as_render())
+            .map(|render| render.render_state().read())
     }
 
     /// Get a write guard to the RenderState for an element
@@ -367,27 +335,14 @@ impl ElementTree {
     ///     state.clear_needs_layout();
     /// }
     /// ```
-    ///
-    /// # Safety
-    ///
-    /// This method uses unsafe to dereference a raw pointer. It is sound for the same
-    /// reasons as `render_state()` (see that method's safety documentation).
-    ///
-    /// Additional considerations for write access:
-    /// - `RwLock::write()` provides exclusive access via the write guard
-    /// - No other readers or writers can access the RenderState while the guard exists
-    /// - The lifetime of the guard prevents the element from being removed
     #[inline]
     pub fn render_state_mut(
         &self,
         element_id: ElementId,
     ) -> Option<parking_lot::RwLockWriteGuard<'_, RenderState>> {
-        self.get(element_id).and_then(|element| {
-            element.render_state_ptr().map(|ptr| unsafe {
-                // SAFETY: Same invariants as render_state(), see that method's documentation
-                (*ptr).write()
-            })
-        })
+        self.get(element_id)
+            .and_then(|element| element.as_render())
+            .map(|render| render.render_state().write())
     }
 
     // ========== Layout & Paint Helpers ==========
@@ -779,16 +734,6 @@ impl ElementTree {
     ///     println!("Element {}: arity = {:?}", element_id, render_obj.arity());
     /// });
     /// ```
-    ///
-    /// # Safety
-    ///
-    /// This method uses unsafe to dereference a raw pointer to RenderState.
-    /// It is sound because:
-    /// 1. We iterate over `&self.nodes` which keeps the slab borrowed immutably
-    /// 2. Each element exists for the duration of the loop iteration
-    /// 3. The state pointer points to valid RenderState owned by the RenderElement
-    /// 4. The state guard's lifetime is contained within the visitor call
-    /// 5. No elements can be removed during iteration (immutable borrow of tree)
     pub fn visit_all_render_objects<F>(&self, mut visitor: F)
     where
         F: FnMut(ElementId, &crate::RenderNode, parking_lot::RwLockReadGuard<RenderState>),
@@ -800,17 +745,9 @@ impl ElementTree {
                 None => continue,
             };
 
-            // Borrow render object through RwLock guard
+            // Borrow render object and state through RwLock guards
             let render_obj_guard = render_elem.render_object();
-            let state_ptr: *const parking_lot::RwLock<RenderState> = render_elem.render_state();
-            
-            // SAFETY: 
-            // - We hold immutable reference to tree via &self
-            // - The slab owns ElementNode owns Element owns RenderElement owns RwLock<RenderState>
-            // - state_ptr points to valid RenderState for the element's lifetime
-            // - The element cannot be removed while we iterate (borrow checker guarantees)
-            // - RwLock::read() is safe to call on a valid RwLock
-            let state = unsafe { (*state_ptr).read() };
+            let state = render_elem.render_state().read();
 
             // Call visitor with references
             // The guards live for the duration of the visitor call

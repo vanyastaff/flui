@@ -43,6 +43,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::element::ElementId;
@@ -50,6 +51,14 @@ use crate::element::ElementTree;
 
 #[cfg(debug_assertions)]
 use crate::debug_println;
+
+/// Element type classification for rebuild dispatch
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ElementType {
+    Component,
+    Render,
+    Provider,
+}
 
 /// Build batching system for performance optimization
 ///
@@ -381,7 +390,7 @@ impl BuildPipeline {
     /// reconciling the element tree.
     ///
     /// Returns the number of elements rebuilt.
-    pub fn rebuild_dirty(&mut self, tree: &mut ElementTree) -> usize {
+    pub fn rebuild_dirty(&mut self, tree: &Arc<parking_lot::RwLock<ElementTree>>) -> usize {
         if self.dirty_elements.is_empty() {
             return 0;
         }
@@ -402,70 +411,64 @@ impl BuildPipeline {
         self.dirty_elements.sort_by_key(|(_, depth)| *depth);
 
         // Deduplicate - remove any duplicate ElementIds while preserving depth order
-        // This handles rare race conditions where an element is scheduled multiple times
         self.dirty_elements.dedup_by_key(|(id, _)| *id);
 
         // Take the dirty list to avoid borrow conflicts
         let mut dirty = std::mem::take(&mut self.dirty_elements);
+        let mut rebuilt_count = 0;
 
         // Rebuild each element
         for (element_id, depth) in dirty.drain(..) {
             #[cfg(debug_assertions)]
             tracing::trace!("rebuild_dirty: Processing element {:?} at depth {}", element_id, depth);
 
-            // Verify element still exists in tree
-            let element = match tree.get(element_id) {
-                Some(elem) => elem,
-                None => {
-                    tracing::error!(
-                        element_id = ?element_id,
-                        "Element marked dirty but not found in tree during rebuild"
-                    );
-                    continue;
+            // Determine element type (read-only scope)
+            let element_type = {
+                let tree_guard = tree.read();
+                match tree_guard.get(element_id) {
+                    Some(elem) => {
+                        if elem.as_component().is_some() {
+                            Some(ElementType::Component)
+                        } else if elem.as_provider().is_some() {
+                            Some(ElementType::Provider)
+                        } else if elem.as_render().is_some() {
+                            Some(ElementType::Render)
+                        } else {
+                            None
+                        }
+                    }
+                    None => {
+                        tracing::error!(
+                            element_id = ?element_id,
+                            "Element marked dirty but not found in tree during rebuild"
+                        );
+                        None
+                    }
                 }
             };
 
             // Dispatch rebuild based on element type
-            match element {
-                crate::element::Element::Component(_comp) => {
-                    // TODO(Issue #2): Full View-based component rebuild
-                    //
-                    // Proper implementation requires:
-                    // 1. Get parent element to retrieve new view
-                    // 2. Parent calls view.rebuild_any() to create new child view
-                    // 3. Reconcile new view with existing child
-                    // 4. Update component's child reference
-                    // 5. Mark new child as dirty if changed
-                    //
-                    // For now, component rebuilds are handled by parent elements.
-                    // This ensures the build phase runs without errors, even though
-                    // the View integration is not yet complete.
-                    //
-                    // See docs/PIPELINE_ARCHITECTURE.md for full algorithm.
-
-                    #[cfg(debug_assertions)]
-                    tracing::debug!("Component element {:?} rebuild deferred to parent (View integration pending)", element_id);
+            match element_type {
+                Some(ElementType::Component) => {
+                    if self.rebuild_component(tree, element_id, depth) {
+                        rebuilt_count += 1;
+                    }
                 }
 
-                crate::element::Element::Render(_render) => {
+                Some(ElementType::Render) => {
                     // RenderElements don't rebuild - they only relayout
-                    // Skip rebuild for render elements
                     #[cfg(debug_assertions)]
                     tracing::trace!("Render element {:?} skipped (rebuilds via layout)", element_id);
                 }
 
-                crate::element::Element::Provider(_provider) => {
-                    // TODO(Issue #2): Provider rebuild
-                    //
-                    // Providers should:
-                    // 1. Check if provided data changed
-                    // 2. Notify dependents if data changed
-                    // 3. Mark dependents as dirty
-                    //
-                    // For now, providers work but don't propagate changes.
+                Some(ElementType::Provider) => {
+                    if self.rebuild_provider(tree, element_id, depth) {
+                        rebuilt_count += 1;
+                    }
+                }
 
-                    #[cfg(debug_assertions)]
-                    tracing::debug!("Provider element {:?} rebuild (change propagation pending)", element_id);
+                None => {
+                    // Element not found or unrecognized type
                 }
             }
 
@@ -474,9 +477,213 @@ impl BuildPipeline {
         }
 
         #[cfg(debug_assertions)]
-        debug_println!(PRINT_BUILD_SCOPE, "rebuild_dirty #{}: complete ({} elements processed)", build_num, dirty_count);
+        debug_println!(PRINT_BUILD_SCOPE, "rebuild_dirty #{}: complete ({} elements rebuilt)", build_num, rebuilt_count);
 
-        dirty_count
+        rebuilt_count
+    }
+
+    /// Rebuild a ComponentElement
+    ///
+    /// Creates BuildContext, calls view.build(), and reconciles child elements.
+    fn rebuild_component(
+        &mut self,
+        tree: &Arc<parking_lot::RwLock<ElementTree>>,
+        element_id: ElementId,
+        depth: usize,
+    ) -> bool {
+        #[cfg(debug_assertions)]
+        tracing::debug!("Rebuilding component element {:?}", element_id);
+
+        // Phase 1: Extract component data (minimize lock time)
+        let (view, old_child_id, hook_context) = {
+            let tree_guard = tree.read();
+            let element = match tree_guard.get(element_id) {
+                Some(e) => e,
+                None => return false,
+            };
+
+            let component = match element.as_component() {
+                Some(c) => c,
+                None => return false,
+            };
+
+            // Clone view for rebuild
+            let view = component.view().clone_box();
+            let old_child = component.child();
+
+            // Get or create hook context
+            // TODO: Extract existing hook context from component state
+            let hook_context = std::sync::Arc::new(std::cell::RefCell::new(
+                crate::hooks::HookContext::new()
+            ));
+
+            (view, old_child, hook_context)
+        };
+
+        // Phase 2: Build new child view (outside locks)
+        let mut ctx = crate::view::BuildContext::with_hook_context(
+            tree.clone(),
+            element_id,
+            hook_context.clone(),
+        );
+
+        let (new_child_element, _new_state) = view.build_any(&mut ctx);
+
+        // Phase 3: Reconcile child (write lock)
+        let new_element = new_child_element.into_element();
+
+        {
+            let mut tree_guard = tree.write();
+
+            // Reconcile based on old/new child state
+            match (old_child_id, Some(new_element)) {
+                (Some(old_id), Some(new_element)) => {
+                    // Check if we can update in-place or need to replace
+                    let can_update = {
+                        let old_elem = tree_guard.get(old_id);
+                        match old_elem {
+                            Some(old) => {
+                                // Check if types match
+                                std::mem::discriminant(old) == std::mem::discriminant(&new_element)
+                            }
+                            None => false,
+                        }
+                    };
+
+                    if can_update {
+                        // Update existing child element in-place
+                        if let Some(old) = tree_guard.get_mut(old_id) {
+                            *old = new_element;
+                            // Schedule child for rebuild
+                            self.schedule(old_id, depth + 1);
+                        }
+                    } else {
+                        // Type changed - need to replace
+                        // Remove old child
+                        let _ = tree_guard.remove(old_id);
+
+                        // Insert new child
+                        let new_id = tree_guard.insert(new_element);
+
+                        // Mount new child
+                        if let Some(child) = tree_guard.get_mut(new_id) {
+                            child.mount(Some(element_id), None);
+                        }
+
+                        // Update parent component's child reference
+                        if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(element_id) {
+                            component.set_child(new_id);
+                        }
+
+                        self.schedule(new_id, depth + 1);
+                    }
+                }
+
+                (None, Some(new_element)) => {
+                    // No old child - insert new one
+                    let new_id = tree_guard.insert(new_element);
+
+                    // Mount new child
+                    if let Some(child) = tree_guard.get_mut(new_id) {
+                        child.mount(Some(element_id), None);
+                    }
+
+                    // Update parent component's child reference
+                    if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(element_id) {
+                        component.set_child(new_id);
+                    }
+
+                    self.schedule(new_id, depth + 1);
+                }
+
+                (Some(old_id), None) => {
+                    // Had child before, none now - remove old child
+                    let _ = tree_guard.remove(old_id);
+
+                    // Update parent component
+                    if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(element_id) {
+                        component.clear_child();
+                    }
+                }
+
+                (None, None) => {
+                    // No child before, none now - nothing to do
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Rebuild a ProviderElement and notify dependents
+    ///
+    /// Checks if provider data changed and schedules dependent elements for rebuild.
+    fn rebuild_provider(
+        &mut self,
+        tree: &Arc<parking_lot::RwLock<ElementTree>>,
+        element_id: ElementId,
+        _depth: usize,
+    ) -> bool {
+        #[cfg(debug_assertions)]
+        tracing::debug!("Rebuilding provider element {:?}", element_id);
+
+        // Phase 1: Get dependents list (read-only)
+        let dependents = {
+            let tree_guard = tree.read();
+            let element = match tree_guard.get(element_id) {
+                Some(e) => e,
+                None => return false,
+            };
+
+            let provider = match element.as_provider() {
+                Some(p) => p,
+                None => return false,
+            };
+
+            // Copy dependents list
+            provider.dependents().iter().copied().collect::<Vec<_>>()
+        };
+
+        // Phase 2: Notify all dependents
+        // For now, assume provider data changed (TODO: proper change detection)
+        if !dependents.is_empty() {
+            #[cfg(debug_assertions)]
+            tracing::debug!(
+                "Provider {:?} notifying {} dependents",
+                element_id,
+                dependents.len()
+            );
+
+            for dependent_id in dependents {
+                // Calculate depth for dependent
+                let dep_depth = self.calculate_depth(tree, dependent_id);
+                self.schedule(dependent_id, dep_depth);
+            }
+        }
+
+        true
+    }
+
+    /// Calculate element depth in tree
+    fn calculate_depth(
+        &self,
+        tree: &Arc<parking_lot::RwLock<ElementTree>>,
+        element_id: ElementId,
+    ) -> usize {
+        let tree_guard = tree.read();
+        let mut depth = 0;
+        let mut current = element_id;
+
+        while let Some(element) = tree_guard.get(current) {
+            if let Some(parent_id) = element.parent() {
+                depth += 1;
+                current = parent_id;
+            } else {
+                break;
+            }
+        }
+
+        depth
     }
 
     /// Rebuilds all dirty elements using parallel execution (when feature enabled)
