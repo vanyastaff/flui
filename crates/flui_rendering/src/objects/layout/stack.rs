@@ -175,6 +175,9 @@ impl Default for RenderStack {
 }
 
 impl MultiRender for RenderStack {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

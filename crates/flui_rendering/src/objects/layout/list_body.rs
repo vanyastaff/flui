@@ -75,6 +75,9 @@ impl Default for RenderListBody {
 }
 
 impl MultiRender for RenderListBody {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

@@ -170,6 +170,9 @@ impl Default for RenderFlex {
 }
 
 impl MultiRender for RenderFlex {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

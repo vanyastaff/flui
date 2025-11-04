@@ -71,6 +71,9 @@ impl Default for RenderIndexedStack {
 }
 
 impl MultiRender for RenderIndexedStack {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

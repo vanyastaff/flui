@@ -175,6 +175,9 @@ impl RenderParagraph {
 // ===== RenderObject Implementation =====
 
 impl LeafRender for RenderParagraph {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
         // Calculate text size
         // In production, this would use a proper text layout engine

@@ -116,6 +116,9 @@ impl Default for RenderWrap {
 }
 
 impl MultiRender for RenderWrap {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
