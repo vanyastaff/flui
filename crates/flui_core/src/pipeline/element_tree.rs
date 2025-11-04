@@ -619,7 +619,26 @@ impl ElementTree {
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> flui_types::Size {
-        // TODO(2025-01): Add bounds checking for child_id to ensure it exists in the tree
+        // Bounds checking: verify child_id exists in tree
+        if !self.contains(child_id) {
+            #[cfg(debug_assertions)]
+            {
+                tracing::error!(
+                    child_id = ?child_id,
+                    "layout_child called with invalid child_id - element not in tree"
+                );
+                panic!("Invalid child_id in layout_child: {:?}", child_id);
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                tracing::error!(
+                    child_id = ?child_id,
+                    "layout_child called with invalid child_id, returning Size::ZERO"
+                );
+                return flui_types::Size::ZERO;
+            }
+        }
 
         // Walk down through ComponentElements to find the first RenderElement
         let mut current_id = child_id;
@@ -658,6 +677,10 @@ impl ElementTree {
                 }
             }
         } else {
+            tracing::warn!(
+                child_id = ?child_id,
+                "Could not find RenderElement for child. Element may be Component without child or Provider. Returning Size::ZERO."
+            );
             flui_types::Size::ZERO
         }
     }
