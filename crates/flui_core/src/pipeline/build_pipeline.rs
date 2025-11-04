@@ -200,18 +200,9 @@ impl BuildPipeline {
             return;
         }
 
-        // Otherwise, add directly to dirty elements
-        // Check if already scheduled
-        if self.dirty_elements.iter().any(|(id, _)| *id == element_id) {
-            #[cfg(debug_assertions)]
-            debug_println!(
-                PRINT_SCHEDULE_BUILD,
-                "Element {:?} already scheduled for rebuild",
-                element_id
-            );
-            return;
-        }
-
+        // Add directly to dirty elements
+        // Note: Duplicates are allowed and will be deduplicated during rebuild_dirty()
+        // This is more efficient than O(n) check on every schedule()
         #[cfg(debug_assertions)]
         debug_println!(
             PRINT_SCHEDULE_BUILD,
@@ -409,6 +400,10 @@ impl BuildPipeline {
 
         // Sort by depth (parents before children)
         self.dirty_elements.sort_by_key(|(_, depth)| *depth);
+
+        // Deduplicate - remove any duplicate ElementIds while preserving depth order
+        // This handles rare race conditions where an element is scheduled multiple times
+        self.dirty_elements.dedup_by_key(|(id, _)| *id);
 
         // Take the dirty list to avoid borrow conflicts
         let mut dirty = std::mem::take(&mut self.dirty_elements);
