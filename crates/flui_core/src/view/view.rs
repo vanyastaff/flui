@@ -101,6 +101,47 @@ pub trait View: Sealed + Clone + 'static {
     ///
     /// ChangeFlags indicating what changed
     ///
+    /// # ⚠️ Performance Warning
+    ///
+    /// **The default implementation always marks the element as dirty and rebuilds.**
+    /// This can cause unnecessary work on every frame.
+    ///
+    /// For better performance, override this method to:
+    /// 1. Compare `self` with `prev` to detect actual changes
+    /// 2. Only call `element.mark_dirty()` if something changed
+    /// 3. Return `ChangeFlags::NONE` if no changes
+    ///
+    /// # Example: Optimized rebuild
+    ///
+    /// ```rust,ignore
+    /// fn rebuild(
+    ///     self,
+    ///     prev: &Self,
+    ///     _state: &mut Self::State,
+    ///     element: &mut Self::Element,
+    /// ) -> ChangeFlags {
+    ///     // Only rebuild if text actually changed
+    ///     if self.text != prev.text {
+    ///         element.mark_dirty();
+    ///         ChangeFlags::NEEDS_BUILD
+    ///     } else {
+    ///         ChangeFlags::NONE  // Skip rebuild - nothing changed
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # When to Override
+    ///
+    /// Override when:
+    /// - Your view has expensive rendering (complex layouts, many children)
+    /// - Your view is in a frequently rebuilding part of the tree
+    /// - You can cheaply compare old and new props (e.g., comparing primitives)
+    ///
+    /// Don't override when:
+    /// - Your view is simple and fast to rebuild
+    /// - Comparison would be as expensive as rebuilding
+    /// - Your view rarely changes
+    ///
     /// # Default Implementation
     ///
     /// By default, always rebuilds. Override for better performance.

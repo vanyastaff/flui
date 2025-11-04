@@ -231,6 +231,42 @@ impl BuildContext {
         self.element_id
     }
 
+    /// Check if this BuildContext still points to a valid element
+    ///
+    /// Returns `false` if the element has been removed from the tree,
+    /// making this context stale.
+    ///
+    /// # ⚠️ When to Use
+    ///
+    /// Use this when:
+    /// - Storing BuildContext for later use (e.g., in closures)
+    /// - Accessing context after potential tree mutations
+    /// - Debugging unexpected behavior
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Store context in a closure
+    /// let ctx_clone = ctx.clone();
+    /// let callback = move || {
+    ///     if !ctx_clone.is_valid() {
+    ///         // Element was removed, don't use this context
+    ///         return;
+    ///     }
+    ///     // Safe to use context
+    ///     let size = ctx_clone.size();
+    /// };
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This acquires a read lock on the element tree, so avoid calling
+    /// in hot loops. In most cases, BuildContext is valid during `build()`.
+    pub fn is_valid(&self) -> bool {
+        let tree = self.tree.read();
+        tree.get(self.element_id).is_some()
+    }
+
     /// Get shared reference to the element tree
     ///
     /// Returns the `Arc<RwLock<ElementTree>>` for more complex operations.
