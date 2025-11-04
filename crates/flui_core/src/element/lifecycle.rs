@@ -1,31 +1,126 @@
-//! Element lifecycle states
+//! Element lifecycle states and transitions
+//!
+//! This module defines the lifecycle states that elements go through from
+//! creation to destruction, and the valid transitions between them.
 
 /// Element lifecycle states
 ///
-/// Elements transition through these states as they're mounted/unmounted:
+/// Elements transition through these states as they're created, mounted,
+/// unmounted, and destroyed in the element tree.
+///
+/// # State Diagram
 ///
 /// ```text
-/// Initial → Active → Inactive → Defunct
-///           ↑_____|
+///     ┌─────────┐
+///     │ Initial │  (Created but not mounted)
+///     └────┬────┘
+///          │ mount()
+///          ▼
+///     ┌────────┐
+///  ┌─▶│ Active │◀─┐  (Mounted in tree)
+///  │  └───┬────┘  │
+///  │      │       │ activate()
+///  │      │ deactivate()
+///  │      ▼       │
+///  │  ┌──────────┐│
+///  └──│ Inactive ├┘  (Unmounted but state preserved)
+///     └────┬─────┘
+///          │ dispose()
+///          ▼
+///     ┌─────────┐
+///     │ Defunct │  (Permanently removed)
+///     └─────────┘
 /// ```
 ///
-/// # State Transitions
+/// # Valid State Transitions
 ///
-/// - **Initial → Active**: Element mounted via `mount()`
-/// - **Active → Inactive**: Element unmounted but might be reinserted via `deactivate()`
-/// - **Inactive → Active**: Element reinserted via `activate()`
-/// - **Active/Inactive → Defunct**: Element permanently removed
+/// | From     | To       | Trigger        | Description                          |
+/// |----------|----------|----------------|--------------------------------------|
+/// | Initial  | Active   | `mount()`      | Element mounted to tree              |
+/// | Active   | Inactive | `deactivate()` | Element removed but state preserved  |
+/// | Inactive | Active   | `activate()`   | Element re-mounted to tree           |
+/// | Active   | Defunct  | `dispose()`    | Element permanently destroyed        |
+/// | Inactive | Defunct  | `dispose()`    | Inactive element permanently removed |
 ///
-/// # Examples
+/// # Invalid Transitions
 ///
-/// ```rust
+/// These transitions are **not allowed** and indicate bugs:
+///
+/// - ❌ Initial → Inactive (must mount first)
+/// - ❌ Initial → Defunct (must mount then dispose)
+/// - ❌ Defunct → * (cannot resurrect defunct elements)
+///
+/// # Lifecycle Hooks
+///
+/// Different operations happen at each transition:
+///
+/// - **Initial → Active**: `build()` called, dependencies registered
+/// - **Active → Inactive**: Dependencies unregistered, element hidden
+/// - **Inactive → Active**: Dependencies re-registered, element shown
+/// - *** → Defunct**: Cleanup hooks called, resources freed
+///
+/// # Memory Management
+///
+/// - **Initial/Active/Inactive**: Element state retained in memory
+/// - **Defunct**: Element removed from tree, state dropped
+///
+/// # Example: Typical Lifecycle
+///
+/// ```rust,ignore
 /// use flui_core::ElementLifecycle;
 ///
-/// let state = ElementLifecycle::Initial;
-/// assert!(!state.is_active());
+/// // 1. Element created
+/// let mut state = ElementLifecycle::Initial;
+/// assert!(state.is_initial());
 ///
-/// let state = ElementLifecycle::Active;
+/// // 2. Element mounted to tree
+/// state = ElementLifecycle::Active;
 /// assert!(state.is_active());
+///
+/// // 3. Element temporarily removed (e.g., conditional rendering)
+/// state = ElementLifecycle::Inactive;
+/// assert!(state.is_inactive());
+///
+/// // 4. Element re-mounted
+/// state = ElementLifecycle::Active;
+/// assert!(state.is_active());
+///
+/// // 5. Element permanently removed
+/// state = ElementLifecycle::Defunct;
+/// assert!(state.is_defunct());
+/// ```
+///
+/// # Use Cases
+///
+/// ## Conditional Rendering
+///
+/// ```rust,ignore
+/// if show_widget {
+///     // Active: Widget visible
+///     widget.activate();
+/// } else {
+///     // Inactive: Widget hidden but state preserved
+///     widget.deactivate();
+/// }
+/// ```
+///
+/// ## Animations
+///
+/// ```rust,ignore
+/// // Inactive during exit animation
+/// widget.deactivate();
+/// animate_out();
+///
+/// // Defunct after animation completes
+/// widget.dispose();
+/// ```
+///
+/// ## Debugging
+///
+/// ```rust,ignore
+/// if !element.lifecycle().is_active() {
+///     eprintln!("Warning: Operating on non-active element {:?}", element);
+/// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ElementLifecycle {

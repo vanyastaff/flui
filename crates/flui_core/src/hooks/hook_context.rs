@@ -59,21 +59,42 @@ pub struct HookId {
 }
 
 /// Storage for hook state.
-#[derive(Debug)]
+///
+/// Contains type-erased hook state with explicit cleanup support.
 pub struct HookState {
     state: Box<dyn Any>,
     type_id: TypeId,
     #[allow(dead_code)] // TODO: Implement update tracking in future
     needs_update: bool,
+    /// Explicit cleanup function called on unmount
+    cleanup_fn: Option<Box<dyn FnOnce(Box<dyn Any>)>>,
+}
+
+impl std::fmt::Debug for HookState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookState")
+            .field("type_id", &self.type_id)
+            .field("needs_update", &self.needs_update)
+            .field("has_cleanup", &self.cleanup_fn.is_some())
+            .finish()
+    }
 }
 
 impl HookState {
     /// Create a new hook state with the given value
-    pub fn new<T: 'static>(state: T) -> Self {
+    ///
+    /// Uses Hook::cleanup() for explicit cleanup on unmount.
+    pub fn new<H: Hook>(state: H::State) -> Self {
         Self {
             state: Box::new(state),
-            type_id: TypeId::of::<T>(),
+            type_id: TypeId::of::<H::State>(),
             needs_update: false,
+            cleanup_fn: Some(Box::new(|state_any| {
+                // Downcast and call Hook::cleanup()
+                if let Ok(state) = state_any.downcast::<H::State>() {
+                    H::cleanup(*state);
+                }
+            })),
         }
     }
 
@@ -84,6 +105,16 @@ impl HookState {
         } else {
             None
         }
+    }
+
+    /// Explicitly run cleanup for this hook state
+    ///
+    /// This calls Hook::cleanup() if available, otherwise just drops the state.
+    pub fn cleanup(mut self) {
+        if let Some(cleanup) = self.cleanup_fn.take() {
+            cleanup(self.state);
+        }
+        // If no cleanup_fn, state drops automatically
     }
 }
 
@@ -244,7 +275,7 @@ impl HookContext {
             Entry::Vacant(entry) => {
                 // First call, create state then update
                 let initial_state = H::create(input.clone());
-                entry.insert(HookState::new(initial_state));
+                entry.insert(HookState::new::<H>(initial_state));
 
                 let hook_state = self.hooks.get_mut(&hook_id)
                     .expect("BUG: Hook just inserted but not found")
@@ -293,35 +324,48 @@ impl HookContext {
     ///
     /// This method ensures proper cleanup by:
     /// 1. Identifying all hooks belonging to the component
-    /// 2. Dropping each hook state (triggers Drop impls)
+    /// 2. **Explicitly calling Hook::cleanup()** for each hook
     /// 3. Removing the hooks from the map
+    ///
+    /// # Explicit Cleanup Guarantee
+    ///
+    /// Unlike the previous implementation that relied solely on Drop,
+    /// this version **explicitly invokes Hook::cleanup()** for every hook.
+    /// This ensures:
+    /// - Effect cleanup functions are always called
+    /// - Resources are freed in a controlled manner
+    /// - Cleanup happens even if Drop is bypassed
+    /// - Better guarantees for async cleanup (when implemented)
     ///
     /// # Memory Safety
     ///
-    /// Drop implementations for hook states (SignalState, MemoState, EffectState)
-    /// are called automatically when values are removed from the HashMap.
-    /// This ensures:
-    /// - Cached values are freed
-    /// - Future subscribers are cleared (when implemented)
-    /// - Rc cycles are broken
+    /// After Hook::cleanup() is called, the hook state is removed from the map.
+    /// Drop implementations still run as a fallback, but explicit cleanup
+    /// takes precedence.
     pub fn cleanup_component(&mut self, component_id: ComponentId) {
+        // Collect hooks to clean up
+        let hooks_to_cleanup: Vec<_> = self.hooks
+            .iter()
+            .filter(|(id, _)| id.component == component_id)
+            .map(|(id, _)| *id)
+            .collect();
+
         #[cfg(debug_assertions)]
-        {
-            let count = self.hooks.keys().filter(|id| id.component == component_id).count();
-            if count > 0 {
-                tracing::debug!(
-                    "Cleaning up {} hooks for component {:?}",
-                    count,
-                    component_id
-                );
-            }
+        if !hooks_to_cleanup.is_empty() {
+            tracing::debug!(
+                "Cleaning up {} hooks for component {:?}",
+                hooks_to_cleanup.len(),
+                component_id
+            );
         }
 
-        // HashMap::retain automatically drops values that are removed,
-        // triggering Drop impls for SignalState, MemoState, EffectState.
-        self.hooks.retain(|id, _state| {
-            id.component != component_id
-        });
+        // Explicitly cleanup each hook before removal
+        for hook_id in hooks_to_cleanup {
+            if let Some(hook_state) = self.hooks.remove(&hook_id) {
+                // Explicitly call Hook::cleanup() via HookState::cleanup()
+                hook_state.cleanup();
+            }
+        }
     }
 }
 
