@@ -136,8 +136,10 @@ impl PaintPipeline {
         for id in dirty_ids {
             // Get element from tree
             let Some(element) = tree.get(id) else {
-                #[cfg(debug_assertions)]
-                tracing::warn!("Element {:?} not found during paint", id);
+                tracing::error!(
+                    element_id = ?id,
+                    "Element marked dirty but not found in tree during paint"
+                );
                 continue;
             };
 
@@ -192,10 +194,9 @@ impl PaintPipeline {
                             }
                         }
                         None => {
-                            #[cfg(debug_assertions)]
                             tracing::warn!(
-                                "Paint: Single render node {:?} has no child (not mounted yet), returning empty layer",
-                                id
+                                element_id = ?id,
+                                "Single render node has no child during paint. Returning empty layer."
                             );
                             // Return empty container layer
                             Box::new(flui_engine::ContainerLayer::new())

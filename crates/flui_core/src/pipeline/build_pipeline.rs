@@ -187,8 +187,10 @@ impl BuildPipeline {
         tracing::trace!("schedule element={:?}, depth={}, build_locked={}", element_id, depth, self.build_locked);
 
         if self.build_locked {
-            #[cfg(debug_assertions)]
-            tracing::warn!("Attempted to schedule build while locked (element {:?})", element_id);
+            tracing::warn!(
+                element_id = ?element_id,
+                "Attempted to schedule build while state is locked. Build deferred."
+            );
             return;
         }
 
@@ -421,8 +423,10 @@ impl BuildPipeline {
             let element = match tree.get(element_id) {
                 Some(elem) => elem,
                 None => {
-                    #[cfg(debug_assertions)]
-                    tracing::warn!("Element {:?} not found in tree during rebuild (may have been removed)", element_id);
+                    tracing::error!(
+                        element_id = ?element_id,
+                        "Element marked dirty but not found in tree during rebuild"
+                    );
                     continue;
                 }
             };

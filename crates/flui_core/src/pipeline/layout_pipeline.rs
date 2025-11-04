@@ -147,8 +147,10 @@ impl LayoutPipeline {
         for id in dirty_ids {
             // Get element from tree
             let Some(element) = tree.get(id) else {
-                #[cfg(debug_assertions)]
-                tracing::warn!("Element {:?} not found during layout", id);
+                tracing::error!(
+                    element_id = ?id,
+                    "Element marked dirty but not found in tree during layout"
+                );
                 continue;
             };
 
@@ -217,10 +219,9 @@ impl LayoutPipeline {
                             }
                         }
                         None => {
-                            #[cfg(debug_assertions)]
                             tracing::warn!(
-                                "Layout: Single render node {:?} has no child (not mounted yet), returning zero size",
-                                id
+                                element_id = ?id,
+                                "Single render node has no child. Returning zero size."
                             );
                             // Return zero size constrained by layout_constraints
                             layout_constraints.constrain(flui_types::Size::ZERO)
