@@ -4,31 +4,54 @@
 //! build, layout, and paint. Each phase is implemented as a separate pipeline
 //! with clear responsibilities.
 //!
-//! # Architecture
+//! # Architecture (After Refactoring)
 //!
 //! ```text
-//! PipelineOwner (orchestrator)
-//! ├─ ElementTree (owns elements)
-//! ├─ BuildPipeline (widget rebuild)
-//! ├─ LayoutPipeline (size computation)
-//! └─ PaintPipeline (layer generation)
+//! PipelineOwner (thin facade)
+//!   ├─ tree: Arc<RwLock<ElementTree>>  // Element storage
+//!   ├─ coordinator: FrameCoordinator   // Phase orchestration
+//!   │   ├─ build: BuildPipeline        // Widget rebuild
+//!   │   ├─ layout: LayoutPipeline      // Size computation
+//!   │   └─ paint: PaintPipeline        // Layer generation
+//!   ├─ root_mgr: RootManager           // Root element tracking
+//!   └─ Optional features:
+//!       ├─ metrics: PipelineMetrics
+//!       ├─ recovery: ErrorRecovery
+//!       ├─ cancellation: CancellationToken
+//!       └─ frame_buffer: TripleBuffer
 //! ```
 //!
-//! # Design Principles
+//! # Design Principles (SOLID)
 //!
-//! 1. **Single Responsibility**: Each pipeline does one thing
-//! 2. **Clear Ownership**: ElementTree owned by PipelineOwner
-//! 3. **Composability**: Each pipeline independently testable
-//! 4. **Multi-threading Ready**: Parallel layout from day one
+//! 1. **Single Responsibility**: Each component has ONE clear purpose
+//!    - `FrameCoordinator`: Orchestrates pipeline phases
+//!    - `RootManager`: Manages root element
+//!    - `ElementTree`: Stores elements
+//!    - `BuildPipeline`, `LayoutPipeline`, `PaintPipeline`: Phase-specific logic
+//!
+//! 2. **Open/Closed**: Easy to extend with new features without modifying core
+//!
+//! 3. **Liskov Substitution**: Components can be tested/mocked independently
+//!
+//! 4. **Interface Segregation**: Focused, minimal interfaces
+//!
+//! 5. **Dependency Inversion**: Depend on abstractions (traits), not implementations
+//!
+//! # Benefits
+//!
+//! - **Maintainability**: Changes localized to specific components
+//! - **Testability**: Each component testable in isolation
+//! - **Clarity**: Clear separation of concerns
+//! - **Extensibility**: New features don't bloat PipelineOwner
 //!
 //! # Example
 //!
 //! ```rust,ignore
 //! let mut owner = PipelineOwner::new();
-//! owner.set_root(my_widget);
+//! owner.set_root(my_element);
 //!
 //! // Build complete frame
-//! let layer = owner.build_frame(constraints);
+//! let layer = owner.build_frame(constraints)?;
 //! ```
 //!
 //! # Production Features
@@ -37,19 +60,27 @@
 //! - Metrics (performance monitoring)
 //! - Cancellation (timeout support)
 //! - Error recovery (graceful degradation)
+//! - Frame buffer (lock-free frame exchange)
 
 pub mod build_pipeline;
 pub mod cancellation;
 pub mod dirty_tracking;
 pub mod element_tree;
 pub mod error;
+pub mod frame_coordinator;
 pub mod layout_pipeline;
 pub mod metrics;
 pub mod paint_pipeline;
 pub mod pipeline_builder;
 pub mod pipeline_owner;
 pub mod recovery;
+pub mod root_manager;
 pub mod triple_buffer;
+
+
+
+
+
 
 
 
@@ -62,13 +93,22 @@ pub use cancellation::CancellationToken;
 pub use dirty_tracking::LockFreeDirtySet;
 pub use element_tree::ElementTree;
 pub use error::{PipelineError, PipelinePhase};
+pub use frame_coordinator::FrameCoordinator;
 pub use layout_pipeline::LayoutPipeline;
 pub use metrics::PipelineMetrics;
 pub use paint_pipeline::PaintPipeline;
 pub use pipeline_builder::PipelineBuilder;
 pub use pipeline_owner::PipelineOwner;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
+pub use root_manager::RootManager;
 pub use triple_buffer::TripleBuffer;
+
+
+
+
+
+
+
 
 
 

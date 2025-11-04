@@ -149,26 +149,10 @@ impl RenderPipeline {
 
     // ========== Tree Construction ==========
 
-    /// Insert a root RenderWidget
-    ///
-    /// Creates the root of the render tree by wrapping the widget in a RenderElement.
-    ///
-    /// # Arguments
-    ///
-    /// - `widget`: The root RenderWidget
-    ///
-    /// # Returns
-    ///
-    /// The ElementId of the root element
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let root_id = pipeline.insert_root(FlexWidget::column());
-    /// ```
-
-    // NOTE: Commented out during Widget → View migration
+    // NOTE: insert_root() temporarily removed during Widget → View migration
     // TODO(Phase 5): Reimplement using View system
+    //
+    // Creates the root of the render tree by wrapping the widget in a RenderElement.
     /*
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where

@@ -25,6 +25,7 @@
 pub mod any_view;
 pub mod build_context;
 pub mod sealed;
+#[allow(clippy::module_inception)]  // view/view.rs is intentional for main View trait
 pub mod view;
 pub mod view_sequence;
 

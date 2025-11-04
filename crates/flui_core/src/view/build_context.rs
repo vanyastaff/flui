@@ -61,25 +61,11 @@ impl BuildContext {
         }
     }
 
-    /// Access an InheritedWidget and register dependency
-    ///
-    /// Walks up the tree to find the nearest ancestor of type `T`.
-    /// Registers this element as a dependent, so it will rebuild when the
-    /// InheritedWidget changes (if `update_should_notify()` returns true).
-    ///
-    /// # Returns
-    ///
-    /// `Some(T)` if found, `None` if no ancestor has this type
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let theme = context.depend_on::<Theme>()?;
-    /// println!("Primary color: {:?}", theme.primary_color);
-    /// ```
-
-    // NOTE: Commented out during Widget → View migration
+    // NOTE: depend_on() and read() temporarily removed during Widget → View migration
     // TODO(Phase 5): Reimplement using View/Provider system
+    //
+    // Walks up the tree to find the nearest ancestor of type T and optionally
+    // registers this element as a dependent for automatic rebuilds.
     /*
     pub fn depend_on<T>(&self) -> Option<T>
     where
@@ -350,15 +336,12 @@ impl BuildContext {
     pub fn size(&self) -> Option<flui_types::Size> {
         let tree = self.tree.read();
 
-        // Get element and check if it has a render object
-        if let Some(element) = tree.get(self.element_id) {
-            if let Some(_render_guard) = element.render_object() {
-                // Get render state to retrieve size
-                if let Some(render_element) = element.as_render() {
-                    let render_state = render_element.render_state();
-                    return render_state.read().size();
-                }
-            }
+        // Get element and check if it's a render element
+        if let Some(element) = tree.get(self.element_id)
+            && let Some(render_element) = element.as_render()
+        {
+            let render_state = render_element.render_state();
+            return render_state.read().size();
         }
 
         None

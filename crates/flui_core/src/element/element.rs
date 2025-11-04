@@ -587,13 +587,7 @@ impl Element {
         }
     }
 
-    /// Rebuild element (produces new child widgets)
-    ///
-    /// Returns list of child widgets that need to be mounted:
-    /// (parent_id, child_widget, slot)
-    ///
-    /// # Arguments
-    // Note: rebuild() method temporarily removed during Widget → View migration
+    // NOTE: rebuild() method temporarily removed during Widget → View migration
     // TODO(Phase 5): Implement View-based rebuild:
     // pub fn rebuild(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags
     //

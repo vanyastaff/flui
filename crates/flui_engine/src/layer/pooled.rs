@@ -22,7 +22,7 @@ impl PooledContainerLayer {
     }
 
     /// Get mutable reference to inner layer
-    pub fn as_mut(&mut self) -> &mut ContainerLayer {
+    pub fn inner_mut(&mut self) -> &mut ContainerLayer {
         self.inner.as_mut().expect("PooledContainerLayer already consumed")
     }
 
@@ -85,7 +85,7 @@ impl PooledClipRectLayer {
     }
 
     /// Get mutable reference to inner layer
-    pub fn as_mut(&mut self) -> &mut ClipRectLayer {
+    pub fn inner_mut(&mut self) -> &mut ClipRectLayer {
         self.inner.as_mut().expect("PooledClipRectLayer already consumed")
     }
 
@@ -157,7 +157,7 @@ impl PooledPictureLayer {
     }
 
     /// Get mutable reference to inner layer
-    pub fn as_mut(&mut self) -> &mut PictureLayer {
+    pub fn inner_mut(&mut self) -> &mut PictureLayer {
         self.inner.as_mut().expect("PooledPictureLayer already consumed")
     }
 

@@ -41,6 +41,7 @@
 // Modules
 pub mod component;
 pub mod dependency;
+#[allow(clippy::module_inception)]  // element/element.rs is intentional for main Element enum
 pub mod element;
 pub mod element_base;
 pub mod lifecycle;

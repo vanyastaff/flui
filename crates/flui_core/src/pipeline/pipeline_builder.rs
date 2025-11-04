@@ -30,15 +30,10 @@
 //!     .build();
 //! ```
 
-use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{
-    PipelineOwner, ElementTree, BuildPipeline, LayoutPipeline, PaintPipeline,
-    PipelineMetrics, ErrorRecovery, RecoveryPolicy, CancellationToken,
-    TripleBuffer,
-};
+use super::{PipelineOwner, RecoveryPolicy};
 
 /// Builder for PipelineOwner
 ///
@@ -282,33 +277,37 @@ impl PipelineBuilder {
     /// ```
     #[must_use]
     pub fn build(self) -> PipelineOwner {
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let mut owner = PipelineOwner::new();
 
-        let mut build_pipeline = BuildPipeline::new();
+        // Configure batching
         if let Some(duration) = self.batching_duration {
-            build_pipeline.enable_batching(duration);
+            owner.enable_batching(duration);
         }
 
-        let owner = PipelineOwner {
-            tree,
-            build: build_pipeline,
-            layout: LayoutPipeline::new(),
-            paint: PaintPipeline::new(),
-            root_element_id: None,
-            on_build_scheduled: self.on_build_scheduled,
-            metrics: if self.enable_metrics {
-                Some(PipelineMetrics::new())
-            } else {
-                None
-            },
-            recovery: self.recovery_policy.map(ErrorRecovery::new),
-            cancellation: if self.enable_cancellation {
-                Some(CancellationToken::new())
-            } else {
-                None
-            },
-            frame_buffer: self.frame_buffer_initial.map(TripleBuffer::new),
-        };
+        // Configure build scheduled callback
+        if let Some(callback) = self.on_build_scheduled {
+            owner.set_on_build_scheduled(callback);
+        }
+
+        // Configure metrics
+        if self.enable_metrics {
+            owner.enable_metrics();
+        }
+
+        // Configure error recovery
+        if let Some(policy) = self.recovery_policy {
+            owner.enable_error_recovery(policy);
+        }
+
+        // Configure cancellation
+        if self.enable_cancellation {
+            owner.enable_cancellation();
+        }
+
+        // Configure frame buffer
+        if let Some(initial) = self.frame_buffer_initial {
+            owner.enable_frame_buffer(initial);
+        }
 
         owner
     }

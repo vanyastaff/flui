@@ -129,7 +129,6 @@ impl RenderElement {
     /// Returns a read guard that allows multiple concurrent immutable borrows.
     /// This uses parking_lot::RwLock which is more flexible than RefCell.
     #[inline]
-    #[must_use]
     pub fn render_object(&self) -> parking_lot::RwLockReadGuard<'_, RenderNode> {
         self.render_object.read()
     }
@@ -139,7 +138,6 @@ impl RenderElement {
     /// Returns a write guard that allows exclusive mutable access.
     /// This blocks if there are any active read or write guards.
     #[inline]
-    #[must_use]
     pub fn render_object_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RenderNode> {
         self.render_object.write()
     }
@@ -361,17 +359,11 @@ impl RenderElement {
         self.base.mark_dirty();
     }
 
-    /// Perform rebuild
-    ///
-    /// RenderElement doesn't create child widgets - it's a leaf in the Widget tree
-    /// but may have children in the Render tree (managed by layout).
-    ///
-    /// # Returns
-    ///
-    /// Always returns empty vec as RenderWidget doesn't have widget children.
-
-    // NOTE: Commented out during Widget → View migration
+    // NOTE: rebuild() temporarily removed during Widget → View migration
     // TODO(Phase 5): Reimplement using View system
+    //
+    // RenderElement doesn't create child widgets - it's a leaf in the Widget tree
+    // but may have children in the Render tree (managed by layout).
     /*
     pub fn rebuild(
         &mut self,
