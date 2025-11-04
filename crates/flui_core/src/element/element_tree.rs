@@ -182,10 +182,10 @@ impl ElementTree {
         }
 
         // Remove from parent's children list
-        if let Some(parent_id) = self.get(element_id).and_then(|e| e.parent())
-            && let Some(parent_node) = self.nodes.get_mut(parent_id.get())
-        {
-            parent_node.element.forget_child(element_id);
+        if let Some(parent_id) = self.get(element_id).and_then(|e| e.parent()) {
+            if let Some(parent_node) = self.nodes.get_mut(parent_id.get()) {
+                parent_node.element.forget_child(element_id);
+            }
         }
 
         // Remove the node itself
@@ -429,13 +429,13 @@ impl ElementTree {
 
             // Try to use cached size if constraints match and no relayout needed
             let state = render_state.read();
-            if state.has_size()
-                && !state.needs_layout()
-                && let Some(cached_constraints) = state.constraints()
-                && cached_constraints == constraints
-            {
-                // Cache hit! Return cached size without layout computation
-                return state.size();
+            if state.has_size() && !state.needs_layout() {
+                if let Some(cached_constraints) = state.constraints() {
+                    if cached_constraints == constraints {
+                        // Cache hit! Return cached size without layout computation
+                        return state.size();
+                    }
+                }
             }
         } // All borrows dropped here - safe to proceed
 
@@ -887,11 +887,11 @@ impl ElementTree {
     /// tree.add_dependent(theme_element_id, widget_element_id);
     /// ```
     pub fn add_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(element) = self.get_mut(inherited_id)
-            && let Element::Provider(inherited) = element
-        {
-            inherited.add_dependent(dependent_id);
-            return true;
+        if let Some(element) = self.get_mut(inherited_id) {
+            if let Element::Provider(inherited) = element {
+                inherited.add_dependent(dependent_id);
+                return true;
+            }
         }
         false
     }
@@ -911,11 +911,11 @@ impl ElementTree {
     /// `true` if the dependency was removed successfully, `false` if the inherited_id
     /// doesn't exist or isn't an InheritedElement.
     pub fn remove_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(element) = self.get_mut(inherited_id)
-            && let Element::Provider(inherited) = element
-        {
-            inherited.remove_dependent(dependent_id);
-            return true;
+        if let Some(element) = self.get_mut(inherited_id) {
+            if let Element::Provider(inherited) = element {
+                inherited.remove_dependent(dependent_id);
+                return true;
+            }
         }
         false
     }

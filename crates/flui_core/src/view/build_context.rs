@@ -313,11 +313,11 @@ impl BuildContext {
         let tree = self.tree.read();
 
         // Get element and check if it's a render element
-        if let Some(element) = tree.get(self.element_id)
-            && let Some(render_element) = element.as_render()
-        {
-            let render_state = render_element.render_state();
-            return render_state.read().size();
+        if let Some(element) = tree.get(self.element_id) {
+            if let Some(render_element) = element.as_render() {
+                let render_state = render_element.render_state();
+                return render_state.read().size();
+            }
         }
 
         None

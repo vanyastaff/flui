@@ -101,24 +101,24 @@ impl FontFamily {
         }
 
         // 2. Try same weight, normal style (if italic was requested)
-        if style == FontStyle::Italic
-            && let Some(font) = self.fonts.get(&(weight, FontStyle::Normal))
-        {
-            return Some(Arc::clone(font));
+        if style == FontStyle::Italic {
+            if let Some(font) = self.fonts.get(&(weight, FontStyle::Normal)) {
+                return Some(Arc::clone(font));
+            }
         }
 
         // 3. Try normal weight (W400), same style
-        if weight != FontWeight::W400
-            && let Some(font) = self.fonts.get(&(FontWeight::W400, style))
-        {
-            return Some(Arc::clone(font));
+        if weight != FontWeight::W400 {
+            if let Some(font) = self.fonts.get(&(FontWeight::W400, style)) {
+                return Some(Arc::clone(font));
+            }
         }
 
         // 4. Try normal weight (W400), normal style
-        if (weight != FontWeight::W400 || style != FontStyle::Normal)
-            && let Some(font) = self.fonts.get(&(FontWeight::W400, FontStyle::Normal))
-        {
-            return Some(Arc::clone(font));
+        if weight != FontWeight::W400 || style != FontStyle::Normal {
+            if let Some(font) = self.fonts.get(&(FontWeight::W400, FontStyle::Normal)) {
+                return Some(Arc::clone(font));
+            }
         }
 
         // 5. Try default font
