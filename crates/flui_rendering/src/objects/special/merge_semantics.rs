@@ -5,26 +5,6 @@ use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
-/// Data for RenderMergeSemantics
-#[derive(Debug, Clone, Copy)]
-pub struct MergeSemanticsData {
-    // Currently no additional data needed
-    // Presence of this widget indicates merging should occur
-}
-
-impl MergeSemanticsData {
-    /// Create new merge semantics data
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for MergeSemanticsData {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// RenderObject that merges descendant semantics into a single node
 ///
 /// This combines all semantic information from descendants into one
@@ -85,18 +65,6 @@ impl SingleRender for RenderMergeSemantics {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_merge_semantics_data_new() {
-        let _data = MergeSemanticsData::new();
-        // Just ensure it compiles
-    }
-
-    #[test]
-    fn test_merge_semantics_data_default() {
-        let _data = MergeSemanticsData::default();
-        // Just ensure it compiles
-    }
 
     #[test]
     fn test_render_merge_semantics_new() {

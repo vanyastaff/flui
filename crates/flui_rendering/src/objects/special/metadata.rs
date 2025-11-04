@@ -6,15 +6,6 @@ use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 use std::any::Any;
 
-/// Data for RenderMetaData
-#[derive(Debug)]
-pub struct MetaData {
-    /// Metadata value (can be any type)
-    pub metadata: Option<Box<dyn Any + Send + Sync>>,
-    /// Whether hit testing should use this metadata
-    pub behavior: HitTestBehavior,
-}
-
 /// Hit test behavior for metadata
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitTestBehavior {
@@ -24,38 +15,6 @@ pub enum HitTestBehavior {
     Opaque,
     /// Include if pointer is inside bounds
     Translucent,
-}
-
-impl MetaData {
-    /// Create new metadata data
-    pub fn new() -> Self {
-        Self {
-            metadata: None,
-            behavior: HitTestBehavior::Defer,
-        }
-    }
-
-    /// Create with metadata
-    pub fn with_metadata<T: Any + Send + Sync>(metadata: T) -> Self {
-        Self {
-            metadata: Some(Box::new(metadata)),
-            behavior: HitTestBehavior::Defer,
-        }
-    }
-
-    /// Create with behavior
-    pub fn with_behavior(behavior: HitTestBehavior) -> Self {
-        Self {
-            metadata: None,
-            behavior,
-        }
-    }
-}
-
-impl Default for MetaData {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// RenderObject that attaches metadata to its child_id
@@ -82,8 +41,10 @@ impl Default for MetaData {
 /// ```
 #[derive(Debug)]
 pub struct RenderMetaData {
-    /// Metadata data
-    pub data: MetaData,
+    /// Metadata value (can be any type)
+    pub metadata: Option<Box<dyn Any + Send + Sync>>,
+    /// Whether hit testing should use this metadata
+    pub behavior: HitTestBehavior,
 }
 
 // ===== Public API =====
@@ -92,57 +53,52 @@ impl RenderMetaData {
     /// Create new RenderMetaData
     pub fn new() -> Self {
         Self {
-            data: MetaData::new(),
+            metadata: None,
+            behavior: HitTestBehavior::Defer,
         }
     }
 
     /// Create with metadata
     pub fn with_metadata<T: Any + Send + Sync>(metadata: T) -> Self {
         Self {
-            data: MetaData::with_metadata(metadata),
+            metadata: Some(Box::new(metadata)),
+            behavior: HitTestBehavior::Defer,
         }
     }
 
     /// Create with behavior
     pub fn with_behavior(behavior: HitTestBehavior) -> Self {
         Self {
-            data: MetaData::with_behavior(behavior),
+            metadata: None,
+            behavior,
         }
-    }
-
-    /// Get behavior
-    pub fn behavior(&self) -> HitTestBehavior {
-        self.data.behavior
     }
 
     /// Check if has metadata
     pub fn has_metadata(&self) -> bool {
-        self.data.metadata.is_some()
+        self.metadata.is_some()
     }
 
     /// Try to get metadata as specific type
-    pub fn metadata<T: Any>(&self) -> Option<&T> {
-        self.data
-            .metadata
-            .as_ref()
-            .and_then(|m| m.downcast_ref::<T>())
+    pub fn get_metadata<T: Any>(&self) -> Option<&T> {
+        self.metadata.as_ref().and_then(|m| m.downcast_ref::<T>())
     }
 
     /// Set behavior
     pub fn set_behavior(&mut self, behavior: HitTestBehavior) {
-        if self.data.behavior != behavior {
-            self.data.behavior = behavior;
+        if self.behavior != behavior {
+            self.behavior = behavior;
         }
     }
 
     /// Set metadata
     pub fn set_metadata<T: Any + Send + Sync>(&mut self, metadata: T) {
-        self.data.metadata = Some(Box::new(metadata));
+        self.metadata = Some(Box::new(metadata));
     }
 
     /// Clear metadata
     pub fn clear_metadata(&mut self) {
-        self.data.metadata = None;
+        self.metadata = None;
     }
 }
 

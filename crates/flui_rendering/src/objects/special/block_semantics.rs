@@ -5,26 +5,6 @@ use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
-/// Data for RenderBlockSemantics
-#[derive(Debug, Clone, Copy)]
-pub struct BlockSemanticsData {
-    /// Whether to block semantics merging
-    pub blocking: bool,
-}
-
-impl BlockSemanticsData {
-    /// Create new block semantics data
-    pub fn new(blocking: bool) -> Self {
-        Self { blocking }
-    }
-}
-
-impl Default for BlockSemanticsData {
-    fn default() -> Self {
-        Self::new(true)
-    }
-}
-
 /// RenderObject that blocks descendant semantics from being merged
 ///
 /// Prevents an ancestor MergeSemantics from combining this subtree's
@@ -96,34 +76,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_block_semantics_data_new() {
-        let data = BlockSemanticsData::new(true);
-        assert!(data.blocking);
-
-        let data = BlockSemanticsData::new(false);
-        assert!(!data.blocking);
-    }
-
-    #[test]
-    fn test_block_semantics_data_default() {
-        let data = BlockSemanticsData::default();
-        assert!(data.blocking);
-    }
-
-    #[test]
     fn test_render_block_semantics_new() {
         let block = RenderBlockSemantics::new(true);
-        assert!(block.blocking());
+        assert!(block.blocking);
     }
 
     #[test]
     fn test_render_block_semantics_set_blocking() {
         let mut block = RenderBlockSemantics::new(true);
-
         block.set_blocking(false);
-        assert!(!block.blocking());
+        assert!(!block.blocking);
 
         block.set_blocking(true);
-        assert!(block.blocking());
+        assert!(block.blocking);
     }
 }

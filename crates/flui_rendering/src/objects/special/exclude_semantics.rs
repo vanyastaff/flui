@@ -5,26 +5,6 @@ use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
-/// Data for RenderExcludeSemantics
-#[derive(Debug, Clone, Copy)]
-pub struct ExcludeSemanticsData {
-    /// Whether to exclude semantics
-    pub excluding: bool,
-}
-
-impl ExcludeSemanticsData {
-    /// Create new exclude semantics data
-    pub fn new(excluding: bool) -> Self {
-        Self { excluding }
-    }
-}
-
-impl Default for ExcludeSemanticsData {
-    fn default() -> Self {
-        Self::new(true)
-    }
-}
-
 /// RenderObject that excludes its child from the semantics tree
 ///
 /// When `excluding` is true, this and all descendants are invisible to
@@ -95,34 +75,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_exclude_semantics_data_new() {
-        let data = ExcludeSemanticsData::new(true);
-        assert!(data.excluding);
-
-        let data = ExcludeSemanticsData::new(false);
-        assert!(!data.excluding);
-    }
-
-    #[test]
-    fn test_exclude_semantics_data_default() {
-        let data = ExcludeSemanticsData::default();
-        assert!(data.excluding);
-    }
-
-    #[test]
     fn test_render_exclude_semantics_new() {
         let exclude = RenderExcludeSemantics::new(true);
-        assert!(exclude.excluding());
+        assert!(exclude.excluding);
     }
 
     #[test]
     fn test_render_exclude_semantics_set_excluding() {
         let mut exclude = RenderExcludeSemantics::new(true);
-
         exclude.set_excluding(false);
-        assert!(!exclude.excluding());
+        assert!(!exclude.excluding);
 
         exclude.set_excluding(true);
-        assert!(exclude.excluding());
+        assert!(exclude.excluding);
     }
 }

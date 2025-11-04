@@ -3,51 +3,42 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
+use flui_types::{
+    Alignment, Offset, Size,
+    constraints::BoxConstraints,
+    layout::BoxFit,
+    painting::ClipBehavior,
+};
 
-/// How a box should be inscribed into another box
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoxFit {
-    /// Fill the target box by distorting aspect ratio
-    Fill,
-    /// As large as possible while maintaining aspect ratio (may clip)
-    Cover,
-    /// As large as possible while entirely contained (may leave empty space)
-    Contain,
-    /// Maintain original size (may overflow or leave empty space)
-    None,
-    /// Scale down to fit if needed, otherwise maintain size
-    ScaleDown,
-    /// Fill width, scale height maintaining aspect ratio
-    FitWidth,
-    /// Fill height, scale width maintaining aspect ratio
-    FitHeight,
-}
-
-/// Data for RenderFittedBox
-#[derive(Debug, Clone, Copy)]
-pub struct FittedBoxData {
-    /// How to fit child_id into parent
+/// RenderObject that scales and positions its child_id according to BoxFit
+///
+/// FittedBox is useful for scaling children to fit within constrained spaces
+/// while maintaining aspect ratio.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_rendering::RenderFittedBox;
+/// use flui_types::layout::BoxFit;
+/// use flui_types::Alignment;
+///
+/// // Scale child to cover the entire box
+/// let mut fitted = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT);
+/// ```
+#[derive(Debug)]
+pub struct RenderFittedBox {
+    /// How to fit child into parent
     pub fit: BoxFit,
-    /// How to align child_id within parent
+    /// How to align child within parent
     pub alignment: Alignment,
     /// Clip behavior
     pub clip_behavior: ClipBehavior,
 }
 
-/// Clip behavior
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClipBehavior {
-    /// No clipping
-    None,
-    /// Clip to bounds
-    HardEdge,
-    /// Clip with anti-aliasing
-    AntiAlias,
-}
+// ===== Public API =====
 
-impl FittedBoxData {
-    /// Create new fitted box data
+impl RenderFittedBox {
+    /// Create new RenderFittedBox with default alignment and no clipping
     pub fn new(fit: BoxFit) -> Self {
         Self {
             fit,
@@ -56,7 +47,7 @@ impl FittedBoxData {
         }
     }
 
-    /// Create with alignment
+    /// Create with custom alignment
     pub fn with_alignment(fit: BoxFit, alignment: Alignment) -> Self {
         Self {
             fit,
@@ -65,7 +56,22 @@ impl FittedBoxData {
         }
     }
 
-    /// Calculate fitted size and offset
+    /// Set fit mode
+    pub fn set_fit(&mut self, fit: BoxFit) {
+        self.fit = fit;
+    }
+
+    /// Set alignment
+    pub fn set_alignment(&mut self, alignment: Alignment) {
+        self.alignment = alignment;
+    }
+
+    /// Set clip behavior
+    pub fn set_clip_behavior(&mut self, clip_behavior: ClipBehavior) {
+        self.clip_behavior = clip_behavior;
+    }
+
+    /// Calculate fitted size and offset for given child and container sizes
     pub fn calculate_fit(&self, child_size: Size, container_size: Size) -> (Size, Offset) {
         let scale = match self.fit {
             BoxFit::Fill => (
@@ -110,67 +116,9 @@ impl FittedBoxData {
     }
 }
 
-impl Default for FittedBoxData {
+impl Default for RenderFittedBox {
     fn default() -> Self {
         Self::new(BoxFit::Contain)
-    }
-}
-
-/// RenderObject that scales and positions its child_id according to BoxFit
-///
-/// FittedBox is useful for scaling children to fit within constrained spaces
-/// while maintaining aspect ratio.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_rendering::{RenderFittedBox, BoxFit};
-/// use flui_types::Alignment;
-///
-/// // Scale child_id to cover the entire box
-/// let mut fitted = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT);
-/// ```
-#[derive(Debug)]
-pub struct RenderFittedBox {
-    /// Fitted box data
-    pub data: FittedBoxData,
-}
-
-// ===== Public API =====
-
-impl RenderFittedBox {
-    /// Create new RenderFittedBox
-    pub fn new(fit: BoxFit) -> Self {
-        Self {
-            data: FittedBoxData::new(fit),
-        }
-    }
-
-    /// Create with alignment
-    pub fn with_alignment(fit: BoxFit, alignment: Alignment) -> Self {
-        Self {
-            data: FittedBoxData::with_alignment(fit, alignment),
-        }
-    }
-
-    /// Get fit mode
-    pub fn fit(&self) -> BoxFit {
-        self.data.fit
-    }
-
-    /// Set fit mode
-    pub fn set_fit(&mut self, fit: BoxFit) {
-        self.data.fit = fit;
-    }
-
-    /// Get alignment
-    pub fn alignment(&self) -> Alignment {
-        self.data.alignment
-    }
-
-    /// Set alignment
-    pub fn set_alignment(&mut self, alignment: Alignment) {
-        self.data.alignment = alignment;
     }
 }
 
@@ -219,19 +167,20 @@ mod tests {
     }
 
     #[test]
-    fn test_fitted_box_data_new() {
-        let data = FittedBoxData::new(BoxFit::Cover);
-        assert_eq!(data.fit, BoxFit::Cover);
-        assert_eq!(data.alignment, Alignment::CENTER);
+    fn test_render_fitted_box_new() {
+        let fitted = RenderFittedBox::new(BoxFit::Cover);
+        assert_eq!(fitted.fit, BoxFit::Cover);
+        assert_eq!(fitted.alignment, Alignment::CENTER);
+        assert_eq!(fitted.clip_behavior, ClipBehavior::None);
     }
 
     #[test]
-    fn test_fitted_box_data_calculate_fit_contain() {
-        let data = FittedBoxData::new(BoxFit::Contain);
+    fn test_calculate_fit_contain() {
+        let fitted = RenderFittedBox::new(BoxFit::Contain);
         let child_size = Size::new(200.0, 100.0);
         let container_size = Size::new(100.0, 100.0);
 
-        let (fitted_size, offset) = data.calculate_fit(child_size, container_size);
+        let (fitted_size, offset) = fitted.calculate_fit(child_size, container_size);
 
         // Should scale down to fit width (200 -> 100), maintaining aspect ratio
         assert_eq!(fitted_size.width, 100.0);
@@ -243,12 +192,12 @@ mod tests {
     }
 
     #[test]
-    fn test_fitted_box_data_calculate_fit_cover() {
-        let data = FittedBoxData::new(BoxFit::Cover);
+    fn test_calculate_fit_cover() {
+        let fitted = RenderFittedBox::new(BoxFit::Cover);
         let child_size = Size::new(100.0, 50.0);
         let container_size = Size::new(100.0, 100.0);
 
-        let (fitted_size, _offset) = data.calculate_fit(child_size, container_size);
+        let (fitted_size, _offset) = fitted.calculate_fit(child_size, container_size);
 
         // Should scale to cover height (50 -> 100), maintaining aspect ratio
         assert_eq!(fitted_size.width, 200.0);
@@ -256,12 +205,12 @@ mod tests {
     }
 
     #[test]
-    fn test_fitted_box_data_calculate_fit_fill() {
-        let data = FittedBoxData::new(BoxFit::Fill);
+    fn test_calculate_fit_fill() {
+        let fitted = RenderFittedBox::new(BoxFit::Fill);
         let child_size = Size::new(200.0, 100.0);
         let container_size = Size::new(100.0, 50.0);
 
-        let (fitted_size, _offset) = data.calculate_fit(child_size, container_size);
+        let (fitted_size, _offset) = fitted.calculate_fit(child_size, container_size);
 
         // Should distort to fill exactly
         assert_eq!(fitted_size.width, 100.0);
@@ -269,44 +218,49 @@ mod tests {
     }
 
     #[test]
-    fn test_fitted_box_data_calculate_fit_none() {
-        let data = FittedBoxData::new(BoxFit::None);
+    fn test_calculate_fit_none() {
+        let fitted = RenderFittedBox::new(BoxFit::None);
         let child_size = Size::new(200.0, 100.0);
         let container_size = Size::new(100.0, 100.0);
 
-        let (fitted_size, _offset) = data.calculate_fit(child_size, container_size);
+        let (fitted_size, _offset) = fitted.calculate_fit(child_size, container_size);
 
         // Should keep original size
         assert_eq!(fitted_size, child_size);
     }
 
     #[test]
-    fn test_render_fitted_box_new() {
-        let fitted = RenderFittedBox::new(BoxFit::Contain);
-        assert_eq!(fitted.fit(), BoxFit::Contain);
-        assert_eq!(fitted.alignment(), Alignment::CENTER);
-    }
-
-    #[test]
     fn test_render_fitted_box_with_alignment() {
         let fitted = RenderFittedBox::with_alignment(BoxFit::Cover, Alignment::TOP_LEFT);
-        assert_eq!(fitted.fit(), BoxFit::Cover);
-        assert_eq!(fitted.alignment(), Alignment::TOP_LEFT);
+        assert_eq!(fitted.fit, BoxFit::Cover);
+        assert_eq!(fitted.alignment, Alignment::TOP_LEFT);
     }
 
     #[test]
     fn test_render_fitted_box_set_fit() {
         let mut fitted = RenderFittedBox::new(BoxFit::Contain);
-
         fitted.set_fit(BoxFit::Cover);
-        assert_eq!(fitted.fit(), BoxFit::Cover);
+        assert_eq!(fitted.fit, BoxFit::Cover);
     }
 
     #[test]
     fn test_render_fitted_box_set_alignment() {
         let mut fitted = RenderFittedBox::new(BoxFit::Contain);
-
         fitted.set_alignment(Alignment::TOP_LEFT);
-        assert_eq!(fitted.alignment(), Alignment::TOP_LEFT);
+        assert_eq!(fitted.alignment, Alignment::TOP_LEFT);
+    }
+
+    #[test]
+    fn test_render_fitted_box_set_clip_behavior() {
+        let mut fitted = RenderFittedBox::new(BoxFit::Contain);
+        fitted.set_clip_behavior(ClipBehavior::AntiAlias);
+        assert_eq!(fitted.clip_behavior, ClipBehavior::AntiAlias);
+    }
+
+    #[test]
+    fn test_render_fitted_box_default() {
+        let fitted = RenderFittedBox::default();
+        assert_eq!(fitted.fit, BoxFit::Contain);
+        assert_eq!(fitted.alignment, Alignment::CENTER);
     }
 }

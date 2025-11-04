@@ -8,34 +8,6 @@ use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
-// ===== Data Structure =====
-
-/// Data for RenderAnnotatedRegion
-///
-/// Stores a value that can be retrieved by ancestors to determine how to style
-/// system UI elements (e.g., status bar, navigation bar).
-#[derive(Debug, Clone)]
-pub struct AnnotatedRegionData<T: Clone + Send + Sync + std::fmt::Debug + 'static> {
-    /// The value to annotate this region with
-    pub value: T,
-    /// Whether this annotation should apply to the entire region
-    pub sized: bool,
-}
-
-impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> AnnotatedRegionData<T> {
-    /// Create new annotated region data
-    pub fn new(value: T) -> Self {
-        Self { value, sized: true }
-    }
-
-    /// Create with custom sized flag
-    pub fn with_sized(value: T, sized: bool) -> Self {
-        Self { value, sized }
-    }
-}
-
-// ===== RenderObject =====
-
 /// RenderAnnotatedRegion - Annotates a region with a value
 ///
 /// This is a pass-through render object that provides metadata about its region.
@@ -55,8 +27,10 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> AnnotatedRegionData<T> 
 /// ```
 #[derive(Debug)]
 pub struct RenderAnnotatedRegion<T: Clone + Send + Sync + std::fmt::Debug + 'static> {
-    /// The annotation data
-    pub data: AnnotatedRegionData<T>,
+    /// The value to annotate this region with
+    pub value: T,
+    /// Whether this annotation should apply to the entire region
+    pub sized: bool,
 }
 
 // ===== Methods =====
@@ -65,36 +39,35 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
     /// Create new RenderAnnotatedRegion
     pub fn new(value: T) -> Self {
         Self {
-            data: AnnotatedRegionData::new(value),
+            value,
+            sized: true,
         }
     }
 
     /// Create with custom sized flag
     pub fn with_sized(value: T, sized: bool) -> Self {
-        Self {
-            data: AnnotatedRegionData::with_sized(value, sized),
-        }
+        Self { value, sized }
     }
 
     /// Get the annotation value
-    pub fn value(&self) -> &T {
-        &self.data.value
+    pub fn get_value(&self) -> &T {
+        &self.value
     }
 
     /// Set the annotation value
     pub fn set_value(&mut self, value: T) {
-        self.data.value = value;
+        self.value = value;
         // No repaint needed - this is just metadata
     }
 
     /// Check if the annotation applies to the entire sized region
     pub fn is_sized(&self) -> bool {
-        self.data.sized
+        self.sized
     }
 
     /// Set whether annotation applies to entire region
     pub fn set_sized(&mut self, sized: bool) {
-        self.data.sized = sized;
+        self.sized = sized;
     }
 }
 

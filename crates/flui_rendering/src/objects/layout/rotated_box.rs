@@ -3,78 +3,11 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{Offset, Size, constraints::BoxConstraints};
-
-/// Quarter turns for rotation
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuarterTurns {
-    /// No rotation (0°)
-    Zero = 0,
-    /// 90° clockwise
-    One = 1,
-    /// 180° rotation
-    Two = 2,
-    /// 270° clockwise (90° counter-clockwise)
-    Three = 3,
-}
-
-impl QuarterTurns {
-    /// Create from integer (modulo 4)
-    pub fn from_int(turns: i32) -> Self {
-        match turns.rem_euclid(4) {
-            0 => QuarterTurns::Zero,
-            1 => QuarterTurns::One,
-            2 => QuarterTurns::Two,
-            3 => QuarterTurns::Three,
-            _ => unreachable!(),
-        }
-    }
-
-    /// Get as integer
-    pub fn as_int(self) -> i32 {
-        self as i32
-    }
-
-    /// Check if this rotation swaps width and height
-    pub fn swaps_dimensions(self) -> bool {
-        matches!(self, QuarterTurns::One | QuarterTurns::Three)
-    }
-}
-
-/// Data for RenderRotatedBox
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RotatedBoxData {
-    /// Number of quarter turns clockwise
-    pub quarter_turns: QuarterTurns,
-}
-
-impl RotatedBoxData {
-    /// Create new rotated box data
-    pub fn new(quarter_turns: QuarterTurns) -> Self {
-        Self { quarter_turns }
-    }
-
-    /// Create with 90° rotation
-    pub fn rotate_90() -> Self {
-        Self::new(QuarterTurns::One)
-    }
-
-    /// Create with 180° rotation
-    pub fn rotate_180() -> Self {
-        Self::new(QuarterTurns::Two)
-    }
-
-    /// Create with 270° rotation
-    pub fn rotate_270() -> Self {
-        Self::new(QuarterTurns::Three)
-    }
-}
-
-impl Default for RotatedBoxData {
-    fn default() -> Self {
-        Self::new(QuarterTurns::Zero)
-    }
-}
+use flui_types::{
+    Offset, Size,
+    constraints::BoxConstraints,
+    geometry::QuarterTurns,
+};
 
 /// RenderObject that rotates its child_id by quarter turns
 ///
@@ -210,44 +143,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_quarter_turns_from_int() {
-        assert_eq!(QuarterTurns::from_int(0), QuarterTurns::Zero);
-        assert_eq!(QuarterTurns::from_int(1), QuarterTurns::One);
-        assert_eq!(QuarterTurns::from_int(2), QuarterTurns::Two);
-        assert_eq!(QuarterTurns::from_int(3), QuarterTurns::Three);
-        assert_eq!(QuarterTurns::from_int(4), QuarterTurns::Zero);
-        assert_eq!(QuarterTurns::from_int(5), QuarterTurns::One);
-        assert_eq!(QuarterTurns::from_int(-1), QuarterTurns::Three);
-    }
-
-    #[test]
-    fn test_quarter_turns_swaps_dimensions() {
-        assert!(!QuarterTurns::Zero.swaps_dimensions());
-        assert!(QuarterTurns::One.swaps_dimensions());
-        assert!(!QuarterTurns::Two.swaps_dimensions());
-        assert!(QuarterTurns::Three.swaps_dimensions());
-    }
-
-    #[test]
-    fn test_rotated_box_data_new() {
-        let data = RotatedBoxData::new(QuarterTurns::One);
-        assert_eq!(data.quarter_turns, QuarterTurns::One);
-    }
-
-    #[test]
-    fn test_rotated_box_data_helpers() {
-        assert_eq!(RotatedBoxData::rotate_90().quarter_turns, QuarterTurns::One);
-        assert_eq!(
-            RotatedBoxData::rotate_180().quarter_turns,
-            QuarterTurns::Two
-        );
-        assert_eq!(
-            RotatedBoxData::rotate_270().quarter_turns,
-            QuarterTurns::Three
-        );
-    }
-
-    #[test]
     fn test_render_rotated_box_new() {
         let rotated = RenderRotatedBox::rotate_90();
         assert_eq!(rotated.quarter_turns, QuarterTurns::One);
@@ -256,7 +151,6 @@ mod tests {
     #[test]
     fn test_render_rotated_box_set_quarter_turns() {
         let mut rotated = RenderRotatedBox::new(QuarterTurns::Zero);
-
         rotated.set_quarter_turns(QuarterTurns::Two);
         assert_eq!(rotated.quarter_turns, QuarterTurns::Two);
     }

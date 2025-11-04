@@ -1,5 +1,7 @@
 //! Box layout types - fit and shape
 
+use crate::geometry::Size;
+
 /// How a box should inscribe into another box.
 ///
 /// This is similar to CSS `object-fit` property and Flutter's `BoxFit`.
@@ -128,6 +130,107 @@ impl BoxFit {
                 | BoxFit::FitHeight
         )
     }
+
+    /// Apply this fit mode to given input and output sizes.
+    ///
+    /// Returns `(fitted_size, source_size)` where:
+    /// - `fitted_size` is the size the image should be rendered at
+    /// - `source_size` is the portion of the source image to use
+    #[must_use]
+    pub fn apply(self, input_size: Size, output_size: Size) -> FittedSizes {
+        let input_aspect_ratio = if input_size.height != 0.0 {
+            input_size.width / input_size.height
+        } else {
+            0.0
+        };
+
+        let output_aspect_ratio = if output_size.height != 0.0 {
+            output_size.width / output_size.height
+        } else {
+            0.0
+        };
+
+        match self {
+            BoxFit::Fill => FittedSizes {
+                source: input_size,
+                destination: output_size,
+            },
+
+            BoxFit::Contain => {
+                if output_aspect_ratio > input_aspect_ratio && input_aspect_ratio != 0.0 {
+                    let width = output_size.height * input_aspect_ratio;
+                    FittedSizes {
+                        source: input_size,
+                        destination: Size::new(width, output_size.height),
+                    }
+                } else if output_aspect_ratio != 0.0 {
+                    let height = output_size.width / input_aspect_ratio;
+                    FittedSizes {
+                        source: input_size,
+                        destination: Size::new(output_size.width, height),
+                    }
+                } else {
+                    FittedSizes {
+                        source: input_size,
+                        destination: output_size,
+                    }
+                }
+            }
+
+            BoxFit::Cover => {
+                // Cover needs to fill the entire output, scaling to the smallest dimension
+                if output_aspect_ratio < input_aspect_ratio && input_aspect_ratio != 0.0 {
+                    // Output is taller, fit to height
+                    let width = output_size.height * input_aspect_ratio;
+                    FittedSizes {
+                        source: input_size,
+                        destination: Size::new(width, output_size.height),
+                    }
+                } else if output_aspect_ratio != 0.0 {
+                    // Output is wider, fit to width
+                    let height = output_size.width / input_aspect_ratio;
+                    FittedSizes {
+                        source: input_size,
+                        destination: Size::new(output_size.width, height),
+                    }
+                } else {
+                    FittedSizes {
+                        source: input_size,
+                        destination: output_size,
+                    }
+                }
+            }
+
+            BoxFit::FitWidth => {
+                let height = output_size.width / input_aspect_ratio;
+                FittedSizes {
+                    source: input_size,
+                    destination: Size::new(output_size.width, height),
+                }
+            }
+
+            BoxFit::FitHeight => {
+                let width = output_size.height * input_aspect_ratio;
+                FittedSizes {
+                    source: input_size,
+                    destination: Size::new(width, output_size.height),
+                }
+            }
+
+            BoxFit::None => FittedSizes {
+                source: input_size,
+                destination: input_size,
+            },
+
+            BoxFit::ScaleDown => {
+                if input_size.width > output_size.width || input_size.height > output_size.height {
+                    BoxFit::Contain.apply(input_size, output_size)
+                } else {
+                    BoxFit::None.apply(input_size, output_size)
+                }
+            }
+        }
+    }
 }
 
 /// The shape of a box.
@@ -182,6 +285,71 @@ impl BoxShape {
     #[must_use]
     pub const fn requires_clipping(&self) -> bool {
         matches!(self, BoxShape::Circle)
+    }
+}
+
+/// Result of applying a [`BoxFit`] mode to input and output sizes.
+///
+/// Contains both the portion of the source to show and the size
+/// at which to render it on the destination.
+///
+/// # Example
+///
+/// ```
+/// use flui_types::layout::{BoxFit, FittedSizes};
+/// use flui_types::geometry::Size;
+///
+/// let input = Size::new(200.0, 100.0);
+/// let output = Size::new(100.0, 100.0);
+/// let fitted = BoxFit::Contain.apply(input, output);
+///
+/// assert_eq!(fitted.destination.width, 100.0);
+/// assert_eq!(fitted.destination.height, 50.0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct FittedSizes {
+    /// The size of the part of the input to show on the output.
+    pub source: Size,
+
+    /// The size of the part of the output on which to show the input.
+    pub destination: Size,
+}
+
+impl FittedSizes {
+    /// Creates a new fitted sizes struct.
+    #[inline]
+    #[must_use]
+    pub const fn new(source: Size, destination: Size) -> Self {
+        Self {
+            source,
+            destination,
+        }
+    }
+
+    /// Returns the scale factor from source to destination.
+    #[inline]
+    #[must_use]
+    pub fn scale_factor(&self) -> f32 {
+        if self.source.width > 0.0 {
+            self.destination.width / self.source.width
+        } else {
+            1.0
+        }
+    }
+
+    /// Returns true if the image needs to be scaled.
+    #[inline]
+    #[must_use]
+    pub fn needs_scaling(&self) -> bool {
+        self.source != self.destination
+    }
+
+    /// Returns true if the image will be clipped.
+    #[inline]
+    #[must_use]
+    pub fn will_clip(&self) -> bool {
+        self.destination.width > self.source.width || self.destination.height > self.source.height
     }
 }
 
