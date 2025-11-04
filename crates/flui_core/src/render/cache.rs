@@ -167,12 +167,14 @@ impl LayoutCache {
     /// Useful for debugging and performance analysis.
     pub fn print_stats(&self) {
         let (hits, misses, total, hit_rate) = self.detailed_stats();
-        eprintln!("LayoutCache Statistics:");
-        eprintln!("  Entries: {}", self.entry_count());
-        eprintln!("  Total requests: {}", total);
-        eprintln!("  Hits: {}", hits);
-        eprintln!("  Misses: {}", misses);
-        eprintln!("  Hit rate: {:.1}%", hit_rate);
+        tracing::info!(
+            entries = self.entry_count(),
+            total = total,
+            hits = hits,
+            misses = misses,
+            hit_rate = format_args!("{:.1}%", hit_rate),
+            "LayoutCache Statistics"
+        );
     }
 
     /// Reset statistics counters

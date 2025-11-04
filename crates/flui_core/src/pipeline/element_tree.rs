@@ -449,9 +449,13 @@ impl ElementTree {
             const MAX_LAYOUT_DEPTH: usize = 1000; // Increased for complex UIs
             let current_depth = self.layout_depth.get();
             if current_depth > MAX_LAYOUT_DEPTH {
-                eprintln!("ERROR: Layout depth exceeded {}! Infinite recursion detected.", MAX_LAYOUT_DEPTH);
-                eprintln!("  Element ID: {}", element_id);
-                eprintln!("  This usually means a render object is calling layout on itself or a circular dependency exists.");
+                tracing::error!(
+                    element_id = ?element_id,
+                    depth = current_depth,
+                    max_depth = MAX_LAYOUT_DEPTH,
+                    "Layout depth exceeded! Infinite recursion detected. \
+                     This usually means a render object is calling layout on itself or a circular dependency exists."
+                );
                 panic!("Layout depth limit exceeded - infinite recursion");
             }
             self.layout_depth.set(current_depth + 1);
