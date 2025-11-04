@@ -1,15 +1,20 @@
-//! RenderAlign - aligns child_id within available space
+//! RenderAlign - aligns child within available space
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
 use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
-/// RenderObject that aligns its child_id within the available space
+/// RenderObject that aligns its child within the available space
 ///
-/// This widget positions its child_id according to the alignment parameter.
+/// This render object positions its child according to the alignment parameter.
 /// If width_factor or height_factor are specified, the RenderAlign will
-/// size itself to be that factor times the child_id's size in that dimension.
+/// size itself to be that factor times the child's size in that dimension.
+///
+/// # Layout Behavior
+///
+/// - **With factors**: Size is `child_size * factor` (clamped to constraints)
+/// - **Without factors**: Expands to fill available space (takes max constraints)
 ///
 /// # Example
 ///
@@ -17,7 +22,15 @@ use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 /// use flui_rendering::RenderAlign;
 /// use flui_types::Alignment;
 ///
-/// let align = RenderAlign::new(Alignment::TOP_LEFT);
+/// // Center align with natural sizing
+/// let align = RenderAlign::new(Alignment::CENTER);
+///
+/// // Top-left align with size factors
+/// let align = RenderAlign::with_factors(
+///     Alignment::TOP_LEFT,
+///     Some(2.0),   // Width = child_width * 2.0
+///     Some(1.5),   // Height = child_height * 1.5
+/// );
 /// ```
 #[derive(Debug)]
 pub struct RenderAlign {
@@ -30,7 +43,7 @@ pub struct RenderAlign {
     /// Otherwise, expands to fill available space
     pub height_factor: Option<f32>,
 
-    // Cache for paint
+    // Cached values from layout for paint phase
     child_size: Size,
     size: Size,
 }
@@ -85,23 +98,26 @@ impl Default for RenderAlign {
 }
 
 impl SingleRender for RenderAlign {
+    /// No metadata needed for RenderAlign
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
         child_id: ElementId,
         constraints: BoxConstraints,
     ) -> Size {
-        // SingleArity always has exactly one child_id
-        // Layout child_id with loose constraints to get its natural size
+        // Layout child with loose constraints to get its natural size
+        // Loose constraints allow the child to be smaller than max constraints
         let child_size = tree.layout_child(child_id, constraints.loosen());
 
-        // Store child_id size for paint
+        // Store child size for paint phase
         self.child_size = child_size;
 
         // Calculate our size based on factors
-        // Flutter behavior:
-        // - If factor is set: size = child_size * factor
-        // - If no factor: expand to fill constraints (take max)
+        // Flutter-compatible behavior:
+        // - If factor is set: size = child_size * factor (clamped to constraints)
+        // - If no factor: expand to fill max constraints
         let width = if let Some(factor) = self.width_factor {
             (child_size.width * factor).clamp(constraints.min_width, constraints.max_width)
         } else {
@@ -117,31 +133,36 @@ impl SingleRender for RenderAlign {
         };
 
         let size = Size::new(width, height);
-        // Store our size for paint
+        // Store our size for paint phase
         self.size = size;
         size
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
-        // SingleArity always has exactly one child_id
-        // Use the size from layout phase
+        // Use cached values from layout phase
         let size = self.size;
         let child_size = self.child_size;
 
-        // Calculate aligned offset IN LOCAL COORDINATES
-        // Alignment: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
+        // Calculate aligned offset in local coordinates
+        // Alignment uses normalized coordinates: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
         let available_width = size.width - child_size.width;
         let available_height = size.height - child_size.height;
 
+        // Convert normalized alignment to pixel offset
+        // Formula: offset = (available_space * (alignment + 1.0)) / 2.0
+        // Examples:
+        //   alignment = -1.0 → offset = 0.0 (left/top)
+        //   alignment =  0.0 → offset = available_space / 2.0 (center)
+        //   alignment =  1.0 → offset = available_space (right/bottom)
         let aligned_x = (available_width * (self.alignment.x + 1.0)) / 2.0;
         let aligned_y = (available_height * (self.alignment.y + 1.0)) / 2.0;
 
         let local_child_offset = Offset::new(aligned_x, aligned_y);
 
-        // Paint child at local alignment offset
+        // Paint child at aligned position
         let child_layer = tree.paint_child(child_id, local_child_offset);
 
-        // Wrap in TransformLayer to apply parent offset
+        // Apply parent offset if non-zero
         if offset != Offset::ZERO {
             Box::new(flui_engine::TransformLayer::translate(child_layer, offset))
         } else {
