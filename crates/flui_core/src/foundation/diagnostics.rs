@@ -416,7 +416,7 @@ impl fmt::Display for DiagnosticsProperty {
 /// ```rust
 /// use flui_core::foundation::{DiagnosticsNode, DiagnosticsProperty};
 ///
-/// let mut node = DiagnosticsNode::new("MyWidget");
+/// let mut node = DiagnosticsNode::new("MyView");
 /// node.add_property(DiagnosticsProperty::new("width", 100));
 /// println!("{}", node);
 /// ```
@@ -552,7 +552,7 @@ impl DiagnosticsNode {
     /// ```rust
     /// use flui_core::foundation::{DiagnosticsNode, DiagnosticsProperty};
     ///
-    /// let node = DiagnosticsNode::new("MyWidget")
+    /// let node = DiagnosticsNode::new("MyView")
     ///     .property("width", 100)
     ///     .property("height", 50);
     /// ```
@@ -671,12 +671,12 @@ impl fmt::Display for DiagnosticsNode {
 /// use flui_core::foundation::{Diagnosticable, DiagnosticsNode, DiagnosticsProperty};
 ///
 /// #[derive(Debug)]
-/// struct MyWidget {
+/// struct MyView {
 ///     width: i32,
 ///     height: i32,
 /// }
 ///
-/// impl Diagnosticable for MyWidget {
+/// impl Diagnosticable for MyView {
 ///     fn debug_fill_properties(&self, properties: &mut Vec<DiagnosticsProperty>) {
 ///         properties.push(DiagnosticsProperty::new("width", self.width));
 ///         properties.push(DiagnosticsProperty::new("height", self.height));
@@ -914,12 +914,12 @@ mod tests {
 
     #[test]
     fn test_diagnostics_node() {
-        let mut node = DiagnosticsNode::new("MyWidget");
+        let mut node = DiagnosticsNode::new("MyView");
         node.add_property(DiagnosticsProperty::new("width", 100));
         node.add_property(DiagnosticsProperty::new("height", 50));
 
         assert_eq!(node.properties().len(), 2);
-        assert_eq!(node.name().unwrap(), "MyWidget");
+        assert_eq!(node.name().unwrap(), "MyView");
         assert!(node.has_properties());
         assert!(!node.has_children());
     }
@@ -934,10 +934,10 @@ mod tests {
 
     #[test]
     fn test_diagnostics_node_equality() {
-        let mut node1 = DiagnosticsNode::new("Widget");
+        let mut node1 = DiagnosticsNode::new("Element");
         node1.add_property(DiagnosticsProperty::new("width", 100));
 
-        let mut node2 = DiagnosticsNode::new("Widget");
+        let mut node2 = DiagnosticsNode::new("Element");
         node2.add_property(DiagnosticsProperty::new("width", 100));
 
         assert_eq!(node1, node2);
@@ -1001,7 +1001,7 @@ mod tests {
 
     #[test]
     fn test_diagnostics_node_builder_pattern() {
-        let node = DiagnosticsNode::new("MyWidget")
+        let node = DiagnosticsNode::new("MyView")
             .property("width", 100)
             .property("height", 50)
             .flag("visible", true, "VISIBLE")
@@ -1011,7 +1011,7 @@ mod tests {
             .with_level(DiagnosticLevel::Info)
             .with_style(DiagnosticsTreeStyle::Dense);
 
-        assert_eq!(node.name().unwrap(), "MyWidget");
+        assert_eq!(node.name().unwrap(), "MyView");
         assert_eq!(node.properties().len(), 4); // width, height, visible flag, title
         assert_eq!(node.level(), DiagnosticLevel::Info);
         assert_eq!(node.style(), DiagnosticsTreeStyle::Dense);

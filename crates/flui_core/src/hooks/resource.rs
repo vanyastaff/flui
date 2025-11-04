@@ -4,8 +4,8 @@
 //! Note: Requires an async runtime to be configured.
 
 use super::hook_trait::{Hook};
-use super::hook_context::with_hook_context;
 use super::signal::{Signal, SignalHook};
+use crate::BuildContext;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -38,18 +38,12 @@ pub struct Resource<T, E = String> {
 }
 
 impl<T: Clone + 'static, E: Clone + 'static> Resource<T, E> {
-    /// Create a new resource in loading state.
-    fn new() -> Self {
+    /// Create a new resource with pre-created signals.
+    fn new(loading: Signal<bool>, data: Signal<Option<T>>, error: Signal<Option<E>>) -> Self {
         Self {
-            loading: with_hook_context(|ctx| {
-                ctx.use_hook::<SignalHook<bool>>(true)
-            }),
-            data: with_hook_context(|ctx| {
-                ctx.use_hook::<SignalHook<Option<T>>>(None)
-            }),
-            error: with_hook_context(|ctx| {
-                ctx.use_hook::<SignalHook<Option<E>>>(None)
-            }),
+            loading,
+            data,
+            error,
         }
     }
 
@@ -99,9 +93,20 @@ impl<T: Clone + 'static, E: Clone + 'static> Clone for Resource<T, E> {
 }
 
 /// Hook state for ResourceHook.
-#[derive(Debug)]
 pub struct ResourceState<T, E> {
-    resource: Resource<T, E>,
+    loading: Signal<bool>,
+    data: Signal<Option<T>>,
+    error: Signal<Option<E>>,
+}
+
+impl<T, E> std::fmt::Debug for ResourceState<T, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceState")
+            .field("loading", &"<Signal>")
+            .field("data", &"<Signal>")
+            .field("error", &"<Signal>")
+            .finish()
+    }
 }
 
 /// Resource hook implementation.
@@ -121,21 +126,21 @@ where
     Fut: Future<Output = Result<T, E>> + 'static,
 {
     type State = ResourceState<T, E>;
-    type Input = Rc<F>;
+    type Input = (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>);
     type Output = Resource<T, E>;
 
-    fn create(_fetcher: Rc<F>) -> Self::State {
-        let resource = Resource::new();
+    fn create(input: (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>)) -> Self::State {
+        let (_fetcher, loading, data, error) = input;
 
         // TODO(2025-03): Start async fetch
         // This requires integration with an async runtime (tokio, async-std, etc.)
-        // For now, just create the resource structure
+        // For now, just store the signals
 
-        ResourceState { resource }
+        ResourceState { loading, data, error }
     }
 
-    fn update(state: &mut Self::State, _fetcher: Rc<F>) -> Self::Output {
-        state.resource.clone()
+    fn update(state: &mut Self::State, _input: (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>)) -> Self::Output {
+        Resource::new(state.loading.clone(), state.data.clone(), state.error.clone())
     }
 }
 
@@ -163,10 +168,10 @@ where
 /// }
 ///
 /// impl Component for UserProfile {
-///     fn build(&self, ctx: &mut BuildContext) -> Widget {
+///     fn build(&self, ctx: &BuildContext) -> Widget {
 ///         let user_id = self.user_id.clone();
 ///
-///         let user = use_resource(move || async move {
+///         let user = use_resource(ctx, move || async move {
 ///             fetch_user(&user_id).await
 ///         });
 ///
@@ -186,15 +191,27 @@ where
 ///     }
 /// }
 /// ```
-pub fn use_resource<T, E, F, Fut>(fetcher: F) -> Resource<T, E>
+pub fn use_resource<T, E, F, Fut>(ctx: &BuildContext, fetcher: F) -> Resource<T, E>
 where
     T: Clone + 'static,
     E: Clone + 'static,
     F: Fn() -> Fut + Clone + 'static,
     Fut: Future<Output = Result<T, E>> + 'static,
 {
-    with_hook_context(|ctx| {
-        ctx.use_hook::<ResourceHook<T, E, F, Fut>>(Rc::new(fetcher))
+    // Create signals for the resource
+    let loading = ctx.with_hook_context_mut(|hook_ctx| {
+        hook_ctx.use_hook::<SignalHook<bool>>(true)
+    });
+    let data = ctx.with_hook_context_mut(|hook_ctx| {
+        hook_ctx.use_hook::<SignalHook<Option<T>>>(None)
+    });
+    let error = ctx.with_hook_context_mut(|hook_ctx| {
+        hook_ctx.use_hook::<SignalHook<Option<E>>>(None)
+    });
+
+    // Use the resource hook with the signals
+    ctx.with_hook_context_mut(|hook_ctx| {
+        hook_ctx.use_hook::<ResourceHook<T, E, F, Fut>>((Rc::new(fetcher), loading, data, error))
     })
 }
 

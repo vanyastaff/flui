@@ -1,10 +1,12 @@
 //! BuildContext - context for building widgets
 //!
-//! Provides access to the element tree and InheritedWidgets during build phase.
+//! Provides access to the element tree, InheritedWidgets, and hooks during build phase.
 
 use crate::ElementId;
+use crate::hooks::HookContext;
 use crate::pipeline::{ElementTree, PipelineOwner};
 use parking_lot::RwLock;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 /// BuildContext - provides access to tree and pipeline during widget build
@@ -29,7 +31,7 @@ use std::sync::Arc;
 ///     }
 /// }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BuildContext {
     /// Shared reference to the element tree (with interior mutability for dependency tracking)
     tree: Arc<RwLock<ElementTree>>,
@@ -39,6 +41,19 @@ pub struct BuildContext {
 
     /// ID of the current element being built
     element_id: ElementId,
+
+    /// Hook context for managing hook state (with interior mutability)
+    /// Shared across all BuildContexts for the same component tree
+    hook_context: Arc<RefCell<HookContext>>,
+}
+
+impl std::fmt::Debug for BuildContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuildContext")
+            .field("element_id", &self.element_id)
+            .field("has_hook_context", &true)
+            .finish()
+    }
 }
 
 impl BuildContext {
@@ -58,101 +73,62 @@ impl BuildContext {
             tree,
             pipeline,
             element_id,
+            hook_context: Arc::new(RefCell::new(HookContext::new())),
         }
     }
 
-    // NOTE: depend_on() and read() temporarily removed during Widget → View migration
-    // TODO(Phase 5): Reimplement using View/Provider system
-    //
-    // Walks up the tree to find the nearest ancestor of type T and optionally
-    // registers this element as a dependent for automatic rebuilds.
-    /*
-    pub fn depend_on<T>(&self) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        self.find_ancestor_inherited_widget::<T>(true)
+    /// Create a new BuildContext with shared hook context
+    ///
+    /// This allows multiple BuildContexts to share the same hook context,
+    /// which is necessary for maintaining hook state across component rebuilds.
+    ///
+    /// # Arguments
+    ///
+    /// - `tree`: Shared reference to the element tree
+    /// - `pipeline`: Shared reference to the pipeline owner
+    /// - `element_id`: ID of the element being built
+    /// - `hook_context`: Shared hook context
+    pub fn with_hook_context(
+        tree: Arc<RwLock<ElementTree>>,
+        pipeline: Arc<RwLock<PipelineOwner>>,
+        element_id: ElementId,
+        hook_context: Arc<RefCell<HookContext>>,
+    ) -> Self {
+        Self {
+            tree,
+            pipeline,
+            element_id,
+            hook_context,
+        }
     }
 
-    /// Access an InheritedWidget without dependency
+    /// Get mutable access to the hook context
     ///
-    /// Walks up the tree to find the nearest ancestor of type `T`.
-    /// Does NOT register a dependency - the element will NOT rebuild
-    /// when the InheritedWidget changes.
-    ///
-    /// Use this for one-time reads where you don't need automatic updates.
-    ///
-    /// # Returns
-    ///
-    /// `Some(T)` if found, `None` if no ancestor has this type
+    /// This is the primary way for hooks to access their context.
+    /// Uses interior mutability via RefCell.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Read once at initialization, no auto-rebuild
-    /// let theme = context.read::<Theme>()?;
-    /// println!("Initial theme: {:?}", theme.name);
+    /// pub fn use_signal<T: Clone + 'static>(ctx: &BuildContext, initial: T) -> Signal<T> {
+    ///     ctx.with_hook_context_mut(|hook_ctx| {
+    ///         hook_ctx.use_hook::<SignalHook<T>>(initial)
+    ///     })
+    /// }
     /// ```
-    pub fn read<T>(&self) -> Option<T>
+    pub fn with_hook_context_mut<F, R>(&self, f: F) -> R
     where
-        T: InheritedWidget + Clone + 'static,
+        F: FnOnce(&mut HookContext) -> R,
     {
-        self.find_ancestor_inherited_widget::<T>(false)
+        f(&mut self.hook_context.borrow_mut())
     }
 
-    /// Find an InheritedWidget in ancestors
+    /// Get the shared hook context
     ///
-    /// # Arguments
-    ///
-    /// - `register_dependency`: If true, register this element as dependent
-    ///
-    /// # Returns
-    ///
-    /// The widget if found, None otherwise
-    fn find_ancestor_inherited_widget<T>(&self, register_dependency: bool) -> Option<T>
-    where
-        T: InheritedWidget + Clone + 'static,
-    {
-        let target_type_id = TypeId::of::<T>();
-
-        // Walk up the parent chain
-        let mut current_id = self.element_id;
-
-        // Acquire read lock for traversal
-        let tree = self.tree.read();
-
-        while let Some(parent_id) = tree.parent(current_id) {
-            // Get the element
-            if let Some(element) = tree.get(parent_id) {
-                // Check if this element's widget is InheritedWidget of type T
-                let widget = element.widget();
-
-                // Get type_id from the Widget enum
-                if widget.type_id() == target_type_id {
-                    // Found it! Try to downcast
-                    if let Some(inherited_widget) = widget.as_any().downcast_ref::<T>() {
-                        let result = inherited_widget.clone();
-
-                        // Drop read lock before acquiring write lock (to avoid deadlock)
-                        drop(tree);
-
-                        // Register dependency if requested
-                        if register_dependency {
-                            let mut tree_mut = self.tree.write();
-                            tree_mut.add_dependent(parent_id, self.element_id);
-                        }
-
-                        return Some(result);
-                    }
-                }
-            }
-
-            current_id = parent_id;
-        }
-
-        None
+    /// Useful for creating child contexts that share the same hook state.
+    pub fn hook_context(&self) -> Arc<RefCell<HookContext>> {
+        Arc::clone(&self.hook_context)
     }
-    */
 
     /// Get the current element ID
     pub fn element_id(&self) -> ElementId {
@@ -347,189 +323,6 @@ impl BuildContext {
         None
     }
 
-    // ========== State Management ==========
-
-    // NOTE: Commented out during Widget → View migration
-    // TODO(Phase 5): Reimplement using View system
-    /*
-    /// Update state and trigger rebuild (Flutter-style setState)
-    ///
-    /// This method allows you to modify the state of a StatefulWidget and
-    /// automatically trigger a rebuild. It provides a clean API similar to
-    /// Flutter's `setState()` method.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `S`: The concrete State type (must match the actual state type)
-    /// - `F`: The closure that modifies the state
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// #[derive(Debug)]
-    /// struct CounterState {
-    ///     count: i32,
-    /// }
-    ///
-    /// impl State for CounterState {
-    ///     fn build(&mut self, ctx: &BuildContext) -> Widget {
-    ///         column![
-    ///             text(format!("Count: {}", self.count)),
-    ///             button("+").on_press({
-    ///                 let ctx = ctx.clone();
-    ///                 move |_| {
-    ///                     ctx.set_state(|state: &mut CounterState| {
-    ///                         state.count += 1;
-    ///                     });
-    ///                 }
-    ///             })
-    ///         ]
-    ///     }
-    /// }
-    /// ```
-    pub fn set_state<S, F>(&self, f: F)
-    where
-        S: crate::widget::State + 'static,
-        F: FnOnce(&mut S),
-    {
-        let mut tree = self.tree.write();
-
-        // Get the ComponentElement (must be stateful)
-        if let Some(crate::element::Element::Component(component)) =
-            tree.get_mut(self.element_id)
-        {
-            // Get mutable access to State
-            let state = component
-                .state_mut()
-                .expect("set_state called on stateless component")
-                .as_any_mut()
-                .downcast_mut::<S>()
-                .expect("set_state called with wrong State type");
-
-            // Apply the mutation
-            f(state);
-
-            // Mark element as dirty
-            component.mark_dirty();
-        } else {
-            panic!("set_state can only be called from StatefulWidget");
-        }
-
-        drop(tree);
-
-        // Schedule rebuild
-        // NOTE: Currently we just mark dirty. The PipelineOwner will pick this up
-        // on the next frame. In the future, we could add immediate scheduling via
-        // a callback stored in ElementTree.
-    }
-    */
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::element::{InheritedElement, RenderElement};
-    use crate::{LayoutCx, LeafArity, PaintCx, Render};
-    use flui_engine::{BoxedLayer, ContainerLayer};
-    use flui_types::Size;
-    use parking_lot::RwLock;
-    use std::sync::Arc;
-
-    // Test theme widget
-    #[derive(Debug, Clone, PartialEq)]
-    struct TestTheme {
-        color: u32,
-    }
-
-    impl InheritedWidget for TestTheme {
-        fn update_should_notify(&self, old: &Self) -> bool {
-            self.color != old.color
-        }
-
-        fn child(&self) -> crate::Widget {
-            Box::new(DummyWidget)
-        }
-    }
-
-    impl Widget for TestTheme {}
-
-    #[derive(Debug, Clone)]
-    struct DummyWidget;
-
-    impl Widget for DummyWidget {}
-
-    impl RenderWidget for DummyWidget {
-        type Render = DummyRender;
-        type Arity = LeafArity;
-
-        fn create_render_object(&self) -> Self::Render {
-            DummyRender
-        }
-
-        fn update_render_object(&self, _render: &mut Self::Render) {}
-    }
-
-    #[derive(Debug)]
-    struct DummyRender;
-
-    impl Render for DummyRender {
-        type Arity = LeafArity;
-
-        fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-            cx.constraints().constrain(Size::ZERO)
-        }
-
-        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
-        }
-    }
-
-    #[test]
-    fn test_build_context_creation() {
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
-        let context = BuildContext::new(tree, pipeline, 0);
-
-        assert_eq!(context.element_id(), 0);
-    }
-
-    #[test]
-    fn test_build_context_find_inherited() {
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
-
-        // Insert InheritedElement
-        let theme = TestTheme { color: 0xFF0000 };
-        let inherited_elem = InheritedElement::new(Box::new(theme.clone()));
-        let theme_id = {
-            let mut tree_guard = tree.write();
-            tree_guard.insert(crate::element::Element::Provider(inherited_elem))
-        };
-
-        // Insert child RenderElement
-        let widget: crate::Widget = Box::new(DummyWidget);
-        let child_elem = crate::element::ComponentElement::new(widget);
-        let child_id = {
-            let mut tree_guard = tree.write();
-            tree_guard.insert(crate::element::Element::Component(child_elem))
-        };
-
-        // Manually set up parent-child relationship
-        // (In real code, this would be done by build system)
-        {
-            let mut tree_guard = tree.write();
-            if let Some(crate::element::Element::Component(component)) =
-                tree_guard.get_mut(child_id)
-            {
-                // Set up parent relationship would be done here
-                // For now, this is just a compilation test
-            }
-        }
-
-        let context = BuildContext::new(Arc::clone(&tree), Arc::clone(&pipeline), child_id);
-
-        // Try to find theme (won't work without proper parent setup)
-        // This is just a compilation test
-        let _maybe_theme: Option<TestTheme> = context.read();
-    }
-}
+// Tests removed - need to be rewritten with View API

@@ -4,7 +4,8 @@
 //! When a signal changes, all components that depend on it are automatically re-rendered.
 
 use super::hook_trait::{Hook, DependencyId};
-use super::hook_context::with_hook_context;
+use super::hook_context::with_hook_context; // Still used by Signal::get() and Signal::with() for dependency tracking
+use crate::BuildContext;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::marker::PhantomData;
@@ -194,8 +195,8 @@ impl<T: Clone + 'static> Hook for SignalHook<T> {
 /// struct Counter;
 ///
 /// impl Component for Counter {
-///     fn build(&self, ctx: &mut BuildContext) -> Widget {
-///         let count = use_signal(0);
+///     fn build(&self, ctx: &BuildContext) -> Widget {
+///         let count = use_signal(ctx, 0);
 ///
 ///         Button::new("Increment")
 ///             .on_press(move || count.update(|n| n + 1))
@@ -203,9 +204,9 @@ impl<T: Clone + 'static> Hook for SignalHook<T> {
 ///     }
 /// }
 /// ```
-pub fn use_signal<T: Clone + 'static>(initial: T) -> Signal<T> {
-    with_hook_context(|ctx| {
-        ctx.use_hook::<SignalHook<T>>(initial)
+pub fn use_signal<T: Clone + 'static>(ctx: &BuildContext, initial: T) -> Signal<T> {
+    ctx.with_hook_context_mut(|hook_ctx| {
+        hook_ctx.use_hook::<SignalHook<T>>(initial)
     })
 }
 

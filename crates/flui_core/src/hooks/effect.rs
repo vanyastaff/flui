@@ -4,7 +4,8 @@
 //! similar to React's useEffect.
 
 use super::hook_trait::{Hook, EffectHook as EffectHookTrait, DependencyId};
-use super::hook_context::with_hook_context;
+use super::hook_context::with_hook_context; // Still used by Effect::run_if_needed() for dependency tracking
+use crate::BuildContext;
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -181,10 +182,10 @@ where
 /// struct Logger;
 ///
 /// impl Component for Logger {
-///     fn build(&self, ctx: &mut BuildContext) -> Widget {
-///         let count = use_signal(0);
+///     fn build(&self, ctx: &BuildContext) -> Widget {
+///         let count = use_signal(ctx, 0);
 ///
-///         use_effect(move || {
+///         use_effect(ctx, move || {
 ///             println!("Count changed: {}", count.get());
 ///
 ///             // Optional cleanup
@@ -197,12 +198,12 @@ where
 ///     }
 /// }
 /// ```
-pub fn use_effect<F>(effect: F) -> Effect
+pub fn use_effect<F>(ctx: &BuildContext, effect: F) -> Effect
 where
     F: Fn() -> Option<CleanupFn> + Clone + 'static,
 {
-    with_hook_context(|ctx| {
-        let eff = ctx.use_hook::<EffectHook<F>>(Rc::new(effect));
+    ctx.with_hook_context_mut(|hook_ctx| {
+        let eff = hook_ctx.use_hook::<EffectHook<F>>(Rc::new(effect));
         // Run effect if needed
         eff.run_if_needed();
         eff
@@ -221,10 +222,10 @@ where
 /// struct Logger;
 ///
 /// impl Component for Logger {
-///     fn build(&self, ctx: &mut BuildContext) -> Widget {
-///         let count = use_signal(0);
+///     fn build(&self, ctx: &BuildContext) -> Widget {
+///         let count = use_signal(ctx, 0);
 ///
-///         use_effect_simple(move || {
+///         use_effect_simple(ctx, move || {
 ///             println!("Count: {}", count.get());
 ///         });
 ///
@@ -232,11 +233,11 @@ where
 ///     }
 /// }
 /// ```
-pub fn use_effect_simple<F>(effect: F) -> Effect
+pub fn use_effect_simple<F>(ctx: &BuildContext, effect: F) -> Effect
 where
     F: Fn() + Clone + 'static,
 {
-    use_effect(move || {
+    use_effect(ctx, move || {
         effect();
         None
     })

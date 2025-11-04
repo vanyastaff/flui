@@ -4,7 +4,8 @@
 //! re-computes when dependencies change.
 
 use super::hook_trait::{Hook, ReactiveHook, DependencyId};
-use super::hook_context::with_hook_context;
+use super::hook_context::with_hook_context; // Still used by Memo::get() for dependency tracking
+use crate::BuildContext;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::marker::PhantomData;
@@ -174,11 +175,11 @@ where
 /// struct ExpensiveComponent;
 ///
 /// impl Component for ExpensiveComponent {
-///     fn build(&self, ctx: &mut BuildContext) -> Widget {
-///         let count = use_signal(0);
+///     fn build(&self, ctx: &BuildContext) -> Widget {
+///         let count = use_signal(ctx, 0);
 ///
 ///         // This expensive computation only runs when count changes
-///         let doubled = use_memo(move || {
+///         let doubled = use_memo(ctx, move || {
 ///             expensive_computation(count.get())
 ///         });
 ///
@@ -186,13 +187,13 @@ where
 ///     }
 /// }
 /// ```
-pub fn use_memo<T, F>(compute: F) -> Memo<T>
+pub fn use_memo<T, F>(ctx: &BuildContext, compute: F) -> Memo<T>
 where
     T: Clone + 'static,
     F: Fn() -> T + Clone + 'static,
 {
-    with_hook_context(|ctx| {
-        ctx.use_hook::<MemoHook<T, F>>(Rc::new(compute))
+    ctx.with_hook_context_mut(|hook_ctx| {
+        hook_ctx.use_hook::<MemoHook<T, F>>(Rc::new(compute))
     })
 }
 

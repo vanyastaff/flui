@@ -1,4 +1,4 @@
-//! Dependency tracking for InheritedWidget system
+//! Dependency tracking for Provider system
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -6,10 +6,10 @@ use std::hash::{Hash, Hasher};
 
 use crate::ElementId;
 
-/// Information about a dependency on an InheritedWidget
+/// Information about a dependency on a Provider
 ///
-/// Tracks which element depends on an InheritedWidget, with optional
-/// aspect support for partial dependencies (InheritedModel).
+/// Tracks which element depends on a Provider, with optional
+/// aspect support for partial dependencies.
 ///
 /// # Examples
 ///
@@ -24,12 +24,12 @@ use crate::ElementId;
 /// ```
 #[derive(Debug)]
 pub struct DependencyInfo {
-    /// The element that depends on the InheritedWidget
+    /// The element that depends on the Provider
     pub dependent_id: ElementId,
 
     /// Optional aspect for partial dependencies
     ///
-    /// Used by InheritedModel to track which aspect of the data
+    /// Used by Providers to track which aspect of the data
     /// this element depends on. Cannot be cloned or compared due
     /// to trait object limitations.
     pub aspect: Option<Box<dyn Any + Send + Sync>>,
@@ -117,8 +117,8 @@ impl Hash for DependencyInfo {
 
 /// Tracks dependencies for an InheritedElement
 ///
-/// Maintains a registry of which elements depend on a specific InheritedWidget,
-/// enabling selective notification when the widget changes.
+/// Maintains a registry of which elements depend on a specific Provider,
+/// enabling selective notification when the provider changes.
 ///
 /// # Performance
 ///
@@ -186,8 +186,8 @@ impl DependencyTracker {
     ///
     /// # Parameters
     ///
-    /// - `dependent_id`: ID of the element that depends on the InheritedWidget
-    /// - `aspect`: Optional aspect for partial dependencies (InheritedModel)
+    /// - `dependent_id`: ID of the element that depends on the Provider
+    /// - `aspect`: Optional aspect for partial dependencies
     ///
     /// # Examples
     ///
@@ -255,7 +255,7 @@ impl DependencyTracker {
 // ========== Queries ==========
 
 impl DependencyTracker {
-    /// Checks if an element depends on this InheritedWidget
+    /// Checks if an element depends on this Provider
     ///
     /// # Examples
     ///

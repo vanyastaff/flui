@@ -12,11 +12,11 @@ use crate::render::RenderState;
 ///
 /// # New Architecture
 ///
-/// ElementTree now stores heterogeneous Elements (ComponentElement, StatefulElement,
+/// ElementTree now stores heterogeneous Elements (ComponentElement, InheritedElement,
 /// RenderElement) instead of Renders directly. This provides:
 /// - Unified tree structure for all element types
-/// - Widget lifecycle management (build, rebuild, mount, unmount)
-/// - State management for StatefulElements
+/// - View lifecycle management (build, rebuild, mount, unmount)
+/// - Dependency tracking for InheritedElements
 /// - RenderState is now inside RenderElement
 ///
 /// # Memory Layout
@@ -29,10 +29,8 @@ use crate::render::RenderState;
 /// ElementNode {
 ///     element: Element  ← Enum-based heterogeneous storage (3-4x faster!)
 ///         ├─ Element::Component(ComponentElement)
-///         ├─ Element::Component(StatefulElement)
 ///         ├─ Element::Provider(InheritedElement)
-///         ├─ Element::Render(RenderElement)
-///         └─ Element::ParentData(ParentDataElement)
+///         └─ Element::Render(RenderElement)
 /// }
 /// ```
 ///
@@ -44,7 +42,7 @@ use crate::render::RenderState;
 /// let mut tree = ElementTree::new();
 ///
 /// // Insert root element (now stores Element, not Render)
-/// let root_element = RenderElement::new(FlexWidget::column());
+/// let root_element = RenderElement::new(render_object);
 /// let root_id = tree.insert(Box::new(root_element));
 ///
 /// // Access element
@@ -68,10 +66,10 @@ pub struct ElementTree {
 
 /// Internal node in the element tree
 ///
-/// Contains an Element enum variant (Component, Stateful, Inherited, Render, ParentData).
+/// Contains an Element enum variant (Component, Provider, Render).
 /// The Element enum contains all necessary data including:
-/// - Widget configuration
-/// - State (for StatefulElement)
+/// - View configuration (for ComponentElement)
+/// - Provider data (for InheritedElement)
 /// - Render + RenderState (for RenderElement)
 /// - Lifecycle state
 /// - Children management
@@ -135,9 +133,9 @@ impl ElementTree {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use flui_core::{Element, RenderElement, FlexWidget};
+    /// use flui_core::{Element, RenderElement};
     ///
-    /// let render_elem = RenderElement::new(FlexWidget::column());
+    /// let render_elem = RenderElement::new(render_object);
     /// let root_id = tree.insert(Element::Render(render_elem));
     /// ```
     pub fn insert(&mut self, element: Element) -> ElementId {
@@ -949,189 +947,4 @@ impl Default for ElementTree {
     }
 }
 
-// Tests disabled - need to be updated for new Element enum API
-#[cfg(any())] // Always false - tests disabled
-mod tests {
-    use super::*;
-    use crate::{LayoutCx, LeafArity, PaintCx, SingleArity};
-    use crate::{Render, RenderWidget, Widget};
-    use flui_engine::{BoxedLayer, ContainerLayer};
-    use flui_types::Size;
-
-    // Test Widgets and Renders
-    #[derive(Debug, Clone)]
-    struct TestLeafWidget;
-
-    impl Widget for TestLeafWidget {}
-    impl Widget for TestLeafWidget {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
-    impl RenderWidget for TestLeafWidget {
-        type Render = TestLeafRender;
-        type Arity = LeafArity;
-
-        fn create_render_object(&self) -> Self::Render {
-            TestLeafRender
-        }
-
-        fn update_render_object(&self, _render: &mut Self::Render) {}
-    }
-
-    #[derive(Debug)]
-    struct TestLeafRender;
-
-    impl Render for TestLeafRender {
-        type Arity = LeafArity;
-
-        fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-            cx.constraints().constrain(Size::new(100.0, 50.0))
-        }
-
-        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    struct TestSingleWidget;
-
-    impl Widget for TestSingleWidget {}
-    impl Widget for TestSingleWidget {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
-    impl RenderWidget for TestSingleWidget {
-        type Render = TestSingleRender;
-        type Arity = SingleArity;
-
-        fn create_render_object(&self) -> Self::Render {
-            TestSingleRender
-        }
-
-        fn update_render_object(&self, _render: &mut Self::Render) {}
-    }
-
-    #[derive(Debug)]
-    struct TestSingleRender;
-
-    impl Render for TestSingleRender {
-        type Arity = SingleArity;
-
-        fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
-            cx.constraints().constrain(Size::new(200.0, 100.0))
-        }
-
-        fn paint(&self, _cx: &PaintCx<Self::Arity>) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
-        }
-    }
-
-    #[test]
-    fn test_element_tree_creation() {
-        let tree = ElementTree::new();
-        assert_eq!(tree.len(), 0);
-        assert!(tree.is_empty());
-    }
-
-    #[test]
-    fn test_element_tree_with_capacity() {
-        let tree = ElementTree::with_capacity(100);
-        assert!(tree.capacity() >= 100);
-    }
-
-    #[test]
-    fn test_insert_root() {
-        let mut tree = ElementTree::new();
-        let element = RenderElement::new(TestLeafWidget);
-        let root_id = tree.insert(Box::new(element));
-
-        assert_eq!(tree.len(), 1);
-        assert!(tree.contains(root_id));
-        assert_eq!(tree.parent(root_id), None);
-    }
-
-    #[test]
-    fn test_remove_element() {
-        let mut tree = ElementTree::new();
-        let element = RenderElement::new(TestLeafWidget);
-        let root_id = tree.insert(Box::new(element));
-
-        assert!(tree.remove(root_id));
-        assert!(!tree.contains(root_id));
-        assert_eq!(tree.len(), 0);
-    }
-
-    #[test]
-    fn test_render_object_access() {
-        let mut tree = ElementTree::new();
-        let element = RenderElement::new(TestLeafWidget);
-        let element_id = tree.insert(Box::new(element));
-
-        // Immutable access
-        let render_obj = tree.render_object(element_id).unwrap();
-        assert_eq!(render_obj.arity(), Some(0));
-
-        // Mutable access
-        let render_obj_mut = tree.render_object_mut(element_id).unwrap();
-        assert_eq!(render_obj_mut.arity(), Some(0));
-    }
-
-    #[test]
-    fn test_render_state_access() {
-        let mut tree = ElementTree::new();
-        let element = RenderElement::new(TestLeafWidget);
-        let element_id = tree.insert(Box::new(element));
-
-        // Read access
-        {
-            let state = tree.render_state(element_id).unwrap();
-            assert!(!state.has_size());
-        }
-
-        // Write access
-        {
-            let state = tree.render_state_mut(element_id).unwrap();
-            state.set_size(Size::new(100.0, 50.0));
-        }
-
-        // Verify
-        {
-            let state = tree.render_state(element_id).unwrap();
-            assert!(state.has_size());
-            assert_eq!(state.size(), Some(Size::new(100.0, 50.0)));
-        }
-    }
-
-    #[test]
-    fn test_visit_all_elements() {
-        let mut tree = ElementTree::new();
-        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
-        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
-
-        let mut count = 0;
-        tree.visit_all_elements(|_id, _element| {
-            count += 1;
-        });
-
-        assert_eq!(count, 2);
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut tree = ElementTree::new();
-        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
-        tree.insert(Box::new(RenderElement::new(TestLeafWidget)));
-
-        assert_eq!(tree.len(), 2);
-
-        tree.clear();
-
-        assert_eq!(tree.len(), 0);
-        assert!(tree.is_empty());
-    }
-}
+// Tests removed - need to be rewritten with View API
