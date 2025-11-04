@@ -46,9 +46,6 @@
 
 pub mod error;
 pub mod objects;
-pub mod parent_data;
-#[macro_use]
-pub mod utils;
 
 // Re-export from flui_core - the new trait-based RenderObject architecture
 pub use flui_core::render::{
@@ -62,18 +59,14 @@ pub use flui_engine::BoxedLayer;
 // Re-export from flui_types for convenience
 pub use flui_types::layout::{FlexFit, StackFit};
 
-// Re-export parent data types
-pub use parent_data::{FlexParentData, StackParentData};
-
 // Re-export all RenderObjects
 pub use objects::{
-    BoxFit,
-    DecoratedBoxData,
     DecorationPosition,
+    // Metadata types
+    FlexItemMetadata,
     MouseCallbacks,
-
     ParagraphData,
-    QuarterTurns,
+    PositionedMetadata,
     RRectShape,
     RectShape,
     // Interaction objects
@@ -90,6 +83,7 @@ pub use objects::{
     RenderDecoratedBox,
     RenderFittedBox,
     RenderFlex,
+    RenderFlexItem,
     RenderFractionallySizedBox,
     RenderIgnorePointer,
     RenderIndexedStack,
@@ -102,12 +96,12 @@ pub use objects::{
     RenderOverflowBox,
 
     // Effects objects
-    ImageFilter,
     PhysicalShape,
     RenderBackdropFilter,
     RenderOpacity,
     RenderPadding,
     RenderPhysicalModel,
+    RenderPositioned,
     RenderRepaintBoundary,
     // Text objects
     RenderParagraph,
@@ -128,5 +122,4 @@ pub mod prelude {
     pub use crate::{LeafRender, MultiRender, RenderFlags, RenderState, SingleRender};
 
     pub use crate::objects::*;
-    pub use crate::parent_data::*;
 }

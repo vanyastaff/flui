@@ -69,103 +69,9 @@ impl RenderStack {
         self.fit = fit;
     }
 
-    /// Compute constraints for a positioned child based on its StackParentData
-    ///
-    /// Calculates appropriate BoxConstraints for a child based on its positioning parameters:
-    /// - If left AND right are specified → width is fixed
-    /// - If only width is specified → width is fixed
-    /// - If top AND bottom are specified → height is fixed
-    /// - If only height is specified → height is fixed
-    /// - Otherwise → loose constraints
-    ///
-    /// # Example Scenarios:
-    ///
-    /// ```rust,ignore
-    /// // left: 10, right: 20, parent width: 400
-    /// // → child width must be: 400 - 10 - 20 = 370
-    ///
-    /// // top: 10, height: 50
-    /// // → child height must be: 50
-    ///
-    /// // left: 10 (no right, no width)
-    /// // → child width can be anything (loose)
-    /// ```
-    fn compute_positioned_constraints(
-        stack_data: &crate::parent_data::StackParentData,
-        parent_constraints: BoxConstraints,
-    ) -> BoxConstraints {
-        let parent_width = parent_constraints.max_width;
-        let parent_height = parent_constraints.max_height;
-
-        // Compute width constraints
-        let (min_width, max_width) = if let Some(width) = stack_data.width {
-            // Explicit width
-            (width, width)
-        } else if let (Some(left), Some(right)) = (stack_data.left, stack_data.right) {
-            // Both left and right → width is determined
-            let w = (parent_width - left - right).max(0.0);
-            (w, w)
-        } else {
-            // Width is flexible
-            (0.0, parent_width)
-        };
-
-        // Compute height constraints
-        let (min_height, max_height) = if let Some(height) = stack_data.height {
-            // Explicit height
-            (height, height)
-        } else if let (Some(top), Some(bottom)) = (stack_data.top, stack_data.bottom) {
-            // Both top and bottom → height is determined
-            let h = (parent_height - top - bottom).max(0.0);
-            (h, h)
-        } else {
-            // Height is flexible
-            (0.0, parent_height)
-        };
-
-        BoxConstraints::new(min_width, max_width, min_height, max_height)
-    }
-
-    /// Calculate child offset based on StackParentData
-    fn calculate_child_offset(
-        child_size: Size,
-        stack_size: Size,
-        alignment: Alignment,
-        parent_data: Option<&crate::parent_data::StackParentData>,
-    ) -> Offset {
-        if let Some(stack_data) = parent_data
-            && stack_data.is_positioned()
-        {
-            // Positioned child - calculate position from edges
-            let x;
-            let y;
-
-            // Calculate x position
-            if let Some(left) = stack_data.left {
-                x = left;
-            } else if let Some(right) = stack_data.right {
-                x = stack_size.width - child_size.width - right;
-            } else {
-                // Center horizontally if no left/right specified
-                x = (stack_size.width - child_size.width) / 2.0;
-            }
-
-            // Calculate y position
-            if let Some(top) = stack_data.top {
-                y = top;
-            } else if let Some(bottom) = stack_data.bottom {
-                y = stack_size.height - child_size.height - bottom;
-            } else {
-                // Center vertically if no top/bottom specified
-                y = (stack_size.height - child_size.height) / 2.0;
-            }
-
-            return Offset::new(x, y);
-        }
-
-        // Non-positioned child - use alignment
-        alignment.calculate_offset(child_size, stack_size)
-    }
+    // TODO: Positioned children support will be implemented via GAT Metadata
+    // (similar to FlexItemMetadata pattern shown in FINAL_ARCHITECTURE_V2.md)
+    // For now, all children are treated as non-positioned and aligned according to stack alignment.
 }
 
 impl Default for RenderStack {
@@ -199,17 +105,35 @@ impl MultiRender for RenderStack {
         let mut max_height: f32 = 0.0;
 
         for child in child_ids.iter().copied() {
-            // TODO: Implement tree.parent_data() method to query parent data from elements
-            // Check if child has StackParentData and is positioned
-            let stack_data: Option<&crate::parent_data::StackParentData> = None; // tree.parent_data::<crate::parent_data::StackParentData>(child);
-
-            let child_constraints = if let Some(data) = stack_data
-                && data.is_positioned()
-            {
-                // Child is positioned - use computed constraints based on positioning
-                Self::compute_positioned_constraints(data, constraints)
+            // Check if child has PositionedMetadata (via RenderPositioned wrapper)
+            let positioned_metadata = if let Some(element) = tree.get(child) {
+                if let Some(render_node_guard) = element.render_object() {
+                    if let Some(metadata_any) = render_node_guard.metadata() {
+                        metadata_any.downcast_ref::<super::positioned::PositionedMetadata>().copied()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             } else {
-                // Child is not positioned - use fit-based constraints
+                None
+            };
+
+            let child_constraints = if let Some(pos_meta) = positioned_metadata {
+                if pos_meta.is_positioned() {
+                    // Child is positioned - use computed constraints
+                    pos_meta.compute_constraints(constraints)
+                } else {
+                    // Child has PositionedMetadata but is not positioned - use fit-based constraints
+                    match self.fit {
+                        StackFit::Loose => constraints.loosen(),
+                        StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
+                        StackFit::Passthrough => constraints,
+                    }
+                }
+            } else {
+                // Child has no PositionedMetadata - use fit-based constraints
                 match self.fit {
                     StackFit::Loose => constraints.loosen(),
                     StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
@@ -233,14 +157,37 @@ impl MultiRender for RenderStack {
         };
 
         // Calculate and save child offsets
-        for (i, &_child) in child_ids.iter().enumerate() {
+        for (i, &child) in child_ids.iter().enumerate() {
             let child_size = self.child_sizes[i];
-            // TODO: Implement tree.parent_data() method to query parent data from elements
-            let stack_data: Option<&crate::parent_data::StackParentData> = None; // tree.parent_data::<crate::parent_data::StackParentData>(child);
 
-            // Use the existing calculate_child_offset function
-            let child_offset =
-                Self::calculate_child_offset(child_size, size, self.alignment, stack_data);
+            // Check if child has PositionedMetadata
+            let positioned_metadata = if let Some(element) = tree.get(child) {
+                if let Some(render_node_guard) = element.render_object() {
+                    if let Some(metadata_any) = render_node_guard.metadata() {
+                        metadata_any.downcast_ref::<super::positioned::PositionedMetadata>().copied()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let child_offset = if let Some(pos_meta) = positioned_metadata {
+                if let Some(offset) = pos_meta.calculate_offset(child_size, size) {
+                    // Child is positioned - use calculated offset
+                    offset
+                } else {
+                    // Child has PositionedMetadata but is not positioned - use alignment
+                    self.alignment.calculate_offset(child_size, size)
+                }
+            } else {
+                // Child has no PositionedMetadata - use alignment-based positioning
+                self.alignment.calculate_offset(child_size, size)
+            };
+
             self.child_offsets.push(child_offset);
         }
 

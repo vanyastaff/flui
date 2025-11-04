@@ -17,11 +17,10 @@ use flui_types::{
 ///
 /// # Features
 ///
-/// - FlexParentData for flex factors and positioning
-/// - Flexible/Expanded child support
 /// - Main axis alignment (start, end, center, space between/around/evenly)
 /// - Cross axis alignment (start, end, center, stretch, baseline)
 /// - Main axis sizing (min or max)
+/// - TODO: Flexible/Expanded child support via GAT Metadata (see FINAL_ARCHITECTURE_V2.md)
 ///
 /// # Example
 ///
@@ -225,21 +224,29 @@ impl MultiRender for RenderFlex {
 
         // Step 1: Separate inflexible and flexible children
         let mut inflexible_children: Vec<(ElementId, Size)> = Vec::new();
-        let flexible_children: Vec<(ElementId, i32, flui_types::layout::FlexFit)> = Vec::new();
-        let total_flex = 0i32;
+        let mut flexible_children: Vec<(ElementId, i32, flui_types::layout::FlexFit)> = Vec::new();
+        let mut total_flex = 0i32;
 
         for &child in child_ids.iter() {
-            // TODO: Implement tree.parent_data() method to query parent data from elements
-            // For now, treat all children as inflexible
-            // if let Some(flex_data) = tree.parent_data::<crate::parent_data::FlexParentData>(child) {
-            //     if flex_data.flex > 0 {
-            //         // Child is flexible
-            //         flexible_children.push((child, flex_data.flex, flex_data.fit));
-            //         total_flex += flex_data.flex;
-            //         continue;
-            //     }
-            // }
-            // Child is inflexible (no FlexParentData or flex == 0)
+            // Check if child has FlexItemMetadata (via RenderFlexItem wrapper)
+            if let Some(element) = tree.get(child) {
+                if let Some(render_node_guard) = element.render_object() {
+                    // Try to access FlexItemMetadata via the metadata() method
+                    if let Some(metadata_any) = render_node_guard.metadata() {
+                        // Downcast to FlexItemMetadata
+                        if let Some(flex_meta) = metadata_any.downcast_ref::<super::flex_item::FlexItemMetadata>() {
+                            if flex_meta.is_flexible() {
+                                // Child is flexible
+                                flexible_children.push((child, flex_meta.flex, flex_meta.fit));
+                                total_flex += flex_meta.flex;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Child is inflexible (no FlexItemMetadata or flex == 0)
             inflexible_children.push((child, Size::ZERO)); // Size will be filled in next step
         }
 

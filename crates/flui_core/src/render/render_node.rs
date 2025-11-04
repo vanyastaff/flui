@@ -234,6 +234,30 @@ impl RenderNode {
         matches!(self, Self::Multi { .. })
     }
 
+    /// Get metadata from the render object
+    ///
+    /// Returns `Some(&dyn Any)` if the render object provides metadata via its `metadata()` method.
+    /// The caller can then downcast to the specific metadata type.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use crate::objects::layout::flex_item::FlexItemMetadata;
+    ///
+    /// if let Some(metadata_any) = render_node.metadata() {
+    ///     if let Some(flex_meta) = metadata_any.downcast_ref::<FlexItemMetadata>() {
+    ///         // Use flex_meta.flex, flex_meta.fit, etc.
+    ///     }
+    /// }
+    /// ```
+    pub fn metadata(&self) -> Option<&dyn std::any::Any> {
+        match self {
+            Self::Leaf(r) => r.metadata(),
+            Self::Single { render: r, .. } => r.metadata(),
+            Self::Multi { render: r, .. } => r.metadata(),
+        }
+    }
+
     // ========== Layout ==========
 
     /// Perform layout
