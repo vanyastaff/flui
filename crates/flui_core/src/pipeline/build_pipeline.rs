@@ -418,23 +418,58 @@ impl BuildPipeline {
             tracing::trace!("rebuild_dirty: Processing element {:?} at depth {}", element_id, depth);
 
             // Verify element still exists in tree
-            if tree.get(element_id).is_none() {
-                #[cfg(debug_assertions)]
-                tracing::warn!("Element {:?} not found in tree during rebuild (may have been removed)", element_id);
-                continue;
-            }
+            let element = match tree.get(element_id) {
+                Some(elem) => elem,
+                None => {
+                    #[cfg(debug_assertions)]
+                    tracing::warn!("Element {:?} not found in tree during rebuild (may have been removed)", element_id);
+                    continue;
+                }
+            };
 
-            // TODO(2025-11): Full View-based rebuilding
-            // For now, just log that we processed the element
-            // The actual rebuild logic will be implemented when View::rebuild() is complete
-            //
-            // Full implementation should:
-            // 1. Call view.rebuild_any() to get new child
-            // 2. Reconcile old vs new child
-            // 3. Update element's child reference
-            // 4. Mark child dirty if needed
-            //
-            // See docs/PIPELINE_ARCHITECTURE.md for detailed algorithm.
+            // Dispatch rebuild based on element type
+            match element {
+                crate::element::Element::Component(_comp) => {
+                    // TODO(Issue #2): Full View-based component rebuild
+                    //
+                    // Proper implementation requires:
+                    // 1. Get parent element to retrieve new view
+                    // 2. Parent calls view.rebuild_any() to create new child view
+                    // 3. Reconcile new view with existing child
+                    // 4. Update component's child reference
+                    // 5. Mark new child as dirty if changed
+                    //
+                    // For now, component rebuilds are handled by parent elements.
+                    // This ensures the build phase runs without errors, even though
+                    // the View integration is not yet complete.
+                    //
+                    // See docs/PIPELINE_ARCHITECTURE.md for full algorithm.
+
+                    #[cfg(debug_assertions)]
+                    tracing::debug!("Component element {:?} rebuild deferred to parent (View integration pending)", element_id);
+                }
+
+                crate::element::Element::Render(_render) => {
+                    // RenderElements don't rebuild - they only relayout
+                    // Skip rebuild for render elements
+                    #[cfg(debug_assertions)]
+                    tracing::trace!("Render element {:?} skipped (rebuilds via layout)", element_id);
+                }
+
+                crate::element::Element::Provider(_provider) => {
+                    // TODO(Issue #2): Provider rebuild
+                    //
+                    // Providers should:
+                    // 1. Check if provided data changed
+                    // 2. Notify dependents if data changed
+                    // 3. Mark dependents as dirty
+                    //
+                    // For now, providers work but don't propagate changes.
+
+                    #[cfg(debug_assertions)]
+                    tracing::debug!("Provider element {:?} rebuild (change propagation pending)", element_id);
+                }
+            }
 
             #[cfg(debug_assertions)]
             tracing::trace!("Processed element {:?}", element_id);
