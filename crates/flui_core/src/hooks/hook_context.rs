@@ -91,8 +91,24 @@ impl HookContext {
     }
 
     fn current_hook_id(&self) -> HookId {
+        let component = self.current_component.unwrap_or_else(|| {
+            tracing::error!(
+                hook_index = self.current_hook_index,
+                "Hook called outside component render! Hooks must be called during component rendering.\n\
+                 Common causes:\n\
+                 1. Hook called in async callback\n\
+                 2. Hook called outside component function\n\
+                 3. Hook called after component render completed"
+            );
+            panic!(
+                "Hook called outside component render at index {}. \
+                 Hooks must only be called during component rendering.",
+                self.current_hook_index
+            );
+        });
+
         HookId {
-            component: self.current_component.expect("No active component"),
+            component,
             index: HookIndex(self.current_hook_index),
         }
     }
@@ -108,7 +124,32 @@ impl HookContext {
             Entry::Occupied(mut entry) => {
                 // Hook already exists, update it
                 let hook_state = entry.get_mut().get_mut::<H::State>()
-                    .expect("Hook state type mismatch");
+                    .unwrap_or_else(|| {
+                        tracing::error!(
+                            component_id = ?hook_id.component,
+                            hook_index = hook_id.index.0,
+                            expected_type = std::any::type_name::<H::State>(),
+                            "Hook state type mismatch! This is a CRITICAL bug.\n\
+                             Common causes:\n\
+                             1. Hook calls are conditional (if/else with different hooks)\n\
+                             2. Hook calls are reordered between renders\n\
+                             3. Different hook type used at same index\n\
+                             4. Loop with variable number of hook calls\n\
+                             \n\
+                             Rules of Hooks:\n\
+                             - Always call hooks in the same order\n\
+                             - Never call hooks conditionally\n\
+                             - Never call hooks in loops with variable iterations"
+                        );
+                        panic!(
+                            "Hook state type mismatch at component {:?} index {}.\n\
+                             Expected: {}\n\
+                             This usually means hooks are called conditionally or in different order between renders.",
+                            hook_id.component,
+                            hook_id.index.0,
+                            std::any::type_name::<H::State>()
+                        );
+                    });
                 H::update(hook_state, input)
             }
             Entry::Vacant(entry) => {
@@ -116,8 +157,10 @@ impl HookContext {
                 let initial_state = H::create(input.clone());
                 entry.insert(HookState::new(initial_state));
 
-                let hook_state = self.hooks.get_mut(&hook_id).unwrap()
-                    .get_mut::<H::State>().unwrap();
+                let hook_state = self.hooks.get_mut(&hook_id)
+                    .expect("BUG: Hook just inserted but not found")
+                    .get_mut::<H::State>()
+                    .expect("BUG: Hook state type mismatch on fresh insert");
 
                 H::update(hook_state, input)
             }
