@@ -236,11 +236,10 @@ impl ErrorRecovery {
 
         // Check if exceeded max errors
         if count > self.max_errors {
-            #[cfg(debug_assertions)]
             tracing::error!(
-                "Exceeded maximum errors ({}/{}), panicking",
-                count,
-                self.max_errors
+                error_count = count,
+                max_errors = self.max_errors,
+                "Exceeded maximum errors, panicking"
             );
 
             return RecoveryAction::Panic(PipelineError::InvalidState {
@@ -252,8 +251,11 @@ impl ErrorRecovery {
         }
 
         // Log error
-        #[cfg(debug_assertions)]
-        tracing::warn!("Pipeline error #{}: {}", count, error);
+        tracing::warn!(
+            error_count = count,
+            error = %error,
+            "Pipeline error"
+        );
 
         // Apply recovery policy
         match self.policy {
