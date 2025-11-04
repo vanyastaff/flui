@@ -128,7 +128,7 @@ impl LockFreeDirtySet {
     #[inline]
     pub fn mark_dirty(&self, id: ElementId) {
         // ElementId is 1-based, convert to 0-based index
-        if id == 0 || id > self.capacity {
+        if id.get() > self.capacity {
             return; // Silently ignore out-of-bounds
         }
         let index = id - 1;
@@ -168,7 +168,7 @@ impl LockFreeDirtySet {
     #[inline]
     pub fn is_dirty(&self, id: ElementId) -> bool {
         // ElementId is 1-based, convert to 0-based index
-        if id == 0 || id > self.capacity {
+        if id.get() > self.capacity {
             return false;
         }
         let index = id - 1;
@@ -207,7 +207,7 @@ impl LockFreeDirtySet {
     #[inline]
     pub fn clear_dirty(&self, id: ElementId) {
         // ElementId is 1-based, convert to 0-based index
-        if id == 0 || id > self.capacity {
+        if id.get() > self.capacity {
             return;
         }
         let index = id - 1;
@@ -264,7 +264,7 @@ impl LockFreeDirtySet {
                     if index < self.capacity {
                         // ElementId is 1-based, so add 1 to convert from 0-based index
                         let id = index + 1;
-                        dirty.push(id);
+                        dirty.push(ElementId::new(id));
                     }
                 }
             }

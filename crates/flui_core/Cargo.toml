@@ -12,6 +12,7 @@ repository.workspace = true
 flui_types = { path = "../flui_types" }
 flui_engine = { path = "../flui_engine" }
 flui_derive = { path = "../flui_derive" }
+flui_reactive = { path = "../flui_reactive" }
 
 # Essential dependencies
 parking_lot.workspace = true
@@ -46,4 +47,8 @@ path = "src/lib.rs"
 
 [[bench]]
 name = "element_enum"
+harness = false
+
+[[bench]]
+name = "element_id_bench"
 harness = false

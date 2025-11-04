@@ -7,7 +7,7 @@ members = [
     "crates/flui_widgets",
     "crates/flui_app",
     "crates/flui_painting",
-    "crates/flui_engine", "crates/flui_derive", "crates/flui_devtools",       # Rendering engine - Layer/Scene/Painter
+    "crates/flui_engine", "crates/flui_derive", "crates/flui_devtools", "crates/flui_reactive",       # Rendering engine - Layer/Scene/Painter
     # "crates/flui_animation",
     # "crates/flui_gestures",
     # "crates/flui_scheduler",
@@ -184,10 +184,26 @@ opt-level = 2
 [[example]]
 name = "widget_hello_world"
 path = "examples/widget_hello_world.rs"
-required-features = ["flui_app", "flui_widgets"]  # Needs high-level APIs
+required-features = ["flui_app", "flui_widgets"]
 
-# Demo of new ergonomic IntoWidget API
+# Hot reload demo - demonstrates reassemble lifecycle
 [[example]]
-name = "widget_hello_world_new_syntax"
-path = "examples/widget_hello_world_new_syntax.rs"
-required-features = ["flui_app", "flui_widgets"]  # Needs high-level APIs
+name = "hot_reload_demo"
+path = "examples/hot_reload_demo.rs"
+required-features = ["flui_app", "flui_widgets"]
+
+# Signal counter app - demonstrates Signal<T> reactive state
+[[example]]
+name = "counter_signal_app"
+path = "examples/counter_signal_app.rs"
+required-features = ["flui_app", "flui_widgets"]
+
+# PipelineBuilder demo - demonstrates fluent builder API for PipelineOwner
+[[example]]
+name = "pipeline_builder_demo"
+path = "examples/pipeline_builder_demo.rs"
+
+# ElementId demo - demonstrates NonZeroUsize niche optimization
+[[example]]
+name = "element_id_demo"
+path = "examples/element_id_demo.rs"

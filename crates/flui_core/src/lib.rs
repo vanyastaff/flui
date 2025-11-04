@@ -68,33 +68,64 @@
 //!
 //! ## StatefulWidget
 //!
-//! Widgets with persistent mutable state.
+//! Widgets with persistent mutable state. FLUI offers two approaches for managing
+//! state in StatefulWidgets:
 //!
-//! ```rust
+//! ### Approach 1: Using `ctx.set_state()` (Flutter-style)
+//!
+//! For simple widgets and familiar Flutter-like API:
+//!
+//! ```rust,ignore
 //! # use flui_core::{StatefulWidget, State, Widget, BuildContext};
-//! #[derive(Debug)]
-//! struct Counter {
-//!     initial: i32,
-//! }
-//!
 //! struct CounterState {
 //!     count: i32,
 //! }
 //!
-//! impl StatefulWidget for Counter {
-//!     type State = CounterState;
-//!
-//!     fn create_state(&self) -> Self::State {
-//!         CounterState { count: self.initial }
-//!     }
-//! }
-//!
-//! impl State<Counter> for CounterState {
-//!     fn build(&mut self, widget: &Counter) -> Widget {
-//!         Box::new(Text::new(format!("Count: {}", self.count)))
+//! impl State for CounterState {
+//!     fn build(&mut self, ctx: &BuildContext) -> Widget {
+//!         column![
+//!             text(format!("Count: {}", self.count)),
+//!             button("+").on_press({
+//!                 let ctx = ctx.clone();  // Cheap Arc clone
+//!                 move |_| {
+//!                     ctx.set_state(|state: &mut CounterState| {
+//!                         state.count += 1;
+//!                     });
+//!                 }
+//!             })
+//!         ]
 //!     }
 //! }
 //! ```
+//!
+//! ### Approach 2: Using `Signal<T>` (Fine-grained reactivity)
+//!
+//! For high-performance, fine-grained updates:
+//!
+//! ```rust,ignore
+//! # use flui_core::{StatefulWidget, State, Widget, BuildContext, Signal};
+//! struct CounterState {
+//!     count: Signal<i32>,  // Signal is Copy (8 bytes)
+//! }
+//!
+//! impl State for CounterState {
+//!     fn build(&mut self, ctx: &BuildContext) -> Widget {
+//!         column![
+//!             // Only this text rebuilds when count changes
+//!             text(format!("Count: {}", self.count.get())),
+//!             button("+").on_press({
+//!                 let count = self.count;  // Copy, not clone!
+//!                 move |_| count.increment()
+//!             })
+//!         ]
+//!     }
+//! }
+//! ```
+//!
+//! **When to use each:**
+//!
+//! - **`ctx.set_state()`**: Simple widgets, few state changes, Flutter familiarity
+//! - **`Signal<T>`**: High-frequency updates, animations, maximum performance
 //!
 //! ## InheritedWidget
 //!
@@ -176,6 +207,68 @@
 //!
 //! # Key Features
 //!
+//! ## Reactive State Management
+//!
+//! FLUI provides two powerful approaches for reactive state management:
+//!
+//! ### Fine-Grained Reactivity with `Signal<T>`
+//!
+//! Signals are Copy-able reactive primitives inspired by Leptos and SolidJS:
+//!
+//! ```rust,ignore
+//! use flui_core::Signal;
+//!
+//! // Create a signal - just 8 bytes, Copy-able!
+//! let count = Signal::new(0);
+//!
+//! // Signal is Copy, no cloning needed
+//! let count_copy = count;
+//!
+//! // Read and update
+//! println!("Count: {}", count.get());
+//! count.set(10);
+//! count.update(|v| *v += 1);
+//! count.increment();  // Convenience method
+//!
+//! // Subscribe to changes
+//! count.subscribe(Arc::new(|| {
+//!     println!("Count changed!");
+//! }));
+//!
+//! // Automatic dependency tracking
+//! let (_, result, deps) = create_scope(|| {
+//!     count.get() * 2  // Automatically tracked
+//! });
+//! ```
+//!
+//! **Benefits:**
+//! - ✅ Copy semantics (8 bytes)
+//! - ✅ Fine-grained updates (only affected parts rebuild)
+//! - ✅ Automatic dependency tracking
+//! - ✅ Zero allocations for signal handles
+//! - ✅ Thread-local arena storage
+//!
+//! ### Flutter-Style `ctx.set_state()`
+//!
+//! Familiar API for Flutter developers:
+//!
+//! ```rust,ignore
+//! button("+").on_press({
+//!     let ctx = ctx.clone();
+//!     move |_| {
+//!         ctx.set_state(|state: &mut CounterState| {
+//!             state.count += 1;
+//!         });
+//!     }
+//! })
+//! ```
+//!
+//! **Benefits:**
+//! - ✅ Familiar Flutter API
+//! - ✅ Simple mental model
+//! - ✅ Direct state access
+//! - ✅ Automatic rebuilds
+//!
 //! ## Automatic DynWidget
 //!
 //! All widgets automatically get object-safe `DynWidget` trait via blanket impl:
@@ -239,6 +332,9 @@
 // Re-export external types
 pub use flui_engine::BoxedLayer;
 pub use flui_types::{Offset, Size};
+
+// Re-export reactive types
+pub use flui_reactive::{create_scope, with_scope, Signal, SignalId, ScopeId, ReactiveScope};
 // ============================================================================
 // Debug Infrastructure
 // ============================================================================
@@ -246,10 +342,15 @@ pub use flui_types::{Offset, Size};
 /// Debug flags, diagnostics, and validation
 pub mod debug;
 pub mod element;
-pub mod error;
 pub mod foundation;
 pub mod render;
-pub mod widget;
+
+// New modules (Phase 1: Week 1)
+pub mod view;
+pub mod pipeline;
+pub mod hooks;
+pub mod context;
+pub mod testing;
 
 // Re-export debug types
 pub use debug::DebugFlags;
@@ -258,8 +359,8 @@ pub use debug::DebugFlags;
 // Error Types
 // ============================================================================
 
-// Re-export error types
-pub use error::{CoreError, Result};
+// Re-export error types from foundation (moved in Phase 1)
+pub use foundation::error::{CoreError, Result};
 
 // ============================================================================
 // Foundation
@@ -294,25 +395,6 @@ pub use foundation::{
     ValueNotifier,
 };
 
-// ============================================================================
-// Widget System
-// ============================================================================
-
-// Re-export widget types
-pub use widget::{
-    // Widget traits
-    InheritedWidget,
-    IntoWidget,
-    NotificationListener,
-    ParentDataWidget,
-    RenderWidget,
-    State,
-    StatefulWidget,
-    StatelessWidget,
-
-    // Core enum
-    Widget,
-};
 
 // ============================================================================
 // Element System
@@ -320,8 +402,6 @@ pub use widget::{
 
 // Re-export element types
 pub use element::{
-    // Context types
-    BuildContext,
     // Element types
     ComponentElement,
     // Dependency tracking
@@ -332,15 +412,16 @@ pub use element::{
     Element,
     ElementId,
 
-    ElementTree,
-
     InheritedElement,
-    ParentDataElement,
 
-    PipelineOwner,
     RenderElement,
-    StatefulElement,
 };
+
+// Re-export view types (moved in Phase 1)
+pub use view::BuildContext;
+
+// Re-export pipeline types (moved in Phase 1)
+pub use pipeline::{ElementTree, PipelineBuilder, PipelineOwner};
 
 // ============================================================================
 // Render System
@@ -353,7 +434,7 @@ pub use render::{LeafRender, MultiRender, RenderNode, RenderState, SingleRender}
 // Macros
 // ============================================================================
 
-// impl_parent_data macro is defined in widget::parent_data_widget module and re-exported
+// TODO(Phase 2): Add macros for common widget patterns
 
 // ============================================================================
 // Prelude
@@ -369,14 +450,15 @@ pub use render::{LeafRender, MultiRender, RenderNode, RenderState, SingleRender}
 pub mod prelude {
     pub use crate::foundation::{Key, KeyRef};
 
-    pub use crate::widget::{
-        InheritedWidget, ParentDataWidget, RenderWidget, State, StatefulWidget, StatelessWidget,
-        Widget,
-    };
+    // Element and View system
+    pub use crate::view::{BuildContext, View, ViewElement, ViewSequence, AnyView, ChangeFlags};
+    pub use crate::element::Element;
 
-    pub use crate::element::{BuildContext, Element};
-
+    // Render system
     pub use crate::render::{LeafRender, MultiRender, RenderNode, SingleRender};
+
+    // Reactive primitives
+    pub use flui_reactive::{Signal, create_scope};
 }
 
 // ============================================================================
@@ -413,6 +495,8 @@ mod tests {
 
         // Test that all major types are available
         let _key: Option<Key> = None;
-        let _widget: Option<Widget> = None;
+        let _element: Option<Element> = None;
+        let _signal: Option<Signal<i32>> = None;
     }
 }
+

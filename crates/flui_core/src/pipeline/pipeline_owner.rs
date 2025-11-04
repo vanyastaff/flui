@@ -76,22 +76,22 @@ use crate::debug_println;
 /// ```
 pub struct PipelineOwner {
     /// The element tree
-    tree: Arc<RwLock<ElementTree>>,
+    pub(crate) tree: Arc<RwLock<ElementTree>>,
 
     /// Build pipeline - manages widget rebuild phase
-    build: super::BuildPipeline,
+    pub(crate) build: super::BuildPipeline,
 
     /// Layout pipeline - manages size computation phase
-    layout: super::LayoutPipeline,
+    pub(crate) layout: super::LayoutPipeline,
 
     /// Paint pipeline - manages layer generation phase
-    paint: super::PaintPipeline,
+    pub(crate) paint: super::PaintPipeline,
 
     /// Root element ID
-    root_element_id: Option<ElementId>,
+    pub(crate) root_element_id: Option<ElementId>,
 
     /// Callback when a build is scheduled (optional)
-    on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
+    pub(crate) on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
 
     // =========================================================================
     // Production Features (Optional)
@@ -101,26 +101,26 @@ pub struct PipelineOwner {
     ///
     /// When enabled, tracks FPS, frame times, cache hit rates, etc.
     /// Overhead: ~1% CPU, 480 bytes memory
-    metrics: Option<super::PipelineMetrics>,
+    pub(crate) metrics: Option<super::PipelineMetrics>,
 
     /// Error recovery policy (optional)
     ///
     /// Defines how to handle pipeline errors (UseLastGoodFrame, ShowErrorWidget, etc.)
     /// Overhead: ~40 bytes memory
-    recovery: Option<super::ErrorRecovery>,
+    pub(crate) recovery: Option<super::ErrorRecovery>,
 
     /// Cancellation token (optional)
     ///
     /// Enables timeout support for long-running operations
     /// Overhead: ~24 bytes memory
-    cancellation: Option<super::CancellationToken>,
+    pub(crate) cancellation: Option<super::CancellationToken>,
 
     /// Triple buffer for lock-free frame exchange (optional)
     ///
     /// When enabled, allows compositor to read frames while renderer writes
     /// Uses Arc<BoxedLayer> to enable cloning for TripleBuffer
     /// Overhead: 3× Arc size + layer size + RwLock overhead
-    frame_buffer: Option<super::TripleBuffer<Arc<crate::BoxedLayer>>>,
+    pub(crate) frame_buffer: Option<super::TripleBuffer<Arc<crate::BoxedLayer>>>,
 }
 
 impl std::fmt::Debug for PipelineOwner {
@@ -142,12 +142,33 @@ impl std::fmt::Debug for PipelineOwner {
 impl PipelineOwner {
     /// Create a new pipeline owner
     ///
+    /// **Deprecated**: Prefer using [`PipelineBuilder`](super::PipelineBuilder) for better API ergonomics.
+    ///
     /// Creates a basic pipeline without production features.
     /// Use builder methods to enable optional features:
     /// - `enable_metrics()` for performance monitoring
     /// - `enable_error_recovery()` for graceful degradation
     /// - `enable_cancellation()` for timeout support
     /// - `enable_frame_buffer()` for lock-free frame exchange
+    ///
+    /// # Example (New API - Recommended)
+    ///
+    /// ```rust,ignore
+    /// use flui_core::pipeline::PipelineBuilder;
+    ///
+    /// let owner = PipelineBuilder::new()
+    ///     .with_metrics()
+    ///     .with_batching(Duration::from_millis(16))
+    ///     .build();
+    /// ```
+    ///
+    /// # Example (Old API - Still Supported)
+    ///
+    /// ```rust,ignore
+    /// let mut owner = PipelineOwner::new();
+    /// owner.enable_metrics();
+    /// owner.enable_batching(Duration::from_millis(16));
+    /// ```
     pub fn new() -> Self {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
 

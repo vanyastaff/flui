@@ -46,9 +46,11 @@ pub mod error;
 pub mod layout_pipeline;
 pub mod metrics;
 pub mod paint_pipeline;
+pub mod pipeline_builder;
 pub mod pipeline_owner;
 pub mod recovery;
 pub mod triple_buffer;
+
 
 
 
@@ -63,9 +65,11 @@ pub use error::{PipelineError, PipelinePhase};
 pub use layout_pipeline::LayoutPipeline;
 pub use metrics::PipelineMetrics;
 pub use paint_pipeline::PaintPipeline;
+pub use pipeline_builder::PipelineBuilder;
 pub use pipeline_owner::PipelineOwner;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use triple_buffer::TripleBuffer;
+
 
 
 
