@@ -37,11 +37,11 @@ impl HSLColor {
     /// Creates a new HSL color.
     ///
     /// Values are clamped/wrapped to valid ranges:
-    /// - hue: wrapped to 0-360
+    /// - hue: wrapped to 0-360 (handles negative values correctly)
     /// - saturation, lightness, alpha: clamped to 0-1
     pub fn new(hue: f32, saturation: f32, lightness: f32, alpha: f32) -> Self {
         Self {
-            hue: hue % 360.0,
+            hue: hue.rem_euclid(360.0),  // Correctly wraps negative hues
             saturation: saturation.clamp(0.0, 1.0),
             lightness: lightness.clamp(0.0, 1.0),
             alpha: alpha.clamp(0.0, 1.0),
@@ -165,11 +165,11 @@ impl HSVColor {
     /// Creates a new HSV color.
     ///
     /// Values are clamped/wrapped to valid ranges:
-    /// - hue: wrapped to 0-360
+    /// - hue: wrapped to 0-360 (handles negative values correctly)
     /// - saturation, value, alpha: clamped to 0-1
     pub fn new(hue: f32, saturation: f32, value: f32, alpha: f32) -> Self {
         Self {
-            hue: hue % 360.0,
+            hue: hue.rem_euclid(360.0),  // Correctly wraps negative hues
             saturation: saturation.clamp(0.0, 1.0),
             value: value.clamp(0.0, 1.0),
             alpha: alpha.clamp(0.0, 1.0),
@@ -384,5 +384,37 @@ mod tests {
             assert!((back.g as i16 - original.g as i16).abs() <= 2);
             assert!((back.b as i16 - original.b as i16).abs() <= 2);
         }
+    }
+
+    #[test]
+    fn test_negative_hue_wrapping_hsl() {
+        // Test negative hue values wrap correctly using rem_euclid
+        let hsl1 = HSLColor::new(-30.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsl1.hue, 330.0, "hue -30 should wrap to 330");
+
+        let hsl2 = HSLColor::new(-90.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsl2.hue, 270.0, "hue -90 should wrap to 270");
+
+        let hsl3 = HSLColor::new(-360.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsl3.hue, 0.0, "hue -360 should wrap to 0");
+
+        let hsl4 = HSLColor::new(-720.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsl4.hue, 0.0, "hue -720 should wrap to 0");
+    }
+
+    #[test]
+    fn test_negative_hue_wrapping_hsv() {
+        // Test negative hue values wrap correctly using rem_euclid
+        let hsv1 = HSVColor::new(-30.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsv1.hue, 330.0, "hue -30 should wrap to 330");
+
+        let hsv2 = HSVColor::new(-90.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsv2.hue, 270.0, "hue -90 should wrap to 270");
+
+        let hsv3 = HSVColor::new(-360.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsv3.hue, 0.0, "hue -360 should wrap to 0");
+
+        let hsv4 = HSVColor::new(-720.0, 0.5, 0.5, 1.0);
+        assert_eq!(hsv4.hue, 0.0, "hue -720 should wrap to 0");
     }
 }
