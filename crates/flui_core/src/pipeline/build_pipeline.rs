@@ -355,8 +355,7 @@ impl BuildPipeline {
         F: FnOnce(&mut Self) -> R,
     {
         if self.in_build_scope {
-            #[cfg(debug_assertions)]
-            eprintln!("Warning: Nested build_scope detected!");
+            tracing::warn!("Nested build_scope detected! This may indicate incorrect usage.");
         }
 
         self.in_build_scope = true;

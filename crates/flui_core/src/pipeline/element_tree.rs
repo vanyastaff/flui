@@ -463,17 +463,11 @@ impl ElementTree {
         });
 
         if is_reentrant {
-            // Get element info for debugging
-            let element_debug = if let Some(_elem) = self.get(element_id) {
-                // Note: widget() method removed during Widget → View migration
-                format!("Element #{}", element_id)
-            } else {
-                "Unknown".to_string()
-            };
-            eprintln!("WARNING: Re-entrant layout detected!");
-            eprintln!("  Element ID: {}", element_id);
-            eprintln!("  Element: {}", element_debug);
-            eprintln!("  This element is trying to layout itself - this is a bug in the render object implementation!");
+            tracing::error!(
+                element_id = ?element_id,
+                "Re-entrant layout detected! Element is trying to layout itself - this is a render object bug."
+            );
+
             #[cfg(debug_assertions)]
             self.layout_depth.set(self.layout_depth.get().saturating_sub(1));
 
@@ -543,17 +537,10 @@ impl ElementTree {
         });
 
         if is_reentrant {
-            // Get element info for debugging
-            let element_debug = if let Some(_elem) = self.get(element_id) {
-                // Note: widget() method removed during Widget → View migration
-                format!("Element #{}", element_id)
-            } else {
-                "Unknown".to_string()
-            };
-            eprintln!("WARNING: Re-entrant paint detected!");
-            eprintln!("  Element ID: {}", element_id);
-            eprintln!("  Element: {}", element_debug);
-            eprintln!("  This element is trying to paint itself - this is a bug in the render object implementation!");
+            tracing::error!(
+                element_id = ?element_id,
+                "Re-entrant paint detected! Element is trying to paint itself - this is a render object bug."
+            );
             // Return None to avoid infinite recursion
             return None;
         }
@@ -655,8 +642,17 @@ impl ElementTree {
         };
 
         if let Some(render_id) = render_id {
-            self.layout_render_object(render_id, constraints)
-                .unwrap_or(flui_types::Size::ZERO)
+            match self.layout_render_object(render_id, constraints) {
+                Some(size) => size,
+                None => {
+                    tracing::error!(
+                        child_id = ?child_id,
+                        render_id = ?render_id,
+                        "Failed to layout render object. Returning Size::ZERO."
+                    );
+                    flui_types::Size::ZERO
+                }
+            }
         } else {
             flui_types::Size::ZERO
         }

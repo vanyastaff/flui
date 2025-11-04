@@ -604,8 +604,7 @@ impl PipelineOwner {
     {
         // Manually manage build scope since we need to pass full PipelineOwner
         if self.build.is_in_build_scope() {
-            #[cfg(debug_assertions)]
-            eprintln!("Warning: Nested build_scope detected!");
+            tracing::warn!("Nested build_scope detected! This may indicate incorrect usage.");
         }
 
         // Set scope flag
@@ -659,10 +658,9 @@ impl PipelineOwner {
                 #[cfg(debug_assertions)]
                 debug_println!(PRINT_BUILD_SCOPE, "finalize_tree: tree is clean");
             } else {
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "Warning: finalize_tree: {} dirty elements remaining",
-                    owner.build.dirty_count()
+                tracing::warn!(
+                    dirty_count = owner.build.dirty_count(),
+                    "finalize_tree: dirty elements remaining after build"
                 );
             }
         });
