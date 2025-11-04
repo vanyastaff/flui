@@ -8,6 +8,25 @@ use slab::Slab;
 use crate::element::{Element, ElementId};
 use crate::render::RenderState;
 
+/// Maximum layout recursion depth before panic.
+///
+/// This limit prevents infinite recursion in layout calculations,
+/// which typically indicates a circular dependency in the render tree.
+///
+/// # When to Adjust
+///
+/// The default of 1000 should be sufficient for most UIs. If you have
+/// an extremely deep component hierarchy (unusual), you may need to increase this.
+///
+/// To modify, change this constant and recompile flui_core.
+///
+/// # Performance Note
+///
+/// This check only runs in debug builds (`cfg(debug_assertions)`).
+/// Release builds have no depth checking for maximum performance.
+#[cfg(debug_assertions)]
+pub const MAX_LAYOUT_DEPTH: usize = 1000;
+
 /// Element tree managing Element instances with efficient slab allocation
 ///
 /// # New Architecture
@@ -463,7 +482,6 @@ impl ElementTree {
         // Depth guard to prevent infinite recursion
         #[cfg(debug_assertions)]
         {
-            const MAX_LAYOUT_DEPTH: usize = 1000; // Increased for complex UIs
             let current_depth = self.layout_depth.get();
             if current_depth > MAX_LAYOUT_DEPTH {
                 tracing::error!(

@@ -8,6 +8,43 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentId(pub u64);
 
+/// RAII guard that automatically ends component rendering on drop.
+///
+/// This ensures that `end_component()` is called even if rendering panics,
+/// preventing stale component state in the HookContext.
+#[derive(Debug)]
+pub struct ComponentGuard<'a> {
+    context: &'a mut HookContext,
+    #[allow(dead_code)]
+    component_id: ComponentId,
+}
+
+impl<'a> ComponentGuard<'a> {
+    /// Begin rendering a component with automatic cleanup.
+    ///
+    /// Returns a guard that will automatically call `end_component()` when dropped.
+    pub fn new(context: &'a mut HookContext, component_id: ComponentId) -> Self {
+        context.begin_component(component_id);
+        Self {
+            context,
+            component_id,
+        }
+    }
+}
+
+impl Drop for ComponentGuard<'_> {
+    fn drop(&mut self) {
+        self.context.end_component();
+
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            self.context.current_component,
+            None,
+            "Component guard dropped but current_component is not None"
+        );
+    }
+}
+
 /// Index of hook call within a component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HookIndex(pub usize);
@@ -78,12 +115,34 @@ impl HookContext {
     }
 
     /// Begin rendering a component, resetting hook index
+    ///
+    /// # ⚠️ Prefer Using ComponentGuard
+    ///
+    /// For panic-safe component rendering, use [`ComponentGuard::new()`] instead.
+    /// It automatically calls `end_component()` even if rendering panics.
+    ///
+    /// ```rust,ignore
+    /// // ✅ CORRECT: Use guard for automatic cleanup
+    /// let _guard = ComponentGuard::new(&mut hook_ctx, component_id);
+    /// // ... render component with hooks ...
+    /// // Guard automatically calls end_component() on drop
+    ///
+    /// // ❌ AVOID: Manual begin/end can leak state on panic
+    /// hook_ctx.begin_component(component_id);
+    /// // ... render component ...
+    /// hook_ctx.end_component();  // Never called if panic!
+    /// ```
     pub fn begin_component(&mut self, id: ComponentId) {
         self.current_component = Some(id);
         self.current_hook_index = 0;
     }
 
     /// End component rendering
+    ///
+    /// # ⚠️ Prefer Using ComponentGuard
+    ///
+    /// For panic-safe component rendering, use [`ComponentGuard::new()`] instead.
+    /// See [`begin_component()`](HookContext::begin_component) for details.
     pub fn end_component(&mut self) {
         self.current_component = None;
         self.current_hook_index = 0;

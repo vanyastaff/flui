@@ -127,8 +127,6 @@ impl std::fmt::Debug for PipelineOwner {
 impl PipelineOwner {
     /// Create a new pipeline owner
     ///
-    /// **Deprecated**: Prefer using [`PipelineBuilder`](super::PipelineBuilder) for better API ergonomics.
-    ///
     /// Creates a basic pipeline without production features.
     ///
     /// # Example
@@ -136,6 +134,11 @@ impl PipelineOwner {
     /// ```rust,ignore
     /// let owner = PipelineOwner::new();
     /// ```
+    #[deprecated(
+        since = "0.1.0",
+        note = "Prefer using PipelineBuilder for better API ergonomics and production features. \
+                Example: PipelineBuilder::new().build()"
+    )]
     pub fn new() -> Self {
         Self {
             tree: Arc::new(RwLock::new(ElementTree::new())),
