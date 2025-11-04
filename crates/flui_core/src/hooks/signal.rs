@@ -293,8 +293,35 @@ impl<T> Signal<T> {
 
     /// Subscribe to changes with a callback.
     ///
-    /// Returns a subscription ID that can be used to unsubscribe.
-    /// For automatic cleanup, use `subscribe_scoped()` instead.
+    /// Returns a subscription ID that **must be manually unsubscribed** using
+    /// [`unsubscribe()`](Signal::unsubscribe).
+    ///
+    /// # ⚠️ Memory Leak Warning
+    ///
+    /// **Forgetting to call `unsubscribe()` causes memory leaks!** Each subscriber
+    /// holds an `Rc<dyn Fn()>` that will never be freed unless explicitly removed.
+    ///
+    /// ```rust,ignore
+    /// // ❌ MEMORY LEAK: Never unsubscribed!
+    /// signal.subscribe(|| println!("Changed"));
+    ///
+    /// // ✅ CORRECT: Manual cleanup
+    /// let id = signal.subscribe(|| println!("Changed"));
+    /// // ... later ...
+    /// signal.unsubscribe(id);
+    ///
+    /// // ✅ BETTER: Use subscribe_scoped() for automatic cleanup
+    /// let _subscription = signal.subscribe_scoped(|| println!("Changed"));
+    /// // Automatically unsubscribes when _subscription drops
+    /// ```
+    ///
+    /// # Recommendation
+    ///
+    /// **Prefer [`subscribe_scoped()`](Signal::subscribe_scoped) for most use cases.**
+    /// It provides automatic cleanup via RAII and prevents memory leaks.
+    ///
+    /// Only use `subscribe()` when you need fine-grained control over subscription
+    /// lifetime (e.g., unsubscribing from multiple locations, conditional unsubscribe).
     ///
     /// # Example
     ///
@@ -305,6 +332,7 @@ impl<T> Signal<T> {
     /// // Later...
     /// signal.unsubscribe(id);
     /// ```
+    #[must_use = "Subscription ID must be stored and unsubscribed, or use subscribe_scoped() instead"]
     pub fn subscribe<F>(&self, callback: F) -> SubscriptionId
     where
         F: Fn() + 'static,
