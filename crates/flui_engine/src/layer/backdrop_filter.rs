@@ -137,6 +137,11 @@ impl BackdropFilterLayer {
                     // Apply each filter
                 }
             }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator { .. } => {
+                // Overflow indicators are not used as backdrop filters
+                // No-op
+            }
         }
 
         painter.restore();

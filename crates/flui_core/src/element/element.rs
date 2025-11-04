@@ -84,18 +84,16 @@
 use std::fmt;
 
 use crate::element::{
-    ComponentElement, ElementId, ElementLifecycle, InheritedElement, ParentDataElement,
-    RenderElement, StatefulElement,
+    ComponentElement, ElementId, ElementLifecycle, InheritedElement,
+    RenderElement,
 };
+use crate::foundation::Slot;
 use crate::render::RenderNode;
-use crate::widget::Widget;
 
-// Re-export common element types
+// Re-export element types for convenience
 pub use crate::element::component::ComponentElement as Component;
-pub use crate::element::inherited::InheritedElement as Inherited;
-pub use crate::element::parent_data_element::ParentDataElement as ParentData;
-pub use crate::element::render_object_element::RenderElement as Render;
-pub use crate::element::stateful::StatefulElement as Stateful;
+pub use crate::element::render::RenderElement as Render;
+pub use crate::element::provider::InheritedElement as Provider;
 
 /// Element - Heterogeneous element storage via enum
 ///
@@ -103,13 +101,18 @@ pub use crate::element::stateful::StatefulElement as Stateful;
 /// User code does NOT extend this enum - new element types are a
 /// framework-level addition (major version bump).
 ///
-/// # Variants
+/// # Variants (3 total - matches Flutter architecture)
 ///
-/// - **Component** - StatelessWidget → calls `build()` to produce child widget tree
-/// - **Stateful** - StatefulWidget → manages mutable `State` object across rebuilds
-/// - **Inherited** - InheritedWidget → propagates data down tree with dependency tracking
+/// - **Component** - StatelessWidget AND StatefulWidget → calls `build()` to produce child widget tree
 /// - **Render** - RenderWidget → owns Render for layout and painting
-/// - **ParentData** - ParentDataWidget → attaches metadata to child for parent's layout
+/// - **Provider** - InheritedWidget → propagates data down tree with dependency tracking
+///
+/// # Why 3 variants?
+///
+/// 1. **Closed set** - Framework defines element types, not users
+/// 2. **Clear separation** - Component (build), Render (layout), Provider (context)
+/// 3. **Performance** - Smaller enum = better cache locality
+/// 4. **Matches Flutter** - Flutter has same 3 element types
 ///
 /// # Design Rationale
 ///
@@ -156,45 +159,36 @@ pub use crate::element::stateful::StatefulElement as Stateful;
 /// but the enum wrapper is 100% safe.
 #[derive(Debug)]
 pub enum Element {
-    /// StatelessWidget → ComponentElement
+    /// Component element - manages widget build lifecycle
     ///
-    /// Calls `build()` to produce child widget tree.
-    /// No mutable state - pure function of widget configuration.
+    /// Created by **StatelessWidget** and **StatefulWidget**.
+    /// Handles both widget types:
+    /// - StatelessWidget: Pure build() function, no state
+    /// - StatefulWidget: Manages State object across rebuilds
     ///
     /// # Lifecycle
     ///
+    /// **StatelessWidget:**
     /// ```text
-    /// mount() → build() → child widget → rebuild on update
+    /// mount() → widget.build() → child widget → rebuild on update
     /// ```
-    Component(ComponentElement),
-
-    /// StatefulWidget → StatefulElement
     ///
-    /// Manages mutable `State` object that persists across rebuilds.
-    /// State holds widget's mutable data.
-    ///
-    /// # Lifecycle
-    ///
+    /// **StatefulWidget:**
     /// ```text
     /// mount() → create_state() → state.build() → rebuild on setState()
     /// ```
-    Stateful(StatefulElement),
+    ///
+    /// # Implementation
+    ///
+    /// ComponentElement stores:
+    /// - `state: Box<dyn Any>` - () for stateless, Box<dyn DynState> for stateful
+    /// - `child: Option<ElementId>` - Single child from build()
+    Component(ComponentElement),
 
-    /// InheritedWidget → InheritedElement
+    /// Render element - performs layout and paint
     ///
-    /// Propagates data down the tree with automatic dependency tracking.
-    /// Descendants can access inherited data via BuildContext.
-    ///
-    /// # Lifecycle
-    ///
-    /// ```text
-    /// mount() → register in tree → notify dependents on update
-    /// ```
-    Inherited(InheritedElement),
-
-    /// RenderWidget → RenderElement
-    ///
-    /// Owns a Render that performs layout and painting.
+    /// Created by **RenderWidget**.
+    /// Owns RenderObject that does actual layout/paint work.
     /// This is the bridge between Widget tree and Render tree.
     ///
     /// # Lifecycle
@@ -202,19 +196,38 @@ pub enum Element {
     /// ```text
     /// mount() → create_render_object() → layout() → paint()
     /// ```
+    ///
+    /// # Implementation
+    ///
+    /// RenderElement stores:
+    /// - `render_node: RenderNode` - Leaf/Single/Multi with RenderObject
+    /// - `size: Size, offset: Offset` - Layout results
+    /// - ParentData via RenderObject::Metadata GAT (not separate element)
     Render(RenderElement),
 
-    /// ParentDataWidget → ParentDataElement
+    /// Provider element - provides context/inherited data
     ///
-    /// Attaches metadata to child for parent's layout algorithm.
-    /// Examples: Positioned (for Stack), Flexible (for Flex)
+    /// Created by **InheritedWidget**.
+    /// Provides data to descendant widgets with automatic dependency tracking.
+    /// Descendants access via BuildContext (e.g., Theme, MediaQuery).
     ///
     /// # Lifecycle
     ///
     /// ```text
-    /// mount() → attach parent data → parent uses in layout
+    /// mount() → register in tree → notify dependents on update
     /// ```
-    ParentData(ParentDataElement),
+    ///
+    /// # Implementation
+    ///
+    /// ProviderElement (InheritedElement) stores:
+    /// - `provided: Box<dyn Any>` - The provided data
+    /// - `dependents: Vec<ElementId>` - Widgets that depend on this data
+    /// - `child: Option<ElementId>` - Single child
+    ///
+    /// # Migration Note
+    ///
+    /// Previously called `Inherited`, renamed to `Provider` to better reflect purpose.
+    Provider(InheritedElement),
 }
 
 impl Element {
@@ -259,48 +272,34 @@ impl Element {
         }
     }
 
-    /// Try to get as StatefulElement (immutable)
+    // Note: as_stateful() removed - StatefulElement merged into ComponentElement
+    // Use as_component() + is_stateful() instead
+
+    /// Try to get as ProviderElement (immutable)
     ///
-    /// Returns `Some(&StatefulElement)` if this is a Stateful variant,
+    /// Returns `Some(&InheritedElement)` if this is a Provider variant,
     /// `None` otherwise.
+    ///
+    /// Note: InheritedElement is the implementation type for Provider.
     #[inline]
     #[must_use]
-    pub fn as_stateful(&self) -> Option<&StatefulElement> {
+    pub fn as_provider(&self) -> Option<&InheritedElement> {
         match self {
-            Self::Stateful(s) => Some(s),
+            Self::Provider(p) => Some(p),
             _ => None,
         }
     }
 
-    /// Try to get as StatefulElement (mutable)
+    /// Try to get as ProviderElement (mutable)
     #[inline]
     #[must_use]
-    pub fn as_stateful_mut(&mut self) -> Option<&mut StatefulElement> {
+    pub fn as_provider_mut(&mut self) -> Option<&mut InheritedElement> {
         match self {
-            Self::Stateful(s) => Some(s),
+            Self::Provider(p) => Some(p),
             _ => None,
         }
     }
 
-    /// Try to get as InheritedElement (immutable)
-    #[inline]
-    #[must_use]
-    pub fn as_inherited(&self) -> Option<&InheritedElement> {
-        match self {
-            Self::Inherited(i) => Some(i),
-            _ => None,
-        }
-    }
-
-    /// Try to get as InheritedElement (mutable)
-    #[inline]
-    #[must_use]
-    pub fn as_inherited_mut(&mut self) -> Option<&mut InheritedElement> {
-        match self {
-            Self::Inherited(i) => Some(i),
-            _ => None,
-        }
-    }
 
     /// Try to get as RenderElement (immutable)
     #[inline]
@@ -322,25 +321,8 @@ impl Element {
         }
     }
 
-    /// Try to get as ParentDataElement (immutable)
-    #[inline]
-    #[must_use]
-    pub fn as_parent_data(&self) -> Option<&ParentDataElement> {
-        match self {
-            Self::ParentData(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Try to get as ParentDataElement (mutable)
-    #[inline]
-    #[must_use]
-    pub fn as_parent_data_mut(&mut self) -> Option<&mut ParentDataElement> {
-        match self {
-            Self::ParentData(p) => Some(p),
-            _ => None,
-        }
-    }
+    // Note: as_parent_data() removed - ParentData now via RenderObject::Metadata GAT
+    // Access parent data via render_object().metadata() instead
 
     // ========== Predicates ==========
     //
@@ -348,38 +330,30 @@ impl Element {
     // all predicates start with `is_`, `has_`, or `can_`.
 
     /// Check if this is a Component element
+    ///
+    /// Returns true for both StatelessWidget and StatefulWidget elements.
     #[inline]
     #[must_use]
     pub fn is_component(&self) -> bool {
         matches!(self, Self::Component(_))
     }
 
-    /// Check if this is a Stateful element
-    #[inline]
-    #[must_use]
-    pub fn is_stateful(&self) -> bool {
-        matches!(self, Self::Stateful(_))
-    }
-
-    /// Check if this is an Inherited element
-    #[inline]
-    #[must_use]
-    pub fn is_inherited(&self) -> bool {
-        matches!(self, Self::Inherited(_))
-    }
-
     /// Check if this is a Render element
+    ///
+    /// Returns true for RenderWidget elements.
     #[inline]
     #[must_use]
     pub fn is_render(&self) -> bool {
         matches!(self, Self::Render(_))
     }
 
-    /// Check if this is a ParentData element
+    /// Check if this is a Provider element
+    ///
+    /// Returns true for InheritedWidget elements.
     #[inline]
     #[must_use]
-    pub fn is_parent_data(&self) -> bool {
-        matches!(self, Self::ParentData(_))
+    pub fn is_provider(&self) -> bool {
+        matches!(self, Self::Provider(_))
     }
 
     // ========== Unified Interface (DynElement-like) ==========
@@ -395,10 +369,8 @@ impl Element {
     pub fn parent(&self) -> Option<ElementId> {
         match self {
             Self::Component(c) => c.parent(),
-            Self::Stateful(s) => s.parent(),
-            Self::Inherited(i) => i.parent(),
             Self::Render(r) => r.parent(),
-            Self::ParentData(p) => p.parent(),
+            Self::Provider(p) => p.parent(),
         }
     }
 
@@ -415,10 +387,8 @@ impl Element {
     pub fn children(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
         match self {
             Self::Component(c) => c.children_iter(),
-            Self::Stateful(s) => s.children_iter(),
-            Self::Inherited(i) => i.children_iter(),
+            Self::Provider(p) => p.children_iter(),
             Self::Render(r) => r.children_iter(),
-            Self::ParentData(p) => p.children_iter(),
         }
     }
 
@@ -430,10 +400,8 @@ impl Element {
     pub fn lifecycle(&self) -> ElementLifecycle {
         match self {
             Self::Component(c) => c.lifecycle(),
-            Self::Stateful(s) => s.lifecycle(),
-            Self::Inherited(i) => i.lifecycle(),
+            Self::Provider(p) => p.lifecycle(),
             Self::Render(r) => r.lifecycle(),
-            Self::ParentData(p) => p.lifecycle(),
         }
     }
 
@@ -447,13 +415,11 @@ impl Element {
     /// - `parent` - Parent element ID (None for root)
     /// - `slot` - Position in parent's child list
     #[inline]
-    pub fn mount(&mut self, parent: Option<ElementId>, slot: usize) {
+    pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>) {
         match self {
             Self::Component(c) => c.mount(parent, slot),
-            Self::Stateful(s) => s.mount(parent, slot),
-            Self::Inherited(i) => i.mount(parent, slot),
+            Self::Provider(p) => p.mount(parent, slot),
             Self::Render(r) => r.mount(parent, slot),
-            Self::ParentData(p) => p.mount(parent, slot),
         }
     }
 
@@ -465,10 +431,8 @@ impl Element {
     pub fn unmount(&mut self) {
         match self {
             Self::Component(c) => c.unmount(),
-            Self::Stateful(s) => s.unmount(),
-            Self::Inherited(i) => i.unmount(),
+            Self::Provider(p) => p.unmount(),
             Self::Render(r) => r.unmount(),
-            Self::ParentData(p) => p.unmount(),
         }
     }
 
@@ -480,10 +444,8 @@ impl Element {
     pub fn deactivate(&mut self) {
         match self {
             Self::Component(c) => c.deactivate(),
-            Self::Stateful(s) => s.deactivate(),
-            Self::Inherited(i) => i.deactivate(),
+            Self::Provider(p) => p.deactivate(),
             Self::Render(r) => r.deactivate(),
-            Self::ParentData(p) => p.deactivate(),
         }
     }
 
@@ -495,10 +457,8 @@ impl Element {
     pub fn activate(&mut self) {
         match self {
             Self::Component(c) => c.activate(),
-            Self::Stateful(s) => s.activate(),
-            Self::Inherited(i) => i.activate(),
+            Self::Provider(p) => p.activate(),
             Self::Render(r) => r.activate(),
-            Self::ParentData(p) => p.activate(),
         }
     }
 
@@ -510,10 +470,8 @@ impl Element {
     pub fn is_dirty(&self) -> bool {
         match self {
             Self::Component(c) => c.is_dirty(),
-            Self::Stateful(s) => s.is_dirty(),
-            Self::Inherited(i) => i.is_dirty(),
+            Self::Provider(p) => p.is_dirty(),
             Self::Render(r) => r.is_dirty(),
-            Self::ParentData(p) => p.is_dirty(),
         }
     }
 
@@ -524,39 +482,22 @@ impl Element {
     pub fn mark_dirty(&mut self) {
         match self {
             Self::Component(c) => c.mark_dirty(),
-            Self::Stateful(s) => s.mark_dirty(),
-            Self::Inherited(i) => i.mark_dirty(),
+            Self::Provider(p) => p.mark_dirty(),
             Self::Render(r) => r.mark_dirty(),
-            Self::ParentData(p) => p.mark_dirty(),
         }
     }
 
-    /// Get widget this element holds
-    ///
-    /// Returns a reference to the widget configuration this element represents.
-    #[inline]
-    #[must_use]
-    pub fn widget(&self) -> &Widget {
-        match self {
-            Self::Component(c) => c.widget(),
-            Self::Stateful(s) => s.widget(),
-            Self::Inherited(i) => i.widget(),
-            Self::Render(r) => r.widget(),
-            Self::ParentData(p) => p.widget(),
-        }
-    }
+    // Note: widget() method removed - Widget type no longer exists
+    // Elements now store Box<dyn AnyView> instead
+    // TODO(Phase 5): Add view() method once View integration is complete
 
     /// Get render object if this is a render element
     ///
-    /// Returns a `Ref` guard to the render object for Render elements, `None` otherwise.
-    /// The guard ensures safe access through RefCell's borrow checking.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the render object is currently borrowed mutably.
+    /// Returns a read guard to the render object for Render elements, `None` otherwise.
+    /// The guard ensures safe access through RwLock's read locking.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> Option<std::cell::Ref<'_, RenderNode>> {
+    pub fn render_object(&self) -> Option<parking_lot::RwLockReadGuard<'_, RenderNode>> {
         match self {
             Self::Render(r) => Some(r.render_object()),
             _ => None,
@@ -565,15 +506,11 @@ impl Element {
 
     /// Get mutable render object if this is a render element
     ///
-    /// Returns a `RefMut` guard to the render object for Render elements, `None` otherwise.
-    /// The guard ensures safe mutable access through RefCell's borrow checking.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the render object is currently borrowed.
+    /// Returns a write guard to the render object for Render elements, `None` otherwise.
+    /// The guard ensures safe mutable access through RwLock's write locking.
     #[inline]
     #[must_use]
-    pub fn render_object_mut(&self) -> Option<std::cell::RefMut<'_, RenderNode>> {
+    pub fn render_object_mut(&self) -> Option<parking_lot::RwLockWriteGuard<'_, RenderNode>> {
         match self {
             Self::Render(r) => Some(r.render_object_mut()),
             _ => None,
@@ -595,10 +532,8 @@ impl Element {
     pub fn category(&self) -> &'static str {
         match self {
             Self::Component(_) => "Component",
-            Self::Stateful(_) => "Stateful",
-            Self::Inherited(_) => "Inherited",
             Self::Render(_) => "Render",
-            Self::ParentData(_) => "ParentData",
+            Self::Provider(_) => "Provider",
         }
     }
 
@@ -635,10 +570,8 @@ impl Element {
     pub fn forget_child(&mut self, child_id: ElementId) {
         match self {
             Self::Component(c) => c.forget_child(child_id),
-            Self::Stateful(s) => s.forget_child(child_id),
-            Self::Inherited(i) => i.forget_child(child_id),
+            Self::Provider(p) => p.forget_child(child_id),
             Self::Render(r) => r.forget_child(child_id),
-            Self::ParentData(p) => p.forget_child(child_id),
         }
     }
 
@@ -649,10 +582,8 @@ impl Element {
     pub fn update_slot_for_child(&mut self, child_id: ElementId, new_slot: usize) {
         match self {
             Self::Component(c) => c.update_slot_for_child(child_id, new_slot),
-            Self::Stateful(s) => s.update_slot_for_child(child_id, new_slot),
-            Self::Inherited(i) => i.update_slot_for_child(child_id, new_slot),
+            Self::Provider(p) => p.update_slot_for_child(child_id, new_slot),
             Self::Render(r) => r.update_slot_for_child(child_id, new_slot),
-            Self::ParentData(p) => p.update_slot_for_child(child_id, new_slot),
         }
     }
 
@@ -662,23 +593,14 @@ impl Element {
     /// (parent_id, child_widget, slot)
     ///
     /// # Arguments
-    ///
-    /// - `element_id`: The ElementId of this element
-    /// - `tree`: Shared reference to the ElementTree for creating BuildContext
-    #[inline]
-    pub fn rebuild(
-        &mut self,
-        element_id: ElementId,
-        tree: std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
-    ) -> Vec<(ElementId, crate::widget::Widget, usize)> {
-        match self {
-            Self::Component(c) => c.rebuild(element_id, tree),
-            Self::Stateful(s) => s.rebuild(element_id, tree),
-            Self::Inherited(i) => i.rebuild(element_id, tree),
-            Self::Render(r) => r.rebuild(element_id, tree),
-            Self::ParentData(p) => p.rebuild(element_id, tree),
-        }
-    }
+    // Note: rebuild() method temporarily removed during Widget → View migration
+    // TODO(Phase 5): Implement View-based rebuild:
+    // pub fn rebuild(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags
+    //
+    // Each element type will call View::rebuild() to efficiently update:
+    // - Component: view.rebuild(prev_view, state, element)
+    // - Provider: view.rebuild(prev_view, (), element)
+    // - Render: Updates render object directly
 
     /// Get raw pointer to RenderState if this is a RenderElement
     ///
@@ -705,10 +627,8 @@ impl fmt::Display for Element {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Component(c) => write!(f, "Component({:?})", c),
-            Self::Stateful(s) => write!(f, "Stateful({:?})", s),
-            Self::Inherited(i) => write!(f, "Inherited({:?})", i),
             Self::Render(r) => write!(f, "Render({:?})", r),
-            Self::ParentData(p) => write!(f, "ParentData({:?})", p),
+            Self::Provider(p) => write!(f, "Provider({:?})", p),
         }
     }
 }

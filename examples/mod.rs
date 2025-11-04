@@ -59,14 +59,32 @@
 //! cargo run --example pricing_table --features="flui_app,flui_widgets"
 //! ```
 
+pub mod counter_set_state;
+pub mod counter_signal;
+pub mod counter_signal_app;
 pub mod dashboard;
+pub mod element_id_demo;
+pub mod hot_reload_demo;
 pub mod minimal_app;
 pub mod overflow_test;
 pub mod photo_gallery;
+pub mod pipeline_builder_demo;
 pub mod pricing_table;
 pub mod profile_card;
 pub mod settings_page;
 pub mod widget_hello_world;
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

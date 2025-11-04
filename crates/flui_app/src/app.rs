@@ -96,8 +96,9 @@ impl FluiApp {
     /// - `root_widget`: The root widget of the application
     pub fn new(root_widget: Widget) -> Self {
         let mut pipeline = PipelineOwner::new();
-        let root_element = Element::Component(ComponentElement::new(root_widget));
-        pipeline.set_root(root_element);
+        // CRITICAL FIX: Use inflate_root() to properly create the root element based on widget type
+        // This ensures StatefulWidgets create StatefulElements, not ComponentElements
+        let _root_id = pipeline.inflate_root(root_widget);
 
         Self {
             pipeline,
@@ -153,6 +154,13 @@ impl FluiApp {
         loop {
             let dirty_count = self.pipeline.dirty_count();
 
+            println!(
+                "[DEBUG] Frame {}: Build iteration {}, dirty_count={}",
+                self.stats.frame_count,
+                iterations,
+                dirty_count
+            );
+
             if dirty_count == 0 {
                 break;
             }
@@ -169,15 +177,20 @@ impl FluiApp {
             }
         }
 
+        println!("[DEBUG] Frame {}: Build complete, {} iterations", self.stats.frame_count, iterations);
+
         // ===== Phase 2: Layout =====
         let current_size = Size::new(ui.available_size().x, ui.available_size().y);
-        let needs_layout = self.size_changed(current_size);
+        let size_changed = self.size_changed(current_size);
+        // Need layout if size changed OR if there were any rebuilds (rebuilds modify render tree)
+        let needs_layout = size_changed || iterations > 0;
 
         tracing::debug!(
-            "Frame {}: needs_layout={} (size_changed={})",
+            "Frame {}: needs_layout={} (size_changed={}, rebuilds={})",
             self.stats.frame_count,
             needs_layout,
-            self.size_changed(current_size)
+            size_changed,
+            iterations > 0
         );
 
         if needs_layout {

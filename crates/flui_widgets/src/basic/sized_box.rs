@@ -426,6 +426,8 @@ impl RenderWidget for SizedBox {
 
         // Create tight constraints for specified dimensions
         let constraints = BoxConstraints::tight_for(self.width, self.height);
+
+        // Always create Single render - ElementTree.layout_child will handle missing children gracefully
         RenderNode::single(Box::new(RenderConstrainedBox::new(constraints)))
     }
 

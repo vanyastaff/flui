@@ -7,6 +7,16 @@
         "@modelcontextprotocol/server-filesystem",
         "C:\\Users\\vanya\\RustroverProjects\\flui"
       ]
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "<YOUR_TOKEN>"
+      }
     }
   }
 }

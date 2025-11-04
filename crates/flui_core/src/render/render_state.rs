@@ -51,6 +51,20 @@ pub struct RenderState {
     ///
     /// Set during parent's layout phase.
     pub offset: RwLock<Offset>,
+
+    /// Overflow on horizontal axis (debug mode only)
+    ///
+    /// Number of pixels that overflow the container horizontally.
+    /// Set during layout when content width exceeds available width.
+    #[cfg(debug_assertions)]
+    pub overflow_horizontal: RwLock<f32>,
+
+    /// Overflow on vertical axis (debug mode only)
+    ///
+    /// Number of pixels that overflow the container vertically.
+    /// Set during layout when content height exceeds available height.
+    #[cfg(debug_assertions)]
+    pub overflow_vertical: RwLock<f32>,
 }
 
 impl RenderState {
@@ -61,6 +75,10 @@ impl RenderState {
             size: RwLock::new(None),
             constraints: RwLock::new(None),
             offset: RwLock::new(Offset::ZERO),
+            #[cfg(debug_assertions)]
+            overflow_horizontal: RwLock::new(0.0),
+            #[cfg(debug_assertions)]
+            overflow_vertical: RwLock::new(0.0),
         }
     }
 
@@ -71,6 +89,10 @@ impl RenderState {
             size: RwLock::new(None),
             constraints: RwLock::new(None),
             offset: RwLock::new(Offset::ZERO),
+            #[cfg(debug_assertions)]
+            overflow_horizontal: RwLock::new(0.0),
+            #[cfg(debug_assertions)]
+            overflow_vertical: RwLock::new(0.0),
         }
     }
 
@@ -210,6 +232,82 @@ impl RenderState {
         *self.offset.write() = offset;
     }
 
+    // ========== Overflow (Debug Only) ==========
+
+    /// Set overflow amount for a specific axis
+    ///
+    /// This should be called during layout when content doesn't fit in available space.
+    /// The overflow amount is in pixels.
+    ///
+    /// # Arguments
+    /// * `axis` - The axis on which overflow occurred
+    /// * `pixels` - Number of pixels that overflow (must be >= 0.0)
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let overflow = (total_width - available_width).max(0.0);
+    /// state.set_overflow(Axis::Horizontal, overflow);
+    /// ```
+    #[cfg(debug_assertions)]
+    pub fn set_overflow(&self, axis: flui_types::Axis, pixels: f32) {
+        let pixels = pixels.max(0.0); // Ensure non-negative
+        match axis {
+            flui_types::Axis::Horizontal => *self.overflow_horizontal.write() = pixels,
+            flui_types::Axis::Vertical => *self.overflow_vertical.write() = pixels,
+        }
+
+        // Set HAS_OVERFLOW flag if any overflow exists
+        if pixels > 0.0 {
+            self.flags.set(RenderFlags::HAS_OVERFLOW);
+        } else {
+            // Clear flag if both axes are now zero
+            let other_axis = match axis {
+                flui_types::Axis::Horizontal => *self.overflow_vertical.read(),
+                flui_types::Axis::Vertical => *self.overflow_horizontal.read(),
+            };
+            if other_axis <= 0.0 {
+                self.flags.remove(RenderFlags::HAS_OVERFLOW);
+            }
+        }
+    }
+
+    /// Get overflow amount for a specific axis
+    ///
+    /// Returns the number of pixels that overflow on the given axis.
+    #[cfg(debug_assertions)]
+    pub fn overflow(&self, axis: flui_types::Axis) -> f32 {
+        match axis {
+            flui_types::Axis::Horizontal => *self.overflow_horizontal.read(),
+            flui_types::Axis::Vertical => *self.overflow_vertical.read(),
+        }
+    }
+
+    /// Check if there is any overflow (lock-free!)
+    ///
+    /// This is a fast atomic check that can be used in hot paths.
+    /// Returns true if either horizontal or vertical overflow is > 0.
+    #[cfg(debug_assertions)]
+    #[inline]
+    pub fn has_overflow(&self) -> bool {
+        self.flags.contains(RenderFlags::HAS_OVERFLOW)
+    }
+
+    /// Get both overflow amounts
+    ///
+    /// Returns (horizontal_overflow, vertical_overflow)
+    #[cfg(debug_assertions)]
+    pub fn overflow_both(&self) -> (f32, f32) {
+        (*self.overflow_horizontal.read(), *self.overflow_vertical.read())
+    }
+
+    /// Clear all overflow information
+    #[cfg(debug_assertions)]
+    pub fn clear_overflow(&self) {
+        *self.overflow_horizontal.write() = 0.0;
+        *self.overflow_vertical.write() = 0.0;
+        self.flags.remove(RenderFlags::HAS_OVERFLOW);
+    }
+
     // ========== Lifecycle ==========
 
     /// Check if detached from tree
@@ -236,6 +334,11 @@ impl RenderState {
         *self.size.write() = None;
         *self.constraints.write() = None;
         *self.offset.write() = Offset::ZERO;
+        #[cfg(debug_assertions)]
+        {
+            *self.overflow_horizontal.write() = 0.0;
+            *self.overflow_vertical.write() = 0.0;
+        }
     }
 }
 
@@ -252,6 +355,10 @@ impl Clone for RenderState {
             size: RwLock::new(*self.size.read()),
             constraints: RwLock::new(*self.constraints.read()),
             offset: RwLock::new(*self.offset.read()),
+            #[cfg(debug_assertions)]
+            overflow_horizontal: RwLock::new(*self.overflow_horizontal.read()),
+            #[cfg(debug_assertions)]
+            overflow_vertical: RwLock::new(*self.overflow_vertical.read()),
         }
     }
 }

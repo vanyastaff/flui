@@ -7,11 +7,11 @@
 //!
 //! These traits are object-safe and have simple, clean APIs.
 
-use downcast_rs::{Downcast, impl_downcast};
 use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
-use crate::element::{ElementId, ElementTree};
+use crate::element::ElementId;
+use crate::pipeline::ElementTree;
 
 // ========== Leaf Render ==========
 
@@ -19,6 +19,27 @@ use crate::element::{ElementId, ElementTree};
 ///
 /// Leaf render objects are terminal nodes that handle their own rendering
 /// without delegating to children.
+///
+/// # Generic Associated Type (GAT): Metadata
+///
+/// Each render object can define its own `Metadata` type for storing
+/// custom data. Use `()` if no metadata is needed (zero-cost).
+///
+/// ```rust,ignore
+/// // Example: No metadata needed
+/// impl LeafRender for RenderText {
+///     type Metadata = ();  // Default, zero-cost
+/// }
+///
+/// // Example: With metadata (e.g., for parent's layout algorithm)
+/// impl LeafRender for RenderFlexItem {
+///     type Metadata = FlexItemMetadata;
+///
+///     fn metadata(&self) -> Option<&dyn std::any::Any> {
+///         Some(&self.flex_metadata)
+///     }
+/// }
+/// ```
 ///
 /// # Examples
 ///
@@ -39,6 +60,8 @@ use crate::element::{ElementId, ElementTree};
 /// }
 ///
 /// impl LeafRender for Paragraph {
+///     type ParentData = ();  // No parent data needed
+///
 ///     fn layout(&mut self, constraints: BoxConstraints) -> Size {
 ///         let width = self.text.len() as f32 * 10.0;
 ///         constraints.constrain(Size::new(width, 20.0))
@@ -51,12 +74,36 @@ use crate::element::{ElementId, ElementTree};
 ///     }
 /// }
 /// ```
-pub trait LeafRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
+pub trait LeafRender: Send + Sync + std::fmt::Debug + 'static {
+    /// Associated metadata type.
+    ///
+    /// Use `()` if this render object doesn't need metadata (zero-cost).
+    /// Use a custom type (e.g., `FlexItemMetadata`) if you need to store
+    /// additional data for this render object.
+    ///
+    /// # Zero-cost when unused
+    ///
+    /// When `Metadata = ()`, there is zero runtime overhead - the compiler
+    /// optimizes it away completely.
+    type Metadata: std::any::Any + Send + Sync + 'static;
+
     /// Compute layout
     fn layout(&mut self, constraints: BoxConstraints) -> Size;
 
     /// Paint to layer
     fn paint(&self, offset: Offset) -> BoxedLayer;
+
+    /// Get metadata (type-erased)
+    ///
+    /// Returns `Some(&dyn Any)` if this render object has metadata,
+    /// `None` otherwise. Caller can downcast to `Self::Metadata`.
+    ///
+    /// # Default implementation
+    ///
+    /// Returns `None` by default. Override if metadata is used.
+    fn metadata(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 
     /// Optional: compute intrinsic width
     fn intrinsic_width(&self, _height: Option<f32>) -> Option<f32> {
@@ -73,7 +120,9 @@ pub trait LeafRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
         std::any::type_name::<Self>()
     }
 }
-impl_downcast!(LeafRender);
+
+// Note: impl_downcast! cannot be used with GAT traits.
+// Downcast functionality is provided via metadata() method which returns &dyn Any.
 
 // ========== Single Render ==========
 
@@ -81,6 +130,11 @@ impl_downcast!(LeafRender);
 ///
 /// Single-child render objects wrap exactly one child and provide
 /// transformation or effects (e.g., padding, opacity, clipping).
+///
+/// # Generic Associated Type (GAT): Metadata
+///
+/// Each render object can define its own `ParentData` type for metadata
+/// that the parent needs during layout. Use `()` if no parent data is needed.
 ///
 /// # Examples
 ///
@@ -102,6 +156,8 @@ impl_downcast!(LeafRender);
 /// }
 ///
 /// impl SingleRender for Opacity {
+///     type Metadata = ();  // No metadata needed
+///
 ///     fn layout(
 ///         &mut self,
 ///         tree: &ElementTree,
@@ -123,7 +179,13 @@ impl_downcast!(LeafRender);
 ///     }
 /// }
 /// ```
-pub trait SingleRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
+pub trait SingleRender: Send + Sync + std::fmt::Debug + 'static {
+    /// Associated metadata type.
+    ///
+    /// Use `()` if this render object doesn't need metadata (zero-cost).
+    /// Use a custom type if you need to store additional data.
+    type Metadata: std::any::Any + Send + Sync + 'static;
+
     /// Compute layout
     fn layout(
         &mut self,
@@ -134,6 +196,14 @@ pub trait SingleRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
 
     /// Paint to layer
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer;
+
+    /// Get metadata (type-erased)
+    ///
+    /// Returns `Some(&dyn Any)` if this render object has parent data,
+    /// `None` otherwise. Parent can downcast to `Self::ParentData`.
+    fn metadata(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 
     /// Optional: compute intrinsic width
     fn intrinsic_width(&self, _height: Option<f32>) -> Option<f32> {
@@ -150,7 +220,9 @@ pub trait SingleRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
         std::any::type_name::<Self>()
     }
 }
-impl_downcast!(SingleRender);
+
+// Note: impl_downcast! cannot be used with GAT traits.
+// Downcast functionality is provided via metadata() method which returns &dyn Any.
 
 // ========== Multi Render ==========
 
@@ -159,12 +231,21 @@ impl_downcast!(SingleRender);
 /// Multi-child render objects arrange multiple children according to
 /// layout algorithms (e.g., flex, stack, grid).
 ///
+/// # Generic Associated Type (GAT): Metadata
+///
+/// Each render object can define its own `Metadata` type for storing
+/// custom data. Use `()` if no metadata is needed (zero-cost).
+///
+/// **Common use case:** Multi-child renders often need per-child metadata
+/// (e.g., flex factor, stack position). Children can provide this via their
+/// own `Metadata` type.
+///
 /// # Examples
 ///
-/// - Row/Column (flex)
-/// - Stack (layered)
-/// - Wrap (wrapping)
-/// - Grid
+/// - Row/Column (flex) - needs FlexParentData per child
+/// - Stack (layered) - needs StackParentData per child
+/// - Wrap (wrapping) - may need WrapParentData per child
+/// - Grid - needs GridParentData per child
 ///
 /// # Example
 ///
@@ -178,6 +259,8 @@ impl_downcast!(SingleRender);
 /// }
 ///
 /// impl MultiRender for Flex {
+///     type Metadata = ();  // Flex doesn't have metadata itself
+///
 ///     fn layout(
 ///         &mut self,
 ///         tree: &ElementTree,
@@ -186,6 +269,7 @@ impl_downcast!(SingleRender);
 ///     ) -> Size {
 ///         let mut total_size = Size::ZERO;
 ///         for &child in children {
+///             // Can access child's metadata via tree
 ///             total_size.width += 100.0;
 ///         }
 ///         constraints.constrain(total_size)
@@ -203,7 +287,13 @@ impl_downcast!(SingleRender);
 ///     }
 /// }
 /// ```
-pub trait MultiRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
+pub trait MultiRender: Send + Sync + std::fmt::Debug + 'static {
+    /// Associated metadata type.
+    ///
+    /// Use `()` if this render object doesn't need metadata (zero-cost).
+    /// Use a custom type if you need to store additional data.
+    type Metadata: std::any::Any + Send + Sync + 'static;
+
     /// Compute layout
     fn layout(
         &mut self,
@@ -214,6 +304,14 @@ pub trait MultiRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
 
     /// Paint to layer
     fn paint(&self, tree: &ElementTree, children: &[ElementId], offset: Offset) -> BoxedLayer;
+
+    /// Get metadata (type-erased)
+    ///
+    /// Returns `Some(&dyn Any)` if this render object has parent data,
+    /// `None` otherwise. Parent can downcast to `Self::ParentData`.
+    fn metadata(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 
     /// Optional: compute intrinsic width
     fn intrinsic_width(&self, _height: Option<f32>) -> Option<f32> {
@@ -230,7 +328,9 @@ pub trait MultiRender: Downcast + Send + Sync + std::fmt::Debug + 'static {
         std::any::type_name::<Self>()
     }
 }
-impl_downcast!(MultiRender);
+
+// Note: impl_downcast! cannot be used with GAT traits.
+// Downcast functionality is provided via metadata() method which returns &dyn Any.
 
 #[cfg(test)]
 mod tests {
@@ -241,6 +341,8 @@ mod tests {
     struct TestLeaf;
 
     impl LeafRender for TestLeaf {
+        type Metadata = ();  // No metadata needed
+
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
             constraints.constrain(Size::new(100.0, 100.0))
         }
@@ -254,6 +356,8 @@ mod tests {
     struct TestSingle;
 
     impl SingleRender for TestSingle {
+        type Metadata = ();
+
         fn layout(
             &mut self,
             _tree: &ElementTree,
@@ -272,6 +376,8 @@ mod tests {
     struct TestMulti;
 
     impl MultiRender for TestMulti {
+        type Metadata = ();
+
         fn layout(
             &mut self,
             _tree: &ElementTree,
@@ -293,9 +399,9 @@ mod tests {
 
     #[test]
     fn test_traits_are_object_safe() {
-        let _leaf: Box<dyn LeafRender> = Box::new(TestLeaf);
-        let _single: Box<dyn SingleRender> = Box::new(TestSingle);
-        let _multi: Box<dyn MultiRender> = Box::new(TestMulti);
+        let _leaf: Box<dyn LeafRender<Metadata = ()>> = Box::new(TestLeaf);
+        let _single: Box<dyn SingleRender<Metadata = ()>> = Box::new(TestSingle);
+        let _multi: Box<dyn MultiRender<Metadata = ()>> = Box::new(TestMulti);
     }
 
     #[test]

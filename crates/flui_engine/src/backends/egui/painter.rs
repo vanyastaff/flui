@@ -874,6 +874,12 @@ impl<'a> Painter for EguiPainter<'a> {
                     self.apply_image_filter(f, bounds);
                 }
             }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator { .. } => {
+                // Overflow indicators are handled by OverflowIndicatorLayer
+                // which paints directly - this filter should never reach the painter
+                // No-op here
+            }
         }
     }
 }

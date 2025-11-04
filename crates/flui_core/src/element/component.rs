@@ -14,7 +14,6 @@
 //! - View with State=T → stateful behavior
 
 use std::any::Any;
-use std::fmt;
 
 use super::{ElementBase, ElementLifecycle};
 use crate::ElementId;

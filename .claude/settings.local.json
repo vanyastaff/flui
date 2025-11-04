@@ -109,13 +109,29 @@
       "Bash(echo:*)",
       "Bash(fi)",
       "Bash(timeout 3 cargo run:*)",
-      "Bash(timeout 5 cargo run:*)"
+      "Bash(timeout 5 cargo run:*)",
+      "Bash(for file in crates/flui_widgets/src/basic/*.rs crates/flui_widgets/src/layout/*.rs crates/flui_widgets/src/visual_effects/*.rs)",
+      "Bash(RUST_BACKTRACE=1 cargo run:*)",
+      "WebFetch(domain:book.leptos.dev)",
+      "WebFetch(domain:dioxuslabs.com)",
+      "WebFetch(domain:book.iced.rs)",
+      "Bash(cargo clean:*)",
+      "Bash(docs/FINAL_ARCHITECTURE_V2.md)",
+      "Bash(/dev/null)",
+      "Bash(! ls crates/flui_core/src/element/pipeline_owner.rs)",
+      "Bash(! ls crates/flui_core/src/element/element_tree.rs)",
+      "Bash(! ls crates/flui_core/src/element/build_context.rs)",
+      "Bash(! ls crates/flui_core/src/error.rs)",
+      "Bash(! ls crates/flui_core/src/element/inherited.rs)",
+      "Bash(! ls crates/flui_core/src/element/render_object_element.rs)",
+      "Bash(tree:*)",
+      "Bash(cargo bench:*)"
     ],
     "deny": [],
     "ask": []
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "filesystem"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

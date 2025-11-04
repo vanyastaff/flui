@@ -94,10 +94,13 @@ pub mod filter;
 pub mod handle;
 pub mod offset;
 pub mod opacity;
+#[cfg(debug_assertions)]
+pub mod overflow_indicator;
 pub mod picture;
 pub mod pool;
 pub mod pooled;
 pub mod transform;
+
 
 
 // Basic composition layers
@@ -133,6 +136,10 @@ pub use backdrop_filter::BackdropFilterLayer;
 pub use blur::BlurLayer;
 pub use filter::FilterLayer;
 
+// Debug layers
+#[cfg(debug_assertions)]
+pub use overflow_indicator::OverflowIndicatorLayer;
+
 // Re-export filter types from flui_types
 pub use flui_types::painting::effects::{
     BlurMode, BlurQuality, ColorFilter, ColorMatrix, ImageFilter,
@@ -143,4 +150,5 @@ pub use flui_types::painting::effects::{
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
 

@@ -46,8 +46,8 @@ use flui_engine::{BoxedLayer, ContainerLayer};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 
-use crate::element::{ElementId, ElementTree, RenderElement};
-use crate::widget::{RenderWidget, Widget};
+use crate::element::ElementId;
+use crate::pipeline::ElementTree;
 
 /// RenderPipeline - orchestrates the rendering pipeline
 ///
@@ -166,13 +166,18 @@ impl RenderPipeline {
     /// ```rust,ignore
     /// let root_id = pipeline.insert_root(FlexWidget::column());
     /// ```
+
+    // NOTE: Commented out during Widget → View migration
+    // TODO(Phase 5): Reimplement using View system
+    /*
     pub fn insert_root<W>(&mut self, widget: W) -> ElementId
     where
         W: RenderWidget + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         // Create a temporary BuildContext for root widget creation
         // Use an empty temporary tree since root has no parent context
-        use crate::element::{BuildContext, ElementTree};
+        use crate::view::BuildContext;
+        use crate::pipeline::ElementTree;
         use parking_lot::RwLock;
         use std::sync::Arc;
 
@@ -195,6 +200,7 @@ impl RenderPipeline {
 
         id
     }
+    */
 
     // ========== Dirty Tracking API ==========
 

@@ -523,6 +523,27 @@ pub enum ImageFilter {
     ///
     /// Allows chaining multiple image filters together.
     Compose(Vec<ImageFilter>),
+
+    /// Overflow indicator with diagonal stripes (debug mode only).
+    ///
+    /// Displays a warning tape pattern (red/yellow diagonal stripes) on the
+    /// overflow region. This filter is only active in debug builds and has
+    /// zero cost in release builds.
+    ///
+    /// # Parameters
+    ///
+    /// * `overflow_h` - Horizontal overflow in pixels (0.0 if none)
+    /// * `overflow_v` - Vertical overflow in pixels (0.0 if none)
+    /// * `container_size` - Size of the container for positioning
+    #[cfg(debug_assertions)]
+    OverflowIndicator {
+        /// Horizontal overflow in pixels
+        overflow_h: f32,
+        /// Vertical overflow in pixels
+        overflow_v: f32,
+        /// Container size
+        container_size: crate::Size,
+    },
 }
 
 impl ImageFilter {
@@ -569,6 +590,28 @@ impl ImageFilter {
     #[must_use]
     pub fn color(filter: ColorFilter) -> Self {
         Self::Color(filter)
+    }
+
+    /// Create an overflow indicator filter (debug mode only).
+    ///
+    /// # Arguments
+    ///
+    /// * `overflow_h` - Horizontal overflow in pixels (0.0 if none)
+    /// * `overflow_v` - Vertical overflow in pixels (0.0 if none)
+    /// * `container_size` - Size of the container
+    #[cfg(debug_assertions)]
+    #[inline]
+    #[must_use]
+    pub fn overflow_indicator(
+        overflow_h: f32,
+        overflow_v: f32,
+        container_size: crate::Size,
+    ) -> Self {
+        Self::OverflowIndicator {
+            overflow_h,
+            overflow_v,
+            container_size,
+        }
     }
 }
 

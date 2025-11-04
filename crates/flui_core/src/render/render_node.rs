@@ -9,7 +9,8 @@ use flui_engine::BoxedLayer;
 use flui_types::{Offset, Size, constraints::BoxConstraints};
 
 use super::render_traits::{LeafRender, MultiRender, SingleRender};
-use crate::element::{ElementId, ElementTree};
+use crate::element::ElementId;
+use crate::pipeline::ElementTree;
 
 /// Unified render tree node enum
 ///
@@ -17,6 +18,12 @@ use crate::element::{ElementId, ElementTree};
 /// - `Leaf`: No children
 /// - `Single`: Exactly one child
 /// - `Multi`: Multiple children
+///
+/// # GAT and Trait Objects
+///
+/// Each render trait has a `Metadata` associated type. To use with trait objects,
+/// we specify `Metadata = ()` as the default. Render objects can still have their
+/// own parent data types - they just need to implement the trait with `Metadata = ()`.
 ///
 /// # Example
 ///
@@ -32,20 +39,23 @@ use crate::element::{ElementId, ElementTree};
 #[derive(Debug)]
 pub enum RenderNode {
     /// Leaf (no children)
-    Leaf(Box<dyn LeafRender>),
+    ///
+    /// Metadata fixed to () for object safety. Individual render objects can
+    /// store parent data internally if needed.
+    Leaf(Box<dyn LeafRender<Metadata = ()>>),
 
     /// Single child
     Single {
-        /// Render object
-        render: Box<dyn SingleRender>,
-        /// Child element ID
-        child: ElementId,
+        /// Render object (Metadata fixed to () for object safety)
+        render: Box<dyn SingleRender<Metadata = ()>>,
+        /// Child element ID (None if not yet mounted)
+        child: Option<ElementId>,
     },
 
     /// Multiple children
     Multi {
-        /// Render object
-        render: Box<dyn MultiRender>,
+        /// Render object (Metadata fixed to () for object safety)
+        render: Box<dyn MultiRender<Metadata = ()>>,
         /// Child element IDs
         children: Vec<ElementId>,
     },
@@ -55,39 +65,39 @@ impl RenderNode {
     // ========== Constructors ==========
 
     /// Create leaf render
-    pub fn new_leaf(render: Box<dyn LeafRender>) -> Self {
+    pub fn new_leaf(render: Box<dyn LeafRender<Metadata = ()>>) -> Self {
         Self::Leaf(render)
     }
 
     /// Create single-child render
-    pub fn new_single(render: Box<dyn SingleRender>, child: ElementId) -> Self {
-        Self::Single { render, child }
+    pub fn new_single(render: Box<dyn SingleRender<Metadata = ()>>, child: ElementId) -> Self {
+        Self::Single { render, child: Some(child) }
     }
 
     /// Create multi-child render
-    pub fn new_multi(render: Box<dyn MultiRender>, children: Vec<ElementId>) -> Self {
+    pub fn new_multi(render: Box<dyn MultiRender<Metadata = ()>>, children: Vec<ElementId>) -> Self {
         Self::Multi { render, children }
     }
 
     /// Create leaf render (alias for widget convenience)
-    pub fn leaf(render: Box<dyn LeafRender>) -> Self {
+    pub fn leaf(render: Box<dyn LeafRender<Metadata = ()>>) -> Self {
         Self::new_leaf(render)
     }
 
     /// Create single-child render without ElementId (for widgets)
     ///
     /// The element framework will set the child ElementId later during mounting.
-    pub fn single(render: Box<dyn SingleRender>) -> Self {
+    pub fn single(render: Box<dyn SingleRender<Metadata = ()>>) -> Self {
         Self::Single {
             render,
-            child: ElementId::default(),
+            child: None,
         }
     }
 
     /// Create multi-child render without ElementIds (for widgets)
     ///
     /// The element framework will set children ElementIds later during mounting.
-    pub fn multi(render: Box<dyn MultiRender>) -> Self {
+    pub fn multi(render: Box<dyn MultiRender<Metadata = ()>>) -> Self {
         Self::Multi {
             render,
             children: Vec::new(),
@@ -123,7 +133,8 @@ impl RenderNode {
     ///
     /// # Returns
     ///
-    /// Returns `Some(ElementId)` if this is a Single variant, `None` otherwise.
+    /// Returns `Some(ElementId)` if this is a Single variant with a mounted child,
+    /// `None` if Single but not yet mounted, or `None` if not a Single variant.
     ///
     /// # Examples
     ///
@@ -134,7 +145,7 @@ impl RenderNode {
     /// ```
     pub fn child(&self) -> Option<ElementId> {
         match self {
-            Self::Single { child, .. } => Some(*child),
+            Self::Single { child, .. } => *child,
             _ => None,
         }
     }
@@ -155,7 +166,7 @@ impl RenderNode {
     pub fn set_child(&mut self, new_child: ElementId) -> bool {
         match self {
             Self::Single { child, .. } => {
-                *child = new_child;
+                *child = Some(new_child);
                 true
             }
             _ => false,
@@ -225,12 +236,24 @@ impl RenderNode {
     // ========== Layout ==========
 
     /// Perform layout
+    ///
+    /// # Single Child Handling
+    ///
+    /// For Single variant, if child is None (not yet mounted), returns zero size
+    /// constrained by the given constraints.
     pub fn layout(&mut self, tree: &ElementTree, constraints: BoxConstraints) -> Size {
         match self {
             Self::Leaf(r) => r.layout(constraints),
             Self::Single {
                 render: r, child, ..
-            } => r.layout(tree, *child, constraints),
+            } => {
+                if let Some(child_id) = child {
+                    r.layout(tree, *child_id, constraints)
+                } else {
+                    // Child not yet mounted - return zero size
+                    constraints.constrain(Size::ZERO)
+                }
+            }
             Self::Multi {
                 render: r,
                 children,
@@ -242,12 +265,24 @@ impl RenderNode {
     // ========== Paint ==========
 
     /// Perform paint
+    ///
+    /// # Single Child Handling
+    ///
+    /// For Single variant, if child is None (not yet mounted), returns an empty
+    /// container layer.
     pub fn paint(&self, tree: &ElementTree, offset: Offset) -> BoxedLayer {
         match self {
             Self::Leaf(r) => r.paint(offset),
             Self::Single {
                 render: r, child, ..
-            } => r.paint(tree, *child, offset),
+            } => {
+                if let Some(child_id) = child {
+                    r.paint(tree, *child_id, offset)
+                } else {
+                    // Child not yet mounted - return empty layer
+                    Box::new(flui_engine::ContainerLayer::new())
+                }
+            }
             Self::Multi {
                 render: r,
                 children,
@@ -286,6 +321,8 @@ mod tests {
     struct TestLeaf;
 
     impl LeafRender for TestLeaf {
+        type Metadata = ();
+
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
             constraints.constrain(Size::new(100.0, 100.0))
         }
@@ -299,6 +336,8 @@ mod tests {
     struct TestSingle;
 
     impl SingleRender for TestSingle {
+        type Metadata = ();
+
         fn layout(
             &mut self,
             _tree: &ElementTree,
@@ -317,6 +356,8 @@ mod tests {
     struct TestMulti;
 
     impl MultiRender for TestMulti {
+        type Metadata = ();
+
         fn layout(
             &mut self,
             _tree: &ElementTree,

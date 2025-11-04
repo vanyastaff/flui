@@ -1,4 +1,0 @@
-error: failed to parse manifest at `C:\Users\vanya\RustroverProjects\flui\crates\flui_devtools\Cargo.toml`
-
-Caused by:
-  can't find `profiler_bench` bench at `benches\profiler_bench.rs` or `benches\profiler_bench\main.rs`. Please specify bench.path if you want to use a non-default path.

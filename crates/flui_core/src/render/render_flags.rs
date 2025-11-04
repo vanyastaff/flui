@@ -41,6 +41,13 @@ bitflags! {
 
         /// Render has been laid out at least once
         const HAS_SIZE = 1 << 7;
+
+        /// Render has overflow (debug mode only)
+        ///
+        /// Set when content doesn't fit in available space.
+        /// Used for lock-free overflow detection in paint phase.
+        #[cfg(debug_assertions)]
+        const HAS_OVERFLOW = 1 << 8;
     }
 }
 

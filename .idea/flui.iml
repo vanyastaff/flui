@@ -20,6 +20,9 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_devtools/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_devtools/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_types/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_reactive/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_reactive/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_widgets/examples" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

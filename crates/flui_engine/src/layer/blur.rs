@@ -155,6 +155,11 @@ impl BlurLayer {
                     })
                     .fold(0.0f32, f32::max)
             }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator { .. } => {
+                // Overflow indicators don't extend bounds
+                0.0
+            }
         }
     }
 
