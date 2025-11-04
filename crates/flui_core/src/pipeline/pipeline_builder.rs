@@ -289,7 +289,7 @@ impl PipelineBuilder {
             build_pipeline.enable_batching(duration);
         }
 
-        let mut owner = PipelineOwner {
+        let owner = PipelineOwner {
             tree,
             build: build_pipeline,
             layout: LayoutPipeline::new(),

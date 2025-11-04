@@ -181,7 +181,7 @@ impl LayoutPipeline {
             // Perform layout based on RenderNode variant
             let render_object = render_elem.render_object();
             let computed_size = match &*render_object {
-                crate::render::RenderNode::Leaf(leaf) => {
+                crate::render::RenderNode::Leaf(_leaf) => {
                     // SAFETY: We need mutable access to call layout(), but we only have &self.
                     // We use interior mutability through RwLock in the render object.
                     // This is safe because:
@@ -245,7 +245,7 @@ impl LayoutPipeline {
 
             // Store computed size in RenderState
             let render_state_lock = render_elem.render_state();
-            let mut render_state = render_state_lock.write();
+            let render_state = render_state_lock.write();
             render_state.set_size(computed_size);
             render_state.set_constraints(layout_constraints);
             render_state.clear_needs_layout();
