@@ -15,10 +15,25 @@ pub struct SignalId(u64);
 
 impl SignalId {
     /// Create a new signal ID.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if u64::MAX signals have been created (practically impossible).
     pub fn new() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        #[cfg(debug_assertions)]
+        if id == u64::MAX {
+            panic!(
+                "SignalId counter overflow! Created {} signals. \
+                 This is theoretically impossible in practice.",
+                u64::MAX
+            );
+        }
+
+        Self(id)
     }
 }
 

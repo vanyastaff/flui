@@ -102,11 +102,28 @@ impl Key {
     ///
     /// This method is thread-safe and lock-free.
     /// Uses `Ordering::Relaxed` for maximum performance.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if u64::MAX keys have been created (practically impossible).
+    /// This prevents undefined behavior from NonZeroU64::new_unchecked(0) after overflow.
     #[inline]
     pub fn new() -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(1);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: Counter starts at 1, so id is always non-zero
+
+        #[cfg(debug_assertions)]
+        if id == u64::MAX {
+            panic!(
+                "Key counter overflow! Created {} keys. \
+                 This is theoretically impossible in practice.",
+                u64::MAX
+            );
+        }
+
+        // SAFETY: Counter starts at 1 and we check for overflow in debug builds.
+        // In release, after u64::MAX the counter wraps to 0, but this would require
+        // creating 18 quintillion keys which is impossible in practice.
         Self(unsafe { NonZeroU64::new_unchecked(id) })
     }
 
