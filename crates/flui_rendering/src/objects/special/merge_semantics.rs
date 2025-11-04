@@ -63,6 +63,9 @@ impl Default for RenderMergeSemantics {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderMergeSemantics {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

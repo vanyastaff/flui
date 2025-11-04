@@ -71,6 +71,9 @@ impl RenderExcludeSemantics {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderExcludeSemantics {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

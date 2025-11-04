@@ -253,6 +253,9 @@ impl RenderDecoratedBox {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderDecoratedBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

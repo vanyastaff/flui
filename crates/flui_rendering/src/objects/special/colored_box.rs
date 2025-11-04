@@ -52,6 +52,9 @@ impl Default for RenderColoredBox {
 }
 
 impl SingleRender for RenderColoredBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

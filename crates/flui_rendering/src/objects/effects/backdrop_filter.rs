@@ -165,6 +165,9 @@ impl RenderBackdropFilter {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderBackdropFilter {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

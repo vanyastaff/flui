@@ -213,6 +213,9 @@ impl Default for RenderCustomPaint {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderCustomPaint {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

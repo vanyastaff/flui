@@ -155,6 +155,9 @@ impl Default for RenderMetaData {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderMetaData {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

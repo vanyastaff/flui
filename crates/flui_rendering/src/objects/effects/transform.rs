@@ -56,6 +56,9 @@ impl RenderTransform {
 }
 
 impl SingleRender for RenderTransform {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

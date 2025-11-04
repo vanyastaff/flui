@@ -174,6 +174,9 @@ impl RenderShaderMask {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderShaderMask {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

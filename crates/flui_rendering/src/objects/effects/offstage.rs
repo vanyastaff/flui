@@ -46,6 +46,9 @@ impl Default for RenderOffstage {
 }
 
 impl SingleRender for RenderOffstage {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

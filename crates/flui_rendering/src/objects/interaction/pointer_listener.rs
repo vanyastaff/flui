@@ -72,6 +72,9 @@ impl RenderPointerListener {
 }
 
 impl SingleRender for RenderPointerListener {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

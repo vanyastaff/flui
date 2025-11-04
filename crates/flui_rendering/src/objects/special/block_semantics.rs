@@ -72,6 +72,9 @@ impl RenderBlockSemantics {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderBlockSemantics {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

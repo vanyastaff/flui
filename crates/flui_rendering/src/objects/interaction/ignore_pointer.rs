@@ -50,6 +50,9 @@ impl Default for RenderIgnorePointer {
 }
 
 impl SingleRender for RenderIgnorePointer {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

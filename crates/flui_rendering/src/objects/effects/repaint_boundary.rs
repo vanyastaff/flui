@@ -56,6 +56,9 @@ impl Default for RenderRepaintBoundary {
 }
 
 impl SingleRender for RenderRepaintBoundary {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

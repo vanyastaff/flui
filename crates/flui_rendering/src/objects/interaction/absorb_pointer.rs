@@ -51,6 +51,9 @@ impl Default for RenderAbsorbPointer {
 }
 
 impl SingleRender for RenderAbsorbPointer {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

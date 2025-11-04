@@ -177,6 +177,9 @@ impl RenderFittedBox {
 // ===== RenderObject Implementation =====
 
 impl SingleRender for RenderFittedBox {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

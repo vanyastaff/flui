@@ -111,6 +111,9 @@ impl Default for RenderPhysicalModel {
 }
 
 impl SingleRender for RenderPhysicalModel {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

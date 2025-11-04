@@ -68,6 +68,9 @@ impl Default for RenderAnimatedOpacity {
 }
 
 impl SingleRender for RenderAnimatedOpacity {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
