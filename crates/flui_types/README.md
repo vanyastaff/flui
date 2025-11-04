@@ -10,12 +10,12 @@ Fundamental types used throughout the FLUI ecosystem: geometry, layout, styling,
 
 ## Features
 
-- 🔒 **100% Safe Rust** - Zero unsafe code in entire crate
-- ⚡ **Zero Allocation** - All types are stack-allocated with `Copy` semantics
+- 🔒 **Memory Safe** - Minimal unsafe code (SIMD optimizations only) with safe public API
+- ⚡ **Performance-Focused** - Zero-allocation core types, selective heap usage for caching
 - 🎯 **Type Safety** - Strong typing with `#[must_use]` annotations
-- 🚀 **High Performance** - Inline-optimized, const-evaluatable, SIMD-ready
+- 🚀 **High Performance** - Inline-optimized, const-evaluatable, SIMD-accelerated
 - 📦 **Tiny Binary** - Minimal overhead, compact representations (Color is 4 bytes)
-- 🧪 **Battle Tested** - 672+ unit tests covering edge cases
+- 🧪 **Battle Tested** - 700+ unit tests covering edge cases
 
 ## Quick Start
 
