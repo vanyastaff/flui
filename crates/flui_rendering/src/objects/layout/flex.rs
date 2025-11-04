@@ -385,19 +385,15 @@ impl MultiRender for RenderFlex {
             // Report overflow to ElementTree for automatic indicator painting
             tree.set_current_overflow(direction, self.overflow_pixels);
 
-            // Print console warning if overflow occurred
+            // Log overflow warning
             if self.overflow_pixels > 0.0 {
-                eprintln!(
-                    "⚠️  RenderFlex overflow detected!\n\
-                     └─ Direction: {:?}\n\
-                     └─ Content size: {:.1}px\n\
-                     └─ Container size: {:.1}px\n\
-                     └─ Overflow: {:.1}px\n\
-                     └─ Tip: Use Flexible/Expanded widgets or reduce content size",
-                    direction,
-                    total_main_size,
-                    container_main_size,
-                    self.overflow_pixels
+                tracing::warn!(
+                    direction = ?direction,
+                    content_size_px = total_main_size,
+                    container_size_px = container_main_size,
+                    overflow_px = self.overflow_pixels,
+                    "RenderFlex overflow detected! \
+                     Tip: Use Flexible/Expanded widgets or reduce content size"
                 );
             }
         }

@@ -126,7 +126,7 @@ pub fn run<L: AppLogic>(mut logic: L, config: WindowConfig) -> Result<(), String
                             logic.render(&mut painter);
 
                             if let Err(e) = painter.end_frame() {
-                                eprintln!("Render error: {:?}", e);
+                                tracing::error!(error = ?e, "Render error in WGPU backend");
                             }
 
                             window.request_redraw();
