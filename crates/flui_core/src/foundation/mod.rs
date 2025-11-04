@@ -5,10 +5,12 @@
 pub mod atomic_flags;
 pub mod change_notifier;
 pub mod diagnostics;
+pub mod element_id;
 pub mod error;
 pub mod key;
 pub mod notification;
 pub mod slot;
+
 
 
 
@@ -20,11 +22,13 @@ pub use diagnostics::{
     DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty,
     DiagnosticsTreeStyle,
 };
+pub use element_id::ElementId;
 pub use key::{Key, KeyRef};
 pub use notification::{
     DynNotification, FocusChangedNotification, KeepAliveNotification, LayoutChangedNotification,
     Notification, ScrollNotification, SizeChangedNotification,
 };
 pub use slot::Slot;
+
 
 

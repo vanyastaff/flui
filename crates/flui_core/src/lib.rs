@@ -292,6 +292,8 @@ pub use foundation::{
     DiagnosticsProperty,
     DiagnosticsTreeStyle,
     DynNotification,
+    // Element ID (moved from element module to break circular dependencies)
+    ElementId,
     FocusChangedNotification,
     KeepAliveNotification,
     Key,
@@ -325,7 +327,7 @@ pub use element::{
 
     // Core enum
     Element,
-    ElementId,
+    // Note: ElementId is now exported from foundation (see above)
 
     InheritedElement,
 

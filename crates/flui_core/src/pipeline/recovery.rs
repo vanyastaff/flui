@@ -242,12 +242,13 @@ impl ErrorRecovery {
                 "Exceeded maximum errors, panicking"
             );
 
-            return RecoveryAction::Panic(PipelineError::InvalidState {
-                message: format!(
+            return RecoveryAction::Panic(
+                PipelineError::invalid_state(format!(
                     "Exceeded maximum pipeline errors ({}/{})",
                     count, self.max_errors
-                ),
-            });
+                ))
+                .expect("Non-empty error message")
+            );
         }
 
         // Log error
@@ -338,10 +339,7 @@ mod tests {
     fn test_error_count() {
         let mut recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 
-        let error = PipelineError::LayoutError {
-            element_id: 42,
-            message: "test".to_string(),
-        };
+        let error = PipelineError::layout_error(42, "test").unwrap();
 
         recovery.handle_error(error.clone(), PipelinePhase::Layout);
         assert_eq!(recovery.error_count(), 1);
@@ -357,10 +355,7 @@ mod tests {
     fn test_skip_frame_policy() {
         let mut recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 
-        let error = PipelineError::LayoutError {
-            element_id: 42,
-            message: "test".to_string(),
-        };
+        let error = PipelineError::layout_error(42, "test").unwrap();
 
         match recovery.handle_error(error, PipelinePhase::Layout) {
             RecoveryAction::SkipFrame => {
@@ -374,10 +369,7 @@ mod tests {
     fn test_show_error_policy() {
         let mut recovery = ErrorRecovery::new(RecoveryPolicy::ShowErrorWidget);
 
-        let error = PipelineError::PaintError {
-            element_id: 42,
-            message: "test".to_string(),
-        };
+        let error = PipelineError::paint_error(42, "test").unwrap();
 
         match recovery.handle_error(error.clone(), PipelinePhase::Paint) {
             RecoveryAction::ShowError(e) => {
@@ -392,10 +384,7 @@ mod tests {
     fn test_max_errors() {
         let mut recovery = ErrorRecovery::with_max_errors(RecoveryPolicy::SkipFrame, 3);
 
-        let error = PipelineError::LayoutError {
-            element_id: 42,
-            message: "test".to_string(),
-        };
+        let error = PipelineError::layout_error(42, "test").unwrap();
 
         // Should panic on 4th error
         for _ in 0..5 {

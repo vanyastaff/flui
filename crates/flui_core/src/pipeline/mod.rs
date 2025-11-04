@@ -103,7 +103,7 @@ pub use build_pipeline::BuildPipeline;
 pub use cancellation::CancellationToken;
 pub use dirty_tracking::LockFreeDirtySet;
 pub use element_tree::ElementTree;
-pub use error::{PipelineError, PipelinePhase};
+pub use error::{PipelineError, PipelinePhase, TimeoutDuration, InvalidError, InvalidDuration};
 pub use frame_coordinator::FrameCoordinator;
 pub use frame_scheduler::{FrameScheduler, FrameSkipPolicy};
 pub use layout_pipeline::LayoutPipeline;

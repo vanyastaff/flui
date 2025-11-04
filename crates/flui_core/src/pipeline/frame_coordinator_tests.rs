@@ -19,9 +19,7 @@
 
 #[cfg(test)]
 mod tests {
-    use super::super::{
-        FrameCoordinator, ElementTree, BuildPipeline, LayoutPipeline, PaintPipeline,
-    };
+    use super::super::{FrameCoordinator, ElementTree};
     use crate::element::{Element, RenderElement, ElementId};
     use crate::render::LeafRender;
     use crate::foundation::Slot;
@@ -39,11 +37,13 @@ mod tests {
     struct MockRender;
 
     impl LeafRender for MockRender {
-        fn layout(&self, _constraints: BoxConstraints) -> Size {
+        type Metadata = ();
+
+        fn layout(&mut self, _constraints: BoxConstraints) -> Size {
             Size::new(100.0, 100.0)
         }
 
-        fn paint(&self, _tree: &ElementTree, _offset: Offset) -> BoxedLayer {
+        fn paint(&self, _offset: Offset) -> BoxedLayer {
             Box::new(flui_engine::ContainerLayer::new())
         }
     }

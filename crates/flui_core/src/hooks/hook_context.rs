@@ -201,7 +201,35 @@ impl HookContext {
     }
 
     /// Clean up all hooks for a component
+    ///
+    /// This method ensures proper cleanup by:
+    /// 1. Identifying all hooks belonging to the component
+    /// 2. Dropping each hook state (triggers Drop impls)
+    /// 3. Removing the hooks from the map
+    ///
+    /// # Memory Safety
+    ///
+    /// Drop implementations for hook states (SignalState, MemoState, EffectState)
+    /// are called automatically when values are removed from the HashMap.
+    /// This ensures:
+    /// - Cached values are freed
+    /// - Future subscribers are cleared (when implemented)
+    /// - Rc cycles are broken
     pub fn cleanup_component(&mut self, component_id: ComponentId) {
+        #[cfg(debug_assertions)]
+        {
+            let count = self.hooks.keys().filter(|id| id.component == component_id).count();
+            if count > 0 {
+                tracing::debug!(
+                    "Cleaning up {} hooks for component {:?}",
+                    count,
+                    component_id
+                );
+            }
+        }
+
+        // HashMap::retain automatically drops values that are removed,
+        // triggering Drop impls for SignalState, MemoState, EffectState.
         self.hooks.retain(|id, _state| {
             id.component != component_id
         });
