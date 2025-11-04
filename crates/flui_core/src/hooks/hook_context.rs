@@ -138,12 +138,43 @@ impl HookContext {
                              Rules of Hooks:\n\
                              - Always call hooks in the same order\n\
                              - Never call hooks conditionally\n\
-                             - Never call hooks in loops with variable iterations"
+                             - Never call hooks in loops with variable iterations\n\
+                             \n\
+                             See hooks/RULES.md for detailed explanation and examples."
                         );
                         panic!(
-                            "Hook state type mismatch at component {:?} index {}.\n\
-                             Expected: {}\n\
-                             This usually means hooks are called conditionally or in different order between renders.",
+                            "\n\
+                            ╔════════════════════════════════════════════════════════════════╗\n\
+                            ║          HOOK ORDERING VIOLATION DETECTED                      ║\n\
+                            ╚════════════════════════════════════════════════════════════════╝\n\
+                            \n\
+                            Hook state type mismatch at:\n\
+                            • Component: {:?}\n\
+                            • Hook index: {}\n\
+                            • Expected type: {}\n\
+                            \n\
+                            WHY THIS HAPPENED:\n\
+                            You're calling hooks in a different order between renders.\n\
+                            The hook system identifies hooks by their position (0, 1, 2...),\n\
+                            so changing the order breaks the state tracking.\n\
+                            \n\
+                            COMMON CAUSES:\n\
+                            ❌ Conditional hooks:     if x {{ use_signal(...) }}\n\
+                            ❌ Early returns:         if !ready {{ return }}; use_signal(...)\n\
+                            ❌ Variable loops:        for item in list {{ use_signal(...) }}\n\
+                            ❌ Different code paths:  match {{ A => hook1(), B => hook2() }}\n\
+                            \n\
+                            HOW TO FIX:\n\
+                            ✅ Call ALL hooks at the TOP LEVEL of your component's build() method\n\
+                            ✅ Make sure EVERY render calls the SAME hooks in the SAME order\n\
+                            ✅ Make VALUES conditional, not hook CALLS:\n\
+                               let x = use_signal(ctx, 0);\n\
+                               if condition {{ x.set(10); }}  // ← Correct\n\
+                            \n\
+                            📚 For detailed rules and examples, see:\n\
+                            crates/flui_core/src/hooks/RULES.md\n\
+                            \n\
+                            ",
                             hook_id.component,
                             hook_id.index.0,
                             std::any::type_name::<H::State>()
