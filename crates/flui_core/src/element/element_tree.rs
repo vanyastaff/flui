@@ -82,6 +82,70 @@ pub(super) struct ElementNode {
     pub(super) element: Element,
 }
 
+// ========== RAII Guards for Thread-Local Stacks ==========
+
+/// RAII guard that automatically pops element from layout stack on drop.
+///
+/// This ensures the stack is cleaned up even if layout panics.
+struct LayoutGuard {
+    element_id: ElementId,
+}
+
+impl LayoutGuard {
+    fn new(element_id: ElementId) -> Self {
+        ElementTree::LAYOUT_STACK.with(|stack| {
+            stack.borrow_mut().push(element_id);
+        });
+        Self { element_id }
+    }
+}
+
+impl Drop for LayoutGuard {
+    fn drop(&mut self) {
+        ElementTree::LAYOUT_STACK.with(|stack| {
+            let popped = stack.borrow_mut().pop();
+            debug_assert_eq!(
+                popped,
+                Some(self.element_id),
+                "Layout stack corruption: expected {:?}, got {:?}",
+                self.element_id,
+                popped
+            );
+        });
+    }
+}
+
+/// RAII guard that automatically pops element from paint stack on drop.
+///
+/// This ensures the stack is cleaned up even if paint panics.
+struct PaintGuard {
+    element_id: ElementId,
+}
+
+impl PaintGuard {
+    fn new(element_id: ElementId) -> Self {
+        ElementTree::PAINT_STACK.with(|stack| {
+            stack.borrow_mut().push(element_id);
+        });
+        Self { element_id }
+    }
+}
+
+impl Drop for PaintGuard {
+    fn drop(&mut self) {
+        ElementTree::PAINT_STACK.with(|stack| {
+            let popped = stack.borrow_mut().pop();
+            debug_assert_eq!(
+                popped,
+                Some(self.element_id),
+                "Paint stack corruption: expected {:?}, got {:?}",
+                self.element_id,
+                popped
+            );
+        });
+    }
+}
+
 impl ElementTree {
     /// Create a new empty element tree
     ///
@@ -435,22 +499,16 @@ impl ElementTree {
             return render_state.read().size();
         }
 
-        // Push element onto layout stack
-        Self::LAYOUT_STACK.with(|stack| {
-            stack.borrow_mut().push(element_id);
-        });
+        // Push element onto layout stack with RAII guard
+        // The guard will automatically pop the element even if layout panics
+        let _guard = LayoutGuard::new(element_id);
 
         // Scope 2: Perform layout (re-fetch element to avoid use-after-free - Issue #3)
         let size = {
             let element = self.get(element_id)?;
             let render_element = element.as_render()?;
             render_element.render_object_mut().layout(self, constraints)
-        }; // Drop all borrows before pop/cleanup
-
-        // Pop element from layout stack
-        Self::LAYOUT_STACK.with(|stack| {
-            stack.borrow_mut().pop();
-        });
+        }; // Drop all borrows before guard cleanup (which happens automatically)
 
         // Decrement depth
         #[cfg(debug_assertions)]
@@ -502,27 +560,21 @@ impl ElementTree {
             return None;
         }
 
-        // Push element onto paint stack
-        Self::PAINT_STACK.with(|stack| {
-            stack.borrow_mut().push(element_id);
-        });
+        // Push element onto paint stack with RAII guard
+        // The guard will automatically pop the element even if paint panics
+        let _guard = PaintGuard::new(element_id);
 
         // Get render element
         let element = self.get(element_id)?;
         let render_element = element.as_render()?;
 
-            // Borrow the render object through RwLock - the guard must live until after the call
-            let render_object_guard = render_element.render_object();
+        // Borrow the render object through RwLock - the guard must live until after the call
+        let render_object_guard = render_element.render_object();
 
-            // Call paint on RenderNode
-            let layer = render_object_guard.paint(self, offset);
+        // Call paint on RenderNode
+        let layer = render_object_guard.paint(self, offset);
 
-        // Pop element from paint stack
-        Self::PAINT_STACK.with(|stack| {
-            stack.borrow_mut().pop();
-        });
-
-        // Guard dropped here (render_object_guard)
+        // Guards dropped here (render_object_guard, then _guard automatically)
 
         // Note: Overflow indicators are now painted by each RenderObject itself
         // (e.g., RenderFlex paints its own overflow indicators in debug mode).
