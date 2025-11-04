@@ -4,7 +4,7 @@
 //! re-computes when dependencies change.
 
 use super::hook_trait::{Hook, ReactiveHook, DependencyId};
-use super::hook_context::with_hook_context; // Still used by Memo::get() for dependency tracking
+use super::hook_context::HookContext;
 use crate::BuildContext;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -56,13 +56,13 @@ struct MemoInner<T> {
 /// # Example
 ///
 /// ```rust,ignore
-/// let count = use_signal(0);
-/// let doubled = use_memo(move || count.get() * 2);
-/// println!("Doubled: {}", doubled.get());
+/// let count = use_signal(ctx, 0);
+/// let doubled = use_memo(ctx, move |ctx| count.get(ctx) * 2);
+/// println!("Doubled: {}", doubled.get(ctx));
 /// ```
 pub struct Memo<T> {
     inner: Rc<MemoInner<T>>,
-    compute: Rc<dyn Fn() -> T>,
+    compute: Rc<dyn Fn(&mut HookContext) -> T>,
 }
 
 impl<T> std::fmt::Debug for Memo<T> {
@@ -88,25 +88,25 @@ impl<T> Memo<T> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let count = use_signal(0);
-    /// let doubled = use_memo(move || count.get() * 2);
-    /// println!("Doubled: {}", doubled.get());
+    /// let count = use_signal(ctx, 0);
+    /// let doubled = use_memo(ctx, move || count.get(ctx) * 2);
+    /// println!("Doubled: {}", doubled.get(ctx));
     /// ```
-    pub fn get(&self) -> T
+    pub fn get(&self, ctx: &mut HookContext) -> T
     where
         T: Clone,
     {
-        self.try_get().unwrap_or_else(|err| {
+        self.try_get(ctx).unwrap_or_else(|err| {
             panic!("Memo::get() failed: {}", err)
         })
     }
 
     /// Get the memoized value with a function, recomputing if needed.
-    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R
+    pub fn with<R>(&self, ctx: &mut HookContext, f: impl FnOnce(&T) -> R) -> R
     where
         T: Clone,
     {
-        let value = self.get();
+        let value = self.get(ctx);
         f(&value)
     }
 
@@ -163,8 +163,8 @@ impl<T> Memo<T> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let memo = use_memo(|| expensive_computation());
-    /// match memo.try_get() {
+    /// let memo = use_memo(ctx, || expensive_computation());
+    /// match memo.try_get(ctx) {
     ///     Ok(value) => println!("Value: {}", value),
     ///     Err(MemoError::Poisoned) => {
     ///         memo.recover();
@@ -173,7 +173,7 @@ impl<T> Memo<T> {
     ///     Err(e) => eprintln!("Error: {}", e),
     /// }
     /// ```
-    pub fn try_get(&self) -> Result<T, MemoError>
+    pub fn try_get(&self, ctx: &mut HookContext) -> Result<T, MemoError>
     where
         T: Clone,
     {
@@ -214,15 +214,13 @@ impl<T> Memo<T> {
             };
 
             // Start tracking dependencies
-            with_hook_context(|ctx| {
-                ctx.start_tracking();
-            });
+            ctx.start_tracking();
 
             // Compute new value (this can panic!)
-            let new_value = (self.compute)();
+            let new_value = (self.compute)(ctx);
 
             // Get tracked dependencies
-            let deps = with_hook_context(|ctx| ctx.end_tracking());
+            let deps = ctx.end_tracking();
 
             // Check if dependencies changed
             let deps_changed = {
@@ -265,7 +263,7 @@ impl<T> Clone for Memo<T> {
 /// Hook state for MemoHook.
 pub struct MemoState<T> {
     inner: Rc<MemoInner<T>>,
-    compute: Rc<dyn Fn() -> T>,
+    compute: Rc<dyn Fn(&mut HookContext) -> T>,
 }
 
 impl<T> std::fmt::Debug for MemoState<T> {
@@ -309,7 +307,7 @@ pub struct MemoHook<T, F>(PhantomData<(T, F)>);
 impl<T, F> Hook for MemoHook<T, F>
 where
     T: Clone + 'static,
-    F: Fn() -> T + Clone + 'static,
+    F: Fn(&mut HookContext) -> T + Clone + 'static,
 {
     type State = MemoState<T>;
     type Input = Rc<F>;
@@ -324,7 +322,7 @@ where
                 is_computing: RefCell::new(false),
                 is_poisoned: RefCell::new(false),
             }),
-            compute: compute as Rc<dyn Fn() -> T>,
+            compute: compute as Rc<dyn Fn(&mut HookContext) -> T>,
         }
     }
 
@@ -339,7 +337,7 @@ where
 impl<T, F> ReactiveHook for MemoHook<T, F>
 where
     T: Clone + 'static,
-    F: Fn() -> T + Clone + 'static,
+    F: Fn(&mut HookContext) -> T + Clone + 'static,
 {
     fn track_dependencies(&self) -> Vec<DependencyId> {
         // Dependencies are tracked during computation
@@ -363,18 +361,18 @@ where
 ///         let count = use_signal(ctx, 0);
 ///
 ///         // This expensive computation only runs when count changes
-///         let doubled = use_memo(ctx, move || {
-///             expensive_computation(count.get())
+///         let doubled = use_memo(ctx, move |ctx| {
+///             expensive_computation(count.get(ctx))
 ///         });
 ///
-///         Text::new(format!("Result: {}", doubled.get())).into()
+///         Text::new(format!("Result: {}", doubled.get(ctx))).into()
 ///     }
 /// }
 /// ```
 pub fn use_memo<T, F>(ctx: &BuildContext, compute: F) -> Memo<T>
 where
     T: Clone + 'static,
-    F: Fn() -> T + Clone + 'static,
+    F: Fn(&mut HookContext) -> T + Clone + 'static,
 {
     ctx.with_hook_context_mut(|hook_ctx| {
         hook_ctx.use_hook::<MemoHook<T, F>>(Rc::new(compute))

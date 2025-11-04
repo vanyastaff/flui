@@ -4,7 +4,7 @@
 //! When a signal changes, all components that depend on it are automatically re-rendered.
 
 use super::hook_trait::{Hook, DependencyId};
-use super::hook_context::with_hook_context; // Still used by Signal::get() and Signal::with() for dependency tracking
+use super::hook_context::HookContext;
 use crate::BuildContext;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -195,28 +195,54 @@ pub struct Signal<T> {
 impl<T> Signal<T> {
     /// Get the current value of the signal.
     ///
-    /// This tracks the signal as a dependency.
-    pub fn get(&self) -> T
+    /// This tracks the signal as a dependency in the given context.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let value = count.get(ctx);
+    /// ```
+    pub fn get(&self, ctx: &mut HookContext) -> T
     where
         T: Clone,
     {
         // Track dependency
-        with_hook_context(|ctx| {
-            ctx.track_dependency(DependencyId::new(self.inner.id.0));
-        });
+        ctx.track_dependency(DependencyId::new(self.inner.id.0));
+        self.inner.value.borrow().clone()
+    }
 
+    /// Get the current value without tracking as a dependency.
+    ///
+    /// Use this when you need to read the value but don't want
+    /// to register a dependency (e.g., in event handlers or subscribers).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// signal.subscribe(move || {
+    ///     let value = signal_clone.get_untracked();
+    ///     println!("Value: {}", value);
+    /// });
+    /// ```
+    pub fn get_untracked(&self) -> T
+    where
+        T: Clone,
+    {
         self.inner.value.borrow().clone()
     }
 
     /// Get a reference to the current value without cloning.
     ///
-    /// This tracks the signal as a dependency.
-    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+    /// This tracks the signal as a dependency in the given context.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// count.with(ctx, |n| println!("Count: {}", n));
+    /// ```
+    pub fn with<R>(&self, ctx: &mut HookContext, f: impl FnOnce(&T) -> R) -> R {
         // Track dependency
-        with_hook_context(|ctx| {
-            ctx.track_dependency(DependencyId::new(self.inner.id.0));
-        });
-
+        ctx.track_dependency(DependencyId::new(self.inner.id.0));
         f(&*self.inner.value.borrow())
     }
 
@@ -431,10 +457,10 @@ mod tests {
         ctx.begin_component(ComponentId(1));
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
-        assert_eq!(signal.get(), 0);
+        assert_eq!(signal.get(&mut ctx), 0);
 
         signal.set(42);
-        assert_eq!(signal.get(), 42);
+        assert_eq!(signal.get(&mut ctx), 42);
     }
 
     #[test]
@@ -444,10 +470,10 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
         signal.update(|n| n + 1);
-        assert_eq!(signal.get(), 1);
+        assert_eq!(signal.get(&mut ctx), 1);
 
         signal.update(|n| n * 2);
-        assert_eq!(signal.get(), 2);
+        assert_eq!(signal.get(&mut ctx), 2);
     }
 
     #[test]
@@ -459,7 +485,7 @@ mod tests {
         let signal2 = signal1.clone();
 
         signal1.set(42);
-        assert_eq!(signal2.get(), 42);
+        assert_eq!(signal2.get(&mut ctx), 42);
     }
 
     // =========================================================================
@@ -613,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn test_subscriber_can_read_signal() {
+    fn test_subscriber_can_read_signal_value() {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
@@ -624,7 +650,8 @@ mod tests {
         let signal_clone = signal.clone();
 
         let _id = signal.subscribe(move || {
-            *last_value_clone.borrow_mut() = signal_clone.get();
+            // Use get_untracked() in subscribers (no access to HookContext)
+            *last_value_clone.borrow_mut() = signal_clone.get_untracked();
         });
 
         signal.set(42);

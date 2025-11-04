@@ -2,7 +2,6 @@
 
 use super::hook_trait::{Hook, DependencyId};
 use std::any::{Any, TypeId};
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Unique identifier for a component instance.
@@ -242,17 +241,19 @@ impl Default for HookContext {
     }
 }
 
-thread_local! {
-    static HOOK_CONTEXT: RefCell<HookContext> = RefCell::new(HookContext::new());
-}
-
-/// Access the thread-local hook context
-///
-/// Provides mutable access to the hook context for the current thread.
-/// Used internally by hook implementations to manage state.
-pub fn with_hook_context<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut HookContext) -> R,
-{
-    HOOK_CONTEXT.with(|ctx| f(&mut ctx.borrow_mut()))
-}
+// REMOVED: Thread-local global state (Issue #17)
+//
+// Previously, HookContext was stored in thread-local storage, which:
+// - Prevented running hook tests in parallel
+// - Made it impossible to have multiple independent UI trees
+// - Made debugging harder due to hidden global state
+// - Violated dependency injection principles
+//
+// Now, HookContext is passed explicitly through the API, providing:
+// ✅ Explicit dependencies (no magic globals)
+// ✅ Isolated test contexts
+// ✅ Multiple independent apps
+// ✅ Clear ownership and lifecycle
+//
+// Migration: Replace `with_hook_context(|ctx| ...)` with explicit context parameters.
+// See HOOK_REFACTORING.md for full migration guide.

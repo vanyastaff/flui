@@ -4,7 +4,7 @@
 //! similar to React's useEffect.
 
 use super::hook_trait::{Hook, EffectHook as EffectHookTrait, DependencyId};
-use super::hook_context::with_hook_context; // Still used by Effect::run_if_needed() for dependency tracking
+use super::hook_context::HookContext;
 use crate::BuildContext;
 use std::rc::Rc;
 use std::cell::RefCell;
@@ -49,14 +49,12 @@ impl std::fmt::Debug for Effect {
 
 impl Effect {
     /// Run the effect if dependencies changed.
-    pub fn run_if_needed(&self) {
+    pub fn run_if_needed(&self, ctx: &mut HookContext) {
         // Track current dependencies
-        with_hook_context(|ctx| {
-            ctx.start_tracking();
-        });
+        ctx.start_tracking();
 
         // Check if we should run
-        let deps = with_hook_context(|ctx| ctx.end_tracking());
+        let deps = ctx.end_tracking();
 
         let should_run = {
             let prev_deps = self.inner.prev_deps.borrow();
@@ -205,7 +203,7 @@ where
     ctx.with_hook_context_mut(|hook_ctx| {
         let eff = hook_ctx.use_hook::<EffectHook<F>>(Rc::new(effect));
         // Run effect if needed
-        eff.run_if_needed();
+        eff.run_if_needed(hook_ctx);
         eff
     })
 }

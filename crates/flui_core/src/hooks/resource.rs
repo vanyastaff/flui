@@ -48,28 +48,43 @@ impl<T: Clone + 'static, E: Clone + 'static> Resource<T, E> {
     }
 
     /// Check if the resource is loading.
+    ///
+    /// Note: This does not track the signal as a dependency.
+    /// Use `loading.get(ctx)` if you need dependency tracking.
     pub fn is_loading(&self) -> bool {
-        self.loading.get()
+        self.loading.get_untracked()
     }
 
     /// Check if the resource has data.
+    ///
+    /// Note: This does not track the signal as a dependency.
+    /// Use `data.get(ctx)` if you need dependency tracking.
     pub fn has_data(&self) -> bool {
-        self.data.get().is_some()
+        self.data.get_untracked().is_some()
     }
 
     /// Check if the resource has an error.
+    ///
+    /// Note: This does not track the signal as a dependency.
+    /// Use `error.get(ctx)` if you need dependency tracking.
     pub fn has_error(&self) -> bool {
-        self.error.get().is_some()
+        self.error.get_untracked().is_some()
     }
 
     /// Get the data if available.
+    ///
+    /// Note: This does not track the signal as a dependency.
+    /// Use `data.get(ctx)` if you need dependency tracking.
     pub fn get_data(&self) -> Option<T> {
-        self.data.get()
+        self.data.get_untracked()
     }
 
     /// Get the error if available.
+    ///
+    /// Note: This does not track the signal as a dependency.
+    /// Use `error.get(ctx)` if you need dependency tracking.
     pub fn get_error(&self) -> Option<E> {
-        self.error.get()
+        self.error.get_untracked()
     }
 
     /// Refetch the resource.

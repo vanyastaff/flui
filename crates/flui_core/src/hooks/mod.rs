@@ -49,7 +49,7 @@ pub mod resource;
 pub mod test_harness;
 
 pub use hook_trait::{Hook, ReactiveHook, EffectHook, AsyncHook, DependencyId};
-pub use hook_context::{HookContext, ComponentId, HookId, HookIndex, with_hook_context};
+pub use hook_context::{HookContext, ComponentId, HookId, HookIndex};
 pub use signal::{use_signal, Signal, SignalHook, SignalId};
 pub use memo::{use_memo, Memo, MemoHook};
 pub use effect::{use_effect, use_effect_simple, Effect, EffectHook as EffectHookImpl, CleanupFn};
