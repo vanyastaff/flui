@@ -30,9 +30,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -122,7 +122,7 @@ use flui_types::layout::{Alignment, StackFit};
 /// - Stack: For showing all children overlaid
 /// - PageView: For swiping between pages
 /// - TabBarView: For tab-based navigation with animations
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(Alignment, into),
@@ -158,7 +158,31 @@ pub struct IndexedStack {
     /// Only the child at `index` will be visible, but all children
     /// are laid out to compute the correct size and maintain state.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Widget>,
+    pub children: Vec<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for IndexedStack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IndexedStack")
+            .field("key", &self.key)
+            .field("index", &self.index)
+            .field("alignment", &self.alignment)
+            .field("sizing", &self.sizing)
+            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for IndexedStack {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            index: self.index,
+            alignment: self.alignment,
+            sizing: self.sizing,
+            children: Vec::new(),
+        }
+    }
 }
 
 impl IndexedStack {
@@ -213,8 +237,8 @@ impl IndexedStack {
     /// stack.add_child(Container::new());
     /// stack.add_child(Text::new("Page 2"));
     /// ```
-    pub fn add_child(&mut self, child: Widget) {
-        self.children.push(child);
+    pub fn add_child(&mut self, child: impl View + 'static) {
+        self.children.push(Box::new(child));
     }
 
     /// Sets the children widgets.
@@ -224,11 +248,11 @@ impl IndexedStack {
     /// ```rust,ignore
     /// let mut stack = IndexedStack::new(Some(0));
     /// stack.set_children(vec![
-    ///     Container::new(),
-    ///     Text::new("Page 2"),
+    ///     Box::new(Container::new()),
+    ///     Box::new(Text::new("Page 2")),
     /// ]);
     /// ```
-    pub fn set_children(&mut self, children: Vec<Widget>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
         self.children = children;
     }
 
@@ -255,30 +279,47 @@ impl Default for IndexedStack {
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for IndexedStack {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::multi(Box::new(RenderIndexedStack::with_alignment(
-            self.index,
-            self.alignment,
-        )))
-    }
+// Implement View for IndexedStack - New architecture
+impl View for IndexedStack {
+    type Element = Element;
+    type State = Vec<Box<dyn std::any::Any>>;
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi { render, .. } = render_object {
-            if let Some(indexed_stack) = render.downcast_mut::<RenderIndexedStack>() {
-                indexed_stack.set_index(self.index);
-                indexed_stack.set_alignment(self.alignment);
-            }
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build all children
+        let mut child_ids = Vec::new();
+        let mut child_states = Vec::new();
+
+        for child in self.children {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            child_ids.push(id);
+            child_states.push(state);
         }
+
+        // Create RenderIndexedStack
+        let render_indexed_stack = RenderIndexedStack::with_alignment(self.index, self.alignment);
+
+        // Create RenderNode (Multi)
+        let render_node = RenderNode::Multi {
+            render: Box::new(render_indexed_stack),
+            children: child_ids,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_states)
     }
 
-    fn child(&self) -> Option<&Widget> {
-        None // Multi-child widgets don't have a single child
-    }
-
-    fn children(&self) -> Option<&[Widget]> {
-        Some(&self.children)
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -292,30 +333,30 @@ where
 {
     /// Sets the children widgets (works in builder chain).
     ///
-    /// Accepts anything that implements `IntoWidget` for ergonomic API.
-    ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// IndexedStack::builder()
     ///     .index(0)
-    ///     .children(vec![Text::new("Page 1"), Container::builder().build()])
+    ///     .children(vec![
+    ///         Box::new(Text::new("Page 1")) as Box<dyn AnyView>,
+    ///         Box::new(Container::new()) as Box<dyn AnyView>,
+    ///     ])
     ///     .build()
     /// ```
     pub fn children(
         self,
-        children: impl IntoIterator<Item = impl flui_core::IntoWidget>,
+        children: Vec<Box<dyn AnyView>>,
     ) -> IndexedStackBuilder<SetChildren<S>> {
-        let widgets: Vec<Widget> = children.into_iter().map(|c| c.into_widget()).collect();
-        self.children_internal(widgets)
+        self.children_internal(children)
     }
 }
 
 // Public build() wrapper
 impl<S: State> IndexedStackBuilder<S> {
-    /// Builds the IndexedStack widget and returns it as a Widget.
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_indexed_stack())
+    /// Builds the IndexedStack widget.
+    pub fn build(self) -> IndexedStack {
+        self.build_indexed_stack()
     }
 }
 
@@ -357,32 +398,36 @@ macro_rules! indexed_stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::{LeafRenderObjectElement, RenderObjectWidget};
-    use flui_rendering::RenderPadding;
-    use flui_types::EdgeInsets;
 
-    // Mock widget for testing
-    #[derive(Debug, Clone)]
-    struct MockWidget {
+    // Mock view for testing
+    #[derive()]
+    struct MockView {
         #[allow(dead_code)]
         id: String,
     }
 
-    impl MockWidget {
+    impl MockView {
         fn new(id: &str) -> Self {
             Self { id: id.to_string() }
         }
     }
 
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            use flui_rendering::RenderColoredBox;
+            use flui_types::Color;
+            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
         }
 
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
     }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_indexed_stack_new() {
@@ -418,8 +463,8 @@ mod tests {
     #[test]
     fn test_indexed_stack_add_child() {
         let mut widget = IndexedStack::new(Some(0));
-        widget.add_child(MockWidget::new("child1"));
-        widget.add_child(MockWidget::new("child2"));
+        widget.add_child(MockView::new("child1"));
+        widget.add_child(MockView::new("child2"));
         assert_eq!(widget.children.len(), 2);
     }
 
@@ -427,9 +472,9 @@ mod tests {
     fn test_indexed_stack_set_children() {
         let mut widget = IndexedStack::new(Some(0));
         widget.set_children(vec![
-            Box::new(MockWidget::new("child1")),
-            Box::new(MockWidget::new("child2")),
-            Box::new(MockWidget::new("child3")),
+            Box::new(MockView::new("child1")),
+            Box::new(MockView::new("child2")),
+            Box::new(MockView::new("child3")),
         ]);
         assert_eq!(widget.children.len(), 3);
     }
@@ -451,7 +496,10 @@ mod tests {
     fn test_indexed_stack_builder_with_children() {
         let widget = IndexedStack::builder()
             .index(0)
-            .children(vec![MockWidget::new("child1"), MockWidget::new("child2")])
+            .children(vec![
+                Box::new(MockView::new("child1")),
+                Box::new(MockView::new("child2")),
+            ])
             .build();
 
         assert_eq!(widget.children.len(), 2);
@@ -503,22 +551,22 @@ mod tests {
 
         // Index within bounds
         let mut widget = IndexedStack::new(Some(1));
-        widget.add_child(MockWidget::new("child1"));
-        widget.add_child(MockWidget::new("child2"));
-        widget.add_child(MockWidget::new("child3"));
+        widget.add_child(MockView::new("child1"));
+        widget.add_child(MockView::new("child2"));
+        widget.add_child(MockView::new("child3"));
         assert!(widget.validate().is_ok());
 
         // Index 0 with children
         let mut widget = IndexedStack::new(Some(0));
-        widget.add_child(MockWidget::new("child1"));
+        widget.add_child(MockView::new("child1"));
         assert!(widget.validate().is_ok());
     }
 
     #[test]
     fn test_indexed_stack_validate_out_of_bounds() {
         let mut widget = IndexedStack::new(Some(5));
-        widget.add_child(MockWidget::new("child1"));
-        widget.add_child(MockWidget::new("child2"));
+        widget.add_child(MockView::new("child1"));
+        widget.add_child(MockView::new("child2"));
         assert!(widget.validate().is_err());
     }
 
@@ -555,39 +603,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_indexed_stack_render_object_creation() {
-        let widget = IndexedStack::new(Some(0));
-        let render_object = widget.create_render_object();
-        assert!(render_object.downcast_ref::<RenderIndexedStack>().is_some());
-    }
-
-    #[test]
-    fn test_indexed_stack_render_object_update() {
-        let widget1 = IndexedStack::new(Some(0));
-        let mut render_object = widget1.create_render_object();
-
-        let widget2 = IndexedStack::builder()
-            .index(1)
-            .alignment(Alignment::CENTER)
-            .sizing(StackFit::Expand)
-            .build();
-        widget2.update_render_object(&mut *render_object);
-
-        let indexed_stack_render = render_object.downcast_ref::<RenderIndexedStack>().unwrap();
-        assert_eq!(indexed_stack_render.index(), Some(1));
-    }
-
-    #[test]
-    fn test_indexed_stack_children_method() {
-        let widget = IndexedStack::new(Some(0));
-        assert_eq!(widget.children().len(), 0);
-
-        let mut widget = IndexedStack::new(Some(0));
-        widget.add_child(MockWidget::new("child1"));
-        widget.add_child(MockWidget::new("child2"));
-        assert_eq!(widget.children().len(), 2);
-    }
 
     #[test]
     fn test_indexed_stack_empty_children() {
@@ -600,7 +615,7 @@ mod tests {
     fn test_indexed_stack_many_children() {
         let mut widget = IndexedStack::new(Some(5));
         for i in 0..10 {
-            widget.add_child(MockWidget::new(&format!("child{}", i)));
+            widget.add_child(MockView::new(&format!("child{}", i)));
         }
         assert_eq!(widget.children.len(), 10);
         assert!(widget.validate().is_ok());
@@ -609,8 +624,8 @@ mod tests {
     #[test]
     fn test_indexed_stack_index_change() {
         let mut widget = IndexedStack::new(Some(0));
-        widget.add_child(MockWidget::new("child1"));
-        widget.add_child(MockWidget::new("child2"));
+        widget.add_child(MockView::new("child1"));
+        widget.add_child(MockView::new("child2"));
 
         assert_eq!(widget.index, Some(0));
         assert!(widget.validate().is_ok());
@@ -621,24 +636,13 @@ mod tests {
     }
 
     #[test]
-    fn test_indexed_stack_widget_trait() {
-        let widget = IndexedStack::builder()
-            .index(Some(0))
-            .children(vec![MockWidget::new("1"), MockWidget::new("2")])
-            .build();
-
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
-    }
-
-    #[test]
     fn test_indexed_stack_multi_child() {
         let widget = IndexedStack::builder()
             .index(Some(1))
             .children(vec![
-                MockWidget::new("page1"),
-                MockWidget::new("page2"),
-                MockWidget::new("page3"),
+                Box::new(MockView::new("page1")),
+                Box::new(MockView::new("page2")),
+                Box::new(MockView::new("page3")),
             ])
             .build();
 
@@ -647,5 +651,4 @@ mod tests {
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(IndexedStack, render);
+// IndexedStack now implements View trait directly

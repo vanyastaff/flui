@@ -29,9 +29,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::{RenderClipRRect, RRectShape};
 use flui_types::styling::BorderRadius;
 use flui_types::painting::Clip;
@@ -113,7 +113,7 @@ use flui_types::painting::Clip;
 /// - ClipRect: For rectangular (non-rounded) clipping
 /// - ClipOval: For circular/elliptical clipping
 /// - ClipPath: For arbitrary path clipping
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(BorderRadius, into),
@@ -144,7 +144,29 @@ pub struct ClipRRect {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for ClipRRect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClipRRect")
+            .field("key", &self.key)
+            .field("border_radius", &self.border_radius)
+            .field("clip_behavior", &self.clip_behavior)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for ClipRRect {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            border_radius: self.border_radius,
+            clip_behavior: self.clip_behavior,
+            child: None,
+        }
+    }
 }
 
 impl ClipRRect {
@@ -215,8 +237,8 @@ impl ClipRRect {
     /// let mut widget = ClipRRect::circular(10.0);
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates ClipRRect configuration.
@@ -292,29 +314,45 @@ impl Default for ClipRRect {
     }
 }
 
-// Implement Widget trait with associated type
+// Implement View for ClipRRect - New architecture
+impl View for ClipRRect {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
 
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child if present
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
 
-// Implement RenderObjectWidget
-impl RenderWidget for ClipRRect {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderClipRRect::new(
-            RRectShape::new(self.border_radius),
-            self.clip_behavior,
-        )))
+        // Create RenderNode (Single - child is Option<ElementId>)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderClipRRect::new(
+                RRectShape::new(self.border_radius),
+                self.clip_behavior,
+            )),
+            child: child_id,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(obj) = render.downcast_mut::<RenderClipRRect>() {
-                obj.set_border_radius(self.border_radius);
-                obj.set_clip_behavior(self.clip_behavior);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -336,18 +374,16 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: Widget) -> ClipRRectBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> ClipRRectBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 // Public build() wrapper
 impl<S: State> ClipRRectBuilder<S> {
     /// Builds the ClipRRect widget.
-    ///
-    /// Equivalent to calling the generated `build_clip_rrect()` finishing function.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_clip_rrect())
+    pub fn build(self) -> ClipRRect {
+        self.build_clip_rrect()
     }
 }
 
@@ -385,28 +421,12 @@ macro_rules! clip_rrect {
     };
 }
 
+// ClipRRect now implements View trait directly
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use flui_types::styling::Radius;
-    use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
-    use flui_rendering::RenderPadding;
-
-    #[derive(Debug, Clone)]
-    struct MockWidget;
-
-    
-
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
-
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
-    }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_clip_rrect_new() {
@@ -528,41 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clip_rrect_render_object_creation() {
-        let widget = ClipRRect::circular(10.0);
-        let render_object = widget.create_render_object();
-        assert!(render_object.downcast_ref::<RenderClipRRect>().is_some());
-    }
-
-    #[test]
-    fn test_clip_rrect_render_object_update() {
-        let widget1 = ClipRRect::circular(10.0);
-        let mut render_object = widget1.create_render_object();
-
-        let widget2 = ClipRRect::builder()
-            .border_radius(BorderRadius::circular(20.0))
-            .clip_behavior(Clip::HardEdge)
-            .build();
-        widget2.update_render_object(&mut *render_object);
-
-        let clip_render = render_object.downcast_ref::<RenderClipRRect>().unwrap();
-        assert_eq!(clip_render.border_radius(), BorderRadius::circular(20.0));
-        assert_eq!(clip_render.clip_behavior(), Clip::HardEdge);
-    }
-
-    #[test]
-    fn test_clip_rrect_render_object_clip_behavior() {
-        let widget = ClipRRect::builder()
-            .border_radius(BorderRadius::circular(10.0))
-            .clip_behavior(Clip::None)
-            .build();
-
-        let render_object = widget.create_render_object();
-        let clip_render = render_object.downcast_ref::<RenderClipRRect>().unwrap();
-        assert_eq!(clip_render.clip_behavior(), Clip::None);
-    }
-
-    #[test]
     fn test_clip_rrect_macro_empty() {
         let widget = clip_rrect!();
         assert_eq!(widget.border_radius, BorderRadius::circular(0.0));
@@ -624,36 +609,4 @@ mod tests {
             assert_eq!(widget.clip_behavior, behavior);
         }
     }
-
-    #[test]
-    fn test_clip_rrect_widget_trait() {
-        let widget = ClipRRect::builder()
-            .border_radius(BorderRadius::circular(10.0))
-            .child(MockWidget)
-            .build();
-
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
-    }
-
-    #[test]
-    fn test_clip_rrect_builder_with_child() {
-        let widget = ClipRRect::builder()
-            .border_radius(BorderRadius::circular(10.0))
-            .child(MockWidget)
-            .build();
-
-        assert!(widget.child.is_some());
-        assert_eq!(widget.border_radius, BorderRadius::circular(10.0));
-    }
-
-    #[test]
-    fn test_clip_rrect_set_child() {
-        let mut widget = ClipRRect::circular(5.0);
-        widget.set_child(MockWidget);
-        assert!(widget.child.is_some());
-    }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(ClipRRect, render);

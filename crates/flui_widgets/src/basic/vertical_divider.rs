@@ -23,8 +23,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{StatelessWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::{BuildContext, Element};
 use flui_types::Color;
 
 use crate::{ColoredBox, Container, SizedBox};
@@ -163,25 +163,19 @@ impl Default for VerticalDivider {
     }
 }
 
-// bon Builder Extensions
-use vertical_divider_builder::{State};
+// Implement View trait
+impl View for VerticalDivider {
+    type Element = Element;
+    type State = Box<dyn std::any::Any>;
 
-impl<S: State> VerticalDividerBuilder<S> {
-    /// Builds the VerticalDivider widget.
-    pub fn build(self) -> Widget {
-        Widget::stateless(self.build_vertical_divider())
-    }
-}
-
-// Implement StatelessWidget
-impl StatelessWidget for VerticalDivider {
-    fn build(&self, _context: &BuildContext) -> Widget {
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Calculate effective width (use width if specified, otherwise thickness)
         let effective_width = self.width.unwrap_or(self.thickness);
 
-        // If we have indents, we need to wrap in a Container with padding
-        if self.indent > 0.0 || self.end_indent > 0.0 {
-            Widget::from(Container::builder()
+        // Build the child view
+        let child: Box<dyn AnyView> = if self.indent > 0.0 || self.end_indent > 0.0 {
+            // If we have indents, we need to wrap in a Container with padding
+            Box::new(Container::builder()
                 .width(effective_width)
                 .padding(flui_types::EdgeInsets {
                     left: 0.0,
@@ -195,10 +189,10 @@ impl StatelessWidget for VerticalDivider {
                         .width(self.thickness)
                         .build())
                     .build())
-                .build())
+                .build_container())
         } else {
             // Simple case: just a colored box with width
-            Widget::from(SizedBox::builder()
+            Box::new(SizedBox::builder()
                 .width(effective_width)
                 .child(ColoredBox::builder()
                     .color(self.color)
@@ -207,12 +201,35 @@ impl StatelessWidget for VerticalDivider {
                         .build())
                     .build())
                 .build())
+        };
+
+        // Build the child view
+        let (boxed_element, state) = child.build_any(ctx);
+        let element = boxed_element.into_element();
+        (element, state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        _element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // Check if any properties changed
+        let properties_changed = self.width != prev.width
+            || self.thickness != prev.thickness
+            || self.indent != prev.indent
+            || self.end_indent != prev.end_indent
+            || self.color != prev.color;
+
+        if properties_changed {
+            // Properties changed - need to rebuild
+            ChangeFlags::NEEDS_BUILD
+        } else {
+            ChangeFlags::NONE
         }
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(VerticalDivider, stateless);
 
 #[cfg(test)]
 mod tests {
@@ -245,7 +262,7 @@ mod tests {
             .indent(10.0)
             .end_indent(10.0)
             .color(Color::RED)
-            .build();
+            .build_vertical_divider();
 
         assert_eq!(divider.thickness, 2.0);
         assert_eq!(divider.indent, 10.0);
@@ -264,7 +281,7 @@ mod tests {
         let divider = VerticalDivider::builder()
             .width(20.0)
             .thickness(2.0)
-            .build();
+            .build_vertical_divider();
 
         assert_eq!(divider.width, Some(20.0));
         assert_eq!(divider.thickness, 2.0);

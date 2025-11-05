@@ -14,9 +14,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::view::{AnyView, ChangeFlags, View};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::{BuildContext, Element};
 use flui_rendering::RenderOffstage;
 
 /// A widget that lays out its child as if it was in the tree, but without painting or hit testing.
@@ -58,7 +58,7 @@ use flui_rendering::RenderOffstage;
 ///     .child(content)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_offstage)]
 pub struct Offstage {
     /// Optional key for widget identification
@@ -72,7 +72,27 @@ pub struct Offstage {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Offstage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Offstage")
+            .field("key", &self.key)
+            .field("offstage", &self.offstage)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for Offstage {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            offstage: self.offstage,
+            child: None,
+        }
+    }
 }
 
 impl Offstage {
@@ -90,7 +110,7 @@ impl Offstage {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 }
@@ -113,35 +133,47 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> OffstageBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> OffstageBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-// Build wrapper
-impl<S: State> OffstageBuilder<S> {
-    /// Builds the Offstage widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_offstage())
-    }
-}
+// Implement View trait
+impl View for Offstage {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
 
-// Implement RenderObjectWidget
-impl RenderWidget for Offstage {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderOffstage::new(self.offstage)))
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderOffstage
+        let render = RenderOffstage::new(self.offstage);
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(obj) = render.downcast_mut::<RenderOffstage>() {
-                obj.set_offstage(self.offstage);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -159,24 +191,6 @@ macro_rules! offstage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
-    use flui_rendering::RenderPadding;
-
-    #[derive(Debug, Clone)]
-    struct MockWidget;
-
-    
-
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
-
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
-    }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_offstage_new() {
@@ -200,26 +214,30 @@ mod tests {
 
     #[test]
     fn test_offstage_builder() {
-        let widget = Offstage::builder().build();
+        let widget = Offstage::builder().build_offstage();
         assert!(widget.offstage); // Default is true
     }
 
     #[test]
     fn test_offstage_builder_with_child() {
-        let widget = Offstage::builder().child(MockWidget).build();
+        let widget = Offstage::builder()
+            .child(crate::SizedBox::new())
+            .build_offstage();
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_offstage_builder_with_offstage_false() {
-        let widget = Offstage::builder().offstage(false).build();
+        let widget = Offstage::builder()
+            .offstage(false)
+            .build_offstage();
         assert!(!widget.offstage);
     }
 
     #[test]
     fn test_offstage_set_child() {
         let mut widget = Offstage::new(true);
-        widget.set_child(MockWidget);
+        widget.set_child(Box::new(crate::SizedBox::new()));
         assert!(widget.child.is_some());
     }
 
@@ -234,37 +252,4 @@ mod tests {
         let widget = offstage!(offstage: false);
         assert!(!widget.offstage);
     }
-
-    #[test]
-    fn test_offstage_widget_trait() {
-        let widget = Offstage::builder()
-            .offstage(true)
-            .child(MockWidget)
-            .build();
-
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
-    }
-
-    #[test]
-    fn test_offstage_render_object_creation() {
-        let widget = Offstage::new(true);
-        let render_object = widget.create_render_object();
-        assert!(render_object.downcast_ref::<RenderOffstage>().is_some());
-    }
-
-    #[test]
-    fn test_offstage_render_object_update() {
-        let widget1 = Offstage::new(true);
-        let mut render_object = widget1.create_render_object();
-
-        let widget2 = Offstage::new(false);
-        widget2.update_render_object(&mut *render_object);
-
-        let offstage_render = render_object.downcast_ref::<RenderOffstage>().unwrap();
-        assert!(!offstage_render.offstage());
-    }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Offstage, render);

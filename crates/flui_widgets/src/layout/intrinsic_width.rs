@@ -4,8 +4,8 @@
 //! Similar to Flutter's IntrinsicWidth widget.
 
 use bon::Builder;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::{BuildContext, render::RenderNode};
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::{BuildContext, Element, render::RenderNode};
 use flui_rendering::RenderIntrinsicWidth;
 
 /// A widget that sizes its child to the child's intrinsic width.
@@ -79,7 +79,7 @@ use flui_rendering::RenderIntrinsicWidth;
 ///     .child(widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_intrinsic_width)]
 pub struct IntrinsicWidth {
     /// Optional key for widget identification
@@ -93,7 +93,29 @@ pub struct IntrinsicWidth {
 
     /// The child widget to size
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for IntrinsicWidth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntrinsicWidth")
+            .field("key", &self.key)
+            .field("step_width", &self.step_width)
+            .field("step_height", &self.step_height)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for IntrinsicWidth {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            step_width: self.step_width,
+            step_height: self.step_height,
+            child: None,
+        }
+    }
 }
 
 impl IntrinsicWidth {
@@ -102,9 +124,9 @@ impl IntrinsicWidth {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = IntrinsicWidth::new(child);
+    /// let widget = IntrinsicWidth::new(Box::new(child));
     /// ```
-    pub fn new(child: Widget) -> Self {
+    pub fn new(child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             step_width: None,
@@ -118,9 +140,9 @@ impl IntrinsicWidth {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = IntrinsicWidth::with_step_width(50.0, child);
+    /// let widget = IntrinsicWidth::with_step_width(50.0, Box::new(child));
     /// ```
-    pub fn with_step_width(step_width: f32, child: Widget) -> Self {
+    pub fn with_step_width(step_width: f32, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             step_width: Some(step_width),
@@ -134,9 +156,9 @@ impl IntrinsicWidth {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = IntrinsicWidth::with_steps(10.0, 10.0, child);
+    /// let widget = IntrinsicWidth::with_steps(10.0, 10.0, Box::new(child));
     /// ```
-    pub fn with_steps(step_width: f32, step_height: f32, child: Widget) -> Self {
+    pub fn with_steps(step_width: f32, step_height: f32, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             step_width: Some(step_width),
@@ -165,46 +187,54 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> IntrinsicWidthBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> IntrinsicWidthBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-impl<S: State> IntrinsicWidthBuilder<S> {
-    /// Builds the IntrinsicWidth widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_intrinsic_width())
-    }
-}
+// Implement View trait
+impl View for IntrinsicWidth {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
 
-// Implement RenderWidget
-impl RenderWidget for IntrinsicWidth {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderIntrinsicWidth
         let render = match (self.step_width, self.step_height) {
             (Some(w), Some(h)) => RenderIntrinsicWidth::with_steps(w, h),
             (Some(w), None) => RenderIntrinsicWidth::with_step_width(w),
             (None, Some(h)) => RenderIntrinsicWidth::with_step_height(h),
             (None, None) => RenderIntrinsicWidth::new(),
         };
-        RenderNode::single(Box::new(render))
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(intrinsic) = render.downcast_mut::<RenderIntrinsicWidth>() {
-                intrinsic.step_width = self.step_width;
-                intrinsic.step_height = self.step_height;
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(IntrinsicWidth, render);
 
 #[cfg(test)]
 mod tests {
@@ -212,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_intrinsic_width_new() {
-        let widget = IntrinsicWidth::new(Widget::from(()));
+        let widget = IntrinsicWidth::new(Box::new(crate::SizedBox::new()));
         assert!(widget.child.is_some());
         assert_eq!(widget.step_width, None);
         assert_eq!(widget.step_height, None);
@@ -220,14 +250,14 @@ mod tests {
 
     #[test]
     fn test_intrinsic_width_with_step_width() {
-        let widget = IntrinsicWidth::with_step_width(50.0, Widget::from(()));
+        let widget = IntrinsicWidth::with_step_width(50.0, Box::new(crate::SizedBox::new()));
         assert_eq!(widget.step_width, Some(50.0));
         assert_eq!(widget.step_height, None);
     }
 
     #[test]
     fn test_intrinsic_width_with_steps() {
-        let widget = IntrinsicWidth::with_steps(10.0, 20.0, Widget::from(()));
+        let widget = IntrinsicWidth::with_steps(10.0, 20.0, Box::new(crate::SizedBox::new()));
         assert_eq!(widget.step_width, Some(10.0));
         assert_eq!(widget.step_height, Some(20.0));
     }
@@ -236,7 +266,7 @@ mod tests {
     fn test_intrinsic_width_builder() {
         let widget = IntrinsicWidth::builder()
             .step_width(25.0)
-            .build();
+            .build_intrinsic_width();
         assert_eq!(widget.step_width, Some(25.0));
     }
 

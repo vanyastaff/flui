@@ -74,6 +74,9 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 // ===== RenderObject Implementation =====
 
 impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> SingleRender for RenderAnnotatedRegion<T> {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
@@ -104,24 +107,18 @@ mod tests {
     }
 
     #[test]
-    fn test_annotated_region_data_new() {
-        let data = AnnotatedRegionData::new(SystemUiStyle::Dark);
-        assert_eq!(data.value, SystemUiStyle::Dark);
-        assert!(data.sized);
-    }
-
-    #[test]
-    fn test_annotated_region_data_with_sized() {
-        let data = AnnotatedRegionData::with_sized(SystemUiStyle::Light, false);
-        assert_eq!(data.value, SystemUiStyle::Light);
-        assert!(!data.sized);
-    }
-
-    #[test]
     fn test_render_annotated_region_new() {
         let region = RenderAnnotatedRegion::new("dark");
-        assert_eq!(region.value(), &"dark");
-        assert!(region.is_sized());
+        assert_eq!(region.value, "dark");
+        assert!(region.sized);
+    }
+
+    #[test]
+    fn test_render_annotated_region_set_sized() {
+        let mut region = RenderAnnotatedRegion::new("light");
+        region.set_sized(false);
+        assert_eq!(region.value, "light");
+        assert!(!region.sized);
     }
 
     #[test]
@@ -129,11 +126,11 @@ mod tests {
         let mut region = RenderAnnotatedRegion::new("dark");
 
         region.set_value("light");
-        assert_eq!(region.value(), &"light");
+        assert_eq!(region.value, "light");
     }
 
     #[test]
-    fn test_render_annotated_region_set_sized() {
+    fn test_render_annotated_region_with_integer() {
         let mut region = RenderAnnotatedRegion::new(42);
 
         assert!(region.is_sized());
@@ -156,8 +153,8 @@ mod tests {
 
         let mut region = RenderAnnotatedRegion::new(metadata.clone());
 
-        assert_eq!(region.value().style, "dark");
-        assert_eq!(region.value().priority, 5);
+        assert_eq!(region.value.style, "dark");
+        assert_eq!(region.value.priority, 5);
 
         let new_metadata = ComplexMetadata {
             style: "light".to_string(),
@@ -165,7 +162,7 @@ mod tests {
         };
         region.set_value(new_metadata.clone());
 
-        assert_eq!(region.value().style, "light");
-        assert_eq!(region.value().priority, 10);
+        assert_eq!(region.value.style, "light");
+        assert_eq!(region.value.priority, 10);
     }
 }

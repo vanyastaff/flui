@@ -17,9 +17,10 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::widget::{ParentDataWidget, Widget};
-use flui_core::RenderNode;
-use flui_rendering::FlexParentData;
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::render::RenderNode;
+use flui_core::{BuildContext, Element};
+use flui_rendering::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
 ///
@@ -101,7 +102,7 @@ use flui_rendering::FlexParentData;
 /// - Flexible: For children that can be smaller than allocated space
 /// - Row: Horizontal flex layout
 /// - Column: Vertical flex layout
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Expanded {
     /// The flex factor.
     ///
@@ -110,7 +111,17 @@ pub struct Expanded {
     pub flex: i32,
 
     /// The child widget.
-    pub child: Widget,
+    pub child: Box<dyn AnyView>,
+}
+
+// Manual Debug implementation since AnyView doesn't implement Debug
+impl std::fmt::Debug for Expanded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Expanded")
+            .field("flex", &self.flex)
+            .field("child", &"<AnyView>")
+            .finish()
+    }
 }
 
 impl Expanded {
@@ -123,9 +134,9 @@ impl Expanded {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Expanded::new(Container::new());
+    /// let widget = Expanded::new(Box::new(Container::new()));
     /// ```
-    pub fn new(child: Widget) -> Self {
+    pub fn new(child: Box<dyn AnyView>) -> Self {
         Self { flex: 1, child }
     }
 
@@ -140,9 +151,9 @@ impl Expanded {
     ///
     /// ```rust,ignore
     /// // This child gets twice as much space as flex: 1
-    /// let widget = Expanded::with_flex(2, Container::new());
+    /// let widget = Expanded::with_flex(2, Box::new(Container::new()));
     /// ```
-    pub fn with_flex(flex: i32, child: Widget) -> Self {
+    pub fn with_flex(flex: i32, child: Box<dyn AnyView>) -> Self {
         Self { flex, child }
     }
 
@@ -158,30 +169,41 @@ impl Expanded {
         }
         Ok(())
     }
-
-    /// Creates FlexParentData for this Expanded.
-    ///
-    /// Always creates FlexParentData with FlexFit::Tight.
-    pub fn create_parent_data(&self) -> FlexParentData {
-        FlexParentData::expanded_with_flex(self.flex)
-    }
 }
 
-// ========== ParentDataWidget Implementation ==========
+// Implement View trait
+impl View for Expanded {
+    type Element = Element;
+    type State = ();
 
-impl ParentDataWidget for Expanded {
-    fn apply_parent_data(&self, _render_object: &mut RenderNode) {
-        // TODO: apply_parent_data needs DynRenderObject trait
-        // This will be implemented when the render object trait is ready
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child
+        let (child_elem, _child_state) = self.child.build_any(ctx);
+        let child_id = ctx.tree().write().insert(child_elem.into_element());
+
+        // Create RenderFlexItem wrapper with FlexItemMetadata
+        let render = RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex));
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: Some(child_id),
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), ())
     }
 
-    fn child(&self) -> &Widget {
-        &self.child
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Expanded, parent_data);
 
 /// Macro for creating Expanded with declarative syntax.
 ///

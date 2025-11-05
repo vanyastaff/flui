@@ -6,86 +6,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode};
-
-// ===== Data Structure =====
-
-/// Image filter specification
-#[derive(Debug, Clone, PartialEq)]
-pub enum ImageFilter {
-    /// Gaussian blur filter
-    Blur {
-        /// Blur radius in logical pixels (sigma)
-        radius: f32,
-    },
-    /// Brightness adjustment
-    Brightness {
-        /// Brightness factor (1.0 = no change, >1.0 = brighter, <1.0 = darker)
-        factor: f32,
-    },
-    /// Saturation adjustment
-    Saturation {
-        /// Saturation factor (1.0 = no change, 0.0 = grayscale, >1.0 = more saturated)
-        factor: f32,
-    },
-    /// Invert colors
-    Invert,
-}
-
-impl ImageFilter {
-    /// Create blur filter with given radius
-    pub fn blur(radius: f32) -> Self {
-        Self::Blur { radius }
-    }
-
-    /// Create brightness filter
-    pub fn brightness(factor: f32) -> Self {
-        Self::Brightness { factor }
-    }
-
-    /// Create saturation filter
-    pub fn saturation(factor: f32) -> Self {
-        Self::Saturation { factor }
-    }
-
-    /// Create invert filter
-    pub fn invert() -> Self {
-        Self::Invert
-    }
-}
-
-/// Data for RenderBackdropFilter
-#[derive(Debug, Clone)]
-pub struct BackdropFilterData {
-    /// Image filter to apply to backdrop
-    pub filter: ImageFilter,
-    /// Blend mode for compositing filtered result
-    pub blend_mode: BlendMode,
-}
-
-impl BackdropFilterData {
-    /// Create new backdrop filter with blur
-    pub fn blur(radius: f32) -> Self {
-        Self {
-            filter: ImageFilter::blur(radius),
-            blend_mode: BlendMode::default(),
-        }
-    }
-
-    /// Create with custom filter
-    pub fn new(filter: ImageFilter) -> Self {
-        Self {
-            filter,
-            blend_mode: BlendMode::default(),
-        }
-    }
-
-    /// Set blend mode
-    pub fn with_blend_mode(mut self, blend_mode: BlendMode) -> Self {
-        self.blend_mode = blend_mode;
-        self
-    }
-}
+use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode, painting::ImageFilter};
 
 // ===== RenderObject =====
 
@@ -111,7 +32,7 @@ impl BackdropFilterData {
 #[derive(Debug)]
 pub struct RenderBackdropFilter {
     /// Image filter to apply to backdrop
-    pub filter: ImageFilter,
+    pub filter:  flui_types::painting::ImageFilter,
     /// Blend mode for compositing filtered result
     pub blend_mode: BlendMode,
 }
@@ -200,88 +121,12 @@ impl SingleRender for RenderBackdropFilter {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_image_filter_blur() {
-        let filter = ImageFilter::blur(10.0);
-        match filter {
-            ImageFilter::Blur { radius } => {
-                assert_eq!(radius, 10.0);
-            }
-            _ => panic!("Expected blur filter"),
-        }
-    }
-
-    #[test]
-    fn test_image_filter_brightness() {
-        let filter = ImageFilter::brightness(1.5);
-        match filter {
-            ImageFilter::Brightness { factor } => {
-                assert_eq!(factor, 1.5);
-            }
-            _ => panic!("Expected brightness filter"),
-        }
-    }
-
-    #[test]
-    fn test_image_filter_saturation() {
-        let filter = ImageFilter::saturation(0.5);
-        match filter {
-            ImageFilter::Saturation { factor } => {
-                assert_eq!(factor, 0.5);
-            }
-            _ => panic!("Expected saturation filter"),
-        }
-    }
-
-    #[test]
-    fn test_image_filter_invert() {
-        let filter = ImageFilter::invert();
-        assert_eq!(filter, ImageFilter::Invert);
-    }
-
-    #[test]
-    fn test_backdrop_filter_data_blur() {
-        let data = BackdropFilterData::blur(5.0);
-        match data.filter {
-            ImageFilter::Blur { radius } => {
-                assert_eq!(radius, 5.0);
-            }
-            _ => panic!("Expected blur filter"),
-        }
-        assert_eq!(data.blend_mode, BlendMode::default());
-    }
-
-    #[test]
-    fn test_backdrop_filter_data_new() {
-        let filter = ImageFilter::brightness(2.0);
-        let data = BackdropFilterData::new(filter.clone());
-        assert_eq!(data.filter, filter);
-    }
-
-    #[test]
-    fn test_backdrop_filter_data_with_blend_mode() {
-        let data = BackdropFilterData::blur(10.0).with_blend_mode(BlendMode::Multiply);
-        assert_eq!(data.blend_mode, BlendMode::Multiply);
-    }
-
-    #[test]
-    fn test_render_backdrop_filter_new() {
-        let filter = RenderBackdropFilter::blur(10.0);
-
-        match filter.filter() {
-            ImageFilter::Blur { radius } => {
-                assert_eq!(*radius, 10.0);
-            }
-            _ => panic!("Expected blur filter"),
-        }
-        assert_eq!(filter.blend_mode(), BlendMode::default());
-    }
 
     #[test]
     fn test_render_backdrop_filter_set_filter() {
         let mut filter = RenderBackdropFilter::blur(5.0);
 
-        let new_filter = ImageFilter::brightness(1.5);
+        let new_filter = ImageFilter::Blur { sigma_x: 10.0, sigma_y: 10.0 };
         filter.set_filter(new_filter.clone());
 
         assert_eq!(*filter.filter(), new_filter);

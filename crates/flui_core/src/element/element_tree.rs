@@ -226,8 +226,9 @@ impl ElementTree {
         let node = ElementNode { element };
 
         // Insert into slab and get ID (convert usize to ElementId)
+        // Add 1 because ElementId uses NonZeroUsize (0 is invalid)
         let id = self.nodes.insert(node);
-        ElementId::new(id)
+        ElementId::new(id + 1)
     }
 
     /// Remove an element and all its descendants from the tree
@@ -247,13 +248,14 @@ impl ElementTree {
     /// ```
     pub fn remove(&mut self, element_id: ElementId) -> bool {
         // Get element to call unmount
-        if let Some(node) = self.nodes.get_mut(element_id.get()) {
+        // Subtract 1 to convert ElementId (1-based) to slab index (0-based)
+        if let Some(node) = self.nodes.get_mut(element_id.get() - 1) {
             // Call unmount lifecycle
             node.element.unmount();
         }
 
         // Get children from element (before removing)
-        let children: Vec<ElementId> = if let Some(node) = self.nodes.get(element_id.get()) {
+        let children: Vec<ElementId> = if let Some(node) = self.nodes.get(element_id.get() - 1) {
             node.element.children().collect()
         } else {
             Vec::new()
@@ -266,13 +268,14 @@ impl ElementTree {
 
         // Remove from parent's children list
         if let Some(parent_id) = self.get(element_id).and_then(|e| e.parent()) {
-            if let Some(parent_node) = self.nodes.get_mut(parent_id.get()) {
+            if let Some(parent_node) = self.nodes.get_mut(parent_id.get() - 1) {
                 parent_node.element.forget_child(element_id);
             }
         }
 
         // Remove the node itself
-        self.nodes.try_remove(element_id.get()).is_some()
+        // Subtract 1 to convert ElementId (1-based) to slab index (0-based)
+        self.nodes.try_remove(element_id.get() - 1).is_some()
     }
 
     // ========== Tree Traversal ==========
@@ -306,7 +309,8 @@ impl ElementTree {
     /// ```
     #[inline]
     pub fn get(&self, element_id: ElementId) -> Option<&Element> {
-        self.nodes.get(element_id.get()).map(|node| &node.element)
+        // Subtract 1 to convert ElementId (1-based) to slab index (0-based)
+        self.nodes.get(element_id.get() - 1).map(|node| &node.element)
     }
 
     /// Get a mutable reference to an element
@@ -316,7 +320,8 @@ impl ElementTree {
     /// `Some(&mut Element)` if the element exists, `None` otherwise
     #[inline]
     pub fn get_mut(&mut self, element_id: ElementId) -> Option<&mut Element> {
-        self.nodes.get_mut(element_id.get()).map(|node| &mut node.element)
+        // Subtract 1 to convert ElementId (1-based) to slab index (0-based)
+        self.nodes.get_mut(element_id.get() - 1).map(|node| &mut node.element)
     }
 
     /// Get the parent of an element
@@ -821,7 +826,8 @@ impl ElementTree {
 
             // Call visitor with references
             // The guards live for the duration of the visitor call
-            visitor(ElementId::new(element_id), &render_obj_guard, state);
+            // Add 1 to convert slab index (0-based) to ElementId (1-based)
+            visitor(ElementId::new(element_id + 1), &render_obj_guard, state);
             // Guards are dropped here
         }
     }
@@ -842,7 +848,8 @@ impl ElementTree {
         F: FnMut(ElementId, &Element),
     {
         for (element_id, node) in &self.nodes {
-            visitor(ElementId::new(element_id), &node.element);
+            // Add 1 to convert slab index (0-based) to ElementId (1-based)
+            visitor(ElementId::new(element_id + 1), &node.element);
         }
     }
 

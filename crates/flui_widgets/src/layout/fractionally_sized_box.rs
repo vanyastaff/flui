@@ -4,9 +4,9 @@
 //! Similar to Flutter's FractionallySizedBox widget.
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderFractionallySizedBox;
 
 /// A widget that sizes its child to a fraction of the total available space.
@@ -66,7 +66,7 @@ use flui_rendering::RenderFractionallySizedBox;
 ///     .child(some_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_fractionally_sized_box)]
 pub struct FractionallySizedBox {
     /// Optional key for widget identification
@@ -82,7 +82,29 @@ pub struct FractionallySizedBox {
 
     /// The child widget to size.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for FractionallySizedBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FractionallySizedBox")
+            .field("key", &self.key)
+            .field("width_factor", &self.width_factor)
+            .field("height_factor", &self.height_factor)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for FractionallySizedBox {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            width_factor: self.width_factor,
+            height_factor: self.height_factor,
+            child: None,
+        }
+    }
 }
 
 impl FractionallySizedBox {
@@ -97,12 +119,12 @@ impl FractionallySizedBox {
     /// // Only 60% width, height unconstrained
     /// let widget = FractionallySizedBox::new(Some(0.6), None, child);
     /// ```
-    pub fn new(width_factor: Option<f32>, height_factor: Option<f32>, child: Widget) -> Self {
+    pub fn new(width_factor: Option<f32>, height_factor: Option<f32>, child: impl View + 'static) -> Self {
         Self {
             key: None,
             width_factor,
             height_factor,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -114,7 +136,7 @@ impl FractionallySizedBox {
     /// // 50% of both width and height
     /// let widget = FractionallySizedBox::both(0.5, child);
     /// ```
-    pub fn both(factor: f32, child: Widget) -> Self {
+    pub fn both(factor: f32, child: impl View + 'static) -> Self {
         Self::new(Some(factor), Some(factor), child)
     }
 
@@ -126,7 +148,7 @@ impl FractionallySizedBox {
     /// // 80% width, height unconstrained
     /// let widget = FractionallySizedBox::width(0.8, child);
     /// ```
-    pub fn width(factor: f32, child: Widget) -> Self {
+    pub fn width(factor: f32, child: impl View + 'static) -> Self {
         Self::new(Some(factor), None, child)
     }
 
@@ -138,13 +160,13 @@ impl FractionallySizedBox {
     /// // 60% height, width unconstrained
     /// let widget = FractionallySizedBox::height(0.6, child);
     /// ```
-    pub fn height(factor: f32, child: Widget) -> Self {
+    pub fn height(factor: f32, child: impl View + 'static) -> Self {
         Self::new(None, Some(factor), child)
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates FractionallySizedBox configuration.
@@ -173,59 +195,109 @@ impl FractionallySizedBox {
     }
 }
 
+// Implement View for FractionallySizedBox - New architecture
+impl View for FractionallySizedBox {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child if present
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderNode (always Single for SingleRender widgets)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderFractionallySizedBox::new(
+                self.width_factor,
+                self.height_factor,
+            )),
+            child: child_id,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
+    }
+}
+
 // bon Builder Extensions
 use fractionally_sized_box_builder::{IsUnset, SetChild, State};
 
+// Custom setter for child
 impl<S: State> FractionallySizedBoxBuilder<S>
 where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> FractionallySizedBoxBuilder<SetChild<S>> {
-        self.child_internal(child)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// FractionallySizedBox::builder()
+    ///     .width_factor(0.5)
+    ///     .child(some_widget)
+    ///     .build()
+    /// ```
+    pub fn child(self, child: impl View + 'static) -> FractionallySizedBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
+// Public build() wrapper
 impl<S: State> FractionallySizedBoxBuilder<S> {
     /// Builds the FractionallySizedBox widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_fractionally_sized_box())
+    pub fn build(self) -> FractionallySizedBox {
+        self.build_fractionally_sized_box()
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for FractionallySizedBox {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderFractionallySizedBox::new(
-            self.width_factor,
-            self.height_factor,
-        )))
-    }
-
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(fractional) = render.downcast_mut::<RenderFractionallySizedBox>() {
-                fractional.set_width_factor(self.width_factor);
-                fractional.set_height_factor(self.height_factor);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
-    }
-}
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(FractionallySizedBox, render);
+// FractionallySizedBox now implements View trait directly
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Mock view for testing
+    #[derive()]
+    struct MockView;
+
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            use flui_rendering::RenderColoredBox;
+            use flui_types::Color;
+            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
+        }
+
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
+    }
+
     #[test]
     fn test_fractionally_sized_box_new() {
-        let widget = FractionallySizedBox::new(Some(0.5), Some(0.75), Widget::from(()));
+        let widget = FractionallySizedBox::new(Some(0.5), Some(0.75), MockView);
         assert_eq!(widget.width_factor, Some(0.5));
         assert_eq!(widget.height_factor, Some(0.75));
         assert!(widget.child.is_some());
@@ -233,21 +305,21 @@ mod tests {
 
     #[test]
     fn test_fractionally_sized_box_both() {
-        let widget = FractionallySizedBox::both(0.5, Widget::from(()));
+        let widget = FractionallySizedBox::both(0.5, MockView);
         assert_eq!(widget.width_factor, Some(0.5));
         assert_eq!(widget.height_factor, Some(0.5));
     }
 
     #[test]
     fn test_fractionally_sized_box_width() {
-        let widget = FractionallySizedBox::width(0.6, Widget::from(()));
+        let widget = FractionallySizedBox::width(0.6, MockView);
         assert_eq!(widget.width_factor, Some(0.6));
         assert_eq!(widget.height_factor, None);
     }
 
     #[test]
     fn test_fractionally_sized_box_height() {
-        let widget = FractionallySizedBox::height(0.8, Widget::from(()));
+        let widget = FractionallySizedBox::height(0.8, MockView);
         assert_eq!(widget.width_factor, None);
         assert_eq!(widget.height_factor, Some(0.8));
     }
@@ -257,6 +329,7 @@ mod tests {
         let widget = FractionallySizedBox::builder()
             .width_factor(0.7)
             .height_factor(0.9)
+            .child(MockView)
             .build();
         assert_eq!(widget.width_factor, Some(0.7));
         assert_eq!(widget.height_factor, Some(0.9));
@@ -264,25 +337,25 @@ mod tests {
 
     #[test]
     fn test_fractionally_sized_box_validate() {
-        let widget = FractionallySizedBox::new(Some(0.5), Some(0.75), Widget::from(()));
+        let widget = FractionallySizedBox::new(Some(0.5), Some(0.75), MockView);
         assert!(widget.validate().is_ok());
     }
 
     #[test]
     fn test_fractionally_sized_box_validate_invalid_width() {
-        let widget = FractionallySizedBox::new(Some(1.5), Some(0.5), Widget::from(()));
+        let widget = FractionallySizedBox::new(Some(1.5), Some(0.5), MockView);
         assert!(widget.validate().is_err());
     }
 
     #[test]
     fn test_fractionally_sized_box_validate_invalid_height() {
-        let widget = FractionallySizedBox::new(Some(0.5), Some(-0.1), Widget::from(()));
+        let widget = FractionallySizedBox::new(Some(0.5), Some(-0.1), MockView);
         assert!(widget.validate().is_err());
     }
 
     #[test]
     fn test_fractionally_sized_box_validate_none_factors() {
-        let widget = FractionallySizedBox::new(None, None, Widget::from(()));
+        let widget = FractionallySizedBox::new(None, None, MockView);
         assert!(widget.validate().is_ok());
     }
 }

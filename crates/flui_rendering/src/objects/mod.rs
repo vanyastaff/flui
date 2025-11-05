@@ -1,9 +1,11 @@
 //! RenderObjects organized by category
 
+/// Debug render objects and utilities
 pub mod debug;
 pub mod effects;
 pub mod interaction;
 pub mod layout;
+/// Special-purpose render objects
 pub mod special;
 pub mod text;
 

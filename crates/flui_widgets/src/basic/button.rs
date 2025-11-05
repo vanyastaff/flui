@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use flui_core::widget::{Widget, StatelessWidget};
-use flui_core::BuildContext;
+use flui_core::view::{ChangeFlags, View};
+use flui_core::{BuildContext, Element};
 use flui_types::{Color, EdgeInsets, events::PointerEventData};
 use flui_types::styling::{BorderRadius, BoxDecoration};
 
@@ -71,8 +71,11 @@ impl Button {
     }
 }
 
-impl StatelessWidget for Button {
-    fn build(&self, _context: &BuildContext) -> Widget {
+impl View for Button {
+    type Element = Element;
+    type State = Box<dyn std::any::Any>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Create the visual container
         let container = Container::builder()
             .padding(self.padding)
@@ -81,19 +84,45 @@ impl StatelessWidget for Button {
                 border_radius: Some(self.border_radius),
                 ..Default::default()
             })
-            .build();
+            .build_container();
 
         // Wrap in GestureDetector for tap handling
-        if let Some(on_tap) = &self.on_tap {
-            let on_tap_clone = Arc::clone(on_tap);
-            Widget::from(GestureDetector::builder()
+        let view: Box<dyn flui_core::view::AnyView> = if let Some(on_tap) = self.on_tap {
+            let on_tap_clone = Arc::clone(&on_tap);
+            Box::new(GestureDetector::builder()
                 .child(container)
                 .on_tap(move |_data: &PointerEventData| {
                     on_tap_clone();
                 })
                 .build())
         } else {
-            container
+            Box::new(container)
+        };
+
+        let (boxed_element, state) = view.build_any(ctx);
+        let element = boxed_element.into_element();
+        (element, state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        _element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // Check if any properties changed
+        let properties_changed = self.label != prev.label
+            || self.color != prev.color
+            || self.padding != prev.padding
+            || self.border_radius != prev.border_radius
+            || self.min_width != prev.min_width
+            || self.min_height != prev.min_height
+            || self.on_tap.is_some() != prev.on_tap.is_some();
+
+        if properties_changed {
+            ChangeFlags::NEEDS_BUILD
+        } else {
+            ChangeFlags::NONE
         }
     }
 }
@@ -237,6 +266,3 @@ mod tests {
         assert_eq!(button.min_height, Some(48.0));
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Button, stateless);

@@ -3,8 +3,9 @@
 //! A widget that renders Material Design elevation effects with shadows.
 
 use bon::Builder;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::{BuildContext, RenderNode};
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::render::RenderNode;
+use flui_core::{BuildContext, Element};
 use flui_rendering::{PhysicalShape, RenderPhysicalModel};
 use flui_types::Color;
 
@@ -64,7 +65,7 @@ use flui_types::Color;
 ///     .child(widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_physical_model)]
 pub struct PhysicalModel {
     /// Optional key for widget identification
@@ -97,7 +98,35 @@ pub struct PhysicalModel {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for PhysicalModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhysicalModel")
+            .field("key", &self.key)
+            .field("shape", &self.shape)
+            .field("border_radius", &self.border_radius)
+            .field("elevation", &self.elevation)
+            .field("color", &self.color)
+            .field("shadow_color", &self.shadow_color)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for PhysicalModel {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            shape: self.shape,
+            border_radius: self.border_radius,
+            elevation: self.elevation,
+            color: self.color,
+            shadow_color: self.shadow_color,
+            child: None,
+        }
+    }
 }
 
 impl PhysicalModel {
@@ -106,9 +135,9 @@ impl PhysicalModel {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let model = PhysicalModel::rectangle(8.0, Color::WHITE, child);
+    /// let model = PhysicalModel::rectangle(8.0, Color::WHITE, Box::new(child));
     /// ```
-    pub fn rectangle(elevation: f32, color: Color, child: Widget) -> Self {
+    pub fn rectangle(elevation: f32, color: Color, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::Rectangle,
@@ -125,9 +154,9 @@ impl PhysicalModel {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let model = PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, child);
+    /// let model = PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, Box::new(child));
     /// ```
-    pub fn rounded_rectangle(elevation: f32, border_radius: f32, color: Color, child: Widget) -> Self {
+    pub fn rounded_rectangle(elevation: f32, border_radius: f32, color: Color, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::RoundedRectangle,
@@ -144,9 +173,9 @@ impl PhysicalModel {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let model = PhysicalModel::circle(4.0, Color::BLUE, icon);
+    /// let model = PhysicalModel::circle(4.0, Color::BLUE, Box::new(icon));
     /// ```
-    pub fn circle(elevation: f32, color: Color, child: Widget) -> Self {
+    pub fn circle(elevation: f32, color: Color, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::Circle,
@@ -181,46 +210,51 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl flui_core::IntoWidget) -> PhysicalModelBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
+    pub fn child(self, child: impl View + 'static) -> PhysicalModelBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-impl<S: State> PhysicalModelBuilder<S> {
-    /// Builds the PhysicalModel widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_physical_model())
-    }
-}
+// Implement View trait
+impl View for PhysicalModel {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
 
-// Implement RenderWidget
-impl RenderWidget for PhysicalModel {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderPhysicalModel
         let mut render = RenderPhysicalModel::new(self.shape, self.elevation, self.color);
         render.border_radius = self.border_radius;
         render.shadow_color = self.shadow_color;
-        RenderNode::single(Box::new(render))
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(physical_model) = render.downcast_mut::<RenderPhysicalModel>() {
-                physical_model.set_shape(self.shape);
-                physical_model.border_radius = self.border_radius;
-                physical_model.set_elevation(self.elevation);
-                physical_model.set_color(self.color);
-                physical_model.shadow_color = self.shadow_color;
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(PhysicalModel, render);
 
 #[cfg(test)]
 mod tests {
@@ -228,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_physical_model_rectangle() {
-        let child = Widget::from(());
+        let child = Box::new(crate::SizedBox::new());
         let model = PhysicalModel::rectangle(8.0, Color::WHITE, child);
         assert_eq!(model.shape, PhysicalShape::Rectangle);
         assert_eq!(model.elevation, 8.0);
@@ -236,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_physical_model_rounded_rectangle() {
-        let child = Widget::from(());
+        let child = Box::new(crate::SizedBox::new());
         let model = PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, child);
         assert_eq!(model.shape, PhysicalShape::RoundedRectangle);
         assert_eq!(model.border_radius, 4.0);
@@ -244,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_physical_model_circle() {
-        let child = Widget::from(());
+        let child = Box::new(crate::SizedBox::new());
         let model = PhysicalModel::circle(4.0, Color::BLUE, child);
         assert_eq!(model.shape, PhysicalShape::Circle);
     }
@@ -255,7 +289,7 @@ mod tests {
             .shape(PhysicalShape::RoundedRectangle)
             .elevation(12.0)
             .border_radius(8.0)
-            .build();
+            .build_physical_model();
         assert_eq!(model.elevation, 12.0);
     }
 

@@ -146,32 +146,32 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_data_new() {
-        let data = MetaDataData::new();
-        assert!(data.metadata.is_none());
-        assert_eq!(data.behavior, HitTestBehavior::Defer);
+    fn test_render_metadata_default_state() {
+        let meta = RenderMetaData::new();
+        assert!(meta.metadata.is_none());
+        assert_eq!(meta.behavior, HitTestBehavior::Defer);
     }
 
     #[test]
-    fn test_metadata_data_with_metadata() {
+    fn test_render_metadata_with_metadata_state() {
         let test_data = TestMetadata { value: 42 };
-        let data = MetaDataData::with_metadata(test_data);
-        assert!(data.metadata.is_some());
-        assert_eq!(data.behavior, HitTestBehavior::Defer);
+        let meta = RenderMetaData::with_metadata(test_data);
+        assert!(meta.metadata.is_some());
+        assert_eq!(meta.behavior, HitTestBehavior::Defer);
     }
 
     #[test]
-    fn test_metadata_data_with_behavior() {
-        let data = MetaDataData::with_behavior(HitTestBehavior::Opaque);
-        assert!(data.metadata.is_none());
-        assert_eq!(data.behavior, HitTestBehavior::Opaque);
+    fn test_render_metadata_with_behavior_state() {
+        let meta = RenderMetaData::with_behavior(HitTestBehavior::Opaque);
+        assert!(meta.metadata.is_none());
+        assert_eq!(meta.behavior, HitTestBehavior::Opaque);
     }
 
     #[test]
     fn test_render_metadata_new() {
         let meta = RenderMetaData::new();
         assert!(!meta.has_metadata());
-        assert_eq!(meta.behavior(), HitTestBehavior::Defer);
+        assert_eq!(meta.behavior, HitTestBehavior::Defer);
     }
 
     #[test]
@@ -180,7 +180,7 @@ mod tests {
         let meta = RenderMetaData::with_metadata(test_data.clone());
         assert!(meta.has_metadata());
 
-        let retrieved = meta.metadata::<TestMetadata>();
+        let retrieved = meta.get_metadata::<TestMetadata>();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().value, 42);
     }
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_render_metadata_with_behavior() {
         let meta = RenderMetaData::with_behavior(HitTestBehavior::Opaque);
-        assert_eq!(meta.behavior(), HitTestBehavior::Opaque);
+        assert_eq!(meta.behavior, HitTestBehavior::Opaque);
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
         meta.set_metadata(test_data.clone());
         assert!(meta.has_metadata());
 
-        let retrieved = meta.metadata::<TestMetadata>();
+        let retrieved = meta.get_metadata::<TestMetadata>();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap(), &test_data);
     }
@@ -218,6 +218,6 @@ mod tests {
         let mut meta = RenderMetaData::new();
 
         meta.set_behavior(HitTestBehavior::Translucent);
-        assert_eq!(meta.behavior(), HitTestBehavior::Translucent);
+        assert_eq!(meta.behavior, HitTestBehavior::Translucent);
     }
 }

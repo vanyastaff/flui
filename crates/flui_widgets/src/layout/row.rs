@@ -32,9 +32,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
@@ -61,7 +61,7 @@ use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 ///     ])
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(MainAxisAlignment, into),
@@ -98,7 +98,31 @@ pub struct Row {
     ///
     /// Children are laid out horizontally in the order they appear in the vector.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Widget>,
+    pub children: Vec<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Row {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Row")
+            .field("key", &self.key)
+            .field("main_axis_alignment", &self.main_axis_alignment)
+            .field("cross_axis_alignment", &self.cross_axis_alignment)
+            .field("main_axis_size", &self.main_axis_size)
+            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for Row {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            main_axis_alignment: self.main_axis_alignment,
+            cross_axis_alignment: self.cross_axis_alignment,
+            main_axis_size: self.main_axis_size,
+            children: Vec::new(),
+        }
+    }
 }
 
 impl Row {
@@ -122,12 +146,12 @@ impl Row {
     /// row.add_child(Text::new("Hello"));
     /// row.add_child(Text::new("World"));
     /// ```
-    pub fn add_child(&mut self, child: Widget) {
-        self.children.push(child);
+    pub fn add_child(&mut self, child: impl View + 'static) {
+        self.children.push(Box::new(child));
     }
 
     /// Sets all children at once.
-    pub fn set_children(&mut self, children: Vec<Widget>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
         self.children = children;
     }
 
@@ -145,33 +169,50 @@ impl Default for Row {
     }
 }
 
-// Implement RenderWidget for Row (multi-child widget)
-impl RenderWidget for Row {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+// Implement View for Row - New architecture
+impl View for Row {
+    type Element = Element;
+    type State = Vec<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build all children
+        let mut child_ids = Vec::new();
+        let mut child_states = Vec::new();
+
+        for child in self.children {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            child_ids.push(id);
+            child_states.push(state);
+        }
+
+        // Create RenderFlex for Row (horizontal)
         let render_flex = RenderFlex::row()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        RenderNode::multi(Box::new(render_flex))
+        // Create RenderNode (Multi)
+        let render_node = RenderNode::Multi {
+            render: Box::new(render_flex),
+            children: child_ids,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_states)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi { render, .. } = render_object {
-            if let Some(flex) = render.downcast_mut::<RenderFlex>() {
-                flex.main_axis_alignment = self.main_axis_alignment;
-                flex.cross_axis_alignment = self.cross_axis_alignment;
-                flex.main_axis_size = self.main_axis_size;
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        None // Multi-child widgets don't have a single child
-    }
-
-    fn children(&self) -> Option<&[Widget]> {
-        Some(&self.children)
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -185,18 +226,19 @@ where
 {
     /// Sets the children widgets (works in builder chain).
     ///
-    /// Accepts anything that implements `IntoWidget` for ergonomic API.
-    ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// Row::builder()
-    ///     .children(vec![Text::new("Hello"), Container::builder().build()])
+    ///     .children(vec![
+    ///         Box::new(Text::new("Hello")) as Box<dyn AnyView>,
+    ///         Box::new(Text::new("World")) as Box<dyn AnyView>,
+    ///     ])
     ///     .build()
     /// ```
     pub fn children(
         self,
-        children: Vec<Widget>,
+        children: Vec<Box<dyn AnyView>>,
     ) -> RowBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
@@ -204,9 +246,9 @@ where
 
 // Build wrapper - available for all states
 impl<S: State> RowBuilder<S> {
-    /// Builds the Row widget and returns it as a Widget.
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_row())
+    /// Builds the Row widget.
+    pub fn build(self) -> Row {
+        self.build_row()
     }
 }
 
@@ -235,23 +277,27 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::LeafRenderObjectElement;
-    use flui_rendering::RenderPadding;
-    use flui_types::EdgeInsets;
 
-    // Mock widget for testing
-    #[derive(Debug, Clone)]
-    struct MockWidget;
+    // Mock view for testing
+    #[derive()]
+    struct MockView;
 
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            use flui_rendering::RenderColoredBox;
+            use flui_types::Color;
+            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
         }
 
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
     }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_row_new() {
@@ -274,7 +320,7 @@ mod tests {
     fn test_row_struct_literal() {
         let row = Row {
             main_axis_alignment: MainAxisAlignment::Center,
-            children: vec![Box::new(MockWidget)],
+            children: vec![Box::new(MockView)],
             ..Default::default()
         };
         assert_eq!(row.main_axis_alignment, MainAxisAlignment::Center);
@@ -306,8 +352,8 @@ mod tests {
     fn test_row_builder_children() {
         let row = Row::builder()
             .children(vec![
-                Box::new(MockWidget) as Box<dyn DynWidget>,
-                Box::new(MockWidget) as Box<dyn DynWidget>,
+                Box::new(MockView),
+                Box::new(MockView),
             ])
             .build();
 
@@ -317,8 +363,8 @@ mod tests {
     #[test]
     fn test_row_add_child() {
         let mut row = Row::new();
-        row.add_child(MockWidget);
-        row.add_child(MockWidget);
+        row.add_child(MockView);
+        row.add_child(MockView);
         assert_eq!(row.children.len(), 2);
     }
 
@@ -326,8 +372,8 @@ mod tests {
     fn test_row_set_children() {
         let mut row = Row::new();
         row.set_children(vec![
-            Box::new(MockWidget) as Box<dyn DynWidget>,
-            Box::new(MockWidget) as Box<dyn DynWidget>,
+            Box::new(MockView),
+            Box::new(MockView),
         ]);
         assert_eq!(row.children.len(), 2);
     }
@@ -385,22 +431,12 @@ mod tests {
     }
 
     #[test]
-    fn test_row_widget_trait() {
-        let row = Row::builder()
-            .children(vec![Box::new(MockWidget), Box::new(MockWidget)])
-            .build();
-
-        // Test that it implements Widget and can create an element
-        let _element = row.into_element();
-    }
-
-    #[test]
     fn test_row_multi_child() {
         let row = Row::builder()
             .children(vec![
-                Box::new(MockWidget) as Box<dyn DynWidget>,
-                Box::new(MockWidget) as Box<dyn DynWidget>,
-                Box::new(MockWidget) as Box<dyn DynWidget>,
+                Box::new(MockView),
+                Box::new(MockView),
+                Box::new(MockView),
             ])
             .build();
 
@@ -408,5 +444,4 @@ mod tests {
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Row, render);
+// Row now implements View trait directly

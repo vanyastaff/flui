@@ -174,8 +174,6 @@ mod tests {
         }
     }
 
-    impl crate::view::sealed::Sealed for MockView {}
-
     impl View for MockView {
         type State = ();
         type Element = MockElement;

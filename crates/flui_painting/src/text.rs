@@ -134,10 +134,10 @@ impl TextPainter {
         let effective_style = span.style.as_ref().unwrap_or(base_style);
 
         // Paint this span's text if it has any
-        if let Some(text) = &span.text
-            && !text.is_empty()
-        {
-            Self::paint_span_text(painter, text, effective_style, current_pos);
+        if let Some(text) = &span.text {
+            if !text.is_empty() {
+                Self::paint_span_text(painter, text, effective_style, current_pos);
+            }
         }
 
         // Recursively paint children

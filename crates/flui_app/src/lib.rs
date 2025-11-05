@@ -9,19 +9,24 @@
 //!
 //! ```rust,ignore
 //! use flui_app::*;
-//! use flui_widgets::*;
+//! use flui_core::view::View;
+//! use flui_core::element::ComponentElement;
 //!
 //! #[derive(Debug, Clone)]
 //! struct MyApp;
 //!
-//! impl StatelessWidget for MyApp {
-//!     fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
-//!         Box::new(Text::new("Hello, World!"))
+//! impl View for MyApp {
+//!     type State = ();
+//!     type Element = ComponentElement;
+//!
+//!     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+//!         // Build your UI here
+//!         todo!()
 //!     }
 //! }
 //!
 //! fn main() {
-//!     run_app(Box::new(MyApp));
+//!     run_app(Box::new(MyApp)).unwrap();
 //! }
 //! ```
 
@@ -34,6 +39,15 @@ pub use window::run_app;
 
 // Re-export commonly used types from flui_core
 pub use flui_core::{
-    BuildContext, Element, ElementTree, InheritedElement, InheritedWidget, State, StatefulElement,
-    StatefulWidget, StatelessWidget, Widget,
+    // View system (new API)
+    view::{AnyView, BuildContext, ChangeFlags, View, ViewElement, ViewSequence},
+
+    // Element system
+    element::{ComponentElement, Element, InheritedElement, RenderElement},
+
+    // Foundation types
+    foundation::{ElementId, Key, Slot},
+
+    // Render system
+    render::{LeafRender, MultiRender, SingleRender, RenderNode},
 };

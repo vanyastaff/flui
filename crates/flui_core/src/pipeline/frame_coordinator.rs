@@ -327,15 +327,33 @@ impl FrameCoordinator {
         // Get root element's computed size
         let size = match root_id {
             Some(id) => {
-                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    render_state.size()
-                } else {
-                    None
+                match tree_guard.get(id) {
+                    Some(crate::element::Element::Render(render_elem)) => {
+                        let render_state_lock = render_elem.render_state();
+                        let render_state = render_state_lock.read();
+                        let size_opt = render_state.size();
+                        #[cfg(debug_assertions)]
+                        tracing::debug!("flush_layout: Root (ID: {:?}) RenderState size: {:?}", id, size_opt);
+                        size_opt
+                    }
+                    Some(elem) => {
+                        #[cfg(debug_assertions)]
+                        println!("[DEBUG] flush_layout: Root element is not Render! Type: {:?}",
+                            std::any::type_name_of_val(elem));
+                        None
+                    }
+                    None => {
+                        #[cfg(debug_assertions)]
+                        println!("[DEBUG] flush_layout: Root element not found! ID: {:?}", id);
+                        None
+                    }
                 }
             }
-            None => None,
+            None => {
+                #[cfg(debug_assertions)]
+                println!("[DEBUG] flush_layout: No root_id provided!");
+                None
+            }
         };
 
         Ok(size)

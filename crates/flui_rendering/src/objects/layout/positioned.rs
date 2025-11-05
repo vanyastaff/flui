@@ -270,7 +270,8 @@ impl RenderPositioned {
 
 impl SingleRender for RenderPositioned {
     /// GAT Metadata type
-    type Metadata = PositionedMetadata;
+    /// Fixed to () for object safety - metadata stored internally as field
+    type Metadata = ();
 
     fn layout(
         &mut self,

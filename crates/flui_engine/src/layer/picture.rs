@@ -357,6 +357,9 @@ impl Default for PictureLayer {
 
 impl Layer for PictureLayer {
     fn paint(&self, painter: &mut dyn Painter) {
+        #[cfg(debug_assertions)]
+        tracing::debug!("PictureLayer::paint: {} commands", self.commands.len());
+
         // Execute all drawing commands
         for command in &self.commands {
             match command {
@@ -381,7 +384,13 @@ impl Layer for PictureLayer {
                     position,
                     style,
                 } => {
+                    #[cfg(debug_assertions)]
+                    tracing::debug!("PictureLayer::paint: Text command - text='{}', position={:?}, style={:?}", text, position, style);
+
                     painter.text_styled(text, *position, style);
+
+                    #[cfg(debug_assertions)]
+                    tracing::debug!("PictureLayer::paint: Text painted");
                 }
                 DrawCommand::Image {
                     image,

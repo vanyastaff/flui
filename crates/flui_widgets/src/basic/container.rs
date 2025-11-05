@@ -37,8 +37,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{StatelessWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::{BuildContext, Element};
 use flui_types::constraints::BoxConstraints;
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
@@ -83,7 +83,7 @@ use flui_types::{Alignment, Color, EdgeInsets};
 ///   passes constraints through to child and sizes itself to child.
 ///
 /// - If the widget has width or height, those properties override constraints.
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(EdgeInsets, into),
@@ -148,7 +148,41 @@ pub struct Container {
     /// If null, the container will size itself according to other properties.
     /// Use the custom `.child()` setter in the builder.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Container {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Container")
+            .field("key", &self.key)
+            .field("alignment", &self.alignment)
+            .field("padding", &self.padding)
+            .field("color", &self.color)
+            .field("decoration", &self.decoration)
+            .field("margin", &self.margin)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("constraints", &self.constraints)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for Container {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            alignment: self.alignment,
+            padding: self.padding,
+            color: self.color,
+            decoration: self.decoration.clone(),
+            margin: self.margin,
+            width: self.width,
+            height: self.height,
+            constraints: self.constraints,
+            child: None,
+        }
+    }
 }
 
 impl Container {
@@ -183,9 +217,9 @@ impl Container {
     ///
     /// ```rust,ignore
     /// let mut container = Container::new();
-    /// container.set_child(some_widget);
+    /// container.set_child(Box::new(some_view));
     /// ```
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 
@@ -247,17 +281,15 @@ impl Default for Container {
     }
 }
 
-// NOTE: Container is a StatelessWidget (like in Flutter), NOT a RenderObjectWidget!
+// NOTE: Container is a composite View (like in Flutter), NOT a RenderObjectWidget!
 //
-// Flutter inheritance: Object → Widget → StatelessWidget → Container
-//
-// Container should create a ComponentElement that implements build() to compose
-// other widgets (Padding, Align, DecoratedBox, ConstrainedBox, etc.) into a tree.
-//
-// Widget trait will be automatically implemented via StatelessWidget trait below
+// Container composes other Views (Padding, Align, DecoratedBox, SizedBox, etc.) into a tree.
 
-impl StatelessWidget for Container {
-    fn build(&self, _context: &BuildContext) -> Widget {
+impl View for Container {
+    type Element = Element;
+    type State = Box<dyn std::any::Any>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Build widget tree from inside out:
         // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
         //
@@ -269,54 +301,52 @@ impl StatelessWidget for Container {
         //  then the Container tries to expand to fit the parent, and then positions
         //  the child within itself as per the alignment."
 
-        let mut current: Widget = if let Some(child) = &self.child {
-            child.clone()
+        let mut current: Box<dyn AnyView> = if let Some(child) = self.child {
+            child
         } else {
             // No child - use empty SizedBox
-            Widget::render_object(crate::SizedBox::new())
+            Box::new(crate::SizedBox::new())
         };
 
         // Apply padding (inner spacing around child)
         if let Some(padding) = self.padding {
-            current = Widget::render_object(crate::Padding {
-                key: None,
-                padding,
-                child: Some(current),
-            });
+            let mut padding_widget = crate::Padding::builder()
+                .padding(padding)
+                .build();
+            padding_widget.child = Some(current);
+            current = Box::new(padding_widget);
         }
 
         // Apply alignment BEFORE decoration!
         // This allows decoration to be on the outside and receive tight constraints
         if let Some(alignment) = self.alignment {
-            current = Widget::render_object(crate::Align {
-                key: None,
-                alignment,
-                width_factor: None,
-                height_factor: None,
-                child: Some(current),
-            });
+            let mut align_widget = crate::Align::builder()
+                .alignment(alignment)
+                .build();
+            align_widget.child = Some(current);
+            current = Box::new(align_widget);
         }
 
         // Apply decoration or color AFTER alignment
         // Decoration will now receive tight constraints from SizedBox/margin
-        if let Some(decoration) = &self.decoration {
-            current = Widget::render_object(crate::DecoratedBox {
-                key: None,
-                decoration: decoration.clone(),
-                position: crate::DecorationPosition::Background,
-                child: Some(current),
-            });
+        if let Some(decoration) = self.decoration {
+            let mut decorated_widget = crate::DecoratedBox::builder()
+                .decoration(decoration)
+                .position(crate::DecorationPosition::Background)
+                .build();
+            decorated_widget.child = Some(current);
+            current = Box::new(decorated_widget);
         } else if let Some(color) = self.color {
             let decoration = BoxDecoration {
                 color: Some(color),
                 ..Default::default()
             };
-            current = Widget::render_object(crate::DecoratedBox {
-                key: None,
-                decoration,
-                position: crate::DecorationPosition::Background,
-                child: Some(current),
-            });
+            let mut decorated_widget = crate::DecoratedBox::builder()
+                .decoration(decoration)
+                .position(crate::DecorationPosition::Background)
+                .build();
+            decorated_widget.child = Some(current);
+            current = Box::new(decorated_widget);
         }
 
         // Apply margin BEFORE size constraints!
@@ -324,37 +354,67 @@ impl StatelessWidget for Container {
         // Note: margin is implemented using Padding widget (same as Flutter)
         // The semantic difference (margin vs padding) is maintained by the widget order
         if let Some(margin) = self.margin {
-            current = Widget::render_object(crate::Padding {
-                key: None,
-                padding: margin,
-                child: Some(current),
-            });
+            let mut margin_widget = crate::Padding::builder()
+                .padding(margin)
+                .build();
+            margin_widget.child = Some(current);
+            current = Box::new(margin_widget);
         }
 
         // Apply width/height constraints
         // These constraints apply to the TOTAL size (including margin)
         if self.width.is_some() || self.height.is_some() {
-            current = Widget::render_object(crate::SizedBox {
+            let mut sized_widget = crate::SizedBox {
                 key: None,
                 width: self.width,
                 height: self.height,
                 child: Some(current),
-            });
+            };
+            current = Box::new(sized_widget);
         }
 
         // Note: Transform feature is currently disabled
         // // Apply transform LAST (outermost)
         // // Transform is applied OUTSIDE all other effects
         // if let Some(transform) = self.transform {
-        //     current = Widget::Transform(crate::Transform {
-        //         key: None,
-        //         transform,
-        //         transform_hit_tests: true,
-        //         child: Some(current),
-        //     });
+        //     current = Box::new(crate::Transform::builder()
+        //         .transform(transform)
+        //         .child(current)
+        //         .build());
         // }
 
-        current
+        // Build the final child tree
+        let (boxed_element, state) = current.build_any(ctx);
+        let element = boxed_element.into_element();
+        (element, state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // Check if any properties changed
+        let properties_changed = self.alignment != prev.alignment
+            || self.padding != prev.padding
+            || self.color != prev.color
+            || self.decoration != prev.decoration
+            || self.margin != prev.margin
+            || self.width != prev.width
+            || self.height != prev.height
+            || self.constraints != prev.constraints;
+
+        if properties_changed {
+            // Properties changed - need to rebuild the entire tree
+            ChangeFlags::NEEDS_BUILD
+        } else {
+            // Properties same - let child handle rebuild
+            // Note: In a more sophisticated implementation, we could
+            // rebuild the child here, but for composite widgets it's
+            // simpler to just return NEEDS_BUILD when properties change
+            ChangeFlags::NONE
+        }
     }
 }
 
@@ -368,35 +428,18 @@ where
 {
     /// Sets the child widget (works in builder chain).
     ///
-    /// Accepts anything that implements `IntoWidget` for ergonomic API.
+    /// Accepts anything that implements `View` trait.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// Container::builder()
     ///     .width(100.0)
-    ///     .child(Text::new("Hello"))  // No need for Widget::render_object()!
+    ///     .child(Text::new("Hello"))
     ///     .build()
     /// ```
-    pub fn child(self, child: impl flui_core::IntoWidget) -> ContainerBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
-    }
-}
-
-impl<S: State> ContainerBuilder<S> {
-    /// Build the container and return it as a Widget.
-    ///
-    /// This automatically wraps the Container in a Widget::stateless() for convenience.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let widget = Container::builder()
-    ///     .width(100.0)
-    ///     .build();  // Returns Widget, not Container!
-    /// ```
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::stateless(self.build_container())
+    pub fn child(self, child: impl View + 'static) -> ContainerBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
@@ -461,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_container_builder() {
-        let container = Container::builder().width(100.0).height(200.0).build();
+        let container = Container::builder().width(100.0).height(200.0).build_container();
 
         assert_eq!(container.width, Some(100.0));
         assert_eq!(container.height, Some(200.0));
@@ -470,7 +513,7 @@ mod tests {
     #[test]
     fn test_container_builder_color() {
         let red = Color::rgb(255, 0, 0);
-        let container = Container::builder().color(red).build();
+        let container = Container::builder().color(red).build_container();
 
         assert_eq!(container.color, Some(red));
     }
@@ -478,7 +521,7 @@ mod tests {
     #[test]
     fn test_container_builder_padding() {
         let padding = EdgeInsets::all(16.0);
-        let container = Container::builder().padding(padding).build();
+        let container = Container::builder().padding(padding).build_container();
 
         assert_eq!(container.padding, Some(padding));
     }
@@ -486,14 +529,14 @@ mod tests {
     #[test]
     fn test_container_builder_margin() {
         let margin = EdgeInsets::symmetric(10.0, 20.0);
-        let container = Container::builder().margin(margin).build();
+        let container = Container::builder().margin(margin).build_container();
 
         assert_eq!(container.margin, Some(margin));
     }
 
     #[test]
     fn test_container_builder_alignment() {
-        let container = Container::builder().alignment(Alignment::CENTER).build();
+        let container = Container::builder().alignment(Alignment::CENTER).build_container();
 
         assert_eq!(container.alignment, Some(Alignment::CENTER));
     }
@@ -501,14 +544,14 @@ mod tests {
     #[test]
     fn test_container_builder_constraints() {
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let container = Container::builder().constraints(constraints).build();
+        let container = Container::builder().constraints(constraints).build_container();
 
         assert_eq!(container.constraints, Some(constraints));
     }
 
     #[test]
     fn test_container_builder_key() {
-        let container = Container::builder().key("my-container").build();
+        let container = Container::builder().key("my-container").build_container();
 
         assert_eq!(container.key, Some("my-container".to_string()));
     }
@@ -522,7 +565,7 @@ mod tests {
             .padding(EdgeInsets::all(8.0))
             .color(blue)
             .alignment(Alignment::CENTER)
-            .build();
+            .build_container();
 
         assert_eq!(container.width, Some(200.0));
         assert_eq!(container.height, Some(100.0));
@@ -545,7 +588,7 @@ mod tests {
             color: Some(green),
             ..Default::default()
         };
-        let container = Container::builder().decoration(decoration.clone()).build();
+        let container = Container::builder().decoration(decoration.clone()).build_container();
 
         assert_eq!(container.decoration, Some(decoration));
     }
@@ -553,7 +596,7 @@ mod tests {
     #[test]
     fn test_container_get_decoration_from_color() {
         let green = Color::rgb(0, 255, 0);
-        let container = Container::builder().color(green).build();
+        let container = Container::builder().color(green).build_container();
 
         let decoration = container.get_decoration();
         assert!(decoration.is_some());
@@ -562,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_container_validate_ok() {
-        let container = Container::builder().width(100.0).height(200.0).build();
+        let container = Container::builder().width(100.0).height(200.0).build_container();
 
         assert!(container.validate().is_ok());
     }
@@ -616,6 +659,3 @@ mod tests {
         assert_eq!(container.color, Some(Color::rgb(255, 0, 0)));
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Container, stateless);

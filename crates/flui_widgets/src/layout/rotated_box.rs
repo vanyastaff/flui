@@ -4,13 +4,14 @@
 //! Similar to Flutter's RotatedBox widget.
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::view::{AnyView, ChangeFlags, View};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::{BuildContext, Element};
 use flui_rendering::RenderRotatedBox;
+use flui_types::geometry::QuarterTurns;
 
-// Re-export QuarterTurns from rendering for convenience
-pub use flui_rendering::QuarterTurns;
+// Re-export QuarterTurns for convenience
+pub use flui_types::geometry::QuarterTurns as WidgetQuarterTurns;
 
 /// A widget that rotates its child by a integral number of quarter turns.
 ///
@@ -78,7 +79,7 @@ pub use flui_rendering::QuarterTurns;
 /// // From integer (modulo 4)
 /// RotatedBox::new(QuarterTurns::from_int(5), widget)  // Same as One
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), on(QuarterTurns, into), finish_fn = build_rotated_box)]
 pub struct RotatedBox {
     /// Optional key for widget identification
@@ -91,7 +92,27 @@ pub struct RotatedBox {
 
     /// The child widget to rotate.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for RotatedBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RotatedBox")
+            .field("key", &self.key)
+            .field("quarter_turns", &self.quarter_turns)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for RotatedBox {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            quarter_turns: self.quarter_turns,
+            child: None,
+        }
+    }
 }
 
 impl RotatedBox {
@@ -100,9 +121,9 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::new(QuarterTurns::One, child);
+    /// let widget = RotatedBox::new(QuarterTurns::One, Box::new(child));
     /// ```
-    pub fn new(quarter_turns: QuarterTurns, child: Widget) -> Self {
+    pub fn new(quarter_turns: QuarterTurns, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             quarter_turns,
@@ -115,9 +136,9 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::rotate_90(Text::new("Vertical"));
+    /// let widget = RotatedBox::rotate_90(Box::new(Text::new("Vertical")));
     /// ```
-    pub fn rotate_90(child: Widget) -> Self {
+    pub fn rotate_90(child: Box<dyn AnyView>) -> Self {
         Self::new(QuarterTurns::One, child)
     }
 
@@ -126,9 +147,9 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::rotate_180(my_widget);
+    /// let widget = RotatedBox::rotate_180(Box::new(my_widget));
     /// ```
-    pub fn rotate_180(child: Widget) -> Self {
+    pub fn rotate_180(child: Box<dyn AnyView>) -> Self {
         Self::new(QuarterTurns::Two, child)
     }
 
@@ -137,14 +158,14 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::rotate_270(child);
+    /// let widget = RotatedBox::rotate_270(Box::new(child));
     /// ```
-    pub fn rotate_270(child: Widget) -> Self {
+    pub fn rotate_270(child: Box<dyn AnyView>) -> Self {
         Self::new(QuarterTurns::Three, child)
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 }
@@ -167,39 +188,49 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> RotatedBoxBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> RotatedBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-impl<S: State> RotatedBoxBuilder<S> {
-    /// Builds the RotatedBox widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_rotated_box())
+// Implement View trait
+impl View for RotatedBox {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderRotatedBox
+        let render = RenderRotatedBox::new(self.quarter_turns);
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement RenderWidget
-impl RenderWidget for RotatedBox {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderRotatedBox::new(self.quarter_turns)))
-    }
-
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(rotated_box) = render.downcast_mut::<RenderRotatedBox>() {
-                rotated_box.set_quarter_turns(self.quarter_turns);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
-    }
-}
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(RotatedBox, render);
 
 #[cfg(test)]
 mod tests {
@@ -207,28 +238,28 @@ mod tests {
 
     #[test]
     fn test_rotated_box_new() {
-        let widget = RotatedBox::new(QuarterTurns::One, Widget::from(()));
+        let widget = RotatedBox::new(QuarterTurns::One, Box::new(crate::SizedBox::new()));
         assert_eq!(widget.quarter_turns, QuarterTurns::One);
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_rotated_box_rotate_90() {
-        let widget = RotatedBox::rotate_90(Widget::from(()));
+        let widget = RotatedBox::rotate_90(Box::new(crate::SizedBox::new()));
         assert_eq!(widget.quarter_turns, QuarterTurns::One);
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_rotated_box_rotate_180() {
-        let widget = RotatedBox::rotate_180(Widget::from(()));
+        let widget = RotatedBox::rotate_180(Box::new(crate::SizedBox::new()));
         assert_eq!(widget.quarter_turns, QuarterTurns::Two);
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_rotated_box_rotate_270() {
-        let widget = RotatedBox::rotate_270(Widget::from(()));
+        let widget = RotatedBox::rotate_270(Box::new(crate::SizedBox::new()));
         assert_eq!(widget.quarter_turns, QuarterTurns::Three);
         assert!(widget.child.is_some());
     }
@@ -237,7 +268,7 @@ mod tests {
     fn test_rotated_box_builder() {
         let widget = RotatedBox::builder()
             .quarter_turns(QuarterTurns::Two)
-            .build();
+            .build_rotated_box();
         assert_eq!(widget.quarter_turns, QuarterTurns::Two);
     }
 
@@ -253,13 +284,13 @@ mod tests {
         let mut widget = RotatedBox::default();
         assert!(widget.child.is_none());
 
-        widget.set_child(Widget::from(()));
+        widget.set_child(Box::new(crate::SizedBox::new()));
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_quarter_turns_from_int() {
-        let widget = RotatedBox::new(QuarterTurns::from_int(5), Widget::from(()));
+        let widget = RotatedBox::new(QuarterTurns::from_int(5), Box::new(crate::SizedBox::new()));
         assert_eq!(widget.quarter_turns, QuarterTurns::One);  // 5 % 4 = 1
     }
 }

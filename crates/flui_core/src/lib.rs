@@ -248,8 +248,6 @@
 pub use flui_engine::BoxedLayer;
 pub use flui_types::{Offset, Size};
 
-// Re-export reactive types
-pub use flui_reactive::{create_scope, with_scope, Signal, SignalId, ScopeId, ReactiveScope};
 // ============================================================================
 // Debug Infrastructure
 // ============================================================================
@@ -377,9 +375,6 @@ pub mod prelude {
 
     // Render system
     pub use crate::render::{LeafRender, MultiRender, RenderNode, SingleRender};
-
-    // Reactive primitives
-    pub use flui_reactive::{Signal, create_scope};
 }
 
 // ============================================================================

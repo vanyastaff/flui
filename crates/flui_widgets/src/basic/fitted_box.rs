@@ -4,14 +4,14 @@
 //! Similar to Flutter's FittedBox widget.
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderFittedBox;
 use flui_types::Alignment;
 
-// Re-export BoxFit from rendering for convenience
-pub use flui_rendering::BoxFit;
+// Re-export BoxFit from types for convenience
+pub use flui_types::styling::BoxFit;
 
 /// A widget that scales and positions its child within itself according to fit.
 ///
@@ -83,7 +83,7 @@ pub use flui_rendering::BoxFit;
 /// // Fill width
 /// FittedBox::new(BoxFit::FitWidth, child)
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), on(BoxFit, into), on(Alignment, into), finish_fn = build_fitted_box)]
 pub struct FittedBox {
     /// Optional key for widget identification
@@ -101,7 +101,29 @@ pub struct FittedBox {
 
     /// The child widget to scale and position.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for FittedBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FittedBox")
+            .field("key", &self.key)
+            .field("fit", &self.fit)
+            .field("alignment", &self.alignment)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for FittedBox {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            fit: self.fit,
+            alignment: self.alignment,
+            child: None,
+        }
+    }
 }
 
 impl FittedBox {
@@ -112,12 +134,12 @@ impl FittedBox {
     /// ```rust,ignore
     /// let widget = FittedBox::new(BoxFit::Cover, child);
     /// ```
-    pub fn new(fit: BoxFit, child: Widget) -> Self {
+    pub fn new(fit: BoxFit, child: impl View + 'static) -> Self {
         Self {
             key: None,
             fit,
             alignment: Alignment::CENTER,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -132,18 +154,18 @@ impl FittedBox {
     ///     child
     /// );
     /// ```
-    pub fn with_alignment(fit: BoxFit, alignment: Alignment, child: Widget) -> Self {
+    pub fn with_alignment(fit: BoxFit, alignment: Alignment, child: impl View + 'static) -> Self {
         Self {
             key: None,
             fit,
             alignment,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 }
 
@@ -158,6 +180,45 @@ impl Default for FittedBox {
     }
 }
 
+// Implement View for FittedBox - New architecture
+impl View for FittedBox {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child if present
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderNode (always Single for SingleRender widgets)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderFittedBox::with_alignment(self.fit, self.alignment)),
+            child: child_id,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
+    }
+}
+
 // bon Builder Extensions
 use fitted_box_builder::{IsUnset, SetChild, State};
 
@@ -166,51 +227,48 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> FittedBoxBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> FittedBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 impl<S: State> FittedBoxBuilder<S> {
     /// Builds the FittedBox widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_fitted_box())
+    pub fn build(self) -> FittedBox {
+        self.build_fitted_box()
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for FittedBox {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderFittedBox::with_alignment(
-            self.fit,
-            self.alignment,
-        )))
-    }
-
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(fitted_box) = render.downcast_mut::<RenderFittedBox>() {
-                fitted_box.set_fit(self.fit);
-                fitted_box.set_alignment(self.alignment);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
-    }
-}
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(FittedBox, render);
+// FittedBox now implements View trait directly
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Mock view for testing
+    #[derive(Debug, Clone)]
+    struct MockView;
+
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            use flui_rendering::RenderColoredBox;
+            use flui_types::Color;
+            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
+        }
+
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
+    }
+
     #[test]
     fn test_fitted_box_new() {
-        let widget = FittedBox::new(BoxFit::Cover, Widget::from(()));
+        let widget = FittedBox::new(BoxFit::Cover, MockView);
         assert_eq!(widget.fit, BoxFit::Cover);
         assert_eq!(widget.alignment, Alignment::CENTER);
         assert!(widget.child.is_some());
@@ -221,7 +279,7 @@ mod tests {
         let widget = FittedBox::with_alignment(
             BoxFit::Contain,
             Alignment::TOP_LEFT,
-            Widget::from(()),
+            MockView,
         );
         assert_eq!(widget.fit, BoxFit::Contain);
         assert_eq!(widget.alignment, Alignment::TOP_LEFT);
@@ -251,7 +309,7 @@ mod tests {
         let mut widget = FittedBox::default();
         assert!(widget.child.is_none());
 
-        widget.set_child(Widget::from(()));
+        widget.set_child(MockView);
         assert!(widget.child.is_some());
     }
 }

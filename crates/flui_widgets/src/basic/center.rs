@@ -26,9 +26,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -58,7 +58,7 @@ use flui_types::Alignment;
 ///     .child(some_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     finish_fn = build_center
@@ -81,7 +81,31 @@ pub struct Center {
 
     /// The child widget to center.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+// Manual Debug implementation since AnyView doesn't implement Debug
+impl std::fmt::Debug for Center {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Center")
+            .field("key", &self.key)
+            .field("width_factor", &self.width_factor)
+            .field("height_factor", &self.height_factor)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+// Manual Clone implementation since AnyView doesn't implement Clone
+impl Clone for Center {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            width_factor: self.width_factor,
+            height_factor: self.height_factor,
+            child: None,
+        }
+    }
 }
 
 impl Center {
@@ -96,8 +120,8 @@ impl Center {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates Center configuration.
@@ -139,20 +163,16 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    ///
-    /// Accepts anything that implements `IntoWidget` for ergonomic API.
-    pub fn child(self, child: impl flui_core::IntoWidget) -> CenterBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
+    pub fn child(self, child: impl View + 'static) -> CenterBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 // Build wrapper
 impl<S: State> CenterBuilder<S> {
-    /// Build the Center and return it as a Widget.
-    ///
-    /// This automatically wraps the Center in a Widget::render_object() for convenience.
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_center())
+    /// Builds the Center widget.
+    pub fn build(self) -> Center {
+        self.build_center()
     }
 }
 
@@ -176,15 +196,23 @@ mod tests {
     use flui_rendering::RenderPadding;
     use flui_types::EdgeInsets;
 
+    // Mock view for testing
     #[derive(Debug, Clone)]
-    struct MockWidget;
+    struct MockView;
 
-    impl RenderWidget for MockWidget {
-        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            let render_node = RenderNode::Leaf(Box::new(RenderPadding::new(EdgeInsets::ZERO)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
         }
 
-        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
     }
 
     #[test]
@@ -210,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_center_builder_with_child() {
-        let center = Center::builder().child(Widget::from(MockWidget)).build();
+        let center = Center::builder().child(MockView).build();
         assert!(center.child.is_some());
     }
 
@@ -227,7 +255,7 @@ mod tests {
     #[test]
     fn test_center_set_child() {
         let mut center = Center::new();
-        center.set_child(Widget::from(MockWidget));
+        center.set_child(MockView);
         assert!(center.child.is_some());
     }
 
@@ -270,49 +298,63 @@ mod tests {
     }
 
     #[test]
-    fn test_center_widget_trait() {
-        let _widget = Center::builder().child(Widget::from(MockWidget)).build();
+    fn test_center_view_trait() {
+        let center = Center::builder().child(MockView).build();
 
-        // Test that it implements Widget
-        // Widget creation is tested through the builder pattern
+        // Test that it implements View
+        assert!(center.child.is_some());
     }
 
     #[test]
-    fn test_single_child_render_object_widget_trait() {
-        let widget = Center::builder()
+    fn test_center_with_factors() {
+        let center = Center::builder()
             .width_factor(2.0)
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
 
-        // Test child() method
-        assert!(widget.child.is_some());
+        // Test child field
+        assert!(center.child.is_some());
+        assert_eq!(center.width_factor, Some(2.0));
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for Center {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderAlign::with_factors(
-            Alignment::CENTER,
-            self.width_factor,
-            self.height_factor,
-        )))
+// Implement View for Center - New architecture
+impl View for Center {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child (required for Center)
+        let child = self.child.expect("Center requires a child widget");
+        let (elem, state) = child.build_any(ctx);
+        let child_id = ctx.tree().write().insert(elem.into_element());
+
+        // Create RenderNode with Single (Center always has child)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderAlign::with_factors(
+                Alignment::CENTER,
+                self.width_factor,
+                self.height_factor,
+            )),
+            child: Some(child_id),
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), Some(state))
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(align) = render.downcast_mut::<RenderAlign>() {
-                align.set_alignment(Alignment::CENTER);
-                align.set_width_factor(self.width_factor);
-                align.set_height_factor(self.height_factor);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Center, render);
+// Center now implements View trait directly

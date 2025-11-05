@@ -5,35 +5,6 @@ use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
 use flui_types::{Offset, Size, constraints::BoxConstraints, typography::TextBaseline};
 
-/// Data for RenderBaseline
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BaselineData {
-    /// Distance from top to baseline
-    pub baseline: f32,
-    /// Type of baseline
-    pub baseline_type: TextBaseline,
-}
-
-impl BaselineData {
-    /// Create new baseline data
-    pub fn new(baseline: f32, baseline_type: TextBaseline) -> Self {
-        Self {
-            baseline,
-            baseline_type,
-        }
-    }
-
-    /// Create with alphabetic baseline
-    pub fn alphabetic(baseline: f32) -> Self {
-        Self::new(baseline, TextBaseline::Alphabetic)
-    }
-
-    /// Create with ideographic baseline
-    pub fn ideographic(baseline: f32) -> Self {
-        Self::new(baseline, TextBaseline::Ideographic)
-    }
-}
-
 /// RenderObject that positions child based on baseline
 ///
 /// This is used for aligning text and other widgets along a common baseline.
@@ -127,27 +98,6 @@ mod tests {
     #[test]
     fn test_text_baseline_types() {
         assert_ne!(TextBaseline::Alphabetic, TextBaseline::Ideographic);
-    }
-
-    #[test]
-    fn test_baseline_data_new() {
-        let data = BaselineData::new(20.0, TextBaseline::Alphabetic);
-        assert_eq!(data.baseline, 20.0);
-        assert_eq!(data.baseline_type, TextBaseline::Alphabetic);
-    }
-
-    #[test]
-    fn test_baseline_data_alphabetic() {
-        let data = BaselineData::alphabetic(15.0);
-        assert_eq!(data.baseline, 15.0);
-        assert_eq!(data.baseline_type, TextBaseline::Alphabetic);
-    }
-
-    #[test]
-    fn test_baseline_data_ideographic() {
-        let data = BaselineData::ideographic(25.0);
-        assert_eq!(data.baseline, 25.0);
-        assert_eq!(data.baseline_type, TextBaseline::Ideographic);
     }
 
     #[test]

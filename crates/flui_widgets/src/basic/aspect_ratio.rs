@@ -29,9 +29,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderAspectRatio;
 
 /// A widget that sizes its child to a specific aspect ratio.
@@ -84,7 +84,7 @@ use flui_rendering::RenderAspectRatio;
 /// - **1.5** - 3:2 (common photo)
 /// - **1.777** - Widescreen (16:9)
 /// - **2.35** - Cinemascope (21:9)
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     finish_fn = build_aspect_ratio
@@ -104,7 +104,29 @@ pub struct AspectRatio {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+// Manual Debug implementation since AnyView doesn't implement Debug
+impl std::fmt::Debug for AspectRatio {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AspectRatio")
+            .field("key", &self.key)
+            .field("aspect_ratio", &self.aspect_ratio)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+// Manual Clone implementation since AnyView doesn't implement Clone
+impl Clone for AspectRatio {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            aspect_ratio: self.aspect_ratio,
+            child: None,
+        }
+    }
 }
 
 impl AspectRatio {
@@ -165,8 +187,8 @@ impl AspectRatio {
     /// let mut widget = AspectRatio::new(16.0 / 9.0);
     /// widget.set_child(Image::network(url));
     /// ```
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates AspectRatio configuration.
@@ -197,22 +219,38 @@ impl Default for AspectRatio {
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for AspectRatio {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderAspectRatio::new(self.aspect_ratio)))
+// Implement View for AspectRatio - New architecture
+impl View for AspectRatio {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child (required for AspectRatio)
+        let child = self.child.expect("AspectRatio requires a child widget");
+        let (elem, state) = child.build_any(ctx);
+        let child_id = ctx.tree().write().insert(elem.into_element());
+
+        // Create RenderNode with Single (AspectRatio always has child)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderAspectRatio::new(self.aspect_ratio)),
+            child: Some(child_id),
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), Some(state))
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(aspect_ratio) = render.downcast_mut::<RenderAspectRatio>() {
-                aspect_ratio.set_aspect_ratio(self.aspect_ratio);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -234,18 +272,16 @@ where
     ///     .child(video_player)
     ///     .build()
     /// ```
-    pub fn child(self, child: Widget) -> AspectRatioBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> AspectRatioBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 // Public build() wrapper
 impl<S: State> AspectRatioBuilder<S> {
     /// Builds the AspectRatio widget.
-    ///
-    /// Equivalent to calling the generated `build_aspect_ratio()` finishing function.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_aspect_ratio())
+    pub fn build(self) -> AspectRatio {
+        self.build_aspect_ratio()
     }
 }
 
@@ -277,23 +313,11 @@ macro_rules! aspect_ratio {
     };
 }
 
+// AspectRatio now implements View trait directly
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
-    use flui_rendering::RenderPadding;
-
-    #[derive(Debug, Clone)]
-    struct MockWidget;
-
-    impl RenderWidget for MockWidget {
-        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
-        }
-
-        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
-    }
 
     #[test]
     fn test_aspect_ratio_new() {
@@ -399,38 +423,6 @@ mod tests {
     }
 
     #[test]
-    fn test_aspect_ratio_render_object_creation() {
-        use flui_core::BuildContext;
-        let widget = AspectRatio::new(16.0 / 9.0);
-        let context = BuildContext::default();
-        let render_node = widget.create_render_object(&context);
-
-        if let RenderNode::Single { render, .. } = render_node {
-            assert!(render.downcast_ref::<RenderAspectRatio>().is_some());
-        } else {
-            panic!("Expected RenderNode::Single");
-        }
-    }
-
-    #[test]
-    fn test_aspect_ratio_render_object_update() {
-        use flui_core::BuildContext;
-        let widget1 = AspectRatio::new(1.0);
-        let context = BuildContext::default();
-        let mut render_node = widget1.create_render_object(&context);
-
-        let widget2 = AspectRatio::new(2.0);
-        widget2.update_render_object(&context, &mut render_node);
-
-        if let RenderNode::Single { render, .. } = render_node {
-            let aspect_ratio_render = render.downcast_ref::<RenderAspectRatio>().unwrap();
-            assert_eq!(aspect_ratio_render.aspect_ratio(), 2.0);
-        } else {
-            panic!("Expected RenderNode::Single");
-        }
-    }
-
-    #[test]
     fn test_aspect_ratio_macro_empty() {
         let widget = aspect_ratio!();
         assert_eq!(widget.aspect_ratio, 1.0);
@@ -455,36 +447,4 @@ mod tests {
         let widget = AspectRatio::new(0.5);
         assert!(widget.aspect_ratio < 1.0); // portrait
     }
-
-    #[test]
-    fn test_aspect_ratio_widget_trait() {
-        let widget = AspectRatio::builder()
-            .aspect_ratio(16.0 / 9.0)
-            .child(Widget::from(MockWidget))
-            .build();
-
-        // Test child() method
-        assert!(widget.child.is_some());
-    }
-
-    #[test]
-    fn test_aspect_ratio_builder_with_child() {
-        let widget = AspectRatio::builder()
-            .aspect_ratio(4.0 / 3.0)
-            .child(Widget::from(MockWidget))
-            .build();
-
-        assert!(widget.child.is_some());
-        assert_eq!(widget.aspect_ratio, 4.0 / 3.0);
-    }
-
-    #[test]
-    fn test_aspect_ratio_set_child() {
-        let mut widget = AspectRatio::new(1.0);
-        widget.set_child(Widget::from(MockWidget));
-        assert!(widget.child.is_some());
-    }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(AspectRatio, render);

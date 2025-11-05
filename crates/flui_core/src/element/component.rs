@@ -269,6 +269,28 @@ impl ComponentElement {
     }
 }
 
+// ========== ViewElement Implementation ==========
+
+use crate::view::view::ViewElement;
+
+impl ViewElement for ComponentElement {
+    fn into_element(self: Box<Self>) -> crate::element::Element {
+        crate::element::Element::Component(*self)
+    }
+
+    fn mark_dirty(&mut self) {
+        self.base.mark_dirty();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
 // ========== Debug Implementation ==========
 
 // Debug is derived, but we could customize it if needed

@@ -22,6 +22,7 @@ pub struct ParagraphData {
     pub text: String,
     /// Text style (size, color, font, etc.)
     pub font_size: f32,
+    /// Text color
     pub color: Color,
     /// Text alignment
     pub text_align: TextAlign,
@@ -233,9 +234,12 @@ impl LeafRender for RenderParagraph {
     }
 
     fn paint(&self, offset: Offset) -> BoxedLayer {
-        let mut pooled = flui_engine::PooledPictureLayer::new(pool::acquire_picture());
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderParagraph::paint: text='{}', offset={:?}, size={:?}", self.data.text, offset, self.size);
 
-        if let Some(size) = self.size {
+        let mut picture = pool::acquire_picture();
+
+        if let Some(_size) = self.size {
             // Create text style from paragraph data
             let style = TextStyle {
                 font_size: Some(self.data.font_size as f64),
@@ -246,17 +250,28 @@ impl LeafRender for RenderParagraph {
             // Paint in LOCAL coordinates (0, 0) - transform will be applied by parent
             let position = Point::new(0.0, 0.0);
 
+            #[cfg(debug_assertions)]
+            tracing::debug!("RenderParagraph::paint: drawing text with style {:?} at {:?}", style, position);
+
             // Draw text to picture layer
-            pooled.as_mut().draw_text(&self.data.text, position, style);
+            picture.draw_text(&self.data.text, position, style);
+        } else {
+            #[cfg(debug_assertions)]
+            tracing::warn!("RenderParagraph::paint: size is None, cannot paint text");
         }
 
         // Wrap in TransformLayer to apply offset
-        let picture_layer: BoxedLayer = Box::new(pooled);
-        if offset != Offset::ZERO {
+        let picture_layer: BoxedLayer = Box::new(flui_engine::PooledPictureLayer::new(picture));
+        let result = if offset != Offset::ZERO {
             Box::new(flui_engine::TransformLayer::translate(picture_layer, offset))
         } else {
             picture_layer
-        }
+        };
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderParagraph::paint: returning layer");
+
+        result
     }
 }
 

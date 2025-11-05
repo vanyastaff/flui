@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use flui_core::widget::{Widget, StatelessWidget};
-use flui_core::BuildContext;
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::{BuildContext, Element};
 use flui_types::events::{PointerEvent, PointerEventData};
 use parking_lot::RwLock;
 
@@ -90,12 +90,12 @@ pub fn clear_gesture_handlers() {
 ///
 /// # Implementation
 ///
-/// Currently uses StatelessWidget that registers event handlers globally.
+/// Currently uses View trait that registers event handlers globally.
 /// This allows proper rendering while we implement SingleChildRenderObjectElement.
 #[derive(Clone)]
 pub struct GestureDetector {
     /// Child widget
-    pub child: Widget,
+    pub child: Box<dyn AnyView>,
 
     /// On tap callback (pointer up)
     pub on_tap: Option<PointerEventCallback>,
@@ -112,7 +112,7 @@ pub struct GestureDetector {
 
 impl GestureDetector {
     /// Create a new GestureDetector with a child
-    pub fn new(child: Widget) -> Self {
+    pub fn new(child: Box<dyn AnyView>) -> Self {
         Self {
             child,
             on_tap: None,
@@ -140,13 +140,40 @@ impl GestureDetector {
     }
 }
 
-impl StatelessWidget for GestureDetector {
-    fn build(&self, _context: &BuildContext) -> Widget {
+impl View for GestureDetector {
+    type Element = Element;
+    type State = Box<dyn std::any::Any>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Register handlers when building
         self.register();
 
         // Return child directly - this ensures proper rendering
-        self.child.clone()
+        let (boxed_element, state) = self.child.build_any(ctx);
+        let element = boxed_element.into_element();
+        (element, state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        _element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // Check if callbacks changed
+        // Note: We can't directly compare Arc<dyn Fn>, so we check if presence changed
+        let callbacks_changed = (self.on_tap.is_some() != prev.on_tap.is_some())
+            || (self.on_tap_down.is_some() != prev.on_tap_down.is_some())
+            || (self.on_tap_up.is_some() != prev.on_tap_up.is_some())
+            || (self.on_tap_cancel.is_some() != prev.on_tap_cancel.is_some());
+
+        if callbacks_changed {
+            // Callbacks changed - need to re-register
+            ChangeFlags::NEEDS_BUILD
+        } else {
+            // Let child handle rebuild
+            ChangeFlags::NONE
+        }
     }
 }
 
@@ -164,7 +191,7 @@ impl std::fmt::Debug for GestureDetector {
 
 /// Builder for GestureDetector
 pub struct GestureDetectorBuilder {
-    child: Option<Widget>,
+    child: Option<Box<dyn AnyView>>,
     on_tap: Option<PointerEventCallback>,
     on_tap_down: Option<PointerEventCallback>,
     on_tap_up: Option<PointerEventCallback>,
@@ -184,8 +211,8 @@ impl GestureDetectorBuilder {
     }
 
     /// Set the child widget
-    pub fn child(mut self, child: Widget) -> Self {
-        self.child = Some(child);
+    pub fn child(mut self, child: impl View + 'static) -> Self {
+        self.child = Some(Box::new(child));
         self
     }
 
@@ -266,6 +293,3 @@ mod tests {
         assert!(detector.on_tap.is_none());
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(GestureDetector, stateless);

@@ -312,7 +312,16 @@ impl PipelineOwner {
 
     /// Request layout for a Render
     pub fn request_layout(&mut self, node_id: ElementId) {
+        // Mark in dirty set
         self.coordinator.layout_mut().mark_dirty(node_id);
+
+        // Also set needs_layout flag in RenderState
+        let tree = self.tree.read();
+        if let Some(crate::element::Element::Render(render_elem)) = tree.get(node_id) {
+            let render_state_lock = render_elem.render_state();
+            let render_state = render_state_lock.write();
+            render_state.mark_needs_layout();
+        }
     }
 
     /// Request paint for a Render

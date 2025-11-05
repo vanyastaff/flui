@@ -7,7 +7,7 @@ members = [
     "crates/flui_widgets",
     "crates/flui_app",
     "crates/flui_painting",
-    "crates/flui_engine", "crates/flui_derive", "crates/flui_devtools", "crates/flui_reactive",       # Rendering engine - Layer/Scene/Painter
+    "crates/flui_engine", "crates/flui_derive", "crates/flui_devtools",      # Rendering engine - Layer/Scene/Painter
     # "crates/flui_animation",
     # "crates/flui_gestures",
     # "crates/flui_scheduler",
@@ -17,7 +17,7 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
@@ -126,6 +126,7 @@ keywords = ["gui", "ui", "egui", "flutter", "reactive"]
 flui_types = { path = "crates/flui_types" }
 flui_core = { path = "crates/flui_core" }
 flui_engine = { path = "crates/flui_engine" }
+flui_rendering = { path = "crates/flui_rendering" }
 flui_app = { path = "crates/flui_app", optional = true }
 flui_widgets = { path = "crates/flui_widgets", optional = true }
 
@@ -179,31 +180,3 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
-
-# High-level Widget API example - demonstrates StatelessWidget pattern
-[[example]]
-name = "widget_hello_world"
-path = "examples/widget_hello_world.rs"
-required-features = ["flui_app", "flui_widgets"]
-
-# Hot reload demo - demonstrates reassemble lifecycle
-[[example]]
-name = "hot_reload_demo"
-path = "examples/hot_reload_demo.rs"
-required-features = ["flui_app", "flui_widgets"]
-
-# Signal counter app - demonstrates Signal<T> reactive state
-[[example]]
-name = "counter_signal_app"
-path = "examples/counter_signal_app.rs"
-required-features = ["flui_app", "flui_widgets"]
-
-# PipelineBuilder demo - demonstrates fluent builder API for PipelineOwner
-[[example]]
-name = "pipeline_builder_demo"
-path = "examples/pipeline_builder_demo.rs"
-
-# ElementId demo - demonstrates NonZeroUsize niche optimization
-[[example]]
-name = "element_id_demo"
-path = "examples/element_id_demo.rs"

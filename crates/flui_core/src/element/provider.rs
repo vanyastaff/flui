@@ -207,6 +207,29 @@ impl InheritedElement {
     }
 }
 
+// ========== ViewElement Implementation ==========
+
+use crate::view::view::ViewElement;
+use std::any::Any;
+
+impl ViewElement for InheritedElement {
+    fn into_element(self: Box<Self>) -> crate::element::Element {
+        crate::element::Element::Provider(*self)
+    }
+
+    fn mark_dirty(&mut self) {
+        self.base.mark_dirty();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
 // TODO(Phase 5): Add tests using View API
 #[cfg(test)]
 mod tests {

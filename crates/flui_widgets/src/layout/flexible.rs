@@ -30,9 +30,11 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{ParentDataWidget, Widget};
-use flui_core::RenderNode;
-use flui_rendering::{FlexFit, FlexParentData};
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::render::RenderNode;
+use flui_core::{BuildContext, Element};
+use flui_rendering::{FlexItemMetadata, RenderFlexItem};
+use flui_types::layout::FlexFit;
 
 /// A widget that controls how a child of a Row, Column, or Flex flexes.
 ///
@@ -118,7 +120,7 @@ use flui_rendering::{FlexFit, FlexParentData};
 /// - Expanded: A Flexible with FlexFit::Tight (forces child to fill space)
 /// - Row: Horizontal flex layout
 /// - Column: Vertical flex layout
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(i32, into),
@@ -144,7 +146,31 @@ pub struct Flexible {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+// Manual Debug implementation since AnyView doesn't implement Debug
+impl std::fmt::Debug for Flexible {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Flexible")
+            .field("key", &self.key)
+            .field("flex", &self.flex)
+            .field("fit", &self.fit)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+// Manual Clone implementation since AnyView doesn't implement Clone
+impl Clone for Flexible {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            flex: self.flex,
+            fit: self.fit,
+            child: None, // Widgets aren't cloned deeply
+        }
+    }
 }
 
 impl Flexible {
@@ -158,9 +184,9 @@ impl Flexible {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Flexible::new(1, Container::new());
+    /// let widget = Flexible::new(1, Box::new(Container::new()));
     /// ```
-    pub fn new(flex: i32, child: Widget) -> Self {
+    pub fn new(flex: i32, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             flex,
@@ -181,9 +207,9 @@ impl Flexible {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Flexible::tight(2, Container::new());
+    /// let widget = Flexible::tight(2, Box::new(Container::new()));
     /// ```
-    pub fn tight(flex: i32, child: Widget) -> Self {
+    pub fn tight(flex: i32, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             flex,
@@ -197,10 +223,10 @@ impl Flexible {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let mut widget = Flexible::builder().flex(1).build();
-    /// widget.set_child(Container::new());
+    /// let mut widget = Flexible::builder().flex(1).build_flexible();
+    /// widget.set_child(Box::new(Container::new()));
     /// ```
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 
@@ -223,19 +249,6 @@ impl Flexible {
 
         Ok(())
     }
-
-    /// Creates FlexParentData for this Flexible.
-    ///
-    /// This is used internally to communicate flex information to the parent
-    /// Row/Column/Flex layout.
-    pub fn create_parent_data(&self) -> FlexParentData {
-        if self.flex > 0 {
-            FlexParentData::new(self.flex, self.fit)
-        } else {
-            // flex: 0 is treated as inflexible
-            FlexParentData::new(0, FlexFit::Loose)
-        }
-    }
 }
 
 impl Default for Flexible {
@@ -249,21 +262,43 @@ impl Default for Flexible {
     }
 }
 
-// ========== ParentDataWidget Implementation ==========
+// Implement View trait
+impl View for Flexible {
+    type Element = Element;
+    type State = ();
 
-impl ParentDataWidget for Flexible {
-    fn apply_parent_data(&self, _render_object: &mut RenderNode) {
-        // TODO: apply_parent_data needs DynRenderObject trait
-        // This will be implemented when the render object trait is ready
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child
+        let child = self.child.expect("Flexible requires a child widget");
+        let (child_elem, _child_state) = child.build_any(ctx);
+        let child_id = ctx.tree().write().insert(child_elem.into_element());
+
+        // Create RenderFlexItem wrapper with FlexItemMetadata
+        let render = RenderFlexItem::new(FlexItemMetadata {
+            flex: self.flex,
+            fit: self.fit,
+        });
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: Some(child_id),
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), ())
     }
 
-    fn child(&self) -> &Widget {
-        self.child.as_ref().expect("Flexible must have a child")
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Flexible, parent_data);
 
 // bon Builder Extensions
 use flexible_builder::{IsUnset, SetChild, State};
@@ -281,20 +316,10 @@ where
     /// Flexible::builder()
     ///     .flex(2)
     ///     .child(Container::new())
-    ///     .build()
+    ///     .build_flexible()
     /// ```
-    pub fn child(self, child: Widget) -> FlexibleBuilder<SetChild<S>> {
-        self.child_internal(child)
-    }
-}
-
-// Public build() wrapper
-impl<S: State> FlexibleBuilder<S> {
-    /// Builds the Flexible widget.
-    ///
-    /// Equivalent to calling the generated `build_flexible()` finishing function.
-    pub fn build(self) -> Widget {
-        Widget::parent_data(self.build_flexible())
+    pub fn child(self, child: impl View + 'static) -> FlexibleBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 

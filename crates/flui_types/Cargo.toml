@@ -36,6 +36,10 @@ smallvec = "1.13"
 criterion.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
+[[bench]]
+name = "performance_verification"
+harness = false
+
 [features]
 default = []
 serde = ["dep:serde"]

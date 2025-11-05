@@ -4,9 +4,9 @@
 //! Similar to Flutter's ConstrainedBox widget.
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderConstrainedBox;
 use flui_types::BoxConstraints;
 
@@ -35,7 +35,7 @@ use flui_types::BoxConstraints;
 ///     .child(some_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), on(BoxConstraints, into), finish_fn = build_constrained_box)]
 pub struct ConstrainedBox {
     /// Optional key for widget identification
@@ -47,7 +47,27 @@ pub struct ConstrainedBox {
 
     /// The child widget to constrain.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for ConstrainedBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConstrainedBox")
+            .field("key", &self.key)
+            .field("constraints", &self.constraints)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for ConstrainedBox {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            constraints: self.constraints,
+            child: None,
+        }
+    }
 }
 
 impl ConstrainedBox {
@@ -61,8 +81,8 @@ impl ConstrainedBox {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates ConstrainedBox configuration.
@@ -99,41 +119,56 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> ConstrainedBoxBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> ConstrainedBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 impl<S: State> ConstrainedBoxBuilder<S> {
     /// Builds the ConstrainedBox widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_constrained_box())
+    pub fn build(self) -> ConstrainedBox {
+        self.build_constrained_box()
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for ConstrainedBox {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+// Implement View for ConstrainedBox - New architecture
+impl View for ConstrainedBox {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         let constraints = self.constraints.unwrap_or(BoxConstraints::UNCONSTRAINED);
-        RenderNode::single(Box::new(RenderConstrainedBox::new(constraints)))
+
+        // Build child (required)
+        let child = self.child.expect("ConstrainedBox requires a child widget");
+        let (elem, state) = child.build_any(ctx);
+        let child_id = ctx.tree().write().insert(elem.into_element());
+
+        // Create RenderNode with Single
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderConstrainedBox::new(constraints)),
+            child: Some(child_id),
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), Some(state))
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(constrained_box) = render.downcast_mut::<RenderConstrainedBox>() {
-                let constraints = self.constraints.unwrap_or(BoxConstraints::UNCONSTRAINED);
-                constrained_box.set_additional_constraints(constraints);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(ConstrainedBox, render);
+// ConstrainedBox now implements View trait directly
 
 #[cfg(test)]
 mod tests {

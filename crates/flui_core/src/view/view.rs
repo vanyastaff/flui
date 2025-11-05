@@ -4,7 +4,6 @@
 //! It follows Xilem's approach: immutable view trees that efficiently
 //! diff and update a mutable element tree.
 
-use super::sealed::Sealed;
 use super::build_context::BuildContext;
 use crate::element::Element;
 use std::any::Any;
@@ -61,7 +60,7 @@ use std::any::Any;
 ///     }
 /// }
 /// ```
-pub trait View: Sealed + Clone + 'static {
+pub trait View: Clone + 'static {
     /// Persistent state that survives across rebuilds
     ///
     /// Use `()` if no state is needed.
@@ -69,7 +68,55 @@ pub trait View: Sealed + Clone + 'static {
 
     /// The element type this view creates
     ///
-    /// Typically `ComponentElement`, `RenderElement`, etc.
+    /// # Choosing the Right Element Type
+    ///
+    /// | Widget Type | Element Type | When to Use | Examples |
+    /// |-------------|--------------|-------------|----------|
+    /// | **Composite** (99% of cases) | `ComponentElement` | Combining other widgets | Button, Card, Column, Row, Container |
+    /// | **Render** (1% of cases) | `RenderElement` | Wrapping a RenderObject from `flui_rendering` | Text (wraps RenderText), Image, Canvas |
+    /// | **Provider** (rare) | `InheritedElement` | Providing context data down the tree | ThemeProvider, LocaleProvider |
+    ///
+    /// # Example: Composite Widget
+    ///
+    /// ```rust,ignore
+    /// use flui_core::element::ComponentElement;
+    ///
+    /// impl View for Button {
+    ///     type Element = ComponentElement;  // ← Composite widget
+    ///     type State = ();
+    ///     // ...
+    /// }
+    /// ```
+    ///
+    /// # Example: Render Widget
+    ///
+    /// ```rust,ignore
+    /// use flui_core::element::RenderElement;
+    /// use flui_rendering::RenderText;
+    ///
+    /// impl View for Text {
+    ///     type Element = RenderElement;  // ← Wraps RenderObject
+    ///     type State = ();
+    ///
+    ///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    ///         let render_obj = RenderText::new(self.text);
+    ///         let element = RenderElement::new(RenderNode::new(render_obj));
+    ///         (element, ())
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Example: Provider Widget
+    ///
+    /// ```rust,ignore
+    /// use flui_core::element::InheritedElement;
+    ///
+    /// impl<V: View> View for ThemeProvider<V> {
+    ///     type Element = InheritedElement;  // ← Context provider
+    ///     type State = ();
+    ///     // ...
+    /// }
+    /// ```
     type Element: ViewElement;
 
     /// Build initial element from this view
@@ -229,8 +276,14 @@ impl ChangeFlags {
 impl std::ops::BitOr for ChangeFlags {
     type Output = Self;
 
-    fn bitor(self, rhs: Self) -> Self {
+    fn bitor(self, rhs: Self) -> Self::Output {
         self.union(rhs)
+    }
+}
+
+impl std::ops::BitOrAssign for ChangeFlags {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = self.union(rhs);
     }
 }
 

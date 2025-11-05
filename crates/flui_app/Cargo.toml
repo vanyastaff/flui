@@ -9,10 +9,10 @@ repository.workspace = true
 description = "Application framework for Flui - Flutter-inspired UI"
 
 [features]
-default = ["egui", "widgets"]
+default = ["egui"]
 egui = ["dep:egui", "dep:eframe", "flui_engine/egui"]
 wgpu = ["flui_engine/wgpu"]
-widgets = ["dep:flui_widgets"]  # Optional widgets library
+widgets = ["dep:flui_widgets"]  # Optional widgets library (currently broken, needs migration to View API)
 
 [dependencies]
 # Flui crates

@@ -18,77 +18,6 @@ pub trait CustomPainter: std::fmt::Debug + Send + Sync {
     }
 }
 
-/// Data for RenderCustomPaint
-#[derive(Debug)]
-pub struct CustomPaintData {
-    /// Foreground painter (painted on top of child_id)
-    pub foreground_painter: Option<Box<dyn CustomPainter>>,
-    /// Background painter (painted behind child_id)
-    pub painter: Option<Box<dyn CustomPainter>>,
-    /// Size to use when child_id is not present
-    pub size: Size,
-    /// Whether child_id is interactive (if false, hit tests go through)
-    pub is_complex: bool,
-    /// Whether foreground paints on top of child_id
-    pub will_change: bool,
-}
-
-impl CustomPaintData {
-    /// Create new custom paint data
-    pub fn new(size: Size) -> Self {
-        Self {
-            foreground_painter: None,
-            painter: None,
-            size,
-            is_complex: false,
-            will_change: false,
-        }
-    }
-
-    /// Create with background painter
-    pub fn with_painter(painter: Box<dyn CustomPainter>, size: Size) -> Self {
-        Self {
-            foreground_painter: None,
-            painter: Some(painter),
-            size,
-            is_complex: false,
-            will_change: false,
-        }
-    }
-
-    /// Create with foreground painter
-    pub fn with_foreground(foreground: Box<dyn CustomPainter>, size: Size) -> Self {
-        Self {
-            foreground_painter: Some(foreground),
-            painter: None,
-            size,
-            is_complex: false,
-            will_change: false,
-        }
-    }
-
-    /// Create with both painters
-    pub fn with_both(
-        painter: Box<dyn CustomPainter>,
-        foreground: Box<dyn CustomPainter>,
-        size: Size,
-    ) -> Self {
-        Self {
-            foreground_painter: Some(foreground),
-            painter: Some(painter),
-            size,
-            is_complex: false,
-            will_change: false,
-        }
-    }
-}
-
-impl Default for CustomPaintData {
-    fn default() -> Self {
-        Self::new(Size::ZERO)
-    }
-}
-
 /// RenderObject that allows custom painting
 ///
 /// This widget allows you to paint custom graphics before and/or after
@@ -276,35 +205,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_custom_paint_data_new() {
-        let data = CustomPaintData::new(Size::new(100.0, 200.0));
-        assert_eq!(data.size, Size::new(100.0, 200.0));
-        assert!(data.painter.is_none());
-        assert!(data.foreground_painter.is_none());
-    }
-
-    #[test]
-    fn test_custom_paint_data_with_painter() {
-        let data = CustomPaintData::with_painter(Box::new(MockPainter), Size::new(50.0, 75.0));
-        assert_eq!(data.size, Size::new(50.0, 75.0));
-        assert!(data.painter.is_some());
-        assert!(data.foreground_painter.is_none());
-    }
-
-    #[test]
-    fn test_custom_paint_data_with_foreground() {
-        let data = CustomPaintData::with_foreground(Box::new(MockPainter), Size::new(50.0, 75.0));
-        assert_eq!(data.size, Size::new(50.0, 75.0));
-        assert!(data.painter.is_none());
-        assert!(data.foreground_painter.is_some());
-    }
-
-    #[test]
-    fn test_custom_paint_data_default() {
-        let data = CustomPaintData::default();
-        assert_eq!(data.size, Size::ZERO);
-    }
 
     #[test]
     fn test_render_custom_paint_new() {

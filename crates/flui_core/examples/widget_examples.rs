@@ -8,6 +8,8 @@ use flui_core::{
     hooks::{use_signal, use_memo, use_effect_simple},
 };
 
+use super::mock_render::*;
+
 // ============================================================================
 // Example 1: Simple Stateless Widget
 // ============================================================================
@@ -37,7 +39,7 @@ impl SimpleText {
 
 impl View for SimpleText {
     // Element type - typically you'd use a real render element
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
 
     // State type - no state needed for simple text
     type State = ();
@@ -50,7 +52,8 @@ impl View for SimpleText {
         // let element = TextRenderElement::new(self.text);
         // (Element::from(element), ())
 
-        todo!("Create actual render element for text: {}", self.text)
+        let element = create_text_element(self.text.clone());
+        (element, ())
     }
 
     fn rebuild(
@@ -97,7 +100,7 @@ impl Counter {
 }
 
 impl View for Counter {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -118,7 +121,8 @@ impl View for Counter {
         //     ]
         // }
 
-        todo!("Build counter UI with count: {}", count.get())
+        let element = create_column_element(10.0, 2); // Label + buttons
+        (element, ())
     }
 }
 
@@ -148,7 +152,7 @@ impl ComputedDisplay {
 }
 
 impl View for ComputedDisplay {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -178,7 +182,8 @@ impl View for ComputedDisplay {
         //     ]
         // }
 
-        todo!("Build computed display UI")
+        let element = create_text_element(format!("Doubled: {}", doubled.get()));
+        (element, ())
     }
 }
 
@@ -212,7 +217,7 @@ impl LoggingWidget {
 }
 
 impl View for LoggingWidget {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -227,7 +232,8 @@ impl View for LoggingWidget {
         // Build UI
         // Button("Increment", move || count.update(|n| n + 1))
 
-        todo!("Build logging widget UI")
+        let element = create_text_element(format!("Count: {}", count.get()));
+        (element, ())
     }
 }
 
@@ -275,7 +281,7 @@ impl Container {
 }
 
 impl View for Container {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -285,7 +291,8 @@ impl View for Container {
         // - Apply padding
         // - Return the container element
 
-        todo!("Build container with {} children", self.children.len())
+        let element = create_container_element(self.children.len(), 0.0);
+        (element, ())
     }
 
     fn rebuild(
@@ -325,7 +332,7 @@ impl View for Container {
 pub struct ConditionalWidget;
 
 impl View for ConditionalWidget {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -350,7 +357,12 @@ impl View for ConditionalWidget {
         //     ]
         // }
 
-        todo!("Build conditional widget")
+        let element = if is_visible.get() {
+            create_text_element(format!("Content: {}", content.clone()))
+        } else {
+            create_text_element("Hidden".to_string())
+        };
+        (element, ())
     }
 }
 
@@ -374,7 +386,7 @@ impl View for ConditionalWidget {
 pub struct FormWidget;
 
 impl View for FormWidget {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -411,7 +423,8 @@ impl View for FormWidget {
         //     ]
         // }
 
-        todo!("Build form widget")
+        let element = create_column_element(10.0, 3); // TextField + Checkbox + Button
+        (element, ())
     }
 }
 
@@ -445,7 +458,7 @@ impl ListWidget {
 }
 
 impl View for ListWidget {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -460,7 +473,8 @@ impl View for ListWidget {
         //     })
         // }
 
-        todo!("Build list with {} items", self.items.len())
+        let element = create_column_element(10.0, self.items.len());
+        (element, ())
     }
 
     fn rebuild(

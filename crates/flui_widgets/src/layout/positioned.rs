@@ -33,9 +33,10 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{ParentDataWidget, Widget};
-use flui_core::RenderNode;
-use flui_rendering::StackParentData;
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::render::RenderNode;
+use flui_core::{BuildContext, Element};
+use flui_rendering::{PositionedMetadata, RenderPositioned};
 
 /// A widget that controls where a child of a Stack is positioned.
 ///
@@ -138,7 +139,7 @@ use flui_rendering::StackParentData;
 ///
 /// - Stack: For overlaying multiple children
 /// - Align: For simple alignment without absolute positioning
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(f32, into),
@@ -180,7 +181,39 @@ pub struct Positioned {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+// Manual Debug implementation since AnyView doesn't implement Debug
+impl std::fmt::Debug for Positioned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Positioned")
+            .field("key", &self.key)
+            .field("left", &self.left)
+            .field("top", &self.top)
+            .field("right", &self.right)
+            .field("bottom", &self.bottom)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+// Manual Clone implementation since AnyView doesn't implement Clone
+impl Clone for Positioned {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            left: self.left,
+            top: self.top,
+            right: self.right,
+            bottom: self.bottom,
+            width: self.width,
+            height: self.height,
+            child: None, // Widgets aren't cloned deeply
+        }
+    }
 }
 
 impl Positioned {
@@ -211,9 +244,9 @@ impl Positioned {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Positioned::fill(Container::new());
+    /// let widget = Positioned::fill(Box::new(Container::new()));
     /// ```
-    pub fn fill(child: Widget) -> Self {
+    pub fn fill(child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             left: Some(0.0),
@@ -238,9 +271,9 @@ impl Positioned {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, Container::new());
+    /// let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, Box::new(Container::new()));
     /// ```
-    pub fn from_rect(left: f32, top: f32, width: f32, height: f32, child: Widget) -> Self {
+    pub fn from_rect(left: f32, top: f32, width: f32, height: f32, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             left: Some(left),
@@ -269,7 +302,7 @@ impl Positioned {
         top: Option<f32>,
         end: Option<f32>,
         bottom: Option<f32>,
-        child: Widget,
+        child: Box<dyn AnyView>,
     ) -> Self {
         Self {
             key: None,
@@ -289,9 +322,9 @@ impl Positioned {
     ///
     /// ```rust,ignore
     /// let mut widget = Positioned::new();
-    /// widget.set_child(Container::new());
+    /// widget.set_child(Box::new(Container::new()));
     /// ```
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 
@@ -350,11 +383,9 @@ impl Positioned {
             || self.height.is_some()
     }
 
-    /// Creates StackParentData for this Positioned.
-    ///
-    /// Converts Positioned positioning values into StackParentData.
-    pub fn create_parent_data(&self) -> StackParentData {
-        StackParentData::positioned(
+    /// Creates PositionedMetadata for this Positioned.
+    fn create_metadata(&self) -> PositionedMetadata {
+        PositionedMetadata::new(
             self.left,
             self.top,
             self.right,
@@ -371,21 +402,43 @@ impl Default for Positioned {
     }
 }
 
-// ========== ParentDataWidget Implementation ==========
+// Implement View trait
+impl View for Positioned {
+    type Element = Element;
+    type State = ();
 
-impl ParentDataWidget for Positioned {
-    fn apply_parent_data(&self, _render_object: &mut RenderNode) {
-        // TODO: apply_parent_data needs DynRenderObject trait
-        // This will be implemented when the render object trait is ready
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Extract metadata before consuming self.child
+        let metadata = self.create_metadata();
+
+        // Build child if present
+        let child = self.child.expect("Positioned requires a child widget");
+        let (child_elem, _child_state) = child.build_any(ctx);
+        let child_id = ctx.tree().write().insert(child_elem.into_element());
+
+        // Create RenderPositioned wrapper with PositionedMetadata
+        let render = RenderPositioned::new(metadata);
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: Some(child_id),
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), ())
     }
 
-    fn child(&self) -> &Widget {
-        self.child.as_ref().expect("Positioned must have a child")
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Positioned, parent_data);
 
 // bon Builder Extensions
 use positioned_builder::{IsUnset, SetChild, State};
@@ -404,20 +457,10 @@ where
     ///     .left(10.0)
     ///     .top(20.0)
     ///     .child(Container::new())
-    ///     .build()
+    ///     .build_positioned()
     /// ```
-    pub fn child(self, child: Widget) -> PositionedBuilder<SetChild<S>> {
-        self.child_internal(child)
-    }
-}
-
-// Public build() wrapper
-impl<S: State> PositionedBuilder<S> {
-    /// Builds the Positioned widget.
-    ///
-    /// Equivalent to calling the generated `build_positioned()` finishing function.
-    pub fn build(self) -> Widget {
-        Widget::parent_data(self.build_positioned())
+    pub fn child(self, child: impl View + 'static) -> PositionedBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 

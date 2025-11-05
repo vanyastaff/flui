@@ -252,6 +252,9 @@ impl LayoutPipeline {
             render_state.clear_needs_layout();
 
             #[cfg(debug_assertions)]
+            tracing::debug!("Layout: Stored size {:?} for element {:?}", computed_size, id);
+
+            #[cfg(debug_assertions)]
             tracing::trace!(
                 "Layout: Element {:?} computed size {:?}",
                 id,

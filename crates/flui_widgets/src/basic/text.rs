@@ -18,9 +18,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::RenderWidget;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags};
 use flui_rendering::{ParagraphData, RenderParagraph};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
@@ -158,9 +158,13 @@ impl Text {
     }
 }
 
-// Implement RenderWidget for Text (Leaf widget - no children)
-impl RenderWidget for Text {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+// Implement View for Text - New architecture
+impl View for Text {
+    type Element = Element;
+    type State = ();
+
+    fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Create paragraph data
         let data = ParagraphData::new(&self.data)
             .with_font_size(self.size)
             .with_color(self.color)
@@ -176,29 +180,30 @@ impl RenderWidget for Text {
         data.text_direction = self.text_direction;
         data.soft_wrap = self.soft_wrap;
 
-        RenderNode::Leaf(Box::new(RenderParagraph::new(data)))
+        // Create RenderParagraph
+        let render_paragraph = RenderParagraph::new(data);
+
+        // Create RenderNode (Leaf - no children)
+        let render_node = RenderNode::Leaf(Box::new(render_paragraph));
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        // Wrap in Element enum
+        let element = Element::Render(render_element);
+
+        (element, ())
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Leaf(render) = render_object {
-            if let Some(paragraph) = render.downcast_mut::<RenderParagraph>() {
-                paragraph.set_text(&self.data);
-                paragraph.set_font_size(self.size);
-                paragraph.set_color(self.color);
-                paragraph.set_text_align(self.text_align);
-
-                // Update data fields directly
-                let data = paragraph.data_mut();
-                data.text_direction = self.text_direction;
-                data.max_lines = self.max_lines;
-                data.overflow = self.overflow;
-                data.soft_wrap = self.soft_wrap;
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&flui_core::widget::Widget> {
-        None // Leaf widgets have no children
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -288,5 +293,4 @@ mod tests {
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Text, render);
+// Text now implements View trait directly - no need for IntoWidget wrapper

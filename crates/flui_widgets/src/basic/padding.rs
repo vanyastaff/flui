@@ -29,9 +29,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
 
@@ -58,7 +58,7 @@ use flui_types::EdgeInsets;
 ///     .child(some_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(EdgeInsets, into),
@@ -74,7 +74,27 @@ pub struct Padding {
 
     /// The child widget to pad.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Padding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Padding")
+            .field("key", &self.key)
+            .field("padding", &self.padding)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for Padding {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            padding: self.padding,
+            child: None,
+        }
+    }
 }
 
 impl Padding {
@@ -118,17 +138,17 @@ impl Padding {
     }
 
     /// Creates a Padding with the given padding and child.
-    pub fn with_child(padding: EdgeInsets, child: Widget) -> Self {
+    pub fn with_child(padding: EdgeInsets, child: impl View + 'static) -> Self {
         Self {
             key: None,
             padding,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates padding configuration.
@@ -152,22 +172,42 @@ impl Default for Padding {
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for Padding {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderPadding::new(self.padding)))
+// Implement View for Padding - New architecture
+impl View for Padding {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child if present
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderNode (always Single for SingleRender widgets)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderPadding::new(self.padding)),
+            child: child_id,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(padding) = render.downcast_mut::<RenderPadding>() {
-                padding.set_padding(self.padding);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -180,16 +220,16 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl flui_core::IntoWidget) -> PaddingBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
+    pub fn child(self, child: impl View + 'static) -> PaddingBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 // Build wrapper
 impl<S: State> PaddingBuilder<S> {
-    /// Builds the Padding widget and returns it as a Widget.
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_padding())
+    /// Builds the Padding widget.
+    pub fn build(self) -> Padding {
+        self.build_padding()
     }
 }
 
@@ -210,17 +250,26 @@ macro_rules! padding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::LeafRenderObjectElement;
+    use flui_core::element::ElementBase;
+    use flui_types::{Size, Offset};
 
+    // Mock view for testing
     #[derive(Debug, Clone)]
-    struct MockWidget;
+    struct MockView;
 
-    impl RenderWidget for MockWidget {
-        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            let render_node = RenderNode::Leaf(Box::new(RenderPadding::new(EdgeInsets::ZERO)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
         }
 
-        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
     }
 
     #[test]
@@ -262,7 +311,7 @@ mod tests {
     fn test_padding_builder_with_child() {
         let padding = Padding::builder()
             .padding(EdgeInsets::all(10.0))
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
         assert!(padding.child.is_some());
     }
@@ -270,7 +319,7 @@ mod tests {
     #[test]
     fn test_padding_set_child() {
         let mut padding = Padding::new();
-        padding.set_child(Widget::from(MockWidget));
+        padding.set_child(MockView);
         assert!(padding.child.is_some());
     }
 
@@ -304,16 +353,15 @@ mod tests {
     }
 
     #[test]
-    fn test_padding_widget_trait() {
+    fn test_padding_view_trait() {
         let padding = Padding::builder()
             .padding(EdgeInsets::all(10.0))
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
 
-        // Test child() method
+        // Test child field
         assert!(padding.child.is_some());
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Padding, render);
+// Padding now implements View trait directly

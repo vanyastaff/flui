@@ -4,7 +4,7 @@
 //! for running Flui applications.
 
 use crate::app::FluiApp;
-use flui_core::Widget;
+use flui_core::view::AnyView;
 
 /// Run a Flui application
 ///
@@ -13,19 +13,25 @@ use flui_core::Widget;
 ///
 /// # Parameters
 ///
-/// - `root_widget`: The root widget of your application
+/// - `root_view`: The root view of your application (type-erased via `Box<dyn AnyView>`)
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_app::*;
+/// use flui_core::view::View;
+/// use flui_core::element::ComponentElement;
 ///
 /// #[derive(Debug, Clone)]
 /// struct MyApp;
 ///
-/// impl StatelessWidget for MyApp {
-///     fn build(&self, _context: &BuildContext) -> Box<dyn Widget> {
-///         Box::new(Text::new("Hello, World!"))
+/// impl View for MyApp {
+///     type State = ();
+///     type Element = ComponentElement;
+///
+///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+///         // Build your UI here
+///         todo!()
 ///     }
 /// }
 ///
@@ -33,7 +39,7 @@ use flui_core::Widget;
 ///     run_app(Box::new(MyApp)).unwrap();
 /// }
 /// ```
-pub fn run_app(root_widget: Widget) -> Result<(), eframe::Error> {
+pub fn run_app(root_view: Box<dyn AnyView>) -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])
@@ -45,7 +51,7 @@ pub fn run_app(root_widget: Widget) -> Result<(), eframe::Error> {
         "Flui App",
         options,
         Box::new(|_cc| {
-            let app = FluiApp::new(root_widget);
+            let app = FluiApp::new(root_view);
             Ok(Box::new(app))
         }),
     )

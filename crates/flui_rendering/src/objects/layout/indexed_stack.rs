@@ -109,16 +109,17 @@ impl MultiRender for RenderIndexedStack {
         let mut container = pool::acquire_container();
 
         // Only paint the selected child
-        if let Some(index) = self.index
-            && let (Some(&child_id), Some(&child_size)) =
+        if let Some(index) = self.index {
+            if let (Some(&child_id), Some(&child_size)) =
                 (child_ids.get(index), self.child_sizes.get(index))
-        {
-            // Calculate aligned position
-            let child_offset = self.alignment.calculate_offset(child_size, self.size);
+            {
+                // Calculate aligned position
+                let child_offset = self.alignment.calculate_offset(child_size, self.size);
 
-            // Paint child with combined offset
-            let child_layer = tree.paint_child(child_id, offset + child_offset);
-            container.add_child(child_layer);
+                // Paint child with combined offset
+                let child_layer = tree.paint_child(child_id, offset + child_offset);
+                container.add_child(child_layer);
+            }
         }
 
         Box::new(container)

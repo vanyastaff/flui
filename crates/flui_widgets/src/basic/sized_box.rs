@@ -29,10 +29,11 @@
 //!     height: 50.0,
 //! }
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderConstrainedBox;
+use flui_types::BoxConstraints;
 
 /// A box with a specified size.
 ///
@@ -66,7 +67,7 @@ use flui_rendering::RenderConstrainedBox;
 ///     .height(20.0)  // 20px vertical spacing
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     finish_fn = build_sized_box
@@ -89,7 +90,29 @@ pub struct SizedBox {
     ///
     /// If null, the box will be empty with the specified dimensions.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for SizedBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SizedBox")
+            .field("key", &self.key)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for SizedBox {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            width: self.width,
+            height: self.height,
+            child: None,
+        }
+    }
 }
 
 impl SizedBox {
@@ -151,8 +174,8 @@ impl SizedBox {
     /// let mut sized_box = SizedBox::square(100.0);
     /// sized_box.set_child(some_widget);
     /// ```
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates SizedBox configuration.
@@ -203,16 +226,16 @@ where
     ///     .child(some_widget)
     ///     .build()
     /// ```
-    pub fn child(self, child: impl flui_core::IntoWidget) -> SizedBoxBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
+    pub fn child(self, child: impl View + 'static) -> SizedBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-// Build wrapper
+// Build wrapper returns SizedBox directly (it implements View)
 impl<S: State> SizedBoxBuilder<S> {
-    /// Builds the SizedBox widget and returns it as a Widget.
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_sized_box())
+    /// Builds the SizedBox widget.
+    pub fn build(self) -> SizedBox {
+        self.build_sized_box()
     }
 }
 
@@ -241,20 +264,42 @@ macro_rules! sized_box {
 
 #[cfg(test)]
 mod tests {
+    use flui_core::ComponentElement;
+
     use super::*;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
-    struct MockWidget;
+    struct MockView;
 
-    impl RenderWidget for MockWidget {
-        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+    impl View for MockView {
+        type Element = ComponentElement;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
             use flui_rendering::RenderPadding;
             use flui_types::EdgeInsets;
-            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+
+            let render_node = RenderNode::Leaf(Box::new(RenderPadding::new(EdgeInsets::ZERO)));
+            let render_element = RenderElement {
+                base: ElementBase::new(None, 0),
+                render_node,
+                size: Size::ZERO,
+                offset: Offset::ZERO,
+                needs_layout: true,
+                needs_paint: true,
+            };
+            (Element::Render(render_element), ())
         }
 
-        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
+        fn rebuild(
+            self,
+            _prev: &Self,
+            _state: &mut Self::State,
+            _element: &mut Self::Element,
+        ) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
     }
 
     #[test]
@@ -323,7 +368,7 @@ mod tests {
     #[test]
     fn test_sized_box_set_child() {
         let mut sized_box = SizedBox::new();
-        sized_box.set_child(Widget::from(MockWidget));
+        sized_box.set_child(MockView);
         assert!(sized_box.child.is_some());
     }
 
@@ -331,7 +376,7 @@ mod tests {
     fn test_sized_box_builder_with_child() {
         let sized_box = SizedBox::builder()
             .width(100.0)
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
         assert!(sized_box.child.is_some());
     }
@@ -397,54 +442,68 @@ mod tests {
     }
 
     #[test]
-    fn test_widget_trait() {
+    fn test_view_trait() {
         let sized_box = SizedBox::builder()
             .width(100.0)
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
 
-        // Test child() method
+        // Test child field
         assert!(sized_box.child.is_some());
     }
 
     #[test]
-    fn test_single_child_render_object_widget_trait() {
+    fn test_single_child_view() {
         let sized_box = SizedBox::builder()
             .width(100.0)
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
 
-        // Test child() method - returns Option now
+        // Test child field - returns Option
         assert!(sized_box.child.is_some());
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for SizedBox {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        use flui_types::constraints::BoxConstraints;
+// Implement View for SizedBox - New architecture
+impl View for SizedBox {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;  // Child state
 
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Create tight constraints for specified dimensions
         let constraints = BoxConstraints::tight_for(self.width, self.height);
 
-        // Always create Single render - ElementTree.layout_child will handle missing children gracefully
-        RenderNode::single(Box::new(RenderConstrainedBox::new(constraints)))
+        // Build child if present
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderNode (always Single for SingleRender widgets)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderConstrainedBox::new(constraints)),
+            child: child_id,
+        };
+
+        // Create RenderElement
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        use flui_types::constraints::BoxConstraints;
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(constrained_box) = render.downcast_mut::<RenderConstrainedBox>() {
-                let constraints = BoxConstraints::tight_for(self.width, self.height);
-                constrained_box.set_additional_constraints(constraints);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(SizedBox, render);
+// SizedBox now implements View trait directly

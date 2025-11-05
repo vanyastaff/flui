@@ -623,6 +623,26 @@ impl fmt::Display for Element {
     }
 }
 
+// ========== ViewElement Implementation ==========
+
+impl crate::view::ViewElement for Element {
+    fn into_element(self: Box<Self>) -> Element {
+        *self
+    }
+
+    fn mark_dirty(&mut self) {
+        Element::mark_dirty(self)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 // ========== Tests ==========
 
 #[cfg(test)]

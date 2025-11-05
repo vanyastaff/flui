@@ -5,76 +5,6 @@ use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, TransformLayer};
 use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
 
-/// Data for RenderSizedOverflowBox
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SizedOverflowBoxData {
-    /// Explicit width for this widget
-    pub width: Option<f32>,
-    /// Explicit height for this widget
-    pub height: Option<f32>,
-    /// Minimum width for child_id (overrides parent constraints)
-    pub child_min_width: Option<f32>,
-    /// Maximum width for child_id (overrides parent constraints)
-    pub child_max_width: Option<f32>,
-    /// Minimum height for child_id (overrides parent constraints)
-    pub child_min_height: Option<f32>,
-    /// Maximum height for child_id (overrides parent constraints)
-    pub child_max_height: Option<f32>,
-    /// How to align the child_id
-    pub alignment: Alignment,
-}
-
-impl SizedOverflowBoxData {
-    /// Create new sized overflow box data
-    pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
-        Self {
-            width,
-            height,
-            child_min_width: None,
-            child_max_width: None,
-            child_min_height: None,
-            child_max_height: None,
-            alignment: Alignment::CENTER,
-        }
-    }
-
-    /// Create with explicit size and child_id constraints
-    pub fn with_child_constraints(
-        width: Option<f32>,
-        height: Option<f32>,
-        child_min_width: Option<f32>,
-        child_max_width: Option<f32>,
-        child_min_height: Option<f32>,
-        child_max_height: Option<f32>,
-    ) -> Self {
-        Self {
-            width,
-            height,
-            child_min_width,
-            child_max_width,
-            child_min_height,
-            child_max_height,
-            alignment: Alignment::CENTER,
-        }
-    }
-
-    /// Create with specific alignment
-    pub fn with_alignment(width: Option<f32>, height: Option<f32>, alignment: Alignment) -> Self {
-        Self {
-            width,
-            height,
-            alignment,
-            ..Self::new(width, height)
-        }
-    }
-}
-
-impl Default for SizedOverflowBoxData {
-    fn default() -> Self {
-        Self::new(None, None)
-    }
-}
-
 /// RenderObject with fixed size that allows child_id to overflow
 ///
 /// This is a combination of SizedBox and OverflowBox:
@@ -242,37 +172,6 @@ impl SingleRender for RenderSizedOverflowBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_sized_overflow_box_data_new() {
-        let data = SizedOverflowBoxData::new(Some(100.0), Some(200.0));
-        assert_eq!(data.width, Some(100.0));
-        assert_eq!(data.height, Some(200.0));
-        assert_eq!(data.alignment, Alignment::CENTER);
-    }
-
-    #[test]
-    fn test_sized_overflow_box_data_with_child_constraints() {
-        let data = SizedOverflowBoxData::with_child_constraints(
-            Some(100.0),
-            Some(100.0),
-            None,
-            Some(200.0),
-            None,
-            Some(200.0),
-        );
-        assert_eq!(data.width, Some(100.0));
-        assert_eq!(data.height, Some(100.0));
-        assert_eq!(data.child_max_width, Some(200.0));
-        assert_eq!(data.child_max_height, Some(200.0));
-    }
-
-    #[test]
-    fn test_sized_overflow_box_data_with_alignment() {
-        let data =
-            SizedOverflowBoxData::with_alignment(Some(50.0), Some(75.0), Alignment::TOP_LEFT);
-        assert_eq!(data.alignment, Alignment::TOP_LEFT);
-    }
 
     #[test]
     fn test_render_sized_overflow_box_new() {

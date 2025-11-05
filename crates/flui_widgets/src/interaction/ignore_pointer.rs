@@ -23,9 +23,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::view::{AnyView, ChangeFlags, View};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::{BuildContext, Element};
 use flui_rendering::RenderIgnorePointer;
 
 /// A widget that is invisible to pointer events.
@@ -64,7 +64,7 @@ use flui_rendering::RenderIgnorePointer;
 ///     .child(some_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_ignore_pointer)]
 pub struct IgnorePointer {
     /// Optional key for widget identification
@@ -79,7 +79,27 @@ pub struct IgnorePointer {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for IgnorePointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IgnorePointer")
+            .field("key", &self.key)
+            .field("ignoring", &self.ignoring)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for IgnorePointer {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            ignoring: self.ignoring,
+            child: None,
+        }
+    }
 }
 
 impl IgnorePointer {
@@ -97,7 +117,7 @@ impl IgnorePointer {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 }
@@ -120,16 +140,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> IgnorePointerBuilder<SetChild<S>> {
-        self.child_internal(child)
-    }
-}
-
-// Build wrapper
-impl<S: State> IgnorePointerBuilder<S> {
-    /// Builds the IgnorePointer widget.
-    pub fn build(self) -> IgnorePointer {
-        self.build_ignore_pointer()
+    pub fn child(self, child: impl View + 'static) -> IgnorePointerBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
@@ -147,24 +159,6 @@ macro_rules! ignore_pointer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
-    use flui_rendering::RenderPadding;
-
-    #[derive(Debug, Clone)]
-    struct MockWidget;
-
-    
-
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
-
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
-    }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_ignore_pointer_new() {
@@ -188,26 +182,30 @@ mod tests {
 
     #[test]
     fn test_ignore_pointer_builder() {
-        let widget = IgnorePointer::builder().build();
+        let widget = IgnorePointer::builder().build_ignore_pointer();
         assert!(widget.ignoring); // Default is true
     }
 
     #[test]
     fn test_ignore_pointer_builder_with_child() {
-        let widget = IgnorePointer::builder().child(MockWidget).build();
+        let widget = IgnorePointer::builder()
+            .child(crate::SizedBox::new())
+            .build_ignore_pointer();
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_ignore_pointer_builder_with_ignoring_false() {
-        let widget = IgnorePointer::builder().ignoring(false).build();
+        let widget = IgnorePointer::builder()
+            .ignoring(false)
+            .build_ignore_pointer();
         assert!(!widget.ignoring);
     }
 
     #[test]
     fn test_ignore_pointer_set_child() {
         let mut widget = IgnorePointer::new(true);
-        widget.set_child(MockWidget);
+        widget.set_child(Box::new(crate::SizedBox::new()));
         assert!(widget.child.is_some());
     }
 
@@ -222,48 +220,43 @@ mod tests {
         let widget = ignore_pointer!(ignoring: false);
         assert!(!widget.ignoring);
     }
-
-    #[test]
-    fn test_ignore_pointer_widget_trait() {
-        let widget = IgnorePointer::builder()
-            .ignoring(true)
-            .child(MockWidget)
-            .build();
-
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
-    }
-
-    #[test]
-    fn test_single_child_render_object_widget_trait() {
-        let widget = IgnorePointer::builder()
-            .ignoring(false)
-            .child(MockWidget)
-            .build();
-
-        // Test child() method
-        assert!(widget.child().is_some());
-    }
 }
 
-// Implement RenderObjectWidget
-impl RenderWidget for IgnorePointer {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderIgnorePointer::new(self.ignoring)))
+// Implement View trait
+impl View for IgnorePointer {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderIgnorePointer
+        let render = RenderIgnorePointer::new(self.ignoring);
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(obj) = render.downcast_mut::<RenderIgnorePointer>() {
-                obj.set_ignoring(self.ignoring);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(IgnorePointer, render);

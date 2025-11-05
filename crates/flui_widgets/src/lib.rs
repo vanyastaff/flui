@@ -70,7 +70,6 @@ pub use visual_effects::{BackdropFilter, ClipOval, ClipRect, ClipRRect, Offstage
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
 // Re-export commonly used types
-pub use flui_core::Widget;
 pub use flui_rendering::DecorationPosition;
 pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
@@ -91,7 +90,7 @@ pub mod prelude {
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 
     // Re-export core types
-    pub use flui_core::{BuildContext, Widget};
+    pub use flui_core::BuildContext;
     pub use flui_types::layout::{
         CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
     };

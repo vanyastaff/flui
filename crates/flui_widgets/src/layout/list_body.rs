@@ -5,8 +5,9 @@
 //! are sized to their intrinsic size along the main axis.
 
 use bon::Builder;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::{BuildContext, RenderNode};
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::render::RenderNode;
+use flui_core::{BuildContext, Element};
 use flui_rendering::RenderListBody;
 use flui_types::Axis;
 
@@ -55,7 +56,7 @@ use flui_types::Axis;
 ///     .children(vec![widget1, widget2, widget3])
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_list_body)]
 pub struct ListBody {
     /// Optional key for widget identification
@@ -73,7 +74,29 @@ pub struct ListBody {
 
     /// The list of child widgets
     #[builder(default)]
-    pub children: Vec<Widget>,
+    pub children: Vec<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for ListBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListBody")
+            .field("key", &self.key)
+            .field("main_axis", &self.main_axis)
+            .field("spacing", &self.spacing)
+            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for ListBody {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            main_axis: self.main_axis,
+            spacing: self.spacing,
+            children: Vec::new(),
+        }
+    }
 }
 
 impl ListBody {
@@ -84,7 +107,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::new(Axis::Vertical, children);
     /// ```
-    pub fn new(main_axis: Axis, children: Vec<Widget>) -> Self {
+    pub fn new(main_axis: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
         Self {
             key: None,
             main_axis,
@@ -100,7 +123,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::vertical(children);
     /// ```
-    pub fn vertical(children: Vec<Widget>) -> Self {
+    pub fn vertical(children: Vec<Box<dyn AnyView>>) -> Self {
         Self::new(Axis::Vertical, children)
     }
 
@@ -111,7 +134,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::horizontal(children);
     /// ```
-    pub fn horizontal(children: Vec<Widget>) -> Self {
+    pub fn horizontal(children: Vec<Box<dyn AnyView>>) -> Self {
         Self::new(Axis::Horizontal, children)
     }
 
@@ -122,7 +145,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::vertical_with_spacing(8.0, children);
     /// ```
-    pub fn vertical_with_spacing(spacing: f32, children: Vec<Widget>) -> Self {
+    pub fn vertical_with_spacing(spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
         Self {
             key: None,
             main_axis: Axis::Vertical,
@@ -138,7 +161,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::horizontal_with_spacing(8.0, children);
     /// ```
-    pub fn horizontal_with_spacing(spacing: f32, children: Vec<Widget>) -> Self {
+    pub fn horizontal_with_spacing(spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
         Self {
             key: None,
             main_axis: Axis::Horizontal,
@@ -159,40 +182,47 @@ impl Default for ListBody {
     }
 }
 
-// bon Builder Extensions
-use list_body_builder::State;
+// Implement View trait
+impl View for ListBody {
+    type Element = Element;
+    type State = Vec<Box<dyn std::any::Any>>;
 
-impl<S: State> ListBodyBuilder<S> {
-    /// Builds the ListBody widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_list_body())
-    }
-}
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build all children and collect their IDs and states
+        let (child_ids, child_states): (Vec<_>, Vec<_>) = self
+            .children
+            .into_iter()
+            .map(|child| {
+                let (elem, state) = child.build_any(ctx);
+                let id = ctx.tree().write().insert(elem.into_element());
+                (id, state)
+            })
+            .unzip();
 
-// Implement RenderWidget
-impl RenderWidget for ListBody {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+        // Create RenderListBody
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
-        RenderNode::multi(Box::new(render))
+
+        let render_node = RenderNode::Multi {
+            render: Box::new(render),
+            children: child_ids,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_states)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi { render, .. } = render_object {
-            if let Some(list_body) = render.downcast_mut::<RenderListBody>() {
-                list_body.set_main_axis(self.main_axis);
-                list_body.set_spacing(self.spacing);
-            }
-        }
-    }
-
-    fn children(&self) -> Option<&[Widget]> {
-        Some(&self.children)
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(ListBody, render);
 
 #[cfg(test)]
 mod tests {
@@ -200,8 +230,11 @@ mod tests {
 
     #[test]
     fn test_list_body_new() {
-        let children = vec![Widget::from(()), Widget::from(())];
-        let list = ListBody::new(Axis::Vertical, children.clone());
+        let children = vec![
+            Box::new(crate::SizedBox::new()) as Box<dyn AnyView>,
+            Box::new(crate::SizedBox::new()) as Box<dyn AnyView>,
+        ];
+        let list = ListBody::new(Axis::Vertical, children);
         assert_eq!(list.main_axis, Axis::Vertical);
         assert_eq!(list.spacing, 0.0);
         assert_eq!(list.children.len(), 2);
@@ -209,21 +242,21 @@ mod tests {
 
     #[test]
     fn test_list_body_vertical() {
-        let children = vec![Widget::from(())];
+        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn AnyView>];
         let list = ListBody::vertical(children);
         assert_eq!(list.main_axis, Axis::Vertical);
     }
 
     #[test]
     fn test_list_body_horizontal() {
-        let children = vec![Widget::from(())];
+        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn AnyView>];
         let list = ListBody::horizontal(children);
         assert_eq!(list.main_axis, Axis::Horizontal);
     }
 
     #[test]
     fn test_list_body_with_spacing() {
-        let children = vec![Widget::from(())];
+        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn AnyView>];
         let list = ListBody::vertical_with_spacing(8.0, children);
         assert_eq!(list.spacing, 8.0);
     }
@@ -233,7 +266,9 @@ mod tests {
         let list = ListBody::builder()
             .main_axis(Axis::Horizontal)
             .spacing(16.0)
-            .build();
+            .build_list_body();
+        assert_eq!(list.main_axis, Axis::Horizontal);
+        assert_eq!(list.spacing, 16.0);
     }
 
     #[test]

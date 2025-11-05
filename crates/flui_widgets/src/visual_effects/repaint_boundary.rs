@@ -4,8 +4,9 @@
 //! repainting from its ancestors for performance optimization.
 
 use bon::Builder;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::{BuildContext, RenderNode};
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::render::RenderNode;
+use flui_core::{BuildContext, Element};
 use flui_rendering::RenderRepaintBoundary;
 
 /// A widget that creates a repaint boundary.
@@ -48,7 +49,7 @@ use flui_rendering::RenderRepaintBoundary;
 ///     .child(expensive_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_repaint_boundary)]
 pub struct RepaintBoundary {
     /// Optional key for widget identification
@@ -56,7 +57,25 @@ pub struct RepaintBoundary {
 
     /// The child widget to isolate
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for RepaintBoundary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepaintBoundary")
+            .field("key", &self.key)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for RepaintBoundary {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            child: None,
+        }
+    }
 }
 
 impl RepaintBoundary {
@@ -65,9 +84,9 @@ impl RepaintBoundary {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let boundary = RepaintBoundary::new(child);
+    /// let boundary = RepaintBoundary::new(Box::new(child));
     /// ```
-    pub fn new(child: Widget) -> Self {
+    pub fn new(child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             child: Some(child),
@@ -81,9 +100,9 @@ impl RepaintBoundary {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let boundary = RepaintBoundary::wrap(animated_widget);
+    /// let boundary = RepaintBoundary::wrap(Box::new(animated_widget));
     /// ```
-    pub fn wrap(child: Widget) -> Self {
+    pub fn wrap(child: Box<dyn AnyView>) -> Self {
         Self::new(child)
     }
 }
@@ -105,42 +124,50 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl flui_core::IntoWidget) -> RepaintBoundaryBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
+    pub fn child(self, child: impl View + 'static) -> RepaintBoundaryBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-impl<S: State> RepaintBoundaryBuilder<S> {
-    /// Builds the RepaintBoundary widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_repaint_boundary())
-    }
-}
+// Implement View trait
+impl View for RepaintBoundary {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
 
-// Implement RenderWidget
-impl RenderWidget for RepaintBoundary {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderRepaintBoundary
         let render = RenderRepaintBoundary::new();
-        RenderNode::single(Box::new(render))
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
+    fn rebuild(
+        self,
+        _prev: &Self,
+        _state: &mut Self::State,
+        _element: &mut Self::Element,
+    ) -> ChangeFlags {
         // RepaintBoundary has no mutable properties to update
         // The is_repaint_boundary flag is always true for this widget
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(boundary) = render.downcast_mut::<RenderRepaintBoundary>() {
-                boundary.set_is_repaint_boundary(true);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+        // Child changes handled by element tree
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(RepaintBoundary, render);
 
 #[cfg(test)]
 mod tests {
@@ -148,22 +175,20 @@ mod tests {
 
     #[test]
     fn test_repaint_boundary_new() {
-        let child = Widget::from(());
-        let boundary = RepaintBoundary::new(child);
+        let boundary = RepaintBoundary::new(Box::new(crate::SizedBox::new()));
         assert!(boundary.child.is_some());
     }
 
     #[test]
     fn test_repaint_boundary_wrap() {
-        let child = Widget::from(());
-        let boundary = RepaintBoundary::wrap(child);
+        let boundary = RepaintBoundary::wrap(Box::new(crate::SizedBox::new()));
         assert!(boundary.child.is_some());
     }
 
     #[test]
     fn test_repaint_boundary_builder() {
         let boundary = RepaintBoundary::builder()
-            .build();
+            .build_repaint_boundary();
         assert!(boundary.child.is_none());
     }
 

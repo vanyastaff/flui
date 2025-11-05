@@ -537,6 +537,9 @@ impl<'a> Painter for EguiPainter<'a> {
         let color = self.paint_color(paint);
         let pos = Self::to_egui_pos(transformed_pos);
 
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text: transformed_pos={:?}, color={:?}, pos={:?}", transformed_pos, color, pos);
+
         // Extract rotation and scale from transform matrix
         let (scale, rotation, _translation) =
             self.current_state.transform.to_scale_rotation_translation();
@@ -546,9 +549,16 @@ impl<'a> Painter for EguiPainter<'a> {
         // Apply scale to font size
         let scaled_font_size = font_size * scale_factor;
         let font_id = egui::FontId::proportional(scaled_font_size);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text: creating galley with font_id={:?}, text='{}'", font_id, text);
+
         let galley = self
             .painter
             .layout_no_wrap(text.to_string(), font_id, color);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text: galley created, size={:?}", galley.size());
 
         // Create text shape with rotation using egui 0.28+ API
         let mut text_shape = egui::epaint::TextShape::new(pos, galley, color);
@@ -556,7 +566,13 @@ impl<'a> Painter for EguiPainter<'a> {
         // Set rotation angle (egui 0.28+ supports angle field)
         text_shape.angle = angle;
 
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text: adding text shape");
+
         self.add_shape(egui::Shape::Text(text_shape));
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text: text shape added");
     }
 
     fn text_styled(
@@ -565,6 +581,9 @@ impl<'a> Painter for EguiPainter<'a> {
         position: Point,
         style: &flui_types::typography::TextStyle,
     ) {
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text_styled: text='{}', position={:?}, style={:?}", text, position, style);
+
         // Extract styling parameters
         let font_size = style.font_size.unwrap_or(14.0) as f32;
         let letter_spacing = style.letter_spacing.unwrap_or(0.0) as f32;
@@ -580,6 +599,9 @@ impl<'a> Painter for EguiPainter<'a> {
             crate::text::VectorTextRenderer::needs_vector_rendering(&self.current_state.transform)
                 || letter_spacing.abs() > 0.001
                 || word_spacing.abs() > 0.001;
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text_styled: needs_vector={}, font_size={}", needs_vector, font_size);
 
         if needs_vector {
             // Use vector rendering with spacing support
@@ -631,9 +653,15 @@ impl<'a> Painter for EguiPainter<'a> {
             }
         }
 
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text_styled: calling self.text()");
+
         // Fallback: Use simple text rendering without spacing
         // Note: egui doesn't support letter_spacing directly, so we ignore it for raster path
         self.text(text, position, font_size, &paint);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("EguiPainter::text_styled: completed");
     }
 
     fn save(&mut self) {

@@ -4,8 +4,8 @@
 //! Similar to Flutter's Card widget.
 
 use bon::Builder;
-use flui_core::widget::{StatelessWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::{BuildContext, Element};
 use flui_types::{Color, EdgeInsets};
 use flui_types::styling::{BorderRadius, BoxDecoration, BoxShadow};
 
@@ -69,7 +69,7 @@ use crate::{Container, DecoratedBox};
 ///     .child(content)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_card)]
 pub struct Card {
     /// Optional key for widget identification
@@ -95,7 +95,33 @@ pub struct Card {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Card {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Card")
+            .field("key", &self.key)
+            .field("color", &self.color)
+            .field("elevation", &self.elevation)
+            .field("margin", &self.margin)
+            .field("shape", &self.shape)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for Card {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            color: self.color,
+            elevation: self.elevation,
+            margin: self.margin,
+            shape: self.shape.clone(),
+            child: None,
+        }
+    }
 }
 
 impl Card {
@@ -104,9 +130,9 @@ impl Card {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let card = Card::new(child);
+    /// let card = Card::new(Box::new(child));
     /// ```
-    pub fn new(child: Widget) -> Self {
+    pub fn new(child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             color: Color::rgb(255, 255, 255),
@@ -122,9 +148,9 @@ impl Card {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let card = Card::with_elevation(4.0, child);
+    /// let card = Card::with_elevation(4.0, Box::new(child));
     /// ```
-    pub fn with_elevation(elevation: f32, child: Widget) -> Self {
+    pub fn with_elevation(elevation: f32, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             color: Color::rgb(255, 255, 255),
@@ -157,21 +183,17 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl flui_core::IntoWidget) -> CardBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
+    pub fn child(self, child: impl View + 'static) -> CardBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-impl<S: State> CardBuilder<S> {
-    /// Builds the Card widget.
-    pub fn build(self) -> Widget {
-        Widget::stateless(self.build_card())
-    }
-}
+// Implement View trait
+impl View for Card {
+    type Element = Element;
+    type State = Box<dyn std::any::Any>;
 
-// Implement StatelessWidget
-impl StatelessWidget for Card {
-    fn build(&self, _context: &BuildContext) -> Widget {
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Calculate shadow based on elevation
         let shadows = if self.elevation > 0.0 {
             vec![
@@ -194,31 +216,54 @@ impl StatelessWidget for Card {
             ..Default::default()
         };
 
-        let child_widget = if let Some(child) = &self.child {
-            child.clone()
+        let child_view: Box<dyn AnyView> = if let Some(child) = self.child {
+            child
         } else {
-            Widget::render_object(crate::SizedBox::new())
+            Box::new(crate::SizedBox::new())
         };
 
-        let decorated = DecoratedBox::builder()
+        let mut decorated = DecoratedBox::builder()
             .decoration(decoration)
-            .child(child_widget)
             .build();
+        decorated.child = Some(child_view);
 
         // Wrap with margin if specified
-        if let Some(margin) = self.margin {
-            Widget::from(Container::builder()
+        let final_view: Box<dyn AnyView> = if let Some(margin) = self.margin {
+            let mut container = Container::builder()
                 .margin(margin)
-                .child(decorated)
-                .build())
+                .build_container();
+            container.child = Some(Box::new(decorated));
+            Box::new(container)
         } else {
-            decorated
+            Box::new(decorated)
+        };
+
+        // Build the final view
+        let (boxed_element, state) = final_view.build_any(ctx);
+        let element = boxed_element.into_element();
+        (element, state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        _element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // Check if any properties changed
+        let properties_changed = self.color != prev.color
+            || self.elevation != prev.elevation
+            || self.margin != prev.margin
+            || self.shape != prev.shape;
+
+        if properties_changed {
+            // Properties changed - need to rebuild
+            ChangeFlags::NEEDS_BUILD
+        } else {
+            ChangeFlags::NONE
         }
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Card, stateless);
 
 #[cfg(test)]
 mod tests {
@@ -226,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_card_new() {
-        let card = Card::new(Widget::from(()));
+        let card = Card::new(Box::new(crate::SizedBox::new()));
         assert_eq!(card.elevation, 1.0);
         assert_eq!(card.color, Color::rgb(255, 255, 255));
         assert!(card.child.is_some());
@@ -234,16 +279,16 @@ mod tests {
 
     #[test]
     fn test_card_with_elevation() {
-        let card = Card::with_elevation(4.0, Widget::from(()));
+        let card = Card::with_elevation(4.0, Box::new(crate::SizedBox::new()));
         assert_eq!(card.elevation, 4.0);
     }
 
     #[test]
     fn test_card_builder() {
-        let card = Card::builder()
+        let _card = Card::builder()
             .elevation(2.0)
             .color(Color::BLUE)
-            .build();
+            .build_card();
     }
 
     #[test]

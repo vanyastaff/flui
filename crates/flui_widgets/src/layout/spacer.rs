@@ -18,9 +18,10 @@
 //! Spacer::with_flex(2)  // Takes 2x the space
 //! ```
 
-use flui_core::widget::{ParentDataWidget, Widget};
-use flui_core::RenderNode;
-use flui_rendering::FlexParentData;
+use flui_core::view::{ChangeFlags, View};
+use flui_core::render::RenderNode;
+use flui_core::{BuildContext, Element};
+use flui_rendering::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that creates flexible empty space in a Row, Column, or Flex.
 ///
@@ -135,9 +136,6 @@ pub struct Spacer {
     ///
     /// Default is 1.
     pub flex: i32,
-
-    /// The child widget (always a zero-sized SizedBox).
-    child: Widget,
 }
 
 impl Spacer {
@@ -149,13 +147,8 @@ impl Spacer {
     /// let spacer = Spacer::new();
     /// ```
     pub fn new() -> Self {
-        use crate::SizedBox;
         Self {
             flex: 1,
-            child: Widget::from(SizedBox::builder()
-                .width(0.0)
-                .height(0.0)
-                .build()),
         }
     }
 
@@ -172,13 +165,8 @@ impl Spacer {
     /// let spacer = Spacer::with_flex(3);
     /// ```
     pub fn with_flex(flex: i32) -> Self {
-        use crate::SizedBox;
         Self {
             flex,
-            child: Widget::from(SizedBox::builder()
-                .width(0.0)
-                .height(0.0)
-                .build()),
         }
     }
 
@@ -194,13 +182,6 @@ impl Spacer {
         }
         Ok(())
     }
-
-    /// Creates FlexParentData for this Spacer.
-    ///
-    /// Always creates FlexParentData with FlexFit::Tight.
-    pub fn create_parent_data(&self) -> FlexParentData {
-        FlexParentData::expanded_with_flex(self.flex)
-    }
 }
 
 impl Default for Spacer {
@@ -209,21 +190,44 @@ impl Default for Spacer {
     }
 }
 
-// ========== ParentDataWidget Implementation ==========
+// Implement View trait
+impl View for Spacer {
+    type Element = Element;
+    type State = ();
 
-impl ParentDataWidget for Spacer {
-    fn apply_parent_data(&self, _render_object: &mut RenderNode) {
-        // TODO: apply_parent_data needs DynRenderObject trait
-        // This will be implemented when the render object trait is ready
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build zero-sized SizedBox as child
+        let sized_box = crate::SizedBox::builder()
+            .width(0.0)
+            .height(0.0)
+            .build();
+
+        let (child_elem, _child_state) = sized_box.build(ctx);
+        let child_id = ctx.tree().write().insert(child_elem);
+
+        // Create RenderFlexItem wrapper with FlexItemMetadata
+        let render = RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex));
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: Some(child_id),
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), ())
     }
 
-    fn child(&self) -> &Widget {
-        &self.child
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Spacer, parent_data);
 
 /// Macro for creating Spacer with declarative syntax.
 ///

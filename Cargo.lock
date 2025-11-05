@@ -1747,6 +1747,7 @@ dependencies = [
  "flui_app",
  "flui_core",
  "flui_engine",
+ "flui_rendering",
  "flui_types",
  "flui_widgets",
  "parking_lot",
@@ -1787,7 +1788,6 @@ dependencies = [
  "downcast-rs 2.0.2",
  "flui_derive",
  "flui_engine",
- "flui_reactive",
  "flui_types",
  "moka",
  "parking_lot",
@@ -1870,13 +1870,6 @@ dependencies = [
  "glam",
  "thiserror 2.0.17",
  "tracing",
-]
-
-[[package]]
-name = "flui_reactive"
-version = "0.1.0"
-dependencies = [
- "parking_lot",
 ]
 
 [[package]]

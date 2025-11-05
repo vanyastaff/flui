@@ -38,6 +38,9 @@ impl RenderPadding {
 }
 
 impl SingleRender for RenderPadding {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,

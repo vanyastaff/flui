@@ -3,7 +3,11 @@
 //! This module provides the FluiApp struct, which manages the application lifecycle,
 //! element tree, and rendering pipeline integration with egui.
 
-use flui_core::{ComponentElement, Element, Offset, PipelineOwner, Size, Widget};
+use flui_core::{Offset, Size};
+use flui_core::pipeline::PipelineOwner;
+use flui_core::view::{AnyView, BuildContext};
+use flui_core::foundation::ElementId;
+use flui_engine::Painter;
 use flui_types::BoxConstraints;
 
 /// Performance statistics for debugging and optimization
@@ -23,10 +27,6 @@ impl FrameStats {
     /// Log statistics to console
     pub fn log(&self) {
         if self.frame_count.is_multiple_of(60) && self.frame_count > 0 {
-            let pool_stats = flui_engine::layer::pool::get_stats();
-            let (cache_hits, _cache_misses, cache_total, cache_hit_rate) =
-                flui_core::render::cache::layout_cache().detailed_stats();
-
             println!(
                 "Performance: {} frames | Rebuilds: {} ({:.1}%) | Layouts: {} ({:.1}%) | Paints: {} ({:.1}%)",
                 self.frame_count,
@@ -36,28 +36,6 @@ impl FrameStats {
                 (self.layout_count as f64 / self.frame_count as f64) * 100.0,
                 self.paint_count,
                 (self.paint_count as f64 / self.frame_count as f64) * 100.0,
-            );
-
-            println!(
-                "  Layout Cache: {}/{} ({:.1}%) | Entries: {}",
-                cache_hits,
-                cache_total,
-                cache_hit_rate,
-                flui_core::render::cache::layout_cache().entry_count(),
-            );
-
-            println!(
-                "  Layer Pool: Container: {}/{} ({:.1}%) | ClipRect: {}/{} ({:.1}%) | Picture: {}/{} ({:.1}%) | Sizes: {:?}",
-                pool_stats.container_hits,
-                pool_stats.container_acquires,
-                pool_stats.container_hit_rate * 100.0,
-                pool_stats.clip_rect_hits,
-                pool_stats.clip_rect_acquires,
-                pool_stats.clip_rect_hit_rate * 100.0,
-                pool_stats.picture_hits,
-                pool_stats.picture_acquires,
-                pool_stats.picture_hit_rate * 100.0,
-                pool_stats.pool_sizes,
             );
         }
     }
@@ -74,36 +52,72 @@ impl FrameStats {
 ///
 /// ```rust,ignore
 /// use flui_app::run_app;
+/// use flui_core::view::View;
 ///
-/// run_app(Box::new(MyRootWidget))?;
+/// #[derive(Clone)]
+/// struct MyApp;
+///
+/// impl View for MyApp {
+///     type State = ();
+///     type Element = ComponentElement;
+///
+///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+///         // Build your UI here
+///         todo!()
+///     }
+/// }
+///
+/// run_app(Box::new(MyApp))?;
 /// ```
 pub struct FluiApp {
     /// Pipeline owner that manages the rendering pipeline
     pipeline: PipelineOwner,
+
+    /// Root view (type-erased)
+    root_view: Box<dyn AnyView>,
+
+    /// Root element ID
+    root_id: Option<ElementId>,
+
+    /// Root state (type-erased)
+    root_state: Option<Box<dyn std::any::Any>>,
 
     /// Performance statistics
     stats: FrameStats,
 
     /// Last known window size for change detection
     last_size: Option<Size>,
+
+    /// Whether the root has been initially built
+    root_built: bool,
 }
 
 impl FluiApp {
-    /// Create a new FluiApp with a root widget
+    /// Create a new FluiApp with a root view
     ///
     /// # Parameters
     ///
-    /// - `root_widget`: The root widget of the application
-    pub fn new(root_widget: Widget) -> Self {
-        let mut pipeline = PipelineOwner::new();
-        // CRITICAL FIX: Use inflate_root() to properly create the root element based on widget type
-        // This ensures StatefulWidgets create StatefulElements, not ComponentElements
-        let _root_id = pipeline.inflate_root(root_widget);
+    /// - `root_view`: The root view of the application (type-erased via AnyView)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_app::FluiApp;
+    ///
+    /// let app = FluiApp::new(Box::new(MyRootView));
+    /// ```
+    #[allow(deprecated)]
+    pub fn new(root_view: Box<dyn AnyView>) -> Self {
+        let pipeline = PipelineOwner::new();
 
         Self {
             pipeline,
+            root_view,
+            root_id: None,
+            root_state: None,
             stats: FrameStats::default(),
             last_size: None,
+            root_built: false,
         }
     }
 
@@ -111,6 +125,39 @@ impl FluiApp {
     #[allow(dead_code)]
     pub fn pipeline(&self) -> &PipelineOwner {
         &self.pipeline
+    }
+
+    /// Build the root element on first frame
+    fn ensure_root_built(&mut self) {
+        if self.root_built {
+            return;
+        }
+
+        // Build root element from view
+        // Use a temporary ID (will be replaced by actual ID after insertion)
+        // Note: This temporary ID is only used for BuildContext creation
+        // The actual root will get a proper ID from pipeline.set_root()
+        let tree = self.pipeline.tree().clone();
+        let temp_id = ElementId::new(1);
+        let mut ctx = BuildContext::new(tree, temp_id);
+        let (element, state) = self.root_view.build_any(&mut ctx);
+
+        // Mount and insert root element using pipeline.set_root()
+        // This properly initializes the root and schedules it for build
+        let root_element = element.into_element();
+        let root_id = self.pipeline.set_root(root_element);
+
+        // Mark root for layout and paint
+        println!("[DEBUG] Requesting layout and paint for root: {:?}", root_id);
+        self.pipeline.request_layout(root_id);
+        self.pipeline.request_paint(root_id);
+        println!("[DEBUG] After request_layout/paint");
+
+        self.root_id = Some(root_id);
+        self.root_state = Some(state);
+        self.root_built = true;
+
+        println!("[DEBUG] Root element built with ID: {:?}", root_id);
     }
 
     /// Check if window size changed significantly
@@ -147,19 +194,14 @@ impl FluiApp {
     pub fn update(&mut self, ctx: &egui::Context, ui: &egui::Ui) {
         self.stats.frame_count += 1;
 
+        // Ensure root is built
+        self.ensure_root_built();
+
         // ===== Phase 1: Build =====
         // Keep flushing build until tree is fully built (no more dirty elements)
-        // This allows ComponentElements to recursively build their children
         let mut iterations = 0;
         loop {
             let dirty_count = self.pipeline.dirty_count();
-
-            println!(
-                "[DEBUG] Frame {}: Build iteration {}, dirty_count={}",
-                self.stats.frame_count,
-                iterations,
-                dirty_count
-            );
 
             if dirty_count == 0 {
                 break;
@@ -170,62 +212,90 @@ impl FluiApp {
 
             iterations += 1;
 
-            // Safety check: prevent infinite loops (should never happen in practice)
+            // Safety check: prevent infinite loops
             if iterations > 100 {
                 tracing::warn!("Build loop exceeded 100 iterations, breaking");
                 break;
             }
         }
 
-        println!("[DEBUG] Frame {}: Build complete, {} iterations", self.stats.frame_count, iterations);
-
         // ===== Phase 2: Layout =====
         let current_size = Size::new(ui.available_size().x, ui.available_size().y);
         let size_changed = self.size_changed(current_size);
-        // Need layout if size changed OR if there were any rebuilds (rebuilds modify render tree)
+        // Need layout if size changed OR if there were any rebuilds
         let needs_layout = size_changed || iterations > 0;
 
-        tracing::debug!(
-            "Frame {}: needs_layout={} (size_changed={}, rebuilds={})",
-            self.stats.frame_count,
-            needs_layout,
-            size_changed,
-            iterations > 0
-        );
+        if self.stats.frame_count <= 3 {
+            println!("[DEBUG] Frame {}: size_changed={}, iterations={}, needs_layout={}, size={:?}",
+                self.stats.frame_count, size_changed, iterations, needs_layout, current_size);
+        }
 
         if needs_layout {
-            tracing::debug!("Frame {}: Calling flush_layout", self.stats.frame_count);
             let constraints = BoxConstraints::tight(current_size);
-            if self.pipeline.flush_layout(constraints).is_some() {
-                self.stats.layout_count += 1;
-                self.last_size = Some(current_size);
-            } else {
-                tracing::warn!(
-                    "Frame {}: flush_layout returned None!",
-                    self.stats.frame_count
-                );
+            match self.pipeline.flush_layout(constraints) {
+                Ok(Some(_size)) => {
+                    self.stats.layout_count += 1;
+                    self.last_size = Some(current_size);
+                    if self.stats.frame_count <= 3 {
+                        println!("[DEBUG] Layout succeeded: {:?}", _size);
+                    }
+                }
+                Ok(None) => {
+                    if self.stats.frame_count <= 3 {
+                        println!("[DEBUG] Layout returned None (no root?)");
+                    }
+                }
+                Err(e) => {
+                    if self.stats.frame_count <= 3 {
+                        println!("[DEBUG] Layout error: {:?}", e);
+                    }
+                }
             }
         }
 
         // ===== Phase 2.5: Pointer Events =====
-        // Process pointer events after layout but before paint
         self.process_pointer_events(ui);
 
         // ===== Phase 3: Paint =====
         // Note: egui clears screen every frame, so we must paint every frame
-        let offset = Offset::new(ui.min_rect().min.x, ui.min_rect().min.y);
-        if let Some(layer) = self.pipeline.flush_paint(offset) {
+
+        // DIRECT TEST: Draw text directly to egui to verify it works
+        #[cfg(debug_assertions)]
+        {
+            let painter = ui.painter();
+            let color = egui::Color32::from_rgb(255, 0, 0);  // RED
+            let pos = egui::pos2(100.0, 100.0);
+            let font_id = egui::FontId::proportional(48.0);
+            let galley = painter.layout_no_wrap("DIRECT EGUI TEST".to_string(), font_id, color);
+            let text_shape = egui::epaint::TextShape::new(pos, galley, color);
+            painter.add(egui::Shape::Text(text_shape));
+            tracing::debug!("Paint: Added DIRECT egui text at (100, 100)");
+        }
+
+        if let Ok(Some(layer)) = self.pipeline.flush_paint() {
             self.stats.paint_count += 1;
+
+            #[cfg(debug_assertions)]
+            tracing::debug!("Paint: Received layer from flush_paint, painting to screen");
 
             // Composite layer to screen using EguiPainter
             let egui_painter = ui.painter();
             let mut painter = flui_engine::EguiPainter::new(egui_painter);
+            let offset = Offset::new(ui.min_rect().min.x, ui.min_rect().min.y);
+
+            #[cfg(debug_assertions)]
+            tracing::debug!("Paint: Calling layer.paint() with offset={:?}", offset);
+
+            painter.save();
+            painter.translate(offset);
             layer.paint(&mut painter);
+            painter.restore();
+
+            #[cfg(debug_assertions)]
+            tracing::debug!("Paint: layer.paint() completed");
         } else {
-            tracing::warn!(
-                "Frame {}: flush_paint returned None!",
-                self.stats.frame_count
-            );
+            #[cfg(debug_assertions)]
+            tracing::debug!("Paint: flush_paint returned None");
         }
 
         // Log performance stats periodically
@@ -252,26 +322,6 @@ impl eframe::App for FluiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::{BuildContext, StatelessWidget};
-    use flui_widgets::prelude::Text;
-
-    #[derive(Debug, Clone)]
-    struct TestWidget;
-
-    impl StatelessWidget for TestWidget {
-        fn build(&self, _context: &BuildContext) -> Widget {
-            Box::new(Text::new("Test"))
-        }
-    }
-
-    #[test]
-    fn test_flui_app_creation() {
-        let app = FluiApp::new(Box::new(TestWidget));
-
-        // Should have mounted root element
-        let tree_guard = app.pipeline().tree().read();
-        assert!(tree_guard.element_count() >= 1);
-    }
 
     #[test]
     fn test_frame_stats_logging() {

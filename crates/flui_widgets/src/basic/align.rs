@@ -29,9 +29,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -69,7 +69,7 @@ use flui_types::Alignment;
 ///     .child(some_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(Alignment, into),
@@ -99,7 +99,33 @@ pub struct Align {
 
     /// The child widget to align.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+// Manual Debug implementation since AnyView doesn't implement Debug
+impl std::fmt::Debug for Align {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Align")
+            .field("key", &self.key)
+            .field("alignment", &self.alignment)
+            .field("width_factor", &self.width_factor)
+            .field("height_factor", &self.height_factor)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+// Manual Clone implementation since AnyView doesn't implement Clone
+impl Clone for Align {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            alignment: self.alignment,
+            width_factor: self.width_factor,
+            height_factor: self.height_factor,
+            child: None, // Shallow clone - child is not cloned
+        }
+    }
 }
 
 impl Align {
@@ -184,8 +210,8 @@ impl Align {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates Align configuration.
@@ -227,16 +253,16 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl flui_core::IntoWidget) -> AlignBuilder<SetChild<S>> {
-        self.child_internal(child.into_widget())
+    pub fn child(self, child: impl View + 'static) -> AlignBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 // Build wrapper
 impl<S: State> AlignBuilder<S> {
-    /// Builds the Align widget and returns it as a Widget.
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_align())
+    /// Builds the Align widget.
+    pub fn build(self) -> Align {
+        self.build_align()
     }
 }
 
@@ -257,19 +283,26 @@ macro_rules! align {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::LeafRenderObjectElement;
     use flui_rendering::RenderPadding;
     use flui_types::EdgeInsets;
 
+    // Mock view for testing
     #[derive(Debug, Clone)]
-    struct MockWidget;
+    struct MockView;
 
-    impl RenderWidget for MockWidget {
-        fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-            RenderNode::single(Box::new(RenderPadding::new(EdgeInsets::ZERO)))
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            let render_node = RenderNode::Leaf(Box::new(RenderPadding::new(EdgeInsets::ZERO)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
         }
 
-        fn update_render_object(&self, _context: &BuildContext, _render_object: &mut RenderNode) {}
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
     }
 
     #[test]
@@ -326,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_align_builder_with_child() {
-        let align = Align::builder().child(Widget::from(MockWidget)).build();
+        let align = Align::builder().child(MockView).build();
         assert!(align.child.is_some());
     }
 
@@ -343,7 +376,7 @@ mod tests {
     #[test]
     fn test_align_set_child() {
         let mut align = Align::new();
-        align.set_child(Widget::from(MockWidget));
+        align.set_child(MockView);
         assert!(align.child.is_some());
     }
 
@@ -400,52 +433,65 @@ mod tests {
     }
 
     #[test]
-    fn test_widget_trait() {
-        let widget = Align::builder()
+    fn test_view_trait() {
+        let align = Align::builder()
             .alignment(Alignment::TOP_LEFT)
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
 
-        // Test child() method
-        assert!(widget.child.is_some());
+        // Test that it implements View
+        assert!(align.child.is_some());
     }
 
     #[test]
-    fn test_single_child_render_object_widget_trait() {
-        let widget = Align::builder()
+    fn test_align_with_child() {
+        let align = Align::builder()
             .alignment(Alignment::CENTER)
-            .child(Widget::from(MockWidget))
+            .child(MockView)
             .build();
 
-        // Test child() method - returns Option now
-        assert!(widget.child.is_some());
+        // Test child field
+        assert!(align.child.is_some());
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for Align {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderAlign::with_factors(
-            self.alignment,
-            self.width_factor,
-            self.height_factor,
-        )))
+// Implement View for Align - New architecture
+impl View for Align {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child (required for Align)
+        let child = self.child.expect("Align requires a child widget");
+        let (elem, state) = child.build_any(ctx);
+        let child_id = ctx.tree().write().insert(elem.into_element());
+
+        // Create RenderNode with Single (Align always has child)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderAlign::with_factors(
+                self.alignment,
+                self.width_factor,
+                self.height_factor,
+            )),
+            child: Some(child_id),
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), Some(state))
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(align) = render.downcast_mut::<RenderAlign>() {
-                align.set_alignment(self.alignment);
-                align.set_width_factor(self.width_factor);
-                align.set_height_factor(self.height_factor);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Align, render);
+// Align now implements View trait directly

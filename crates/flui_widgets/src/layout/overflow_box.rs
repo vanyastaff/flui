@@ -5,9 +5,9 @@
 //! Similar to Flutter's OverflowBox widget.
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::view::{AnyView, ChangeFlags, View};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::{BuildContext, Element};
 use flui_rendering::RenderOverflowBox;
 use flui_types::Alignment;
 
@@ -74,7 +74,7 @@ use flui_types::Alignment;
 ///     .child(tall_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), on(Alignment, into), finish_fn = build_overflow_box)]
 pub struct OverflowBox {
     /// Optional key for widget identification
@@ -103,7 +103,35 @@ pub struct OverflowBox {
 
     /// The child widget that may overflow.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for OverflowBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OverflowBox")
+            .field("key", &self.key)
+            .field("min_width", &self.min_width)
+            .field("max_width", &self.max_width)
+            .field("min_height", &self.min_height)
+            .field("max_height", &self.max_height)
+            .field("alignment", &self.alignment)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for OverflowBox {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            min_width: self.min_width,
+            max_width: self.max_width,
+            min_height: self.min_height,
+            max_height: self.max_height,
+            alignment: self.alignment,
+            child: None,
+        }
+    }
 }
 
 impl OverflowBox {
@@ -128,7 +156,7 @@ impl OverflowBox {
     /// let widget = OverflowBox::with_constraints(
     ///     Some(100.0), Some(300.0),  // width: 100-300
     ///     Some(50.0), Some(200.0),   // height: 50-200
-    ///     child
+    ///     Box::new(child)
     /// );
     /// ```
     pub fn with_constraints(
@@ -136,7 +164,7 @@ impl OverflowBox {
         max_width: Option<f32>,
         min_height: Option<f32>,
         max_height: Option<f32>,
-        child: Widget,
+        child: Box<dyn AnyView>,
     ) -> Self {
         Self {
             key: None,
@@ -154,9 +182,9 @@ impl OverflowBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, child);
+    /// let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, Box::new(child));
     /// ```
-    pub fn with_alignment(alignment: Alignment, child: Widget) -> Self {
+    pub fn with_alignment(alignment: Alignment, child: Box<dyn AnyView>) -> Self {
         Self {
             key: None,
             min_width: None,
@@ -169,7 +197,7 @@ impl OverflowBox {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 
@@ -203,56 +231,54 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> OverflowBoxBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> OverflowBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
-impl<S: State> OverflowBoxBuilder<S> {
-    /// Builds the OverflowBox widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_overflow_box())
-    }
-}
+// Implement View trait
+impl View for OverflowBox {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
 
-// Implement RenderWidget
-impl RenderWidget for OverflowBox {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        let mut render = RenderOverflowBox::new();
-        render.set_min_width(self.min_width);
-        render.set_max_width(self.max_width);
-        render.set_alignment(self.alignment);
-        // Note: RenderOverflowBox doesn't have setters for min/max height in the API
-        // We'll need to use with_constraints instead
-        RenderNode::single(Box::new(RenderOverflowBox::with_constraints(
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderOverflowBox
+        let render = RenderOverflowBox::with_constraints(
             self.min_width,
             self.max_width,
             self.min_height,
             self.max_height,
-        )))
+        );
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(overflow_box) = render.downcast_mut::<RenderOverflowBox>() {
-                overflow_box.set_min_width(self.min_width);
-                overflow_box.set_max_width(self.max_width);
-                overflow_box.set_alignment(self.alignment);
-                // Note: min_height and max_height don't have setters in RenderOverflowBox
-                // This is a limitation of the current API
-                overflow_box.min_height = self.min_height;
-                overflow_box.max_height = self.max_height;
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(OverflowBox, render);
 
 #[cfg(test)]
 mod tests {
@@ -274,7 +300,7 @@ mod tests {
             Some(300.0),
             Some(50.0),
             Some(200.0),
-            Widget::from(()),
+            Box::new(crate::SizedBox::new()),
         );
         assert_eq!(widget.min_width, Some(100.0));
         assert_eq!(widget.max_width, Some(300.0));
@@ -285,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_overflow_box_with_alignment() {
-        let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, Widget::from(()));
+        let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, Box::new(crate::SizedBox::new()));
         assert_eq!(widget.alignment, Alignment::TOP_LEFT);
         assert!(widget.child.is_some());
     }
@@ -296,7 +322,7 @@ mod tests {
             .min_width(50.0)
             .max_width(250.0)
             .alignment(Alignment::BOTTOM_RIGHT)
-            .build();
+            .build_overflow_box();
         assert_eq!(widget.min_width, Some(50.0));
         assert_eq!(widget.max_width, Some(250.0));
         assert_eq!(widget.alignment, Alignment::BOTTOM_RIGHT);
@@ -309,7 +335,7 @@ mod tests {
             Some(200.0),
             Some(50.0),
             Some(150.0),
-            Widget::from(()),
+            Box::new(crate::SizedBox::new()),
         );
         assert!(widget.validate().is_ok());
     }
@@ -321,7 +347,7 @@ mod tests {
             Some(200.0),
             Some(50.0),
             Some(150.0),
-            Widget::from(()),
+            Box::new(crate::SizedBox::new()),
         );
         assert!(widget.validate().is_err());
     }
@@ -333,7 +359,7 @@ mod tests {
             Some(200.0),
             Some(200.0),
             Some(100.0),
-            Widget::from(()),
+            Box::new(crate::SizedBox::new()),
         );
         assert!(widget.validate().is_err());
     }

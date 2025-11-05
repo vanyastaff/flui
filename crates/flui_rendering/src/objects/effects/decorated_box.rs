@@ -9,40 +9,13 @@ use flui_types::{
     styling::{BorderPosition, BoxDecoration, Radius},
 };
 
-/// Position of the decoration relative to the child
+/// Position of decoration relative to child
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecorationPosition {
     /// Paint decoration behind the child
     Background,
     /// Paint decoration in front of the child
     Foreground,
-}
-
-/// Data for RenderDecoratedBox
-#[derive(Debug, Clone, PartialEq)]
-pub struct DecoratedBoxData {
-    /// The decoration to paint
-    pub decoration: BoxDecoration,
-    /// Position of the decoration
-    pub position: DecorationPosition,
-}
-
-impl DecoratedBoxData {
-    /// Create new decorated box data
-    pub fn new(decoration: BoxDecoration) -> Self {
-        Self {
-            decoration,
-            position: DecorationPosition::Background,
-        }
-    }
-
-    /// Create with specific position
-    pub fn with_position(decoration: BoxDecoration, position: DecorationPosition) -> Self {
-        Self {
-            decoration,
-            position,
-        }
-    }
 }
 
 /// RenderObject that paints a decoration around its child
@@ -62,12 +35,15 @@ impl DecoratedBoxData {
 ///     box_shadow: None,
 ///     gradient: None,
 /// };
-/// let mut decorated = RenderDecoratedBox::new(DecoratedBoxData::new(decoration));
+/// let mut decorated = RenderDecoratedBox::new(decoration, DecorationPosition::Background);
 /// ```
 #[derive(Debug)]
 pub struct RenderDecoratedBox {
-    /// Decoration data
-    pub data: DecoratedBoxData,
+    /// The decoration to paint
+    pub decoration: BoxDecoration,
+
+    /// Position of decoration (background or foreground)
+    pub position: DecorationPosition,
 
     // Cache for paint
     size: Size,
@@ -76,32 +52,42 @@ pub struct RenderDecoratedBox {
 // ===== Public API =====
 
 impl RenderDecoratedBox {
-    /// Create new RenderDecoratedBox
-    pub fn new(data: DecoratedBoxData) -> Self {
+    /// Create new RenderDecoratedBox with background position
+    pub fn new(decoration: BoxDecoration) -> Self {
         Self {
-            data,
+            decoration,
+            position: DecorationPosition::Background,
+            size: Size::ZERO,
+        }
+    }
+
+    /// Create new RenderDecoratedBox with specified position
+    pub fn with_position(decoration: BoxDecoration, position: DecorationPosition) -> Self {
+        Self {
+            decoration,
+            position,
             size: Size::ZERO,
         }
     }
 
     /// Get the decoration
     pub fn decoration(&self) -> &BoxDecoration {
-        &self.data.decoration
+        &self.decoration
     }
 
     /// Get the decoration position
     pub fn position(&self) -> DecorationPosition {
-        self.data.position
+        self.position
     }
 
     /// Set new decoration
     pub fn set_decoration(&mut self, decoration: BoxDecoration) {
-        self.data.decoration = decoration;
+        self.decoration = decoration;
     }
 
     /// Set decoration position
     pub fn set_position(&mut self, position: DecorationPosition) {
-        self.data.position = position;
+        self.position = position;
     }
 
     /// Paint decoration layers to container
@@ -113,7 +99,7 @@ impl RenderDecoratedBox {
 
         // use flui_engine::GradientLayer; // TODO: GradientLayer not implemented yet
 
-        let decoration = &self.data.decoration;
+        let decoration = &self.decoration;
 
         // TODO: Paint box shadows when shadow support is added
         // For now, we skip shadows. A full implementation would:
@@ -129,7 +115,7 @@ impl RenderDecoratedBox {
             // container.add_child(Box::new(gradient_layer));
         } else if let Some(color) = decoration.color {
             // Create pooled PictureLayer for solid color background
-            let mut pooled = flui_engine::PooledPictureLayer::new(pool::acquire_picture());
+            let mut picture = pool::acquire_picture();
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
 
             let paint = Paint::fill(color);
@@ -143,20 +129,20 @@ impl RenderDecoratedBox {
                     bottom_right: circular_radius,
                     bottom_left: circular_radius,
                 };
-                pooled.as_mut().draw_rrect(rrect, paint);
+                picture.draw_rrect(rrect, paint);
             } else {
-                pooled.as_mut().draw_rect(rect, paint);
+                picture.draw_rect(rect, paint);
             }
 
-            container.add_child(Box::new(pooled));
+            container.add_child(Box::new(flui_engine::PooledPictureLayer::new(picture)));
         }
 
         // Paint border (if gradient or color was present, border goes on top)
         if let Some(ref border) = decoration.border {
-            let mut pooled = flui_engine::PooledPictureLayer::new(pool::acquire_picture());
+            let mut picture = pool::acquire_picture();
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
-            Self::paint_border(pooled.as_mut(), rect, border, border_radius);
-            container.add_child(Box::new(pooled));
+            Self::paint_border(&mut picture, rect, border, border_radius);
+            container.add_child(Box::new(flui_engine::PooledPictureLayer::new(picture)));
         }
     }
 
@@ -168,34 +154,34 @@ impl RenderDecoratedBox {
         border_radius: Option<f32>,
     ) {
         // Paint each side that exists
-        if let Some(top) = border.top
-            && top.is_visible()
-        {
-            Self::paint_border_side(picture, rect, &top, BorderPosition::Top, border_radius);
+        if let Some(top) = border.top {
+            if top.is_visible() {
+                Self::paint_border_side(picture, rect, &top, BorderPosition::Top, border_radius);
+            }
         }
 
-        if let Some(right) = border.right
-            && right.is_visible()
-        {
-            Self::paint_border_side(picture, rect, &right, BorderPosition::Right, border_radius);
+        if let Some(right) = border.right {
+            if right.is_visible() {
+                Self::paint_border_side(picture, rect, &right, BorderPosition::Right, border_radius);
+            }
         }
 
-        if let Some(bottom) = border.bottom
-            && bottom.is_visible()
-        {
-            Self::paint_border_side(
-                picture,
-                rect,
-                &bottom,
-                BorderPosition::Bottom,
-                border_radius,
-            );
+        if let Some(bottom) = border.bottom {
+            if bottom.is_visible() {
+                Self::paint_border_side(
+                    picture,
+                    rect,
+                    &bottom,
+                    BorderPosition::Bottom,
+                    border_radius,
+                );
+            }
         }
 
-        if let Some(left) = border.left
-            && left.is_visible()
-        {
-            Self::paint_border_side(picture, rect, &left, BorderPosition::Left, border_radius);
+        if let Some(left) = border.left {
+            if left.is_visible() {
+                Self::paint_border_side(picture, rect, &left, BorderPosition::Left, border_radius);
+            }
         }
     }
 
@@ -273,27 +259,26 @@ impl SingleRender for RenderDecoratedBox {
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         // Use pooled container for automatic return to pool on drop
-        let mut pooled = flui_engine::layer::PooledContainerLayer::new(pool::acquire_container());
+        let mut container = pool::acquire_container();
         // Paint decoration in LOCAL coordinates (0, 0)
         let rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
 
         // Paint decoration in background position
-        if self.data.position == DecorationPosition::Background {
-            self.paint_decoration(pooled.as_mut(), rect);
+        if self.position == DecorationPosition::Background {
+            self.paint_decoration(&mut container, rect);
         }
 
         // Paint child in LOCAL coordinates (child will be at 0,0 relative to this box)
         let child_layer = tree.paint_child(child_id, Offset::ZERO);
-        pooled.as_mut().add_child(child_layer);
+        container.add_child(child_layer);
 
         // Paint decoration in foreground position
-        if self.data.position == DecorationPosition::Foreground {
-            self.paint_decoration(pooled.as_mut(), rect);
+        if self.position == DecorationPosition::Foreground {
+            self.paint_decoration(&mut container, rect);
         }
 
         // Wrap entire container in TransformLayer to apply offset
-        // When pooled is boxed and later dropped, it will return to pool automatically
-        let container_layer: BoxedLayer = Box::new(pooled);
+        let container_layer: BoxedLayer = Box::new(container);
         if offset != Offset::ZERO {
             Box::new(flui_engine::TransformLayer::translate(container_layer, offset))
         } else {
@@ -317,7 +302,7 @@ mod tests {
             gradient: None,
             image: None,
         };
-        let decorated = RenderDecoratedBox::new(DecoratedBoxData::new(decoration.clone()));
+        let decorated = RenderDecoratedBox::new(decoration.clone());
         assert_eq!(decorated.decoration(), &decoration);
         assert_eq!(decorated.position(), DecorationPosition::Background);
     }
@@ -332,7 +317,7 @@ mod tests {
             gradient: None,
             image: None,
         };
-        let mut decorated = RenderDecoratedBox::new(DecoratedBoxData::new(decoration1));
+        let mut decorated = RenderDecoratedBox::new(decoration1);
 
         // Set decoration
         let decoration2 = BoxDecoration {
@@ -357,7 +342,7 @@ mod tests {
             gradient: None,
             image: None,
         };
-        let mut decorated = RenderDecoratedBox::new(DecoratedBoxData::new(decoration));
+        let mut decorated = RenderDecoratedBox::new(decoration);
 
         // Set position
         decorated.set_position(DecorationPosition::Foreground);
@@ -382,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn test_decorated_box_data_new() {
+    fn test_decorated_box_with_default_position() {
         let decoration = BoxDecoration {
             color: Some(Color::WHITE),
             border: None,
@@ -391,13 +376,13 @@ mod tests {
             gradient: None,
             image: None,
         };
-        let data = DecoratedBoxData::new(decoration.clone());
-        assert_eq!(data.decoration, decoration);
-        assert_eq!(data.position, DecorationPosition::Background);
+        let decorated = RenderDecoratedBox::new(decoration.clone());
+        assert_eq!(decorated.decoration, decoration);
+        assert_eq!(decorated.position, DecorationPosition::Background);
     }
 
     #[test]
-    fn test_decorated_box_data_with_position() {
+    fn test_decorated_box_with_foreground_position() {
         let decoration = BoxDecoration {
             color: Some(Color::WHITE),
             border: None,
@@ -406,9 +391,9 @@ mod tests {
             gradient: None,
             image: None,
         };
-        let data =
-            DecoratedBoxData::with_position(decoration.clone(), DecorationPosition::Foreground);
-        assert_eq!(data.decoration, decoration);
-        assert_eq!(data.position, DecorationPosition::Foreground);
+        let decorated =
+            RenderDecoratedBox::with_position(decoration.clone(), DecorationPosition::Foreground);
+        assert_eq!(decorated.decoration, decoration);
+        assert_eq!(decorated.position, DecorationPosition::Foreground);
     }
 }

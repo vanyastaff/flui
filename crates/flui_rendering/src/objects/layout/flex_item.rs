@@ -189,7 +189,8 @@ impl RenderFlexItem {
 
 impl SingleRender for RenderFlexItem {
     /// GAT Metadata type
-    type Metadata = FlexItemMetadata;
+    /// Fixed to () for object safety - metadata stored internally as field
+    type Metadata = ();
 
     fn layout(
         &mut self,

@@ -3,8 +3,11 @@
 //! Практические примеры реализации базовых виджетов.
 //! Эти примеры показывают реальную структуру виджетов.
 
-use flui_core::{BuildContext, View, Element, ChangeFlags};
+use flui_core::{BuildContext, Element};
+use flui_core::view::{View, ChangeFlags};
 use flui_core::hooks::{use_signal, Signal};
+
+use super::mock_render::*;
 
 // ============================================================================
 // Button - Интерактивная кнопка
@@ -57,7 +60,7 @@ impl PartialEq for Button {
 }
 
 impl View for Button {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -71,7 +74,8 @@ impl View for Button {
         //     .enabled(self.enabled)
         //     .on_click(self.on_click);
 
-        todo!("Create button render element")
+        let element = create_button_element(self.text.clone(), self.enabled);
+        (element, ())
     }
 
     fn rebuild(
@@ -134,7 +138,7 @@ impl std::fmt::Debug for TextField {
 }
 
 impl View for TextField {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -153,7 +157,12 @@ impl View for TextField {
         //         value_clone.set(new_value);
         //     });
 
-        todo!("Create text field render element")
+        let element = create_textfield_element(
+            self.label.clone(),
+            self.value.get(),
+            self.placeholder.clone()
+        );
+        (element, ())
     }
 
     fn rebuild(
@@ -209,7 +218,7 @@ impl std::fmt::Debug for Checkbox {
 }
 
 impl View for Checkbox {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
@@ -221,7 +230,8 @@ impl View for Checkbox {
         //         checked_clone.update(|v| !v);
         //     });
 
-        todo!("Create checkbox render element")
+        let element = create_checkbox_element(self.label.clone(), self.checked.get());
+        (element, ())
     }
 
     fn rebuild(
@@ -281,10 +291,10 @@ impl std::fmt::Debug for Padding {
 }
 
 impl View for Padding {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // let child_element = self.child
         //     .map(|child| child.build(ctx).0);
 
@@ -292,7 +302,8 @@ impl View for Padding {
         //     .padding(self.padding)
         //     .child(child_element);
 
-        todo!("Create padding render element")
+        let element = create_padding_element(self.padding, None);
+        (element, ())
     }
 
     fn rebuild(
@@ -369,10 +380,10 @@ impl std::fmt::Debug for Row {
 }
 
 impl View for Row {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // let child_elements: Vec<_> = self.children
         //     .into_iter()
         //     .map(|child| child.build(ctx).0)
@@ -382,7 +393,8 @@ impl View for Row {
         //     .spacing(self.spacing)
         //     .children(child_elements);
 
-        todo!("Create row render element")
+        let element = create_row_element(self.spacing, self.children.len());
+        (element, ())
     }
 
     fn rebuild(
@@ -460,10 +472,10 @@ impl std::fmt::Debug for Column {
 }
 
 impl View for Column {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // let child_elements: Vec<_> = self.children
         //     .into_iter()
         //     .map(|child| child.build(ctx).0)
@@ -473,7 +485,8 @@ impl View for Column {
         //     .spacing(self.spacing)
         //     .children(child_elements);
 
-        todo!("Create column render element")
+        let element = create_column_element(self.spacing, self.children.len());
+        (element, ())
     }
 
     fn rebuild(
@@ -506,21 +519,21 @@ impl View for Column {
 pub struct LoginForm;
 
 impl View for LoginForm {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Состояние формы
-        let email = use_signal(ctx, String::new());
-        let password = use_signal(ctx, String::new());
-        let remember_me = use_signal(ctx, false);
+        let _email = use_signal(ctx, String::new());
+        let _password = use_signal(ctx, String::new());
+        let _remember_me = use_signal(ctx, false);
 
         // Валидация
-        let is_valid = use_signal(ctx, false);
+        let _is_valid = use_signal(ctx, false);
 
         // Обработчик отправки
-        let email_clone = email.clone();
-        let password_clone = password.clone();
+        // let email_clone = email.clone();
+        // let password_clone = password.clone();
 
         // Создаём UI:
         // Column::new()
@@ -539,7 +552,8 @@ impl View for LoginForm {
         //             println!("Cancelled");
         //         })))
 
-        todo!("Build login form")
+        let element = create_column_element(10.0, 4);
+        (element, ())
     }
 }
 
@@ -557,11 +571,11 @@ impl View for LoginForm {
 pub struct CounterWithHistory;
 
 impl View for CounterWithHistory {
-    type Element = Element;
+    type Element = flui_core::element::ComponentElement;
     type State = ();
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        let count = use_signal(ctx, 0);
+        let _count = use_signal(ctx, 0);
         let history = use_signal(ctx, Vec::<i32>::new());
 
         // Обновляем историю при изменении счётчика
@@ -576,8 +590,8 @@ impl View for CounterWithHistory {
         //     None
         // });
 
-        let count_inc = count.clone();
-        let count_dec = count.clone();
+        // let count_inc = count.clone();
+        // let count_dec = count.clone();
 
         // Column::new()
         //     .spacing(10.0)
@@ -591,6 +605,7 @@ impl View for CounterWithHistory {
         //         Label::new(n.to_string())
         //     }))
 
-        todo!("Build counter with history")
+        let element = create_column_element(10.0, 3 + history.get().len());
+        (element, ())
     }
 }

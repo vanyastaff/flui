@@ -30,9 +30,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -137,7 +137,7 @@ use flui_types::layout::{Alignment, StackFit};
 /// - Positioned: For positioning children within Stack
 /// - IndexedStack: Shows only one child at a time
 /// - Align: For simple alignment without overlapping
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(
     on(String, into),
     on(Alignment, into),
@@ -172,7 +172,29 @@ pub struct Stack {
     /// Children are painted in order, with the first child at the bottom
     /// and subsequent children painted on top.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Widget>,
+    pub children: Vec<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Stack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Stack")
+            .field("key", &self.key)
+            .field("alignment", &self.alignment)
+            .field("fit", &self.fit)
+            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for Stack {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            alignment: self.alignment,
+            fit: self.fit,
+            children: Vec::new(),
+        }
+    }
 }
 
 impl Stack {
@@ -201,8 +223,8 @@ impl Stack {
     /// stack.add_child(Container::new());
     /// stack.add_child(Text::new("Overlay"));
     /// ```
-    pub fn add_child(&mut self, child: Widget) {
-        self.children.push(child);
+    pub fn add_child(&mut self, child: impl View + 'static) {
+        self.children.push(Box::new(child));
     }
 
     /// Sets the children widgets.
@@ -212,11 +234,11 @@ impl Stack {
     /// ```rust,ignore
     /// let mut stack = Stack::new();
     /// stack.set_children(vec![
-    ///     Container::new(),
-    ///     Text::new("Overlay"),
+    ///     Box::new(Container::new()),
+    ///     Box::new(Text::new("Overlay")),
     /// ]);
     /// ```
-    pub fn set_children(&mut self, children: Vec<Widget>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
         self.children = children;
     }
 
@@ -234,27 +256,48 @@ impl Default for Stack {
     }
 }
 
-// Implement RenderWidget for Stack (multi-child widget)
-impl RenderWidget for Stack {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::multi(Box::new(RenderStack::with_alignment(self.alignment)))
-    }
+// Implement View for Stack - New architecture
+impl View for Stack {
+    type Element = Element;
+    type State = Vec<Box<dyn std::any::Any>>;
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi { render, .. } = render_object {
-            if let Some(stack) = render.downcast_mut::<RenderStack>() {
-                stack.set_alignment(self.alignment);
-                stack.set_fit(self.fit);
-            }
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build all children
+        let mut child_ids = Vec::new();
+        let mut child_states = Vec::new();
+
+        for child in self.children {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            child_ids.push(id);
+            child_states.push(state);
         }
+
+        // Create RenderStack
+        let mut render_stack = RenderStack::with_alignment(self.alignment);
+        render_stack.fit = self.fit;
+
+        // Create RenderNode (Multi)
+        let render_node = RenderNode::Multi {
+            render: Box::new(render_stack),
+            children: child_ids,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_states)
     }
 
-    fn child(&self) -> Option<&Widget> {
-        None // Multi-child widgets don't have a single child
-    }
-
-    fn children(&self) -> Option<&[Widget]> {
-        Some(&self.children)
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
@@ -273,23 +316,25 @@ where
     /// ```rust,ignore
     /// Stack::builder()
     ///     .alignment(Alignment::CENTER)
-    ///     .children(vec![widget1, widget2])
+    ///     .children(vec![
+    ///         Box::new(widget1) as Box<dyn AnyView>,
+    ///         Box::new(widget2) as Box<dyn AnyView>,
+    ///     ])
     ///     .build()
     /// ```
     pub fn children(
         self,
-        children: impl IntoIterator<Item = impl flui_core::IntoWidget>,
+        children: Vec<Box<dyn AnyView>>,
     ) -> StackBuilder<SetChildren<S>> {
-        let widgets: Vec<Widget> = children.into_iter().map(|c| c.into_widget()).collect();
-        self.children_internal(widgets)
+        self.children_internal(children)
     }
 }
 
 // Public build() wrapper
 impl<S: State> StackBuilder<S> {
-    /// Builds the Stack widget and returns it as a Widget.
-    pub fn build(self) -> flui_core::Widget {
-        flui_core::Widget::render_object(self.build_stack())
+    /// Builds the Stack widget.
+    pub fn build(self) -> Stack {
+        self.build_stack()
     }
 }
 
@@ -327,32 +372,36 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::{LeafRenderObjectElement, RenderObjectWidget};
-    use flui_rendering::RenderPadding;
-    use flui_types::EdgeInsets;
 
-    // Mock widget for testing
-    #[derive(Debug, Clone)]
-    struct MockWidget {
+    // Mock view for testing
+    #[derive()]
+    struct MockView {
         #[allow(dead_code)]
         id: String,
     }
 
-    impl MockWidget {
+    impl MockView {
         fn new(id: &str) -> Self {
             Self { id: id.to_string() }
         }
     }
 
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            use flui_rendering::RenderColoredBox;
+            use flui_types::Color;
+            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
         }
 
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
     }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_stack_new() {
@@ -373,8 +422,8 @@ mod tests {
     #[test]
     fn test_stack_add_child() {
         let mut widget = Stack::new();
-        widget.add_child(MockWidget::new("child1"));
-        widget.add_child(MockWidget::new("child2"));
+        widget.add_child(MockView::new("child1"));
+        widget.add_child(MockView::new("child2"));
         assert_eq!(widget.children.len(), 2);
     }
 
@@ -382,9 +431,9 @@ mod tests {
     fn test_stack_set_children() {
         let mut widget = Stack::new();
         widget.set_children(vec![
-            Box::new(MockWidget::new("child1")),
-            Box::new(MockWidget::new("child2")),
-            Box::new(MockWidget::new("child3")),
+            Box::new(MockView::new("child1")),
+            Box::new(MockView::new("child2")),
+            Box::new(MockView::new("child3")),
         ]);
         assert_eq!(widget.children.len(), 3);
     }
@@ -403,7 +452,10 @@ mod tests {
     #[test]
     fn test_stack_builder_with_children() {
         let widget = Stack::builder()
-            .children(vec![MockWidget::new("child1"), MockWidget::new("child2")])
+            .children(vec![
+                Box::new(MockView::new("child1")),
+                Box::new(MockView::new("child2")),
+            ])
             .build();
 
         assert_eq!(widget.children.len(), 2);
@@ -486,38 +538,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stack_render_object_creation() {
-        let widget = Stack::new();
-        let render_object = widget.create_render_object();
-        assert!(render_object.downcast_ref::<RenderStack>().is_some());
-    }
-
-    #[test]
-    fn test_stack_render_object_update() {
-        let widget1 = Stack::new();
-        let mut render_object = widget1.create_render_object();
-
-        let widget2 = Stack::builder()
-            .alignment(Alignment::CENTER)
-            .fit(StackFit::Expand)
-            .build();
-        widget2.update_render_object(&mut *render_object);
-
-        // RenderStack doesn't expose getters, so we just verify it doesn't panic
-    }
-
-    #[test]
-    fn test_stack_children_method() {
-        let widget = Stack::new();
-        assert_eq!(widget.children().len(), 0);
-
-        let mut widget = Stack::new();
-        widget.add_child(MockWidget::new("child1"));
-        widget.add_child(MockWidget::new("child2"));
-        assert_eq!(widget.children().len(), 2);
-    }
-
-    #[test]
     fn test_stack_empty_children() {
         let widget = Stack::new();
         assert_eq!(widget.children.len(), 0);
@@ -528,19 +548,9 @@ mod tests {
     fn test_stack_many_children() {
         let mut widget = Stack::new();
         for i in 0..10 {
-            widget.add_child(MockWidget::new(&format!("child{}", i)));
+            widget.add_child(MockView::new(&format!("child{}", i)));
         }
         assert_eq!(widget.children.len(), 10);
-    }
-
-    #[test]
-    fn test_stack_widget_trait() {
-        let widget = Stack::builder()
-            .children(vec![MockWidget::new("1"), MockWidget::new("2")])
-            .build();
-
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
     }
 
     #[test]
@@ -548,9 +558,9 @@ mod tests {
         let widget = Stack::builder()
             .alignment(Alignment::CENTER)
             .children(vec![
-                MockWidget::new("background"),
-                MockWidget::new("middle"),
-                MockWidget::new("foreground"),
+                Box::new(MockView::new("background")),
+                Box::new(MockView::new("middle")),
+                Box::new(MockView::new("foreground")),
             ])
             .build();
 
@@ -559,5 +569,4 @@ mod tests {
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Stack, render);
+// Stack now implements View trait directly

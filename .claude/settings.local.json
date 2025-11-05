@@ -1,18 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gh issue create:*)",
-      "Bash(gh issue list:*)",
-      "Bash(gh issue comment:*)",
-      "Bash(gh issue close:*)",
-      "Bash(gh issue view:*)",
-      "Bash(└─ Direction: {:?}n)",
-      "Bash(tee:*)",
-      "Bash(cargo check:*)",
-      "Bash(cargo clippy:*)",
-      "Bash(cargo test:*)",
-      "Bash(gh label create:*)",
-      "Bash(gh issue edit:*)"
+      "Bash(cargo run:*)",
+      "Bash(cargo build:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

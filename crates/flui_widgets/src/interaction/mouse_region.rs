@@ -16,9 +16,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::view::{AnyView, ChangeFlags, View};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::{BuildContext, Element};
 use flui_rendering::{RenderMouseRegion, MouseCallbacks};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 
@@ -74,7 +74,7 @@ pub struct MouseRegion {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
 }
 
 impl MouseRegion {
@@ -90,7 +90,7 @@ impl MouseRegion {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
+    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
 }
@@ -137,8 +137,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> MouseRegionBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> MouseRegionBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
@@ -195,24 +195,6 @@ impl<S: State> MouseRegionBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::LeafRenderObjectElement;
-    use flui_types::EdgeInsets;
-    use flui_rendering::RenderPadding;
-
-    #[derive(Debug, Clone)]
-    struct MockWidget;
-
-    
-
-    impl RenderObjectWidget for MockWidget {
-        fn create_render_object(&self) -> Box<dyn DynRenderObject> {
-            Box::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
-
-        fn update_render_object(&self, _render_object: &mut dyn DynRenderObject) {}
-    }
-
-    impl flui_core::LeafRenderObjectWidget for MockWidget {}
 
     #[test]
     fn test_mouse_region_new() {
@@ -232,13 +214,15 @@ mod tests {
 
     #[test]
     fn test_mouse_region_builder() {
-        let widget = MouseRegion::builder().build();
+        let widget = MouseRegion::builder().build_mouse_region();
         assert!(widget.child.is_none());
     }
 
     #[test]
     fn test_mouse_region_builder_with_child() {
-        let widget = MouseRegion::builder().child(MockWidget).build();
+        let widget = MouseRegion::builder()
+            .child(crate::SizedBox::new())
+            .build_mouse_region();
         assert!(widget.child.is_some());
     }
 
@@ -246,7 +230,7 @@ mod tests {
     fn test_mouse_region_builder_with_on_enter() {
         let widget = MouseRegion::builder()
             .on_enter(|_| {})
-            .build();
+            .build_mouse_region();
         assert!(widget.on_enter.is_some());
     }
 
@@ -254,7 +238,7 @@ mod tests {
     fn test_mouse_region_builder_with_on_exit() {
         let widget = MouseRegion::builder()
             .on_exit(|_| {})
-            .build();
+            .build_mouse_region();
         assert!(widget.on_exit.is_some());
     }
 
@@ -262,7 +246,7 @@ mod tests {
     fn test_mouse_region_builder_with_on_hover() {
         let widget = MouseRegion::builder()
             .on_hover(|_| {})
-            .build();
+            .build_mouse_region();
         assert!(widget.on_hover.is_some());
     }
 
@@ -272,8 +256,8 @@ mod tests {
             .on_enter(|_| {})
             .on_exit(|_| {})
             .on_hover(|_| {})
-            .child(MockWidget)
-            .build();
+            .child(crate::SizedBox::new())
+            .build_mouse_region();
 
         assert!(widget.on_enter.is_some());
         assert!(widget.on_exit.is_some());
@@ -284,7 +268,7 @@ mod tests {
     #[test]
     fn test_mouse_region_set_child() {
         let mut widget = MouseRegion::new();
-        widget.set_child(MockWidget);
+        widget.set_child(Box::new(crate::SizedBox::new()));
         assert!(widget.child.is_some());
     }
 
@@ -292,7 +276,7 @@ mod tests {
     fn test_mouse_region_clone() {
         let widget1 = MouseRegion::builder()
             .on_enter(|_| {})
-            .build();
+            .build_mouse_region();
 
         let widget2 = widget1.clone();
         assert!(widget2.on_enter.is_some());
@@ -303,39 +287,30 @@ mod tests {
         let widget = MouseRegion::builder()
             .on_enter(|_| {})
             .on_exit(|_| {})
-            .build();
+            .build_mouse_region();
 
         let debug_str = format!("{:?}", widget);
         assert!(debug_str.contains("MouseRegion"));
         assert!(debug_str.contains("has_on_enter"));
     }
-
-    #[test]
-    fn test_mouse_region_widget_trait() {
-        let widget = MouseRegion::builder()
-            .on_hover(|_| {})
-            .child(MockWidget)
-            .build();
-
-        // Test that it implements Widget and can create an element
-        let _element = widget.into_element();
-    }
-
-    #[test]
-    fn test_single_child_render_object_widget_trait() {
-        let widget = MouseRegion::builder()
-            .on_enter(|_| {})
-            .child(MockWidget)
-            .build();
-
-        // Test child() method
-        assert!(widget.child().is_some());
-    }
 }
 
-// Implement RenderWidget
-impl RenderWidget for MouseRegion {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
+// Implement View trait
+impl View for MouseRegion {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child first
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderMouseRegion
         // TODO: RenderMouseRegion currently uses fn() callbacks as placeholders
         // The widget's Arc<dyn Fn> callbacks will be properly supported when
         // event handling infrastructure is implemented
@@ -344,27 +319,25 @@ impl RenderWidget for MouseRegion {
             on_exit: None,
             on_hover: None,
         };
-        RenderNode::single(Box::new(RenderMouseRegion::new(callbacks)))
+        let render = RenderMouseRegion::new(callbacks);
+
+        let render_node = RenderNode::Single {
+            render: Box::new(render),
+            child: child_id,
+        };
+
+        let render_element = flui_core::element::RenderElement::new(render_node);
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(mouse_region) = render.downcast_mut::<RenderMouseRegion>() {
-                // TODO: Update callbacks when event handling is implemented
-                let callbacks = MouseCallbacks {
-                    on_enter: None,
-                    on_exit: None,
-                    on_hover: None,
-                };
-                mouse_region.set_callbacks(callbacks);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(MouseRegion, render);

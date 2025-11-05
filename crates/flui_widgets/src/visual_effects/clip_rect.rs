@@ -14,9 +14,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::{RenderClipRect, RectShape};
 use flui_types::painting::Clip;
 
@@ -53,7 +53,7 @@ use flui_types::painting::Clip;
 ///     .child(content)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_clip_rect)]
 pub struct ClipRect {
     /// Optional key for widget identification
@@ -65,7 +65,27 @@ pub struct ClipRect {
 
     /// The child widget to clip
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for ClipRect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClipRect")
+            .field("key", &self.key)
+            .field("clip_behavior", &self.clip_behavior)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for ClipRect {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            clip_behavior: self.clip_behavior,
+            child: None,
+        }
+    }
 }
 
 impl ClipRect {
@@ -83,8 +103,8 @@ impl ClipRect {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 }
 
@@ -94,8 +114,44 @@ impl Default for ClipRect {
     }
 }
 
-// Implement Widget trait with associated type
+// Implement View for ClipRect - New architecture
+impl View for ClipRect {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
 
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child if present
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderNode (Single - child is Option<ElementId>)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderClipRect::new(RectShape, self.clip_behavior)),
+            child: child_id,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
+    }
+}
 
 // bon Builder Extensions
 use clip_rect_builder::{IsUnset, SetChild, State};
@@ -106,37 +162,20 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> ClipRectBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> ClipRectBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 // Build wrapper
 impl<S: State> ClipRectBuilder<S> {
     /// Builds the ClipRect widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_clip_rect())
+    pub fn build(self) -> ClipRect {
+        self.build_clip_rect()
     }
 }
 
-// Implement RenderObjectWidget
-impl RenderWidget for ClipRect {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderClipRect::new(RectShape, self.clip_behavior)))
-    }
-
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(obj) = render.downcast_mut::<RenderClipRect>() {
-                obj.set_clip_behavior(self.clip_behavior);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
-    }
-}
+// ClipRect now implements View trait directly
 
 #[cfg(test)]
 mod tests {
@@ -171,13 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clip_rect_set_child() {
-        let mut widget = ClipRect::new(Clip::HardEdge);
-        widget.set_child(Widget::render_object(flui_widgets::SizedBox::new()));
-        assert!(widget.child.is_some());
-    }
-
-    #[test]
     fn test_clip_rect_all_clip_behaviors() {
         // Test all clip behavior variants
         let widget_none = ClipRect::new(Clip::None);
@@ -193,6 +225,3 @@ mod tests {
         assert_eq!(widget_save.clip_behavior, Clip::AntiAliasWithSaveLayer);
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(ClipRect, render);

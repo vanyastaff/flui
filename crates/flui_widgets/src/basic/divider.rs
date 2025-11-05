@@ -23,8 +23,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::widget::{StatelessWidget, Widget};
-use flui_core::BuildContext;
+use flui_core::view::{AnyView, ChangeFlags, View};
+use flui_core::{BuildContext, Element};
 use flui_types::Color;
 
 use crate::{ColoredBox, Container, SizedBox};
@@ -163,25 +163,19 @@ impl Default for Divider {
     }
 }
 
-// bon Builder Extensions
-use divider_builder::{State};
+// Implement View trait
+impl View for Divider {
+    type Element = Element;
+    type State = Box<dyn std::any::Any>;
 
-impl<S: State> DividerBuilder<S> {
-    /// Builds the Divider widget.
-    pub fn build(self) -> Widget {
-        Widget::stateless(self.build_divider())
-    }
-}
-
-// Implement StatelessWidget
-impl StatelessWidget for Divider {
-    fn build(&self, _context: &BuildContext) -> Widget {
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
         // Calculate effective height (use height if specified, otherwise thickness)
         let effective_height = self.height.unwrap_or(self.thickness);
 
-        // If we have indents, we need to wrap in a Container with padding
-        if self.indent > 0.0 || self.end_indent > 0.0 {
-            Widget::from(Container::builder()
+        // Build the child view
+        let child: Box<dyn AnyView> = if self.indent > 0.0 || self.end_indent > 0.0 {
+            // If we have indents, we need to wrap in a Container with padding
+            Box::new(Container::builder()
                 .height(effective_height)
                 .padding(flui_types::EdgeInsets {
                     left: self.indent,
@@ -195,10 +189,10 @@ impl StatelessWidget for Divider {
                         .height(self.thickness)
                         .build())
                     .build())
-                .build())
+                .build_container())
         } else {
             // Simple case: just a colored box with height
-            Widget::from(SizedBox::builder()
+            Box::new(SizedBox::builder()
                 .height(effective_height)
                 .child(ColoredBox::builder()
                     .color(self.color)
@@ -207,12 +201,35 @@ impl StatelessWidget for Divider {
                         .build())
                     .build())
                 .build())
+        };
+
+        // Build the child view
+        let (boxed_element, state) = child.build_any(ctx);
+        let element = boxed_element.into_element();
+        (element, state)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        _state: &mut Self::State,
+        _element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // Check if any properties changed
+        let properties_changed = self.height != prev.height
+            || self.thickness != prev.thickness
+            || self.indent != prev.indent
+            || self.end_indent != prev.end_indent
+            || self.color != prev.color;
+
+        if properties_changed {
+            // Properties changed - need to rebuild
+            ChangeFlags::NEEDS_BUILD
+        } else {
+            ChangeFlags::NONE
         }
     }
 }
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Divider, stateless);
 
 #[cfg(test)]
 mod tests {
@@ -245,7 +262,7 @@ mod tests {
             .indent(10.0)
             .end_indent(10.0)
             .color(Color::RED)
-            .build();
+            .build_divider();
 
         assert_eq!(divider.thickness, 2.0);
         assert_eq!(divider.indent, 10.0);
@@ -264,7 +281,7 @@ mod tests {
         let divider = Divider::builder()
             .height(20.0)
             .thickness(2.0)
-            .build();
+            .build_divider();
 
         assert_eq!(divider.height, Some(20.0));
         assert_eq!(divider.thickness, 2.0);

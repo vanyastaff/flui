@@ -4,8 +4,9 @@
 //! Similar to Flutter's Wrap widget.
 
 use bon::Builder;
-use flui_core::widget::{RenderWidget, Widget};
-use flui_core::{BuildContext, render::RenderNode};
+use flui_core::{BuildContext, Element, RenderElement};
+use flui_core::render::RenderNode;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
@@ -86,7 +87,7 @@ pub use flui_rendering::{WrapAlignment as WrapAlignmentExport, WrapCrossAlignmen
 ///     .children(widgets)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_wrap)]
 pub struct Wrap {
     /// Optional key for widget identification
@@ -118,8 +119,36 @@ pub struct Wrap {
     pub cross_alignment: WrapCrossAlignment,
 
     /// The children widgets
-    #[builder(default)]
-    pub children: Vec<Widget>,
+    #[builder(default, setters(vis = "", name = children_internal))]
+    pub children: Vec<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Wrap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wrap")
+            .field("key", &self.key)
+            .field("direction", &self.direction)
+            .field("alignment", &self.alignment)
+            .field("spacing", &self.spacing)
+            .field("run_spacing", &self.run_spacing)
+            .field("cross_alignment", &self.cross_alignment)
+            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for Wrap {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            direction: self.direction,
+            alignment: self.alignment,
+            spacing: self.spacing,
+            run_spacing: self.run_spacing,
+            cross_alignment: self.cross_alignment,
+            children: Vec::new(),
+        }
+    }
 }
 
 impl Wrap {
@@ -128,9 +157,12 @@ impl Wrap {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let wrap = Wrap::new(vec![widget1, widget2, widget3]);
+    /// let wrap = Wrap::new(vec![
+    ///     Box::new(widget1) as Box<dyn AnyView>,
+    ///     Box::new(widget2) as Box<dyn AnyView>,
+    /// ]);
     /// ```
-    pub fn new(children: Vec<Widget>) -> Self {
+    pub fn new(children: Vec<Box<dyn AnyView>>) -> Self {
         Self {
             key: None,
             direction: Axis::Horizontal,
@@ -149,7 +181,7 @@ impl Wrap {
     /// ```rust,ignore
     /// let wrap = Wrap::horizontal(children);
     /// ```
-    pub fn horizontal(children: Vec<Widget>) -> Self {
+    pub fn horizontal(children: Vec<Box<dyn AnyView>>) -> Self {
         Self {
             direction: Axis::Horizontal,
             ..Self::new(children)
@@ -163,11 +195,21 @@ impl Wrap {
     /// ```rust,ignore
     /// let wrap = Wrap::vertical(children);
     /// ```
-    pub fn vertical(children: Vec<Widget>) -> Self {
+    pub fn vertical(children: Vec<Box<dyn AnyView>>) -> Self {
         Self {
             direction: Axis::Vertical,
             ..Self::new(children)
         }
+    }
+
+    /// Adds a child widget.
+    pub fn add_child(&mut self, child: impl View + 'static) {
+        self.children.push(Box::new(child));
+    }
+
+    /// Sets all children at once.
+    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
+        self.children = children;
     }
 }
 
@@ -177,56 +219,108 @@ impl Default for Wrap {
     }
 }
 
-// bon Builder Extensions
-use wrap_builder::State;
+// Implement View for Wrap - New architecture
+impl View for Wrap {
+    type Element = Element;
+    type State = Vec<Box<dyn std::any::Any>>;
 
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build all children
+        let mut child_ids = Vec::new();
+        let mut child_states = Vec::new();
+
+        for child in self.children {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            child_ids.push(id);
+            child_states.push(state);
+        }
+
+        // Create RenderWrap
+        let mut render_wrap = RenderWrap::new(self.direction);
+        render_wrap.alignment = self.alignment;
+        render_wrap.spacing = self.spacing;
+        render_wrap.run_spacing = self.run_spacing;
+        render_wrap.cross_alignment = self.cross_alignment;
+
+        // Create RenderNode (Multi)
+        let render_node = RenderNode::Multi {
+            render: Box::new(render_wrap),
+            children: child_ids,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_states)
+    }
+
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
+    }
+}
+
+// bon Builder Extensions
+use wrap_builder::{IsUnset, SetChildren, State};
+
+// Custom setter for children
+impl<S: State> WrapBuilder<S>
+where
+    S::Children: IsUnset,
+{
+    /// Sets the children widgets (works in builder chain).
+    pub fn children(
+        self,
+        children: Vec<Box<dyn AnyView>>,
+    ) -> WrapBuilder<SetChildren<S>> {
+        self.children_internal(children)
+    }
+}
+
+// Public build() wrapper
 impl<S: State> WrapBuilder<S> {
     /// Builds the Wrap widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_wrap())
+    pub fn build(self) -> Wrap {
+        self.build_wrap()
     }
 }
-
-// Implement RenderWidget
-impl RenderWidget for Wrap {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        let mut render = RenderWrap::new(self.direction);
-        render.alignment = self.alignment;
-        render.spacing = self.spacing;
-        render.run_spacing = self.run_spacing;
-        render.cross_alignment = self.cross_alignment;
-
-        RenderNode::multi(Box::new(render))
-    }
-
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Multi { render, .. } = render_object {
-            if let Some(wrap) = render.downcast_mut::<RenderWrap>() {
-                wrap.direction = self.direction;
-                wrap.alignment = self.alignment;
-                wrap.spacing = self.spacing;
-                wrap.run_spacing = self.run_spacing;
-                wrap.cross_alignment = self.cross_alignment;
-            }
-        }
-    }
-
-    fn children(&self) -> Option<&[Widget]> {
-        Some(&self.children)
-    }
-}
-
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(Wrap, render);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Mock view for testing
+    #[derive()]
+    struct MockView;
+
+    impl View for MockView {
+        type Element = Element;
+        type State = ();
+
+        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+            use flui_rendering::RenderColoredBox;
+            use flui_types::Color;
+            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
+            let render_element = RenderElement::new(render_node);
+            (Element::Render(render_element), ())
+        }
+
+        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
+            ChangeFlags::NONE
+        }
+    }
+
     #[test]
     fn test_wrap_new() {
-        let children = vec![Widget::from(()), Widget::from(())];
-        let wrap = Wrap::new(children.clone());
+        let children = vec![Box::new(MockView) as Box<dyn AnyView>, Box::new(MockView)];
+        let wrap = Wrap::new(children);
         assert_eq!(wrap.direction, Axis::Horizontal);
         assert_eq!(wrap.alignment, WrapAlignment::Start);
         assert_eq!(wrap.spacing, 0.0);
@@ -236,14 +330,14 @@ mod tests {
 
     #[test]
     fn test_wrap_horizontal() {
-        let children = vec![Widget::from(())];
+        let children = vec![Box::new(MockView) as Box<dyn AnyView>];
         let wrap = Wrap::horizontal(children);
         assert_eq!(wrap.direction, Axis::Horizontal);
     }
 
     #[test]
     fn test_wrap_vertical() {
-        let children = vec![Widget::from(())];
+        let children = vec![Box::new(MockView) as Box<dyn AnyView>];
         let wrap = Wrap::vertical(children);
         assert_eq!(wrap.direction, Axis::Vertical);
     }
@@ -256,11 +350,15 @@ mod tests {
             .run_spacing(5.0)
             .alignment(WrapAlignment::Center)
             .cross_alignment(WrapCrossAlignment::End)
-            .children(vec![Widget::from(()), Widget::from(())])
+            .children(vec![Box::new(MockView), Box::new(MockView)])
             .build();
 
-        // build() returns Widget, so we can't easily test the inner Wrap
-        // Just verify it compiles and returns Widget
+        assert_eq!(wrap.direction, Axis::Vertical);
+        assert_eq!(wrap.spacing, 10.0);
+        assert_eq!(wrap.run_spacing, 5.0);
+        assert_eq!(wrap.alignment, WrapAlignment::Center);
+        assert_eq!(wrap.cross_alignment, WrapCrossAlignment::End);
+        assert_eq!(wrap.children.len(), 2);
     }
 
     #[test]
@@ -269,4 +367,21 @@ mod tests {
         assert_eq!(wrap.children.len(), 0);
         assert_eq!(wrap.direction, Axis::Horizontal);
     }
+
+    #[test]
+    fn test_wrap_add_child() {
+        let mut wrap = Wrap::default();
+        wrap.add_child(MockView);
+        wrap.add_child(MockView);
+        assert_eq!(wrap.children.len(), 2);
+    }
+
+    #[test]
+    fn test_wrap_set_children() {
+        let mut wrap = Wrap::default();
+        wrap.set_children(vec![Box::new(MockView), Box::new(MockView), Box::new(MockView)]);
+        assert_eq!(wrap.children.len(), 3);
+    }
 }
+
+// Wrap now implements View trait directly

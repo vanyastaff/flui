@@ -371,4 +371,27 @@ impl RenderElement {
     }
 }
 
+// ========== ViewElement Implementation ==========
+
+use crate::view::view::ViewElement;
+use std::any::Any;
+
+impl ViewElement for RenderElement {
+    fn into_element(self: Box<Self>) -> crate::element::Element {
+        crate::element::Element::Render(*self)
+    }
+
+    fn mark_dirty(&mut self) {
+        self.base.mark_dirty();
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
 // Tests removed - need to be rewritten with View API

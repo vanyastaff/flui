@@ -4,9 +4,9 @@
 //! Similar to Flutter's LimitedBox widget.
 
 use bon::Builder;
-use flui_core::widget::{Widget, RenderWidget};
+use flui_core::{BuildContext, Element, RenderElement};
 use flui_core::render::RenderNode;
-use flui_core::BuildContext;
+use flui_core::view::{View, ChangeFlags, AnyView};
 use flui_rendering::RenderLimitedBox;
 
 /// A widget that limits its maximum size when unconstrained.
@@ -65,7 +65,7 @@ use flui_rendering::RenderLimitedBox;
 ///     .child(some_widget)
 ///     .build()
 /// ```
-#[derive(Debug, Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_limited_box)]
 pub struct LimitedBox {
     /// Optional key for widget identification
@@ -83,7 +83,29 @@ pub struct LimitedBox {
 
     /// The child widget to limit.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Widget>,
+    pub child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for LimitedBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LimitedBox")
+            .field("key", &self.key)
+            .field("max_width", &self.max_width)
+            .field("max_height", &self.max_height)
+            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .finish()
+    }
+}
+
+impl Clone for LimitedBox {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            max_width: self.max_width,
+            max_height: self.max_height,
+            child: None,
+        }
+    }
 }
 
 impl LimitedBox {
@@ -98,8 +120,8 @@ impl LimitedBox {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Widget) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl View + 'static) {
+        self.child = Some(Box::new(child));
     }
 
     /// Validates LimitedBox configuration.
@@ -122,40 +144,58 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: Widget) -> LimitedBoxBuilder<SetChild<S>> {
-        self.child_internal(child)
+    pub fn child(self, child: impl View + 'static) -> LimitedBoxBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
     }
 }
 
 impl<S: State> LimitedBoxBuilder<S> {
     /// Builds the LimitedBox widget.
-    pub fn build(self) -> Widget {
-        Widget::render_object(self.build_limited_box())
+    pub fn build(self) -> LimitedBox {
+        self.build_limited_box()
     }
 }
 
-// Implement RenderWidget
-impl RenderWidget for LimitedBox {
-    fn create_render_object(&self, _context: &BuildContext) -> RenderNode {
-        RenderNode::single(Box::new(RenderLimitedBox::new(self.max_width, self.max_height)))
+// Implement View for LimitedBox - New architecture
+impl View for LimitedBox {
+    type Element = Element;
+    type State = Option<Box<dyn std::any::Any>>;
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Build child if present
+        let (child_id, child_state) = if let Some(child) = self.child {
+            let (elem, state) = child.build_any(ctx);
+            let id = ctx.tree().write().insert(elem.into_element());
+            (Some(id), Some(state))
+        } else {
+            (None, None)
+        };
+
+        // Create RenderNode (always Single for SingleRender widgets)
+        let render_node = RenderNode::Single {
+            render: Box::new(RenderLimitedBox::new(self.max_width, self.max_height)),
+            child: child_id,
+        };
+
+        // Create RenderElement using constructor
+        let render_element = RenderElement::new(render_node);
+
+        (Element::Render(render_element), child_state)
     }
 
-    fn update_render_object(&self, _context: &BuildContext, render_object: &mut RenderNode) {
-        if let RenderNode::Single { render, .. } = render_object {
-            if let Some(limited_box) = render.downcast_mut::<RenderLimitedBox>() {
-                limited_box.set_max_width(self.max_width);
-                limited_box.set_max_height(self.max_height);
-            }
-        }
-    }
-
-    fn child(&self) -> Option<&Widget> {
-        self.child.as_ref()
+    fn rebuild(
+        self,
+        prev: &Self,
+        state: &mut Self::State,
+        element: &mut Self::Element,
+    ) -> ChangeFlags {
+        // TODO: Implement proper rebuild logic if needed
+        // For now, return NONE as View architecture handles rebuilding
+        ChangeFlags::NONE
     }
 }
 
-// Implement IntoWidget for ergonomic API
-flui_core::impl_into_widget!(LimitedBox, render);
+// LimitedBox now implements View trait directly
 
 #[cfg(test)]
 mod tests {

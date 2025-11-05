@@ -121,6 +121,9 @@ impl<S: ClipShape> RenderClip<S> {
 }
 
 impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
+    /// No metadata needed
+    type Metadata = ();
+
     fn layout(
         &mut self,
         tree: &ElementTree,
