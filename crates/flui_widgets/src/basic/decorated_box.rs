@@ -225,8 +225,8 @@ impl View for DecoratedBox {
     type State = Option<Box<dyn std::any::Any>>;
 
     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child (required)
-        let child = self.child.expect("DecoratedBox requires a child widget");
+        // Build child (use empty SizedBox if none)
+        let child = self.child.unwrap_or_else(|| Box::new(crate::SizedBox::new()));
         let (elem, state) = child.build_any(ctx);
         let child_id = ctx.tree().write().insert(elem.into_element());
 
