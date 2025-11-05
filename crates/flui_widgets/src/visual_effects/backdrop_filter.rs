@@ -163,7 +163,7 @@ impl Clone for BackdropFilter {
             key: self.key.clone(),
             filter: self.filter.clone(),
             blend_mode: self.blend_mode,
-            child: None, // Widgets aren't cloned deeply
+            child: self.child.clone(), // Widgets aren't cloned deeply
         }
     }
 }

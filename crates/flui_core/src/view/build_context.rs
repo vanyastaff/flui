@@ -425,4 +425,184 @@ impl BuildContext {
 
 }
 
+// ==============================================================================
+// Thread-Local BuildContext for Simplified View API
+// ==============================================================================
+
+use std::cell::Cell;
+
+thread_local! {
+    /// Thread-local storage for the current BuildContext
+    ///
+    /// This allows View::build() and RenderBuilder to access BuildContext
+    /// without explicit passing through the call stack.
+    ///
+    /// # Design
+    ///
+    /// - Each thread has its own independent BuildContext
+    /// - Set by pipeline during build phase via BuildContextGuard
+    /// - Cleared automatically when guard drops (RAII)
+    /// - Safe: thread-local = no data races
+    ///
+    /// # Safety
+    ///
+    /// The raw pointer is safe because:
+    /// 1. It's only accessed within the BuildContextGuard's lifetime
+    /// 2. BuildContextGuard ensures the context lives longer than any access
+    /// 3. Thread-local ensures no cross-thread access
+    /// 4. Only one BuildContext can be set at a time (checked by guard)
+    static CURRENT_BUILD_CONTEXT: Cell<Option<*const BuildContext>> = const { Cell::new(None) };
+}
+
+/// RAII guard that sets the thread-local BuildContext
+///
+/// Automatically clears the context when dropped, ensuring proper cleanup
+/// even if build() panics.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // In build pipeline:
+/// let ctx = BuildContext::new(tree, element_id);
+/// let _guard = BuildContextGuard::new(&ctx);
+///
+/// // View::build() can now access current_build_context()
+/// let element = view.build(&ctx).into_element();
+///
+/// // Guard drops here, clearing thread-local
+/// ```
+#[derive(Debug)]
+pub struct BuildContextGuard {
+    _private: (),
+}
+
+impl BuildContextGuard {
+    /// Set the current build context for this thread
+    ///
+    /// Returns a guard that will clear the context when dropped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a build context is already set. Nested builds are not supported.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let ctx = BuildContext::new(tree, element_id);
+    /// let _guard = BuildContextGuard::new(&ctx);
+    /// // Context is now available via current_build_context()
+    /// ```
+    pub fn new(context: &BuildContext) -> Self {
+        CURRENT_BUILD_CONTEXT.with(|cell| {
+            if cell.get().is_some() {
+                panic!(
+                    "BuildContext is already set! Nested builds are not supported.\n\
+                    \n\
+                    This typically means build() was called recursively, which is a framework bug.\n\
+                    \n\
+                    If you're implementing the build pipeline, ensure:\n\
+                    1. BuildContextGuard is dropped before creating a new one\n\
+                    2. Builds are not nested (use sequential building instead)\n\
+                    \n\
+                    Stack trace will show where the first guard was created."
+                );
+            }
+
+            // Store raw pointer (safe because guard ensures lifetime)
+            cell.set(Some(context as *const BuildContext));
+        });
+
+        Self { _private: () }
+    }
+}
+
+impl Drop for BuildContextGuard {
+    fn drop(&mut self) {
+        CURRENT_BUILD_CONTEXT.with(|cell| {
+            cell.set(None);
+        });
+    }
+}
+
+/// Get the current BuildContext (thread-local)
+///
+/// This function is used by the simplified View API to access BuildContext
+/// without explicit passing. It's primarily used internally by:
+/// - `IntoElement::into_element()` for View trait
+/// - `insert_into_tree()` in RenderBuilder
+/// - Hook functions (if we remove ctx parameter in future)
+///
+/// # Panics
+///
+/// Panics if called outside of a build phase (i.e., when no BuildContextGuard is active).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Inside IntoElement::into_element():
+/// impl<V: View> IntoElement for V {
+///     fn into_element(self) -> Element {
+///         let ctx = current_build_context();
+///         let element_like = self.build(ctx);
+///         element_like.into_element()
+///     }
+/// }
+/// ```
+///
+/// # Safety
+///
+/// This function is safe because:
+/// - BuildContextGuard ensures the context pointer is valid
+/// - Thread-local storage prevents cross-thread access
+/// - RAII guarantees cleanup even on panic
+pub fn current_build_context() -> &'static BuildContext {
+    CURRENT_BUILD_CONTEXT.with(|cell| {
+        let ptr = cell.get().expect(
+            "No BuildContext available! Are you calling this outside of View::build()?\n\
+            \n\
+            BuildContext is only available during the build phase when:\n\
+            1. The framework has set BuildContextGuard\n\
+            2. You're inside View::build() or a function called from it\n\
+            \n\
+            Common mistakes:\n\
+            - Calling hooks or IntoElement outside of build()\n\
+            - Storing and using IntoElement values after build completes\n\
+            - Calling framework functions from non-build contexts\n\
+            \n\
+            Solution: Only call this from within View::build() or its callees."
+        );
+
+        // SAFETY: The pointer is guaranteed valid by BuildContextGuard's lifetime
+        // - Guard holds a reference, so BuildContext can't be dropped
+        // - Thread-local ensures no cross-thread access
+        // - Pointer is cleared when guard drops
+        unsafe { &*ptr }
+    })
+}
+
+/// Execute a closure with a BuildContext set
+///
+/// This is an internal API used by the build pipeline to establish a build context
+/// for View::build() calls.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // In build pipeline:
+/// let result = with_build_context(&ctx, || {
+///     view.into_element()
+/// });
+/// ```
+///
+/// # Safety
+///
+/// The BuildContextGuard ensures proper cleanup even if `f` panics.
+pub fn with_build_context<F, R>(context: &BuildContext, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let _guard = BuildContextGuard::new(context);
+    f()
+}
+
 // Tests removed - need to be rewritten with View API

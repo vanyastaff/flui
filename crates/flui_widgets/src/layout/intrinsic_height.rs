@@ -114,7 +114,7 @@ impl Clone for IntrinsicHeight {
             key: self.key.clone(),
             step_width: self.step_width,
             step_height: self.step_height,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

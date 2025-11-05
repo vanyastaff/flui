@@ -180,7 +180,7 @@ impl Clone for Container {
             width: self.width,
             height: self.height,
             constraints: self.constraints,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

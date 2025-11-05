@@ -119,7 +119,7 @@ impl Clone for Card {
             elevation: self.elevation,
             margin: self.margin,
             shape: self.shape.clone(),
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

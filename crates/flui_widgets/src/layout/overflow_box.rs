@@ -129,7 +129,7 @@ impl Clone for OverflowBox {
             min_height: self.min_height,
             max_height: self.max_height,
             alignment: self.alignment,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

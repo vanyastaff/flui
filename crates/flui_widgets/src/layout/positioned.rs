@@ -211,7 +211,7 @@ impl Clone for Positioned {
             bottom: self.bottom,
             width: self.width,
             height: self.height,
-            child: None, // Widgets aren't cloned deeply
+            child: self.child.clone(), // Widgets aren't cloned deeply
         }
     }
 }

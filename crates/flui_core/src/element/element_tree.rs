@@ -716,6 +716,8 @@ impl ElementTree {
     /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
     #[inline]
     pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> crate::BoxedLayer {
+        #[cfg(debug_assertions)]
+        tracing::debug!("paint_child: called with child_id={:?}", child_id);
 
         // Walk down through ComponentElements to find the first RenderElement
         // (same logic as layout_child)
@@ -724,20 +726,28 @@ impl ElementTree {
             if let Some(element) = self.get(current_id) {
                 match element {
                     crate::element::Element::Render(_) => {
+                        #[cfg(debug_assertions)]
+                        tracing::debug!("paint_child: found RenderElement at {:?}", current_id);
                         break Some(current_id);
                     }
                     crate::element::Element::Component(comp) => {
                         if let Some(comp_child_id) = comp.child() {
                             current_id = comp_child_id;
                         } else {
+                            #[cfg(debug_assertions)]
+                            tracing::warn!("paint_child: ComponentElement has no child");
                             break None;
                         }
                     }
                     _ => {
+                        #[cfg(debug_assertions)]
+                        tracing::warn!("paint_child: unexpected element type");
                         break None;
                     }
                 }
             } else {
+                #[cfg(debug_assertions)]
+                tracing::error!("paint_child: element {:?} not found in tree!", current_id);
                 break None;
             }
         };
@@ -746,6 +756,8 @@ impl ElementTree {
             self.paint_render_object(render_id, offset)
                 .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
         } else {
+            #[cfg(debug_assertions)]
+            tracing::warn!("paint_child: returning empty ContainerLayer (no render_id)");
             Box::new(flui_engine::ContainerLayer::new())
         }
     }

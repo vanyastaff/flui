@@ -161,7 +161,7 @@ impl Clone for Transform {
             key: self.key.clone(),
             transform: self.transform,
             transform_hit_tests: self.transform_hit_tests,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

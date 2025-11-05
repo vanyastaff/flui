@@ -338,6 +338,13 @@ pub use element::{
 // Re-export view types (moved in Phase 1)
 pub use view::BuildContext;
 
+// Re-export simplified API (View, IntoElement, RenderBuilder)
+pub use view::{
+    View, AnyView,
+    IntoElement, AnyElement,
+    LeafRenderBuilder, SingleRenderBuilder, MultiRenderBuilder,
+};
+
 // Re-export pipeline types (moved in Phase 1)
 // Note: ElementTree moved to element module (Issue #21)
 pub use pipeline::{PipelineBuilder, PipelineOwner};
@@ -370,7 +377,7 @@ pub mod prelude {
     pub use crate::foundation::{Key, KeyRef};
 
     // Element and View system
-    pub use crate::view::{BuildContext, View, ViewElement, ViewSequence, AnyView, ChangeFlags};
+    pub use crate::view::{BuildContext, View, ViewElement, AnyView, ChangeFlags};
     pub use crate::element::Element;
 
     // Render system

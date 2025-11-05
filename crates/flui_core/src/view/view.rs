@@ -1,218 +1,171 @@
 //! View trait - Core abstraction for reactive UI
 //!
-//! The View trait is the primary abstraction for building UI in Flui.
-//! It follows Xilem's approach: immutable view trees that efficiently
-//! diff and update a mutable element tree.
+//! The View trait is the simplified, unified API for building UI in Flui.
+//! It eliminates boilerplate while maintaining the proven three-tree architecture.
 
 use super::build_context::BuildContext;
+use super::IntoElement;
 use crate::element::Element;
 use std::any::Any;
 
-/// View trait - immutable description of UI
+/// View trait - simplified API for reactive UI
 ///
 /// Views are lightweight, immutable descriptions of what the UI should look like.
-/// They are created cheaply on every frame and compared (diffed) to determine
-/// what changed in the element tree.
+/// They use hooks for state management and return `impl IntoElement` for composition.
 ///
 /// # Design Philosophy
 ///
-/// - **Immutable**: Views are created fresh each frame
-/// - **Cheap**: Views should be cheap to create and clone
-/// - **Pure**: Views don't contain mutable state
-/// - **Composable**: Views can contain other views
+/// - **No GAT State**: Use hooks (`use_signal`, `use_memo`) for state management
+/// - **No GAT Element**: Return `impl IntoElement` for flexible composition
+/// - **No rebuild()**: Framework handles efficient diffing automatically
+/// - **Immutable**: Views are created fresh each frame and must be cheap to clone
+/// - **Clone Required**: Views must implement `Clone` for type erasure with `AnyView`
+/// - **Composable**: Views can contain other views via `IntoElement`
 ///
-/// # Type Parameters
+/// # Examples
 ///
-/// - `State`: Persistent state that survives across rebuilds
-/// - `Element`: The element type this view creates
-///
-/// # Example
+/// ## Simple Composite Widget
 ///
 /// ```rust,ignore
-/// use flui_core::view::{View, BuildContext};
+/// use flui_core::{View, IntoElement, BuildContext};
 ///
-/// #[derive(Clone)]
-/// struct Counter {
-///     count: i32,
+/// #[derive(Debug, Clone)]
+/// struct Card {
+///     title: String,
+///     content: String,
 /// }
 ///
-/// impl View for Counter {
-///     type State = ();
-///     type Element = ComponentElement;
-///
-///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-///         let element = ComponentElement::new(/* ... */);
-///         (element, ())
-///     }
-///
-///     fn rebuild(
-///         self,
-///         prev: &Self,
-///         state: &mut Self::State,
-///         element: &mut Self::Element,
-///     ) -> ChangeFlags {
-///         if self.count != prev.count {
-///             element.mark_dirty();
-///             ChangeFlags::NEEDS_BUILD
-///         } else {
-///             ChangeFlags::empty()
-///         }
+/// impl View for Card {
+///     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+///         Column::new()
+///             .child(Text::new(self.title).size(24.0))
+///             .child(Padding::all(16.0).child(Text::new(self.content)))
 ///     }
 /// }
 /// ```
+///
+/// ## With Hooks (Stateful Widget)
+///
+/// ```rust,ignore
+/// use flui_core::{View, IntoElement, BuildContext, use_signal};
+///
+/// #[derive(Debug, Clone)]
+/// struct Counter;
+///
+/// impl View for Counter {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         // Hooks for state management
+///         let count = use_signal(ctx, 0);
+///
+///         Column::new()
+///             .child(Text::new(format!("Count: {}", count.get())))
+///             .child(
+///                 Button::new("Increment")
+///                     .on_click(move || count.update(|n| n + 1))
+///             )
+///     }
+/// }
+/// ```
+///
+/// ## Render Widget (Wraps RenderObject)
+///
+/// ```rust,ignore
+/// use flui_core::{View, IntoElement, BuildContext};
+/// use flui_rendering::RenderPadding;
+///
+/// #[derive(Debug, Clone)]
+/// struct Padding {
+///     padding: EdgeInsets,
+///     child: Option<Box<dyn AnyView>>,
+/// }
+///
+/// impl View for Padding {
+///     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+///         // Tuple syntax for single-child render (shortest!)
+///         (RenderPadding::new(self.padding), self.child)
+///
+///         // Or builder syntax:
+///         // RenderPadding::new(self.padding)
+///         //     .into_builder()
+///         //     .with_child(self.child)
+///     }
+/// }
+/// ```
+///
+/// # Migration from Old View Trait
+///
+/// **Before (Old View with GATs):**
+/// ```rust,ignore
+/// impl View for Padding {
+///     type Element = Element;
+///     type State = Option<Box<dyn Any>>;
+///
+///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+///         // 20+ lines of manual tree management...
+///     }
+///
+///     fn rebuild(...) -> ChangeFlags { ... }
+/// }
+/// ```
+///
+/// **After (Simplified View):**
+/// ```rust,ignore
+/// impl View for Padding {
+///     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+///         (RenderPadding::new(self.padding), self.child)
+///     }
+/// }
+/// ```
+///
+/// **75% less boilerplate!**
 pub trait View: Clone + 'static {
-    /// Persistent state that survives across rebuilds
+    /// Build this view into an element
     ///
-    /// Use `()` if no state is needed.
-    type State: 'static;
-
-    /// The element type this view creates
+    /// Returns anything that implements `IntoElement` - typically:
+    /// - Other View implementations (composition)
+    /// - RenderBuilder from render objects (wrapping render objects)
+    /// - Tuples like `(RenderObject, child)` for single-child convenience
     ///
-    /// # Choosing the Right Element Type
+    /// # State Management
     ///
-    /// | Widget Type | Element Type | When to Use | Examples |
-    /// |-------------|--------------|-------------|----------|
-    /// | **Composite** (99% of cases) | `ComponentElement` | Combining other widgets | Button, Card, Column, Row, Container |
-    /// | **Render** (1% of cases) | `RenderElement` | Wrapping a RenderObject from `flui_rendering` | Text (wraps RenderText), Image, Canvas |
-    /// | **Provider** (rare) | `InheritedElement` | Providing context data down the tree | ThemeProvider, LocaleProvider |
-    ///
-    /// # Example: Composite Widget
-    ///
+    /// Use hooks instead of GAT State:
     /// ```rust,ignore
-    /// use flui_core::element::ComponentElement;
+    /// fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    ///     let count = use_signal(ctx, 0);      // Signal for reactive state
+    ///     let doubled = use_memo(ctx, |_| {    // Memo for derived state
+    ///         count.get() * 2
+    ///     });
     ///
-    /// impl View for Button {
-    ///     type Element = ComponentElement;  // ← Composite widget
-    ///     type State = ();
-    ///     // ...
+    ///     use_effect(ctx, move |_| {           // Effect for side effects
+    ///         println!("Count: {}", count.get());
+    ///     });
+    ///
+    ///     // Compose UI...
     /// }
     /// ```
     ///
-    /// # Example: Render Widget
+    /// # BuildContext Parameter
     ///
+    /// The `ctx: &BuildContext` parameter provides:
+    /// - Access to hooks: `use_signal(ctx, ...)`, `use_memo(ctx, ...)`, etc.
+    /// - Tree queries (rarely needed): `ctx.parent()`, `ctx.size()`, etc.
+    /// - Inherited data (future): `ctx.depend_on::<Theme>()`
+    ///
+    /// # Performance
+    ///
+    /// The framework automatically handles rebuild optimization:
+    /// - Compares views by type and props
+    /// - Only rebuilds when necessary
+    /// - No manual `rebuild()` method needed
+    ///
+    /// For custom optimization, implement `PartialEq`:
     /// ```rust,ignore
-    /// use flui_core::element::RenderElement;
-    /// use flui_rendering::RenderText;
-    ///
-    /// impl View for Text {
-    ///     type Element = RenderElement;  // ← Wraps RenderObject
-    ///     type State = ();
-    ///
-    ///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-    ///         let render_obj = RenderText::new(self.text);
-    ///         let element = RenderElement::new(RenderNode::new(render_obj));
-    ///         (element, ())
-    ///     }
+    /// #[derive(Clone, PartialEq)]  // ← Automatic optimization
+    /// struct MyView {
+    ///     text: String,
     /// }
     /// ```
-    ///
-    /// # Example: Provider Widget
-    ///
-    /// ```rust,ignore
-    /// use flui_core::element::InheritedElement;
-    ///
-    /// impl<V: View> View for ThemeProvider<V> {
-    ///     type Element = InheritedElement;  // ← Context provider
-    ///     type State = ();
-    ///     // ...
-    /// }
-    /// ```
-    type Element: ViewElement;
-
-    /// Build initial element from this view
-    ///
-    /// Called when this view is first mounted.
-    /// Returns both the element and initial state.
-    ///
-    /// # Parameters
-    ///
-    /// - `ctx`: Build context for creating child elements
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (element, initial_state)
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State);
-
-    /// Rebuild existing element with new view
-    ///
-    /// Called when the view tree changes but can be updated in-place.
-    /// Should compare `self` with `prev` and update `element` if needed.
-    ///
-    /// # Parameters
-    ///
-    /// - `prev`: Previous view (for comparison)
-    /// - `state`: Mutable state from previous build
-    /// - `element`: Element to update
-    ///
-    /// # Returns
-    ///
-    /// ChangeFlags indicating what changed
-    ///
-    /// # ⚠️ Performance Warning
-    ///
-    /// **The default implementation always marks the element as dirty and rebuilds.**
-    /// This can cause unnecessary work on every frame.
-    ///
-    /// For better performance, override this method to:
-    /// 1. Compare `self` with `prev` to detect actual changes
-    /// 2. Only call `element.mark_dirty()` if something changed
-    /// 3. Return `ChangeFlags::NONE` if no changes
-    ///
-    /// # Example: Optimized rebuild
-    ///
-    /// ```rust,ignore
-    /// fn rebuild(
-    ///     self,
-    ///     prev: &Self,
-    ///     _state: &mut Self::State,
-    ///     element: &mut Self::Element,
-    /// ) -> ChangeFlags {
-    ///     // Only rebuild if text actually changed
-    ///     if self.text != prev.text {
-    ///         element.mark_dirty();
-    ///         ChangeFlags::NEEDS_BUILD
-    ///     } else {
-    ///         ChangeFlags::NONE  // Skip rebuild - nothing changed
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// # When to Override
-    ///
-    /// Override when:
-    /// - Your view has expensive rendering (complex layouts, many children)
-    /// - Your view is in a frequently rebuilding part of the tree
-    /// - You can cheaply compare old and new props (e.g., comparing primitives)
-    ///
-    /// Don't override when:
-    /// - Your view is simple and fast to rebuild
-    /// - Comparison would be as expensive as rebuilding
-    /// - Your view rarely changes
-    ///
-    /// # Default Implementation
-    ///
-    /// By default, always rebuilds. Override for better performance.
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // Default: always mark as needing rebuild
-        element.mark_dirty();
-        ChangeFlags::NEEDS_BUILD
-    }
-
-    /// Teardown when view is removed
-    ///
-    /// Override to perform cleanup when this view is unmounted.
-    fn teardown(
-        &self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) {
-        // Default: no teardown needed
-    }
+    fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }
 
 /// ViewElement trait - bridge between View and Element

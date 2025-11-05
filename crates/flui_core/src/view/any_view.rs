@@ -1,10 +1,10 @@
 //! Type-erased view trait
 //!
 //! AnyView provides type erasure for View, allowing heterogeneous view storage.
-//! This is essential for ComponentElement to store different view types.
+//! This is essential for storing different view types together (e.g., in Vec or Option).
 
-use super::view::{ChangeFlags, ViewElement};
-use super::build_context::BuildContext;
+use super::IntoElement;
+use crate::element::Element;
 use std::any::Any;
 
 /// Type-erased view trait
@@ -12,14 +12,26 @@ use std::any::Any;
 /// This trait allows storing views of different types in the same collection
 /// or struct field. It's implemented automatically for all types that implement View.
 ///
+/// # Simplified API
+///
+/// With the new simplified View API, AnyView is much simpler:
+/// - No State GAT (use hooks instead)
+/// - No rebuild() (framework handles it)
+/// - No teardown() (automatic cleanup)
+///
 /// # Example
 ///
 /// ```rust,ignore
 /// // Store different view types together
 /// let views: Vec<Box<dyn AnyView>> = vec![
-///     Box::new(Counter { count: 0 }),
-///     Box::new(Text { content: "Hello".to_string() }),
+///     Box::new(Counter),
+///     Box::new(Text::new("Hello")),
 /// ];
+///
+/// // Build them all
+/// for view in views {
+///     let element = view.build_any();
+/// }
 /// ```
 pub trait AnyView: 'static {
     /// Get as Any for downcasting
@@ -33,52 +45,25 @@ pub trait AnyView: 'static {
     /// Required because dyn AnyView is not Clone.
     fn clone_box(&self) -> Box<dyn AnyView>;
 
-    /// Build initial element from this view (type-erased)
+    /// Build this view into an element (type-erased)
     ///
-    /// Returns:
-    /// - Box<dyn ViewElement>: The created element
-    /// - Box<dyn Any>: The view state
-    fn build_any(&self, ctx: &mut BuildContext) -> (Box<dyn ViewElement>, Box<dyn Any>);
-
-    /// Rebuild existing element with new view (type-erased)
-    ///
-    /// # Parameters
-    ///
-    /// - `prev`: Previous view (must be same concrete type)
-    /// - `state`: Mutable state from previous build
-    /// - `element`: Element to update
-    ///
-    /// # Returns
-    ///
-    /// ChangeFlags indicating what changed
+    /// Uses thread-local BuildContext to call View::build() and convert to Element.
     ///
     /// # Panics
     ///
-    /// Panics if `prev`, `state`, or `element` are not the correct concrete types.
-    fn rebuild_any(
-        &self,
-        prev: &dyn AnyView,
-        state: &mut dyn Any,
-        element: &mut dyn ViewElement,
-    ) -> ChangeFlags;
-
-    /// Teardown when view is removed (type-erased)
-    ///
-    /// # Panics
-    ///
-    /// Panics if `state` or `element` are not the correct concrete types.
-    fn teardown_any(&self, state: &mut dyn Any, element: &mut dyn ViewElement);
+    /// Panics if called outside of build phase (when BuildContext is not set).
+    fn build_any(&self) -> Element;
 
     /// Check if this view has the same type as another
     ///
-    /// Used to determine if views can be diffed or need full rebuild.
+    /// Used to determine if views can be compared or need full rebuild.
     fn same_type(&self, other: &dyn AnyView) -> bool;
 }
 
 /// Blanket implementation of AnyView for all View types
 ///
 /// This automatically makes every View type compatible with type erasure.
-impl<T: super::view::View> AnyView for T {
+impl<T: super::view::View + Clone> AnyView for T {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -91,46 +76,15 @@ impl<T: super::view::View> AnyView for T {
         Box::new(self.clone())
     }
 
-    fn build_any(&self, ctx: &mut BuildContext) -> (Box<dyn ViewElement>, Box<dyn Any>) {
-        let (element, state) = self.clone().build(ctx);
-        (Box::new(element), Box::new(state))
-    }
+    fn build_any(&self) -> Element {
+        use super::build_context::current_build_context;
 
-    fn rebuild_any(
-        &self,
-        prev: &dyn AnyView,
-        state: &mut dyn Any,
-        element: &mut dyn ViewElement,
-    ) -> ChangeFlags {
-        // Downcast to concrete types
-        let prev = prev.as_any()
-            .downcast_ref::<T>()
-            .expect("rebuild_any called with wrong prev type");
+        // Get BuildContext from thread-local
+        let ctx = current_build_context();
 
-        let state = state
-            .downcast_mut::<T::State>()
-            .expect("rebuild_any called with wrong state type");
-
-        let element = element
-            .as_any_mut()
-            .downcast_mut::<T::Element>()
-            .expect("rebuild_any called with wrong element type");
-
-        self.clone().rebuild(prev, state, element)
-    }
-
-    fn teardown_any(&self, state: &mut dyn Any, element: &mut dyn ViewElement) {
-        // Downcast to concrete types
-        let state = state
-            .downcast_mut::<T::State>()
-            .expect("teardown_any called with wrong state type");
-
-        let element = element
-            .as_any_mut()
-            .downcast_mut::<T::Element>()
-            .expect("teardown_any called with wrong element type");
-
-        self.teardown(state, element)
+        // Call View::build() and convert to Element
+        let element_like = self.clone().build(ctx);
+        element_like.into_element()
     }
 
     fn same_type(&self, other: &dyn AnyView) -> bool {
@@ -147,8 +101,7 @@ impl Clone for Box<dyn AnyView> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::view::{View, ViewElement, ChangeFlags};
-    use crate::element::Element;
+    use crate::view::View;
 
     // Mock types for testing
     #[derive(Clone, Debug)]
@@ -156,30 +109,25 @@ mod tests {
         value: i32,
     }
 
-    struct MockElement;
-
-    impl ViewElement for MockElement {
-        fn into_element(self: Box<Self>) -> Element {
-            unimplemented!("test mock")
-        }
-
-        fn mark_dirty(&mut self) {}
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
+    impl View for MockView {
+        fn build(self, _ctx: &super::BuildContext) -> impl IntoElement {
+            // Return a mock element
+            crate::view::LeafRenderBuilder::new(MockRender)
         }
     }
 
-    impl View for MockView {
-        type State = ();
-        type Element = MockElement;
+    #[derive(Debug)]
+    struct MockRender;
 
-        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-            (MockElement, ())
+    impl crate::render::LeafRender for MockRender {
+        type Metadata = ();
+
+        fn layout(&mut self, constraints: crate::foundation::BoxConstraints) -> crate::foundation::Size {
+            constraints.min
+        }
+
+        fn paint(&self, _offset: crate::foundation::Offset) -> crate::engine::BoxedLayer {
+            Box::new(crate::engine::ContainerLayer::new())
         }
     }
 

@@ -111,7 +111,7 @@ impl Clone for MouseRegion {
             on_enter: self.on_enter.clone(),
             on_exit: self.on_exit.clone(),
             on_hover: self.on_hover.clone(),
-            child: None, // Widgets aren't cloned deeply
+            child: self.child.clone(), // Widgets aren't cloned deeply
         }
     }
 }

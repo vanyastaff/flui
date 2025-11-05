@@ -110,7 +110,7 @@ impl Clone for SizedBox {
             key: self.key.clone(),
             width: self.width,
             height: self.height,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

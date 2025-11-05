@@ -168,7 +168,7 @@ impl Clone for Flexible {
             key: self.key.clone(),
             flex: self.flex,
             fit: self.fit,
-            child: None, // Widgets aren't cloned deeply
+            child: self.child.clone(), // Widgets aren't cloned deeply
         }
     }
 }

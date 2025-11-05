@@ -124,7 +124,7 @@ impl Clone for PhysicalModel {
             elevation: self.elevation,
             color: self.color,
             shadow_color: self.shadow_color,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

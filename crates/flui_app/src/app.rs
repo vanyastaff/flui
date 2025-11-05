@@ -79,9 +79,6 @@ pub struct FluiApp {
     /// Root element ID
     root_id: Option<ElementId>,
 
-    /// Root state (type-erased)
-    root_state: Option<Box<dyn std::any::Any>>,
-
     /// Performance statistics
     stats: FrameStats,
 
@@ -114,7 +111,6 @@ impl FluiApp {
             pipeline,
             root_view,
             root_id: None,
-            root_state: None,
             stats: FrameStats::default(),
             last_size: None,
             root_built: false,
@@ -139,12 +135,15 @@ impl FluiApp {
         // The actual root will get a proper ID from pipeline.set_root()
         let tree = self.pipeline.tree().clone();
         let temp_id = ElementId::new(1);
-        let mut ctx = BuildContext::new(tree, temp_id);
-        let (element, state) = self.root_view.build_any(&mut ctx);
+        let ctx = BuildContext::new(tree, temp_id);
+
+        // Build root element using thread-local BuildContext
+        let root_element = flui_core::view::with_build_context(&ctx, || {
+            self.root_view.build_any()
+        });
 
         // Mount and insert root element using pipeline.set_root()
         // This properly initializes the root and schedules it for build
-        let root_element = element.into_element();
         let root_id = self.pipeline.set_root(root_element);
 
         // Mark root for layout and paint
@@ -154,7 +153,6 @@ impl FluiApp {
         println!("[DEBUG] After request_layout/paint");
 
         self.root_id = Some(root_id);
-        self.root_state = Some(state);
         self.root_built = true;
 
         println!("[DEBUG] Root element built with ID: {:?}", root_id);
@@ -219,6 +217,15 @@ impl FluiApp {
             }
         }
 
+        // DEBUG: Check element tree size
+        #[cfg(debug_assertions)]
+        if self.stats.frame_count <= 3 {
+            let tree = self.pipeline.tree();
+            let tree_guard = tree.read();
+            let element_count = tree_guard.len();
+            println!("[DEBUG] After build: ElementTree has {} elements", element_count);
+        }
+
         // ===== Phase 2: Layout =====
         let current_size = Size::new(ui.available_size().x, ui.available_size().y);
         let size_changed = self.size_changed(current_size);
@@ -228,6 +235,12 @@ impl FluiApp {
         if self.stats.frame_count <= 3 {
             println!("[DEBUG] Frame {}: size_changed={}, iterations={}, needs_layout={}, size={:?}",
                 self.stats.frame_count, size_changed, iterations, needs_layout, current_size);
+        }
+
+        // TEMP DEBUG: Always log when size changes
+        if size_changed {
+            println!("[RESIZE] Frame {}: Window resized to {:?}, triggering layout",
+                self.stats.frame_count, current_size);
         }
 
         if needs_layout {

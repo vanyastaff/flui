@@ -103,7 +103,7 @@ impl Clone for LimitedBox {
             key: self.key.clone(),
             max_width: self.max_width,
             max_height: self.max_height,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

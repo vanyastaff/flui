@@ -92,7 +92,7 @@ impl Clone for Padding {
         Self {
             key: self.key.clone(),
             padding: self.padding,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

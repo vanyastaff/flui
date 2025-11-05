@@ -73,7 +73,7 @@ impl Clone for RepaintBoundary {
     fn clone(&self) -> Self {
         Self {
             key: self.key.clone(),
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

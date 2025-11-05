@@ -521,16 +521,18 @@ impl BuildPipeline {
         };
 
         // Phase 2: Build new child view (outside locks)
-        let mut ctx = crate::view::BuildContext::with_hook_context(
+        let ctx = crate::view::BuildContext::with_hook_context(
             tree.clone(),
             element_id,
             hook_context.clone(),
         );
 
-        let (new_child_element, _new_state) = view.build_any(&mut ctx);
+        // Set up thread-local BuildContext and build
+        let new_element = crate::view::with_build_context(&ctx, || {
+            view.build_any()
+        });
 
         // Phase 3: Reconcile child (write lock)
-        let new_element = new_child_element.into_element();
 
         {
             let mut tree_guard = tree.write();

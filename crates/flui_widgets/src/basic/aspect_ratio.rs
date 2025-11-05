@@ -124,7 +124,7 @@ impl Clone for AspectRatio {
         Self {
             key: self.key.clone(),
             aspect_ratio: self.aspect_ratio,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

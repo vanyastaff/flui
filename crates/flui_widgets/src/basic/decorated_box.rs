@@ -146,7 +146,7 @@ impl Clone for DecoratedBox {
             key: self.key.clone(),
             decoration: self.decoration.clone(),
             position: self.position,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

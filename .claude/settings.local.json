@@ -3,7 +3,8 @@
     "allow": [
       "Bash(cargo run:*)",
       "Bash(cargo build:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(timeout 5 cargo run:*)"
     ],
     "deny": [],
     "ask": []

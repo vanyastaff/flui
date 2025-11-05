@@ -384,7 +384,26 @@ impl FrameCoordinator {
         // Get root element's layer
         let layer = match root_id {
             Some(id) => {
-                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
+                let element_opt = tree_guard.get(id);
+
+                #[cfg(debug_assertions)]
+                if let Some(elem) = &element_opt {
+                    match elem {
+                        crate::element::Element::Component(_) => {
+                            tracing::warn!("flush_paint: Root is ComponentElement - returning empty ContainerLayer");
+                        }
+                        crate::element::Element::Provider(_) => {
+                            tracing::warn!("flush_paint: Root is ProviderElement - returning empty ContainerLayer");
+                        }
+                        crate::element::Element::Render(_) => {
+                            tracing::debug!("flush_paint: Root is RenderElement - will paint normally");
+                        }
+                    }
+                } else {
+                    tracing::error!("flush_paint: Root element not found in tree!");
+                }
+
+                if let Some(crate::element::Element::Render(render_elem)) = element_opt {
                     let render_state_lock = render_elem.render_state();
                     let render_state = render_state_lock.read();
                     let offset = render_state.offset();

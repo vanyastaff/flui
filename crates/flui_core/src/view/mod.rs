@@ -10,40 +10,56 @@
 //!
 //! ## Key Components
 //!
-//! - [`BuildContext`]: Context provided to widgets during build
+//! - [`BuildContext`]: Context provided to views during build (read-only, with hooks)
+//! - [`View`]: Simplified trait for reactive UI (no GATs, returns `impl IntoElement`)
 //! - View tree management (TODO(2025-02): Add ViewTree implementation)
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! fn build(&self, ctx: &mut BuildContext) -> View {
-//!     // Use BuildContext to build children
-//!     Text::new("Hello, World!").into()
+//! impl View for MyWidget {
+//!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+//!         // Use BuildContext for hooks
+//!         let count = use_signal(ctx, 0);
+//!         Text::new("Hello, World!")
+//!     }
 //! }
 //! ```
 
 pub mod any_view;
 pub mod build_context;
+pub mod into_element;
+pub mod render_builder;
 pub mod sealed;
 #[allow(clippy::module_inception)]  // view/view.rs is intentional for main View trait
 pub mod view;
-pub mod view_sequence;
 
 
 
 
 
 
-pub use build_context::BuildContext;
+// BuildContext and thread-local helpers
+pub use build_context::{BuildContext, BuildContextGuard, current_build_context, with_build_context};
 
 // View trait and related types
 pub use view::{ChangeFlags, View, ViewElement};
 pub use any_view::AnyView;
-pub use view_sequence::{ViewSequence, ViewElementSequence};
+
+// Simplified API exports (IntoElement, RenderBuilder)
+pub use into_element::{IntoElement, AnyElement, IntoAnyElement};
+pub use render_builder::{
+    LeafRenderBuilder, SingleRenderBuilder, MultiRenderBuilder,
+    LeafRenderExt, SingleRenderExt, MultiRenderExt,
+};
 
 // TODO(2025-02): Add view tree management.
 // The ViewTree will track widget-to-element mappings and provide
 // efficient lookup during rebuild.
+
+
+
+
 
 
 

@@ -123,7 +123,7 @@ impl Clone for Align {
             alignment: self.alignment,
             width_factor: self.width_factor,
             height_factor: self.height_factor,
-            child: None, // Shallow clone - child is not cloned
+            child: self.child.clone(), // Shallow clone - child is not cloned
         }
     }
 }

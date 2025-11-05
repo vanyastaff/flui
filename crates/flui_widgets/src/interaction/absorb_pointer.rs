@@ -97,7 +97,7 @@ impl Clone for AbsorbPointer {
         Self {
             key: self.key.clone(),
             absorbing: self.absorbing,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

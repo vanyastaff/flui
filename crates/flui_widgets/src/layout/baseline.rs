@@ -107,7 +107,7 @@ impl Clone for Baseline {
             key: self.key.clone(),
             baseline: self.baseline,
             baseline_type: self.baseline_type,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

@@ -97,7 +97,7 @@ impl Clone for IgnorePointer {
         Self {
             key: self.key.clone(),
             ignoring: self.ignoring,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

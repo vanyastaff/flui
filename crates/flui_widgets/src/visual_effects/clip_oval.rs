@@ -103,7 +103,7 @@ impl Clone for ClipOval {
         Self {
             key: self.key.clone(),
             clip_behavior: self.clip_behavior,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

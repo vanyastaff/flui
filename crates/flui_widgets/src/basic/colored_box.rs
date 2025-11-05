@@ -98,7 +98,7 @@ impl Clone for ColoredBox {
         Self {
             key: self.key.clone(),
             color: self.color,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

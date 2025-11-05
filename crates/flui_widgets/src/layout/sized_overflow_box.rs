@@ -127,7 +127,7 @@ impl Clone for SizedOverflowBox {
             child_min_height: None,
             child_max_height: None,
             alignment: self.alignment,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

@@ -68,7 +68,7 @@ impl Clone for Opacity {
         Self {
             key: self.key.clone(),
             opacity: self.opacity,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

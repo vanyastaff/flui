@@ -90,7 +90,7 @@ impl Clone for Offstage {
         Self {
             key: self.key.clone(),
             offstage: self.offstage,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

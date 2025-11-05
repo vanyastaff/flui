@@ -164,7 +164,7 @@ impl Clone for ClipRRect {
             key: self.key.clone(),
             border_radius: self.border_radius,
             clip_behavior: self.clip_behavior,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

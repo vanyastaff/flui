@@ -110,7 +110,7 @@ impl Clone for RotatedBox {
         Self {
             key: self.key.clone(),
             quarter_turns: self.quarter_turns,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

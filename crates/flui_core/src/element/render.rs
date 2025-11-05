@@ -6,9 +6,10 @@
 use parking_lot::RwLock;
 
 use super::{ElementBase, ElementLifecycle};
-use crate::element::ElementId;
+use crate::element::{Element, ElementId};
 use crate::foundation::Slot;
 use crate::render::{RenderNode, RenderState};
+use crate::view::IntoElement;
 
 /// Element for render objects (type-erased)
 ///
@@ -394,4 +395,8 @@ impl ViewElement for RenderElement {
     }
 }
 
-// Tests removed - need to be rewritten with View API
+impl IntoElement for RenderElement {
+    fn into_element(self) -> Element {
+        Element::Render(self)
+    }
+}

@@ -121,7 +121,7 @@ impl Clone for FittedBox {
             key: self.key.clone(),
             fit: self.fit,
             alignment: self.alignment,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }

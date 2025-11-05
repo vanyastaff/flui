@@ -40,7 +40,7 @@ pub use window::run_app;
 // Re-export commonly used types from flui_core
 pub use flui_core::{
     // View system (new API)
-    view::{AnyView, BuildContext, ChangeFlags, View, ViewElement, ViewSequence},
+    view::{AnyView, BuildContext, ChangeFlags, View, ViewElement},
 
     // Element system
     element::{ComponentElement, Element, InheritedElement, RenderElement},

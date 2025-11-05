@@ -65,7 +65,7 @@ impl Clone for ConstrainedBox {
         Self {
             key: self.key.clone(),
             constraints: self.constraints,
-            child: None,
+            child: self.child.clone(),
         }
     }
 }
