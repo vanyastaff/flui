@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## AI Assistant Guidelines
+
+### Context7 MCP Integration
+
+**ALWAYS use Context7 MCP tools** when you need:
+- Code generation involving external libraries
+- Setup or configuration steps for dependencies
+- Library or API documentation
+- Understanding how to use a specific crate or API
+
+**Automatically use Context7 tools to:**
+1. Resolve library IDs using `mcp__context7__resolve_library_id`
+2. Get library documentation using `mcp__context7__get_library_docs`
+
+**You should do this proactively** without waiting for the user to explicitly ask. When the user mentions a library, crate, or API, immediately fetch its documentation.
+
+**Example workflow:**
+```
+User: "Add support for serde serialization"
+Assistant: [Automatically calls Context7 to get serde docs, then provides implementation]
+```
+
 ## Project Overview
 
 FLUI is a production-ready, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built on egui 0.33 with support for both egui and wgpu backends.
