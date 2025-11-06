@@ -9,6 +9,7 @@
 
 pub mod align;
 pub mod aspect_ratio;
+pub mod builder;
 pub mod button;
 pub mod card;
 pub mod center;
@@ -20,13 +21,17 @@ pub mod divider;
 pub mod fitted_box;
 pub mod limited_box;
 pub mod padding;
+pub mod safe_area;
 pub mod sized_box;
 pub mod text;
 pub mod vertical_divider;
 
+
+
 // Re-exports
 pub use align::Align;
 pub use aspect_ratio::AspectRatio;
+pub use builder::Builder;
 pub use button::Button;
 pub use card::Card;
 pub use center::Center;
@@ -38,6 +43,9 @@ pub use divider::Divider;
 pub use fitted_box::FittedBox;
 pub use limited_box::LimitedBox;
 pub use padding::Padding;
+pub use safe_area::SafeArea;
 pub use sized_box::SizedBox;
 pub use text::Text;
 pub use vertical_divider::VerticalDivider;
+
+

@@ -64,8 +64,9 @@ pub mod visual_effects;
 // Re-exports for convenient top-level access
 // Essential widgets for Container and Flex layout
 pub use basic::{
-    Align, AspectRatio, Button, Card, Center, ColoredBox, ConstrainedBox, Container, DecoratedBox,
-    Divider, FittedBox, LimitedBox, Padding, SizedBox, Text, VerticalDivider,
+    Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
+    DecoratedBox, Divider, FittedBox, LimitedBox, Padding, SafeArea, SizedBox, Text,
+    VerticalDivider,
 };
 pub use gestures::GestureDetector;
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
@@ -94,8 +95,9 @@ pub use flui_types::{Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offs
 pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
     pub use crate::basic::{
-        Align, AspectRatio, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-        DecoratedBox, Divider, FittedBox, LimitedBox, Padding, SizedBox, Text, VerticalDivider,
+        Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
+        DecoratedBox, Divider, FittedBox, LimitedBox, Padding, SafeArea, SizedBox, Text,
+        VerticalDivider,
     };
     pub use crate::gestures::GestureDetector;
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
