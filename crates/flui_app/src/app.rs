@@ -117,6 +117,47 @@ impl FluiApp {
         }
     }
 
+    /// Recursively mark all RenderElements as needing layout
+    ///
+    /// This is needed when window resizes, because layout_pipeline only processes
+    /// RenderElements, but the root is often a ComponentElement.
+    fn request_layout_recursive(&mut self, element_id: ElementId) {
+        let tree = self.pipeline.tree();
+
+        // First collect all RenderElement IDs and children in one pass
+        let (is_render, children, element_type) = {
+            let tree_guard = tree.read();
+            let Some(element) = tree_guard.get(element_id) else {
+                return;
+            };
+
+            let element_type = match element {
+                flui_core::element::Element::Component(_) => "Component",
+                flui_core::element::Element::Render(_) => "Render",
+                flui_core::element::Element::Provider(_) => "Provider",
+            };
+            let is_render = matches!(element, flui_core::element::Element::Render(_));
+            let children = tree_guard.children(element_id);
+            (is_render, children, element_type)
+        };
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("[RECURSIVE_LAYOUT] Visiting element {:?}, type={}, is_render={}, children_count={}",
+            element_id, element_type, is_render, children.len());
+
+        // Mark this element if it's a RenderElement
+        if is_render {
+            #[cfg(debug_assertions)]
+            tracing::debug!("[RECURSIVE_LAYOUT] Marking RenderElement {:?} for layout", element_id);
+            self.pipeline.request_layout(element_id);
+        }
+
+        // Recursively mark children
+        for child_id in children {
+            self.request_layout_recursive(child_id);
+        }
+    }
+
     /// Get a reference to the pipeline owner
     #[allow(dead_code)]
     pub fn pipeline(&self) -> &PipelineOwner {
@@ -244,6 +285,19 @@ impl FluiApp {
         }
 
         if needs_layout {
+            // IMPORTANT: Recursively mark all RenderElements as dirty for layout when size changes
+            // We need recursion because root is often a ComponentElement, but layout_pipeline
+            // only processes RenderElements
+            if size_changed {
+                if let Some(root_id) = self.root_id {
+                    #[cfg(debug_assertions)]
+                    tracing::debug!("[RESIZE] Calling request_layout_recursive for root {:?}", root_id);
+                    self.request_layout_recursive(root_id);
+                    #[cfg(debug_assertions)]
+                    tracing::debug!("[RESIZE] Finished request_layout_recursive");
+                }
+            }
+
             let constraints = BoxConstraints::tight(current_size);
             match self.pipeline.flush_layout(constraints) {
                 Ok(Some(_size)) => {

@@ -13,24 +13,153 @@ use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    Button, Card, Center, ClipOval, Column, Container, Divider, Row, SizedBox, Text,
+    Button, Card, Center, ClipOval, Column, ConstrainedBox, Container, Divider, Row, SizedBox, Text,
 };
-use flui_types::{Color, EdgeInsets};
+use flui_types::{BoxConstraints, Color, EdgeInsets, Size};
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+use flui_core::view::SingleRenderBuilder;
+use flui_core::render::SingleRender;
+use flui_core::element::ElementTree;
+use flui_core::foundation::ElementId;
+use flui_types::Offset;
+use flui_engine::{BoxedLayer, layer::pool};
 
-/// Profile card application
+/// Simple Scaffold that fills entire screen with background color
+#[derive(Clone)]
+struct Scaffold {
+    background_color: Color,
+    padding: EdgeInsets,
+    child: Option<Box<dyn AnyView>>,
+}
+
+impl std::fmt::Debug for Scaffold {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Scaffold")
+            .field("background_color", &self.background_color)
+            .field("padding", &self.padding)
+            .field("child", &"<AnyView>")
+            .finish()
+    }
+}
+
+impl Scaffold {
+    fn new(background_color: Color, padding: EdgeInsets) -> Self {
+        Self {
+            background_color,
+            padding,
+            child: None,
+        }
+    }
+}
+
+/// RenderScaffold - fills entire screen with background color
+#[derive(Debug)]
+struct RenderScaffold {
+    color: Color,
+    padding: EdgeInsets,
+    size: Size,
+}
+
+impl RenderScaffold {
+    fn new(color: Color, padding: EdgeInsets) -> Self {
+        Self {
+            color,
+            padding,
+            size: Size::ZERO,
+        }
+    }
+}
+
+impl SingleRender for RenderScaffold {
+    type Metadata = ();
+
+    fn layout(
+        &mut self,
+        tree: &ElementTree,
+        child_id: ElementId,
+        constraints: BoxConstraints,
+    ) -> Size {
+        // Fill entire available space
+        let size = constraints.biggest();
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderScaffold::layout: constraints={:?}, size={:?}", constraints, size);
+
+        // Layout child with deflated constraints (subtract padding)
+        let child_constraints = constraints.deflate(&self.padding);
+        let _child_size = tree.layout_child(child_id, child_constraints);
+
+        // Store size for paint
+        self.size = size;
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderScaffold::layout: stored size={:?}", self.size);
+
+        size
+    }
+
+    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderScaffold::paint: size={:?}, color={:?}, offset={:?}", self.size, self.color, offset);
+
+        // Create background layer
+        let mut picture = pool::acquire_picture();
+
+        // Draw background rectangle
+        let paint = flui_engine::Paint {
+            color: self.color,
+            ..Default::default()
+        };
+        let rect = flui_types::Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderScaffold::paint: drawing rect={:?}", rect);
+
+        picture.draw_rect(rect, paint);
+
+        let background_layer: BoxedLayer = Box::new(flui_engine::PooledPictureLayer::new(picture));
+
+        // Paint child with padding offset
+        let padding_offset = Offset::new(self.padding.left, self.padding.top);
+        let child_offset = offset + padding_offset;
+        let child_layer = tree.paint_child(child_id, child_offset);
+
+        // Combine layers
+        let mut container = flui_engine::ContainerLayer::new();
+        container.add_child(background_layer);
+        container.add_child(child_layer);
+
+        Box::new(container)
+    }
+}
+
+impl View for Scaffold {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        SingleRenderBuilder::new(RenderScaffold::new(self.background_color, self.padding))
+            .with_optional_child(self.child)
+    }
+}
+
+/// Profile card application - wraps Scaffold directly
 #[derive(Debug, Clone)]
-struct ProfileCardApp;
+struct ProfileCardApp {
+    scaffold: Scaffold,
+}
+
+impl ProfileCardApp {
+    fn new() -> Self {
+        let mut scaffold = Scaffold::new(
+            Color::rgb(240, 240, 245),
+            EdgeInsets::all(40.0)
+        );
+        scaffold.child = Some(Box::new(CenteredCard));
+        Self { scaffold }
+    }
+}
 
 impl View for ProfileCardApp {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        let mut root = Container::builder()
-            .padding(EdgeInsets::all(40.0))
-            .color(Color::rgb(240, 240, 245))
-            .build_container();
-
-        root.child = Some(Box::new(CenteredCard));
-        root
+        self.scaffold
     }
 }
 
@@ -284,5 +413,5 @@ fn main() -> Result<(), eframe::Error> {
     println!("  • Button widgets for actions");
     println!();
 
-    run_app(Box::new(ProfileCardApp))
+    run_app(Box::new(ProfileCardApp::new()))
 }

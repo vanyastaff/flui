@@ -219,6 +219,15 @@ impl RenderState {
         *self.constraints.write() = Some(constraints);
     }
 
+    /// Clear constraints
+    ///
+    /// This is used when window resizes or layout needs to be fully recalculated.
+    /// Clearing constraints ensures that layout_pipeline uses fresh constraints
+    /// from flush_layout() instead of cached constraints.
+    pub fn clear_constraints(&self) {
+        *self.constraints.write() = None;
+    }
+
     // ========== Offset ==========
 
     /// Get offset

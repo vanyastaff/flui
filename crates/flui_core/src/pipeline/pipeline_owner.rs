@@ -312,15 +312,28 @@ impl PipelineOwner {
 
     /// Request layout for a Render
     pub fn request_layout(&mut self, node_id: ElementId) {
+        #[cfg(debug_assertions)]
+        tracing::debug!("[REQUEST_LAYOUT] Called for element {:?}", node_id);
+
         // Mark in dirty set
         self.coordinator.layout_mut().mark_dirty(node_id);
 
-        // Also set needs_layout flag in RenderState
+        // Also set needs_layout flag in RenderState AND clear cached constraints
         let tree = self.tree.read();
         if let Some(crate::element::Element::Render(render_elem)) = tree.get(node_id) {
             let render_state_lock = render_elem.render_state();
             let render_state = render_state_lock.write();
             render_state.mark_needs_layout();
+
+            // IMPORTANT: Clear cached constraints so layout_pipeline uses fresh constraints
+            // This is critical for window resize - otherwise old constraints are used!
+            render_state.clear_constraints();
+
+            #[cfg(debug_assertions)]
+            tracing::debug!("[REQUEST_LAYOUT] Set needs_layout flag and cleared constraints for RenderElement {:?}", node_id);
+        } else {
+            #[cfg(debug_assertions)]
+            tracing::warn!("[REQUEST_LAYOUT] Element {:?} is not a RenderElement!", node_id);
         }
     }
 
