@@ -531,7 +531,7 @@ impl BuildPipeline {
             // Get or create hook context
             // TODO: Extract existing hook context from component state
             let hook_context =
-                std::sync::Arc::new(std::cell::RefCell::new(crate::hooks::HookContext::new()));
+                std::sync::Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
 
             (view, old_child, hook_context)
         };

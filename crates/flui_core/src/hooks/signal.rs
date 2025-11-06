@@ -6,10 +6,10 @@
 use super::hook_context::HookContext;
 use super::hook_trait::{DependencyId, Hook};
 use crate::BuildContext;
-use std::cell::RefCell;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Unique identifier for a signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,12 +76,12 @@ impl Default for SignalId {
 
 /// Inner signal state shared between Signal instances.
 struct SignalInner<T> {
-    value: Rc<RefCell<T>>,
+    value: Arc<Mutex<T>>,
     id: SignalId,
     /// Subscribers that are notified when the signal changes.
     /// Maps SubscriptionId to callback function.
-    /// We use Rc to allow cloning callbacks for safe iteration.
-    subscribers: RefCell<HashMap<SubscriptionId, Rc<dyn Fn()>>>,
+    /// We use Arc to allow cloning callbacks for safe iteration.
+    subscribers: Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl<T: std::fmt::Debug> std::fmt::Debug for SignalInner<T> {
@@ -91,7 +91,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for SignalInner<T> {
             .field("id", &self.id)
             .field(
                 "subscribers",
-                &format!("{} subscribers", self.subscribers.borrow().len()),
+                &format!("{} subscribers", self.subscribers.lock().len()),
             )
             .finish()
     }
@@ -183,11 +183,11 @@ impl<T> std::fmt::Debug for Subscription<T> {
 ///
 /// # Thread Safety
 ///
-/// Signal is **not thread-safe** (no `Send` or `Sync`). It's designed for
-/// single-threaded UI applications where all updates happen on the main thread.
+/// Signal is **thread-safe** (implements `Send` and `Sync`). It's designed for
+/// multi-threaded UI applications where updates can happen on different threads.
 #[derive(Debug)]
 pub struct Signal<T> {
-    inner: Rc<SignalInner<T>>,
+    inner: Arc<SignalInner<T>>,
 }
 
 impl<T> Signal<T> {
@@ -206,7 +206,7 @@ impl<T> Signal<T> {
     {
         // Track dependency
         ctx.track_dependency(DependencyId::new(self.inner.id.0));
-        self.inner.value.borrow().clone()
+        self.inner.value.lock().clone()
     }
 
     /// Get the current value without tracking as a dependency.
@@ -226,7 +226,7 @@ impl<T> Signal<T> {
     where
         T: Clone,
     {
-        self.inner.value.borrow().clone()
+        self.inner.value.lock().clone()
     }
 
     /// Get a reference to the current value without cloning.
@@ -241,14 +241,14 @@ impl<T> Signal<T> {
     pub fn with<R>(&self, ctx: &mut HookContext, f: impl FnOnce(&T) -> R) -> R {
         // Track dependency
         ctx.track_dependency(DependencyId::new(self.inner.id.0));
-        f(&*self.inner.value.borrow())
+        f(&*self.inner.value.lock())
     }
 
     /// Set the signal to a new value.
     ///
     /// This will trigger re-renders of dependent components and notify all subscribers.
     pub fn set(&self, value: T) {
-        *self.inner.value.borrow_mut() = value;
+        *self.inner.value.lock() = value;
         self.notify_subscribers();
     }
 
@@ -266,9 +266,9 @@ impl<T> Signal<T> {
     where
         T: Clone,
     {
-        let old_value = self.inner.value.borrow().clone();
+        let old_value = self.inner.value.lock().clone();
         let new_value = f(old_value);
-        *self.inner.value.borrow_mut() = new_value;
+        *self.inner.value.lock() = new_value;
         self.notify_subscribers();
     }
 
@@ -282,7 +282,7 @@ impl<T> Signal<T> {
     /// count.update_mut(|n| *n += 1);
     /// ```
     pub fn update_mut(&self, f: impl FnOnce(&mut T)) {
-        f(&mut *self.inner.value.borrow_mut());
+        f(&mut *self.inner.value.lock());
         self.notify_subscribers();
     }
 
@@ -335,13 +335,13 @@ impl<T> Signal<T> {
     #[must_use = "Subscription ID must be stored and unsubscribed, or use subscribe_scoped() instead"]
     pub fn subscribe<F>(&self, callback: F) -> SubscriptionId
     where
-        F: Fn() + 'static,
+        F: Fn() + Send + Sync + 'static,
     {
         let id = SubscriptionId::new();
         self.inner
             .subscribers
-            .borrow_mut()
-            .insert(id, Rc::new(callback));
+            .lock()
+            .insert(id, Arc::new(callback));
         id
     }
 
@@ -362,7 +362,7 @@ impl<T> Signal<T> {
     /// ```
     pub fn subscribe_scoped<F>(&self, callback: F) -> Subscription<T>
     where
-        F: Fn() + 'static,
+        F: Fn() + Send + Sync + 'static,
     {
         let id = self.subscribe(callback);
         Subscription {
@@ -373,17 +373,17 @@ impl<T> Signal<T> {
 
     /// Unsubscribe from changes using a subscription ID.
     pub fn unsubscribe(&self, id: SubscriptionId) {
-        self.inner.subscribers.borrow_mut().remove(&id);
+        self.inner.subscribers.lock().remove(&id);
     }
 
     /// Notify all subscribers that the signal has changed.
     ///
     /// This is called automatically by `set()`, `update()`, and `update_mut()`.
     fn notify_subscribers(&self) {
-        // Clone all subscriber Rc's to avoid holding the borrow during callbacks
-        let subscribers: Vec<_> = self.inner.subscribers.borrow().values().cloned().collect();
+        // Clone all subscriber Arc's to avoid holding the lock during callbacks
+        let subscribers: Vec<_> = self.inner.subscribers.lock().values().cloned().collect();
 
-        // Call each subscriber - safe because we own Rc clones
+        // Call each subscriber - safe because we own Arc clones
         for subscriber in subscribers {
             subscriber();
         }
@@ -404,7 +404,7 @@ impl<T> Signal<T> {
 /// assert_eq!(signal2.get(), 42);  // ✅ Same value!
 /// ```
 ///
-/// Both `signal1` and `signal2` point to the same underlying `Rc<RefCell<T>>`,
+/// Both `signal1` and `signal2` point to the same underlying `Arc<Mutex<T>>`,
 /// so changes made through one are immediately visible through the other.
 ///
 /// # When to Use Clone
@@ -430,7 +430,7 @@ impl<T> Signal<T> {
 /// # Performance
 ///
 /// Cloning a Signal is very cheap:
-/// - Only clones an `Rc<SignalInner>` (just increments a reference count)
+/// - Only clones an `Arc<SignalInner>` (just increments a reference count)
 /// - O(1) time complexity
 /// - No data is copied
 ///
@@ -452,7 +452,7 @@ impl<T> Signal<T> {
 impl<T> Clone for Signal<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -460,7 +460,7 @@ impl<T> Clone for Signal<T> {
 /// Hook state for SignalHook.
 #[derive(Debug)]
 pub struct SignalState<T> {
-    value: Rc<RefCell<T>>,
+    value: Arc<Mutex<T>>,
     id: SignalId,
 }
 
@@ -468,7 +468,7 @@ impl<T> Drop for SignalState<T> {
     fn drop(&mut self) {
         // Subscribers are stored in SignalInner, not SignalState.
         // When the last Signal clone drops, SignalInner will drop and automatically
-        // clear all subscribers (stored in RefCell<HashMap>).
+        // clear all subscribers (stored in Mutex<HashMap>).
         //
         // This is a no-op because SignalState only holds the value and ID,
         // not the subscriber list.
@@ -483,24 +483,24 @@ impl<T> Drop for SignalState<T> {
 #[derive(Debug)]
 pub struct SignalHook<T>(PhantomData<T>);
 
-impl<T: Clone + 'static> Hook for SignalHook<T> {
+impl<T: Clone + Send + 'static> Hook for SignalHook<T> {
     type State = SignalState<T>;
     type Input = T;
     type Output = Signal<T>;
 
     fn create(initial: T) -> Self::State {
         SignalState {
-            value: Rc::new(RefCell::new(initial)),
+            value: Arc::new(Mutex::new(initial)),
             id: SignalId::new(),
         }
     }
 
     fn update(state: &mut Self::State, _input: T) -> Self::Output {
         Signal {
-            inner: Rc::new(SignalInner {
-                value: state.value.clone(),
+            inner: Arc::new(SignalInner {
+                value: Arc::clone(&state.value),
                 id: state.id,
-                subscribers: RefCell::new(HashMap::new()),
+                subscribers: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -525,7 +525,7 @@ impl<T: Clone + 'static> Hook for SignalHook<T> {
 ///     }
 /// }
 /// ```
-pub fn use_signal<T: Clone + 'static>(ctx: &BuildContext, initial: T) -> Signal<T> {
+pub fn use_signal<T: Clone + Send + 'static>(ctx: &BuildContext, initial: T) -> Signal<T> {
     ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<T>>(initial))
 }
 
@@ -582,20 +582,20 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let call_count = Rc::new(RefCell::new(0));
-        let call_count_clone = call_count.clone();
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
 
         let _id = signal.subscribe(move || {
-            *call_count_clone.borrow_mut() += 1;
+            *call_count_clone.lock() += 1;
         });
 
-        assert_eq!(*call_count.borrow(), 0);
+        assert_eq!(*call_count.lock(), 0);
 
         signal.set(1);
-        assert_eq!(*call_count.borrow(), 1);
+        assert_eq!(*call_count.lock(), 1);
 
         signal.set(2);
-        assert_eq!(*call_count.borrow(), 2);
+        assert_eq!(*call_count.lock(), 2);
     }
 
     #[test]
@@ -605,18 +605,18 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let call_count = Rc::new(RefCell::new(0));
-        let call_count_clone = call_count.clone();
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
 
         let _id = signal.subscribe(move || {
-            *call_count_clone.borrow_mut() += 1;
+            *call_count_clone.lock() += 1;
         });
 
         signal.update(|n| n + 1);
-        assert_eq!(*call_count.borrow(), 1);
+        assert_eq!(*call_count.lock(), 1);
 
         signal.update(|n| n * 2);
-        assert_eq!(*call_count.borrow(), 2);
+        assert_eq!(*call_count.lock(), 2);
     }
 
     #[test]
@@ -626,18 +626,18 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let call_count = Rc::new(RefCell::new(0));
-        let call_count_clone = call_count.clone();
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
 
         let _id = signal.subscribe(move || {
-            *call_count_clone.borrow_mut() += 1;
+            *call_count_clone.lock() += 1;
         });
 
         signal.update_mut(|n| *n += 1);
-        assert_eq!(*call_count.borrow(), 1);
+        assert_eq!(*call_count.lock(), 1);
 
         signal.update_mut(|n| *n *= 2);
-        assert_eq!(*call_count.borrow(), 2);
+        assert_eq!(*call_count.lock(), 2);
     }
 
     #[test]
@@ -647,29 +647,29 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let call_count1 = Rc::new(RefCell::new(0));
-        let call_count2 = Rc::new(RefCell::new(0));
-        let call_count3 = Rc::new(RefCell::new(0));
+        let call_count1 = Arc::new(Mutex::new(0));
+        let call_count2 = Arc::new(Mutex::new(0));
+        let call_count3 = Arc::new(Mutex::new(0));
 
-        let cc1 = call_count1.clone();
-        let cc2 = call_count2.clone();
-        let cc3 = call_count3.clone();
+        let cc1 = Arc::clone(&call_count1);
+        let cc2 = Arc::clone(&call_count2);
+        let cc3 = Arc::clone(&call_count3);
 
         let _id1 = signal.subscribe(move || {
-            *cc1.borrow_mut() += 1;
+            *cc1.lock() += 1;
         });
         let _id2 = signal.subscribe(move || {
-            *cc2.borrow_mut() += 1;
+            *cc2.lock() += 1;
         });
         let _id3 = signal.subscribe(move || {
-            *cc3.borrow_mut() += 1;
+            *cc3.lock() += 1;
         });
 
         signal.set(42);
 
-        assert_eq!(*call_count1.borrow(), 1);
-        assert_eq!(*call_count2.borrow(), 1);
-        assert_eq!(*call_count3.borrow(), 1);
+        assert_eq!(*call_count1.lock(), 1);
+        assert_eq!(*call_count2.lock(), 1);
+        assert_eq!(*call_count3.lock(), 1);
     }
 
     #[test]
@@ -679,22 +679,22 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let call_count = Rc::new(RefCell::new(0));
-        let call_count_clone = call_count.clone();
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
 
         let id = signal.subscribe(move || {
-            *call_count_clone.borrow_mut() += 1;
+            *call_count_clone.lock() += 1;
         });
 
         signal.set(1);
-        assert_eq!(*call_count.borrow(), 1);
+        assert_eq!(*call_count.lock(), 1);
 
         // Unsubscribe
         signal.unsubscribe(id);
 
         // Should not be called anymore
         signal.set(2);
-        assert_eq!(*call_count.borrow(), 1);
+        assert_eq!(*call_count.lock(), 1);
     }
 
     #[test]
@@ -704,21 +704,21 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let call_count = Rc::new(RefCell::new(0));
-        let call_count_clone = call_count.clone();
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
 
         {
             let _subscription = signal.subscribe_scoped(move || {
-                *call_count_clone.borrow_mut() += 1;
+                *call_count_clone.lock() += 1;
             });
 
             signal.set(1);
-            assert_eq!(*call_count.borrow(), 1);
+            assert_eq!(*call_count.lock(), 1);
         } // Subscription dropped here
 
         // Should not be called anymore
         signal.set(2);
-        assert_eq!(*call_count.borrow(), 1);
+        assert_eq!(*call_count.lock(), 1);
     }
 
     #[test]
@@ -728,20 +728,20 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let last_value = Rc::new(RefCell::new(0));
-        let last_value_clone = last_value.clone();
+        let last_value = Arc::new(Mutex::new(0));
+        let last_value_clone = Arc::clone(&last_value);
         let signal_clone = signal.clone();
 
         let _id = signal.subscribe(move || {
             // Use get_untracked() in subscribers (no access to HookContext)
-            *last_value_clone.borrow_mut() = signal_clone.get_untracked();
+            *last_value_clone.lock() = signal_clone.get_untracked();
         });
 
         signal.set(42);
-        assert_eq!(*last_value.borrow(), 42);
+        assert_eq!(*last_value.lock(), 42);
 
         signal.set(100);
-        assert_eq!(*last_value.borrow(), 100);
+        assert_eq!(*last_value.lock(), 100);
     }
 
     #[test]
@@ -751,29 +751,29 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(0);
 
-        let log = Rc::new(RefCell::new(Vec::new()));
+        let log = Arc::new(Mutex::new(Vec::new()));
 
-        let log1 = log.clone();
+        let log1 = Arc::clone(&log);
         let _id1 = signal.subscribe(move || {
-            log1.borrow_mut().push(1);
+            log1.lock().push(1);
         });
 
-        let log2 = log.clone();
+        let log2 = Arc::clone(&log);
         let _id2 = signal.subscribe(move || {
-            log2.borrow_mut().push(2);
+            log2.lock().push(2);
         });
 
-        let log3 = log.clone();
+        let log3 = Arc::clone(&log);
         let _id3 = signal.subscribe(move || {
-            log3.borrow_mut().push(3);
+            log3.lock().push(3);
         });
 
         signal.set(42);
 
         // All subscribers should be called
-        assert_eq!(log.borrow().len(), 3);
-        assert!(log.borrow().contains(&1));
-        assert!(log.borrow().contains(&2));
-        assert!(log.borrow().contains(&3));
+        assert_eq!(log.lock().len(), 3);
+        assert!(log.lock().contains(&1));
+        assert!(log.lock().contains(&2));
+        assert!(log.lock().contains(&3));
     }
 }

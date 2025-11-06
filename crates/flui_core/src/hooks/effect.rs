@@ -6,20 +6,20 @@
 use super::hook_context::HookContext;
 use super::hook_trait::{DependencyId, EffectHook as EffectHookTrait, Hook};
 use crate::BuildContext;
-use std::cell::RefCell;
+use parking_lot::Mutex;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Cleanup function for effects.
-pub type CleanupFn = Box<dyn FnOnce()>;
+pub type CleanupFn = Box<dyn FnOnce() + Send>;
 
 /// Inner state for an effect.
 struct EffectInner {
-    effect_fn: Rc<dyn Fn() -> Option<CleanupFn>>,
-    cleanup_fn: RefCell<Option<CleanupFn>>,
-    dependencies: RefCell<Vec<DependencyId>>,
-    prev_deps: RefCell<Option<Vec<DependencyId>>>,
-    ran_once: RefCell<bool>,
+    effect_fn: Arc<dyn Fn() -> Option<CleanupFn> + Send + Sync>,
+    cleanup_fn: Mutex<Option<CleanupFn>>,
+    dependencies: Mutex<Vec<DependencyId>>,
+    prev_deps: Mutex<Option<Vec<DependencyId>>>,
+    ran_once: Mutex<bool>,
 }
 
 impl std::fmt::Debug for EffectInner {
@@ -36,7 +36,7 @@ impl std::fmt::Debug for EffectInner {
 
 /// Effect wrapper that manages side effects.
 pub struct Effect {
-    inner: Rc<EffectInner>,
+    inner: Arc<EffectInner>,
 }
 
 impl std::fmt::Debug for Effect {
@@ -57,8 +57,8 @@ impl Effect {
         let deps = ctx.end_tracking();
 
         let should_run = {
-            let prev_deps = self.inner.prev_deps.borrow();
-            let ran_once = *self.inner.ran_once.borrow();
+            let prev_deps = self.inner.prev_deps.lock();
+            let ran_once = *self.inner.ran_once.lock();
 
             !ran_once
                 || match prev_deps.as_ref() {
@@ -69,7 +69,7 @@ impl Effect {
 
         if should_run {
             // Run cleanup from previous effect
-            if let Some(cleanup) = self.inner.cleanup_fn.borrow_mut().take() {
+            if let Some(cleanup) = self.inner.cleanup_fn.lock().take() {
                 cleanup();
             }
 
@@ -77,16 +77,16 @@ impl Effect {
             let cleanup = (self.inner.effect_fn)();
 
             // Store cleanup and dependencies
-            *self.inner.cleanup_fn.borrow_mut() = cleanup;
-            *self.inner.dependencies.borrow_mut() = deps.clone();
-            *self.inner.prev_deps.borrow_mut() = Some(deps);
-            *self.inner.ran_once.borrow_mut() = true;
+            *self.inner.cleanup_fn.lock() = cleanup;
+            *self.inner.dependencies.lock() = deps.clone();
+            *self.inner.prev_deps.lock() = Some(deps);
+            *self.inner.ran_once.lock() = true;
         }
     }
 
     /// Run cleanup manually.
     pub fn cleanup(&self) {
-        if let Some(cleanup) = self.inner.cleanup_fn.borrow_mut().take() {
+        if let Some(cleanup) = self.inner.cleanup_fn.lock().take() {
             cleanup();
         }
     }
@@ -95,22 +95,19 @@ impl Effect {
 impl Drop for Effect {
     fn drop(&mut self) {
         // Run cleanup on drop, with panic safety
-        // Use try_borrow_mut to avoid double panic if already borrowed
-        if let Ok(mut cleanup_ref) = self.inner.cleanup_fn.try_borrow_mut() {
-            if let Some(cleanup) = cleanup_ref.take() {
-                // Catch panics in cleanup to prevent double panic during unwinding
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    cleanup();
-                }));
-            }
+        // Mutex::lock() doesn't fail in normal circumstances
+        if let Some(cleanup) = self.inner.cleanup_fn.lock().take() {
+            // Catch panics in cleanup to prevent double panic during unwinding
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cleanup();
+            }));
         }
-        // If borrow fails, skip cleanup (already in bad state)
     }
 }
 
 /// Hook state for EffectHook.
 pub struct EffectState {
-    inner: Rc<EffectInner>,
+    inner: Arc<EffectInner>,
 }
 
 impl std::fmt::Debug for EffectState {
@@ -129,33 +126,33 @@ pub struct EffectHook<F>(PhantomData<F>);
 
 impl<F> Hook for EffectHook<F>
 where
-    F: Fn() -> Option<CleanupFn> + Clone + 'static,
+    F: Fn() -> Option<CleanupFn> + Clone + Send + Sync + 'static,
 {
     type State = EffectState;
-    type Input = Rc<F>;
+    type Input = Arc<F>;
     type Output = Effect;
 
-    fn create(effect: Rc<F>) -> Self::State {
+    fn create(effect: Arc<F>) -> Self::State {
         EffectState {
-            inner: Rc::new(EffectInner {
-                effect_fn: effect as Rc<dyn Fn() -> Option<CleanupFn>>,
-                cleanup_fn: RefCell::new(None),
-                dependencies: RefCell::new(Vec::new()),
-                prev_deps: RefCell::new(None),
-                ran_once: RefCell::new(false),
+            inner: Arc::new(EffectInner {
+                effect_fn: effect as Arc<dyn Fn() -> Option<CleanupFn> + Send + Sync>,
+                cleanup_fn: Mutex::new(None),
+                dependencies: Mutex::new(Vec::new()),
+                prev_deps: Mutex::new(None),
+                ran_once: Mutex::new(false),
             }),
         }
     }
 
-    fn update(state: &mut Self::State, _effect: Rc<F>) -> Self::Output {
+    fn update(state: &mut Self::State, _effect: Arc<F>) -> Self::Output {
         Effect {
-            inner: state.inner.clone(),
+            inner: Arc::clone(&state.inner),
         }
     }
 
     fn cleanup(state: Self::State) {
         // Run cleanup function if present
-        if let Some(cleanup) = state.inner.cleanup_fn.borrow_mut().take() {
+        if let Some(cleanup) = state.inner.cleanup_fn.lock().take() {
             cleanup();
         }
     }
@@ -163,7 +160,7 @@ where
 
 impl<F> EffectHookTrait for EffectHook<F>
 where
-    F: Fn() -> Option<CleanupFn> + Clone + 'static,
+    F: Fn() -> Option<CleanupFn> + Clone + Send + Sync + 'static,
 {
     fn run_effect(&mut self) {
         // Effect is run via Effect::run_if_needed()
@@ -206,10 +203,10 @@ where
 /// ```
 pub fn use_effect<F>(ctx: &BuildContext, effect: F) -> Effect
 where
-    F: Fn() -> Option<CleanupFn> + Clone + 'static,
+    F: Fn() -> Option<CleanupFn> + Clone + Send + Sync + 'static,
 {
     ctx.with_hook_context_mut(|hook_ctx| {
-        let eff = hook_ctx.use_hook::<EffectHook<F>>(Rc::new(effect));
+        let eff = hook_ctx.use_hook::<EffectHook<F>>(Arc::new(effect));
         // Run effect if needed
         eff.run_if_needed(hook_ctx);
         eff
@@ -241,7 +238,7 @@ where
 /// ```
 pub fn use_effect_simple<F>(ctx: &BuildContext, effect: F) -> Effect
 where
-    F: Fn() + Clone + 'static,
+    F: Fn() + Clone + Send + Sync + 'static,
 {
     use_effect(ctx, move || {
         effect();

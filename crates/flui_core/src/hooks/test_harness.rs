@@ -57,7 +57,10 @@ impl<H: Hook> HookTestHarness<H> {
     /// Call the hook with the given input.
     ///
     /// This simulates the first render of a component.
-    pub fn call(&mut self, input: H::Input) -> H::Output {
+    pub fn call(&mut self, input: H::Input) -> H::Output
+    where
+        H::State: Send,
+    {
         self.render_count += 1;
         self.context.use_hook::<H>(input)
     }
@@ -65,7 +68,10 @@ impl<H: Hook> HookTestHarness<H> {
     /// Rerender the hook with new input.
     ///
     /// This simulates a subsequent render of the same component.
-    pub fn rerender(&mut self, input: H::Input) -> H::Output {
+    pub fn rerender(&mut self, input: H::Input) -> H::Output
+    where
+        H::State: Send,
+    {
         self.render_count += 1;
         self.context.end_component();
         self.context.begin_component(self.component_id);

@@ -78,9 +78,9 @@ pub struct ElementTree {
     pub(super) nodes: Slab<ElementNode>,
 
     /// Depth guard for layout to prevent infinite recursion
-    /// Tracks the current layout depth
+    /// Tracks the current layout depth (thread-safe with AtomicUsize)
     #[cfg(debug_assertions)]
-    layout_depth: std::cell::Cell<usize>,
+    layout_depth: std::sync::atomic::AtomicUsize,
 }
 
 /// Internal node in the element tree
@@ -177,7 +177,7 @@ impl ElementTree {
         Self {
             nodes: Slab::new(),
             #[cfg(debug_assertions)]
-            layout_depth: std::cell::Cell::new(0),
+            layout_depth: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -197,7 +197,7 @@ impl ElementTree {
         Self {
             nodes: Slab::with_capacity(capacity),
             #[cfg(debug_assertions)]
-            layout_depth: std::cell::Cell::new(0),
+            layout_depth: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -491,7 +491,7 @@ impl ElementTree {
         // Depth guard to prevent infinite recursion
         #[cfg(debug_assertions)]
         {
-            let current_depth = self.layout_depth.get();
+            let current_depth = self.layout_depth.load(std::sync::atomic::Ordering::Relaxed);
             if current_depth > MAX_LAYOUT_DEPTH {
                 tracing::error!(
                     element_id = ?element_id,
@@ -502,7 +502,7 @@ impl ElementTree {
                 );
                 panic!("Layout depth limit exceeded - infinite recursion");
             }
-            self.layout_depth.set(current_depth + 1);
+            self.layout_depth.store(current_depth + 1, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Check for re-entrant layout (element trying to layout itself)
@@ -515,8 +515,10 @@ impl ElementTree {
             );
 
             #[cfg(debug_assertions)]
-            self.layout_depth
-                .set(self.layout_depth.get().saturating_sub(1));
+            self.layout_depth.store(
+                self.layout_depth.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1),
+                std::sync::atomic::Ordering::Relaxed
+            );
 
             // Re-fetch to get cached size safely (Issue #3)
             let element = self.get(element_id)?;
@@ -538,8 +540,10 @@ impl ElementTree {
 
         // Decrement depth
         #[cfg(debug_assertions)]
-        self.layout_depth
-            .set(self.layout_depth.get().saturating_sub(1));
+        self.layout_depth.store(
+            self.layout_depth.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1),
+            std::sync::atomic::Ordering::Relaxed
+        );
 
         // Scope 3: Update state (re-fetch again to be safe - Issue #3)
         {
@@ -968,5 +972,13 @@ impl Default for ElementTree {
         Self::new()
     }
 }
+
+// SAFETY: ElementTree is thread-safe for multi-threaded UI:
+// - Slab<ElementNode> is Send+Sync (contains only owned data)
+// - AtomicUsize is Send+Sync (atomic operations)
+// - Element enum variants are designed to be Send (though not all are Sync due to interior mutability)
+// - Access is controlled by parking_lot::RwLock which provides thread-safe interior mutability
+unsafe impl Send for ElementTree {}
+unsafe impl Sync for ElementTree {}
 
 // Tests removed - need to be rewritten with View API

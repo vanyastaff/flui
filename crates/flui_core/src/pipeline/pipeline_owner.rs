@@ -456,6 +456,7 @@ impl PipelineOwner {
     }
 
     /// Recursive helper for collect_all_elements
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_elements_recursive(
         &self,
         tree: &ElementTree,

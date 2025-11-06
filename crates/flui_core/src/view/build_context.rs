@@ -30,8 +30,7 @@
 use crate::hooks::HookContext;
 use crate::pipeline::ElementTree;
 use crate::ElementId;
-use parking_lot::RwLock;
-use std::cell::RefCell;
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
 /// BuildContext - read-only context for building views
@@ -79,7 +78,8 @@ pub struct BuildContext {
 
     /// Hook context for managing hook state (with interior mutability)
     /// Shared across all BuildContexts for the same component tree
-    hook_context: Arc<RefCell<HookContext>>,
+    /// Uses Mutex for thread-safety (Send + Sync)
+    hook_context: Arc<Mutex<HookContext>>,
 }
 
 impl std::fmt::Debug for BuildContext {
@@ -111,7 +111,7 @@ impl BuildContext {
         Self {
             tree,
             element_id,
-            hook_context: Arc::new(RefCell::new(HookContext::new())),
+            hook_context: Arc::new(Mutex::new(HookContext::new())),
         }
     }
 
@@ -139,7 +139,7 @@ impl BuildContext {
     pub fn with_hook_context(
         tree: Arc<RwLock<ElementTree>>,
         element_id: ElementId,
-        hook_context: Arc<RefCell<HookContext>>,
+        hook_context: Arc<Mutex<HookContext>>,
     ) -> Self {
         Self {
             tree,
@@ -151,26 +151,12 @@ impl BuildContext {
     /// Get mutable access to the hook context
     ///
     /// This is the primary way for hooks to access their context.
-    /// Uses interior mutability via RefCell.
+    /// Uses interior mutability via Mutex for thread-safety.
     ///
-    /// # Panics
+    /// # Thread-Safety
     ///
-    /// Panics if the hook context is already borrowed mutably. This typically
-    /// happens when trying to call hooks from within hook callbacks:
-    ///
-    /// ```rust,ignore
-    /// // ❌ WRONG: Nested hook calls will panic
-    /// ctx.with_hook_context_mut(|_| {
-    ///     let signal = use_signal(&ctx, 0);  // PANIC: Double borrow
-    /// });
-    ///
-    /// // ✅ CORRECT: Call hooks sequentially at the same level
-    /// let signal = use_signal(ctx, 0);
-    /// let memo = use_memo(ctx, |hook_ctx| {
-    ///     // Inside memo, use hook_ctx directly, not ctx
-    ///     signal.get() * 2
-    /// });
-    /// ```
+    /// Uses `parking_lot::Mutex` which is Send + Sync, allowing BuildContext
+    /// to be safely shared across threads for multi-threaded UI.
     ///
     /// # Example
     ///
@@ -181,45 +167,24 @@ impl BuildContext {
     ///     })
     /// }
     /// ```
+    ///
+    /// # Notes
+    ///
+    /// - parking_lot::Mutex doesn't panic on lock contention, it blocks
+    /// - For performance, keep critical sections short
+    /// - Avoid nested hook calls during mutation
     pub fn with_hook_context_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut HookContext) -> R,
     {
-        match self.hook_context.try_borrow_mut() {
-            Ok(mut hook_ctx) => f(&mut hook_ctx),
-            Err(_) => {
-                panic!(
-                    "BuildContext hook context is already borrowed!\n\
-                    \n\
-                    This typically occurs when:\n\
-                    1. Calling hooks from within hook callbacks (nested hook calls)\n\
-                    2. Holding a hook context borrow across a hook call\n\
-                    \n\
-                    Example of the problem:\n\
-                    ```\n\
-                    ctx.with_hook_context_mut(|_| {{\n\
-                        let signal = use_signal(&ctx, 0);  // ← Double borrow!\n\
-                    }});\n\
-                    ```\n\
-                    \n\
-                    Solution: Call hooks sequentially at the component level, not nested:\n\
-                    ```\n\
-                    let signal = use_signal(ctx, 0);  // ← Correct\n\
-                    let memo = use_memo(ctx, |hook_ctx| {{\n\
-                        signal.get() * 2  // Use hook_ctx, not ctx\n\
-                    }});\n\
-                    ```\n\
-                    \n\
-                    For more details, see the hook documentation."
-                )
-            }
-        }
+        let mut hook_ctx = self.hook_context.lock();
+        f(&mut hook_ctx)
     }
 
     /// Get the shared hook context
     ///
     /// Useful for creating child contexts that share the same hook state.
-    pub fn hook_context(&self) -> Arc<RefCell<HookContext>> {
+    pub fn hook_context(&self) -> Arc<Mutex<HookContext>> {
         Arc::clone(&self.hook_context)
     }
 

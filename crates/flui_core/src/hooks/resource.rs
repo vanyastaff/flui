@@ -8,7 +8,7 @@ use super::signal::{Signal, SignalHook};
 use crate::BuildContext;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Resource state tracking loading, data, and errors.
 ///
@@ -135,16 +135,16 @@ pub struct ResourceHook<T, E, F, Fut>(PhantomData<(T, E, F, Fut)>);
 
 impl<T, E, F, Fut> Hook for ResourceHook<T, E, F, Fut>
 where
-    T: Clone + 'static,
-    E: Clone + 'static,
-    F: Fn() -> Fut + Clone + 'static,
-    Fut: Future<Output = Result<T, E>> + 'static,
+    T: Clone + Send + 'static,
+    E: Clone + Send + 'static,
+    F: Fn() -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<T, E>> + Send + 'static,
 {
     type State = ResourceState<T, E>;
-    type Input = (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>);
+    type Input = (Arc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>);
     type Output = Resource<T, E>;
 
-    fn create(input: (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>)) -> Self::State {
+    fn create(input: (Arc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>)) -> Self::State {
         let (_fetcher, loading, data, error) = input;
 
         // TODO(2025-03): Start async fetch
@@ -160,7 +160,7 @@ where
 
     fn update(
         state: &mut Self::State,
-        _input: (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>),
+        _input: (Arc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>),
     ) -> Self::Output {
         Resource::new(
             state.loading.clone(),
@@ -219,10 +219,10 @@ where
 /// ```
 pub fn use_resource<T, E, F, Fut>(ctx: &BuildContext, fetcher: F) -> Resource<T, E>
 where
-    T: Clone + 'static,
-    E: Clone + 'static,
-    F: Fn() -> Fut + Clone + 'static,
-    Fut: Future<Output = Result<T, E>> + 'static,
+    T: Clone + Send + 'static,
+    E: Clone + Send + 'static,
+    F: Fn() -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<T, E>> + Send + 'static,
 {
     // Create signals for the resource
     let loading = ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<bool>>(true));
@@ -233,7 +233,7 @@ where
 
     // Use the resource hook with the signals
     ctx.with_hook_context_mut(|hook_ctx| {
-        hook_ctx.use_hook::<ResourceHook<T, E, F, Fut>>((Rc::new(fetcher), loading, data, error))
+        hook_ctx.use_hook::<ResourceHook<T, E, F, Fut>>((Arc::new(fetcher), loading, data, error))
     })
 }
 

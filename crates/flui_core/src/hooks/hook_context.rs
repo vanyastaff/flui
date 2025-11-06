@@ -57,16 +57,20 @@ pub struct HookId {
     pub index: HookIndex,
 }
 
+/// Type alias for cleanup function (reduces type complexity)
+type CleanupFn = Box<dyn FnOnce(Box<dyn Any>) + Send>;
+
 /// Storage for hook state.
 ///
 /// Contains type-erased hook state with explicit cleanup support.
+/// Thread-safe: Send + Sync for multi-threaded UI.
 pub struct HookState {
-    state: Box<dyn Any>,
+    state: Box<dyn Any + Send>,
     type_id: TypeId,
     #[allow(dead_code)] // TODO: Implement update tracking in future
     needs_update: bool,
-    /// Explicit cleanup function called on unmount
-    cleanup_fn: Option<Box<dyn FnOnce(Box<dyn Any>)>>,
+    /// Explicit cleanup function called on unmount (Send + Sync for thread-safety)
+    cleanup_fn: Option<CleanupFn>,
 }
 
 impl std::fmt::Debug for HookState {
@@ -83,7 +87,11 @@ impl HookState {
     /// Create a new hook state with the given value
     ///
     /// Uses Hook::cleanup() for explicit cleanup on unmount.
-    pub fn new<H: Hook>(state: H::State) -> Self {
+    /// Thread-safe: requires H::State to be Send.
+    pub fn new<H: Hook>(state: H::State) -> Self
+    where
+        H::State: Send,
+    {
         Self {
             state: Box::new(state),
             type_id: TypeId::of::<H::State>(),
@@ -202,7 +210,11 @@ impl HookContext {
     }
 
     /// Use a hook, creating or updating its state
-    pub fn use_hook<H: Hook>(&mut self, input: H::Input) -> H::Output {
+    /// Thread-safe: requires H::State to be Send for multi-threaded UI
+    pub fn use_hook<H: Hook>(&mut self, input: H::Input) -> H::Output
+    where
+        H::State: Send,
+    {
         use std::collections::hash_map::Entry;
 
         let hook_id = self.current_hook_id();

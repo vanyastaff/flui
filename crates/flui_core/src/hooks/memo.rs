@@ -6,9 +6,9 @@
 use super::hook_context::HookContext;
 use super::hook_trait::{DependencyId, Hook, ReactiveHook};
 use crate::BuildContext;
-use std::cell::RefCell;
+use parking_lot::Mutex;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Error type for memoized value computation failures
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,13 +42,13 @@ impl std::error::Error for MemoError {}
 /// Inner state for a memoized value.
 #[derive(Debug)]
 struct MemoInner<T> {
-    cached: RefCell<Option<T>>,
-    dependencies: RefCell<Vec<DependencyId>>,
-    is_dirty: RefCell<bool>,
+    cached: Mutex<Option<T>>,
+    dependencies: Mutex<Vec<DependencyId>>,
+    is_dirty: Mutex<bool>,
     /// Tracks if compute function is currently executing (prevents reentrancy)
-    is_computing: RefCell<bool>,
+    is_computing: Mutex<bool>,
     /// Tracks if compute function panicked (poison state)
-    is_poisoned: RefCell<bool>,
+    is_poisoned: Mutex<bool>,
 }
 
 /// A memoized value that only recomputes when dependencies change.
@@ -61,8 +61,8 @@ struct MemoInner<T> {
 /// println!("Doubled: {}", doubled.get(ctx));
 /// ```
 pub struct Memo<T> {
-    inner: Rc<MemoInner<T>>,
-    compute: Rc<dyn Fn(&mut HookContext) -> T>,
+    inner: Arc<MemoInner<T>>,
+    compute: Arc<dyn Fn(&mut HookContext) -> T + Send + Sync>,
 }
 
 impl<T> std::fmt::Debug for Memo<T> {
@@ -111,7 +111,7 @@ impl<T> Memo<T> {
 
     /// Mark the memo as dirty, forcing recomputation on next access.
     pub fn invalidate(&self) {
-        *self.inner.is_dirty.borrow_mut() = true;
+        *self.inner.is_dirty.lock() = true;
     }
 
     /// Check if memo is poisoned from a previous panic
@@ -124,7 +124,7 @@ impl<T> Memo<T> {
     /// assert!(memo.is_poisoned());
     /// ```
     pub fn is_poisoned(&self) -> bool {
-        *self.inner.is_poisoned.borrow()
+        *self.inner.is_poisoned.lock()
     }
 
     /// Recover from poisoned state by resetting memo
@@ -143,9 +143,9 @@ impl<T> Memo<T> {
     /// assert!(!memo.is_poisoned());
     /// ```
     pub fn recover(&self) {
-        *self.inner.is_poisoned.borrow_mut() = false;
-        *self.inner.is_dirty.borrow_mut() = true;
-        *self.inner.cached.borrow_mut() = None;
+        *self.inner.is_poisoned.lock() = false;
+        *self.inner.is_dirty.lock() = true;
+        *self.inner.cached.lock() = None;
     }
 
     /// Try to get the memoized value, returning an error if poisoned or reentrant
@@ -177,22 +177,22 @@ impl<T> Memo<T> {
         T: Clone,
     {
         // Check if poisoned from previous panic
-        if *self.inner.is_poisoned.borrow() {
+        if *self.inner.is_poisoned.lock() {
             return Err(MemoError::Poisoned);
         }
 
         // Check if we need to recompute
-        let is_dirty = *self.inner.is_dirty.borrow();
-        let needs_compute = is_dirty || self.inner.cached.borrow().is_none();
+        let is_dirty = *self.inner.is_dirty.lock();
+        let needs_compute = is_dirty || self.inner.cached.lock().is_none();
 
         if needs_compute {
             // Check for reentrancy
-            if *self.inner.is_computing.borrow() {
+            if *self.inner.is_computing.lock() {
                 return Err(MemoError::Reentrancy);
             }
 
             // Mark as computing
-            *self.inner.is_computing.borrow_mut() = true;
+            *self.inner.is_computing.lock() = true;
 
             // Panic guard: if we panic, mark as poisoned and stop computing
             struct PanicGuard<'a, T> {
@@ -202,14 +202,9 @@ impl<T> Memo<T> {
             impl<T> Drop for PanicGuard<'_, T> {
                 fn drop(&mut self) {
                     if std::thread::panicking() {
-                        // Use try_borrow_mut to avoid double panic
-                        // If borrow fails, we're already in a bad state - just continue unwinding
-                        if let Ok(mut poisoned) = self.inner.is_poisoned.try_borrow_mut() {
-                            *poisoned = true;
-                        }
-                        if let Ok(mut computing) = self.inner.is_computing.try_borrow_mut() {
-                            *computing = false;
-                        }
+                        // Mutex::lock() should succeed in panic situations
+                        *self.inner.is_poisoned.lock() = true;
+                        *self.inner.is_computing.lock() = false;
                     }
                 }
             }
@@ -227,18 +222,18 @@ impl<T> Memo<T> {
 
             // Check if dependencies changed
             let deps_changed = {
-                let old_deps = self.inner.dependencies.borrow();
+                let old_deps = self.inner.dependencies.lock();
                 old_deps.len() != deps.len() || old_deps.iter().zip(&deps).any(|(a, b)| a != b)
             };
 
             if deps_changed || is_dirty {
-                *self.inner.cached.borrow_mut() = Some(new_value);
-                *self.inner.dependencies.borrow_mut() = deps;
-                *self.inner.is_dirty.borrow_mut() = false;
+                *self.inner.cached.lock() = Some(new_value);
+                *self.inner.dependencies.lock() = deps;
+                *self.inner.is_dirty.lock() = false;
             }
 
             // Clear computing flag (computation succeeded)
-            *self.inner.is_computing.borrow_mut() = false;
+            *self.inner.is_computing.lock() = false;
 
             // Prevent PanicGuard from running (no panic occurred)
             std::mem::forget(_guard);
@@ -247,7 +242,7 @@ impl<T> Memo<T> {
         Ok(self
             .inner
             .cached
-            .borrow()
+            .lock()
             .clone()
             .expect("Memo value should be cached after successful compute"))
     }
@@ -256,16 +251,16 @@ impl<T> Memo<T> {
 impl<T> Clone for Memo<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
-            compute: self.compute.clone(),
+            inner: Arc::clone(&self.inner),
+            compute: Arc::clone(&self.compute),
         }
     }
 }
 
 /// Hook state for MemoHook.
 pub struct MemoState<T> {
-    inner: Rc<MemoInner<T>>,
-    compute: Rc<dyn Fn(&mut HookContext) -> T>,
+    inner: Arc<MemoInner<T>>,
+    compute: Arc<dyn Fn(&mut HookContext) -> T + Send + Sync>,
 }
 
 impl<T> std::fmt::Debug for MemoState<T> {
@@ -291,12 +286,12 @@ impl<T> Drop for MemoState<T> {
         // - Break cycles with other memoized computations
         #[cfg(debug_assertions)]
         {
-            let value_exists = self.inner.cached.borrow().is_some();
+            let value_exists = self.inner.cached.lock().is_some();
             tracing::debug!("Dropping MemoState (cached: {})", value_exists);
         }
 
         // Eagerly clear cached value to free memory
-        self.inner.cached.borrow_mut().take();
+        self.inner.cached.lock().take();
     }
 }
 
@@ -308,38 +303,38 @@ pub struct MemoHook<T, F>(PhantomData<(T, F)>);
 
 impl<T, F> Hook for MemoHook<T, F>
 where
-    T: Clone + 'static,
-    F: Fn(&mut HookContext) -> T + Clone + 'static,
+    T: Clone + Send + 'static,
+    F: Fn(&mut HookContext) -> T + Clone + Send + Sync + 'static,
 {
     type State = MemoState<T>;
-    type Input = Rc<F>;
+    type Input = Arc<F>;
     type Output = Memo<T>;
 
-    fn create(compute: Rc<F>) -> Self::State {
+    fn create(compute: Arc<F>) -> Self::State {
         MemoState {
-            inner: Rc::new(MemoInner {
-                cached: RefCell::new(None),
-                dependencies: RefCell::new(Vec::new()),
-                is_dirty: RefCell::new(true),
-                is_computing: RefCell::new(false),
-                is_poisoned: RefCell::new(false),
+            inner: Arc::new(MemoInner {
+                cached: Mutex::new(None),
+                dependencies: Mutex::new(Vec::new()),
+                is_dirty: Mutex::new(true),
+                is_computing: Mutex::new(false),
+                is_poisoned: Mutex::new(false),
             }),
-            compute: compute as Rc<dyn Fn(&mut HookContext) -> T>,
+            compute: compute as Arc<dyn Fn(&mut HookContext) -> T + Send + Sync>,
         }
     }
 
-    fn update(state: &mut Self::State, _compute: Rc<F>) -> Self::Output {
+    fn update(state: &mut Self::State, _compute: Arc<F>) -> Self::Output {
         Memo {
-            inner: state.inner.clone(),
-            compute: state.compute.clone(),
+            inner: Arc::clone(&state.inner),
+            compute: Arc::clone(&state.compute),
         }
     }
 }
 
 impl<T, F> ReactiveHook for MemoHook<T, F>
 where
-    T: Clone + 'static,
-    F: Fn(&mut HookContext) -> T + Clone + 'static,
+    T: Clone + Send + 'static,
+    F: Fn(&mut HookContext) -> T + Clone + Send + Sync + 'static,
 {
     fn track_dependencies(&self) -> Vec<DependencyId> {
         // Dependencies are tracked during computation
@@ -373,10 +368,10 @@ where
 /// ```
 pub fn use_memo<T, F>(ctx: &BuildContext, compute: F) -> Memo<T>
 where
-    T: Clone + 'static,
-    F: Fn(&mut HookContext) -> T + Clone + 'static,
+    T: Clone + Send + 'static,
+    F: Fn(&mut HookContext) -> T + Clone + Send + Sync + 'static,
 {
-    ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<MemoHook<T, F>>(Rc::new(compute)))
+    ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<MemoHook<T, F>>(Arc::new(compute)))
 }
 
 #[cfg(test)]
@@ -457,9 +452,10 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let call_count = std::cell::RefCell::new(0);
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(move || {
-            let mut count = call_count.borrow_mut();
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+            let mut count = call_count_clone.lock();
             *count += 1;
             if *count == 1 {
                 panic!("Intentional panic");
@@ -468,14 +464,14 @@ mod tests {
         }));
 
         // First call should panic and poison the memo
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.get()));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.get(&mut ctx)));
         assert!(result.is_err());
 
         // Memo should now be poisoned
         assert!(memo.is_poisoned());
 
         // Second call should fail with poisoned error
-        let result = memo.try_get();
+        let result = memo.try_get(&mut ctx);
         assert!(matches!(result, Err(MemoError::Poisoned)));
     }
 
@@ -484,9 +480,10 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let call_count = std::cell::RefCell::new(0);
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(move || {
-            let mut count = call_count.borrow_mut();
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+            let mut count = call_count_clone.lock();
             *count += 1;
             if *count == 1 {
                 panic!("Intentional panic");
@@ -495,7 +492,7 @@ mod tests {
         }));
 
         // Panic and poison
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.get()));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.get(&mut ctx)));
         assert!(memo.is_poisoned());
 
         // Recover from poison
@@ -503,7 +500,7 @@ mod tests {
         assert!(!memo.is_poisoned());
 
         // Should be able to compute successfully now
-        assert_eq!(memo.get(), 42);
+        assert_eq!(memo.get(&mut ctx), 42);
     }
 
     #[test]
@@ -511,10 +508,10 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(|| 42));
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(|_| 42));
 
         // try_get should succeed without panicking
-        let result = memo.try_get();
+        let result = memo.try_get(&mut ctx);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
     }
@@ -529,22 +526,22 @@ mod tests {
         ctx.begin_component(ComponentId(1));
 
         // Create a memo that tries to call itself recursively
-        // We need to use Rc<RefCell<Option<Memo<i32>>>> to allow self-reference
-        let memo_cell = Rc::new(RefCell::new(None));
-        let memo_cell_clone = memo_cell.clone();
+        // We need to use Arc<Mutex<Option<Memo<i32>>>> to allow self-reference
+        let memo_cell = Arc::new(Mutex::new(None));
+        let memo_cell_clone = Arc::clone(&memo_cell);
 
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(move || {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {
             // Try to access memo recursively
-            if let Some(m) = memo_cell_clone.borrow().as_ref() {
-                let _ = m.get(); // This should cause reentrancy error
+            if let Some(m) = memo_cell_clone.lock().as_ref() {
+                let _ = m.get(ctx); // This should cause reentrancy error
             }
             42
         }));
 
-        *memo_cell.borrow_mut() = Some(memo.clone());
+        *memo_cell.lock() = Some(memo.clone());
 
         // First call should detect reentrancy
-        let result = memo.try_get();
+        let result = memo.try_get(&mut ctx);
         assert!(matches!(result, Err(MemoError::Reentrancy)));
     }
 
@@ -554,20 +551,20 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let memo_cell = Rc::new(RefCell::new(None));
-        let memo_cell_clone = memo_cell.clone();
+        let memo_cell = Arc::new(Mutex::new(None));
+        let memo_cell_clone = Arc::clone(&memo_cell);
 
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(move || {
-            if let Some(m) = memo_cell_clone.borrow().as_ref() {
-                m.get(); // Should panic with reentrancy error
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {
+            if let Some(m) = memo_cell_clone.lock().as_ref() {
+                m.get(ctx); // Should panic with reentrancy error
             }
             42
         }));
 
-        *memo_cell.borrow_mut() = Some(memo.clone());
+        *memo_cell.lock() = Some(memo.clone());
 
         // Should panic with reentrancy message
-        memo.get();
+        memo.get(&mut ctx);
     }
 
     // =========================================================================
@@ -579,18 +576,19 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let call_count = std::cell::RefCell::new(0);
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(move || {
-            *call_count.borrow_mut() += 1;
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = Arc::clone(&call_count);
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+            *call_count_clone.lock() += 1;
             panic!("Panic during compute");
         }));
 
         // Panic during compute
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.try_get()));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.try_get(&mut ctx)));
 
         // Computing flag should be cleared by panic guard
         // (verified indirectly: subsequent try_get returns Poisoned, not hangs)
-        let result = memo.try_get();
+        let result = memo.try_get(&mut ctx);
         assert!(matches!(result, Err(MemoError::Poisoned)));
     }
 }
