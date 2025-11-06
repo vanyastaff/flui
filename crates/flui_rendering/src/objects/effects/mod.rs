@@ -15,6 +15,8 @@ pub mod physical_model;
 pub mod repaint_boundary;
 pub mod shader_mask;
 pub mod transform;
+pub mod visibility;
+
 
 // Re-exports
 pub use animated_opacity::RenderAnimatedOpacity;
@@ -31,3 +33,5 @@ pub use physical_model::{PhysicalShape, RenderPhysicalModel};
 pub use repaint_boundary::RenderRepaintBoundary;
 pub use shader_mask::{RenderShaderMask, ShaderSpec};
 pub use transform::RenderTransform;
+pub use visibility::RenderVisibility;
+

@@ -112,6 +112,7 @@ pub use objects::{
     RenderSizedOverflowBox,
     RenderStack,
     RenderTransform,
+    RenderVisibility,
     RenderWrap,
     WrapAlignment,
     WrapCrossAlignment,

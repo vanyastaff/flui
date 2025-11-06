@@ -70,13 +70,13 @@ pub use basic::{
 pub use gestures::GestureDetector;
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 pub use layout::{
-    Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, IntrinsicHeight,
-    IntrinsicWidth, ListBody, OverflowBox, Positioned, RotatedBox, Row, SizedOverflowBox, Spacer,
-    Stack, Wrap,
+    Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
+    IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, RotatedBox, Row,
+    SizedOverflowBox, Spacer, Stack, Wrap,
 };
 pub use visual_effects::{
     BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
-    RepaintBoundary, Transform,
+    RepaintBoundary, Transform, Visibility,
 };
 
 // Re-export commonly used types
@@ -100,13 +100,13 @@ pub mod prelude {
     pub use crate::gestures::GestureDetector;
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
     pub use crate::layout::{
-        Baseline, Column, Expanded, Flexible, FractionallySizedBox, IndexedStack, IntrinsicHeight,
-        IntrinsicWidth, ListBody, OverflowBox, Positioned, RotatedBox, Row, SizedOverflowBox,
-        Spacer, Stack, Wrap,
+        Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
+        IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, RotatedBox, Row,
+        SizedOverflowBox, Spacer, Stack, Wrap,
     };
     pub use crate::visual_effects::{
         BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
-        RepaintBoundary, Transform,
+        RepaintBoundary, Transform, Visibility,
     };
 
     // Re-export core types

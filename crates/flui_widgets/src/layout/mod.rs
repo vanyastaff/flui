@@ -9,6 +9,7 @@
 pub mod baseline;
 pub mod column;
 pub mod expanded;
+pub mod flex;
 pub mod flexible;
 pub mod fractionally_sized_box;
 pub mod indexed_stack;
@@ -24,10 +25,12 @@ pub mod spacer;
 pub mod stack;
 pub mod wrap;
 
+
 // Re-exports
 pub use baseline::Baseline;
 pub use column::Column;
 pub use expanded::Expanded;
+pub use flex::Flex;
 pub use flexible::Flexible;
 pub use fractionally_sized_box::FractionallySizedBox;
 pub use indexed_stack::IndexedStack;
@@ -42,3 +45,4 @@ pub use sized_overflow_box::SizedOverflowBox;
 pub use spacer::Spacer;
 pub use stack::Stack;
 pub use wrap::Wrap;
+
