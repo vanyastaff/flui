@@ -4,7 +4,8 @@
       "Bash(cargo run:*)",
       "Bash(cargo build:*)",
       "Bash(grep:*)",
-      "Bash(timeout 5 cargo run:*)"
+      "Bash(timeout 5 cargo run:*)",
+      "Bash(cargo check:*)"
     ],
     "deny": [],
     "ask": []

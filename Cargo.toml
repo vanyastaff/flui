@@ -122,13 +122,13 @@ description = "Flutter-inspired declarative UI framework built on egui 0.33"
 keywords = ["gui", "ui", "egui", "flutter", "reactive"]
 
 [dependencies]
-# Flui crates
+# Flui crates - all included in workspace
 flui_types = { path = "crates/flui_types" }
 flui_core = { path = "crates/flui_core" }
 flui_engine = { path = "crates/flui_engine" }
 flui_rendering = { path = "crates/flui_rendering" }
-flui_app = { path = "crates/flui_app", optional = true }
-flui_widgets = { path = "crates/flui_widgets", optional = true }
+flui_app = { path = "crates/flui_app" }
+flui_widgets = { path = "crates/flui_widgets" }
 
 # For wgpu_demo example
 parking_lot = { workspace = true }
@@ -155,17 +155,29 @@ puffin_http = { workspace = true, optional = true }
 
 [features]
 default = ["egui", "persistence"]
+
 # Backend selection (mutually exclusive)
-egui = ["flui_app?/egui", "flui_engine/egui"]
-wgpu = ["flui_app?/wgpu", "flui_engine/wgpu"]
+# Choose one: egui (default) or wgpu
+egui = ["flui_app/egui", "flui_engine/egui"]
+wgpu = ["flui_app/wgpu", "flui_engine/wgpu"]
+
 # Optional features
 persistence = ["eframe/persistence"]
-profiling = ["puffin", "puffin_egui", "puffin_http"]
+
+# Profiling features
+profiling = ["puffin", "puffin_egui", "puffin_http", "flui_core/profiling"]
 tracy = ["tracing-tracy"]
 full-profiling = ["profiling", "tracy"]
-# High-level API features
-flui_app = ["dep:flui_app"]
-flui_widgets = ["dep:flui_widgets"]
+
+# Performance features
+parallel = ["flui_core/parallel"]
+
+# Serialization support
+serde = ["flui_core/serde"]
+
+# DevTools features
+devtools = ["flui_engine/devtools"]
+memory-profiler = ["devtools", "flui_engine/memory-profiler"]
 
 [profile.release]
 opt-level = 3
