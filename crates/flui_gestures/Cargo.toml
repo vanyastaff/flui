@@ -1,0 +1,24 @@
+[package]
+name = "flui_gestures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Core types
+flui_types = { path = "../flui_types" }
+flui_core = { path = "../flui_core" }
+flui_engine = { path = "../flui_engine" }
+
+# Utilities
+parking_lot = "0.12"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["full"] }
+
+[lints]
+workspace = true

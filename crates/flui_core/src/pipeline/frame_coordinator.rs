@@ -76,6 +76,18 @@ pub struct FrameCoordinator {
 }
 
 impl FrameCoordinator {
+    /// Create a new frame coordinator with a rebuild queue
+    ///
+    /// The rebuild queue is shared with the PipelineOwner for signal-triggered rebuilds.
+    pub fn new_with_queue(rebuild_queue: super::RebuildQueue) -> Self {
+        Self {
+            build: BuildPipeline::new_with_queue(rebuild_queue),
+            layout: LayoutPipeline::new(),
+            paint: PaintPipeline::new(),
+            scheduler: FrameScheduler::new(),
+        }
+    }
+
     /// Create a new frame coordinator
     ///
     /// # Example
@@ -84,12 +96,7 @@ impl FrameCoordinator {
     /// let coordinator = FrameCoordinator::new();
     /// ```
     pub fn new() -> Self {
-        Self {
-            build: BuildPipeline::new(),
-            layout: LayoutPipeline::new(),
-            paint: PaintPipeline::new(),
-            scheduler: FrameScheduler::new(),
-        }
+        Self::new_with_queue(super::RebuildQueue::new())
     }
 
     /// Get reference to build pipeline

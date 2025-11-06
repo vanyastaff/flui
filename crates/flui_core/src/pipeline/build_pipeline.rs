@@ -162,18 +162,26 @@ pub struct BuildPipeline {
     build_locked: bool,
     /// Optional batching system
     batcher: Option<BuildBatcher>,
+    /// Rebuild queue for deferred rebuilds from signals
+    rebuild_queue: super::RebuildQueue,
 }
 
 impl BuildPipeline {
-    /// Creates a new build pipeline.
-    pub fn new() -> Self {
+    /// Creates a new build pipeline with a rebuild queue.
+    pub fn new_with_queue(rebuild_queue: super::RebuildQueue) -> Self {
         Self {
             dirty_elements: Vec::new(),
             build_count: 0,
             in_build_scope: false,
             build_locked: false,
             batcher: None,
+            rebuild_queue,
         }
+    }
+
+    /// Creates a new build pipeline.
+    pub fn new() -> Self {
+        Self::new_with_queue(super::RebuildQueue::new())
     }
 
     // =========================================================================
@@ -513,13 +521,13 @@ impl BuildPipeline {
 
         // Phase 1: Extract component data (minimize lock time)
         let (view, old_child_id, hook_context) = {
-            let tree_guard = tree.read();
-            let element = match tree_guard.get(element_id) {
+            let mut tree_guard = tree.write();
+            let element = match tree_guard.get_mut(element_id) {
                 Some(e) => e,
                 None => return false,
             };
 
-            let component = match element.as_component() {
+            let component = match element.as_component_mut() {
                 Some(c) => c,
                 None => return false,
             };
@@ -528,23 +536,53 @@ impl BuildPipeline {
             let view = component.view().clone_box();
             let old_child = component.child();
 
-            // Get or create hook context
-            // TODO: Extract existing hook context from component state
-            let hook_context =
-                std::sync::Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
+            // Extract or create hook context from component state
+            let hook_context: std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>> =
+                if let Some(ctx) = component
+                    .state_mut()
+                    .downcast_mut::<std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>>>()
+                {
+                    // Reuse existing HookContext (preserves hook state across rebuilds!)
+                    ctx.clone()
+                } else {
+                    // First build - create new HookContext and store it
+                    let ctx =
+                        std::sync::Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
+                    // Replace the state Box with our new HookContext
+                    component.set_state(Box::new(ctx.clone()));
+                    ctx
+                };
 
             (view, old_child, hook_context)
         };
 
         // Phase 2: Build new child view (outside locks)
-        let ctx = crate::view::BuildContext::with_hook_context(
+        let ctx = crate::view::BuildContext::with_hook_context_and_queue(
             tree.clone(),
             element_id,
             hook_context.clone(),
+            self.rebuild_queue.clone(),
         );
 
+        // Set up ComponentId for hooks
+        // Convert ElementId to ComponentId (hooks use u64, ElementId is usize)
+        let component_id = crate::hooks::ComponentId(element_id.get() as u64);
+
+        // Begin component rendering (locks temporarily)
+        {
+            let mut hook_ctx = hook_context.lock();
+            hook_ctx.begin_component(component_id);
+        }
+
         // Set up thread-local BuildContext and build
+        // Note: BuildContext will lock/unlock hook_context as needed during hooks
         let new_element = crate::view::with_build_context(&ctx, || view.build_any());
+
+        // End component rendering (locks temporarily)
+        {
+            let mut hook_ctx = hook_context.lock();
+            hook_ctx.end_component();
+        }
 
         // Phase 3: Reconcile child (write lock)
 

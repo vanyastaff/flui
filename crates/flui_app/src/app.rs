@@ -9,6 +9,8 @@ use flui_core::view::{AnyView, BuildContext};
 use flui_core::{Offset, Size};
 use flui_engine::Painter;
 use flui_types::BoxConstraints;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// Performance statistics for debugging and optimization
 #[derive(Debug, Default)]
@@ -183,10 +185,30 @@ impl FluiApp {
         // The actual root will get a proper ID from pipeline.set_root()
         let tree = self.pipeline.tree().clone();
         let temp_id = ElementId::new(1);
-        let ctx = BuildContext::new(tree, temp_id);
+        let rebuild_queue = self.pipeline.rebuild_queue().clone();
+        let ctx = BuildContext::with_hook_context_and_queue(
+            tree,
+            temp_id,
+            Arc::new(Mutex::new(flui_core::hooks::HookContext::new())),
+            rebuild_queue,
+        );
+
+        // Set up ComponentId for hooks
+        // Convert ElementId to ComponentId (hooks use u64, ElementId is usize)
+        let component_id = flui_core::hooks::ComponentId(temp_id.get() as u64);
+
+        // Begin component rendering for hook context
+        ctx.with_hook_context_mut(|hook_ctx| {
+            hook_ctx.begin_component(component_id);
+        });
 
         // Build root element using thread-local BuildContext
         let root_element = flui_core::view::with_build_context(&ctx, || self.root_view.build_any());
+
+        // End component rendering for hook context
+        ctx.with_hook_context_mut(|hook_ctx| {
+            hook_ctx.end_component();
+        });
 
         // Mount and insert root element using pipeline.set_root()
         // This properly initializes the root and schedules it for build
@@ -220,11 +242,48 @@ impl FluiApp {
     ///
     /// Converts egui pointer events to Flui PointerEvents and dispatches them
     /// through hit testing.
-    ///
-    /// TODO: Re-implement pointer event handling when the API is ready
-    fn process_pointer_events(&mut self, _ui: &egui::Ui) {
-        // Pointer event dispatching is temporarily disabled
-        // until the PipelineOwner API is updated
+    fn process_pointer_events(&mut self, ui: &egui::Ui) {
+        use flui_types::events::{PointerEvent, PointerEventData};
+        use flui_types::Offset;
+
+        // Get pointer state from egui
+        let pointer = &ui.input(|i| i.pointer.clone());
+
+        // Handle pointer down (primary button)
+        if pointer.primary_down() {
+            if let Some(pos) = pointer.interact_pos() {
+                let event = PointerEvent::Down(PointerEventData {
+                    position: Offset::new(pos.x, pos.y),
+                    local_position: Offset::new(pos.x, pos.y),
+                    device: 0,
+                    buttons: 1, // Primary button
+                    pressure: 1.0,
+                    time_stamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                });
+                flui_widgets::gestures::dispatch_gesture_event(&event);
+            }
+        }
+
+        // Handle pointer up (primary released)
+        if pointer.primary_released() {
+            if let Some(pos) = pointer.interact_pos() {
+                let event = PointerEvent::Up(PointerEventData {
+                    position: Offset::new(pos.x, pos.y),
+                    local_position: Offset::new(pos.x, pos.y),
+                    device: 0,
+                    buttons: 0, // No buttons
+                    pressure: 0.0,
+                    time_stamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                });
+                flui_widgets::gestures::dispatch_gesture_event(&event);
+            }
+        }
     }
 
     /// Update the application for one frame
@@ -245,6 +304,9 @@ impl FluiApp {
         self.ensure_root_built();
 
         // ===== Phase 1: Build =====
+        // Clear gesture handlers before rebuild (prevents accumulation)
+        flui_widgets::gestures::clear_gesture_handlers();
+
         // Keep flushing build until tree is fully built (no more dirty elements)
         let mut iterations = 0;
         loop {

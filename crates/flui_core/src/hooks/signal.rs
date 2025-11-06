@@ -2,14 +2,17 @@
 //!
 //! Provides `use_signal` hook that creates reactive state similar to React's useState.
 //! When a signal changes, all components that depend on it are automatically re-rendered.
+//!
+//! # New in 0.7.0: Copy-Based Signals
+//!
+//! Signal<T> is now Copy! This eliminates the need for explicit `.clone()` calls.
+//! Signals are just lightweight IDs that reference data in a thread-local runtime.
 
 use super::hook_context::HookContext;
 use super::hook_trait::{DependencyId, Hook};
+use super::signal_runtime::SIGNAL_RUNTIME;
 use crate::BuildContext;
-use parking_lot::Mutex;
-use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 /// Unique identifier for a signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,28 +77,7 @@ impl Default for SignalId {
     }
 }
 
-/// Inner signal state shared between Signal instances.
-struct SignalInner<T> {
-    value: Arc<Mutex<T>>,
-    id: SignalId,
-    /// Subscribers that are notified when the signal changes.
-    /// Maps SubscriptionId to callback function.
-    /// We use Arc to allow cloning callbacks for safe iteration.
-    subscribers: Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>,
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for SignalInner<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SignalInner")
-            .field("value", &self.value)
-            .field("id", &self.id)
-            .field(
-                "subscribers",
-                &format!("{} subscribers", self.subscribers.lock().len()),
-            )
-            .finish()
-    }
-}
+// SignalInner removed - signal data now stored in SignalRuntime
 
 /// RAII guard for a signal subscription.
 ///
@@ -132,8 +114,27 @@ impl<T> std::fmt::Debug for Subscription<T> {
 
 /// A reactive signal that can be read and updated.
 ///
-/// When a signal is updated, it automatically tracks dependencies and
-/// notifies dependent components to re-render.
+/// # New in 0.7.0: Copy-Based Signals
+///
+/// Signal<T> is now **Copy**! This means:
+/// - No need to `.clone()` before moving into closures
+/// - Copying is implicit and free (just an 8-byte ID)
+/// - All copies refer to the same underlying value
+///
+/// # Migration
+///
+/// Old code with `.clone()` still works but is unnecessary:
+///
+/// ```rust,ignore
+/// // Old (still works, but .clone() is unnecessary)
+/// let count = use_signal(ctx, 0);
+/// let count_clone = count.clone();  // ← No-op with Copy
+///
+/// // New (idiomatic)
+/// let count = use_signal(ctx, 0);
+/// // Just use count directly - Copy happens implicitly!
+/// Button::new("Click").on_tap(move || count.update(|n| n + 1))
+/// ```
 ///
 /// # Notification Guarantees
 ///
@@ -145,52 +146,35 @@ impl<T> std::fmt::Debug for Subscription<T> {
 /// **Notification is synchronous and happens before the method returns.**
 /// This ensures subscribers see a consistent state.
 ///
-/// **All subscribers are called in the order they were registered,**
-/// though the exact order is not guaranteed between calls.
-///
-/// # Subscription Management
-///
-/// Two ways to subscribe to signal changes:
-///
-/// 1. **Manual subscription** with [`subscribe()`](Signal::subscribe):
-///    ```rust,ignore
-///    let id = signal.subscribe(|| println!("Changed!"));
-///    // Must manually unsubscribe
-///    signal.unsubscribe(id);
-///    ```
-///
-/// 2. **RAII subscription** with [`subscribe_scoped()`](Signal::subscribe_scoped):
-///    ```rust,ignore
-///    {
-///        let _sub = signal.subscribe_scoped(|| println!("Changed!"));
-///        // Automatically unsubscribed when _sub is dropped
-///    }
-///    ```
-///
 /// # Example
 ///
 /// ```rust,ignore
-/// let count = use_signal(0);
+/// let count = use_signal(ctx, 0);
 ///
-/// // Subscribe to changes
-/// let sub = count.subscribe_scoped(|| {
-///     println!("Count changed to: {}", count.get());
-/// });
-///
-/// count.set(42);       // Prints: "Count changed to: 42"
-/// count.update(|n| n + 1); // Prints: "Count changed to: 43"
+/// // No clone needed! Signal is Copy
+/// Button::new("Increment")
+///     .on_tap(move || count.update(|n| n + 1))
 /// ```
 ///
 /// # Thread Safety
 ///
 /// Signal is **thread-safe** (implements `Send` and `Sync`). It's designed for
 /// multi-threaded UI applications where updates can happen on different threads.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Signal<T> {
-    inner: Arc<SignalInner<T>>,
+    id: SignalId,
+    _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T> Signal<T> {
+    /// Create a new signal (internal use only)
+    fn new(id: SignalId) -> Self {
+        Self {
+            id,
+            _phantom: PhantomData,
+        }
+    }
+
     /// Get the current value of the signal.
     ///
     /// This tracks the signal as a dependency in the given context.
@@ -202,11 +186,11 @@ impl<T> Signal<T> {
     /// ```
     pub fn get(&self, ctx: &mut HookContext) -> T
     where
-        T: Clone,
+        T: Clone + Send + 'static,
     {
         // Track dependency
-        ctx.track_dependency(DependencyId::new(self.inner.id.0));
-        self.inner.value.lock().clone()
+        ctx.track_dependency(DependencyId::new(self.id.0));
+        SIGNAL_RUNTIME.with(|runtime| runtime.get(self.id))
     }
 
     /// Get the current value without tracking as a dependency.
@@ -217,16 +201,16 @@ impl<T> Signal<T> {
     /// # Example
     ///
     /// ```rust,ignore
-    /// signal.subscribe(move || {
-    ///     let value = signal_clone.get_untracked();
+    /// Button::new("Show").on_tap(move || {
+    ///     let value = count.get_untracked();
     ///     println!("Value: {}", value);
     /// });
     /// ```
     pub fn get_untracked(&self) -> T
     where
-        T: Clone,
+        T: Clone + Send + 'static,
     {
-        self.inner.value.lock().clone()
+        SIGNAL_RUNTIME.with(|runtime| runtime.get(self.id))
     }
 
     /// Get a reference to the current value without cloning.
@@ -238,18 +222,29 @@ impl<T> Signal<T> {
     /// ```rust,ignore
     /// count.with(ctx, |n| println!("Count: {}", n));
     /// ```
-    pub fn with<R>(&self, ctx: &mut HookContext, f: impl FnOnce(&T) -> R) -> R {
+    pub fn with<R>(&self, ctx: &mut HookContext, f: impl FnOnce(&T) -> R) -> R
+    where
+        T: Send + 'static,
+    {
         // Track dependency
-        ctx.track_dependency(DependencyId::new(self.inner.id.0));
-        f(&*self.inner.value.lock())
+        ctx.track_dependency(DependencyId::new(self.id.0));
+        SIGNAL_RUNTIME.with(|runtime| runtime.with(self.id, f))
     }
 
     /// Set the signal to a new value.
     ///
     /// This will trigger re-renders of dependent components and notify all subscribers.
-    pub fn set(&self, value: T) {
-        *self.inner.value.lock() = value;
-        self.notify_subscribers();
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// count.set(42);
+    /// ```
+    pub fn set(&self, value: T)
+    where
+        T: Send + 'static,
+    {
+        SIGNAL_RUNTIME.with(|runtime| runtime.set(self.id, value));
     }
 
     /// Update the signal using a function.
@@ -264,12 +259,9 @@ impl<T> Signal<T> {
     /// ```
     pub fn update(&self, f: impl FnOnce(T) -> T)
     where
-        T: Clone,
+        T: Clone + Send + 'static,
     {
-        let old_value = self.inner.value.lock().clone();
-        let new_value = f(old_value);
-        *self.inner.value.lock() = new_value;
-        self.notify_subscribers();
+        SIGNAL_RUNTIME.with(|runtime| runtime.update(self.id, f));
     }
 
     /// Update the signal by mutating it in place.
@@ -281,14 +273,16 @@ impl<T> Signal<T> {
     /// ```rust,ignore
     /// count.update_mut(|n| *n += 1);
     /// ```
-    pub fn update_mut(&self, f: impl FnOnce(&mut T)) {
-        f(&mut *self.inner.value.lock());
-        self.notify_subscribers();
+    pub fn update_mut(&self, f: impl FnOnce(&mut T))
+    where
+        T: Send + 'static,
+    {
+        SIGNAL_RUNTIME.with(|runtime| runtime.update_mut(self.id, f));
     }
 
     /// Get the signal ID.
     pub fn id(&self) -> SignalId {
-        self.inner.id
+        self.id
     }
 
     /// Subscribe to changes with a callback.
@@ -298,8 +292,7 @@ impl<T> Signal<T> {
     ///
     /// # ⚠️ Memory Leak Warning
     ///
-    /// **Forgetting to call `unsubscribe()` causes memory leaks!** Each subscriber
-    /// holds an `Rc<dyn Fn()>` that will never be freed unless explicitly removed.
+    /// **Forgetting to call `unsubscribe()` causes memory leaks!**
     ///
     /// ```rust,ignore
     /// // ❌ MEMORY LEAK: Never unsubscribed!
@@ -315,14 +308,6 @@ impl<T> Signal<T> {
     /// // Automatically unsubscribes when _subscription drops
     /// ```
     ///
-    /// # Recommendation
-    ///
-    /// **Prefer [`subscribe_scoped()`](Signal::subscribe_scoped) for most use cases.**
-    /// It provides automatic cleanup via RAII and prevents memory leaks.
-    ///
-    /// Only use `subscribe()` when you need fine-grained control over subscription
-    /// lifetime (e.g., unsubscribing from multiple locations, conditional unsubscribe).
-    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -337,12 +322,7 @@ impl<T> Signal<T> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let id = SubscriptionId::new();
-        self.inner
-            .subscribers
-            .lock()
-            .insert(id, Arc::new(callback));
-        id
+        SIGNAL_RUNTIME.with(|runtime| runtime.subscribe(self.id, callback))
     }
 
     /// Subscribe to changes with automatic cleanup.
@@ -360,118 +340,35 @@ impl<T> Signal<T> {
     /// } // Subscription dropped, callback unsubscribed
     /// signal.set(43); // Callback is NOT called
     /// ```
-    pub fn subscribe_scoped<F>(&self, callback: F) -> Subscription<T>
+    pub fn subscribe_scoped<F>(self, callback: F) -> Subscription<T>
     where
         F: Fn() + Send + Sync + 'static,
     {
         let id = self.subscribe(callback);
-        Subscription {
-            signal: self.clone(),
-            id,
-        }
+        Subscription { signal: self, id }
     }
 
     /// Unsubscribe from changes using a subscription ID.
     pub fn unsubscribe(&self, id: SubscriptionId) {
-        self.inner.subscribers.lock().remove(&id);
-    }
-
-    /// Notify all subscribers that the signal has changed.
-    ///
-    /// This is called automatically by `set()`, `update()`, and `update_mut()`.
-    fn notify_subscribers(&self) {
-        // Clone all subscriber Arc's to avoid holding the lock during callbacks
-        let subscribers: Vec<_> = self.inner.subscribers.lock().values().cloned().collect();
-
-        // Call each subscriber - safe because we own Arc clones
-        for subscriber in subscribers {
-            subscriber();
-        }
+        SIGNAL_RUNTIME.with(|runtime| runtime.unsubscribe(self.id, id));
     }
 }
 
-/// Clone implementation for Signal.
-///
-/// # ⚠️ Shared Value Semantics
-///
-/// **Cloning a Signal creates a NEW handle to the SAME shared value.**
-///
-/// ```rust,ignore
-/// let signal1 = use_signal(ctx, 0);
-/// let signal2 = signal1.clone();
-///
-/// signal1.set(42);
-/// assert_eq!(signal2.get(), 42);  // ✅ Same value!
-/// ```
-///
-/// Both `signal1` and `signal2` point to the same underlying `Arc<Mutex<T>>`,
-/// so changes made through one are immediately visible through the other.
-///
-/// # When to Use Clone
-///
-/// Signal cloning is useful when you need to:
-/// 1. **Pass signals into closures** (event handlers, effects)
-/// 2. **Share signals between components** (parent → child)
-/// 3. **Store signals in collections** (Vec, HashMap)
-///
-/// # Example: Event Handler
-///
-/// ```rust,ignore
-/// let count = use_signal(ctx, 0);
-///
-/// Button::new("Increment", {
-///     let count = count.clone();  // ← Clone for closure
-///     move |_| {
-///         count.update(|n| n + 1);
-///     }
-/// })
-/// ```
-///
-/// # Performance
-///
-/// Cloning a Signal is very cheap:
-/// - Only clones an `Arc<SignalInner>` (just increments a reference count)
-/// - O(1) time complexity
-/// - No data is copied
-///
-/// # Not Like Rust Copy
-///
-/// Unlike `Copy` types (e.g., `i32`), Signal clones share state:
-///
-/// ```rust,ignore
-/// // Copy types: Independent values
-/// let x = 5;
-/// let y = x;
-/// x = 10;  // y is still 5
-///
-/// // Signal: Shared value
-/// let s1 = use_signal(ctx, 5);
-/// let s2 = s1.clone();
-/// s1.set(10);  // s2 also sees 10!
-/// ```
-impl<T> Clone for Signal<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
+// Clone is automatically derived from Copy
+// Note: Copy types automatically implement Clone with memcpy semantics
 
 /// Hook state for SignalHook.
 #[derive(Debug)]
 pub struct SignalState<T> {
-    value: Arc<Mutex<T>>,
     id: SignalId,
+    _phantom: PhantomData<fn() -> T>,
 }
 
 impl<T> Drop for SignalState<T> {
     fn drop(&mut self) {
-        // Subscribers are stored in SignalInner, not SignalState.
-        // When the last Signal clone drops, SignalInner will drop and automatically
-        // clear all subscribers (stored in Mutex<HashMap>).
-        //
-        // This is a no-op because SignalState only holds the value and ID,
-        // not the subscriber list.
+        // Clean up signal from runtime when component unmounts
+        SIGNAL_RUNTIME.with(|runtime| runtime.remove_signal(self.id));
+
         #[cfg(debug_assertions)]
         tracing::debug!("Dropping SignalState for signal {:?}", self.id);
     }
@@ -489,24 +386,24 @@ impl<T: Clone + Send + 'static> Hook for SignalHook<T> {
     type Output = Signal<T>;
 
     fn create(initial: T) -> Self::State {
+        // Create signal in runtime
+        let id = SIGNAL_RUNTIME.with(|runtime| runtime.create_signal(initial));
+
         SignalState {
-            value: Arc::new(Mutex::new(initial)),
-            id: SignalId::new(),
+            id,
+            _phantom: PhantomData,
         }
     }
 
     fn update(state: &mut Self::State, _input: T) -> Self::Output {
-        Signal {
-            inner: Arc::new(SignalInner {
-                value: Arc::clone(&state.value),
-                id: state.id,
-                subscribers: Mutex::new(HashMap::new()),
-            }),
-        }
+        // Just return a Copy signal with the ID
+        Signal::new(state.id)
     }
 }
 
-/// Create a reactive signal.
+/// Create a reactive signal with automatic rebuild subscription.
+///
+/// When the signal value changes, the component is automatically scheduled for rebuild.
 ///
 /// # Example
 ///
@@ -520,13 +417,36 @@ impl<T: Clone + Send + 'static> Hook for SignalHook<T> {
 ///         let count = use_signal(ctx, 0);
 ///
 ///         Button::new("Increment")
-///             .on_press(move || count.update(|n| n + 1))
+///             .on_press(move || count.update(|n| n + 1))  // Triggers automatic rebuild!
 ///             .into()
 ///     }
 /// }
 /// ```
 pub fn use_signal<T: Clone + Send + 'static>(ctx: &BuildContext, initial: T) -> Signal<T> {
-    ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<T>>(initial))
+    // Create the signal via hook
+    let signal = ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<T>>(initial));
+
+    // Subscribe to signal changes to trigger rebuilds
+    let element_id = ctx.element_id();
+    let rebuild_queue = ctx.rebuild_queue().clone();
+
+    // Subscribe with callback that schedules rebuild
+    // TODO: Get actual depth from element tree instead of using 0
+    SIGNAL_RUNTIME.with(|runtime| {
+        runtime.subscribe(signal.id, move || {
+            #[cfg(debug_assertions)]
+            tracing::debug!(
+                "[SIGNAL] Signal {:?} changed, scheduling rebuild for element {:?}",
+                signal.id,
+                element_id
+            );
+
+            // Schedule rebuild with depth 0 (TODO: get actual depth)
+            rebuild_queue.push(element_id, 0);
+        });
+    });
+
+    signal
 }
 
 #[cfg(test)]

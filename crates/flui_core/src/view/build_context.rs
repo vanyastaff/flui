@@ -28,7 +28,7 @@
 //! ```
 
 use crate::hooks::HookContext;
-use crate::pipeline::ElementTree;
+use crate::pipeline::{ElementTree, RebuildQueue};
 use crate::ElementId;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
@@ -80,6 +80,10 @@ pub struct BuildContext {
     /// Shared across all BuildContexts for the same component tree
     /// Uses Mutex for thread-safety (Send + Sync)
     hook_context: Arc<Mutex<HookContext>>,
+
+    /// Rebuild queue for scheduling deferred component rebuilds
+    /// Used by signals and other reactive primitives to schedule rebuilds
+    rebuild_queue: RebuildQueue,
 }
 
 impl std::fmt::Debug for BuildContext {
@@ -112,6 +116,7 @@ impl BuildContext {
             tree,
             element_id,
             hook_context: Arc::new(Mutex::new(HookContext::new())),
+            rebuild_queue: RebuildQueue::new(),
         }
     }
 
@@ -145,6 +150,25 @@ impl BuildContext {
             tree,
             element_id,
             hook_context,
+            rebuild_queue: RebuildQueue::new(),
+        }
+    }
+
+    /// Create a new BuildContext with shared hook context and rebuild queue
+    ///
+    /// This is used by the build pipeline to share both hook state and rebuild
+    /// scheduling across component rebuilds.
+    pub fn with_hook_context_and_queue(
+        tree: Arc<RwLock<ElementTree>>,
+        element_id: ElementId,
+        hook_context: Arc<Mutex<HookContext>>,
+        rebuild_queue: RebuildQueue,
+    ) -> Self {
+        Self {
+            tree,
+            element_id,
+            hook_context,
+            rebuild_queue,
         }
     }
 
@@ -186,6 +210,13 @@ impl BuildContext {
     /// Useful for creating child contexts that share the same hook state.
     pub fn hook_context(&self) -> Arc<Mutex<HookContext>> {
         Arc::clone(&self.hook_context)
+    }
+
+    /// Get the rebuild queue
+    ///
+    /// Used by signals and other reactive primitives to schedule component rebuilds.
+    pub fn rebuild_queue(&self) -> &RebuildQueue {
+        &self.rebuild_queue
     }
 
     /// Get the current element ID

@@ -80,9 +80,11 @@ pub mod paint_pipeline;
 pub mod parallel_build;
 pub mod pipeline_builder;
 pub mod pipeline_owner;
+pub mod rebuild_queue;
 pub mod recovery;
 pub mod root_manager;
 pub mod triple_buffer;
+
 
 pub use build_pipeline::BuildPipeline;
 pub use cancellation::CancellationToken;
@@ -97,6 +99,8 @@ pub use metrics::PipelineMetrics;
 pub use paint_pipeline::PaintPipeline;
 pub use pipeline_builder::PipelineBuilder;
 pub use pipeline_owner::PipelineOwner;
+pub use rebuild_queue::RebuildQueue;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use root_manager::RootManager;
 pub use triple_buffer::TripleBuffer;
+

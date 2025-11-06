@@ -46,7 +46,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{ElementTree, FrameCoordinator, RootManager};
+use super::{ElementTree, FrameCoordinator, RebuildQueue, RootManager};
 use crate::element::{Element, ElementId};
 
 #[cfg(debug_assertions)]
@@ -89,6 +89,10 @@ pub struct PipelineOwner {
 
     /// Root manager (tracks root element)
     root_mgr: RootManager,
+
+    /// Rebuild queue for deferred component rebuilds
+    /// Used by signals and other reactive primitives
+    rebuild_queue: RebuildQueue,
 
     /// Callback when a build is scheduled (optional)
     on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
@@ -144,16 +148,23 @@ impl PipelineOwner {
     ///
     /// [`PipelineBuilder`]: super::PipelineBuilder
     pub fn new() -> Self {
+        let rebuild_queue = RebuildQueue::new();
         Self {
             tree: Arc::new(RwLock::new(ElementTree::new())),
-            coordinator: FrameCoordinator::new(),
+            coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone()),
             root_mgr: RootManager::new(),
+            rebuild_queue,
             on_build_scheduled: None,
             metrics: None,
             recovery: None,
             cancellation: None,
             frame_buffer: None,
         }
+    }
+
+    /// Get reference to the rebuild queue
+    pub fn rebuild_queue(&self) -> &RebuildQueue {
+        &self.rebuild_queue
     }
 
     // =========================================================================
@@ -368,6 +379,37 @@ impl PipelineOwner {
             .flush_paint(&self.tree, self.root_mgr.root_id())
     }
 
+    /// Flush the rebuild queue by marking elements dirty
+    ///
+    /// This processes all pending rebuilds from signals and other reactive primitives.
+    /// Should be called before flush_build() to ensure signal changes trigger rebuilds.
+    pub fn flush_rebuild_queue(&mut self) {
+        let rebuilds = self.rebuild_queue.drain();
+
+        if rebuilds.is_empty() {
+            return;
+        }
+
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "[REBUILD_QUEUE] Processing {} pending rebuilds",
+            rebuilds.len()
+        );
+
+        // Mark each element dirty for rebuild
+        for (element_id, depth) in rebuilds {
+            #[cfg(debug_assertions)]
+            tracing::debug!(
+                "[REBUILD_QUEUE] Scheduling rebuild for element {:?} at depth {}",
+                element_id,
+                depth
+            );
+
+            // Mark element dirty via build pipeline
+            self.coordinator.build_mut().schedule(element_id, depth);
+        }
+    }
+
     /// Build a complete frame
     ///
     /// Delegates to FrameCoordinator.
@@ -380,6 +422,9 @@ impl PipelineOwner {
             "build_frame: Starting frame with constraints {:?}",
             constraints
         );
+
+        // Process pending rebuilds from signals
+        self.flush_rebuild_queue();
 
         // Delegate to coordinator
         self.coordinator

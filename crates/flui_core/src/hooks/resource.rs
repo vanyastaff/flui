@@ -37,7 +37,7 @@ pub struct Resource<T, E = String> {
     pub error: Signal<Option<E>>,
 }
 
-impl<T: Clone + 'static, E: Clone + 'static> Resource<T, E> {
+impl<T: Clone + Send + 'static, E: Clone + Send + 'static> Resource<T, E> {
     /// Create a new resource with pre-created signals.
     fn new(loading: Signal<bool>, data: Signal<Option<T>>, error: Signal<Option<E>>) -> Self {
         Self {
