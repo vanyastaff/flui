@@ -29,9 +29,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
 
@@ -172,42 +171,11 @@ impl Default for Padding {
     }
 }
 
-// Implement View for Padding - New architecture
+// Implement View for Padding - Simplified API
 impl View for Padding {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child if present
-        let (child_id, child_state) = if let Some(child) = self.child {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            (Some(id), Some(state))
-        } else {
-            (None, None)
-        };
-
-        // Create RenderNode (always Single for SingleRender widgets)
-        let render_node = RenderNode::Single {
-            render: Box::new(RenderPadding::new(self.padding)),
-            child: child_id,
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), child_state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        SingleRenderBuilder::new(RenderPadding::new(self.padding))
+            .with_optional_child(self.child)
     }
 }
 
@@ -250,25 +218,16 @@ macro_rules! padding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::element::ElementBase;
-    use flui_types::{Size, Offset};
+    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::LeafRenderBuilder;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
     impl View for MockView {
-        type Element = Element;
-        type State = ();
-
-        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-            let render_node = RenderNode::Leaf(Box::new(RenderPadding::new(EdgeInsets::ZERO)));
-            let render_element = RenderElement::new(render_node);
-            (Element::Render(render_element), ())
-        }
-
-        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
-            ChangeFlags::NONE
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

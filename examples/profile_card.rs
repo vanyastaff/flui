@@ -9,45 +9,28 @@
 //! - Divider for visual separation
 
 use flui_app::run_app;
-use flui_core::view::{View, ChangeFlags, AnyView};
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::BuildContext;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    Container, Center, Card, Column, Row, Text, SizedBox, ClipOval, Divider, Button,
+    Button, Card, Center, ClipOval, Column, Container, Divider, Row, SizedBox, Text,
 };
 use flui_types::{Color, EdgeInsets};
-use flui_types::layout::{MainAxisSize, CrossAxisAlignment, MainAxisAlignment};
+use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 /// Profile card application
 #[derive(Debug, Clone)]
 struct ProfileCardApp;
 
 impl View for ProfileCardApp {
-    type Element = Element;
-    type State = Box<dyn std::any::Any>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build the full widget tree
-        let root = Container::builder()
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        let mut root = Container::builder()
             .padding(EdgeInsets::all(40.0))
             .color(Color::rgb(240, 240, 245))
             .build_container();
 
-        // Set child manually
-        let mut root_with_child = root;
-        root_with_child.child = Some(Box::new(CenteredCard));
-
-        let (element, state) = root_with_child.build(ctx);
-        (element, state)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+        root.child = Some(Box::new(CenteredCard));
+        root
     }
 }
 
@@ -56,22 +39,10 @@ impl View for ProfileCardApp {
 struct CenteredCard;
 
 impl View for CenteredCard {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut center = Center::builder().build();
         center.child = Some(Box::new(ProfileCard));
-        center.build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+        center
     }
 }
 
@@ -80,26 +51,11 @@ impl View for CenteredCard {
 struct ProfileCard;
 
 impl View for ProfileCard {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        let mut card = Card::builder()
-            .elevation(2.0)
-            .build_card();
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        let mut card = Card::builder().elevation(2.0).build_card();
 
         card.child = Some(Box::new(CardContent));
-        let (element, state) = card.build(ctx);
-        (element, Some(state))
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+        card
     }
 }
 
@@ -108,27 +64,14 @@ impl View for ProfileCard {
 struct CardContent;
 
 impl View for CardContent {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut container = Container::builder()
             .width(350.0)
             .padding(EdgeInsets::all(24.0))
             .build_container();
 
         container.child = Some(Box::new(ProfileColumn));
-        let (element, state) = container.build(ctx);
-        (element, Some(state))
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+        container
     }
 }
 
@@ -137,11 +80,8 @@ impl View for CardContent {
 struct ProfileColumn;
 
 impl View for ProfileColumn {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        let column = Column::builder()
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        Column::builder()
             .main_axis_size(MainAxisSize::Min)
             .cross_axis_alignment(CrossAxisAlignment::Center)
             .children(vec![
@@ -157,18 +97,7 @@ impl View for ProfileColumn {
                 Box::new(SizedBox::builder().height(20.0).build()),
                 Box::new(ActionButtons),
             ])
-            .build();
-
-        column.build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+            .build()
     }
 }
 
@@ -177,22 +106,10 @@ impl View for ProfileColumn {
 struct Avatar;
 
 impl View for Avatar {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut clip = ClipOval::builder().build();
         clip.child = Some(Box::new(AvatarContainer));
-        clip.build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+        clip
     }
 }
 
@@ -200,10 +117,7 @@ impl View for Avatar {
 struct AvatarContainer;
 
 impl View for AvatarContainer {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut container = Container::builder()
             .width(100.0)
             .height(100.0)
@@ -211,17 +125,7 @@ impl View for AvatarContainer {
             .build_container();
 
         container.child = Some(Box::new(AvatarCenter));
-        let (element, state) = container.build(ctx);
-        (element, Some(state))
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+        container
     }
 }
 
@@ -229,28 +133,16 @@ impl View for AvatarContainer {
 struct AvatarCenter;
 
 impl View for AvatarCenter {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut center = Center::builder().build();
         center.child = Some(Box::new(
             Text::builder()
                 .data("JD")
                 .size(40.0)
                 .color(Color::WHITE)
-                .build()
+                .build(),
         ));
-        center.build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+        center
     }
 }
 
@@ -259,25 +151,12 @@ impl View for AvatarCenter {
 struct NameText;
 
 impl View for NameText {
-    type Element = Element;
-    type State = ();
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         Text::builder()
             .data("John Doe")
             .size(24.0)
             .color(Color::rgb(33, 33, 33))
             .build()
-            .build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
     }
 }
 
@@ -286,25 +165,12 @@ impl View for NameText {
 struct TitleText;
 
 impl View for TitleText {
-    type Element = Element;
-    type State = ();
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         Text::builder()
             .data("Senior Rust Developer")
             .size(16.0)
             .color(Color::rgb(117, 117, 117))
             .build()
-            .build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
     }
 }
 
@@ -313,24 +179,10 @@ impl View for TitleText {
 struct ProfileDivider;
 
 impl View for ProfileDivider {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        let (element, state) = Divider::builder()
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        Divider::builder()
             .color(Color::rgb(224, 224, 224))
             .build_divider()
-            .build(ctx);
-        (element, Some(state))
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
     }
 }
 
@@ -339,29 +191,24 @@ impl View for ProfileDivider {
 struct StatsRow;
 
 impl View for StatsRow {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        let row = Row::builder()
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        Row::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
             .children(vec![
-                Box::new(Stat { value: "128", label: "Posts" }) as Box<dyn AnyView>,
-                Box::new(Stat { value: "2.5K", label: "Followers" }),
-                Box::new(Stat { value: "312", label: "Following" }),
+                Box::new(Stat {
+                    value: "128",
+                    label: "Posts",
+                }) as Box<dyn AnyView>,
+                Box::new(Stat {
+                    value: "2.5K",
+                    label: "Followers",
+                }),
+                Box::new(Stat {
+                    value: "312",
+                    label: "Following",
+                }),
             ])
-            .build();
-
-        row.build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+            .build()
     }
 }
 
@@ -373,38 +220,28 @@ struct Stat {
 }
 
 impl View for Stat {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        let column = Column::builder()
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        Column::builder()
             .main_axis_size(MainAxisSize::Min)
             .cross_axis_alignment(CrossAxisAlignment::Center)
             .children(vec![
-                Box::new(Text::builder()
-                    .data(self.value)
-                    .size(20.0)
-                    .color(Color::rgb(33, 33, 33))
-                    .build()) as Box<dyn AnyView>,
+                Box::new(
+                    Text::builder()
+                        .data(self.value)
+                        .size(20.0)
+                        .color(Color::rgb(33, 33, 33))
+                        .build(),
+                ) as Box<dyn AnyView>,
                 Box::new(SizedBox::builder().height(4.0).build()),
-                Box::new(Text::builder()
-                    .data(self.label)
-                    .size(14.0)
-                    .color(Color::rgb(117, 117, 117))
-                    .build()),
+                Box::new(
+                    Text::builder()
+                        .data(self.label)
+                        .size(14.0)
+                        .color(Color::rgb(117, 117, 117))
+                        .build(),
+                ),
             ])
-            .build();
-
-        column.build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+            .build()
     }
 }
 
@@ -413,32 +250,22 @@ impl View for Stat {
 struct ActionButtons;
 
 impl View for ActionButtons {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        let row = Row::builder()
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        Row::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
             .children(vec![
-                Box::new(Button::builder("Follow")
-                    .color(Color::rgb(33, 150, 243))
-                    .build()) as Box<dyn AnyView>,
-                Box::new(Button::builder("Message")
-                    .color(Color::rgb(156, 39, 176))
-                    .build()),
+                Box::new(
+                    Button::builder("Follow")
+                        .color(Color::rgb(33, 150, 243))
+                        .build(),
+                ) as Box<dyn AnyView>,
+                Box::new(
+                    Button::builder("Message")
+                        .color(Color::rgb(156, 39, 176))
+                        .build(),
+                ),
             ])
-            .build();
-
-        row.build(ctx)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        ChangeFlags::NONE
+            .build()
     }
 }
 

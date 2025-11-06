@@ -5,9 +5,9 @@
 //! are sized to their intrinsic size along the main axis.
 
 use bon::Builder;
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::render::RenderNode;
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, View, IntoElement, MultiRenderBuilder};
+
+use flui_core::BuildContext;
 use flui_rendering::RenderListBody;
 use flui_types::Axis;
 
@@ -184,43 +184,12 @@ impl Default for ListBody {
 
 // Implement View trait
 impl View for ListBody {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build all children and collect their IDs and states
-        let (child_ids, child_states): (Vec<_>, Vec<_>) = self
-            .children
-            .into_iter()
-            .map(|child| {
-                let (elem, state) = child.build_any(ctx);
-                let id = ctx.tree().write().insert(elem.into_element());
-                (id, state)
-            })
-            .unzip();
-
-        // Create RenderListBody
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
 
-        let render_node = RenderNode::Multi {
-            render: Box::new(render),
-            children: child_ids,
-        };
-
-        let render_element = flui_core::element::RenderElement::new(render_node);
-        (Element::Render(render_element), child_states)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+        MultiRenderBuilder::new(render)
+            .with_children(self.children.into_iter())
     }
 }
 

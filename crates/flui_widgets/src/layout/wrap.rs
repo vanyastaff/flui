@@ -4,9 +4,9 @@
 //! Similar to Flutter's Wrap widget.
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+
+use flui_core::view::{View, AnyView, IntoElement, MultiRenderBuilder};
 use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
@@ -221,49 +221,15 @@ impl Default for Wrap {
 
 // Implement View for Wrap - New architecture
 impl View for Wrap {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build all children
-        let mut child_ids = Vec::new();
-        let mut child_states = Vec::new();
-
-        for child in self.children {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            child_ids.push(id);
-            child_states.push(state);
-        }
-
-        // Create RenderWrap
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render_wrap = RenderWrap::new(self.direction);
         render_wrap.alignment = self.alignment;
         render_wrap.spacing = self.spacing;
         render_wrap.run_spacing = self.run_spacing;
         render_wrap.cross_alignment = self.cross_alignment;
 
-        // Create RenderNode (Multi)
-        let render_node = RenderNode::Multi {
-            render: Box::new(render_wrap),
-            children: child_ids,
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), child_states)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+        MultiRenderBuilder::new(render_wrap)
+            .with_children(self.children.into_iter())
     }
 }
 
@@ -295,25 +261,15 @@ impl<S: State> WrapBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::view::LeafRenderBuilder;
 
     // Mock view for testing
     #[derive()]
     struct MockView;
 
     impl View for MockView {
-        type Element = Element;
-        type State = ();
-
-        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-            use flui_rendering::RenderColoredBox;
-            use flui_types::Color;
-            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
-            let render_element = RenderElement::new(render_node);
-            (Element::Render(render_element), ())
-        }
-
-        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
-            ChangeFlags::NONE
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

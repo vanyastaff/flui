@@ -29,9 +29,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
 
@@ -221,39 +220,13 @@ impl Default for DecoratedBox {
 
 // Implement View for DecoratedBox - New architecture
 impl View for DecoratedBox {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child (use empty SizedBox if none)
-        let child = self.child.unwrap_or_else(|| Box::new(crate::SizedBox::new()));
-        let (elem, state) = child.build_any(ctx);
-        let child_id = ctx.tree().write().insert(elem.into_element());
-
-        // Create RenderNode with Single
-        let render_node = RenderNode::Single {
-            render: Box::new(RenderDecoratedBox::with_position(
-                self.decoration.clone(),
-                self.position,
-            )),
-            child: Some(child_id),
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), Some(state))
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        let child = self.child.or_else(|| Some(Box::new(crate::SizedBox::new())));
+        SingleRenderBuilder::new(RenderDecoratedBox::with_position(
+            self.decoration.clone(),
+            self.position,
+        ))
+        .with_optional_child(child)
     }
 }
 

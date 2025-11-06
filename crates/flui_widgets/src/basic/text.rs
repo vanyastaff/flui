@@ -18,9 +18,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags};
+use flui_core::BuildContext;
+use flui_core::view::{View, IntoElement, LeafRenderBuilder};
 use flui_rendering::{ParagraphData, RenderParagraph};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},
@@ -158,12 +157,9 @@ impl Text {
     }
 }
 
-// Implement View for Text - New architecture
+// Implement View for Text - Simplified API
 impl View for Text {
-    type Element = Element;
-    type State = ();
-
-    fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create paragraph data
         let data = ParagraphData::new(&self.data)
             .with_font_size(self.size)
@@ -180,30 +176,8 @@ impl View for Text {
         data.text_direction = self.text_direction;
         data.soft_wrap = self.soft_wrap;
 
-        // Create RenderParagraph
-        let render_paragraph = RenderParagraph::new(data);
-
-        // Create RenderNode (Leaf - no children)
-        let render_node = RenderNode::Leaf(Box::new(render_paragraph));
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        // Wrap in Element enum
-        let element = Element::Render(render_element);
-
-        (element, ())
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+        // Create and return RenderParagraph via LeafRenderBuilder
+        LeafRenderBuilder::new(RenderParagraph::new(data))
     }
 }
 

@@ -17,9 +17,9 @@
 //! Expanded::with_flex(2, widget)
 //! ```
 
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::render::RenderNode;
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+
+use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that expands a child of a Row, Column, or Flex to fill available space.
@@ -171,37 +171,11 @@ impl Expanded {
     }
 }
 
-// Implement View trait
+// Implement View trait - Simplified API
 impl View for Expanded {
-    type Element = Element;
-    type State = ();
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child
-        let (child_elem, _child_state) = self.child.build_any(ctx);
-        let child_id = ctx.tree().write().insert(child_elem.into_element());
-
-        // Create RenderFlexItem wrapper with FlexItemMetadata
-        let render = RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex));
-
-        let render_node = RenderNode::Single {
-            render: Box::new(render),
-            child: Some(child_id),
-        };
-
-        let render_element = flui_core::element::RenderElement::new(render_node);
-        (Element::Render(render_element), ())
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        SingleRenderBuilder::new(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)))
+            .with_child(self.child)
     }
 }
 

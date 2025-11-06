@@ -4,9 +4,8 @@
 //! repainting from its ancestors for performance optimization.
 
 use bon::Builder;
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::render::RenderNode;
-use flui_core::{BuildContext, Element};
+use flui_core::BuildContext;
+use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderRepaintBoundary;
 
 /// A widget that creates a repaint boundary.
@@ -131,41 +130,9 @@ where
 
 // Implement View trait
 impl View for RepaintBoundary {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child first
-        let (child_id, child_state) = if let Some(child) = self.child {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            (Some(id), Some(state))
-        } else {
-            (None, None)
-        };
-
-        // Create RenderRepaintBoundary
-        let render = RenderRepaintBoundary::new();
-
-        let render_node = RenderNode::Single {
-            render: Box::new(render),
-            child: child_id,
-        };
-
-        let render_element = flui_core::element::RenderElement::new(render_node);
-        (Element::Render(render_element), child_state)
-    }
-
-    fn rebuild(
-        self,
-        _prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // RepaintBoundary has no mutable properties to update
-        // The is_repaint_boundary flag is always true for this widget
-        // Child changes handled by element tree
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        SingleRenderBuilder::new(RenderRepaintBoundary::new())
+            .with_optional_child(self.child)
     }
 }
 

@@ -4,9 +4,9 @@
 //! Similar to Flutter's FractionallySizedBox widget.
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+
+use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderFractionallySizedBox;
 
 /// A widget that sizes its child to a fraction of the total available space.
@@ -195,45 +195,14 @@ impl FractionallySizedBox {
     }
 }
 
-// Implement View for FractionallySizedBox - New architecture
+// Implement View for FractionallySizedBox - Simplified API
 impl View for FractionallySizedBox {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child if present
-        let (child_id, child_state) = if let Some(child) = self.child {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            (Some(id), Some(state))
-        } else {
-            (None, None)
-        };
-
-        // Create RenderNode (always Single for SingleRender widgets)
-        let render_node = RenderNode::Single {
-            render: Box::new(RenderFractionallySizedBox::new(
-                self.width_factor,
-                self.height_factor,
-            )),
-            child: child_id,
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), child_state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        SingleRenderBuilder::new(RenderFractionallySizedBox::new(
+            self.width_factor,
+            self.height_factor,
+        ))
+        .with_optional_child(self.child)
     }
 }
 
@@ -273,25 +242,15 @@ impl<S: State> FractionallySizedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::view::LeafRenderBuilder;
 
     // Mock view for testing
     #[derive()]
     struct MockView;
 
     impl View for MockView {
-        type Element = Element;
-        type State = ();
-
-        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-            use flui_rendering::RenderColoredBox;
-            use flui_types::Color;
-            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
-            let render_element = RenderElement::new(render_node);
-            (Element::Render(render_element), ())
-        }
-
-        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
-            ChangeFlags::NONE
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

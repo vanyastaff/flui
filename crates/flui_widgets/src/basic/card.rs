@@ -4,8 +4,8 @@
 //! Similar to Flutter's Card widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, View, IntoElement};
+use flui_core::BuildContext;
 use flui_types::{Color, EdgeInsets};
 use flui_types::styling::{BorderRadius, BoxDecoration, BoxShadow};
 
@@ -190,10 +190,7 @@ where
 
 // Implement View trait
 impl View for Card {
-    type Element = Element;
-    type State = Box<dyn std::any::Any>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate shadow based on elevation
         let shadows = if self.elevation > 0.0 {
             vec![
@@ -228,39 +225,14 @@ impl View for Card {
         decorated.child = Some(child_view);
 
         // Wrap with margin if specified
-        let final_view: Box<dyn AnyView> = if let Some(margin) = self.margin {
+        if let Some(margin) = self.margin {
             let mut container = Container::builder()
                 .margin(margin)
                 .build_container();
             container.child = Some(Box::new(decorated));
-            Box::new(container)
+            Box::new(container) as Box<dyn AnyView>
         } else {
-            Box::new(decorated)
-        };
-
-        // Build the final view
-        let (boxed_element, state) = final_view.build_any(ctx);
-        let element = boxed_element.into_element();
-        (element, state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // Check if any properties changed
-        let properties_changed = self.color != prev.color
-            || self.elevation != prev.elevation
-            || self.margin != prev.margin
-            || self.shape != prev.shape;
-
-        if properties_changed {
-            // Properties changed - need to rebuild
-            ChangeFlags::NEEDS_BUILD
-        } else {
-            ChangeFlags::NONE
+            Box::new(decorated) as Box<dyn AnyView>
         }
     }
 }

@@ -4,9 +4,9 @@
 //! potentially causing the child to overflow the widget's bounds.
 
 use bon::Builder;
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::render::RenderNode;
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+
+use flui_core::BuildContext;
 use flui_rendering::RenderSizedOverflowBox;
 use flui_types::Alignment;
 
@@ -218,22 +218,9 @@ where
     }
 }
 
-// Implement View trait
+// Implement View trait - Simplified API
 impl View for SizedOverflowBox {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child first
-        let (child_id, child_state) = if let Some(child) = self.child {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            (Some(id), Some(state))
-        } else {
-            (None, None)
-        };
-
-        // Create RenderSizedOverflowBox
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render = if self.child_min_width.is_some()
             || self.child_max_width.is_some()
             || self.child_min_height.is_some()
@@ -252,24 +239,8 @@ impl View for SizedOverflowBox {
         };
         render.alignment = self.alignment;
 
-        let render_node = RenderNode::Single {
-            render: Box::new(render),
-            child: child_id,
-        };
-
-        let render_element = flui_core::element::RenderElement::new(render_node);
-        (Element::Render(render_element), child_state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+        SingleRenderBuilder::new(render)
+            .with_optional_child(self.child)
     }
 }
 

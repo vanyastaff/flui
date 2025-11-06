@@ -37,8 +37,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, View, IntoElement};
+use flui_core::BuildContext;
 use flui_types::constraints::BoxConstraints;
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color, EdgeInsets};
@@ -286,20 +286,12 @@ impl Default for Container {
 // Container composes other Views (Padding, Align, DecoratedBox, SizedBox, etc.) into a tree.
 
 impl View for Container {
-    type Element = Element;
-    type State = Box<dyn std::any::Any>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Build widget tree from inside out:
         // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
         //
         // Key insight: When alignment is set, decoration must be OUTSIDE alignment
         // so that decoration receives tight constraints and expands to full size.
-        //
-        // From Flutter docs:
-        // "If the widget has an alignment, and the parent provides bounded constraints,
-        //  then the Container tries to expand to fit the parent, and then positions
-        //  the child within itself as per the alignment."
 
         let mut current: Box<dyn AnyView> = if let Some(child) = self.child {
             child
@@ -318,7 +310,6 @@ impl View for Container {
         }
 
         // Apply alignment BEFORE decoration!
-        // This allows decoration to be on the outside and receive tight constraints
         if let Some(alignment) = self.alignment {
             let mut align_widget = crate::Align::builder()
                 .alignment(alignment)
@@ -328,7 +319,6 @@ impl View for Container {
         }
 
         // Apply decoration or color AFTER alignment
-        // Decoration will now receive tight constraints from SizedBox/margin
         if let Some(decoration) = self.decoration {
             let mut decorated_widget = crate::DecoratedBox::builder()
                 .decoration(decoration)
@@ -350,9 +340,6 @@ impl View for Container {
         }
 
         // Apply margin BEFORE size constraints!
-        // This ensures margin is "inside" the constrained box
-        // Note: margin is implemented using Padding widget (same as Flutter)
-        // The semantic difference (margin vs padding) is maintained by the widget order
         if let Some(margin) = self.margin {
             let mut margin_widget = crate::Padding::builder()
                 .padding(margin)
@@ -362,9 +349,8 @@ impl View for Container {
         }
 
         // Apply width/height constraints
-        // These constraints apply to the TOTAL size (including margin)
         if self.width.is_some() || self.height.is_some() {
-            let mut sized_widget = crate::SizedBox {
+            let sized_widget = crate::SizedBox {
                 key: None,
                 width: self.width,
                 height: self.height,
@@ -373,48 +359,8 @@ impl View for Container {
             current = Box::new(sized_widget);
         }
 
-        // Note: Transform feature is currently disabled
-        // // Apply transform LAST (outermost)
-        // // Transform is applied OUTSIDE all other effects
-        // if let Some(transform) = self.transform {
-        //     current = Box::new(crate::Transform::builder()
-        //         .transform(transform)
-        //         .child(current)
-        //         .build());
-        // }
-
-        // Build the final child tree
-        let (boxed_element, state) = current.build_any(ctx);
-        let element = boxed_element.into_element();
-        (element, state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // Check if any properties changed
-        let properties_changed = self.alignment != prev.alignment
-            || self.padding != prev.padding
-            || self.color != prev.color
-            || self.decoration != prev.decoration
-            || self.margin != prev.margin
-            || self.width != prev.width
-            || self.height != prev.height
-            || self.constraints != prev.constraints;
-
-        if properties_changed {
-            // Properties changed - need to rebuild the entire tree
-            ChangeFlags::NEEDS_BUILD
-        } else {
-            // Properties same - let child handle rebuild
-            // Note: In a more sophisticated implementation, we could
-            // rebuild the child here, but for composite widgets it's
-            // simpler to just return NEEDS_BUILD when properties change
-            ChangeFlags::NONE
-        }
+        // Return the composed widget tree
+        current
     }
 }
 

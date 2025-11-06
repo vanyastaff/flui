@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::BuildContext;
 use flui_types::events::{PointerEvent, PointerEventData};
 use parking_lot::RwLock;
 
@@ -141,39 +141,12 @@ impl GestureDetector {
 }
 
 impl View for GestureDetector {
-    type Element = Element;
-    type State = Box<dyn std::any::Any>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Register handlers when building
         self.register();
 
         // Return child directly - this ensures proper rendering
-        let (boxed_element, state) = self.child.build_any(ctx);
-        let element = boxed_element.into_element();
-        (element, state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // Check if callbacks changed
-        // Note: We can't directly compare Arc<dyn Fn>, so we check if presence changed
-        let callbacks_changed = (self.on_tap.is_some() != prev.on_tap.is_some())
-            || (self.on_tap_down.is_some() != prev.on_tap_down.is_some())
-            || (self.on_tap_up.is_some() != prev.on_tap_up.is_some())
-            || (self.on_tap_cancel.is_some() != prev.on_tap_cancel.is_some());
-
-        if callbacks_changed {
-            // Callbacks changed - need to re-register
-            ChangeFlags::NEEDS_BUILD
-        } else {
-            // Let child handle rebuild
-            ChangeFlags::NONE
-        }
+        self.child
     }
 }
 

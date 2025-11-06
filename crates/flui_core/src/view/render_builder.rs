@@ -124,6 +124,24 @@ impl<R: SingleRender> SingleRenderBuilder<R> {
         self.child = Some(AnyElement::new(child));
         self
     }
+
+    /// Add an optional child (chainable)
+    ///
+    /// Convenience method for handling `Option<impl IntoElement>`.
+    /// If `None`, the builder remains unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// SingleRenderBuilder::new(render)
+    ///     .with_optional_child(self.child)  // child: Option<Box<dyn AnyView>>
+    /// ```
+    pub fn with_optional_child(mut self, child: Option<impl IntoElement>) -> Self {
+        if let Some(c) = child {
+            self.child = Some(AnyElement::new(c));
+        }
+        self
+    }
 }
 
 impl<R: SingleRender<Metadata = ()>> IntoElement for SingleRenderBuilder<R> {

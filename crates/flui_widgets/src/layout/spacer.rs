@@ -18,9 +18,9 @@
 //! Spacer::with_flex(2)  // Takes 2x the space
 //! ```
 
-use flui_core::view::{ChangeFlags, View};
-use flui_core::render::RenderNode;
-use flui_core::{BuildContext, Element};
+use flui_core::view::{View, IntoElement, SingleRenderBuilder};
+
+use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
 
 /// A widget that creates flexible empty space in a Row, Column, or Flex.
@@ -190,42 +190,17 @@ impl Default for Spacer {
     }
 }
 
-// Implement View trait
+// Implement View trait - Simplified API
 impl View for Spacer {
-    type Element = Element;
-    type State = ();
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Build zero-sized SizedBox as child
         let sized_box = crate::SizedBox::builder()
             .width(0.0)
             .height(0.0)
             .build();
 
-        let (child_elem, _child_state) = sized_box.build(ctx);
-        let child_id = ctx.tree().write().insert(child_elem);
-
-        // Create RenderFlexItem wrapper with FlexItemMetadata
-        let render = RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex));
-
-        let render_node = RenderNode::Single {
-            render: Box::new(render),
-            child: Some(child_id),
-        };
-
-        let render_element = flui_core::element::RenderElement::new(render_node);
-        (Element::Render(render_element), ())
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+        SingleRenderBuilder::new(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)))
+            .with_child(sized_box)
     }
 }
 

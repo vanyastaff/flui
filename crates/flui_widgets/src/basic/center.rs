@@ -26,9 +26,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -193,6 +192,8 @@ macro_rules! center {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::LeafRenderBuilder;
     use flui_rendering::RenderPadding;
     use flui_types::EdgeInsets;
 
@@ -201,17 +202,8 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        type Element = Element;
-        type State = ();
-
-        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-            let render_node = RenderNode::Leaf(Box::new(RenderPadding::new(EdgeInsets::ZERO)));
-            let render_element = RenderElement::new(render_node);
-            (Element::Render(render_element), ())
-        }
-
-        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
-            ChangeFlags::NONE
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
@@ -318,42 +310,15 @@ mod tests {
     }
 }
 
-// Implement View for Center - New architecture
+// Implement View for Center - Simplified API
 impl View for Center {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child (required for Center)
-        let child = self.child.expect("Center requires a child widget");
-        let (elem, state) = child.build_any(ctx);
-        let child_id = ctx.tree().write().insert(elem.into_element());
-
-        // Create RenderNode with Single (Center always has child)
-        let render_node = RenderNode::Single {
-            render: Box::new(RenderAlign::with_factors(
-                Alignment::CENTER,
-                self.width_factor,
-                self.height_factor,
-            )),
-            child: Some(child_id),
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), Some(state))
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        SingleRenderBuilder::new(RenderAlign::with_factors(
+            Alignment::CENTER,
+            self.width_factor,
+            self.height_factor,
+        ))
+        .with_optional_child(self.child)
     }
 }
 

@@ -30,9 +30,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+
+use flui_core::view::{View, AnyView, IntoElement, MultiRenderBuilder};
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -281,45 +281,9 @@ impl Default for IndexedStack {
 
 // Implement View for IndexedStack - New architecture
 impl View for IndexedStack {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build all children
-        let mut child_ids = Vec::new();
-        let mut child_states = Vec::new();
-
-        for child in self.children {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            child_ids.push(id);
-            child_states.push(state);
-        }
-
-        // Create RenderIndexedStack
-        let render_indexed_stack = RenderIndexedStack::with_alignment(self.index, self.alignment);
-
-        // Create RenderNode (Multi)
-        let render_node = RenderNode::Multi {
-            render: Box::new(render_indexed_stack),
-            children: child_ids,
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), child_states)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        MultiRenderBuilder::new(RenderIndexedStack::with_alignment(self.index, self.alignment))
+            .with_children(self.children.into_iter())
     }
 }
 
@@ -398,6 +362,7 @@ macro_rules! indexed_stack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::view::LeafRenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -413,19 +378,8 @@ mod tests {
     }
 
     impl View for MockView {
-        type Element = Element;
-        type State = ();
-
-        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-            use flui_rendering::RenderColoredBox;
-            use flui_types::Color;
-            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
-            let render_element = RenderElement::new(render_node);
-            (Element::Render(render_element), ())
-        }
-
-        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
-            ChangeFlags::NONE
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

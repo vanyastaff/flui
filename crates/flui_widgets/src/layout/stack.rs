@@ -30,9 +30,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+use flui_core::view::{View, AnyView, IntoElement, MultiRenderBuilder};
 use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -258,46 +257,12 @@ impl Default for Stack {
 
 // Implement View for Stack - New architecture
 impl View for Stack {
-    type Element = Element;
-    type State = Vec<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build all children
-        let mut child_ids = Vec::new();
-        let mut child_states = Vec::new();
-
-        for child in self.children {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            child_ids.push(id);
-            child_states.push(state);
-        }
-
-        // Create RenderStack
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
 
-        // Create RenderNode (Multi)
-        let render_node = RenderNode::Multi {
-            render: Box::new(render_stack),
-            children: child_ids,
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), child_states)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+        MultiRenderBuilder::new(render_stack)
+            .with_children(self.children.into_iter())
     }
 }
 
@@ -372,6 +337,7 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::view::LeafRenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -387,19 +353,8 @@ mod tests {
     }
 
     impl View for MockView {
-        type Element = Element;
-        type State = ();
-
-        fn build(self, _ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-            use flui_rendering::RenderColoredBox;
-            use flui_types::Color;
-            let render_node = RenderNode::Leaf(Box::new(RenderColoredBox::new(Color::BLACK)));
-            let render_element = RenderElement::new(render_node);
-            (Element::Render(render_element), ())
-        }
-
-        fn rebuild(self, _prev: &Self, _state: &mut Self::State, _element: &mut Self::Element) -> ChangeFlags {
-            ChangeFlags::NONE
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

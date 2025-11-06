@@ -23,8 +23,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, ChangeFlags, View};
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, View, IntoElement};
+use flui_core::BuildContext;
 use flui_types::Color;
 
 use crate::{ColoredBox, Container, SizedBox};
@@ -165,10 +165,7 @@ impl Default for Divider {
 
 // Implement View trait
 impl View for Divider {
-    type Element = Element;
-    type State = Box<dyn std::any::Any>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate effective height (use height if specified, otherwise thickness)
         let effective_height = self.height.unwrap_or(self.thickness);
 
@@ -203,31 +200,7 @@ impl View for Divider {
                 .build())
         };
 
-        // Build the child view
-        let (boxed_element, state) = child.build_any(ctx);
-        let element = boxed_element.into_element();
-        (element, state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // Check if any properties changed
-        let properties_changed = self.height != prev.height
-            || self.thickness != prev.thickness
-            || self.indent != prev.indent
-            || self.end_indent != prev.end_indent
-            || self.color != prev.color;
-
-        if properties_changed {
-            // Properties changed - need to rebuild
-            ChangeFlags::NEEDS_BUILD
-        } else {
-            ChangeFlags::NONE
-        }
+        child
     }
 }
 

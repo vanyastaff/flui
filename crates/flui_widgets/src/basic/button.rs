@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use flui_core::view::{ChangeFlags, View};
-use flui_core::{BuildContext, Element};
+use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::BuildContext;
 use flui_types::{Color, EdgeInsets, events::PointerEventData};
 use flui_types::styling::{BorderRadius, BoxDecoration};
 
@@ -72,10 +72,7 @@ impl Button {
 }
 
 impl View for Button {
-    type Element = Element;
-    type State = Box<dyn std::any::Any>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create the visual container
         let container = Container::builder()
             .padding(self.padding)
@@ -87,42 +84,16 @@ impl View for Button {
             .build_container();
 
         // Wrap in GestureDetector for tap handling
-        let view: Box<dyn flui_core::view::AnyView> = if let Some(on_tap) = self.on_tap {
+        if let Some(on_tap) = self.on_tap {
             let on_tap_clone = Arc::clone(&on_tap);
             Box::new(GestureDetector::builder()
                 .child(container)
                 .on_tap(move |_data: &PointerEventData| {
                     on_tap_clone();
                 })
-                .build())
+                .build()) as Box<dyn AnyView>
         } else {
-            Box::new(container)
-        };
-
-        let (boxed_element, state) = view.build_any(ctx);
-        let element = boxed_element.into_element();
-        (element, state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        _state: &mut Self::State,
-        _element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // Check if any properties changed
-        let properties_changed = self.label != prev.label
-            || self.color != prev.color
-            || self.padding != prev.padding
-            || self.border_radius != prev.border_radius
-            || self.min_width != prev.min_width
-            || self.min_height != prev.min_height
-            || self.on_tap.is_some() != prev.on_tap.is_some();
-
-        if properties_changed {
-            ChangeFlags::NEEDS_BUILD
-        } else {
-            ChangeFlags::NONE
+            Box::new(container) as Box<dyn AnyView>
         }
     }
 }

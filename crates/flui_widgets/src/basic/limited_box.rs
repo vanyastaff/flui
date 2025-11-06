@@ -4,9 +4,8 @@
 //! Similar to Flutter's LimitedBox widget.
 
 use bon::Builder;
-use flui_core::{BuildContext, Element, RenderElement};
-use flui_core::render::RenderNode;
-use flui_core::view::{View, ChangeFlags, AnyView};
+use flui_core::BuildContext;
+use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderLimitedBox;
 
 /// A widget that limits its maximum size when unconstrained.
@@ -158,40 +157,9 @@ impl<S: State> LimitedBoxBuilder<S> {
 
 // Implement View for LimitedBox - New architecture
 impl View for LimitedBox {
-    type Element = Element;
-    type State = Option<Box<dyn std::any::Any>>;
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build child if present
-        let (child_id, child_state) = if let Some(child) = self.child {
-            let (elem, state) = child.build_any(ctx);
-            let id = ctx.tree().write().insert(elem.into_element());
-            (Some(id), Some(state))
-        } else {
-            (None, None)
-        };
-
-        // Create RenderNode (always Single for SingleRender widgets)
-        let render_node = RenderNode::Single {
-            render: Box::new(RenderLimitedBox::new(self.max_width, self.max_height)),
-            child: child_id,
-        };
-
-        // Create RenderElement using constructor
-        let render_element = RenderElement::new(render_node);
-
-        (Element::Render(render_element), child_state)
-    }
-
-    fn rebuild(
-        self,
-        prev: &Self,
-        state: &mut Self::State,
-        element: &mut Self::Element,
-    ) -> ChangeFlags {
-        // TODO: Implement proper rebuild logic if needed
-        // For now, return NONE as View architecture handles rebuilding
-        ChangeFlags::NONE
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        SingleRenderBuilder::new(RenderLimitedBox::new(self.max_width, self.max_height))
+            .with_optional_child(self.child)
     }
 }
 
