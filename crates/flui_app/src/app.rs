@@ -249,6 +249,14 @@ impl FluiApp {
                 Ok(Some(_size)) => {
                     self.stats.layout_count += 1;
                     self.last_size = Some(current_size);
+
+                    // IMPORTANT: Request paint after layout completes
+                    // When window resizes, layout changes positions/sizes but doesn't trigger paint
+                    // We must explicitly request paint to redraw the scene
+                    if let Some(root_id) = self.root_id {
+                        self.pipeline.request_paint(root_id);
+                    }
+
                     if self.stats.frame_count <= 3 {
                         println!("[DEBUG] Layout succeeded: {:?}", _size);
                     }
