@@ -47,9 +47,9 @@ flui = { version = "0.1", default-features = false, features = ["wgpu"] }
 features = ["parallel"]
 ```
 
-**Status:** 🚧 Currently has thread safety issues - **NOT RECOMMENDED**
+**Status:** ✅ Stable - Thread-safe parallel processing
 
-Enables rayon-based parallel processing for build pipeline.
+Enables rayon-based parallel processing for build pipeline. All thread-safety issues have been resolved through comprehensive Arc/Mutex refactoring.
 
 ### profiling - Puffin Profiler
 
@@ -252,7 +252,7 @@ impl View for Counter {
 |---------|--------|-------|
 | `egui` | ✅ Stable | Recommended for production |
 | `wgpu` | 🚧 Experimental | Still in development |
-| `parallel` | ❌ Broken | Thread safety issues |
+| `parallel` | ✅ Stable | Thread-safe parallel processing |
 | `profiling` | ✅ Stable | Works well |
 | `tracy` | ✅ Stable | Advanced profiling |
 | `persistence` | ✅ Stable | Default feature |
@@ -274,10 +274,6 @@ You get these default features:
 All widgets and application framework are always included.
 
 ## Troubleshooting
-
-### "Parallel build fails to compile"
-
-**Known Issue:** The `parallel` feature currently has thread safety issues and will not compile. Avoid using this feature until it's fixed.
 
 ### "wgpu backend not working"
 
