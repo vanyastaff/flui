@@ -103,7 +103,6 @@ impl FluiApp {
     ///
     /// let app = FluiApp::new(Box::new(MyRootView));
     /// ```
-    #[allow(deprecated)]
     pub fn new(root_view: Box<dyn AnyView>) -> Self {
         let pipeline = PipelineOwner::new();
 

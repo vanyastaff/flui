@@ -125,20 +125,25 @@ impl std::fmt::Debug for PipelineOwner {
 }
 
 impl PipelineOwner {
-    /// Create a new pipeline owner
+    /// Create a new pipeline owner with default configuration
     ///
-    /// Creates a basic pipeline without production features.
+    /// Creates a basic pipeline without production features (no metrics, batching, etc.).
+    /// For advanced configuration, consider using [`PipelineBuilder`] instead.
     ///
     /// # Example
     ///
     /// ```rust,ignore
+    /// // Basic usage
     /// let owner = PipelineOwner::new();
+    ///
+    /// // For advanced features, use PipelineBuilder:
+    /// let owner = PipelineBuilder::new()
+    ///     .with_metrics()
+    ///     .with_batching(Duration::from_millis(16))
+    ///     .build();
     /// ```
-    #[deprecated(
-        since = "0.1.0",
-        note = "Prefer using PipelineBuilder for better API ergonomics and production features. \
-                Example: PipelineBuilder::new().build()"
-    )]
+    ///
+    /// [`PipelineBuilder`]: super::PipelineBuilder
     pub fn new() -> Self {
         Self {
             tree: Arc::new(RwLock::new(ElementTree::new())),
