@@ -71,8 +71,8 @@ pub use gestures::GestureDetector;
 pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 pub use layout::{
     Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-    IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, RotatedBox, Row,
-    SizedOverflowBox, Spacer, Stack, Wrap,
+    IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
+    RotatedBox, Row, SizedOverflowBox, Spacer, Stack, Wrap,
 };
 pub use visual_effects::{
     BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
@@ -101,8 +101,8 @@ pub mod prelude {
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
     pub use crate::layout::{
         Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-        IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, RotatedBox, Row,
-        SizedOverflowBox, Spacer, Stack, Wrap,
+        IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
+        RotatedBox, Row, SizedOverflowBox, Spacer, Stack, Wrap,
     };
     pub use crate::visual_effects::{
         BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
