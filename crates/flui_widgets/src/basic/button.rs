@@ -73,8 +73,15 @@ impl Button {
 
 impl View for Button {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        // Create the visual container
-        let container = Container::builder()
+        // Create text widget for the label
+        let text = crate::Text::builder()
+            .data(self.label)
+            .size(14.0)
+            .color(Color::WHITE)
+            .build();
+
+        // Create the visual container with text as child
+        let mut container = Container::builder()
             .padding(self.padding)
             .decoration(BoxDecoration {
                 color: Some(self.color),
@@ -82,6 +89,8 @@ impl View for Button {
                 ..Default::default()
             })
             .build_container();
+
+        container.child = Some(Box::new(text));
 
         // Wrap in GestureDetector for tap handling
         if let Some(on_tap) = self.on_tap {
