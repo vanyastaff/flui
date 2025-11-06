@@ -247,8 +247,9 @@ impl LeafRender for RenderParagraph {
                 ..Default::default()
             };
 
-            // Use the offset passed from parent to position text correctly
-            let position = Point::new(offset.dx, offset.dy);
+            // Draw text in LOCAL coordinates (0, 0)
+            // The offset will be applied via TransformLayer below
+            let position = Point::new(0.0, 0.0);
 
             #[cfg(debug_assertions)]
             tracing::debug!("RenderParagraph::paint: drawing text with style {:?} at {:?}", style, position);
