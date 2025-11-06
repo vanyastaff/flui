@@ -6,8 +6,10 @@ pub mod debug;
 pub mod effects;
 pub mod interaction;
 pub mod layout;
+pub mod render_scroll_view;
 pub mod special;
 pub mod text;
+
 /// Special-purpose render objects
 
 
@@ -16,9 +18,11 @@ pub use basic::*;
 pub use effects::*;
 pub use interaction::*;
 pub use layout::*;
+pub use render_scroll_view::RenderScrollView;
 pub use special::*;
 pub use text::*;
 
 #[cfg(debug_assertions)]
 pub use debug::*;
+
 
