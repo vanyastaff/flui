@@ -19,6 +19,3 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1.43", features = ["full"] }
-
-[lints]
-workspace = true

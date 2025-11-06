@@ -97,9 +97,11 @@ pub mod opacity;
 #[cfg(debug_assertions)]
 pub mod overflow_indicator;
 pub mod picture;
+pub mod pointer_listener_layer;
 pub mod pool;
 pub mod pooled;
 pub mod transform;
+
 
 // Basic composition layers
 
@@ -124,6 +126,7 @@ pub use container::ContainerLayer;
 pub use offset::OffsetLayer;
 pub use opacity::OpacityLayer;
 pub use picture::{DrawCommand, PictureLayer};
+pub use pointer_listener_layer::PointerListenerLayer;
 pub use transform::{Transform, TransformLayer};
 
 // Clipping layers
@@ -148,3 +151,4 @@ pub use flui_types::painting::effects::{
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+

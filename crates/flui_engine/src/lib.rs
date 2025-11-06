@@ -103,6 +103,8 @@ pub use layer::{
     OffsetLayer,
     OpacityLayer,
     PictureLayer,
+    // Pointer listener
+    PointerListenerLayer,
     // Pooled layers
     PooledClipRectLayer,
     PooledContainerLayer,
