@@ -65,7 +65,7 @@ pub mod visual_effects;
 // Essential widgets for Container and Flex layout
 pub use basic::{
     Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-    DecoratedBox, Divider, FittedBox, LimitedBox, Padding, SafeArea, SizedBox, Text,
+    DecoratedBox, Divider, FittedBox, LayoutBuilder, LimitedBox, Padding, SafeArea, SizedBox, Text,
     VerticalDivider,
 };
 pub use gestures::GestureDetector;
@@ -96,7 +96,7 @@ pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
     pub use crate::basic::{
         Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-        DecoratedBox, Divider, FittedBox, LimitedBox, Padding, SafeArea, SizedBox, Text,
+        DecoratedBox, Divider, FittedBox, LayoutBuilder, LimitedBox, Padding, SafeArea, SizedBox, Text,
         VerticalDivider,
     };
     pub use crate::gestures::GestureDetector;
