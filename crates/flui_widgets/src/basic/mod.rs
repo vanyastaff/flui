@@ -8,6 +8,7 @@
 //! - Align: Aligns its child with flexible positioning
 
 pub mod align;
+pub mod app_bar;
 pub mod aspect_ratio;
 pub mod builder;
 pub mod button;
@@ -30,8 +31,10 @@ pub mod vertical_divider;
 
 
 
+
 // Re-exports
 pub use align::Align;
+pub use app_bar::AppBar;
 pub use aspect_ratio::AspectRatio;
 pub use builder::Builder;
 pub use button::Button;
@@ -50,6 +53,7 @@ pub use safe_area::SafeArea;
 pub use sized_box::SizedBox;
 pub use text::Text;
 pub use vertical_divider::VerticalDivider;
+
 
 
 

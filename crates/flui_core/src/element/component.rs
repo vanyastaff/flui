@@ -125,6 +125,14 @@ impl ComponentElement {
         &mut *self.state
     }
 
+    /// Replace the state with a new value
+    ///
+    /// Used internally by the build pipeline to manage HookContext state.
+    #[inline]
+    pub(crate) fn set_state(&mut self, state: Box<dyn Any>) {
+        self.state = state;
+    }
+
     /// Get child element ID
     ///
     /// Returns `Some(ElementId)` if child exists, `None` otherwise.

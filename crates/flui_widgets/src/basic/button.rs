@@ -7,7 +7,7 @@ use std::sync::Arc;
 use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::styling::{BorderRadius, BoxDecoration};
-use flui_types::{events::PointerEventData, Color, EdgeInsets};
+use flui_types::{Color, EdgeInsets};
 
 use crate::{Container, GestureDetector};
 
@@ -94,12 +94,11 @@ impl View for Button {
 
         // Wrap in GestureDetector for tap handling
         if let Some(on_tap) = self.on_tap {
-            let on_tap_clone = Arc::clone(&on_tap);
             Box::new(
                 GestureDetector::builder()
                     .child(container)
-                    .on_tap(move |_data: &PointerEventData| {
-                        on_tap_clone();
+                    .on_tap(move || {
+                        on_tap();
                     })
                     .build(),
             ) as Box<dyn AnyView>

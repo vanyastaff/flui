@@ -6,8 +6,8 @@
 use flui_core::foundation::ElementId;
 use flui_core::pipeline::PipelineOwner;
 use flui_core::view::{AnyView, BuildContext};
-use flui_core::{Offset, Size};
-use flui_engine::Painter;
+use flui_core::{BoxedLayer, Offset, Size};
+use flui_engine::{EventRouter, Painter};
 use flui_types::BoxConstraints;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -89,6 +89,12 @@ pub struct FluiApp {
 
     /// Whether the root has been initially built
     root_built: bool,
+
+    /// Event router for gesture and pointer events
+    event_router: EventRouter,
+
+    /// Last painted root layer (for event routing)
+    last_root_layer: Option<BoxedLayer>,
 }
 
 impl FluiApp {
@@ -115,6 +121,8 @@ impl FluiApp {
             stats: FrameStats::default(),
             last_size: None,
             root_built: false,
+            event_router: EventRouter::new(),
+            last_root_layer: None,
         }
     }
 
@@ -240,11 +248,16 @@ impl FluiApp {
 
     /// Process pointer events from egui
     ///
-    /// Converts egui pointer events to Flui PointerEvents and dispatches them
-    /// through hit testing.
+    /// Converts egui pointer events to Flui PointerEvents and routes them
+    /// through the EventRouter for hit testing and dispatch.
     fn process_pointer_events(&mut self, ui: &egui::Ui) {
-        use flui_types::events::{PointerEvent, PointerEventData};
+        use flui_types::events::{Event, PointerButton, PointerDeviceKind, PointerEvent, PointerEventData};
         use flui_types::Offset;
+
+        // Need a mutable root layer for event routing
+        if self.last_root_layer.is_none() {
+            return;
+        }
 
         // Get pointer state from egui
         let pointer = &ui.input(|i| i.pointer.clone());
@@ -252,36 +265,38 @@ impl FluiApp {
         // Handle pointer down (primary button)
         if pointer.primary_down() {
             if let Some(pos) = pointer.interact_pos() {
-                let event = PointerEvent::Down(PointerEventData {
-                    position: Offset::new(pos.x, pos.y),
-                    local_position: Offset::new(pos.x, pos.y),
-                    device: 0,
-                    buttons: 1, // Primary button
-                    pressure: 1.0,
-                    time_stamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64,
-                });
-                flui_widgets::gestures::dispatch_gesture_event(&event);
+                let data = PointerEventData::new(
+                    Offset::new(pos.x, pos.y),
+                    PointerDeviceKind::Mouse,
+                )
+                .with_button(PointerButton::Primary);
+
+                let pointer_event = PointerEvent::Down(data);
+                let event = Event::Pointer(pointer_event);
+
+                // Route through EventRouter with hit testing
+                if let Some(ref mut root_layer) = self.last_root_layer {
+                    self.event_router.route_event(root_layer.as_mut(), &event);
+                }
             }
         }
 
         // Handle pointer up (primary released)
         if pointer.primary_released() {
             if let Some(pos) = pointer.interact_pos() {
-                let event = PointerEvent::Up(PointerEventData {
-                    position: Offset::new(pos.x, pos.y),
-                    local_position: Offset::new(pos.x, pos.y),
-                    device: 0,
-                    buttons: 0, // No buttons
-                    pressure: 0.0,
-                    time_stamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64,
-                });
-                flui_widgets::gestures::dispatch_gesture_event(&event);
+                let data = PointerEventData::new(
+                    Offset::new(pos.x, pos.y),
+                    PointerDeviceKind::Mouse,
+                )
+                .with_button(PointerButton::Primary);
+
+                let pointer_event = PointerEvent::Up(data);
+                let event = Event::Pointer(pointer_event);
+
+                // Route through EventRouter with hit testing
+                if let Some(ref mut root_layer) = self.last_root_layer {
+                    self.event_router.route_event(root_layer.as_mut(), &event);
+                }
             }
         }
     }
@@ -304,9 +319,6 @@ impl FluiApp {
         self.ensure_root_built();
 
         // ===== Phase 1: Build =====
-        // Clear gesture handlers before rebuild (prevents accumulation)
-        flui_widgets::gestures::clear_gesture_handlers();
-
         // Keep flushing build until tree is fully built (no more dirty elements)
         let mut iterations = 0;
         loop {
@@ -433,6 +445,9 @@ impl FluiApp {
             #[cfg(debug_assertions)]
             tracing::debug!("Paint: Received layer from flush_paint, painting to screen");
 
+            // Store layer for event routing (need mutable reference later)
+            self.last_root_layer = Some(layer);
+
             // Composite layer to screen using EguiPainter
             let egui_painter = ui.painter();
             let mut painter = flui_engine::EguiPainter::new(egui_painter);
@@ -443,7 +458,9 @@ impl FluiApp {
 
             painter.save();
             painter.translate(offset);
-            layer.paint(&mut painter);
+            if let Some(ref layer) = self.last_root_layer {
+                layer.paint(&mut painter);
+            }
             painter.restore();
 
             #[cfg(debug_assertions)]

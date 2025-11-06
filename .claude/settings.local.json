@@ -6,7 +6,17 @@
       "Bash(grep:*)",
       "Bash(timeout 5 cargo run:*)",
       "Bash(cargo check:*)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(find:*)",
+      "Bash(timeout 5 ./target/debug/examples/counter.exe:*)",
+      "Bash(cargo clean:*)",
+      "Bash(timeout 3 cargo run:*)",
+      "WebSearch",
+      "WebFetch(domain:api.flutter.dev)",
+      "Bash(timeout 60 cargo run:*)"
     ],
     "deny": [],
     "ask": []

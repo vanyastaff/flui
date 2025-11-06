@@ -1864,6 +1864,15 @@ dependencies = [
 [[package]]
 name = "flui_gestures"
 version = "0.1.0"
+dependencies = [
+ "flui_core",
+ "flui_engine",
+ "flui_rendering",
+ "flui_types",
+ "parking_lot",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "flui_painting"
@@ -1918,6 +1927,7 @@ dependencies = [
  "egui 0.33.0",
  "flui_core",
  "flui_engine",
+ "flui_gestures",
  "flui_rendering",
  "flui_types",
  "once_cell",
