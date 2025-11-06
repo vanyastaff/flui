@@ -33,6 +33,8 @@ FLUI is a production-ready, Flutter-inspired declarative UI framework for Rust, 
 View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 ```
 
+**Thread-Safety:** FLUI is fully thread-safe and supports multi-threaded UI. All hooks use `Arc`/`Mutex` (parking_lot) instead of `Rc`/`RefCell`.
+
 ## Build Commands
 
 ### Building Individual Crates
@@ -69,14 +71,14 @@ RUST_LOG=debug cargo test -p flui_core
 ### Running Examples
 
 ```bash
-# Run minimal text demo (useful for debugging rendering)
-cargo run --example minimal_text_demo
+# Run simplified view example
+cargo run --example simplified_view
 
-# Run hello world
-cargo run --example hello_world_view
+# Run thread-safe hooks example
+cargo run --example thread_safe_hooks
 
 # Run with tracing enabled
-RUST_LOG=debug cargo run --example minimal_text_demo
+RUST_LOG=debug cargo run --example simplified_view
 ```
 
 ### Benchmarks
@@ -95,6 +97,9 @@ cargo clippy --workspace -- -D warnings
 
 # Fix automatically
 cargo clippy --workspace --fix
+
+# Format code
+cargo fmt --all
 ```
 
 ## Code Architecture
@@ -102,10 +107,11 @@ cargo clippy --workspace --fix
 ### Three-Tree System
 
 **View Tree (Immutable):**
-- Views implement the `View` trait with `Clone` bound
-- Created fresh every frame - must be cheap to clone
-- `build()` creates initial element and state
-- `rebuild()` efficiently updates existing elements (override for performance)
+- Views implement the unified `View` trait
+- Single `build()` method returns `impl IntoElement`
+- **NO GATs** - State/Element types removed in v0.6.0 migration
+- **NO rebuild() method** - Framework handles this automatically
+- Views must be `'static` but NOT necessarily `Clone`
 - Located in: `crates/flui_core/src/view/`
 
 **Element Tree (Mutable):**
@@ -142,7 +148,48 @@ The rendering pipeline has three phases coordinated by `PipelineOwner`:
 
 Failing to set both will cause layout to skip elements.
 
+### Modern View API (v0.6.0+)
+
+The View API has been unified and simplified. **The old Component trait no longer exists.**
+
+```rust
+// Modern View trait (unified)
+pub trait View: 'static {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement;
+}
+
+// Example usage
+#[derive(Debug)]
+pub struct Padding {
+    pub padding: EdgeInsets,
+    pub child: Option<AnyElement>,
+}
+
+impl View for Padding {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        // Returns tuple of (RenderObject, Option<child>)
+        (RenderPadding::new(self.padding), self.child)
+    }
+}
+```
+
+**Key Changes:**
+- ✅ Single unified `View` trait (no separate Component)
+- ✅ No GAT State/Element types
+- ✅ No rebuild() or teardown() methods
+- ✅ Returns `impl IntoElement` (automatic tree insertion)
+- ✅ Thread-local BuildContext for automatic setup
+- ✅ 75% less boilerplate per widget
+
+**IntoElement Types:**
+- `(LeafRender, ())` → LeafRenderBuilder
+- `(SingleRender, Option<child>)` → SingleRenderBuilder
+- `(MultiRender, Vec<child>)` → MultiRenderBuilder
+- `AnyElement` → For heterogeneous view storage
+
 ### State Management with Hooks
+
+**CRITICAL:** FLUI is thread-safe. All hooks use `Arc`/`Mutex` (parking_lot).
 
 Hooks provide React-like state management with automatic rebuild scheduling:
 
@@ -154,30 +201,28 @@ let count = use_signal(ctx, 0);
 let doubled = use_memo(ctx, |_| count.get() * 2);
 
 // Effect - side effects
-use_effect_simple(ctx, || {
+use_effect(ctx, move || {
     println!("Count changed: {}", count.get());
+    None  // No cleanup
 });
 ```
 
 **Hook Rules (MUST follow):**
-1. Always call hooks in the same order every build
-2. Never call hooks conditionally
-3. Only call hooks at component top level
-4. Clone signals before moving into closures
+1. ✅ Always call hooks in the same order every build
+2. ❌ Never call hooks conditionally
+3. ❌ Never call hooks in loops with variable iterations
+4. ✅ Only call hooks at component top level
+5. ✅ Clone signals before moving into closures
+
+**Breaking these rules causes PANICS!** See `crates/flui_core/src/hooks/RULES.md` for detailed explanation.
+
+**Thread-Safety Requirements:**
+- All signal values must implement `Send`
+- All callbacks must be `Send + Sync`
+- Uses `Arc<Mutex<T>>` instead of `Rc<RefCell<T>>`
+- Uses `parking_lot::Mutex` (2-3x faster than std, no poisoning)
 
 Located in: `crates/flui_core/src/hooks/`
-
-### Widget Conversion to View API
-
-The codebase is migrating from the old Widget API to the new View API. When converting widgets:
-
-1. Change `Widget` trait to `View` trait
-2. Update `build()` signature: `fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State)`
-3. Implement `rebuild()` for performance (compare with previous view)
-4. Use `Element` enum instead of `Box<dyn AnyWidget>`
-5. Replace `RenderObject` with one of: `LeafRender`, `SingleRender`, or `MultiRender`
-
-**Conversion examples:** See `crates/flui_widgets/src/` for converted widgets.
 
 ## Logging and Debugging
 
@@ -213,34 +258,29 @@ If text doesn't appear on screen but all pipeline phases execute:
 
 ## Common Patterns
 
-### Creating a Simple View
+### Creating a Simple View (New API)
 
 ```rust
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct MyView {
     pub text: String,
 }
 
 impl View for MyView {
-    type Element = Element;
-    type State = ();
-
-    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-        // Build element tree
-        let element = /* ... */;
-        (element, ())
-    }
-
-    fn rebuild(self, prev: &Self, _state: &mut Self::State,
-               element: &mut Self::Element) -> ChangeFlags {
-        if self == *prev {
-            return ChangeFlags::NONE;  // Skip rebuild!
-        }
-        element.mark_dirty();
-        ChangeFlags::NEEDS_BUILD
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        // Return RenderObject + children
+        // Framework handles tree insertion automatically
+        (RenderText::new(self.text), ())
     }
 }
 ```
+
+**No need for:**
+- ❌ GAT State/Element types
+- ❌ rebuild() method
+- ❌ teardown() method
+- ❌ Manual tree insertion
+- ❌ Clone derive (unless you need it)
 
 ### Creating a RenderObject
 
@@ -327,6 +367,30 @@ impl MultiRender for RenderFlex {
 }
 ```
 
+### Using Hooks for State
+
+```rust
+#[derive(Debug)]
+pub struct Counter;
+
+impl View for Counter {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        // Hook at top level
+        let count = use_signal(ctx, 0);
+
+        // Clone before moving into closure
+        let count_clone = count.clone();
+
+        Column::new()
+            .children(vec![
+                Box::new(Text::new(format!("Count: {}", count.get()))),
+                Box::new(Button::new("Increment")
+                    .on_pressed(move || count_clone.update(|c| *c += 1))),
+            ])
+    }
+}
+```
+
 ## Important Codebase Conventions
 
 ### BuildContext is Read-Only
@@ -342,39 +406,49 @@ signal.set(42);  // Triggers rebuild via callback
 // ctx.schedule_rebuild();  // This method doesn't exist!
 ```
 
-### Clone is Cheap
+### Thread-Local BuildContext
 
-Views are cloned every frame, so implement efficient cloning:
+The new View API uses thread-local BuildContext via RAII guards:
 
 ```rust
-// ✅ Good - cheap clone
-#[derive(Clone)]
+// Framework code (automatic)
+pub fn with_build_context<F, R>(context: &BuildContext, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let _guard = BuildContextGuard::new(context);
+    f()
+}
+
+// User code (you don't need to call this)
+impl<V: View> IntoElement for V {
+    fn into_element(self) -> Element {
+        let ctx = current_build_context();  // ← Thread-local access
+        let element_like = self.build(ctx);
+        element_like.into_element()
+    }
+}
+```
+
+### Clone is Cheap
+
+Views should be cheap to work with:
+
+```rust
+// ✅ Good - cheap to use
 struct GoodView {
-    text: String,  // String is cheap to clone
+    text: String,  // String is cheap to move
     data: Arc<Vec<i32>>,  // Arc for shared data
 }
 
-// ❌ Bad - expensive clone
+// ❌ Bad - expensive clone if derived
 #[derive(Clone)]
 struct BadView {
     data: Vec<ComplexStruct>,  // Deep clone every frame!
 }
 ```
 
-### Override rebuild() for Performance
-
-The default `rebuild()` always marks dirty - override it:
-
-```rust
-fn rebuild(self, prev: &Self, _state: &mut Self::State,
-           element: &mut Self::Element) -> ChangeFlags {
-    if self == *prev {
-        return ChangeFlags::NONE;  // Massive optimization!
-    }
-    element.mark_dirty();
-    ChangeFlags::NEEDS_BUILD
-}
-```
+**Note:** Views don't need to be Clone anymore (only `'static`), but if you do derive Clone, make it cheap.
 
 ### ElementId Offset Pattern
 
@@ -389,15 +463,55 @@ ElementId::new(id + 1)  // +1 because ElementId uses NonZeroUsize
 self.nodes.get(element_id.get() - 1).map(|node| &node.element)  // -1 to access slab
 ```
 
+## Feature Flags
+
+### Parallel Processing (Stable)
+
+```toml
+features = ["parallel"]
+```
+
+**Status:** ✅ Stable - Thread-safe parallel processing enabled
+
+Enables rayon-based parallel processing for build pipeline. All thread-safety issues have been resolved through comprehensive Arc/Mutex refactoring.
+
+### Backend Selection
+
+Choose **ONE** backend:
+
+```toml
+# egui backend (default, recommended)
+flui = "0.1"
+
+# wgpu backend (experimental)
+flui = { version = "0.1", default-features = false, features = ["wgpu"] }
+```
+
 ## Documentation
 
 Comprehensive documentation is available in:
 
-- `crates/flui_core/docs/ARCHITECTURE.md` - Three-tree architecture details
-- `crates/flui_core/docs/VIEW_GUIDE.md` - Comprehensive View trait guide
-- `crates/flui_core/docs/HOOKS_GUIDE.md` - State management with hooks
-- `crates/flui_core/docs/QUICK_START.md` - Getting started guide
-- `README.md` - Project overview and examples
+**Recent Refactorings:**
+- `THREAD_SAFE_HOOKS_REFACTORING.md` - Thread-safety migration (Arc/Mutex)
+- `VIEW_API_MIGRATION_COMPLETE.md` - View API unification
+- `VIEW_API_LOGIC_REVIEW.md` - View API design review
+
+**Architecture:**
+- `docs/PIPELINE_ARCHITECTURE.md` - Pipeline design and multi-threading
+- `docs/FINAL_ARCHITECTURE_V2.md` - Overall architecture
+- `docs/API_GUIDE.md` - Comprehensive API guide
+
+**Hooks:**
+- `crates/flui_core/src/hooks/RULES.md` - **MUST READ** - Hook usage rules
+- `crates/flui_core/src/hooks/HOOK_REFACTORING.md` - Hook internals
+
+**Widgets:**
+- `crates/flui_widgets/flutter_widgets_full_guide.md` - Flutter widget reference
+- `crates/flui_rendering/RENDER_OBJECT_GUIDE.md` - RenderObject guide
+
+**Examples:**
+- `crates/flui_core/examples/simplified_view.rs` - Modern View API example
+- `crates/flui_core/examples/thread_safe_hooks.rs` - Thread-safety demonstration
 
 ## Git Workflow
 
@@ -431,19 +545,22 @@ Key dependencies and their purpose:
 
 - **egui 0.33** - Immediate mode GUI backend
 - **eframe 0.33** - Platform integration for egui
-- **parking_lot 0.12** - High-performance RwLock (2-3x faster than std)
+- **parking_lot 0.12** - High-performance RwLock/Mutex (2-3x faster than std, no poisoning)
 - **tokio 1.43** - Async runtime
 - **glam 0.30** - Math and geometry
 - **tracing** - Structured logging (always use this, never println!)
 - **slab** - Arena allocator for element tree
+- **rayon** - Parallel processing (when `parallel` feature enabled)
 
 ## Performance Considerations
 
 - Element enum is 3.75x faster than `Box<dyn>` trait objects
 - Option<ElementId> has zero overhead due to niche optimization (8 bytes)
+- parking_lot::Mutex is 2-3x faster than std::sync::Mutex (no poisoning, smaller footprint)
 - parking_lot::RwLock is 2-3x faster than std::sync::RwLock
 - Slab provides O(1) insertion/removal with cache-friendly contiguous storage
-- Override `rebuild()` to avoid unnecessary work (check equality first)
+- New View API reduces boilerplate by 75% with no performance cost
+- Thread-safe hooks enable parallel UI updates
 
 ## Known Issues
 
@@ -461,3 +578,45 @@ If `flush_layout` returns early:
 1. Check `RenderState.needs_layout()` is true
 2. Verify `request_layout()` sets both dirty set and flag
 3. See `crates/flui_core/src/pipeline/pipeline_owner.rs:314-325` for correct pattern
+
+### Hook Panics
+
+If you get "Hook state type mismatch" panics:
+1. Check that hooks are called in the same order every render
+2. Never call hooks conditionally (no `if` around hooks)
+3. Never call hooks in loops with variable iterations
+4. See `crates/flui_core/src/hooks/RULES.md` for complete rules
+
+## Migration Guides
+
+### Migrating to New View API
+
+**Old API (deprecated):**
+```rust
+impl View for MyWidget {
+    type Element = Element;
+    type State = ();
+
+    fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+        // Manual tree management...
+        (element, ())
+    }
+
+    fn rebuild(self, prev: &Self, state: &mut Self::State,
+               element: &mut Self::Element) -> ChangeFlags {
+        // Manual rebuild logic...
+    }
+}
+```
+
+**New API (recommended):**
+```rust
+impl View for MyWidget {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        // Just return RenderObject + children
+        (RenderMyWidget::new(), self.child)
+    }
+}
+```
+
+**Benefits:** 75% less code, automatic tree management, no GATs, no manual rebuilds.
