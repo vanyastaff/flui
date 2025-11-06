@@ -174,7 +174,11 @@ impl<C: Curve + Copy> Curve for Interval<C> {
         } else if t > self.end {
             1.0
         } else if (self.end - self.begin).abs() < 1e-6 {
-            if t < self.end { 0.0 } else { 1.0 }
+            if t < self.end {
+                0.0
+            } else {
+                1.0
+            }
         } else {
             let local_t = (t - self.begin) / (self.end - self.begin);
             self.curve.transform(local_t)
@@ -209,7 +213,11 @@ impl Curve for Threshold {
     #[inline]
     fn transform(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);
-        if t < self.threshold { 0.0 } else { 1.0 }
+        if t < self.threshold {
+            0.0
+        } else {
+            1.0
+        }
     }
 }
 
@@ -729,7 +737,7 @@ mod tests {
     fn test_elastic_in_curve() {
         let curve = ElasticInCurve::default();
         assert!((curve.transform(0.0) - 0.0).abs() < 1e-2); // Elastic curves have some overshoot
-        // Elastic in curve oscillates and can have large values near t=1.0
+                                                            // Elastic in curve oscillates and can have large values near t=1.0
         let val = curve.transform(1.0);
         assert!(val.abs() < 2.0); // Just check it's bounded
     }

@@ -6,18 +6,16 @@
 
 // Import only converted widgets
 use flui_widgets::basic::{
-    Text, SizedBox, ColoredBox, Padding, Center, Align,
-    ConstrainedBox, LimitedBox, FittedBox, DecoratedBox, AspectRatio
+    Align, AspectRatio, Center, ColoredBox, ConstrainedBox, DecoratedBox, FittedBox, LimitedBox,
+    Padding, SizedBox, Text,
 };
 use flui_widgets::layout::{
-    Baseline, FractionallySizedBox, Row, Column, Stack, IndexedStack, Wrap
+    Baseline, Column, FractionallySizedBox, IndexedStack, Row, Stack, Wrap,
 };
-use flui_widgets::visual_effects::{
-    Opacity, Transform, ClipRect, ClipRRect, ClipOval
-};
+use flui_widgets::visual_effects::{ClipOval, ClipRRect, ClipRect, Opacity, Transform};
 
-use flui_types::{Color, EdgeInsets, Alignment, Axis};
-use flui_types::layout::{MainAxisAlignment, CrossAxisAlignment, StackFit};
+use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, StackFit};
+use flui_types::{Alignment, Axis, Color, EdgeInsets};
 
 fn main() {
     println!("=== Testing Converted Widgets ===\n");
@@ -33,10 +31,7 @@ fn main() {
 
     // Test 2: SizedBox widget
     println!("2. Testing SizedBox widget...");
-    let sized_box = SizedBox::builder()
-        .width(100.0)
-        .height(50.0)
-        .build();
+    let sized_box = SizedBox::builder().width(100.0).height(50.0).build();
     println!("   ✓ SizedBox widget created (100x50)\n");
 
     // Test 3: ColoredBox widget
@@ -203,13 +198,9 @@ fn main() {
                                     .data("Welcome to Flui!")
                                     .size(24.0)
                                     .color(Color::BLACK)
-                                    .build()
+                                    .build(),
                             ),
-                            Box::new(
-                                SizedBox::builder()
-                                    .height(20.0)
-                                    .build()
-                            ),
+                            Box::new(SizedBox::builder().height(20.0).build()),
                             Box::new(
                                 Row::builder()
                                     .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
@@ -221,9 +212,9 @@ fn main() {
                                                     SizedBox::builder()
                                                         .width(50.0)
                                                         .height(50.0)
-                                                        .build()
+                                                        .build(),
                                                 )
-                                                .build()
+                                                .build(),
                                         ),
                                         Box::new(
                                             ColoredBox::builder()
@@ -232,9 +223,9 @@ fn main() {
                                                     SizedBox::builder()
                                                         .width(50.0)
                                                         .height(50.0)
-                                                        .build()
+                                                        .build(),
                                                 )
-                                                .build()
+                                                .build(),
                                         ),
                                         Box::new(
                                             ColoredBox::builder()
@@ -243,18 +234,14 @@ fn main() {
                                                     SizedBox::builder()
                                                         .width(50.0)
                                                         .height(50.0)
-                                                        .build()
+                                                        .build(),
                                                 )
-                                                .build()
+                                                .build(),
                                         ),
                                     ])
-                                    .build()
+                                    .build(),
                             ),
-                            Box::new(
-                                SizedBox::builder()
-                                    .height(20.0)
-                                    .build()
-                            ),
+                            Box::new(SizedBox::builder().height(20.0).build()),
                             Box::new(
                                 Stack::builder()
                                     .alignment(Alignment::CENTER)
@@ -266,23 +253,23 @@ fn main() {
                                                     SizedBox::builder()
                                                         .width(200.0)
                                                         .height(100.0)
-                                                        .build()
+                                                        .build(),
                                                 )
-                                                .build()
+                                                .build(),
                                         ),
                                         Box::new(
                                             Text::builder()
                                                 .data("Stacked Text")
                                                 .color(Color::WHITE)
-                                                .build()
+                                                .build(),
                                         ),
                                     ])
-                                    .build()
+                                    .build(),
                             ),
                         ])
-                        .build()
+                        .build(),
                 )
-                .build()
+                .build(),
         )
         .build();
 

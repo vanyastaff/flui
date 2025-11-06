@@ -6,7 +6,9 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode, painting::ImageFilter};
+use flui_types::{
+    constraints::BoxConstraints, painting::BlendMode, painting::ImageFilter, Offset, Size,
+};
 
 // ===== RenderObject =====
 
@@ -32,7 +34,7 @@ use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode,
 #[derive(Debug)]
 pub struct RenderBackdropFilter {
     /// Image filter to apply to backdrop
-    pub filter:  flui_types::painting::ImageFilter,
+    pub filter: flui_types::painting::ImageFilter,
     /// Blend mode for compositing filtered result
     pub blend_mode: BlendMode,
 }
@@ -121,12 +123,14 @@ impl SingleRender for RenderBackdropFilter {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_render_backdrop_filter_set_filter() {
         let mut filter = RenderBackdropFilter::blur(5.0);
 
-        let new_filter = ImageFilter::Blur { sigma_x: 10.0, sigma_y: 10.0 };
+        let new_filter = ImageFilter::Blur {
+            sigma_x: 10.0,
+            sigma_y: 10.0,
+        };
         filter.set_filter(new_filter.clone());
 
         assert_eq!(*filter.filter(), new_filter);

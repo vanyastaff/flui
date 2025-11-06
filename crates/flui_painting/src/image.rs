@@ -5,10 +5,10 @@
 
 use flui_engine::{Paint, Painter};
 use flui_types::{
-    Rect,
     layout::Alignment,
     painting::{BoxFit, ColorFilter, Image, ImageRepeat},
     styling::DecorationImage,
+    Rect,
 };
 
 /// Painter for images

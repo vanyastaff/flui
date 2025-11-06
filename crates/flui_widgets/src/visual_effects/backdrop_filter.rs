@@ -4,8 +4,8 @@
 //! behind it, creating effects like frosted glass.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderBackdropFilter;
 use flui_types::painting::{BlendMode, ImageFilter};
 
@@ -94,7 +94,14 @@ impl std::fmt::Debug for BackdropFilter {
             .field("key", &self.key)
             .field("filter", &self.filter)
             .field("blend_mode", &self.blend_mode)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -146,7 +153,11 @@ impl BackdropFilter {
     ///     Box::new(child)
     /// );
     /// ```
-    pub fn blur_with_blend_mode(radius: f32, blend_mode: BlendMode, child: Box<dyn AnyView>) -> Self {
+    pub fn blur_with_blend_mode(
+        radius: f32,
+        blend_mode: BlendMode,
+        child: Box<dyn AnyView>,
+    ) -> Self {
         Self {
             key: None,
             filter: ImageFilter::blur(radius),
@@ -198,8 +209,7 @@ impl View for BackdropFilter {
         let mut render = RenderBackdropFilter::new(self.filter.clone());
         render.blend_mode = self.blend_mode;
 
-        SingleRenderBuilder::new(render)
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(render).with_optional_child(self.child)
     }
 }
 

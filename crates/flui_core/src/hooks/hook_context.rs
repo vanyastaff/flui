@@ -1,6 +1,6 @@
 //! Hook context with thread-local storage and lifecycle management.
 
-use super::hook_trait::{Hook, DependencyId};
+use super::hook_trait::{DependencyId, Hook};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
@@ -38,8 +38,7 @@ impl Drop for ComponentGuard<'_> {
 
         #[cfg(debug_assertions)]
         debug_assert_eq!(
-            self.context.current_component,
-            None,
+            self.context.current_component, None,
             "Component guard dropped but current_component is not None"
         );
     }
@@ -212,28 +211,27 @@ impl HookContext {
         match self.hooks.entry(hook_id) {
             Entry::Occupied(mut entry) => {
                 // Hook already exists, update it
-                let hook_state = entry.get_mut().get_mut::<H::State>()
-                    .unwrap_or_else(|| {
-                        tracing::error!(
-                            component_id = ?hook_id.component,
-                            hook_index = hook_id.index.0,
-                            expected_type = std::any::type_name::<H::State>(),
-                            "Hook state type mismatch! This is a CRITICAL bug.\n\
-                             Common causes:\n\
-                             1. Hook calls are conditional (if/else with different hooks)\n\
-                             2. Hook calls are reordered between renders\n\
-                             3. Different hook type used at same index\n\
-                             4. Loop with variable number of hook calls\n\
-                             \n\
-                             Rules of Hooks:\n\
-                             - Always call hooks in the same order\n\
-                             - Never call hooks conditionally\n\
-                             - Never call hooks in loops with variable iterations\n\
-                             \n\
-                             See hooks/RULES.md for detailed explanation and examples."
-                        );
-                        panic!(
-                            "\n\
+                let hook_state = entry.get_mut().get_mut::<H::State>().unwrap_or_else(|| {
+                    tracing::error!(
+                        component_id = ?hook_id.component,
+                        hook_index = hook_id.index.0,
+                        expected_type = std::any::type_name::<H::State>(),
+                        "Hook state type mismatch! This is a CRITICAL bug.\n\
+                         Common causes:\n\
+                         1. Hook calls are conditional (if/else with different hooks)\n\
+                         2. Hook calls are reordered between renders\n\
+                         3. Different hook type used at same index\n\
+                         4. Loop with variable number of hook calls\n\
+                         \n\
+                         Rules of Hooks:\n\
+                         - Always call hooks in the same order\n\
+                         - Never call hooks conditionally\n\
+                         - Never call hooks in loops with variable iterations\n\
+                         \n\
+                         See hooks/RULES.md for detailed explanation and examples."
+                    );
+                    panic!(
+                        "\n\
                             ╔════════════════════════════════════════════════════════════════╗\n\
                             ║          HOOK ORDERING VIOLATION DETECTED                      ║\n\
                             ╚════════════════════════════════════════════════════════════════╝\n\
@@ -265,11 +263,11 @@ impl HookContext {
                             crates/flui_core/src/hooks/RULES.md\n\
                             \n\
                             ",
-                            hook_id.component,
-                            hook_id.index.0,
-                            std::any::type_name::<H::State>()
-                        );
-                    });
+                        hook_id.component,
+                        hook_id.index.0,
+                        std::any::type_name::<H::State>()
+                    );
+                });
                 H::update(hook_state, input)
             }
             Entry::Vacant(entry) => {
@@ -277,7 +275,9 @@ impl HookContext {
                 let initial_state = H::create(input.clone());
                 entry.insert(HookState::new::<H>(initial_state));
 
-                let hook_state = self.hooks.get_mut(&hook_id)
+                let hook_state = self
+                    .hooks
+                    .get_mut(&hook_id)
                     .expect("BUG: Hook just inserted but not found")
                     .get_mut::<H::State>()
                     .expect("BUG: Hook state type mismatch on fresh insert");
@@ -344,7 +344,8 @@ impl HookContext {
     /// takes precedence.
     pub fn cleanup_component(&mut self, component_id: ComponentId) {
         // Collect hooks to clean up
-        let hooks_to_cleanup: Vec<_> = self.hooks
+        let hooks_to_cleanup: Vec<_> = self
+            .hooks
             .iter()
             .filter(|(id, _)| id.component == component_id)
             .map(|(id, _)| *id)

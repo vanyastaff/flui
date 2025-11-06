@@ -346,9 +346,7 @@ impl FrameScheduler {
         match self.skip_policy {
             FrameSkipPolicy::Never => false,
             FrameSkipPolicy::OnDeadlineMiss => self.is_deadline_missed(),
-            FrameSkipPolicy::OnConsecutiveMisses(threshold) => {
-                self.consecutive_misses >= threshold
-            }
+            FrameSkipPolicy::OnConsecutiveMisses(threshold) => self.consecutive_misses >= threshold,
         }
     }
 

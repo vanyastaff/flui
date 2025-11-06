@@ -4,12 +4,12 @@
 //! line breaks, and text wrapping.
 
 use flui_core::render::LeafRender;
-use flui_engine::{BoxedLayer, layer::pool};
+use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::{
-    Offset, Point, Size,
     constraints::BoxConstraints,
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextStyle},
+    Offset, Point, Size,
 };
 
 // ===== Data Structure =====
@@ -235,7 +235,12 @@ impl LeafRender for RenderParagraph {
 
     fn paint(&self, offset: Offset) -> BoxedLayer {
         #[cfg(debug_assertions)]
-        tracing::debug!("RenderParagraph::paint: text='{}', offset={:?}, size={:?}", self.data.text, offset, self.size);
+        tracing::debug!(
+            "RenderParagraph::paint: text='{}', offset={:?}, size={:?}",
+            self.data.text,
+            offset,
+            self.size
+        );
 
         let mut picture = pool::acquire_picture();
 
@@ -252,7 +257,11 @@ impl LeafRender for RenderParagraph {
             let position = Point::new(0.0, 0.0);
 
             #[cfg(debug_assertions)]
-            tracing::debug!("RenderParagraph::paint: drawing text with style {:?} at {:?}", style, position);
+            tracing::debug!(
+                "RenderParagraph::paint: drawing text with style {:?} at {:?}",
+                style,
+                position
+            );
 
             // Draw text to picture layer
             picture.draw_text(&self.data.text, position, style);
@@ -264,7 +273,10 @@ impl LeafRender for RenderParagraph {
         // Wrap in TransformLayer to apply offset
         let picture_layer: BoxedLayer = Box::new(flui_engine::PooledPictureLayer::new(picture));
         let result = if offset != Offset::ZERO {
-            Box::new(flui_engine::TransformLayer::translate(picture_layer, offset))
+            Box::new(flui_engine::TransformLayer::translate(
+                picture_layer,
+                offset,
+            ))
         } else {
             picture_layer
         };

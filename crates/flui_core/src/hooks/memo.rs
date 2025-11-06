@@ -3,12 +3,12 @@
 //! Provides `use_memo` hook that memoizes expensive computations and only
 //! re-computes when dependencies change.
 
-use super::hook_trait::{Hook, ReactiveHook, DependencyId};
 use super::hook_context::HookContext;
+use super::hook_trait::{DependencyId, Hook, ReactiveHook};
 use crate::BuildContext;
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 /// Error type for memoized value computation failures
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,9 +96,8 @@ impl<T> Memo<T> {
     where
         T: Clone,
     {
-        self.try_get(ctx).unwrap_or_else(|err| {
-            panic!("Memo::get() failed: {}", err)
-        })
+        self.try_get(ctx)
+            .unwrap_or_else(|err| panic!("Memo::get() failed: {}", err))
     }
 
     /// Get the memoized value with a function, recomputing if needed.
@@ -215,9 +214,7 @@ impl<T> Memo<T> {
                 }
             }
 
-            let _guard = PanicGuard {
-                inner: &self.inner,
-            };
+            let _guard = PanicGuard { inner: &self.inner };
 
             // Start tracking dependencies
             ctx.start_tracking();
@@ -231,8 +228,7 @@ impl<T> Memo<T> {
             // Check if dependencies changed
             let deps_changed = {
                 let old_deps = self.inner.dependencies.borrow();
-                old_deps.len() != deps.len()
-                    || old_deps.iter().zip(&deps).any(|(a, b)| a != b)
+                old_deps.len() != deps.len() || old_deps.iter().zip(&deps).any(|(a, b)| a != b)
             };
 
             if deps_changed || is_dirty {
@@ -380,9 +376,7 @@ where
     T: Clone + 'static,
     F: Fn(&mut HookContext) -> T + Clone + 'static,
 {
-    ctx.with_hook_context_mut(|hook_ctx| {
-        hook_ctx.use_hook::<MemoHook<T, F>>(Rc::new(compute))
-    })
+    ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<MemoHook<T, F>>(Rc::new(compute)))
 }
 
 #[cfg(test)]
@@ -474,9 +468,7 @@ mod tests {
         }));
 
         // First call should panic and poison the memo
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            memo.get()
-        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.get()));
         assert!(result.is_err());
 
         // Memo should now be poisoned
@@ -503,9 +495,7 @@ mod tests {
         }));
 
         // Panic and poison
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            memo.get()
-        }));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.get()));
         assert!(memo.is_poisoned());
 
         // Recover from poison
@@ -546,7 +536,7 @@ mod tests {
         let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(move || {
             // Try to access memo recursively
             if let Some(m) = memo_cell_clone.borrow().as_ref() {
-                let _ = m.get();  // This should cause reentrancy error
+                let _ = m.get(); // This should cause reentrancy error
             }
             42
         }));
@@ -569,7 +559,7 @@ mod tests {
 
         let memo = ctx.use_hook::<MemoHook<i32, _>>(Rc::new(move || {
             if let Some(m) = memo_cell_clone.borrow().as_ref() {
-                m.get();  // Should panic with reentrancy error
+                m.get(); // Should panic with reentrancy error
             }
             42
         }));
@@ -596,9 +586,7 @@ mod tests {
         }));
 
         // Panic during compute
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            memo.try_get()
-        }));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memo.try_get()));
 
         // Computing flag should be cleared by panic guard
         // (verified indirectly: subsequent try_get returns Poisoned, not hangs)

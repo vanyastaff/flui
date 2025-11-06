@@ -152,6 +152,15 @@ pub struct PhaseGuard {
     start: Instant,
 }
 
+impl std::fmt::Debug for PhaseGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhaseGuard")
+            .field("phase", &self.phase)
+            .field("start", &self.start)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Drop for PhaseGuard {
     fn drop(&mut self) {
         let duration = self.start.elapsed();

@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, PictureLayer};
-use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 /// Custom painter trait
 ///
@@ -204,7 +204,6 @@ mod tests {
             // Do nothing
         }
     }
-
 
     #[test]
     fn test_render_custom_paint_new() {

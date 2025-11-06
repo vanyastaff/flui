@@ -1,7 +1,7 @@
 //! RenderClipOval - clips child to an oval shape
 
 use flui_engine::BoxedLayer;
-use flui_types::{Size, painting::Clip};
+use flui_types::{painting::Clip, Size};
 
 use super::clip_base::{ClipShape, RenderClip};
 

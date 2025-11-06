@@ -193,7 +193,12 @@ impl BuildPipeline {
     /// Otherwise, it's added to dirty_elements immediately.
     pub fn schedule(&mut self, element_id: ElementId, depth: usize) {
         #[cfg(debug_assertions)]
-        tracing::trace!("schedule element={:?}, depth={}, build_locked={}", element_id, depth, self.build_locked);
+        tracing::trace!(
+            "schedule element={:?}, depth={}, build_locked={}",
+            element_id,
+            depth,
+            self.build_locked
+        );
 
         if self.build_locked {
             tracing::warn!(
@@ -420,7 +425,11 @@ impl BuildPipeline {
         // Rebuild each element
         for (element_id, depth) in dirty.drain(..) {
             #[cfg(debug_assertions)]
-            tracing::trace!("rebuild_dirty: Processing element {:?} at depth {}", element_id, depth);
+            tracing::trace!(
+                "rebuild_dirty: Processing element {:?} at depth {}",
+                element_id,
+                depth
+            );
 
             // Determine element type (read-only scope)
             let element_type = {
@@ -458,7 +467,10 @@ impl BuildPipeline {
                 Some(ElementType::Render) => {
                     // RenderElements don't rebuild - they only relayout
                     #[cfg(debug_assertions)]
-                    tracing::trace!("Render element {:?} skipped (rebuilds via layout)", element_id);
+                    tracing::trace!(
+                        "Render element {:?} skipped (rebuilds via layout)",
+                        element_id
+                    );
                 }
 
                 Some(ElementType::Provider) => {
@@ -477,7 +489,12 @@ impl BuildPipeline {
         }
 
         #[cfg(debug_assertions)]
-        debug_println!(PRINT_BUILD_SCOPE, "rebuild_dirty #{}: complete ({} elements rebuilt)", build_num, rebuilt_count);
+        debug_println!(
+            PRINT_BUILD_SCOPE,
+            "rebuild_dirty #{}: complete ({} elements rebuilt)",
+            build_num,
+            rebuilt_count
+        );
 
         rebuilt_count
     }
@@ -513,9 +530,8 @@ impl BuildPipeline {
 
             // Get or create hook context
             // TODO: Extract existing hook context from component state
-            let hook_context = std::sync::Arc::new(std::cell::RefCell::new(
-                crate::hooks::HookContext::new()
-            ));
+            let hook_context =
+                std::sync::Arc::new(std::cell::RefCell::new(crate::hooks::HookContext::new()));
 
             (view, old_child, hook_context)
         };
@@ -528,9 +544,7 @@ impl BuildPipeline {
         );
 
         // Set up thread-local BuildContext and build
-        let new_element = crate::view::with_build_context(&ctx, || {
-            view.build_any()
-        });
+        let new_element = crate::view::with_build_context(&ctx, || view.build_any());
 
         // Phase 3: Reconcile child (write lock)
 
@@ -573,7 +587,9 @@ impl BuildPipeline {
                         }
 
                         // Update parent component's child reference
-                        if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(element_id) {
+                        if let Some(crate::element::Element::Component(component)) =
+                            tree_guard.get_mut(element_id)
+                        {
                             component.set_child(new_id);
                         }
 
@@ -591,7 +607,9 @@ impl BuildPipeline {
                     }
 
                     // Update parent component's child reference
-                    if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(element_id) {
+                    if let Some(crate::element::Element::Component(component)) =
+                        tree_guard.get_mut(element_id)
+                    {
                         component.set_child(new_id);
                     }
 
@@ -603,7 +621,9 @@ impl BuildPipeline {
                     let _ = tree_guard.remove(old_id);
 
                     // Update parent component
-                    if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(element_id) {
+                    if let Some(crate::element::Element::Component(component)) =
+                        tree_guard.get_mut(element_id)
+                    {
                         component.clear_child();
                     }
                 }
@@ -699,7 +719,10 @@ impl BuildPipeline {
     /// - Otherwise: sequential execution
     ///
     /// Returns the number of elements rebuilt.
-    pub fn rebuild_dirty_parallel(&mut self, tree: &std::sync::Arc<parking_lot::RwLock<super::ElementTree>>) -> usize {
+    pub fn rebuild_dirty_parallel(
+        &mut self,
+        tree: &std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
+    ) -> usize {
         if self.dirty_elements.is_empty() {
             return 0;
         }

@@ -2,11 +2,11 @@
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
-use flui_engine::{BoxedLayer, Paint, RRect, layer::pool};
+use flui_engine::{layer::pool, BoxedLayer, Paint, RRect};
 use flui_types::{
-    Offset, Point, Rect, Size,
     constraints::BoxConstraints,
     styling::{BorderPosition, BoxDecoration, Radius},
+    Offset, Point, Rect, Size,
 };
 
 /// Position of decoration relative to child
@@ -96,7 +96,6 @@ impl RenderDecoratedBox {
     /// - GradientLayer for gradients
     /// - PictureLayer for solid colors and borders
     fn paint_decoration(&self, container: &mut flui_engine::ContainerLayer, rect: Rect) {
-
         // use flui_engine::GradientLayer; // TODO: GradientLayer not implemented yet
 
         let decoration = &self.decoration;
@@ -162,7 +161,13 @@ impl RenderDecoratedBox {
 
         if let Some(right) = border.right {
             if right.is_visible() {
-                Self::paint_border_side(picture, rect, &right, BorderPosition::Right, border_radius);
+                Self::paint_border_side(
+                    picture,
+                    rect,
+                    &right,
+                    BorderPosition::Right,
+                    border_radius,
+                );
             }
         }
 
@@ -280,7 +285,10 @@ impl SingleRender for RenderDecoratedBox {
         // Wrap entire container in TransformLayer to apply offset
         let container_layer: BoxedLayer = Box::new(container);
         if offset != Offset::ZERO {
-            Box::new(flui_engine::TransformLayer::translate(container_layer, offset))
+            Box::new(flui_engine::TransformLayer::translate(
+                container_layer,
+                offset,
+            ))
         } else {
             container_layer
         }

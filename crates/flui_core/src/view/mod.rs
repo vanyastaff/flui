@@ -31,38 +31,25 @@ pub mod build_context;
 pub mod into_element;
 pub mod render_builder;
 pub mod sealed;
-#[allow(clippy::module_inception)]  // view/view.rs is intentional for main View trait
+#[allow(clippy::module_inception)] // view/view.rs is intentional for main View trait
 pub mod view;
 
-
-
-
-
-
 // BuildContext and thread-local helpers
-pub use build_context::{BuildContext, BuildContextGuard, current_build_context, with_build_context};
+pub use build_context::{
+    current_build_context, with_build_context, BuildContext, BuildContextGuard,
+};
 
 // View trait and related types
-pub use view::{ChangeFlags, View, ViewElement};
 pub use any_view::AnyView;
+pub use view::{ChangeFlags, View, ViewElement};
 
 // Simplified API exports (IntoElement, RenderBuilder)
-pub use into_element::{IntoElement, AnyElement, IntoAnyElement};
+pub use into_element::{AnyElement, IntoAnyElement, IntoElement};
 pub use render_builder::{
-    LeafRenderBuilder, SingleRenderBuilder, MultiRenderBuilder,
-    LeafRenderExt, SingleRenderExt, MultiRenderExt,
+    LeafRenderBuilder, LeafRenderExt, MultiRenderBuilder, MultiRenderExt, SingleRenderBuilder,
+    SingleRenderExt,
 };
 
 // TODO(2025-02): Add view tree management.
 // The ViewTree will track widget-to-element mappings and provide
 // efficient lookup during rebuild.
-
-
-
-
-
-
-
-
-
-

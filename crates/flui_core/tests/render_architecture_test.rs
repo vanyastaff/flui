@@ -9,7 +9,7 @@ use flui_core::render::{
     Render, Render, SingleAdapter, SingleArity, SingleRender,
 };
 use flui_engine::{BoxedLayer, ContainerLayer};
-use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 // ========== Test implementations using NEW API ==========
 

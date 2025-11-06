@@ -9,20 +9,20 @@
 //! - Divider for visual separation
 
 use flui_app::run_app;
+use flui_core::element::ElementTree;
+use flui_core::foundation::ElementId;
+use flui_core::render::SingleRender;
+use flui_core::view::SingleRenderBuilder;
 use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
+use flui_engine::{layer::pool, BoxedLayer};
+use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+use flui_types::Offset;
+use flui_types::{BoxConstraints, Color, EdgeInsets, Size};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     Button, Card, Center, ClipOval, Column, ConstrainedBox, Container, Divider, Row, SizedBox, Text,
 };
-use flui_types::{BoxConstraints, Color, EdgeInsets, Size};
-use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
-use flui_core::view::SingleRenderBuilder;
-use flui_core::render::SingleRender;
-use flui_core::element::ElementTree;
-use flui_core::foundation::ElementId;
-use flui_types::Offset;
-use flui_engine::{BoxedLayer, layer::pool};
 
 /// Simple Scaffold that fills entire screen with background color
 #[derive(Clone)]
@@ -83,7 +83,11 @@ impl SingleRender for RenderScaffold {
         let size = constraints.biggest();
 
         #[cfg(debug_assertions)]
-        tracing::debug!("RenderScaffold::layout: constraints={:?}, size={:?}", constraints, size);
+        tracing::debug!(
+            "RenderScaffold::layout: constraints={:?}, size={:?}",
+            constraints,
+            size
+        );
 
         // Layout child with deflated constraints (subtract padding)
         let child_constraints = constraints.deflate(&self.padding);
@@ -100,7 +104,12 @@ impl SingleRender for RenderScaffold {
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
         #[cfg(debug_assertions)]
-        tracing::debug!("RenderScaffold::paint: size={:?}, color={:?}, offset={:?}", self.size, self.color, offset);
+        tracing::debug!(
+            "RenderScaffold::paint: size={:?}, color={:?}, offset={:?}",
+            self.size,
+            self.color,
+            offset
+        );
 
         // Create background layer
         let mut picture = pool::acquire_picture();
@@ -148,10 +157,7 @@ struct ProfileCardApp {
 
 impl ProfileCardApp {
     fn new() -> Self {
-        let mut scaffold = Scaffold::new(
-            Color::rgb(240, 240, 245),
-            EdgeInsets::all(40.0)
-        );
+        let mut scaffold = Scaffold::new(Color::rgb(240, 240, 245), EdgeInsets::all(40.0));
         scaffold.child = Some(Box::new(CenteredCard));
         Self { scaffold }
     }

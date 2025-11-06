@@ -122,7 +122,10 @@ mod tests {
     impl crate::render::LeafRender for MockRender {
         type Metadata = ();
 
-        fn layout(&mut self, constraints: crate::foundation::BoxConstraints) -> crate::foundation::Size {
+        fn layout(
+            &mut self,
+            constraints: crate::foundation::BoxConstraints,
+        ) -> crate::foundation::Size {
             constraints.min
         }
 

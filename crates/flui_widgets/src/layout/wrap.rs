@@ -6,11 +6,13 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, MultiRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
 use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
-pub use flui_rendering::{WrapAlignment as WrapAlignmentExport, WrapCrossAlignment as WrapCrossAlignmentExport};
+pub use flui_rendering::{
+    WrapAlignment as WrapAlignmentExport, WrapCrossAlignment as WrapCrossAlignmentExport,
+};
 
 /// A widget that displays its children in multiple horizontal or vertical runs.
 ///
@@ -132,7 +134,14 @@ impl std::fmt::Debug for Wrap {
             .field("spacing", &self.spacing)
             .field("run_spacing", &self.run_spacing)
             .field("cross_alignment", &self.cross_alignment)
-            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .field(
+                "children",
+                &if !self.children.is_empty() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -228,8 +237,7 @@ impl View for Wrap {
         render_wrap.run_spacing = self.run_spacing;
         render_wrap.cross_alignment = self.cross_alignment;
 
-        MultiRenderBuilder::new(render_wrap)
-            .with_children(self.children.into_iter())
+        MultiRenderBuilder::new(render_wrap).with_children(self.children)
     }
 }
 
@@ -242,10 +250,7 @@ where
     S::Children: IsUnset,
 {
     /// Sets the children widgets (works in builder chain).
-    pub fn children(
-        self,
-        children: Vec<Box<dyn AnyView>>,
-    ) -> WrapBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> WrapBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }
@@ -335,7 +340,11 @@ mod tests {
     #[test]
     fn test_wrap_set_children() {
         let mut wrap = Wrap::default();
-        wrap.set_children(vec![Box::new(MockView), Box::new(MockView), Box::new(MockView)]);
+        wrap.set_children(vec![
+            Box::new(MockView),
+            Box::new(MockView),
+            Box::new(MockView),
+        ]);
         assert_eq!(wrap.children.len(), 3);
     }
 }

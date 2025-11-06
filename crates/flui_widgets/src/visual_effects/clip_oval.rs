@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_rendering::RenderClipOval;
 use flui_types::painting::Clip;
 
@@ -93,7 +93,14 @@ impl std::fmt::Debug for ClipOval {
         f.debug_struct("ClipOval")
             .field("key", &self.key)
             .field("clip_behavior", &self.clip_behavior)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -216,9 +223,7 @@ mod tests {
 
     #[test]
     fn test_clip_oval_builder() {
-        let widget = ClipOval::builder()
-            .clip_behavior(Clip::None)
-            .build();
+        let widget = ClipOval::builder().clip_behavior(Clip::None).build();
         assert_eq!(widget.clip_behavior, Clip::None);
     }
 

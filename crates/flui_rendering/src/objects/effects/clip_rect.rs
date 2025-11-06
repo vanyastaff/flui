@@ -1,7 +1,7 @@
 //! RenderClipRect - clips child to a rectangle
 
 use flui_engine::BoxedLayer;
-use flui_types::{Rect, Size, painting::Clip};
+use flui_types::{painting::Clip, Rect, Size};
 
 use super::clip_base::{ClipShape, RenderClip};
 

@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -156,7 +156,14 @@ impl std::fmt::Debug for Flexible {
             .field("key", &self.key)
             .field("flex", &self.flex)
             .field("fit", &self.fit)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }

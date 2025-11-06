@@ -29,7 +29,9 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use super::{BuildPipeline, LayoutPipeline, PaintPipeline, PipelineError, ElementTree, FrameScheduler};
+use super::{
+    BuildPipeline, ElementTree, FrameScheduler, LayoutPipeline, PaintPipeline, PipelineError,
+};
 use crate::element::ElementId;
 use flui_types::constraints::BoxConstraints;
 
@@ -326,29 +328,33 @@ impl FrameCoordinator {
 
         // Get root element's computed size
         let size = match root_id {
-            Some(id) => {
-                match tree_guard.get(id) {
-                    Some(crate::element::Element::Render(render_elem)) => {
-                        let render_state_lock = render_elem.render_state();
-                        let render_state = render_state_lock.read();
-                        let size_opt = render_state.size();
-                        #[cfg(debug_assertions)]
-                        tracing::debug!("flush_layout: Root (ID: {:?}) RenderState size: {:?}", id, size_opt);
+            Some(id) => match tree_guard.get(id) {
+                Some(crate::element::Element::Render(render_elem)) => {
+                    let render_state_lock = render_elem.render_state();
+                    let render_state = render_state_lock.read();
+                    let size_opt = render_state.size();
+                    #[cfg(debug_assertions)]
+                    tracing::debug!(
+                        "flush_layout: Root (ID: {:?}) RenderState size: {:?}",
+                        id,
                         size_opt
-                    }
-                    Some(elem) => {
-                        #[cfg(debug_assertions)]
-                        println!("[DEBUG] flush_layout: Root element is not Render! Type: {:?}",
-                            std::any::type_name_of_val(elem));
-                        None
-                    }
-                    None => {
-                        #[cfg(debug_assertions)]
-                        println!("[DEBUG] flush_layout: Root element not found! ID: {:?}", id);
-                        None
-                    }
+                    );
+                    size_opt
                 }
-            }
+                Some(elem) => {
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "[DEBUG] flush_layout: Root element is not Render! Type: {:?}",
+                        std::any::type_name_of_val(elem)
+                    );
+                    None
+                }
+                None => {
+                    #[cfg(debug_assertions)]
+                    println!("[DEBUG] flush_layout: Root element not found! ID: {:?}", id);
+                    None
+                }
+            },
             None => {
                 #[cfg(debug_assertions)]
                 println!("[DEBUG] flush_layout: No root_id provided!");
@@ -396,7 +402,9 @@ impl FrameCoordinator {
                             tracing::warn!("flush_paint: Root is ProviderElement - returning empty ContainerLayer");
                         }
                         crate::element::Element::Render(_) => {
-                            tracing::debug!("flush_paint: Root is RenderElement - will paint normally");
+                            tracing::debug!(
+                                "flush_paint: Root is RenderElement - will paint normally"
+                            );
                         }
                     }
                 } else {

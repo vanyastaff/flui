@@ -980,7 +980,8 @@ mod tests {
 
         // Invalid constraints (min > max)
         assert!(!BoxConstraints::new(150.0, 50.0, 30.0, 100.0).is_normalized()); // min_width > max_width
-        assert!(!BoxConstraints::new(50.0, 150.0, 100.0, 30.0).is_normalized()); // min_height > max_height
+        assert!(!BoxConstraints::new(50.0, 150.0, 100.0, 30.0).is_normalized());
+        // min_height > max_height
     }
 
     #[test]

@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -109,7 +109,14 @@ impl std::fmt::Debug for Align {
             .field("alignment", &self.alignment)
             .field("width_factor", &self.width_factor)
             .field("height_factor", &self.height_factor)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }

@@ -2,8 +2,8 @@
 
 use flui_engine::{Paint, Painter, RRect};
 use flui_types::{
-    Rect,
     styling::{BoxShadow, Radius},
+    Rect,
 };
 
 /// Painter for box shadows
@@ -97,7 +97,7 @@ impl ShadowPainter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::{Offset, styling::Color};
+    use flui_types::{styling::Color, Offset};
 
     #[test]
     fn test_box_shadow_basic() {

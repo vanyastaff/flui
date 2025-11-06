@@ -5,10 +5,10 @@
 
 use std::collections::HashSet;
 
-use crate::ElementId;
 use crate::element::{ElementBase, ElementLifecycle};
-use crate::view::AnyView;
 use crate::foundation::Slot;
+use crate::view::AnyView;
+use crate::ElementId;
 
 /// ProviderElement - provides context/inherited data
 ///

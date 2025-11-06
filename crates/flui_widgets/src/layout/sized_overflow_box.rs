@@ -4,7 +4,7 @@
 //! potentially causing the child to overflow the widget's bounds.
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderSizedOverflowBox;
@@ -106,12 +106,47 @@ impl std::fmt::Debug for SizedOverflowBox {
             .field("key", &self.key)
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("child_min_width", &if self.child_min_width.is_some() { "<AnyView>" } else { "None" })
-            .field("child_max_width", &if self.child_max_width.is_some() { "<AnyView>" } else { "None" })
-            .field("child_min_height", &if self.child_min_height.is_some() { "<AnyView>" } else { "None" })
-            .field("child_max_height", &if self.child_max_height.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child_min_width",
+                &if self.child_min_width.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
+            .field(
+                "child_max_width",
+                &if self.child_max_width.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
+            .field(
+                "child_min_height",
+                &if self.child_min_height.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
+            .field(
+                "child_max_height",
+                &if self.child_max_height.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .field("alignment", &self.alignment)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -239,8 +274,7 @@ impl View for SizedOverflowBox {
         };
         render.alignment = self.alignment;
 
-        SingleRenderBuilder::new(render)
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(render).with_optional_child(self.child)
     }
 }
 
@@ -250,11 +284,8 @@ mod tests {
 
     #[test]
     fn test_sized_overflow_box_new() {
-        let box_widget = SizedOverflowBox::new(
-            Some(100.0),
-            Some(100.0),
-            Box::new(crate::SizedBox::new()),
-        );
+        let box_widget =
+            SizedOverflowBox::new(Some(100.0), Some(100.0), Box::new(crate::SizedBox::new()));
         assert_eq!(box_widget.width, Some(100.0));
         assert_eq!(box_widget.height, Some(100.0));
         assert!(box_widget.child.is_some());

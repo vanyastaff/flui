@@ -2,8 +2,8 @@
 
 use flui_engine::{Paint, Painter, RRect};
 use flui_types::{
-    Point, Rect,
     styling::{Border, BorderRadius},
+    Point, Rect,
 };
 
 /// Painter for borders

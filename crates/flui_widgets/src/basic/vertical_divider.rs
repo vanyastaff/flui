@@ -23,7 +23,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::Color;
 
@@ -172,32 +172,36 @@ impl View for VerticalDivider {
         // Build the child view
         let child: Box<dyn AnyView> = if self.indent > 0.0 || self.end_indent > 0.0 {
             // If we have indents, we need to wrap in a Container with padding
-            Box::new(Container::builder()
-                .width(effective_width)
-                .padding(flui_types::EdgeInsets {
-                    left: 0.0,
-                    right: 0.0,
-                    top: self.indent,
-                    bottom: self.end_indent,
-                })
-                .child(ColoredBox::builder()
-                    .color(self.color)
-                    .child(SizedBox::builder()
-                        .width(self.thickness)
-                        .build())
-                    .build())
-                .build_container())
+            Box::new(
+                Container::builder()
+                    .width(effective_width)
+                    .padding(flui_types::EdgeInsets {
+                        left: 0.0,
+                        right: 0.0,
+                        top: self.indent,
+                        bottom: self.end_indent,
+                    })
+                    .child(
+                        ColoredBox::builder()
+                            .color(self.color)
+                            .child(SizedBox::builder().width(self.thickness).build())
+                            .build(),
+                    )
+                    .build_container(),
+            )
         } else {
             // Simple case: just a colored box with width
-            Box::new(SizedBox::builder()
-                .width(effective_width)
-                .child(ColoredBox::builder()
-                    .color(self.color)
-                    .child(SizedBox::builder()
-                        .width(self.thickness)
-                        .build())
-                    .build())
-                .build())
+            Box::new(
+                SizedBox::builder()
+                    .width(effective_width)
+                    .child(
+                        ColoredBox::builder()
+                            .color(self.color)
+                            .child(SizedBox::builder().width(self.thickness).build())
+                            .build(),
+                    )
+                    .build(),
+            )
         };
 
         child

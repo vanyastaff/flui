@@ -40,20 +40,20 @@
 //! }
 //! ```
 
-pub mod hook_trait;
-pub mod hook_context;
-pub mod signal;
-pub mod memo;
 pub mod effect;
+pub mod hook_context;
+pub mod hook_trait;
+pub mod memo;
 pub mod resource;
+pub mod signal;
 pub mod test_harness;
 
-pub use hook_trait::{Hook, ReactiveHook, EffectHook, AsyncHook, DependencyId};
-pub use hook_context::{HookContext, ComponentId, HookId, HookIndex};
-pub use signal::{use_signal, Signal, SignalHook, SignalId};
+pub use effect::{use_effect, use_effect_simple, CleanupFn, Effect, EffectHook as EffectHookImpl};
+pub use hook_context::{ComponentId, HookContext, HookId, HookIndex};
+pub use hook_trait::{AsyncHook, DependencyId, EffectHook, Hook, ReactiveHook};
 pub use memo::{use_memo, Memo, MemoHook};
-pub use effect::{use_effect, use_effect_simple, Effect, EffectHook as EffectHookImpl, CleanupFn};
 pub use resource::{use_resource, Resource, ResourceHook};
+pub use signal::{use_signal, Signal, SignalHook, SignalId};
 pub use test_harness::{HookTestHarness, MultiHookTestHarness};
 
 // TODO(2025-03): Add hook composition support.

@@ -4,7 +4,7 @@
 //! Similar to Flutter's IntrinsicWidth widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderIntrinsicWidth;
 
@@ -81,6 +81,7 @@ use flui_rendering::RenderIntrinsicWidth;
 /// ```
 #[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_intrinsic_width)]
+#[derive(Default)]
 pub struct IntrinsicWidth {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -102,7 +103,14 @@ impl std::fmt::Debug for IntrinsicWidth {
             .field("key", &self.key)
             .field("step_width", &self.step_width)
             .field("step_height", &self.step_height)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -168,16 +176,6 @@ impl IntrinsicWidth {
     }
 }
 
-impl Default for IntrinsicWidth {
-    fn default() -> Self {
-        Self {
-            key: None,
-            step_width: None,
-            step_height: None,
-            child: None,
-        }
-    }
-}
 
 // bon Builder Extensions
 use intrinsic_width_builder::{IsUnset, SetChild, State};
@@ -202,8 +200,7 @@ impl View for IntrinsicWidth {
             (None, None) => RenderIntrinsicWidth::new(),
         };
 
-        SingleRenderBuilder::new(render)
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(render).with_optional_child(self.child)
     }
 }
 

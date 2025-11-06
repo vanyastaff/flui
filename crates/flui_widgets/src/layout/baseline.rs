@@ -4,8 +4,8 @@
 //! Similar to Flutter's Baseline widget.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderBaseline;
 use flui_types::typography::TextBaseline;
 
@@ -95,7 +95,14 @@ impl std::fmt::Debug for Baseline {
             .field("key", &self.key)
             .field("baseline", &self.baseline)
             .field("baseline_type", &self.baseline_type)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }

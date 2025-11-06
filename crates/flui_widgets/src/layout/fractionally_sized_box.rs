@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_rendering::RenderFractionallySizedBox;
 
 /// A widget that sizes its child to a fraction of the total available space.
@@ -91,7 +91,14 @@ impl std::fmt::Debug for FractionallySizedBox {
             .field("key", &self.key)
             .field("width_factor", &self.width_factor)
             .field("height_factor", &self.height_factor)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -119,7 +126,11 @@ impl FractionallySizedBox {
     /// // Only 60% width, height unconstrained
     /// let widget = FractionallySizedBox::new(Some(0.6), None, child);
     /// ```
-    pub fn new(width_factor: Option<f32>, height_factor: Option<f32>, child: impl View + 'static) -> Self {
+    pub fn new(
+        width_factor: Option<f32>,
+        height_factor: Option<f32>,
+        child: impl View + 'static,
+    ) -> Self {
         Self {
             key: None,
             width_factor,

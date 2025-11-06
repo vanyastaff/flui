@@ -3,12 +3,12 @@
 //! Provides `use_effect` hook that runs side effects after rendering,
 //! similar to React's useEffect.
 
-use super::hook_trait::{Hook, EffectHook as EffectHookTrait, DependencyId};
 use super::hook_context::HookContext;
+use super::hook_trait::{DependencyId, EffectHook as EffectHookTrait, Hook};
 use crate::BuildContext;
-use std::rc::Rc;
 use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 /// Cleanup function for effects.
 pub type CleanupFn = Box<dyn FnOnce()>;
@@ -60,10 +60,11 @@ impl Effect {
             let prev_deps = self.inner.prev_deps.borrow();
             let ran_once = *self.inner.ran_once.borrow();
 
-            !ran_once || match prev_deps.as_ref() {
-                None => true,
-                Some(prev) => prev != &deps,
-            }
+            !ran_once
+                || match prev_deps.as_ref() {
+                    None => true,
+                    Some(prev) => prev != &deps,
+                }
         };
 
         if should_run {

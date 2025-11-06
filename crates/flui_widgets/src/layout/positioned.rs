@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{PositionedMetadata, RenderPositioned};
@@ -195,7 +195,14 @@ impl std::fmt::Debug for Positioned {
             .field("bottom", &self.bottom)
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -273,7 +280,13 @@ impl Positioned {
     /// ```rust,ignore
     /// let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, Box::new(Container::new()));
     /// ```
-    pub fn from_rect(left: f32, top: f32, width: f32, height: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn from_rect(
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+        child: Box<dyn AnyView>,
+    ) -> Self {
         Self {
             key: None,
             left: Some(left),
@@ -407,8 +420,7 @@ impl View for Positioned {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let metadata = self.create_metadata();
 
-        SingleRenderBuilder::new(RenderPositioned::new(metadata))
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderPositioned::new(metadata)).with_optional_child(self.child)
     }
 }
 

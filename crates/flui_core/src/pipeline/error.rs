@@ -448,7 +448,10 @@ impl PipelineError {
         if message.is_empty() {
             return Err(InvalidError::EmptyMessage);
         }
-        Ok(Self::LayoutError { element_id, message })
+        Ok(Self::LayoutError {
+            element_id,
+            message,
+        })
     }
 
     /// Create a paint error with validation
@@ -469,7 +472,10 @@ impl PipelineError {
         if message.is_empty() {
             return Err(InvalidError::EmptyMessage);
         }
-        Ok(Self::PaintError { element_id, message })
+        Ok(Self::PaintError {
+            element_id,
+            message,
+        })
     }
 
     /// Create a build error with validation
@@ -490,7 +496,10 @@ impl PipelineError {
         if message.is_empty() {
             return Err(InvalidError::EmptyMessage);
         }
-        Ok(Self::BuildError { element_id, message })
+        Ok(Self::BuildError {
+            element_id,
+            message,
+        })
     }
 
     /// Create a tree corruption error with validation
@@ -569,19 +578,24 @@ impl fmt::Display for PipelineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Timeout { phase, duration } => {
-                write!(
-                    f,
-                    "Pipeline timeout in {} phase: {}",
-                    phase, duration
-                )
+                write!(f, "Pipeline timeout in {} phase: {}", phase, duration)
             }
-            Self::LayoutError { element_id, message } => {
+            Self::LayoutError {
+                element_id,
+                message,
+            } => {
                 write!(f, "Layout error for element {:?}: {}", element_id, message)
             }
-            Self::PaintError { element_id, message } => {
+            Self::PaintError {
+                element_id,
+                message,
+            } => {
                 write!(f, "Paint error for element {:?}: {}", element_id, message)
             }
-            Self::BuildError { element_id, message } => {
+            Self::BuildError {
+                element_id,
+                message,
+            } => {
                 write!(f, "Build error for element {:?}: {}", element_id, message)
             }
             Self::TreeCorruption { message } => {
@@ -744,7 +758,10 @@ mod tests {
     fn test_layout_error_constructor_valid() {
         let error = PipelineError::layout_error(42, "Constraint violation").unwrap();
         match error {
-            PipelineError::LayoutError { element_id, message } => {
+            PipelineError::LayoutError {
+                element_id,
+                message,
+            } => {
                 assert_eq!(element_id, 42);
                 assert_eq!(message, "Constraint violation");
             }
@@ -766,7 +783,10 @@ mod tests {
     fn test_paint_error_constructor_valid() {
         let error = PipelineError::paint_error(42, "Layer creation failed").unwrap();
         match error {
-            PipelineError::PaintError { element_id, message } => {
+            PipelineError::PaintError {
+                element_id,
+                message,
+            } => {
                 assert_eq!(element_id, 42);
                 assert_eq!(message, "Layer creation failed");
             }
@@ -788,7 +808,10 @@ mod tests {
     fn test_build_error_constructor_valid() {
         let error = PipelineError::build_error(42, "Widget rebuild failed").unwrap();
         match error {
-            PipelineError::BuildError { element_id, message } => {
+            PipelineError::BuildError {
+                element_id,
+                message,
+            } => {
                 assert_eq!(element_id, 42);
                 assert_eq!(message, "Widget rebuild failed");
             }

@@ -247,7 +247,7 @@ impl ErrorRecovery {
                     "Exceeded maximum pipeline errors ({}/{})",
                     count, self.max_errors
                 ))
-                .expect("Non-empty error message")
+                .expect("Non-empty error message"),
             );
         }
 

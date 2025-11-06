@@ -4,8 +4,8 @@
 //! repainting from its ancestors for performance optimization.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderRepaintBoundary;
 
 /// A widget that creates a repaint boundary.
@@ -50,6 +50,7 @@ use flui_rendering::RenderRepaintBoundary;
 /// ```
 #[derive(Builder)]
 #[builder(on(String, into), finish_fn = build_repaint_boundary)]
+#[derive(Default)]
 pub struct RepaintBoundary {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -63,7 +64,14 @@ impl std::fmt::Debug for RepaintBoundary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RepaintBoundary")
             .field("key", &self.key)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -106,14 +114,6 @@ impl RepaintBoundary {
     }
 }
 
-impl Default for RepaintBoundary {
-    fn default() -> Self {
-        Self {
-            key: None,
-            child: None,
-        }
-    }
-}
 
 // bon Builder Extensions
 use repaint_boundary_builder::{IsUnset, SetChild, State};
@@ -131,8 +131,7 @@ where
 // Implement View trait
 impl View for RepaintBoundary {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderRepaintBoundary::new())
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderRepaintBoundary::new()).with_optional_child(self.child)
     }
 }
 
@@ -154,8 +153,7 @@ mod tests {
 
     #[test]
     fn test_repaint_boundary_builder() {
-        let boundary = RepaintBoundary::builder()
-            .build_repaint_boundary();
+        let boundary = RepaintBoundary::builder().build_repaint_boundary();
         assert!(boundary.child.is_none());
     }
 

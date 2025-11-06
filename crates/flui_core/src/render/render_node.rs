@@ -6,7 +6,7 @@
 //! - MultiRender
 
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 use super::render_traits::{LeafRender, MultiRender, SingleRender};
 use crate::element::ElementId;
@@ -71,11 +71,17 @@ impl RenderNode {
 
     /// Create single-child render
     pub fn new_single(render: Box<dyn SingleRender<Metadata = ()>>, child: ElementId) -> Self {
-        Self::Single { render, child: Some(child) }
+        Self::Single {
+            render,
+            child: Some(child),
+        }
     }
 
     /// Create multi-child render
-    pub fn new_multi(render: Box<dyn MultiRender<Metadata = ()>>, children: Vec<ElementId>) -> Self {
+    pub fn new_multi(
+        render: Box<dyn MultiRender<Metadata = ()>>,
+        children: Vec<ElementId>,
+    ) -> Self {
         Self::Multi { render, children }
     }
 

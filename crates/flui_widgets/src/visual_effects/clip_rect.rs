@@ -16,8 +16,8 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
-use flui_rendering::{RenderClipRect, RectShape};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_rendering::{RectShape, RenderClipRect};
 use flui_types::painting::Clip;
 
 /// A widget that clips its child using a rectangle.
@@ -73,7 +73,14 @@ impl std::fmt::Debug for ClipRect {
         f.debug_struct("ClipRect")
             .field("key", &self.key)
             .field("clip_behavior", &self.clip_behavior)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -172,9 +179,7 @@ mod tests {
 
     #[test]
     fn test_clip_rect_builder_with_clip_behavior() {
-        let widget = ClipRect::builder()
-            .clip_behavior(Clip::None)
-            .build();
+        let widget = ClipRect::builder().clip_behavior(Clip::None).build();
         assert_eq!(widget.clip_behavior, Clip::None);
     }
 

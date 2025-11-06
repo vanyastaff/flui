@@ -132,7 +132,6 @@ impl<V: crate::view::View> IntoElement for V {
     }
 }
 
-
 /// Implementation for Box<dyn AnyView>
 ///
 /// Allows using type-erased views as children:
@@ -179,7 +178,10 @@ struct EmptyRender;
 impl crate::render::LeafRender for EmptyRender {
     type Metadata = ();
 
-    fn layout(&mut self, _constraints: flui_types::constraints::BoxConstraints) -> flui_types::Size {
+    fn layout(
+        &mut self,
+        _constraints: flui_types::constraints::BoxConstraints,
+    ) -> flui_types::Size {
         flui_types::Size::ZERO
     }
 

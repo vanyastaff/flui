@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
 
@@ -81,7 +81,14 @@ impl std::fmt::Debug for Padding {
         f.debug_struct("Padding")
             .field("key", &self.key)
             .field("padding", &self.padding)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -174,8 +181,7 @@ impl Default for Padding {
 // Implement View for Padding - Simplified API
 impl View for Padding {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderPadding::new(self.padding))
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderPadding::new(self.padding)).with_optional_child(self.child)
     }
 }
 

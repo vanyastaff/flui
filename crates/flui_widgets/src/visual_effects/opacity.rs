@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_rendering::RenderOpacity;
 
 /// A widget that makes its child partially transparent.
@@ -58,7 +58,14 @@ impl std::fmt::Debug for Opacity {
         f.debug_struct("Opacity")
             .field("key", &self.key)
             .field("opacity", &self.opacity)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -107,7 +114,7 @@ impl Opacity {
     pub fn validate(&self) -> Result<(), String> {
         if self.opacity.is_nan() {
             return Err(
-                "Invalid opacity: NaN. Must be a finite number between 0.0 and 1.0.".to_string()
+                "Invalid opacity: NaN. Must be a finite number between 0.0 and 1.0.".to_string(),
             );
         }
 
@@ -131,8 +138,7 @@ impl Default for Opacity {
 // Implement View for Opacity - New architecture
 impl View for Opacity {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderOpacity::new(self.opacity))
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderOpacity::new(self.opacity)).with_optional_child(self.child)
     }
 }
 
@@ -224,9 +230,7 @@ mod tests {
 
     #[test]
     fn test_opacity_builder() {
-        let widget = Opacity::builder()
-            .opacity(0.75)
-            .build();
+        let widget = Opacity::builder().opacity(0.75).build();
         assert_eq!(widget.opacity, 0.75);
     }
 

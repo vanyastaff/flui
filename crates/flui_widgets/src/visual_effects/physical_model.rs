@@ -3,8 +3,8 @@
 //! A widget that renders Material Design elevation effects with shadows.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
 use flui_rendering::{PhysicalShape, RenderPhysicalModel};
 use flui_types::Color;
 
@@ -109,7 +109,14 @@ impl std::fmt::Debug for PhysicalModel {
             .field("elevation", &self.elevation)
             .field("color", &self.color)
             .field("shadow_color", &self.shadow_color)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -155,7 +162,12 @@ impl PhysicalModel {
     /// ```rust,ignore
     /// let model = PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, Box::new(child));
     /// ```
-    pub fn rounded_rectangle(elevation: f32, border_radius: f32, color: Color, child: Box<dyn AnyView>) -> Self {
+    pub fn rounded_rectangle(
+        elevation: f32,
+        border_radius: f32,
+        color: Color,
+        child: Box<dyn AnyView>,
+    ) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::RoundedRectangle,
@@ -222,8 +234,7 @@ impl View for PhysicalModel {
         render.border_radius = self.border_radius;
         render.shadow_color = self.shadow_color;
 
-        SingleRenderBuilder::new(render)
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(render).with_optional_child(self.child)
     }
 }
 

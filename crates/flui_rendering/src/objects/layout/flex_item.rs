@@ -13,7 +13,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints, layout::FlexFit};
+use flui_types::{constraints::BoxConstraints, layout::FlexFit, Offset, Size};
 
 /// Metadata for flexible children in Flex layout
 ///

@@ -66,6 +66,8 @@ pub use objects::{
     FlexItemMetadata,
     MouseCallbacks,
     ParagraphData,
+    // Effects objects
+    PhysicalShape,
     PositionedMetadata,
     RRectShape,
     RectShape,
@@ -74,6 +76,7 @@ pub use objects::{
     // Layout objects
     RenderAlign,
     RenderAspectRatio,
+    RenderBackdropFilter,
     RenderBaseline,
     RenderClipOval,
     RenderClipRRect,
@@ -93,20 +96,17 @@ pub use objects::{
     RenderListBody,
     RenderMouseRegion,
     RenderOffstage,
+    RenderOpacity,
     RenderOverflowBox,
 
-    // Effects objects
-    PhysicalShape,
-    RenderBackdropFilter,
-    RenderOpacity,
     RenderPadding,
-    RenderPhysicalModel,
-    RenderPositioned,
-    RenderRepaintBoundary,
     // Text objects
     RenderParagraph,
+    RenderPhysicalModel,
     RenderPointerListener,
+    RenderPositioned,
     RenderPositionedBox,
+    RenderRepaintBoundary,
     RenderRotatedBox,
     RenderSizedBox,
     RenderSizedOverflowBox,

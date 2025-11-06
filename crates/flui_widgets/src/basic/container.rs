@@ -37,7 +37,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::constraints::BoxConstraints;
 use flui_types::styling::BoxDecoration;
@@ -163,7 +163,14 @@ impl std::fmt::Debug for Container {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("constraints", &self.constraints)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -302,18 +309,14 @@ impl View for Container {
 
         // Apply padding (inner spacing around child)
         if let Some(padding) = self.padding {
-            let mut padding_widget = crate::Padding::builder()
-                .padding(padding)
-                .build();
+            let mut padding_widget = crate::Padding::builder().padding(padding).build();
             padding_widget.child = Some(current);
             current = Box::new(padding_widget);
         }
 
         // Apply alignment BEFORE decoration!
         if let Some(alignment) = self.alignment {
-            let mut align_widget = crate::Align::builder()
-                .alignment(alignment)
-                .build();
+            let mut align_widget = crate::Align::builder().alignment(alignment).build();
             align_widget.child = Some(current);
             current = Box::new(align_widget);
         }
@@ -341,9 +344,7 @@ impl View for Container {
 
         // Apply margin BEFORE size constraints!
         if let Some(margin) = self.margin {
-            let mut margin_widget = crate::Padding::builder()
-                .padding(margin)
-                .build();
+            let mut margin_widget = crate::Padding::builder().padding(margin).build();
             margin_widget.child = Some(current);
             current = Box::new(margin_widget);
         }
@@ -450,7 +451,10 @@ mod tests {
 
     #[test]
     fn test_container_builder() {
-        let container = Container::builder().width(100.0).height(200.0).build_container();
+        let container = Container::builder()
+            .width(100.0)
+            .height(200.0)
+            .build_container();
 
         assert_eq!(container.width, Some(100.0));
         assert_eq!(container.height, Some(200.0));
@@ -482,7 +486,9 @@ mod tests {
 
     #[test]
     fn test_container_builder_alignment() {
-        let container = Container::builder().alignment(Alignment::CENTER).build_container();
+        let container = Container::builder()
+            .alignment(Alignment::CENTER)
+            .build_container();
 
         assert_eq!(container.alignment, Some(Alignment::CENTER));
     }
@@ -490,7 +496,9 @@ mod tests {
     #[test]
     fn test_container_builder_constraints() {
         let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-        let container = Container::builder().constraints(constraints).build_container();
+        let container = Container::builder()
+            .constraints(constraints)
+            .build_container();
 
         assert_eq!(container.constraints, Some(constraints));
     }
@@ -534,7 +542,9 @@ mod tests {
             color: Some(green),
             ..Default::default()
         };
-        let container = Container::builder().decoration(decoration.clone()).build_container();
+        let container = Container::builder()
+            .decoration(decoration.clone())
+            .build_container();
 
         assert_eq!(container.decoration, Some(decoration));
     }
@@ -551,7 +561,10 @@ mod tests {
 
     #[test]
     fn test_container_validate_ok() {
-        let container = Container::builder().width(100.0).height(200.0).build_container();
+        let container = Container::builder()
+            .width(100.0)
+            .height(200.0)
+            .build_container();
 
         assert!(container.validate().is_ok());
     }

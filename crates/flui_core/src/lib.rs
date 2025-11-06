@@ -259,11 +259,11 @@ pub mod foundation;
 pub mod render;
 
 // New modules (Phase 1: Week 1)
-pub mod view;
-pub mod pipeline;
-pub mod hooks;
 pub mod context;
+pub mod hooks;
+pub mod pipeline;
 pub mod testing;
+pub mod view;
 
 // Re-export debug types
 pub use debug::DebugFlags;
@@ -310,7 +310,6 @@ pub use foundation::{
     ValueNotifier,
 };
 
-
 // ============================================================================
 // Element System
 // ============================================================================
@@ -340,9 +339,8 @@ pub use view::BuildContext;
 
 // Re-export simplified API (View, IntoElement, RenderBuilder)
 pub use view::{
-    View, AnyView,
-    IntoElement, AnyElement,
-    LeafRenderBuilder, SingleRenderBuilder, MultiRenderBuilder,
+    AnyElement, AnyView, IntoElement, LeafRenderBuilder, MultiRenderBuilder, SingleRenderBuilder,
+    View,
 };
 
 // Re-export pipeline types (moved in Phase 1)
@@ -377,8 +375,8 @@ pub mod prelude {
     pub use crate::foundation::{Key, KeyRef};
 
     // Element and View system
-    pub use crate::view::{BuildContext, View, ViewElement, AnyView, ChangeFlags};
     pub use crate::element::Element;
+    pub use crate::view::{AnyView, BuildContext, ChangeFlags, View, ViewElement};
 
     // Render system
     pub use crate::render::{LeafRender, MultiRender, RenderNode, SingleRender};
@@ -422,4 +420,3 @@ mod tests {
         let _signal: Option<Signal<i32>> = None;
     }
 }
-

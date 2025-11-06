@@ -3,10 +3,10 @@
 //! This module provides wrapper types that automatically return layers
 //! to the pool when they're dropped, improving pool hit rates.
 
-use super::{ContainerLayer, Layer, ClipRectLayer, PictureLayer, pool};
+use super::{pool, ClipRectLayer, ContainerLayer, Layer, PictureLayer};
 use crate::painter::Painter;
-use flui_types::{Rect, Offset};
 use flui_types::events::{Event, HitTestResult};
+use flui_types::{Offset, Rect};
 
 /// Wrapper for ContainerLayer that automatically returns to pool on drop
 pub struct PooledContainerLayer {
@@ -23,13 +23,17 @@ impl PooledContainerLayer {
 
     /// Get mutable reference to inner layer
     pub fn inner_mut(&mut self) -> &mut ContainerLayer {
-        self.inner.as_mut().expect("PooledContainerLayer already consumed")
+        self.inner
+            .as_mut()
+            .expect("PooledContainerLayer already consumed")
     }
 
     /// Take the inner layer, consuming self without returning to pool
     /// Useful when you need to pass ownership elsewhere
     pub fn take(mut self) -> ContainerLayer {
-        self.inner.take().expect("PooledContainerLayer already consumed")
+        self.inner
+            .take()
+            .expect("PooledContainerLayer already consumed")
     }
 }
 
@@ -49,7 +53,10 @@ impl Layer for PooledContainerLayer {
     }
 
     fn bounds(&self) -> Rect {
-        self.inner.as_ref().map(|l| l.bounds()).unwrap_or(Rect::ZERO)
+        self.inner
+            .as_ref()
+            .map(|l| l.bounds())
+            .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
@@ -57,11 +64,17 @@ impl Layer for PooledContainerLayer {
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        self.inner.as_ref().map(|l| l.hit_test(position, result)).unwrap_or(false)
+        self.inner
+            .as_ref()
+            .map(|l| l.hit_test(position, result))
+            .unwrap_or(false)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        self.inner.as_mut().map(|l| l.handle_event(event)).unwrap_or(false)
+        self.inner
+            .as_mut()
+            .map(|l| l.handle_event(event))
+            .unwrap_or(false)
     }
 
     fn dispose(&mut self) {
@@ -86,12 +99,16 @@ impl PooledClipRectLayer {
 
     /// Get mutable reference to inner layer
     pub fn inner_mut(&mut self) -> &mut ClipRectLayer {
-        self.inner.as_mut().expect("PooledClipRectLayer already consumed")
+        self.inner
+            .as_mut()
+            .expect("PooledClipRectLayer already consumed")
     }
 
     /// Take the inner layer, consuming self without returning to pool
     pub fn take(mut self) -> ClipRectLayer {
-        self.inner.take().expect("PooledClipRectLayer already consumed")
+        self.inner
+            .take()
+            .expect("PooledClipRectLayer already consumed")
     }
 }
 
@@ -111,7 +128,10 @@ impl Layer for PooledClipRectLayer {
     }
 
     fn bounds(&self) -> Rect {
-        self.inner.as_ref().map(|l| l.bounds()).unwrap_or(Rect::ZERO)
+        self.inner
+            .as_ref()
+            .map(|l| l.bounds())
+            .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
@@ -119,11 +139,17 @@ impl Layer for PooledClipRectLayer {
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        self.inner.as_ref().map(|l| l.hit_test(position, result)).unwrap_or(false)
+        self.inner
+            .as_ref()
+            .map(|l| l.hit_test(position, result))
+            .unwrap_or(false)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        self.inner.as_mut().map(|l| l.handle_event(event)).unwrap_or(false)
+        self.inner
+            .as_mut()
+            .map(|l| l.handle_event(event))
+            .unwrap_or(false)
     }
 
     fn dispose(&mut self) {
@@ -158,12 +184,16 @@ impl PooledPictureLayer {
 
     /// Get mutable reference to inner layer
     pub fn inner_mut(&mut self) -> &mut PictureLayer {
-        self.inner.as_mut().expect("PooledPictureLayer already consumed")
+        self.inner
+            .as_mut()
+            .expect("PooledPictureLayer already consumed")
     }
 
     /// Take the inner layer, consuming self without returning to pool
     pub fn take(mut self) -> PictureLayer {
-        self.inner.take().expect("PooledPictureLayer already consumed")
+        self.inner
+            .take()
+            .expect("PooledPictureLayer already consumed")
     }
 }
 
@@ -183,7 +213,10 @@ impl Layer for PooledPictureLayer {
     }
 
     fn bounds(&self) -> Rect {
-        self.inner.as_ref().map(|l| l.bounds()).unwrap_or(Rect::ZERO)
+        self.inner
+            .as_ref()
+            .map(|l| l.bounds())
+            .unwrap_or(Rect::ZERO)
     }
 
     fn is_visible(&self) -> bool {
@@ -191,11 +224,17 @@ impl Layer for PooledPictureLayer {
     }
 
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        self.inner.as_ref().map(|l| l.hit_test(position, result)).unwrap_or(false)
+        self.inner
+            .as_ref()
+            .map(|l| l.hit_test(position, result))
+            .unwrap_or(false)
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
-        self.inner.as_mut().map(|l| l.handle_event(event)).unwrap_or(false)
+        self.inner
+            .as_mut()
+            .map(|l| l.handle_event(event))
+            .unwrap_or(false)
     }
 
     fn dispose(&mut self) {
@@ -233,7 +272,7 @@ mod tests {
         {
             let pooled = acquire_pooled_container();
             let _container = pooled.take(); // take ownership, don't return to pool
-            // container dropped here without returning to pool
+                                            // container dropped here without returning to pool
         }
 
         assert_eq!(pool::container_pool_size(), 0);

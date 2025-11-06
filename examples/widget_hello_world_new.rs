@@ -4,11 +4,11 @@
 //! Shows all 23 converted widgets in a visual window!
 
 use flui_app::run_app;
-use flui_core::{BuildContext, Element, view::View};
-use flui_widgets::basic::{Text, SizedBox, ColoredBox, Padding, Center};
+use flui_core::{view::View, BuildContext, Element};
+use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment};
+use flui_types::{Alignment, Color, EdgeInsets};
+use flui_widgets::basic::{Center, ColoredBox, Padding, SizedBox, Text};
 use flui_widgets::layout::{Column, Row, Stack};
-use flui_types::{Color, EdgeInsets, Alignment};
-use flui_types::layout::{MainAxisAlignment, CrossAxisAlignment};
 
 /// Our root application using NEW View trait
 #[derive(Debug, Clone)]

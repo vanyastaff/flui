@@ -46,8 +46,8 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::element::{Element, ElementId};
 use super::{ElementTree, FrameCoordinator, RootManager};
+use crate::element::{Element, ElementId};
 
 #[cfg(debug_assertions)]
 use crate::debug_println;
@@ -96,7 +96,6 @@ pub struct PipelineOwner {
     // =========================================================================
     // Production Features (Optional)
     // =========================================================================
-
     /// Performance metrics (optional)
     metrics: Option<super::PipelineMetrics>,
 
@@ -338,7 +337,10 @@ impl PipelineOwner {
             tracing::debug!("[REQUEST_LAYOUT] Set needs_layout flag and cleared constraints for RenderElement {:?}", node_id);
         } else {
             #[cfg(debug_assertions)]
-            tracing::warn!("[REQUEST_LAYOUT] Element {:?} is not a RenderElement!", node_id);
+            tracing::warn!(
+                "[REQUEST_LAYOUT] Element {:?} is not a RenderElement!",
+                node_id
+            );
         }
     }
 
@@ -354,14 +356,16 @@ impl PipelineOwner {
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<flui_types::Size>, super::PipelineError> {
-        self.coordinator.flush_layout(&self.tree, self.root_mgr.root_id(), constraints)
+        self.coordinator
+            .flush_layout(&self.tree, self.root_mgr.root_id(), constraints)
     }
 
     /// Flush the paint phase
     ///
     /// Delegates to FrameCoordinator.
     pub fn flush_paint(&mut self) -> Result<Option<crate::BoxedLayer>, super::PipelineError> {
-        self.coordinator.flush_paint(&self.tree, self.root_mgr.root_id())
+        self.coordinator
+            .flush_paint(&self.tree, self.root_mgr.root_id())
     }
 
     /// Build a complete frame
@@ -372,10 +376,14 @@ impl PipelineOwner {
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<crate::BoxedLayer>, super::PipelineError> {
         #[cfg(debug_assertions)]
-        tracing::debug!("build_frame: Starting frame with constraints {:?}", constraints);
+        tracing::debug!(
+            "build_frame: Starting frame with constraints {:?}",
+            constraints
+        );
 
         // Delegate to coordinator
-        self.coordinator.build_frame(&self.tree, self.root_mgr.root_id(), constraints)
+        self.coordinator
+            .build_frame(&self.tree, self.root_mgr.root_id(), constraints)
     }
 
     // =========================================================================

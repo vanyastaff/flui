@@ -18,8 +18,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{IntoElement, LeafRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, IntoElement, LeafRenderBuilder};
 use flui_rendering::{ParagraphData, RenderParagraph};
 use flui_types::{
     typography::{TextAlign, TextDirection, TextOverflow},

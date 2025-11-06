@@ -92,7 +92,7 @@ impl LockFreeDirtySet {
     /// let dirty_set = LockFreeDirtySet::new(10000);
     /// ```
     pub fn new(capacity: usize) -> Self {
-        let num_words = (capacity + 63) / 64;
+        let num_words = capacity.div_ceil(64);
         Self {
             bitmap: (0..num_words).map(|_| AtomicU64::new(0)).collect(),
             capacity,

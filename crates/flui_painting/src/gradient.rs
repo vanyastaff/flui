@@ -2,8 +2,8 @@
 
 use flui_engine::Painter;
 use flui_types::{
-    Point, Rect,
     styling::{Gradient, LinearGradient, RadialGradient, SweepGradient},
+    Point, Rect,
 };
 
 /// Painter for gradients

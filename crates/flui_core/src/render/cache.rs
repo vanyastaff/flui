@@ -2,8 +2,8 @@
 //!
 //! LRU cache for layout results with statistics tracking
 
-use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
+use flui_types::Size;
 use moka::sync::Cache;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

@@ -1,5 +1,3 @@
-
-
 //! Atomic element flags for lock-free dirty tracking
 //!
 //! This module provides `AtomicElementFlags` for thread-safe, lock-free

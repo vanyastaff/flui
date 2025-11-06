@@ -27,8 +27,8 @@
 //! ```
 
 use crate::element::ElementId;
-use crate::pipeline::dirty_tracking::LockFreeDirtySet;
 use crate::element::ElementTree;
+use crate::pipeline::dirty_tracking::LockFreeDirtySet;
 use crate::pipeline::PipelineError;
 use flui_types::constraints::BoxConstraints;
 
@@ -212,7 +212,9 @@ impl LayoutPipeline {
                             drop(render_object);
                             let mut render_object_mut = render_elem.render_object_mut();
 
-                            if let crate::render::RenderNode::Single { render, .. } = &mut *render_object_mut {
+                            if let crate::render::RenderNode::Single { render, .. } =
+                                &mut *render_object_mut
+                            {
                                 render.layout(tree, child_id, layout_constraints)
                             } else {
                                 unreachable!("RenderNode variant changed during layout")
@@ -234,7 +236,9 @@ impl LayoutPipeline {
                     drop(render_object);
                     let mut render_object_mut = render_elem.render_object_mut();
 
-                    if let crate::render::RenderNode::Multi { render, children } = &mut *render_object_mut {
+                    if let crate::render::RenderNode::Multi { render, children } =
+                        &mut *render_object_mut
+                    {
                         // Borrow children directly from RenderNode instead of cloning
                         // This eliminates allocation + memcpy in layout hot path
                         render.layout(tree, children, layout_constraints)
@@ -252,14 +256,14 @@ impl LayoutPipeline {
             render_state.clear_needs_layout();
 
             #[cfg(debug_assertions)]
-            tracing::debug!("Layout: Stored size {:?} for element {:?}", computed_size, id);
+            tracing::debug!(
+                "Layout: Stored size {:?} for element {:?}",
+                computed_size,
+                id
+            );
 
             #[cfg(debug_assertions)]
-            tracing::trace!(
-                "Layout: Element {:?} computed size {:?}",
-                id,
-                computed_size
-            );
+            tracing::trace!("Layout: Element {:?} computed size {:?}", id, computed_size);
         }
 
         #[cfg(debug_assertions)]

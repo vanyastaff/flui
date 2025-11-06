@@ -23,7 +23,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::Color;
 
@@ -172,32 +172,36 @@ impl View for Divider {
         // Build the child view
         let child: Box<dyn AnyView> = if self.indent > 0.0 || self.end_indent > 0.0 {
             // If we have indents, we need to wrap in a Container with padding
-            Box::new(Container::builder()
-                .height(effective_height)
-                .padding(flui_types::EdgeInsets {
-                    left: self.indent,
-                    right: self.end_indent,
-                    top: 0.0,
-                    bottom: 0.0,
-                })
-                .child(ColoredBox::builder()
-                    .color(self.color)
-                    .child(SizedBox::builder()
-                        .height(self.thickness)
-                        .build())
-                    .build())
-                .build_container())
+            Box::new(
+                Container::builder()
+                    .height(effective_height)
+                    .padding(flui_types::EdgeInsets {
+                        left: self.indent,
+                        right: self.end_indent,
+                        top: 0.0,
+                        bottom: 0.0,
+                    })
+                    .child(
+                        ColoredBox::builder()
+                            .color(self.color)
+                            .child(SizedBox::builder().height(self.thickness).build())
+                            .build(),
+                    )
+                    .build_container(),
+            )
         } else {
             // Simple case: just a colored box with height
-            Box::new(SizedBox::builder()
-                .height(effective_height)
-                .child(ColoredBox::builder()
-                    .color(self.color)
-                    .child(SizedBox::builder()
-                        .height(self.thickness)
-                        .build())
-                    .build())
-                .build())
+            Box::new(
+                SizedBox::builder()
+                    .height(effective_height)
+                    .child(
+                        ColoredBox::builder()
+                            .color(self.color)
+                            .child(SizedBox::builder().height(self.thickness).build())
+                            .build(),
+                    )
+                    .build(),
+            )
         };
 
         child

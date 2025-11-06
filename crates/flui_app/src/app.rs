@@ -3,10 +3,10 @@
 //! This module provides the FluiApp struct, which manages the application lifecycle,
 //! element tree, and rendering pipeline integration with egui.
 
-use flui_core::{Offset, Size};
+use flui_core::foundation::ElementId;
 use flui_core::pipeline::PipelineOwner;
 use flui_core::view::{AnyView, BuildContext};
-use flui_core::foundation::ElementId;
+use flui_core::{Offset, Size};
 use flui_engine::Painter;
 use flui_types::BoxConstraints;
 
@@ -141,13 +141,21 @@ impl FluiApp {
         };
 
         #[cfg(debug_assertions)]
-        tracing::debug!("[RECURSIVE_LAYOUT] Visiting element {:?}, type={}, is_render={}, children_count={}",
-            element_id, element_type, is_render, children.len());
+        tracing::debug!(
+            "[RECURSIVE_LAYOUT] Visiting element {:?}, type={}, is_render={}, children_count={}",
+            element_id,
+            element_type,
+            is_render,
+            children.len()
+        );
 
         // Mark this element if it's a RenderElement
         if is_render {
             #[cfg(debug_assertions)]
-            tracing::debug!("[RECURSIVE_LAYOUT] Marking RenderElement {:?} for layout", element_id);
+            tracing::debug!(
+                "[RECURSIVE_LAYOUT] Marking RenderElement {:?} for layout",
+                element_id
+            );
             self.pipeline.request_layout(element_id);
         }
 
@@ -178,16 +186,17 @@ impl FluiApp {
         let ctx = BuildContext::new(tree, temp_id);
 
         // Build root element using thread-local BuildContext
-        let root_element = flui_core::view::with_build_context(&ctx, || {
-            self.root_view.build_any()
-        });
+        let root_element = flui_core::view::with_build_context(&ctx, || self.root_view.build_any());
 
         // Mount and insert root element using pipeline.set_root()
         // This properly initializes the root and schedules it for build
         let root_id = self.pipeline.set_root(root_element);
 
         // Mark root for layout and paint
-        println!("[DEBUG] Requesting layout and paint for root: {:?}", root_id);
+        println!(
+            "[DEBUG] Requesting layout and paint for root: {:?}",
+            root_id
+        );
         self.pipeline.request_layout(root_id);
         self.pipeline.request_paint(root_id);
         println!("[DEBUG] After request_layout/paint");
@@ -263,7 +272,10 @@ impl FluiApp {
             let tree = self.pipeline.tree();
             let tree_guard = tree.read();
             let element_count = tree_guard.len();
-            println!("[DEBUG] After build: ElementTree has {} elements", element_count);
+            println!(
+                "[DEBUG] After build: ElementTree has {} elements",
+                element_count
+            );
         }
 
         // ===== Phase 2: Layout =====
@@ -273,14 +285,18 @@ impl FluiApp {
         let needs_layout = size_changed || iterations > 0;
 
         if self.stats.frame_count <= 3 {
-            println!("[DEBUG] Frame {}: size_changed={}, iterations={}, needs_layout={}, size={:?}",
-                self.stats.frame_count, size_changed, iterations, needs_layout, current_size);
+            println!(
+                "[DEBUG] Frame {}: size_changed={}, iterations={}, needs_layout={}, size={:?}",
+                self.stats.frame_count, size_changed, iterations, needs_layout, current_size
+            );
         }
 
         // TEMP DEBUG: Always log when size changes
         if size_changed {
-            println!("[RESIZE] Frame {}: Window resized to {:?}, triggering layout",
-                self.stats.frame_count, current_size);
+            println!(
+                "[RESIZE] Frame {}: Window resized to {:?}, triggering layout",
+                self.stats.frame_count, current_size
+            );
         }
 
         if needs_layout {
@@ -290,7 +306,10 @@ impl FluiApp {
             if size_changed {
                 if let Some(root_id) = self.root_id {
                     #[cfg(debug_assertions)]
-                    tracing::debug!("[RESIZE] Calling request_layout_recursive for root {:?}", root_id);
+                    tracing::debug!(
+                        "[RESIZE] Calling request_layout_recursive for root {:?}",
+                        root_id
+                    );
                     self.request_layout_recursive(root_id);
                     #[cfg(debug_assertions)]
                     tracing::debug!("[RESIZE] Finished request_layout_recursive");
@@ -337,7 +356,7 @@ impl FluiApp {
         #[cfg(debug_assertions)]
         {
             let painter = ui.painter();
-            let color = egui::Color32::from_rgb(255, 0, 0);  // RED
+            let color = egui::Color32::from_rgb(255, 0, 0); // RED
             let pos = egui::pos2(100.0, 100.0);
             let font_id = egui::FontId::proportional(48.0);
             let galley = painter.layout_no_wrap("DIRECT EGUI TEST".to_string(), font_id, color);

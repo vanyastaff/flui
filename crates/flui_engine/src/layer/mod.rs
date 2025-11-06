@@ -101,8 +101,6 @@ pub mod pool;
 pub mod pooled;
 pub mod transform;
 
-
-
 // Basic composition layers
 
 // Clipping layers
@@ -117,8 +115,8 @@ pub mod transform;
 pub use base::{AnyLayer, Layer, LayerState};
 pub use handle::LayerHandle;
 pub use pooled::{
-    PooledContainerLayer, PooledClipRectLayer, PooledPictureLayer,
-    acquire_pooled_container, acquire_pooled_clip_rect, acquire_pooled_picture,
+    acquire_pooled_clip_rect, acquire_pooled_container, acquire_pooled_picture,
+    PooledClipRectLayer, PooledContainerLayer, PooledPictureLayer,
 };
 
 // Basic composition layers
@@ -150,5 +148,3 @@ pub use flui_types::painting::effects::{
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
-
-

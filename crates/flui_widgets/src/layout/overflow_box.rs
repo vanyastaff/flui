@@ -5,7 +5,7 @@
 //! Similar to Flutter's OverflowBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderOverflowBox;
@@ -115,7 +115,14 @@ impl std::fmt::Debug for OverflowBox {
             .field("min_height", &self.min_height)
             .field("max_height", &self.max_height)
             .field("alignment", &self.alignment)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -246,8 +253,7 @@ impl View for OverflowBox {
             self.max_height,
         );
 
-        SingleRenderBuilder::new(render)
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(render).with_optional_child(self.child)
     }
 }
 
@@ -282,7 +288,8 @@ mod tests {
 
     #[test]
     fn test_overflow_box_with_alignment() {
-        let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, Box::new(crate::SizedBox::new()));
+        let widget =
+            OverflowBox::with_alignment(Alignment::TOP_LEFT, Box::new(crate::SizedBox::new()));
         assert_eq!(widget.alignment, Alignment::TOP_LEFT);
         assert!(widget.child.is_some());
     }

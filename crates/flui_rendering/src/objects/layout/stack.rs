@@ -2,9 +2,9 @@
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::MultiRender;
-use flui_engine::{BoxedLayer, layer::pool};
+use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::layout::StackFit;
-use flui_types::{Alignment, Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Alignment, Offset, Size};
 
 /// RenderObject for stack layout (layering)
 ///
@@ -109,7 +109,9 @@ impl MultiRender for RenderStack {
             let positioned_metadata = if let Some(element) = tree.get(child) {
                 if let Some(render_node_guard) = element.render_object() {
                     if let Some(metadata_any) = render_node_guard.metadata() {
-                        metadata_any.downcast_ref::<super::positioned::PositionedMetadata>().copied()
+                        metadata_any
+                            .downcast_ref::<super::positioned::PositionedMetadata>()
+                            .copied()
                     } else {
                         None
                     }
@@ -164,7 +166,9 @@ impl MultiRender for RenderStack {
             let positioned_metadata = if let Some(element) = tree.get(child) {
                 if let Some(render_node_guard) = element.render_object() {
                     if let Some(metadata_any) = render_node_guard.metadata() {
-                        metadata_any.downcast_ref::<super::positioned::PositionedMetadata>().copied()
+                        metadata_any
+                            .downcast_ref::<super::positioned::PositionedMetadata>()
+                            .copied()
                     } else {
                         None
                     }

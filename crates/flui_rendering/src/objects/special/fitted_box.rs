@@ -4,10 +4,7 @@ use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
 use flui_types::{
-    Alignment, Offset, Size,
-    constraints::BoxConstraints,
-    layout::BoxFit,
-    painting::ClipBehavior,
+    constraints::BoxConstraints, layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size,
 };
 
 /// RenderObject that scales and positions its child_id according to BoxFit

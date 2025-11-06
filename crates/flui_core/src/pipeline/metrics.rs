@@ -57,7 +57,6 @@ const FPS_WINDOW_SIZE: usize = 60;
 #[derive(Debug)]
 pub struct PipelineMetrics {
     // ========== Frame Timing ==========
-
     /// Current frame start time
     frame_start: Option<Instant>,
 
@@ -74,7 +73,6 @@ pub struct PipelineMetrics {
     dropped_frames: u64,
 
     // ========== Phase Timing ==========
-
     /// Total build phase time (microseconds)
     total_build_time: u64,
 
@@ -85,7 +83,6 @@ pub struct PipelineMetrics {
     total_paint_time: u64,
 
     // ========== Cache Metrics ==========
-
     /// Cache hits
     cache_hits: u64,
 

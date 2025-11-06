@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 /// RenderObject that makes its subtree ignore pointer events
 ///

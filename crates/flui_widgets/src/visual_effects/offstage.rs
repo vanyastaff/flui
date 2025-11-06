@@ -14,8 +14,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderOffstage;
 
 /// A widget that lays out its child as if it was in the tree, but without painting or hit testing.
@@ -79,7 +79,14 @@ impl std::fmt::Debug for Offstage {
         f.debug_struct("Offstage")
             .field("key", &self.key)
             .field("offstage", &self.offstage)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -122,7 +129,6 @@ impl Default for Offstage {
 
 // Implement Widget trait with associated type
 
-
 // bon Builder Extensions
 use offstage_builder::{IsUnset, SetChild, State};
 
@@ -140,8 +146,7 @@ where
 // Implement View trait
 impl View for Offstage {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderOffstage::new(self.offstage))
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderOffstage::new(self.offstage)).with_optional_child(self.child)
     }
 }
 
@@ -196,9 +201,7 @@ mod tests {
 
     #[test]
     fn test_offstage_builder_with_offstage_false() {
-        let widget = Offstage::builder()
-            .offstage(false)
-            .build_offstage();
+        let widget = Offstage::builder().offstage(false).build_offstage();
         assert!(!widget.offstage);
     }
 

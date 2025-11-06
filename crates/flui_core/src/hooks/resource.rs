@@ -3,7 +3,7 @@
 //! Provides `use_resource` hook for managing async data fetching.
 //! Note: Requires an async runtime to be configured.
 
-use super::hook_trait::{Hook};
+use super::hook_trait::Hook;
 use super::signal::{Signal, SignalHook};
 use crate::BuildContext;
 use std::future::Future;
@@ -151,11 +151,22 @@ where
         // This requires integration with an async runtime (tokio, async-std, etc.)
         // For now, just store the signals
 
-        ResourceState { loading, data, error }
+        ResourceState {
+            loading,
+            data,
+            error,
+        }
     }
 
-    fn update(state: &mut Self::State, _input: (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>)) -> Self::Output {
-        Resource::new(state.loading.clone(), state.data.clone(), state.error.clone())
+    fn update(
+        state: &mut Self::State,
+        _input: (Rc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>),
+    ) -> Self::Output {
+        Resource::new(
+            state.loading.clone(),
+            state.data.clone(),
+            state.error.clone(),
+        )
     }
 }
 
@@ -214,15 +225,11 @@ where
     Fut: Future<Output = Result<T, E>> + 'static,
 {
     // Create signals for the resource
-    let loading = ctx.with_hook_context_mut(|hook_ctx| {
-        hook_ctx.use_hook::<SignalHook<bool>>(true)
-    });
-    let data = ctx.with_hook_context_mut(|hook_ctx| {
-        hook_ctx.use_hook::<SignalHook<Option<T>>>(None)
-    });
-    let error = ctx.with_hook_context_mut(|hook_ctx| {
-        hook_ctx.use_hook::<SignalHook<Option<E>>>(None)
-    });
+    let loading = ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<bool>>(true));
+    let data =
+        ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<Option<T>>>(None));
+    let error =
+        ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<Option<E>>>(None));
 
     // Use the resource hook with the signals
     ctx.with_hook_context_mut(|hook_ctx| {
@@ -240,9 +247,7 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let resource = ctx.use_hook::<ResourceHook<i32, String, _, _>>(|| async {
-            Ok(42)
-        });
+        let resource = ctx.use_hook::<ResourceHook<i32, String, _, _>>(|| async { Ok(42) });
 
         // Initially loading with no data
         assert!(resource.is_loading());
@@ -255,9 +260,7 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let resource1 = ctx.use_hook::<ResourceHook<i32, String, _, _>>(|| async {
-            Ok(42)
-        });
+        let resource1 = ctx.use_hook::<ResourceHook<i32, String, _, _>>(|| async { Ok(42) });
 
         let resource2 = resource1.clone();
 

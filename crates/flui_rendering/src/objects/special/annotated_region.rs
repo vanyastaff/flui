@@ -6,7 +6,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 /// RenderAnnotatedRegion - Annotates a region with a value
 ///
@@ -38,10 +38,7 @@ pub struct RenderAnnotatedRegion<T: Clone + Send + Sync + std::fmt::Debug + 'sta
 impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T> {
     /// Create new RenderAnnotatedRegion
     pub fn new(value: T) -> Self {
-        Self {
-            value,
-            sized: true,
-        }
+        Self { value, sized: true }
     }
 
     /// Create with custom sized flag

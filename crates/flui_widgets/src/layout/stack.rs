@@ -30,8 +30,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, MultiRenderBuilder};
 use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -180,7 +180,14 @@ impl std::fmt::Debug for Stack {
             .field("key", &self.key)
             .field("alignment", &self.alignment)
             .field("fit", &self.fit)
-            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .field(
+                "children",
+                &if !self.children.is_empty() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -261,8 +268,7 @@ impl View for Stack {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
 
-        MultiRenderBuilder::new(render_stack)
-            .with_children(self.children.into_iter())
+        MultiRenderBuilder::new(render_stack).with_children(self.children)
     }
 }
 
@@ -287,10 +293,7 @@ where
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(
-        self,
-        children: Vec<Box<dyn AnyView>>,
-    ) -> StackBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> StackBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }

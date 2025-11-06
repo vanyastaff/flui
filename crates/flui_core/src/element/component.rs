@@ -16,9 +16,9 @@
 use std::any::Any;
 
 use super::{ElementBase, ElementLifecycle};
-use crate::ElementId;
-use crate::view::{AnyView, ChangeFlags};
 use crate::foundation::Slot;
+use crate::view::{AnyView, ChangeFlags};
+use crate::ElementId;
 
 // ============================================================================
 // ComponentElement
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_child_sentinel() {
-        let view: Box<dyn AnyView> = Box::new(());  // Unit implements View
+        let view: Box<dyn AnyView> = Box::new(()); // Unit implements View
         let state: Box<dyn Any> = Box::new(());
 
         let component = ComponentElement::new(view, state);

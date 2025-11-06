@@ -42,10 +42,10 @@
 //! }
 //! ```
 
+use super::{AnyElement, IntoElement};
 use crate::element::{Element, RenderElement};
 use crate::foundation::ElementId;
 use crate::render::{LeafRender, MultiRender, RenderNode, SingleRender};
-use super::{IntoElement, AnyElement};
 
 /// Builder for LeafRender objects (no children)
 ///
@@ -204,7 +204,7 @@ impl<R: MultiRender> MultiRenderBuilder<R> {
     {
         self.children = children
             .into_iter()
-            .map(|child| AnyElement::new(child))
+            .map(AnyElement::new)
             .collect();
         self
     }

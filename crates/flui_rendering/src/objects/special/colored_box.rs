@@ -3,7 +3,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{Color, Offset, Rect, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Color, Offset, Rect, Size};
 
 /// RenderObject that paints a solid color background
 ///

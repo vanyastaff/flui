@@ -23,8 +23,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderAbsorbPointer;
 
 /// A widget that absorbs pointer events during hit testing.
@@ -86,7 +86,14 @@ impl std::fmt::Debug for AbsorbPointer {
         f.debug_struct("AbsorbPointer")
             .field("key", &self.key)
             .field("absorbing", &self.absorbing)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -128,7 +135,6 @@ impl Default for AbsorbPointer {
 }
 
 // Implement Widget trait with associated type
-
 
 // bon Builder Extensions
 use absorb_pointer_builder::{IsUnset, SetChild, State};

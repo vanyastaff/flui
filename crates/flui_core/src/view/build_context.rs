@@ -27,9 +27,9 @@
 //! // ctx.schedule_rebuild();  // This method was removed!
 //! ```
 
-use crate::ElementId;
 use crate::hooks::HookContext;
 use crate::pipeline::ElementTree;
+use crate::ElementId;
 use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -107,10 +107,7 @@ impl BuildContext {
     ///     element_id,
     /// );
     /// ```
-    pub fn new(
-        tree: Arc<RwLock<ElementTree>>,
-        element_id: ElementId,
-    ) -> Self {
+    pub fn new(tree: Arc<RwLock<ElementTree>>, element_id: ElementId) -> Self {
         Self {
             tree,
             element_id,
@@ -422,7 +419,6 @@ impl BuildContext {
 
         None
     }
-
 }
 
 // ==============================================================================
@@ -569,7 +565,7 @@ pub fn current_build_context() -> &'static BuildContext {
             - Storing and using IntoElement values after build completes\n\
             - Calling framework functions from non-build contexts\n\
             \n\
-            Solution: Only call this from within View::build() or its callees."
+            Solution: Only call this from within View::build() or its callees.",
         );
 
         // SAFETY: The pointer is guaranteed valid by BuildContextGuard's lifetime

@@ -2,7 +2,7 @@
 
 use crate::{BorderPainter, GradientPainter, ShadowPainter};
 use flui_engine::{Paint, Painter, RRect};
-use flui_types::{Rect, styling::BoxDecoration};
+use flui_types::{styling::BoxDecoration, Rect};
 
 /// Painter for BoxDecoration
 ///
@@ -115,11 +115,11 @@ impl BoxDecorationPainter {
 mod tests {
     use super::*;
     use flui_types::{
-        Offset,
         styling::{
             Border, BorderRadius, BorderSide, BorderStyle, BoxShadow, Color, Gradient,
             LinearGradient,
         },
+        Offset,
     };
 
     #[test]

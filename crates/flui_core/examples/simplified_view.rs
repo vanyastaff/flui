@@ -3,7 +3,7 @@
 //! This example shows the new simplified View API with no GATs,
 //! automatic tree management, and hooks for state.
 
-use flui_core::{View, AnyView, IntoElement, LeafRenderBuilder, SingleRenderBuilder, BuildContext};
+use flui_core::{AnyView, BuildContext, IntoElement, LeafRenderBuilder, SingleRenderBuilder, View};
 
 // ============================================================================
 // Example 1: Simple Text Component
@@ -36,8 +36,10 @@ struct SimplePadding {
 impl View for SimplePadding {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // OPTION 1: Using builder (most explicit)
-        SingleRenderBuilder::new(MockPaddingRender { padding: self.padding })
-            .with_child(self.child)
+        SingleRenderBuilder::new(MockPaddingRender {
+            padding: self.padding,
+        })
+        .with_child(self.child)
 
         // OPTION 2: Using tuple syntax (more concise)
         // (MockPaddingRender { padding: self.padding }, self.child)
@@ -58,9 +60,7 @@ impl View for SimpleButton {
         // Compose other views
         SimplePadding {
             padding: 16.0,
-            child: Some(Box::new(SimpleText {
-                text: self.label,
-            })),
+            child: Some(Box::new(SimpleText { text: self.label })),
         }
     }
 }
@@ -70,8 +70,8 @@ impl View for SimpleButton {
 // ============================================================================
 
 use flui_core::render::{LeafRender, SingleRender};
-use flui_types::{BoxConstraints, Offset, Size};
 use flui_engine::BoxedLayer;
+use flui_types::{BoxConstraints, Offset, Size};
 
 #[derive(Debug)]
 struct MockTextRender {

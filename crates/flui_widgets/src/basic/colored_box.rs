@@ -4,8 +4,8 @@
 //! Similar to Flutter's ColoredBox widget.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderColoredBox;
 use flui_types::Color;
 
@@ -86,7 +86,14 @@ impl std::fmt::Debug for ColoredBox {
         f.debug_struct("ColoredBox")
             .field("key", &self.key)
             .field("color", &self.color)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -157,8 +164,7 @@ impl<S: State> ColoredBoxBuilder<S> {
 // Implement View for ColoredBox - New architecture
 impl View for ColoredBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderColoredBox::new(self.color))
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderColoredBox::new(self.color)).with_optional_child(self.child)
     }
 }
 
@@ -188,9 +194,7 @@ mod tests {
 
     #[test]
     fn test_colored_box_builder() {
-        let widget = ColoredBox::builder()
-            .color(Color::BLUE)
-            .build();
+        let widget = ColoredBox::builder().color(Color::BLUE).build();
         assert_eq!(widget.color, Color::BLUE);
     }
 

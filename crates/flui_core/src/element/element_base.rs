@@ -192,7 +192,8 @@ impl ElementBase {
         self.lifecycle = ElementLifecycle::Active;
 
         // Set DIRTY and MOUNTED flags atomically
-        self.flags.insert(ElementFlags::DIRTY | ElementFlags::MOUNTED | ElementFlags::ACTIVE);
+        self.flags
+            .insert(ElementFlags::DIRTY | ElementFlags::MOUNTED | ElementFlags::ACTIVE);
     }
 
     /// Unmount element from tree
@@ -212,7 +213,8 @@ impl ElementBase {
         self.lifecycle = ElementLifecycle::Defunct;
 
         // Clear MOUNTED and ACTIVE flags atomically
-        self.flags.remove(ElementFlags::MOUNTED | ElementFlags::ACTIVE);
+        self.flags
+            .remove(ElementFlags::MOUNTED | ElementFlags::ACTIVE);
     }
 
     /// Deactivate element
@@ -252,7 +254,8 @@ impl ElementBase {
         self.lifecycle = ElementLifecycle::Active;
 
         // Set ACTIVE and DIRTY flags atomically (rebuild when reactivated)
-        self.flags.insert(ElementFlags::ACTIVE | ElementFlags::DIRTY);
+        self.flags
+            .insert(ElementFlags::ACTIVE | ElementFlags::DIRTY);
     }
 
     /// Mark element as needing rebuild

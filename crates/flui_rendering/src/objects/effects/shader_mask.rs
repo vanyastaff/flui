@@ -6,7 +6,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints, painting::BlendMode};
+use flui_types::{constraints::BoxConstraints, painting::BlendMode, Offset, Size};
 
 // ===== Data Structure =====
 /// FIXME: This is a placeholder structure for shader mask data. All types should be in flui_types.

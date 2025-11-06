@@ -29,8 +29,8 @@
 //!     height: 50.0,
 //! }
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderConstrainedBox;
 use flui_types::BoxConstraints;
 
@@ -98,7 +98,14 @@ impl std::fmt::Debug for SizedBox {
             .field("key", &self.key)
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -350,10 +357,7 @@ mod tests {
 
     #[test]
     fn test_sized_box_builder_with_child() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .child(MockView)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).child(MockView).build();
         assert!(sized_box.child.is_some());
     }
 
@@ -419,10 +423,7 @@ mod tests {
 
     #[test]
     fn test_view_trait() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .child(MockView)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).child(MockView).build();
 
         // Test child field
         assert!(sized_box.child.is_some());
@@ -430,10 +431,7 @@ mod tests {
 
     #[test]
     fn test_single_child_view() {
-        let sized_box = SizedBox::builder()
-            .width(100.0)
-            .child(MockView)
-            .build();
+        let sized_box = SizedBox::builder().width(100.0).child(MockView).build();
 
         // Test child field - returns Option
         assert!(sized_box.child.is_some());

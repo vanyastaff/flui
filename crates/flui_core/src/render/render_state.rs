@@ -306,7 +306,10 @@ impl RenderState {
     /// Returns (horizontal_overflow, vertical_overflow)
     #[cfg(debug_assertions)]
     pub fn overflow_both(&self) -> (f32, f32) {
-        (*self.overflow_horizontal.read(), *self.overflow_vertical.read())
+        (
+            *self.overflow_horizontal.read(),
+            *self.overflow_vertical.read(),
+        )
     }
 
     /// Clear all overflow information

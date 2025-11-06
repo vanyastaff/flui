@@ -114,7 +114,11 @@ impl RootManager {
     /// let root = Element::Component(component);
     /// let root_id = root_mgr.set_root(&tree, root);
     /// ```
-    pub fn set_root(&mut self, tree: &Arc<RwLock<ElementTree>>, mut root_element: Element) -> ElementId {
+    pub fn set_root(
+        &mut self,
+        tree: &Arc<RwLock<ElementTree>>,
+        mut root_element: Element,
+    ) -> ElementId {
         let mut tree_guard = tree.write();
 
         // Mount the element (no parent, slot 0)

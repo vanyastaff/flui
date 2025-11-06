@@ -15,8 +15,8 @@ pub use alignment::{
 };
 pub use axis::{Axis, AxisDirection, Orientation, VerticalDirection};
 pub use baseline::TextBaseline;
-pub use r#box::{BoxFit, BoxShape, FittedSizes};
 pub use edge_insets::{EdgeInsets, EdgeInsetsDirectional, EdgeInsetsGeometry};
 pub use flex::FlexFit;
+pub use r#box::{BoxFit, BoxShape, FittedSizes};
 pub use stack::StackFit;
 pub use wrap::{WrapAlignment, WrapCrossAlignment};

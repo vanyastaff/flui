@@ -5,9 +5,9 @@
 
 use flui_engine::{Paint, Painter};
 use flui_types::{
-    Point, Rect,
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextSpan, TextStyle},
+    Point, Rect,
 };
 
 /// Text painter - handles text rendering with layout and styling

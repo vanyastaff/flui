@@ -26,8 +26,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
 
@@ -90,7 +90,14 @@ impl std::fmt::Debug for Center {
             .field("key", &self.key)
             .field("width_factor", &self.width_factor)
             .field("height_factor", &self.height_factor)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -299,10 +306,7 @@ mod tests {
 
     #[test]
     fn test_center_with_factors() {
-        let center = Center::builder()
-            .width_factor(2.0)
-            .child(MockView)
-            .build();
+        let center = Center::builder().width_factor(2.0).child(MockView).build();
 
         // Test child field
         assert!(center.child.is_some());

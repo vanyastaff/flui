@@ -13,7 +13,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 /// Metadata for positioned children in Stack layout
 ///
@@ -54,6 +54,7 @@ use flui_types::{Offset, Size, constraints::BoxConstraints};
 /// };
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub struct PositionedMetadata {
     /// Position from left edge (for positioned children)
     pub left: Option<f32>,
@@ -201,18 +202,6 @@ impl PositionedMetadata {
     }
 }
 
-impl Default for PositionedMetadata {
-    fn default() -> Self {
-        Self {
-            left: None,
-            top: None,
-            right: None,
-            bottom: None,
-            width: None,
-            height: None,
-        }
-    }
-}
 
 /// RenderObject that wraps a child and provides positioned metadata
 ///

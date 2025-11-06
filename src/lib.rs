@@ -71,12 +71,12 @@
 //! - [`prelude`] - Common imports
 
 // Re-export all crates for modular access
-pub use flui_types as types;
+pub use flui_app as app;
 pub use flui_core as core;
 pub use flui_engine as engine;
 pub use flui_rendering as rendering;
+pub use flui_types as types;
 pub use flui_widgets as widgets;
-pub use flui_app as app;
 
 /// Prelude for common imports - brings in everything needed for most use cases
 ///
@@ -95,11 +95,9 @@ pub use flui_app as app;
 /// ```
 pub mod prelude {
     // Core types
-    pub use flui_types::{Axis, BoxConstraints, Color, EdgeInsets, Offset, Size};
-    pub use flui_types::layout::{
-        Alignment, CrossAxisAlignment, MainAxisAlignment, MainAxisSize,
-    };
+    pub use flui_types::layout::{Alignment, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
     pub use flui_types::typography::TextAlign;
+    pub use flui_types::{Axis, BoxConstraints, Color, EdgeInsets, Offset, Size};
 
     // Core traits and context
     pub use flui_core::prelude::*;

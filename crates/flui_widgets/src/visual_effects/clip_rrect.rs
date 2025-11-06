@@ -31,10 +31,10 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
-use flui_rendering::{RenderClipRRect, RRectShape};
-use flui_types::styling::BorderRadius;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_rendering::{RRectShape, RenderClipRRect};
 use flui_types::painting::Clip;
+use flui_types::styling::BorderRadius;
 
 /// A widget that clips its child to a rounded rectangle.
 ///
@@ -153,7 +153,14 @@ impl std::fmt::Debug for ClipRRect {
             .field("key", &self.key)
             .field("border_radius", &self.border_radius)
             .field("clip_behavior", &self.clip_behavior)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }

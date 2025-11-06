@@ -18,7 +18,7 @@
 //! Spacer::with_flex(2)  // Takes 2x the space
 //! ```
 
-use flui_core::view::{View, IntoElement, SingleRenderBuilder};
+use flui_core::view::{IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -147,9 +147,7 @@ impl Spacer {
     /// let spacer = Spacer::new();
     /// ```
     pub fn new() -> Self {
-        Self {
-            flex: 1,
-        }
+        Self { flex: 1 }
     }
 
     /// Creates a Spacer with a custom flex factor.
@@ -165,9 +163,7 @@ impl Spacer {
     /// let spacer = Spacer::with_flex(3);
     /// ```
     pub fn with_flex(flex: i32) -> Self {
-        Self {
-            flex,
-        }
+        Self { flex }
     }
 
     /// Validates Spacer configuration.
@@ -194,13 +190,12 @@ impl Default for Spacer {
 impl View for Spacer {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Build zero-sized SizedBox as child
-        let sized_box = crate::SizedBox::builder()
-            .width(0.0)
-            .height(0.0)
-            .build();
+        let sized_box = crate::SizedBox::builder().width(0.0).height(0.0).build();
 
-        SingleRenderBuilder::new(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)))
-            .with_child(sized_box)
+        SingleRenderBuilder::new(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
+            self.flex,
+        )))
+        .with_child(sized_box)
     }
 }
 
@@ -290,11 +285,7 @@ mod tests {
 
     #[test]
     fn test_spacer_flex_factors() {
-        let spacers = vec![
-            Spacer::new(),
-            Spacer::with_flex(2),
-            Spacer::with_flex(3),
-        ];
+        let spacers = vec![Spacer::new(), Spacer::with_flex(2), Spacer::with_flex(3)];
 
         assert_eq!(spacers[0].flex, 1);
         assert_eq!(spacers[1].flex, 2);

@@ -4,8 +4,8 @@
 //! Similar to Flutter's FittedBox widget.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderFittedBox;
 use flui_types::Alignment;
 
@@ -109,7 +109,14 @@ impl std::fmt::Debug for FittedBox {
             .field("key", &self.key)
             .field("fit", &self.fit)
             .field("alignment", &self.alignment)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -234,11 +241,7 @@ mod tests {
 
     #[test]
     fn test_fitted_box_with_alignment() {
-        let widget = FittedBox::with_alignment(
-            BoxFit::Contain,
-            Alignment::TOP_LEFT,
-            MockView,
-        );
+        let widget = FittedBox::with_alignment(BoxFit::Contain, Alignment::TOP_LEFT, MockView);
         assert_eq!(widget.fit, BoxFit::Contain);
         assert_eq!(widget.alignment, Alignment::TOP_LEFT);
         assert!(widget.child.is_some());

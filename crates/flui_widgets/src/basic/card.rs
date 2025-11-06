@@ -4,10 +4,10 @@
 //! Similar to Flutter's Card widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
-use flui_types::{Color, EdgeInsets};
 use flui_types::styling::{BorderRadius, BoxDecoration, BoxShadow};
+use flui_types::{Color, EdgeInsets};
 
 use crate::{Container, DecoratedBox};
 
@@ -106,7 +106,14 @@ impl std::fmt::Debug for Card {
             .field("elevation", &self.elevation)
             .field("margin", &self.margin)
             .field("shape", &self.shape)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -118,7 +125,7 @@ impl Clone for Card {
             color: self.color,
             elevation: self.elevation,
             margin: self.margin,
-            shape: self.shape.clone(),
+            shape: self.shape,
             child: self.child.clone(),
         }
     }
@@ -193,23 +200,25 @@ impl View for Card {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate shadow based on elevation
         let shadows = if self.elevation > 0.0 {
-            vec![
-                BoxShadow {
-                    color: Color::rgba(0, 0, 0, (0.2 * self.elevation.min(10.0) / 10.0) as u8),
-                    offset: flui_types::Offset::new(0.0, self.elevation * 0.5),
-                    blur_radius: self.elevation * 2.0,
-                    spread_radius: 0.0,
-                    inset: false,
-                },
-            ]
+            vec![BoxShadow {
+                color: Color::rgba(0, 0, 0, (0.2 * self.elevation.min(10.0) / 10.0) as u8),
+                offset: flui_types::Offset::new(0.0, self.elevation * 0.5),
+                blur_radius: self.elevation * 2.0,
+                spread_radius: 0.0,
+                inset: false,
+            }]
         } else {
             vec![]
         };
 
         let decoration = BoxDecoration {
             color: Some(self.color),
-            border_radius: Some(self.shape.clone()),
-            box_shadow: if shadows.is_empty() { None } else { Some(shadows) },
+            border_radius: Some(self.shape),
+            box_shadow: if shadows.is_empty() {
+                None
+            } else {
+                Some(shadows)
+            },
             ..Default::default()
         };
 
@@ -219,16 +228,12 @@ impl View for Card {
             Box::new(crate::SizedBox::new())
         };
 
-        let mut decorated = DecoratedBox::builder()
-            .decoration(decoration)
-            .build();
+        let mut decorated = DecoratedBox::builder().decoration(decoration).build();
         decorated.child = Some(child_view);
 
         // Wrap with margin if specified
         if let Some(margin) = self.margin {
-            let mut container = Container::builder()
-                .margin(margin)
-                .build_container();
+            let mut container = Container::builder().margin(margin).build_container();
             container.child = Some(Box::new(decorated));
             Box::new(container) as Box<dyn AnyView>
         } else {

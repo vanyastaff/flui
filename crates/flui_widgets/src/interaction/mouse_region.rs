@@ -16,9 +16,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
-use flui_rendering::{RenderMouseRegion, MouseCallbacks};
+use flui_rendering::{MouseCallbacks, RenderMouseRegion};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 
 /// A widget that tracks mouse pointer events.
@@ -101,7 +101,6 @@ impl Default for MouseRegion {
 }
 
 // Implement Widget trait with associated type
-
 
 impl Clone for MouseRegion {
     fn clone(&self) -> Self {
@@ -227,25 +226,19 @@ mod tests {
 
     #[test]
     fn test_mouse_region_builder_with_on_enter() {
-        let widget = MouseRegion::builder()
-            .on_enter(|_| {})
-            .build_mouse_region();
+        let widget = MouseRegion::builder().on_enter(|_| {}).build_mouse_region();
         assert!(widget.on_enter.is_some());
     }
 
     #[test]
     fn test_mouse_region_builder_with_on_exit() {
-        let widget = MouseRegion::builder()
-            .on_exit(|_| {})
-            .build_mouse_region();
+        let widget = MouseRegion::builder().on_exit(|_| {}).build_mouse_region();
         assert!(widget.on_exit.is_some());
     }
 
     #[test]
     fn test_mouse_region_builder_with_on_hover() {
-        let widget = MouseRegion::builder()
-            .on_hover(|_| {})
-            .build_mouse_region();
+        let widget = MouseRegion::builder().on_hover(|_| {}).build_mouse_region();
         assert!(widget.on_hover.is_some());
     }
 
@@ -273,9 +266,7 @@ mod tests {
 
     #[test]
     fn test_mouse_region_clone() {
-        let widget1 = MouseRegion::builder()
-            .on_enter(|_| {})
-            .build_mouse_region();
+        let widget1 = MouseRegion::builder().on_enter(|_| {}).build_mouse_region();
 
         let widget2 = widget1.clone();
         assert!(widget2.on_enter.is_some());
@@ -302,12 +293,11 @@ impl View for MouseRegion {
         // The widget's Arc<dyn Fn> callbacks will be properly supported when
         // event handling infrastructure is implemented
         let callbacks = MouseCallbacks {
-            on_enter: None,  // Placeholder - widget callbacks not yet supported
+            on_enter: None, // Placeholder - widget callbacks not yet supported
             on_exit: None,
             on_hover: None,
         };
 
-        SingleRenderBuilder::new(RenderMouseRegion::new(callbacks))
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderMouseRegion::new(callbacks)).with_optional_child(self.child)
     }
 }

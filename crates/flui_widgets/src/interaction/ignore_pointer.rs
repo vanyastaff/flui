@@ -23,8 +23,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderIgnorePointer;
 
 /// A widget that is invisible to pointer events.
@@ -86,7 +86,14 @@ impl std::fmt::Debug for IgnorePointer {
         f.debug_struct("IgnorePointer")
             .field("key", &self.key)
             .field("ignoring", &self.ignoring)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -128,7 +135,6 @@ impl Default for IgnorePointer {
 }
 
 // Implement Widget trait with associated type
-
 
 // bon Builder Extensions
 use ignore_pointer_builder::{IsUnset, SetChild, State};

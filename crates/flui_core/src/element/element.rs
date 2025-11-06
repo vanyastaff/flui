@@ -80,16 +80,15 @@
 use std::fmt;
 
 use crate::element::{
-    ComponentElement, ElementId, ElementLifecycle, InheritedElement,
-    RenderElement,
+    ComponentElement, ElementId, ElementLifecycle, InheritedElement, RenderElement,
 };
 use crate::foundation::Slot;
 use crate::render::RenderNode;
 
 // Re-export element types for convenience
 pub use crate::element::component::ComponentElement as Component;
-pub use crate::element::render::RenderElement as Render;
 pub use crate::element::provider::InheritedElement as Provider;
+pub use crate::element::render::RenderElement as Render;
 
 /// Element - Heterogeneous element storage via enum
 ///
@@ -295,7 +294,6 @@ impl Element {
             _ => None,
         }
     }
-
 
     /// Try to get as RenderElement (immutable)
     #[inline]

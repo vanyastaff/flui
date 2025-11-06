@@ -31,7 +31,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_rendering::RenderTransform;
 use flui_types::Matrix4;
 
@@ -150,7 +150,14 @@ impl std::fmt::Debug for Transform {
             .field("key", &self.key)
             .field("transform", &self.transform)
             .field("transform_hit_tests", &self.transform_hit_tests)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -313,8 +320,7 @@ impl View for Transform {
             ty: m[13],
         };
 
-        SingleRenderBuilder::new(RenderTransform::new(transform))
-            .with_optional_child(self.child)
+        SingleRenderBuilder::new(RenderTransform::new(transform)).with_optional_child(self.child)
     }
 }
 

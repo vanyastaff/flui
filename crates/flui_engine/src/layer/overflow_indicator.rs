@@ -4,9 +4,9 @@
 //! its container. Zero cost in release builds - completely compiled out.
 
 #[cfg(debug_assertions)]
-use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
-#[cfg(debug_assertions)]
 use crate::layer::picture::{DrawCommand, PictureLayer};
+#[cfg(debug_assertions)]
+use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 #[cfg(debug_assertions)]
 use crate::painter::{Paint, Painter};
 #[cfg(debug_assertions)]
@@ -73,7 +73,13 @@ impl OverflowIndicatorLayer {
 
     /// Set overflow amounts, container size, and offset
     #[must_use]
-    pub fn with_overflow(mut self, overflow_h: f32, overflow_v: f32, container_size: Size, offset: Offset) -> Self {
+    pub fn with_overflow(
+        mut self,
+        overflow_h: f32,
+        overflow_v: f32,
+        container_size: Size,
+        offset: Offset,
+    ) -> Self {
         self.overflow_h = overflow_h.max(0.0);
         self.overflow_v = overflow_v.max(0.0);
         self.container_size = container_size;
@@ -85,9 +91,19 @@ impl OverflowIndicatorLayer {
     fn paint_diagonal_stripes_direct(painter: &mut dyn Painter, rect: Rect) {
         // Flutter-style diagonal stripes
         const STRIPE_SPACING: f32 = 12.0; // Расстояние между полосками (как ты сказал!)
-        const STRIPE_WIDTH: f32 = 4.0;    // Тонкие полоски (как ты сказал!)
-        const BG_COLOR: Color = Color { r: 255, g: 235, b: 59, a: 100 }; // Желтый #FFEB3B
-        const STRIPE_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 100 }; // Черный
+        const STRIPE_WIDTH: f32 = 4.0; // Тонкие полоски (как ты сказал!)
+        const BG_COLOR: Color = Color {
+            r: 255,
+            g: 235,
+            b: 59,
+            a: 100,
+        }; // Желтый #FFEB3B
+        const STRIPE_COLOR: Color = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 100,
+        }; // Черный
 
         // Контроль угла полосок:
         // 1.0 = -45° (диагональ /)
@@ -126,7 +142,6 @@ impl OverflowIndicatorLayer {
         let diagonal_distance = width + height;
         let num_stripes = ((diagonal_distance / STRIPE_SPACING).ceil() as i32) * 2;
 
-
         // Start from well before the rectangle to ensure full coverage
         // Нужно начать с отрицательной позиции чтобы покрыть верхний правый угол
         let start_offset = -(width + height);
@@ -141,10 +156,10 @@ impl OverflowIndicatorLayer {
             let horizontal_shift = height * ANGLE_FACTOR;
 
             let x_start = right + offset;
-            let x_end = x_start - horizontal_shift;  // Смещаем на постоянное расстояние
+            let x_end = x_start - horizontal_shift; // Смещаем на постоянное расстояние
 
-            let p1 = Point::new(x_start, top);     // Верх справа
-            let p2 = Point::new(x_end, bottom);    // Низ левее
+            let p1 = Point::new(x_start, top); // Верх справа
+            let p2 = Point::new(x_end, bottom); // Низ левее
 
             // Draw if line intersects with rect (более мягкое условие)
             // Линия видна если хотя бы одна точка в пределах rect
@@ -156,7 +171,12 @@ impl OverflowIndicatorLayer {
 
     /// Paint red border directly to painter
     fn paint_border_direct(painter: &mut dyn Painter, rect: Rect) {
-        const BORDER_COLOR: Color = Color { r: 211, g: 47, b: 47, a: 255 };
+        const BORDER_COLOR: Color = Color {
+            r: 211,
+            g: 47,
+            b: 47,
+            a: 255,
+        };
 
         let border_paint = Paint {
             color: BORDER_COLOR,
@@ -185,7 +205,12 @@ impl OverflowIndicatorLayer {
         };
 
         // Настройки текста как в Flutter
-        const TEXT_COLOR: Color = Color { r: 255, g: 0, b: 0, a: 255 }; // Красный текст
+        const TEXT_COLOR: Color = Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        }; // Красный текст
         const TEXT_SIZE: f32 = 10.0; // Мелкий шрифт
 
         let text_paint = Paint {
@@ -207,8 +232,18 @@ impl OverflowIndicatorLayer {
     #[allow(dead_code)]
     fn paint_diagonal_stripes(picture: &mut PictureLayer, rect: Rect) {
         const STRIPE_WIDTH: f32 = 1.0;
-        const RED: Color = Color { r: 211, g: 47, b: 47, a: 255 };
-        const YELLOW: Color = Color { r: 255, g: 193, b: 7, a: 255 };
+        const RED: Color = Color {
+            r: 211,
+            g: 47,
+            b: 47,
+            a: 255,
+        };
+        const YELLOW: Color = Color {
+            r: 255,
+            g: 193,
+            b: 7,
+            a: 255,
+        };
 
         let paint_red = Paint {
             color: RED,
@@ -268,7 +303,12 @@ impl OverflowIndicatorLayer {
     /// Paint red border around overflow region
     #[allow(dead_code)]
     fn paint_border(picture: &mut PictureLayer, rect: Rect) {
-        const BORDER_COLOR: Color = Color { r: 211, g: 47, b: 47, a: 255 };
+        const BORDER_COLOR: Color = Color {
+            r: 211,
+            g: 47,
+            b: 47,
+            a: 255,
+        };
 
         let border_paint = Paint {
             color: BORDER_COLOR,
@@ -375,7 +415,13 @@ impl Layer for OverflowIndicatorLayer {
             Self::paint_border_direct(painter, bottom_rect);
             painter.restore();
             // Текст поверх bottom overflow
-            Self::paint_overflow_text(painter, bottom_rect, self.overflow_h, self.overflow_v, false);
+            Self::paint_overflow_text(
+                painter,
+                bottom_rect,
+                self.overflow_h,
+                self.overflow_v,
+                false,
+            );
 
             // Corner overflow
             let corner_rect = Rect::from_ltrb(
@@ -403,7 +449,13 @@ impl Layer for OverflowIndicatorLayer {
             Self::paint_border_direct(painter, overflow_rect);
             painter.restore();
             // Текст для horizontal overflow
-            Self::paint_overflow_text(painter, overflow_rect, self.overflow_h, self.overflow_v, true);
+            Self::paint_overflow_text(
+                painter,
+                overflow_rect,
+                self.overflow_h,
+                self.overflow_v,
+                true,
+            );
         } else {
             // Vertical overflow only - paint bottom
             let overflow_rect = Rect::from_ltrb(
@@ -418,7 +470,13 @@ impl Layer for OverflowIndicatorLayer {
             Self::paint_border_direct(painter, overflow_rect);
             painter.restore();
             // Текст для vertical overflow
-            Self::paint_overflow_text(painter, overflow_rect, self.overflow_h, self.overflow_v, false);
+            Self::paint_overflow_text(
+                painter,
+                overflow_rect,
+                self.overflow_h,
+                self.overflow_v,
+                false,
+            );
         }
     }
 
@@ -430,12 +488,7 @@ impl Layer for OverflowIndicatorLayer {
         let right = child_bounds.min.x + self.container_size.width + self.overflow_h;
         let bottom = child_bounds.min.y + self.container_size.height + self.overflow_v;
 
-        Rect::from_ltrb(
-            child_bounds.min.x,
-            child_bounds.min.y,
-            right,
-            bottom,
-        )
+        Rect::from_ltrb(child_bounds.min.x, child_bounds.min.y, right, bottom)
     }
 
     fn is_visible(&self) -> bool {

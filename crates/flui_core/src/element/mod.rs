@@ -37,7 +37,7 @@
 // Modules
 pub mod component;
 pub mod dependency;
-#[allow(clippy::module_inception)]  // element/element.rs is intentional for main Element enum
+#[allow(clippy::module_inception)] // element/element.rs is intentional for main Element enum
 pub mod element;
 pub mod element_base;
 pub mod element_tree;
@@ -45,15 +45,14 @@ pub mod lifecycle;
 pub mod provider;
 pub mod render;
 
-
 // Re-exports
 pub use component::ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
 pub use element::Element;
 pub use element_base::ElementBase;
-pub use element_tree::ElementTree;  // Moved from pipeline to break circular dependency
+pub use element_tree::ElementTree; // Moved from pipeline to break circular dependency
 pub use lifecycle::ElementLifecycle;
-pub use provider::InheritedElement;  // Re-exported with old name for compatibility
+pub use provider::InheritedElement; // Re-exported with old name for compatibility
 pub use render::RenderElement;
 
 // Moved to other modules (Phase 1):
@@ -70,17 +69,3 @@ pub use render::RenderElement;
 // - pipeline depends on foundation + element (OK)
 // Previously: element → render → pipeline → element (CIRCULAR!)
 pub use crate::foundation::ElementId;
-
-
-
-
-
-
-
-
-
-
-
-
-
-

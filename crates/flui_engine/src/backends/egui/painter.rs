@@ -538,7 +538,12 @@ impl<'a> Painter for EguiPainter<'a> {
         let pos = Self::to_egui_pos(transformed_pos);
 
         #[cfg(debug_assertions)]
-        tracing::debug!("EguiPainter::text: transformed_pos={:?}, color={:?}, pos={:?}", transformed_pos, color, pos);
+        tracing::debug!(
+            "EguiPainter::text: transformed_pos={:?}, color={:?}, pos={:?}",
+            transformed_pos,
+            color,
+            pos
+        );
 
         // Extract rotation and scale from transform matrix
         let (scale, rotation, _translation) =
@@ -551,14 +556,21 @@ impl<'a> Painter for EguiPainter<'a> {
         let font_id = egui::FontId::proportional(scaled_font_size);
 
         #[cfg(debug_assertions)]
-        tracing::debug!("EguiPainter::text: creating galley with font_id={:?}, text='{}'", font_id, text);
+        tracing::debug!(
+            "EguiPainter::text: creating galley with font_id={:?}, text='{}'",
+            font_id,
+            text
+        );
 
         let galley = self
             .painter
             .layout_no_wrap(text.to_string(), font_id, color);
 
         #[cfg(debug_assertions)]
-        tracing::debug!("EguiPainter::text: galley created, size={:?}", galley.size());
+        tracing::debug!(
+            "EguiPainter::text: galley created, size={:?}",
+            galley.size()
+        );
 
         // Create text shape with rotation using egui 0.28+ API
         let mut text_shape = egui::epaint::TextShape::new(pos, galley, color);
@@ -582,7 +594,12 @@ impl<'a> Painter for EguiPainter<'a> {
         style: &flui_types::typography::TextStyle,
     ) {
         #[cfg(debug_assertions)]
-        tracing::debug!("EguiPainter::text_styled: text='{}', position={:?}, style={:?}", text, position, style);
+        tracing::debug!(
+            "EguiPainter::text_styled: text='{}', position={:?}, style={:?}",
+            text,
+            position,
+            style
+        );
 
         // Extract styling parameters
         let font_size = style.font_size.unwrap_or(14.0) as f32;
@@ -601,7 +618,11 @@ impl<'a> Painter for EguiPainter<'a> {
                 || word_spacing.abs() > 0.001;
 
         #[cfg(debug_assertions)]
-        tracing::debug!("EguiPainter::text_styled: needs_vector={}, font_size={}", needs_vector, font_size);
+        tracing::debug!(
+            "EguiPainter::text_styled: needs_vector={}, font_size={}",
+            needs_vector,
+            font_size
+        );
 
         if needs_vector {
             // Use vector rendering with spacing support

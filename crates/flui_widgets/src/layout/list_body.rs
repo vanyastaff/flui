@@ -5,7 +5,7 @@
 //! are sized to their intrinsic size along the main axis.
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement, MultiRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderListBody;
@@ -83,7 +83,14 @@ impl std::fmt::Debug for ListBody {
             .field("key", &self.key)
             .field("main_axis", &self.main_axis)
             .field("spacing", &self.spacing)
-            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .field(
+                "children",
+                &if !self.children.is_empty() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -188,8 +195,7 @@ impl View for ListBody {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
 
-        MultiRenderBuilder::new(render)
-            .with_children(self.children.into_iter())
+        MultiRenderBuilder::new(render).with_children(self.children)
     }
 }
 

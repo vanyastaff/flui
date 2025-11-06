@@ -39,9 +39,6 @@ pub use window::run_app;
 
 // Re-export commonly used types from flui_core
 pub use flui_core::{
-    // View system (new API)
-    view::{AnyView, BuildContext, ChangeFlags, View, ViewElement},
-
     // Element system
     element::{ComponentElement, Element, InheritedElement, RenderElement},
 
@@ -49,5 +46,7 @@ pub use flui_core::{
     foundation::{ElementId, Key, Slot},
 
     // Render system
-    render::{LeafRender, MultiRender, SingleRender, RenderNode},
+    render::{LeafRender, MultiRender, RenderNode, SingleRender},
+    // View system (new API)
+    view::{AnyView, BuildContext, ChangeFlags, View, ViewElement},
 };

@@ -19,13 +19,13 @@
 
 #[cfg(test)]
 mod tests {
-    use super::super::{FrameCoordinator, ElementTree};
-    use crate::element::{Element, RenderElement, ElementId};
-    use crate::render::LeafRender;
+    use super::super::{ElementTree, FrameCoordinator};
+    use crate::element::{Element, ElementId, RenderElement};
     use crate::foundation::Slot;
+    use crate::render::LeafRender;
     use crate::BoxedLayer;
     use flui_types::constraints::BoxConstraints;
-    use flui_types::{Size, Offset};
+    use flui_types::{Offset, Size};
     use parking_lot::RwLock;
     use std::sync::Arc;
 
@@ -211,11 +211,10 @@ mod tests {
         let mut fixture = TestFixture::new();
 
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-        let result = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let result =
+            fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
         // Should succeed and return a layer
         assert!(result.is_ok());
@@ -227,11 +226,10 @@ mod tests {
         let mut fixture = TestFixture::with_size(100);
 
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-        let result = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let result =
+            fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
         // Should handle large trees
         assert!(result.is_ok());
@@ -251,11 +249,10 @@ mod tests {
         ];
 
         for constraints in test_cases {
-            let result = fixture.coordinator.build_frame(
-                &fixture.tree,
-                Some(fixture.root),
-                constraints
-            );
+            let result =
+                fixture
+                    .coordinator
+                    .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
             assert!(result.is_ok(), "Failed with constraints: {:?}", constraints);
         }
@@ -271,11 +268,9 @@ mod tests {
         assert_eq!(fixture.coordinator.scheduler().total_frames(), 0);
 
         // Build frame
-        let _ = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let _ = fixture
+            .coordinator
+            .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
         // Scheduler should track the frame
         assert_eq!(fixture.coordinator.scheduler().total_frames(), 1);
@@ -293,11 +288,10 @@ mod tests {
 
         // Use non-existent root ID
         let invalid_root = 9999;
-        let result = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(invalid_root),
-            constraints
-        );
+        let result =
+            fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(invalid_root), constraints);
 
         // Should succeed but return None (root not found)
         assert!(result.is_ok());
@@ -315,7 +309,10 @@ mod tests {
         // Mark elements as dirty
         {
             let tree_guard = fixture.tree.read();
-            fixture.coordinator.build_mut().mark_dirty(fixture.root, &tree_guard);
+            fixture
+                .coordinator
+                .build_mut()
+                .mark_dirty(fixture.root, &tree_guard);
         }
 
         let initial_dirty = fixture.coordinator.build().dirty_count();
@@ -335,11 +332,10 @@ mod tests {
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 
         // Flush layout phase
-        let result = fixture.coordinator.flush_layout(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let result =
+            fixture
+                .coordinator
+                .flush_layout(&fixture.tree, Some(fixture.root), constraints);
 
         // Should succeed
         assert!(result.is_ok());
@@ -350,10 +346,9 @@ mod tests {
         let mut fixture = TestFixture::new();
 
         // Flush paint phase
-        let result = fixture.coordinator.flush_paint(
-            &fixture.tree,
-            Some(fixture.root)
-        );
+        let result = fixture
+            .coordinator
+            .flush_paint(&fixture.tree, Some(fixture.root));
 
         // Should succeed and return a layer
         assert!(result.is_ok());
@@ -368,16 +363,13 @@ mod tests {
         fixture.coordinator.flush_build(&fixture.tree);
 
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-        let _ = fixture.coordinator.flush_layout(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let _ = fixture
+            .coordinator
+            .flush_layout(&fixture.tree, Some(fixture.root), constraints);
 
-        let _ = fixture.coordinator.flush_paint(
-            &fixture.tree,
-            Some(fixture.root)
-        );
+        let _ = fixture
+            .coordinator
+            .flush_paint(&fixture.tree, Some(fixture.root));
     }
 
     // =========================================================================
@@ -392,11 +384,10 @@ mod tests {
 
         // Build multiple frames
         for _ in 0..10 {
-            let result = fixture.coordinator.build_frame(
-                &fixture.tree,
-                Some(fixture.root),
-                constraints
-            );
+            let result =
+                fixture
+                    .coordinator
+                    .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
             assert!(result.is_ok());
         }
@@ -410,11 +401,10 @@ mod tests {
         let mut fixture = TestFixture::new();
 
         let constraints = BoxConstraints::tight(Size::new(0.0, 0.0));
-        let result = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let result =
+            fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
         // Should handle zero-size constraints
         assert!(result.is_ok());
@@ -427,17 +417,15 @@ mod tests {
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 
         // Build frame twice without changes
-        let result1 = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let result1 =
+            fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
-        let result2 = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let result2 =
+            fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
         // Both should succeed
         assert!(result1.is_ok());
@@ -452,11 +440,9 @@ mod tests {
 
         // Build some frames
         for _ in 0..5 {
-            let _ = fixture.coordinator.build_frame(
-                &fixture.tree,
-                Some(fixture.root),
-                constraints
-            );
+            let _ = fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(fixture.root), constraints);
         }
 
         // Check scheduler metrics
@@ -477,11 +463,10 @@ mod tests {
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 
         // Build frame (acquires locks internally)
-        let result = fixture.coordinator.build_frame(
-            &fixture.tree,
-            Some(fixture.root),
-            constraints
-        );
+        let result =
+            fixture
+                .coordinator
+                .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
         assert!(result.is_ok());
 

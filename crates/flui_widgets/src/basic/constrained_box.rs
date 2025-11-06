@@ -4,8 +4,8 @@
 //! Similar to Flutter's ConstrainedBox widget.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderConstrainedBox;
 use flui_types::BoxConstraints;
 
@@ -54,7 +54,14 @@ impl std::fmt::Debug for ConstrainedBox {
         f.debug_struct("ConstrainedBox")
             .field("key", &self.key)
             .field("constraints", &self.constraints)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -156,9 +163,7 @@ mod tests {
     #[test]
     fn test_constrained_box_builder() {
         let constraints = BoxConstraints::tight_for(Some(100.0), Some(100.0));
-        let widget = ConstrainedBox::builder()
-            .constraints(constraints)
-            .build();
+        let widget = ConstrainedBox::builder().constraints(constraints).build();
         assert_eq!(widget.constraints, Some(constraints));
     }
 

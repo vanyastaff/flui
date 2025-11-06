@@ -32,7 +32,7 @@
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints, painting::Clip};
+use flui_types::{constraints::BoxConstraints, painting::Clip, Offset, Size};
 
 /// Trait for defining clip shapes
 ///

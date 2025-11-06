@@ -2,12 +2,12 @@
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::MultiRender;
-use flui_engine::{BoxedLayer, layer::pool};
+use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::{
-    Axis, Offset, Size,
     constraints::BoxConstraints,
     layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize},
     typography::TextBaseline,
+    Axis, Offset, Size,
 };
 
 /// RenderObject for flex layout (Row/Column)
@@ -159,7 +159,6 @@ impl RenderFlex {
             Axis::Vertical => (0.0, self.overflow_pixels),
         }
     }
-
 }
 
 impl Default for RenderFlex {
@@ -234,7 +233,9 @@ impl MultiRender for RenderFlex {
                     // Try to access FlexItemMetadata via the metadata() method
                     if let Some(metadata_any) = render_node_guard.metadata() {
                         // Downcast to FlexItemMetadata
-                        if let Some(flex_meta) = metadata_any.downcast_ref::<super::flex_item::FlexItemMetadata>() {
+                        if let Some(flex_meta) =
+                            metadata_any.downcast_ref::<super::flex_item::FlexItemMetadata>()
+                        {
                             if flex_meta.is_flexible() {
                                 // Child is flexible
                                 flexible_children.push((child, flex_meta.flex, flex_meta.fit));
@@ -498,8 +499,10 @@ impl MultiRender for RenderFlex {
         #[cfg(debug_assertions)]
         if self.overflow_pixels > 0.0 {
             let (overflow_h, overflow_v) = self.get_overflow();
-            let indicator_layer = flui_engine::layer::OverflowIndicatorLayer::new(Box::new(container))
-                .with_overflow(overflow_h, overflow_v, self.container_size, offset);
+            let indicator_layer = flui_engine::layer::OverflowIndicatorLayer::new(Box::new(
+                container,
+            ))
+            .with_overflow(overflow_h, overflow_v, self.container_size, offset);
             return Box::new(indicator_layer);
         }
 

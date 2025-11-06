@@ -32,8 +32,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, MultiRenderBuilder};
 use flui_rendering::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
@@ -107,7 +107,14 @@ impl std::fmt::Debug for Row {
             .field("main_axis_alignment", &self.main_axis_alignment)
             .field("cross_axis_alignment", &self.cross_axis_alignment)
             .field("main_axis_size", &self.main_axis_size)
-            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .field(
+                "children",
+                &if !self.children.is_empty() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -176,8 +183,7 @@ impl View for Row {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        MultiRenderBuilder::new(render_flex)
-            .with_children(self.children.into_iter())
+        MultiRenderBuilder::new(render_flex).with_children(self.children)
     }
 }
 
@@ -201,10 +207,7 @@ where
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(
-        self,
-        children: Vec<Box<dyn AnyView>>,
-    ) -> RowBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> RowBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }
@@ -306,10 +309,7 @@ mod tests {
     #[test]
     fn test_row_builder_children() {
         let row = Row::builder()
-            .children(vec![
-                Box::new(MockView),
-                Box::new(MockView),
-            ])
+            .children(vec![Box::new(MockView), Box::new(MockView)])
             .build();
 
         assert_eq!(row.children.len(), 2);
@@ -326,10 +326,7 @@ mod tests {
     #[test]
     fn test_row_set_children() {
         let mut row = Row::new();
-        row.set_children(vec![
-            Box::new(MockView),
-            Box::new(MockView),
-        ]);
+        row.set_children(vec![Box::new(MockView), Box::new(MockView)]);
         assert_eq!(row.children.len(), 2);
     }
 

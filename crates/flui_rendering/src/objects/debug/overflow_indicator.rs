@@ -25,19 +25,19 @@ use flui_core::element::{ElementId, ElementTree};
 #[cfg(debug_assertions)]
 use flui_core::render::SingleRender;
 #[cfg(debug_assertions)]
-use flui_engine::layer::pool;
-#[cfg(debug_assertions)]
 use flui_engine::layer::picture::DrawCommand;
+#[cfg(debug_assertions)]
+use flui_engine::layer::pool;
 #[cfg(debug_assertions)]
 use flui_engine::painter::Paint;
 #[cfg(debug_assertions)]
 use flui_engine::BoxedLayer;
 #[cfg(debug_assertions)]
+use flui_types::constraints::BoxConstraints;
+#[cfg(debug_assertions)]
 use flui_types::painting::PaintingStyle;
 #[cfg(debug_assertions)]
 use flui_types::{Color, Offset, Rect, Size};
-#[cfg(debug_assertions)]
-use flui_types::constraints::BoxConstraints;
 
 /// Paint overflow indicator with diagonal stripes (debug mode only)
 ///
@@ -86,7 +86,13 @@ pub fn paint_overflow_indicators(
     // Paint overflow region(s) with diagonal stripes
     if overflow_h > 0.0 && overflow_v > 0.0 {
         // Both axes overflow - paint L-shaped region covering right and bottom
-        paint_overflow_region(&mut indicator, overflow_h, overflow_v, container_size, offset);
+        paint_overflow_region(
+            &mut indicator,
+            overflow_h,
+            overflow_v,
+            container_size,
+            offset,
+        );
     } else if overflow_h > 0.0 {
         // Horizontal overflow only - paint right side
         let overflow_rect = Rect::from_ltrb(
@@ -159,8 +165,18 @@ fn paint_diagonal_stripes(picture: &mut flui_engine::layer::PictureLayer, rect: 
     use flui_types::Point;
 
     const STRIPE_WIDTH: f32 = 6.0; // Width of each stripe (adjusted for better density)
-    const RED: Color = Color { r: 211, g: 47, b: 47, a: 255 };
-    const YELLOW: Color = Color { r: 255, g: 193, b: 7, a: 255 };
+    const RED: Color = Color {
+        r: 211,
+        g: 47,
+        b: 47,
+        a: 255,
+    };
+    const YELLOW: Color = Color {
+        r: 255,
+        g: 193,
+        b: 7,
+        a: 255,
+    };
 
     let paint_red = Paint {
         color: RED,
@@ -216,7 +232,12 @@ fn paint_diagonal_stripes(picture: &mut flui_engine::layer::PictureLayer, rect: 
 /// Paint red border around overflow region
 #[cfg(debug_assertions)]
 fn paint_border(picture: &mut flui_engine::layer::PictureLayer, rect: Rect) {
-    const BORDER_COLOR: Color = Color { r: 211, g: 47, b: 47, a: 255 };
+    const BORDER_COLOR: Color = Color {
+        r: 211,
+        g: 47,
+        b: 47,
+        a: 255,
+    };
 
     let border_paint = Paint {
         color: BORDER_COLOR,

@@ -3,13 +3,13 @@
 //! Provides `use_signal` hook that creates reactive state similar to React's useState.
 //! When a signal changes, all components that depend on it are automatically re-rendered.
 
-use super::hook_trait::{Hook, DependencyId};
 use super::hook_context::HookContext;
+use super::hook_trait::{DependencyId, Hook};
 use crate::BuildContext;
 use std::cell::RefCell;
-use std::rc::Rc;
-use std::marker::PhantomData;
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 /// Unique identifier for a signal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,10 +61,7 @@ impl SignalId {
 
         // Always check for overflow
         if id == u64::MAX {
-            panic!(
-                "SignalId counter overflow! Created {} signals.",
-                u64::MAX
-            );
+            panic!("SignalId counter overflow! Created {} signals.", u64::MAX);
         }
 
         Self(id)
@@ -92,7 +89,10 @@ impl<T: std::fmt::Debug> std::fmt::Debug for SignalInner<T> {
         f.debug_struct("SignalInner")
             .field("value", &self.value)
             .field("id", &self.id)
-            .field("subscribers", &format!("{} subscribers", self.subscribers.borrow().len()))
+            .field(
+                "subscribers",
+                &format!("{} subscribers", self.subscribers.borrow().len()),
+            )
             .finish()
     }
 }
@@ -338,7 +338,10 @@ impl<T> Signal<T> {
         F: Fn() + 'static,
     {
         let id = SubscriptionId::new();
-        self.inner.subscribers.borrow_mut().insert(id, Rc::new(callback));
+        self.inner
+            .subscribers
+            .borrow_mut()
+            .insert(id, Rc::new(callback));
         id
     }
 
@@ -378,10 +381,7 @@ impl<T> Signal<T> {
     /// This is called automatically by `set()`, `update()`, and `update_mut()`.
     fn notify_subscribers(&self) {
         // Clone all subscriber Rc's to avoid holding the borrow during callbacks
-        let subscribers: Vec<_> = self.inner.subscribers.borrow()
-            .values()
-            .cloned()
-            .collect();
+        let subscribers: Vec<_> = self.inner.subscribers.borrow().values().cloned().collect();
 
         // Call each subscriber - safe because we own Rc clones
         for subscriber in subscribers {
@@ -526,9 +526,7 @@ impl<T: Clone + 'static> Hook for SignalHook<T> {
 /// }
 /// ```
 pub fn use_signal<T: Clone + 'static>(ctx: &BuildContext, initial: T) -> Signal<T> {
-    ctx.with_hook_context_mut(|hook_ctx| {
-        hook_ctx.use_hook::<SignalHook<T>>(initial)
-    })
+    ctx.with_hook_context_mut(|hook_ctx| hook_ctx.use_hook::<SignalHook<T>>(initial))
 }
 
 #[cfg(test)]

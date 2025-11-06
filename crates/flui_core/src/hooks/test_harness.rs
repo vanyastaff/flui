@@ -2,8 +2,8 @@
 //!
 //! Provides utilities for testing hooks in isolation without a full component tree.
 
+use super::hook_context::{ComponentId, HookContext};
 use super::hook_trait::Hook;
-use super::hook_context::{HookContext, ComponentId};
 use std::marker::PhantomData;
 
 /// Test harness for testing hooks in isolation.
@@ -201,8 +201,8 @@ impl Default for MultiHookTestHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::signal::SignalHook;
     use crate::hooks::memo::MemoHook;
+    use crate::hooks::signal::SignalHook;
 
     #[test]
     fn test_harness_basic() {
@@ -247,9 +247,7 @@ mod tests {
         harness.render(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
-            let doubled = ctx.use_hook::<MemoHook<i32, _>>(move || {
-                count.get() * 2
-            });
+            let doubled = ctx.use_hook::<MemoHook<i32, _>>(move || count.get() * 2);
 
             assert_eq!(count.get(), 5);
             assert_eq!(doubled.get(), 10);
@@ -260,9 +258,7 @@ mod tests {
         harness.rerender(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
-            let doubled = ctx.use_hook::<MemoHook<i32, _>>(move || {
-                count.get() * 2
-            });
+            let doubled = ctx.use_hook::<MemoHook<i32, _>>(move || count.get() * 2);
 
             assert_eq!(count.get(), 10);
             assert_eq!(doubled.get(), 20);

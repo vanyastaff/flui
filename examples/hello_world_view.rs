@@ -7,8 +7,8 @@
 use flui_app::run_app;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
-use flui_widgets::{Center, Container, Text};
 use flui_types::{Color, EdgeInsets};
+use flui_widgets::{Center, Container, Text};
 
 /// Simple Hello World app using NEW View trait
 #[derive(Debug, Clone)]

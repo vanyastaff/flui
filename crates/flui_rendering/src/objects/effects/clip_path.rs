@@ -2,8 +2,8 @@
 
 use flui_engine::BoxedLayer;
 use flui_types::{
+    painting::{path::Path, Clip},
     Size,
-    painting::{Clip, path::Path},
 };
 
 use super::clip_base::{ClipShape, RenderClip};

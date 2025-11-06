@@ -4,7 +4,7 @@
 //! Similar to Flutter's RotatedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, View, IntoElement, SingleRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderRotatedBox;
@@ -100,7 +100,14 @@ impl std::fmt::Debug for RotatedBox {
         f.debug_struct("RotatedBox")
             .field("key", &self.key)
             .field("quarter_turns", &self.quarter_turns)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -260,6 +267,6 @@ mod tests {
     #[test]
     fn test_quarter_turns_from_int() {
         let widget = RotatedBox::new(QuarterTurns::from_int(5), Box::new(crate::SizedBox::new()));
-        assert_eq!(widget.quarter_turns, QuarterTurns::One);  // 5 % 4 = 1
+        assert_eq!(widget.quarter_turns, QuarterTurns::One); // 5 % 4 = 1
     }
 }

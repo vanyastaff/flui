@@ -4,8 +4,8 @@
 //! Similar to Flutter's LimitedBox widget.
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderLimitedBox;
 
 /// A widget that limits its maximum size when unconstrained.
@@ -91,7 +91,14 @@ impl std::fmt::Debug for LimitedBox {
             .field("key", &self.key)
             .field("max_width", &self.max_width)
             .field("max_height", &self.max_height)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }

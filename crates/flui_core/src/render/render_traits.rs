@@ -8,7 +8,7 @@
 //! These traits are object-safe and have simple, clean APIs.
 
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size, constraints::BoxConstraints};
+use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 use crate::element::ElementId;
 use crate::element::ElementTree;
@@ -341,7 +341,7 @@ mod tests {
     struct TestLeaf;
 
     impl LeafRender for TestLeaf {
-        type Metadata = ();  // No metadata needed
+        type Metadata = (); // No metadata needed
 
         fn layout(&mut self, constraints: BoxConstraints) -> Size {
             constraints.constrain(Size::new(100.0, 100.0))

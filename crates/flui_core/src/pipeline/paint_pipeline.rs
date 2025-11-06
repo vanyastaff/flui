@@ -22,8 +22,8 @@
 //! ```
 
 use crate::element::ElementId;
-use crate::pipeline::dirty_tracking::LockFreeDirtySet;
 use crate::element::ElementTree;
+use crate::pipeline::dirty_tracking::LockFreeDirtySet;
 use crate::pipeline::PipelineError;
 
 /// Result type for paint operations
@@ -187,7 +187,9 @@ impl PaintPipeline {
                             drop(render_object);
                             let render_object = render_elem.render_object();
 
-                            if let crate::render::RenderNode::Single { render, .. } = &*render_object {
+                            if let crate::render::RenderNode::Single { render, .. } =
+                                &*render_object
+                            {
                                 render.paint(tree, child_id, offset)
                             } else {
                                 unreachable!("RenderNode variant changed during paint")

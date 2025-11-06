@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::RenderAspectRatio;
 
 /// A widget that sizes its child to a specific aspect ratio.
@@ -112,7 +112,14 @@ impl std::fmt::Debug for AspectRatio {
         f.debug_struct("AspectRatio")
             .field("key", &self.key)
             .field("aspect_ratio", &self.aspect_ratio)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -331,9 +338,7 @@ mod tests {
 
     #[test]
     fn test_aspect_ratio_builder() {
-        let widget = AspectRatio::builder()
-            .aspect_ratio(2.0)
-            .build();
+        let widget = AspectRatio::builder().aspect_ratio(2.0).build();
         assert_eq!(widget.aspect_ratio, 2.0);
     }
 

@@ -4,9 +4,9 @@
 //! Shows a single Text widget rendered through the full pipeline.
 
 use flui_app::run_app;
-use flui_core::view::{View, ChangeFlags};
+use flui_core::view::{ChangeFlags, View};
 use flui_core::{BuildContext, Element, RenderElement, RenderNode};
-use flui_rendering::{RenderParagraph, ParagraphData};
+use flui_rendering::{ParagraphData, RenderParagraph};
 use flui_types::Color;
 
 /// Minimal app that displays "Hello, Flui!"
@@ -21,7 +21,7 @@ impl View for MinimalApp {
         // Create paragraph data
         let data = ParagraphData::new("Flui Text от системы!")
             .with_font_size(48.0)
-            .with_color(Color::rgb(0, 255, 0));  // GREEN text
+            .with_color(Color::rgb(0, 255, 0)); // GREEN text
 
         // Create RenderParagraph (LeafRender)
         let render_paragraph = RenderParagraph::new(data);

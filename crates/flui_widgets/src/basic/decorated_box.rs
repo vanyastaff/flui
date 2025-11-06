@@ -29,8 +29,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
-use flui_core::view::{View, AnyView, IntoElement, SingleRenderBuilder};
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
 
@@ -134,7 +134,14 @@ impl std::fmt::Debug for DecoratedBox {
             .field("key", &self.key)
             .field("decoration", &self.decoration)
             .field("position", &self.position)
-            .field("child", &if self.child.is_some() { "<AnyView>" } else { "None" })
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -221,7 +228,9 @@ impl Default for DecoratedBox {
 // Implement View for DecoratedBox - New architecture
 impl View for DecoratedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        let child = self.child.or_else(|| Some(Box::new(crate::SizedBox::new())));
+        let child = self
+            .child
+            .or_else(|| Some(Box::new(crate::SizedBox::new())));
         SingleRenderBuilder::new(RenderDecoratedBox::with_position(
             self.decoration.clone(),
             self.position,

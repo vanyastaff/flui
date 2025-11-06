@@ -359,8 +359,7 @@ impl PipelineBuilder {
     /// ```
     #[must_use]
     pub fn development() -> Self {
-        Self::new()
-            .with_error_recovery(RecoveryPolicy::ShowErrorWidget)
+        Self::new().with_error_recovery(RecoveryPolicy::ShowErrorWidget)
     }
 
     /// Testing configuration preset
@@ -376,8 +375,7 @@ impl PipelineBuilder {
     /// ```
     #[must_use]
     pub fn testing() -> Self {
-        Self::new()
-            .with_error_recovery(RecoveryPolicy::Panic)
+        Self::new().with_error_recovery(RecoveryPolicy::Panic)
     }
 
     /// Minimal configuration preset
@@ -429,9 +427,11 @@ mod tests {
 
     #[test]
     fn test_builder_with_error_recovery() {
-        let builder = PipelineBuilder::new()
-            .with_error_recovery(RecoveryPolicy::UseLastGoodFrame);
-        assert_eq!(builder.recovery_policy, Some(RecoveryPolicy::UseLastGoodFrame));
+        let builder = PipelineBuilder::new().with_error_recovery(RecoveryPolicy::UseLastGoodFrame);
+        assert_eq!(
+            builder.recovery_policy,
+            Some(RecoveryPolicy::UseLastGoodFrame)
+        );
     }
 
     #[test]

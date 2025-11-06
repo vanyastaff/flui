@@ -41,7 +41,7 @@ impl HSLColor {
     /// - saturation, lightness, alpha: clamped to 0-1
     pub fn new(hue: f32, saturation: f32, lightness: f32, alpha: f32) -> Self {
         Self {
-            hue: hue.rem_euclid(360.0),  // Correctly wraps negative hues
+            hue: hue.rem_euclid(360.0), // Correctly wraps negative hues
             saturation: saturation.clamp(0.0, 1.0),
             lightness: lightness.clamp(0.0, 1.0),
             alpha: alpha.clamp(0.0, 1.0),
@@ -169,7 +169,7 @@ impl HSVColor {
     /// - saturation, value, alpha: clamped to 0-1
     pub fn new(hue: f32, saturation: f32, value: f32, alpha: f32) -> Self {
         Self {
-            hue: hue.rem_euclid(360.0),  // Correctly wraps negative hues
+            hue: hue.rem_euclid(360.0), // Correctly wraps negative hues
             saturation: saturation.clamp(0.0, 1.0),
             value: value.clamp(0.0, 1.0),
             alpha: alpha.clamp(0.0, 1.0),

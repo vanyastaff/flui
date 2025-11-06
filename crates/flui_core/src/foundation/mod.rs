@@ -11,9 +11,6 @@ pub mod key;
 pub mod notification;
 pub mod slot;
 
-
-
-
 pub use atomic_flags::{AtomicElementFlags, ElementFlags};
 pub use change_notifier::{
     ChangeNotifier, Listenable, ListenerCallback, ListenerId, MergedListenable, ValueNotifier,
@@ -29,6 +26,3 @@ pub use notification::{
     Notification, ScrollNotification, SizeChangedNotification,
 };
 pub use slot::Slot;
-
-
-

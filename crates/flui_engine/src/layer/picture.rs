@@ -385,7 +385,12 @@ impl Layer for PictureLayer {
                     style,
                 } => {
                     #[cfg(debug_assertions)]
-                    tracing::debug!("PictureLayer::paint: Text command - text='{}', position={:?}, style={:?}", text, position, style);
+                    tracing::debug!(
+                        "PictureLayer::paint: Text command - text='{}', position={:?}, style={:?}",
+                        text,
+                        position,
+                        style
+                    );
 
                     painter.text_styled(text, *position, style);
 

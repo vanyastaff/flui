@@ -301,7 +301,11 @@ impl AxisDirection {
     #[inline]
     #[must_use]
     pub const fn sign(self) -> f32 {
-        if self.is_positive() { 1.0 } else { -1.0 }
+        if self.is_positive() {
+            1.0
+        } else {
+            -1.0
+        }
     }
 
     /// Create from an axis and whether it's reversed.

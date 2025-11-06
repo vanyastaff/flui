@@ -32,7 +32,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{View, AnyView, IntoElement, MultiRenderBuilder};
+use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -168,7 +168,14 @@ impl std::fmt::Debug for IndexedStack {
             .field("index", &self.index)
             .field("alignment", &self.alignment)
             .field("sizing", &self.sizing)
-            .field("children", &if !self.children.is_empty() { "<AnyView>" } else { "None" })
+            .field(
+                "children",
+                &if !self.children.is_empty() {
+                    "<AnyView>"
+                } else {
+                    "None"
+                },
+            )
             .finish()
     }
 }
@@ -282,8 +289,11 @@ impl Default for IndexedStack {
 // Implement View for IndexedStack - New architecture
 impl View for IndexedStack {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        MultiRenderBuilder::new(RenderIndexedStack::with_alignment(self.index, self.alignment))
-            .with_children(self.children.into_iter())
+        MultiRenderBuilder::new(RenderIndexedStack::with_alignment(
+            self.index,
+            self.alignment,
+        ))
+        .with_children(self.children)
     }
 }
 
@@ -308,10 +318,7 @@ where
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(
-        self,
-        children: Vec<Box<dyn AnyView>>,
-    ) -> IndexedStackBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> IndexedStackBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }
@@ -556,7 +563,6 @@ mod tests {
             assert_eq!(widget.sizing, sizing);
         }
     }
-
 
     #[test]
     fn test_indexed_stack_empty_children() {

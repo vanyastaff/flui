@@ -310,7 +310,9 @@ impl ElementTree {
     #[inline]
     pub fn get(&self, element_id: ElementId) -> Option<&Element> {
         // Subtract 1 to convert ElementId (1-based) to slab index (0-based)
-        self.nodes.get(element_id.get() - 1).map(|node| &node.element)
+        self.nodes
+            .get(element_id.get() - 1)
+            .map(|node| &node.element)
     }
 
     /// Get a mutable reference to an element
@@ -321,7 +323,9 @@ impl ElementTree {
     #[inline]
     pub fn get_mut(&mut self, element_id: ElementId) -> Option<&mut Element> {
         // Subtract 1 to convert ElementId (1-based) to slab index (0-based)
-        self.nodes.get_mut(element_id.get() - 1).map(|node| &mut node.element)
+        self.nodes
+            .get_mut(element_id.get() - 1)
+            .map(|node| &mut node.element)
     }
 
     /// Get the parent of an element
@@ -375,8 +379,8 @@ impl ElementTree {
     //
     // This is stored in thread-local storage since layout is single-threaded.
     thread_local! {
-        static LAYOUT_STACK: std::cell::RefCell<Vec<ElementId>> = std::cell::RefCell::new(Vec::new());
-        static PAINT_STACK: std::cell::RefCell<Vec<ElementId>> = std::cell::RefCell::new(Vec::new());
+        static LAYOUT_STACK: std::cell::RefCell<Vec<ElementId>> = const { std::cell::RefCell::new(Vec::new()) };
+        static PAINT_STACK: std::cell::RefCell<Vec<ElementId>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
     /// Get a read guard to the RenderState for an element
@@ -502,9 +506,7 @@ impl ElementTree {
         }
 
         // Check for re-entrant layout (element trying to layout itself)
-        let is_reentrant = Self::LAYOUT_STACK.with(|stack| {
-            stack.borrow().contains(&element_id)
-        });
+        let is_reentrant = Self::LAYOUT_STACK.with(|stack| stack.borrow().contains(&element_id));
 
         if is_reentrant {
             tracing::error!(
@@ -513,7 +515,8 @@ impl ElementTree {
             );
 
             #[cfg(debug_assertions)]
-            self.layout_depth.set(self.layout_depth.get().saturating_sub(1));
+            self.layout_depth
+                .set(self.layout_depth.get().saturating_sub(1));
 
             // Re-fetch to get cached size safely (Issue #3)
             let element = self.get(element_id)?;
@@ -535,7 +538,8 @@ impl ElementTree {
 
         // Decrement depth
         #[cfg(debug_assertions)]
-        self.layout_depth.set(self.layout_depth.get().saturating_sub(1));
+        self.layout_depth
+            .set(self.layout_depth.get().saturating_sub(1));
 
         // Scope 3: Update state (re-fetch again to be safe - Issue #3)
         {
@@ -570,9 +574,7 @@ impl ElementTree {
         offset: crate::Offset,
     ) -> Option<crate::BoxedLayer> {
         // Check for re-entrant paint (element trying to paint itself)
-        let is_reentrant = Self::PAINT_STACK.with(|stack| {
-            stack.borrow().contains(&element_id)
-        });
+        let is_reentrant = Self::PAINT_STACK.with(|stack| stack.borrow().contains(&element_id));
 
         if is_reentrant {
             tracing::error!(
@@ -627,9 +629,7 @@ impl ElementTree {
     #[cfg(debug_assertions)]
     pub fn set_current_overflow(&self, axis: flui_types::Axis, pixels: f32) {
         // Get current element from layout stack
-        let current_element = Self::LAYOUT_STACK.with(|stack| {
-            stack.borrow().last().copied()
-        });
+        let current_element = Self::LAYOUT_STACK.with(|stack| stack.borrow().last().copied());
 
         if let Some(element_id) = current_element {
             if let Some(state) = self.render_state(element_id) {
@@ -913,11 +913,9 @@ impl ElementTree {
     /// tree.add_dependent(theme_element_id, widget_element_id);
     /// ```
     pub fn add_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(element) = self.get_mut(inherited_id) {
-            if let Element::Provider(inherited) = element {
-                inherited.add_dependent(dependent_id);
-                return true;
-            }
+        if let Some(Element::Provider(inherited)) = self.get_mut(inherited_id) {
+            inherited.add_dependent(dependent_id);
+            return true;
         }
         false
     }
@@ -937,11 +935,9 @@ impl ElementTree {
     /// `true` if the dependency was removed successfully, `false` if the inherited_id
     /// doesn't exist or isn't an InheritedElement.
     pub fn remove_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(element) = self.get_mut(inherited_id) {
-            if let Element::Provider(inherited) = element {
-                inherited.remove_dependent(dependent_id);
-                return true;
-            }
+        if let Some(Element::Provider(inherited)) = self.get_mut(inherited_id) {
+            inherited.remove_dependent(dependent_id);
+            return true;
         }
         false
     }
