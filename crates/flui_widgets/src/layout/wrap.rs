@@ -146,7 +146,7 @@ impl Clone for Wrap {
             spacing: self.spacing,
             run_spacing: self.run_spacing,
             cross_alignment: self.cross_alignment,
-            children: Vec::new(),
+            children: self.children.clone(),
         }
     }
 }

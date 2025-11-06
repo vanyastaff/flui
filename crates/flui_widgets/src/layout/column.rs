@@ -119,7 +119,7 @@ impl Clone for Column {
             main_axis_alignment: self.main_axis_alignment,
             cross_axis_alignment: self.cross_axis_alignment,
             main_axis_size: self.main_axis_size,
-            children: Vec::new(),
+            children: self.children.clone(),
         }
     }
 }

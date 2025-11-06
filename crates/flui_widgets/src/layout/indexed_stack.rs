@@ -180,7 +180,7 @@ impl Clone for IndexedStack {
             index: self.index,
             alignment: self.alignment,
             sizing: self.sizing,
-            children: Vec::new(),
+            children: self.children.clone(),
         }
     }
 }

@@ -94,7 +94,7 @@ impl Clone for ListBody {
             key: self.key.clone(),
             main_axis: self.main_axis,
             spacing: self.spacing,
-            children: Vec::new(),
+            children: self.children.clone(),
         }
     }
 }

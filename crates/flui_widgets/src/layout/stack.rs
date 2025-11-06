@@ -191,7 +191,7 @@ impl Clone for Stack {
             key: self.key.clone(),
             alignment: self.alignment,
             fit: self.fit,
-            children: Vec::new(),
+            children: self.children.clone(),
         }
     }
 }
