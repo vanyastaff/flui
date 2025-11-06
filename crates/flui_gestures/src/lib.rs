@@ -29,12 +29,10 @@
 //! ```
 
 pub mod detector;
-pub mod pointer_router;
 pub mod recognizers;
 
 pub mod prelude {
     //! Commonly used types and traits
     pub use crate::detector::*;
-    pub use crate::pointer_router::*;
     pub use crate::recognizers::tap::*;
 }

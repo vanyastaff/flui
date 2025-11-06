@@ -5,8 +5,8 @@
 use flui_types::events::{PointerEvent, PointerEventData};
 use std::sync::Arc;
 
-/// Callback for tap events
-pub type TapCallback = Arc<dyn Fn(&PointerEventData) + Send + Sync>;
+/// Callback for tap events (with pointer data)
+pub type TapEventCallback = Arc<dyn Fn(&PointerEventData) + Send + Sync>;
 
 /// Recognizes tap gestures
 ///
@@ -15,13 +15,13 @@ pub type TapCallback = Arc<dyn Fn(&PointerEventData) + Send + Sync>;
 #[derive(Clone)]
 pub struct TapGestureRecognizer {
     /// Callback when tap is detected
-    on_tap: Option<TapCallback>,
+    on_tap: Option<TapEventCallback>,
 
     /// Callback when pointer goes down
-    on_tap_down: Option<TapCallback>,
+    on_tap_down: Option<TapEventCallback>,
 
     /// Callback when pointer goes up (may not be a tap if dragged)
-    on_tap_up: Option<TapCallback>,
+    on_tap_up: Option<TapEventCallback>,
 
     /// Whether pointer is currently down
     is_pointer_down: bool,

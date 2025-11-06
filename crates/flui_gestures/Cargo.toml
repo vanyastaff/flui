@@ -12,6 +12,7 @@ repository.workspace = true
 flui_types = { path = "../flui_types" }
 flui_core = { path = "../flui_core" }
 flui_engine = { path = "../flui_engine" }
+flui_rendering = { path = "../flui_rendering" }
 
 # Utilities
 parking_lot = "0.12"
