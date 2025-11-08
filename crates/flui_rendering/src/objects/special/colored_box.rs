@@ -70,11 +70,23 @@ impl SingleRender for RenderColoredBox {
     }
 
     fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "RenderColoredBox::paint: color={:?}, size={:?}, offset={:?}",
+            self.color,
+            self.size,
+            offset
+        );
+
         // Create picture layer for background color
         let mut picture = PictureLayer::new();
 
-        // Paint background at the offset position with actual size from layout
+        // Apply offset directly to background rect
+        // (instead of using TransformLayer which requires painter transform support)
         let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderColoredBox::paint: drawing rect={:?}", rect);
 
         // Create paint for the color
         let paint = Paint::fill(self.color);
@@ -83,6 +95,7 @@ impl SingleRender for RenderColoredBox {
         picture.draw_rect(rect, paint);
 
         // SingleArity always has exactly one child
+        // Paint child at the same offset
         let child_layer = tree.paint_child(child_id, offset);
 
         // Use ContainerLayer to stack background + child - use pool for efficiency
@@ -90,7 +103,11 @@ impl SingleRender for RenderColoredBox {
         container.add_child(Box::new(picture));
         container.add_child(child_layer);
 
-        Box::new(container)
+        // Wrap everything in OffsetLayer to apply the parent's offset
+        let offset_layer =
+            flui_engine::layer::OffsetLayer::new(Box::new(container)).with_offset(offset);
+
+        Box::new(offset_layer)
     }
 }
 

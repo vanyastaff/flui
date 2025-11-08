@@ -1,16 +1,16 @@
 //! FluiApp - Main application structure
 //!
 //! This module provides the FluiApp struct, which manages the application lifecycle,
-//! element tree, and rendering pipeline integration with egui.
+//! element tree, and rendering pipeline integration with wgpu.
 
 use flui_core::foundation::ElementId;
 use flui_core::pipeline::PipelineOwner;
 use flui_core::view::{AnyView, BuildContext};
-use flui_core::{BoxedLayer, Offset, Size};
-use flui_engine::{EventRouter, Painter};
+use flui_core::{BoxedLayer, Size};
+use flui_engine::EventRouter;
 use flui_types::BoxConstraints;
-use parking_lot::Mutex;
 use std::sync::Arc;
+use winit::window::Window;
 
 /// Performance statistics for debugging and optimization
 #[derive(Debug, Default)]
@@ -28,8 +28,8 @@ pub(crate) struct FrameStats {
 impl FrameStats {
     /// Log statistics to console
     pub fn log(&self) {
-        if self.frame_count.is_multiple_of(60) && self.frame_count > 0 {
-            println!(
+        if self.frame_count % 60 == 0 && self.frame_count > 0 {
+            tracing::info!(
                 "Performance: {} frames | Rebuilds: {} ({:.1}%) | Layouts: {} ({:.1}%) | Paints: {} ({:.1}%)",
                 self.frame_count,
                 self.rebuild_count,
@@ -48,7 +48,7 @@ impl FrameStats {
 /// Manages the Flui application lifecycle, including:
 /// - Element tree management via PipelineOwner
 /// - Three-phase rendering: Build → Layout → Paint
-/// - Integration with eframe/egui for window management
+/// - Integration with winit/wgpu for window management and GPU rendering
 ///
 /// # Example
 ///
@@ -56,14 +56,11 @@ impl FrameStats {
 /// use flui_app::run_app;
 /// use flui_core::view::View;
 ///
-/// #[derive(Clone)]
+/// #[derive(Debug)]
 /// struct MyApp;
 ///
 /// impl View for MyApp {
-///     type State = ();
-///     type Element = ComponentElement;
-///
-///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
 ///         // Build your UI here
 ///         todo!()
 ///     }
@@ -93,421 +90,261 @@ pub struct FluiApp {
     /// Event router for gesture and pointer events
     event_router: EventRouter,
 
-    /// Last painted root layer (for event routing)
-    last_root_layer: Option<BoxedLayer>,
+    /// wgpu instance
+    instance: wgpu::Instance,
+
+    /// wgpu surface
+    surface: wgpu::Surface<'static>,
+
+    /// wgpu device
+    device: wgpu::Device,
+
+    /// wgpu queue
+    queue: wgpu::Queue,
+
+    /// wgpu surface configuration
+    config: wgpu::SurfaceConfiguration,
+
+    /// Window reference
+    window: Arc<Window>,
 }
 
 impl FluiApp {
-    /// Create a new FluiApp with a root view
+    /// Create a new Flui application
     ///
-    /// # Parameters
+    /// # Arguments
     ///
-    /// - `root_view`: The root view of the application (type-erased via AnyView)
+    /// * `root_view` - The root view of the application (type-erased)
+    /// * `window` - The window to render to
     ///
-    /// # Example
+    /// # Returns
     ///
-    /// ```rust,ignore
-    /// use flui_app::FluiApp;
-    ///
-    /// let app = FluiApp::new(Box::new(MyRootView));
-    /// ```
-    pub fn new(root_view: Box<dyn AnyView>) -> Self {
-        let pipeline = PipelineOwner::new();
+    /// A new `FluiApp` instance with wgpu initialized
+    pub fn new(root_view: Box<dyn AnyView>, window: Arc<Window>) -> Self {
+        // Create wgpu instance
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+
+        // Create surface
+        let surface = instance
+            .create_surface(Arc::clone(&window))
+            .expect("Failed to create surface");
+
+        // Request adapter
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }))
+        .expect("Failed to find adapter");
+
+        // Request device and queue
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                label: None,
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: Default::default(),
+            },
+        ))
+        .expect("Failed to create device");
+
+        // Get window size
+        let size = window.inner_size();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface.get_capabilities(&adapter).formats[0],
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
 
         Self {
-            pipeline,
+            pipeline: PipelineOwner::new(),
             root_view,
             root_id: None,
             stats: FrameStats::default(),
             last_size: None,
             root_built: false,
             event_router: EventRouter::new(),
-            last_root_layer: None,
+            instance,
+            surface,
+            device,
+            queue,
+            config,
+            window,
         }
     }
 
-    /// Recursively mark all RenderElements as needing layout
-    ///
-    /// This is needed when window resizes, because layout_pipeline only processes
-    /// RenderElements, but the root is often a ComponentElement.
-    fn request_layout_recursive(&mut self, element_id: ElementId) {
-        let tree = self.pipeline.tree();
+    /// Handle window resize
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
 
-        // First collect all RenderElement IDs and children in one pass
-        let (is_render, children, element_type) = {
-            let tree_guard = tree.read();
-            let Some(element) = tree_guard.get(element_id) else {
-                return;
-            };
+            // Mark size changed for relayout
+            self.last_size = None;
 
-            let element_type = match element {
-                flui_core::element::Element::Component(_) => "Component",
-                flui_core::element::Element::Render(_) => "Render",
-                flui_core::element::Element::Provider(_) => "Provider",
-            };
-            let is_render = matches!(element, flui_core::element::Element::Render(_));
-            let children = tree_guard.children(element_id);
-            (is_render, children, element_type)
-        };
-
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "[RECURSIVE_LAYOUT] Visiting element {:?}, type={}, is_render={}, children_count={}",
-            element_id,
-            element_type,
-            is_render,
-            children.len()
-        );
-
-        // Mark this element if it's a RenderElement
-        if is_render {
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "[RECURSIVE_LAYOUT] Marking RenderElement {:?} for layout",
-                element_id
-            );
-            self.pipeline.request_layout(element_id);
-        }
-
-        // Recursively mark children
-        for child_id in children {
-            self.request_layout_recursive(child_id);
+            tracing::info!("Window resized to {}x{}", width, height);
         }
     }
 
-    /// Get a reference to the pipeline owner
-    #[allow(dead_code)]
-    pub fn pipeline(&self) -> &PipelineOwner {
-        &self.pipeline
-    }
+    /// Update and render a frame
+    pub fn update(&mut self) {
+        let size = Size::new(self.config.width as f32, self.config.height as f32);
 
-    /// Build the root element on first frame
-    fn ensure_root_built(&mut self) {
-        if self.root_built {
-            return;
+        // Build phase - create/update element tree
+        if !self.root_built {
+            self.build_root();
+            self.root_built = true;
         }
 
-        // Build root element from view
-        // Use a temporary ID (will be replaced by actual ID after insertion)
-        // Note: This temporary ID is only used for BuildContext creation
-        // The actual root will get a proper ID from pipeline.set_root()
-        let tree = self.pipeline.tree().clone();
-        let temp_id = ElementId::new(1);
-        let rebuild_queue = self.pipeline.rebuild_queue().clone();
-        let ctx = BuildContext::with_hook_context_and_queue(
-            tree,
-            temp_id,
-            Arc::new(Mutex::new(flui_core::hooks::HookContext::new())),
-            rebuild_queue,
-        );
-
-        // Set up ComponentId for hooks
-        // Convert ElementId to ComponentId (hooks use u64, ElementId is usize)
-        let component_id = flui_core::hooks::ComponentId(temp_id.get() as u64);
-
-        // Begin component rendering for hook context
-        ctx.with_hook_context_mut(|hook_ctx| {
-            hook_ctx.begin_component(component_id);
-        });
-
-        // Build root element using thread-local BuildContext
-        let root_element = flui_core::view::with_build_context(&ctx, || self.root_view.build_any());
-
-        // End component rendering for hook context
-        ctx.with_hook_context_mut(|hook_ctx| {
-            hook_ctx.end_component();
-        });
-
-        // Mount and insert root element using pipeline.set_root()
-        // This properly initializes the root and schedules it for build
-        let root_id = self.pipeline.set_root(root_element);
-
-        // Mark root for layout and paint
-        println!(
-            "[DEBUG] Requesting layout and paint for root: {:?}",
-            root_id
-        );
-        self.pipeline.request_layout(root_id);
-        self.pipeline.request_paint(root_id);
-        println!("[DEBUG] After request_layout/paint");
-
-        self.root_id = Some(root_id);
-        self.root_built = true;
-
-        println!("[DEBUG] Root element built with ID: {:?}", root_id);
-    }
-
-    /// Check if window size changed significantly
-    ///
-    /// Ignores sub-pixel changes to avoid unnecessary layouts
-    fn size_changed(&self, new_size: Size) -> bool {
-        self.last_size.is_none_or(|last| {
-            (last.width - new_size.width).abs() > 1.0 || (last.height - new_size.height).abs() > 1.0
-        })
-    }
-
-    /// Process pointer events from egui
-    ///
-    /// Converts egui pointer events to Flui PointerEvents and routes them
-    /// through the EventRouter for hit testing and dispatch.
-    fn process_pointer_events(&mut self, ui: &egui::Ui) {
-        use flui_types::events::{Event, PointerButton, PointerDeviceKind, PointerEvent, PointerEventData};
-        use flui_types::Offset;
-
-        // Need a mutable root layer for event routing
-        if self.last_root_layer.is_none() {
-            return;
-        }
-
-        // Get pointer state from egui
-        let pointer = &ui.input(|i| i.pointer.clone());
-
-        // Handle pointer down (primary button)
-        if pointer.primary_down() {
-            if let Some(pos) = pointer.interact_pos() {
-                let data = PointerEventData::new(
-                    Offset::new(pos.x, pos.y),
-                    PointerDeviceKind::Mouse,
-                )
-                .with_button(PointerButton::Primary);
-
-                let pointer_event = PointerEvent::Down(data);
-                let event = Event::Pointer(pointer_event);
-
-                // Route through EventRouter with hit testing
-                if let Some(ref mut root_layer) = self.last_root_layer {
-                    self.event_router.route_event(root_layer.as_mut(), &event);
-                }
-            }
-        }
-
-        // Handle pointer up (primary released)
-        if pointer.primary_released() {
-            if let Some(pos) = pointer.interact_pos() {
-                let data = PointerEventData::new(
-                    Offset::new(pos.x, pos.y),
-                    PointerDeviceKind::Mouse,
-                )
-                .with_button(PointerButton::Primary);
-
-                let pointer_event = PointerEvent::Up(data);
-                let event = Event::Pointer(pointer_event);
-
-                // Route through EventRouter with hit testing
-                if let Some(ref mut root_layer) = self.last_root_layer {
-                    self.event_router.route_event(root_layer.as_mut(), &event);
-                }
-            }
-        }
-    }
-
-    /// Update the application for one frame
-    ///
-    /// Three-phase rendering pipeline:
-    /// 1. **Build**: Rebuild dirty elements
-    /// 2. **Layout**: Calculate sizes and positions (only if needed)
-    /// 3. **Paint**: Render to screen (every frame for egui)
-    ///
-    /// # Parameters
-    ///
-    /// - `ctx`: egui Context for rendering
-    /// - `ui`: egui Ui for getting available space
-    pub fn update(&mut self, ctx: &egui::Context, ui: &egui::Ui) {
-        self.stats.frame_count += 1;
-
-        // Ensure root is built
-        self.ensure_root_built();
-
-        // ===== Phase 1: Build =====
-        // Keep flushing build until tree is fully built (no more dirty elements)
-        let mut iterations = 0;
-        loop {
-            let dirty_count = self.pipeline.dirty_count();
-
-            if dirty_count == 0 {
-                break;
-            }
-
-            self.stats.rebuild_count += 1;
-            self.pipeline.flush_build();
-
-            iterations += 1;
-
-            // Safety check: prevent infinite loops
-            if iterations > 100 {
-                tracing::warn!("Build loop exceeded 100 iterations, breaking");
-                break;
-            }
-        }
-
-        // DEBUG: Check element tree size
-        #[cfg(debug_assertions)]
-        if self.stats.frame_count <= 3 {
-            let tree = self.pipeline.tree();
-            let tree_guard = tree.read();
-            let element_count = tree_guard.len();
-            println!(
-                "[DEBUG] After build: ElementTree has {} elements",
-                element_count
-            );
-        }
-
-        // ===== Phase 2: Layout =====
-        let current_size = Size::new(ui.available_size().x, ui.available_size().y);
-        let size_changed = self.size_changed(current_size);
-        // Need layout if size changed OR if there were any rebuilds
-        let needs_layout = size_changed || iterations > 0;
-
-        if self.stats.frame_count <= 3 {
-            println!(
-                "[DEBUG] Frame {}: size_changed={}, iterations={}, needs_layout={}, size={:?}",
-                self.stats.frame_count, size_changed, iterations, needs_layout, current_size
-            );
-        }
-
-        // TEMP DEBUG: Always log when size changes
+        // Check if size changed
+        let size_changed = self.last_size.map_or(true, |last| last != size);
         if size_changed {
-            println!(
-                "[RESIZE] Frame {}: Window resized to {:?}, triggering layout",
-                self.stats.frame_count, current_size
-            );
+            self.last_size = Some(size);
         }
 
-        if needs_layout {
-            // IMPORTANT: Recursively mark all RenderElements as dirty for layout when size changes
-            // We need recursion because root is often a ComponentElement, but layout_pipeline
-            // only processes RenderElements
-            if size_changed {
-                if let Some(root_id) = self.root_id {
-                    #[cfg(debug_assertions)]
-                    tracing::debug!(
-                        "[RESIZE] Calling request_layout_recursive for root {:?}",
-                        root_id
-                    );
-                    self.request_layout_recursive(root_id);
-                    #[cfg(debug_assertions)]
-                    tracing::debug!("[RESIZE] Finished request_layout_recursive");
-                }
-            }
-
-            let constraints = BoxConstraints::tight(current_size);
+        // Layout phase - compute positions and sizes
+        if let Some(root_id) = self.root_id {
+            let constraints = BoxConstraints::tight(size);
             match self.pipeline.flush_layout(constraints) {
-                Ok(Some(_size)) => {
+                Ok(_) => {
                     self.stats.layout_count += 1;
-                    self.last_size = Some(current_size);
-
-                    // IMPORTANT: Request paint after layout completes
-                    // When window resizes, layout changes positions/sizes but doesn't trigger paint
-                    // We must explicitly request paint to redraw the scene
-                    if let Some(root_id) = self.root_id {
-                        self.pipeline.request_paint(root_id);
-                    }
-
-                    if self.stats.frame_count <= 3 {
-                        println!("[DEBUG] Layout succeeded: {:?}", _size);
-                    }
-                }
-                Ok(None) => {
-                    if self.stats.frame_count <= 3 {
-                        println!("[DEBUG] Layout returned None (no root?)");
-                    }
+                    tracing::debug!("Layout complete for size {:?}", size);
                 }
                 Err(e) => {
-                    if self.stats.frame_count <= 3 {
-                        println!("[DEBUG] Layout error: {:?}", e);
-                    }
+                    tracing::error!("Layout failed: {:?}", e);
                 }
             }
         }
 
-        // ===== Phase 2.5: Pointer Events =====
-        self.process_pointer_events(ui);
+        // Paint phase - generate layer tree
+        if let Some(_root_id) = self.root_id {
+            match self.pipeline.flush_paint() {
+                Ok(Some(root_layer)) => {
+                    // Note: BoxedLayer cannot be cloned (trait object), so we render directly
+                    self.stats.paint_count += 1;
 
-        // ===== Phase 3: Paint =====
-        // Note: egui clears screen every frame, so we must paint every frame
-
-        // DIRECT TEST: Draw text directly to egui to verify it works
-        #[cfg(debug_assertions)]
-        {
-            let painter = ui.painter();
-            let color = egui::Color32::from_rgb(255, 0, 0); // RED
-            let pos = egui::pos2(100.0, 100.0);
-            let font_id = egui::FontId::proportional(48.0);
-            let galley = painter.layout_no_wrap("DIRECT EGUI TEST".to_string(), font_id, color);
-            let text_shape = egui::epaint::TextShape::new(pos, galley, color);
-            painter.add(egui::Shape::Text(text_shape));
-            tracing::debug!("Paint: Added DIRECT egui text at (100, 100)");
-        }
-
-        if let Ok(Some(layer)) = self.pipeline.flush_paint() {
-            self.stats.paint_count += 1;
-
-            #[cfg(debug_assertions)]
-            tracing::debug!("Paint: Received layer from flush_paint, painting to screen");
-
-            // Store layer for event routing (need mutable reference later)
-            self.last_root_layer = Some(layer);
-
-            // Composite layer to screen using EguiPainter
-            let egui_painter = ui.painter();
-            let mut painter = flui_engine::EguiPainter::new(egui_painter);
-            let offset = Offset::new(ui.min_rect().min.x, ui.min_rect().min.y);
-
-            #[cfg(debug_assertions)]
-            tracing::debug!("Paint: Calling layer.paint() with offset={:?}", offset);
-
-            painter.save();
-            painter.translate(offset);
-            if let Some(ref layer) = self.last_root_layer {
-                layer.paint(&mut painter);
+                    // Render to surface
+                    self.render(root_layer);
+                }
+                Ok(None) => {
+                    tracing::warn!("Paint phase returned no layer");
+                }
+                Err(e) => {
+                    tracing::error!("Paint phase failed: {:?}", e);
+                }
             }
-            painter.restore();
-
-            #[cfg(debug_assertions)]
-            tracing::debug!("Paint: layer.paint() completed");
-        } else {
-            #[cfg(debug_assertions)]
-            tracing::debug!("Paint: flush_paint returned None");
         }
 
-        // Log performance stats periodically
+        self.stats.frame_count += 1;
         self.stats.log();
-
-        // Request repaint for the next frame
-        ctx.request_repaint();
     }
-}
 
-impl eframe::App for FluiApp {
-    /// Update the app for one frame
-    ///
-    /// Called by eframe once per frame.
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE) // Remove default padding/margin
-            .show(ctx, |ui| {
-                FluiApp::update(self, ctx, ui);
+    /// Build the root view
+    fn build_root(&mut self) {
+        use flui_core::view::with_build_context;
+        use flui_core::ElementId;
+
+        // Create a temporary BuildContext for initial build
+        // We use ElementId::new(1) as a placeholder - it will be replaced by set_root
+        let temp_id = ElementId::new(1);
+        let ctx = BuildContext::new(self.pipeline.tree().clone(), temp_id);
+
+        // Build the view within a context guard (sets up thread-local)
+        let root_element = with_build_context(&ctx, || {
+            self.root_view.build_any()
+        });
+
+        // Mount the element and get the real root ID
+        let root_id = self.pipeline.set_root(root_element);
+        self.root_id = Some(root_id);
+        self.stats.rebuild_count += 1;
+
+        // Request layout for the entire tree
+        self.pipeline.request_layout(root_id);
+
+        tracing::info!("Root view built with ID: {:?}", root_id);
+    }
+
+    /// Render a layer tree to the wgpu surface
+    fn render(&mut self, layer: BoxedLayer) {
+        use crate::wgpu_painter::WgpuPainter;
+
+        // Get current frame
+        let frame = match self.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(e) => {
+                tracing::warn!("Failed to get current texture: {:?}", e);
+                return;
+            }
+        };
+
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create command encoder
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
             });
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+        // Clear screen
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.1,
+                            b: 0.1,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
 
-    #[test]
-    fn test_frame_stats_logging() {
-        let mut stats = FrameStats::default();
+        // Create GPU painter with device and queue references
+        tracing::debug!("Painting layer tree");
+        let surface_format = self.config.format;
+        let size = (self.config.width, self.config.height);
 
-        // Should not panic
-        stats.log();
+        // We need to clone device and queue for the painter
+        // wgpu types are Arc-based internally, so cloning is cheap
+        let mut painter = WgpuPainter::new(
+            self.device.clone(),
+            self.queue.clone(),
+            surface_format,
+            size,
+        );
 
-        stats.frame_count = 60;
-        stats.rebuild_count = 1;
-        stats.layout_count = 1;
-        stats.paint_count = 60;
+        // Collect all paint commands into the painter
+        layer.paint(&mut painter);
 
-        // Should log at 60 frames
-        stats.log();
+        // Actually render to GPU
+        painter.render(&view, &mut encoder);
+
+        // Submit commands
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
     }
 }

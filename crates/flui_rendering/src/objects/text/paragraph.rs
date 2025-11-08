@@ -180,6 +180,13 @@ impl LeafRender for RenderParagraph {
     type Metadata = ();
 
     fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "RenderParagraph::layout: text='{}', constraints={:?}",
+            self.data.text,
+            constraints
+        );
+
         // Calculate text size
         // In production, this would use a proper text layout engine
         // For now, use simple estimation based on character count and font size
@@ -230,6 +237,13 @@ impl LeafRender for RenderParagraph {
         // Cache the size for painting
         self.size = Some(size);
 
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "RenderParagraph::layout: text='{}' -> size={:?}",
+            self.data.text,
+            size
+        );
+
         size
     }
 
@@ -252,9 +266,9 @@ impl LeafRender for RenderParagraph {
                 ..Default::default()
             };
 
-            // Draw text in LOCAL coordinates (0, 0)
-            // The offset will be applied via TransformLayer below
-            let position = Point::new(0.0, 0.0);
+            // Apply offset directly to text position
+            // (instead of using TransformLayer which requires painter transform support)
+            let position = Point::new(offset.dx, offset.dy);
 
             #[cfg(debug_assertions)]
             tracing::debug!(
@@ -270,16 +284,8 @@ impl LeafRender for RenderParagraph {
             tracing::warn!("RenderParagraph::paint: size is None, cannot paint text");
         }
 
-        // Wrap in TransformLayer to apply offset
-        let picture_layer: BoxedLayer = Box::new(flui_engine::PooledPictureLayer::new(picture));
-        let result = if offset != Offset::ZERO {
-            Box::new(flui_engine::TransformLayer::translate(
-                picture_layer,
-                offset,
-            ))
-        } else {
-            picture_layer
-        };
+        // Return picture layer directly (offset already applied to position)
+        let result: BoxedLayer = Box::new(flui_engine::PooledPictureLayer::new(picture));
 
         #[cfg(debug_assertions)]
         tracing::debug!("RenderParagraph::paint: returning layer");

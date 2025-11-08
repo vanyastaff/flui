@@ -9,9 +9,7 @@ repository.workspace = true
 description = "Application framework for Flui - Flutter-inspired UI"
 
 [features]
-default = ["egui"]
-egui = ["dep:egui", "dep:eframe", "flui_engine/egui"]
-wgpu = ["flui_engine/wgpu"]
+default = []
 widgets = ["dep:flui_widgets"]  # Optional widgets library (currently broken, needs migration to View API)
 
 [dependencies]
@@ -21,13 +19,21 @@ flui_types = { path = "../flui_types" }
 flui_rendering = { path = "../flui_rendering" }
 flui_widgets = { path = "../flui_widgets", optional = true }
 
-# egui & platform (optional - enabled via features)
-egui = { workspace = true, optional = true }
-eframe = { workspace = true, optional = true }
+# Rendering engine
 flui_engine = { path = "../flui_engine" }
+
+# Window management
+winit.workspace = true
+
+# GPU rendering
+wgpu.workspace = true
+glyphon.workspace = true
+bytemuck = { version = "1.14", features = ["derive"] }
 
 # Utilities
 tracing.workspace = true
+tracing-subscriber = "0.3"
 parking_lot.workspace = true
+pollster = "0.3"
 
 [dev-dependencies]
