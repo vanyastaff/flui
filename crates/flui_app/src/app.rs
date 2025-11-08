@@ -278,7 +278,7 @@ impl FluiApp {
 
     /// Render a layer tree to the wgpu surface
     fn render(&mut self, layer: BoxedLayer) {
-        use crate::wgpu_painter::WgpuPainter;
+        use flui_engine::painter::WgpuPainter;
 
         // Get current frame
         let frame = match self.surface.get_current_texture() {

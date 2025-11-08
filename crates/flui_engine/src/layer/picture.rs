@@ -209,16 +209,24 @@ impl PictureLayer {
     fn command_bounds(command: &DrawCommand) -> Rect {
         match command {
             DrawCommand::Rect { rect, paint } => {
-                if paint.stroke_width > 0.0 {
-                    // Add stroke width to bounds
-                    rect.expand(paint.stroke_width / 2.0)
+                if let Some(stroke) = &paint.stroke {
+                    if stroke.width > 0.0 {
+                        // Add stroke width to bounds
+                        rect.expand(stroke.width / 2.0)
+                    } else {
+                        *rect
+                    }
                 } else {
                     *rect
                 }
             }
             DrawCommand::RRect { rrect, paint } => {
-                if paint.stroke_width > 0.0 {
-                    rrect.rect.expand(paint.stroke_width / 2.0)
+                if let Some(stroke) = &paint.stroke {
+                    if stroke.width > 0.0 {
+                        rrect.rect.expand(stroke.width / 2.0)
+                    } else {
+                        rrect.rect
+                    }
                 } else {
                     rrect.rect
                 }
@@ -228,8 +236,12 @@ impl PictureLayer {
                 radius,
                 paint,
             } => {
-                let r = if paint.stroke_width > 0.0 {
-                    radius + paint.stroke_width / 2.0
+                let r = if let Some(stroke) = &paint.stroke {
+                    if stroke.width > 0.0 {
+                        radius + stroke.width / 2.0
+                    } else {
+                        *radius
+                    }
                 } else {
                     *radius
                 };
@@ -243,7 +255,11 @@ impl PictureLayer {
                 let max_x = p1.x.max(p2.x);
                 let max_y = p1.y.max(p2.y);
 
-                let stroke = paint.stroke_width / 2.0;
+                let stroke = if let Some(stroke_info) = &paint.stroke {
+                    stroke_info.width / 2.0
+                } else {
+                    0.5 // Default stroke width
+                };
                 Rect::from_min_max(
                     Point::new(min_x - stroke, min_y - stroke),
                     Point::new(max_x + stroke, max_y + stroke),
@@ -280,8 +296,12 @@ impl PictureLayer {
             DrawCommand::Image {
                 dst_rect, paint, ..
             } => {
-                if paint.stroke_width > 0.0 {
-                    dst_rect.expand(paint.stroke_width / 2.0)
+                if let Some(stroke) = &paint.stroke {
+                    if stroke.width > 0.0 {
+                        dst_rect.expand(stroke.width / 2.0)
+                    } else {
+                        *dst_rect
+                    }
                 } else {
                     *dst_rect
                 }
@@ -309,15 +329,23 @@ impl PictureLayer {
                     }
                 });
 
-                if paint.stroke_width > 0.0 {
-                    bounds.expand(paint.stroke_width / 2.0)
+                if let Some(stroke) = &paint.stroke {
+                    if stroke.width > 0.0 {
+                        bounds.expand(stroke.width / 2.0)
+                    } else {
+                        bounds
+                    }
                 } else {
                     bounds
                 }
             }
             DrawCommand::Arc { rect, paint, .. } => {
-                if paint.stroke_width > 0.0 {
-                    rect.expand(paint.stroke_width / 2.0)
+                if let Some(stroke) = &paint.stroke {
+                    if stroke.width > 0.0 {
+                        rect.expand(stroke.width / 2.0)
+                    } else {
+                        *rect
+                    }
                 } else {
                     *rect
                 }
@@ -339,7 +367,11 @@ impl PictureLayer {
                     max_y = max_y.max(p.y);
                 }
 
-                let stroke = paint.stroke_width / 2.0;
+                let stroke = if let Some(stroke_info) = &paint.stroke {
+                    stroke_info.width / 2.0
+                } else {
+                    0.5 // Default stroke width
+                };
                 Rect::from_min_max(
                     Point::new(min_x - stroke, min_y - stroke),
                     Point::new(max_x + stroke, max_y + stroke),
@@ -357,9 +389,6 @@ impl Default for PictureLayer {
 
 impl Layer for PictureLayer {
     fn paint(&self, painter: &mut dyn Painter) {
-        #[cfg(debug_assertions)]
-        tracing::debug!("PictureLayer::paint: {} commands", self.commands.len());
-
         // Execute all drawing commands
         for command in &self.commands {
             match command {
@@ -384,29 +413,24 @@ impl Layer for PictureLayer {
                     position,
                     style,
                 } => {
-                    #[cfg(debug_assertions)]
-                    tracing::debug!(
-                        "PictureLayer::paint: Text command - text='{}', position={:?}, style={:?}",
-                        text,
-                        position,
-                        style
-                    );
-
-                    painter.text_styled(text, *position, style);
-
-                    #[cfg(debug_assertions)]
-                    tracing::debug!("PictureLayer::paint: Text painted");
+                    // Extract font size and create paint from style
+                    let font_size = style.font_size.unwrap_or(14.0) as f32;
+                    let paint = Paint::fill(style.color.unwrap_or(flui_types::styling::Color::BLACK));
+                    painter.text_styled(text, *position, font_size, &paint);
                 }
                 DrawCommand::Image {
                     image,
-                    src_rect,
+                    src_rect: _,
                     dst_rect,
-                    paint,
+                    paint: _,
                 } => {
-                    painter.draw_image(image, Some(*src_rect), *dst_rect, paint);
+                    // Note: draw_image is stubbed in compat layer - image rendering not yet implemented
+                    let image_name = format!("Image({:?})", image);
+                    painter.draw_image(&image_name, dst_rect.top_left());
                 }
                 DrawCommand::Path { path, paint } => {
-                    painter.path(path, paint);
+                    // Note: path is stubbed in compat layer - path rendering not yet implemented
+                    painter.path(&format!("{:?}", path), paint);
                 }
                 DrawCommand::Arc {
                     rect,

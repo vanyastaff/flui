@@ -222,7 +222,18 @@ impl Layer for TransformLayer {
                 painter.skew(skew_x, skew_y);
             }
             Transform::Matrix { a, b, c, d, tx, ty } => {
-                painter.transform_matrix(a, b, c, d, tx, ty);
+                // Convert 2D affine transform (a,b,c,d,tx,ty) to 4x4 matrix (column-major)
+                // [a  c  0  tx]
+                // [b  d  0  ty]
+                // [0  0  1  0 ]
+                // [0  0  0  1 ]
+                let matrix: [f32; 16] = [
+                    a, b, 0.0, 0.0,    // Column 0
+                    c, d, 0.0, 0.0,    // Column 1
+                    0.0, 0.0, 1.0, 0.0,  // Column 2
+                    tx, ty, 0.0, 1.0,  // Column 3
+                ];
+                painter.transform_matrix(&matrix);
             }
             Transform::Trapezoid { .. } => {
                 // Trapezoid is a non-affine transform (non-linear gradient scaling)

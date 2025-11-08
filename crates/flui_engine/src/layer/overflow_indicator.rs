@@ -122,13 +122,9 @@ impl OverflowIndicatorLayer {
         painter.rect(rect, &bg_paint);
 
         // Draw diagonal red stripes as thick lines
-        let stripe_paint = Paint {
-            color: STRIPE_COLOR,
-            style: PaintingStyle::Stroke,
-            stroke_width: STRIPE_WIDTH,
-            anti_alias: false,
-            ..Default::default()
-        };
+        let stripe_paint = Paint::stroke(STRIPE_COLOR)
+            .with_stroke(crate::painter::Stroke::new(STRIPE_WIDTH))
+            .with_anti_alias(false);
 
         let left = rect.min.x;
         let right = rect.max.x;
@@ -178,13 +174,9 @@ impl OverflowIndicatorLayer {
             a: 255,
         };
 
-        let border_paint = Paint {
-            color: BORDER_COLOR,
-            style: PaintingStyle::Stroke,
-            stroke_width: 3.0,
-            anti_alias: true,
-            ..Default::default()
-        };
+        let border_paint = Paint::stroke(BORDER_COLOR)
+            .with_stroke(crate::painter::Stroke::new(3.0))
+            .with_anti_alias(true);
 
         painter.rect(rect, &border_paint);
     }
@@ -310,13 +302,9 @@ impl OverflowIndicatorLayer {
             a: 255,
         };
 
-        let border_paint = Paint {
-            color: BORDER_COLOR,
-            style: PaintingStyle::Stroke,
-            stroke_width: 3.0,
-            anti_alias: true,
-            ..Default::default()
-        };
+        let border_paint = Paint::stroke(BORDER_COLOR)
+            .with_stroke(crate::painter::Stroke::new(3.0))
+            .with_anti_alias(true);
 
         picture.add_command(DrawCommand::Rect {
             rect,
