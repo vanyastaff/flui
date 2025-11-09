@@ -140,9 +140,20 @@ use flui_types::layout::{Alignment, StackFit};
 #[builder(
     on(String, into),
     on(Alignment, into),
-    finish_fn = build_stack
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Stack {
+    /// The child widgets.
+    ///
+    /// Children are painted in order, with the first child at the bottom
+    /// and subsequent children painted on top.
+    ///
+    /// Can be set via:
+    /// - `.children(vec![...])` to set all at once
+    /// - `.child(widget)` repeatedly to add one at a time (chainable)
+    #[builder(field)]
+    pub children: Vec<Box<dyn AnyView>>,
+
     /// Optional key for widget identification
     pub key: Option<String>,
 
@@ -165,13 +176,6 @@ pub struct Stack {
     /// - `StackFit::Passthrough` - Use incoming constraints as-is
     #[builder(default = StackFit::Loose)]
     pub fit: StackFit,
-
-    /// The child widgets.
-    ///
-    /// Children are painted in order, with the first child at the bottom
-    /// and subsequent children painted on top.
-    #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn AnyView>>,
 }
 
 impl std::fmt::Debug for Stack {
@@ -221,29 +225,13 @@ impl Stack {
     }
 
     /// Adds a child widget.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut stack = Stack::new();
-    /// stack.add_child(Container::new());
-    /// stack.add_child(Text::new("Overlay"));
-    /// ```
+    #[deprecated(note = "Use builder pattern with chainable .child() instead")]
     pub fn add_child(&mut self, child: impl View + 'static) {
         self.children.push(Box::new(child));
     }
 
     /// Sets the children widgets.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut stack = Stack::new();
-    /// stack.set_children(vec![
-    ///     Box::new(Container::new()),
-    ///     Box::new(Text::new("Overlay")),
-    /// ]);
-    /// ```
+    #[deprecated(note = "Use builder pattern with .children() instead")]
     pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
         self.children = children;
     }
@@ -272,15 +260,9 @@ impl View for Stack {
     }
 }
 
-// bon Builder Extensions
-use stack_builder::{IsUnset, SetChildren, State};
-
-// Custom setter for children
-impl<S: State> StackBuilder<S>
-where
-    S::Children: IsUnset,
-{
-    /// Sets the children widgets (works in builder chain).
+// bon Builder Extensions - Custom builder methods for StackBuilder
+impl<S: stack_builder::State> StackBuilder<S> {
+    /// Sets all children at once.
     ///
     /// # Examples
     ///
@@ -288,21 +270,44 @@ where
     /// Stack::builder()
     ///     .alignment(Alignment::CENTER)
     ///     .children(vec![
-    ///         Box::new(widget1) as Box<dyn AnyView>,
-    ///         Box::new(widget2) as Box<dyn AnyView>,
+    ///         Box::new(widget1),
+    ///         Box::new(widget2),
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> StackBuilder<SetChildren<S>> {
-        self.children_internal(children)
+    pub fn children(mut self, children: Vec<Box<dyn AnyView>>) -> Self {
+        self.children = children;
+        self
     }
-}
 
-// Public build() wrapper
-impl<S: State> StackBuilder<S> {
-    /// Builds the Stack widget.
+    /// Adds a single child widget (chainable).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// Stack::builder()
+    ///     .alignment(Alignment::CENTER)
+    ///     .child(Container::new())
+    ///     .child(Text::new("Overlay"))
+    ///     .build()
+    /// ```
+    pub fn child(mut self, child: impl AnyView + 'static) -> Self {
+        self.children.push(Box::new(child));
+        self
+    }
+
+    /// Builds the Stack with optional validation.
     pub fn build(self) -> Stack {
-        self.build_stack()
+        let stack = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = stack.validate() {
+                tracing::warn!("Stack validation failed: {}", e);
+            }
+        }
+
+        stack
     }
 }
 
@@ -378,6 +383,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_stack_add_child() {
         let mut widget = Stack::new();
         widget.add_child(MockView::new("child1"));
@@ -386,6 +392,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_stack_set_children() {
         let mut widget = Stack::new();
         widget.set_children(vec![
@@ -503,6 +510,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_stack_many_children() {
         let mut widget = Stack::new();
         for i in 0..10 {

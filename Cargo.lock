@@ -1794,6 +1794,7 @@ name = "flui_engine"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "bon",
  "bytemuck",
  "cosmic-text",
  "eframe",

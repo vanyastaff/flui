@@ -143,7 +143,7 @@ use flui_rendering::{PositionedMetadata, RenderPositioned};
 #[builder(
     on(String, into),
     on(f32, into),
-    finish_fn = build_positioned
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Positioned {
     /// Optional key for widget identification
@@ -251,9 +251,9 @@ impl Positioned {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Positioned::fill(Box::new(Container::new()));
+    /// let widget = Positioned::fill(Container::new());
     /// ```
-    pub fn fill(child: Box<dyn AnyView>) -> Self {
+    pub fn fill(child: impl View + 'static) -> Self {
         Self {
             key: None,
             left: Some(0.0),
@@ -262,7 +262,7 @@ impl Positioned {
             bottom: Some(0.0),
             width: None,
             height: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -278,14 +278,14 @@ impl Positioned {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, Box::new(Container::new()));
+    /// let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, Container::new());
     /// ```
     pub fn from_rect(
         left: f32,
         top: f32,
         width: f32,
         height: f32,
-        child: Box<dyn AnyView>,
+        child: impl View + 'static,
     ) -> Self {
         Self {
             key: None,
@@ -295,7 +295,7 @@ impl Positioned {
             bottom: None,
             width: Some(width),
             height: Some(height),
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -315,7 +315,7 @@ impl Positioned {
         top: Option<f32>,
         end: Option<f32>,
         bottom: Option<f32>,
-        child: Box<dyn AnyView>,
+        child: impl View + 'static,
     ) -> Self {
         Self {
             key: None,
@@ -325,18 +325,12 @@ impl Positioned {
             bottom,
             width: None,
             height: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Sets the child widget.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut widget = Positioned::new();
-    /// widget.set_child(Box::new(Container::new()));
-    /// ```
+    #[deprecated(note = "Use builder pattern with .child() instead")]
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
@@ -441,10 +435,27 @@ where
     ///     .left(10.0)
     ///     .top(20.0)
     ///     .child(Container::new())
-    ///     .build_positioned()
+    ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> PositionedBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Public build() wrapper
+impl<S: State> PositionedBuilder<S> {
+    /// Builds the Positioned with optional validation.
+    pub fn build(self) -> Positioned {
+        let positioned = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = positioned.validate() {
+                tracing::warn!("Positioned validation failed: {}", e);
+            }
+        }
+
+        positioned
     }
 }
 

@@ -54,7 +54,7 @@ use flui_types::events::{PointerEvent, PointerEventHandler};
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_mouse_region)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct MouseRegion {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -186,7 +186,7 @@ where
 impl<S: State> MouseRegionBuilder<S> {
     /// Builds the MouseRegion widget.
     pub fn build(self) -> MouseRegion {
-        self.build_mouse_region()
+        self.build_internal()
     }
 }
 
@@ -212,33 +212,31 @@ mod tests {
 
     #[test]
     fn test_mouse_region_builder() {
-        let widget = MouseRegion::builder().build_mouse_region();
+        let widget = MouseRegion::builder().build();
         assert!(widget.child.is_none());
     }
 
     #[test]
     fn test_mouse_region_builder_with_child() {
-        let widget = MouseRegion::builder()
-            .child(crate::SizedBox::new())
-            .build_mouse_region();
+        let widget = MouseRegion::builder().child(crate::SizedBox::new()).build();
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_mouse_region_builder_with_on_enter() {
-        let widget = MouseRegion::builder().on_enter(|_| {}).build_mouse_region();
+        let widget = MouseRegion::builder().on_enter(|_| {}).build();
         assert!(widget.on_enter.is_some());
     }
 
     #[test]
     fn test_mouse_region_builder_with_on_exit() {
-        let widget = MouseRegion::builder().on_exit(|_| {}).build_mouse_region();
+        let widget = MouseRegion::builder().on_exit(|_| {}).build();
         assert!(widget.on_exit.is_some());
     }
 
     #[test]
     fn test_mouse_region_builder_with_on_hover() {
-        let widget = MouseRegion::builder().on_hover(|_| {}).build_mouse_region();
+        let widget = MouseRegion::builder().on_hover(|_| {}).build();
         assert!(widget.on_hover.is_some());
     }
 
@@ -249,7 +247,7 @@ mod tests {
             .on_exit(|_| {})
             .on_hover(|_| {})
             .child(crate::SizedBox::new())
-            .build_mouse_region();
+            .build();
 
         assert!(widget.on_enter.is_some());
         assert!(widget.on_exit.is_some());
@@ -266,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_mouse_region_clone() {
-        let widget1 = MouseRegion::builder().on_enter(|_| {}).build_mouse_region();
+        let widget1 = MouseRegion::builder().on_enter(|_| {}).build();
 
         let widget2 = widget1.clone();
         assert!(widget2.on_enter.is_some());
@@ -277,7 +275,7 @@ mod tests {
         let widget = MouseRegion::builder()
             .on_enter(|_| {})
             .on_exit(|_| {})
-            .build_mouse_region();
+            .build();
 
         let debug_str = format!("{:?}", widget);
         assert!(debug_str.contains("MouseRegion"));

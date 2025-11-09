@@ -3,18 +3,42 @@
 //! The Text widget displays a string with a single style. It's one of the most
 //! fundamental widgets in any UI framework.
 //!
-//! # Example
+//! # Usage Patterns
 //!
+//! ## 1. Simple Constructor
 //! ```rust,ignore
-//! // Simple text
 //! Text::new("Hello, World!")
+//! ```
 //!
-//! // Styled text with builder
+//! ## 2. Convenience Methods
+//! ```rust,ignore
+//! // Sized text
+//! Text::sized("Hello", 24.0)
+//!
+//! // Colored text
+//! Text::colored("Error!", Color::RED)
+//!
+//! // Typography presets
+//! Text::headline("Main Title")      // 32px bold
+//! Text::title("Section Title")      // 24px
+//! Text::body("Regular text")        // 16px
+//! Text::caption("Small text")       // 12px
+//! ```
+//!
+//! ## 3. Builder Pattern
+//! ```rust,ignore
 //! Text::builder()
-//!     .data("Hello, World!")
-//!     .size(24.0)
-//!     .color(Color::rgb(255, 0, 0))
+//!     .data("Styled text")
+//!     .size(20.0)
+//!     .color(Color::BLUE)
+//!     .text_align(TextAlign::Center)
 //!     .build()
+//! ```
+//!
+//! ## 4. Macro
+//! ```rust,ignore
+//! text!("Hello")
+//! text!(data: "Hello", size: 24.0, color: Color::RED)
 //! ```
 
 use bon::Builder;
@@ -42,9 +66,10 @@ use flui_types::{
 /// Text is a LeafRenderObjectWidget that creates a RenderParagraph object for
 /// rendering. The actual text rendering is delegated to flui_rendering's RenderParagraph.
 #[derive(Debug, Clone, Builder)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Text {
     /// The text to display
-    #[builder(into)]
+    #[builder(default)]
     pub data: String,
 
     /// Text size in logical pixels
@@ -79,11 +104,9 @@ pub struct Text {
 }
 
 impl Text {
-    /// Create a new Text widget with the given string
+    /// Create a new Text widget with the given string.
     ///
-    /// # Parameters
-    ///
-    /// - `data`: The text to display
+    /// Uses default styling: 14px black text, left-aligned.
     ///
     /// # Example
     ///
@@ -104,12 +127,7 @@ impl Text {
         }
     }
 
-    /// Create a text widget with a specific size
-    ///
-    /// # Parameters
-    ///
-    /// - `data`: The text to display
-    /// - `size`: Font size in logical pixels
+    /// Create a text widget with a specific size.
     ///
     /// # Example
     ///
@@ -130,17 +148,12 @@ impl Text {
         }
     }
 
-    /// Create a colored text widget
-    ///
-    /// # Parameters
-    ///
-    /// - `data`: The text to display
-    /// - `color`: Text color
+    /// Create a colored text widget.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let text = Text::colored("Error!", Color::rgb(255, 0, 0));
+    /// let text = Text::colored("Error!", Color::RED);
     /// ```
     pub fn colored(data: impl Into<String>, color: Color) -> Self {
         Self {
@@ -154,6 +167,133 @@ impl Text {
             soft_wrap: true,
             key: None,
         }
+    }
+
+    /// Create headline text (large, prominent) - 32px.
+    ///
+    /// Perfect for page titles and main headings.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let title = Text::headline("Welcome to FLUI");
+    /// ```
+    pub fn headline(data: impl Into<String>) -> Self {
+        Self::sized(data, 32.0)
+    }
+
+    /// Create title text (section heading) - 24px.
+    ///
+    /// Perfect for section titles and subheadings.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let section = Text::title("Getting Started");
+    /// ```
+    pub fn title(data: impl Into<String>) -> Self {
+        Self::sized(data, 24.0)
+    }
+
+    /// Create body text (normal reading) - 16px.
+    ///
+    /// Perfect for paragraphs and regular content.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let content = Text::body("This is some regular text content.");
+    /// ```
+    pub fn body(data: impl Into<String>) -> Self {
+        Self::sized(data, 16.0)
+    }
+
+    /// Create caption text (small, secondary) - 12px.
+    ///
+    /// Perfect for labels, captions, and metadata.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let label = Text::caption("Last updated: 2024");
+    /// ```
+    pub fn caption(data: impl Into<String>) -> Self {
+        Self::sized(data, 12.0)
+    }
+
+    /// Create text with custom size and color.
+    ///
+    /// Convenience method combining both common customizations.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let styled = Text::styled("Warning", 18.0, Color::ORANGE);
+    /// ```
+    pub fn styled(data: impl Into<String>, size: f32, color: Color) -> Self {
+        Self {
+            data: data.into(),
+            size,
+            color,
+            text_align: TextAlign::Left,
+            text_direction: TextDirection::Ltr,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            key: None,
+        }
+    }
+
+    /// Create centered text.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let centered = Text::centered("Middle");
+    /// ```
+    pub fn centered(data: impl Into<String>) -> Self {
+        Self {
+            data: data.into(),
+            size: 14.0,
+            color: Color::BLACK,
+            text_align: TextAlign::Center,
+            text_direction: TextDirection::Ltr,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            key: None,
+        }
+    }
+
+    /// Create right-aligned text.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let right = Text::right_aligned("End");
+    /// ```
+    pub fn right_aligned(data: impl Into<String>) -> Self {
+        Self {
+            data: data.into(),
+            size: 14.0,
+            color: Color::BLACK,
+            text_align: TextAlign::Right,
+            text_direction: TextDirection::Ltr,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            key: None,
+        }
+    }
+}
+
+// bon Builder Extensions
+use text_builder::State;
+
+impl<S: State> TextBuilder<S> {
+    /// Builds the Text widget.
+    pub fn build(self) -> Text {
+        self.build_internal()
     }
 }
 
@@ -236,6 +376,57 @@ mod tests {
         let text = Text::colored("Error!", color);
         assert_eq!(text.data, "Error!");
         assert_eq!(text.color, color);
+    }
+
+    #[test]
+    fn test_text_headline() {
+        let text = Text::headline("Main Title");
+        assert_eq!(text.data, "Main Title");
+        assert_eq!(text.size, 32.0);
+    }
+
+    #[test]
+    fn test_text_title() {
+        let text = Text::title("Section");
+        assert_eq!(text.data, "Section");
+        assert_eq!(text.size, 24.0);
+    }
+
+    #[test]
+    fn test_text_body() {
+        let text = Text::body("Content");
+        assert_eq!(text.data, "Content");
+        assert_eq!(text.size, 16.0);
+    }
+
+    #[test]
+    fn test_text_caption() {
+        let text = Text::caption("Small");
+        assert_eq!(text.data, "Small");
+        assert_eq!(text.size, 12.0);
+    }
+
+    #[test]
+    fn test_text_styled() {
+        let color = Color::rgb(255, 128, 0);
+        let text = Text::styled("Warning", 18.0, color);
+        assert_eq!(text.data, "Warning");
+        assert_eq!(text.size, 18.0);
+        assert_eq!(text.color, color);
+    }
+
+    #[test]
+    fn test_text_centered() {
+        let text = Text::centered("Middle");
+        assert_eq!(text.data, "Middle");
+        assert_eq!(text.text_align, TextAlign::Center);
+    }
+
+    #[test]
+    fn test_text_right_aligned() {
+        let text = Text::right_aligned("End");
+        assert_eq!(text.data, "End");
+        assert_eq!(text.text_align, TextAlign::Right);
     }
 
     #[test]

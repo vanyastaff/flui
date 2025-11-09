@@ -116,7 +116,7 @@ use flui_types::Matrix4;
 #[builder(
     on(String, into),
     on(Matrix4, into),
-    finish_fn = build_transform
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Transform {
     /// Optional key for widget identification
@@ -347,11 +347,18 @@ where
     }
 }
 
-// Public build() wrapper
+// Public build() wrapper with validation
 impl<S: State> TransformBuilder<S> {
-    /// Builds the Transform widget.
+    /// Builds the Transform widget with automatic validation in debug mode.
     pub fn build(self) -> Transform {
-        self.build_transform()
+        let transform = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        if let Err(e) = transform.validate() {
+            tracing::warn!("Transform validation warning: {}", e);
+        }
+
+        transform
     }
 }
 

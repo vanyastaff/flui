@@ -137,8 +137,6 @@ env_logger = "0.11"
 winit = { workspace = true }
 
 # Workspace dependencies
-egui.workspace = true
-eframe.workspace = true
 tokio.workspace = true
 serde.workspace = true
 tracing.workspace = true
@@ -154,15 +152,10 @@ puffin_http = { workspace = true, optional = true }
 # criterion only needed in individual crates for benchmarks, not in root
 
 [features]
-default = ["egui", "persistence"]
+default = []
 
-# Backend selection (mutually exclusive)
-# Choose one: egui (default) or wgpu
-egui = ["flui_app/egui", "flui_engine/egui"]
-wgpu = ["flui_app/wgpu", "flui_engine/wgpu"]
-
-# Optional features
-persistence = ["eframe/persistence"]
+# Optional features (removed - no longer needed)
+# persistence = ["eframe/persistence"]
 
 # Profiling features
 profiling = ["puffin", "puffin_egui", "puffin_http", "flui_core/profiling"]

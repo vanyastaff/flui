@@ -79,7 +79,7 @@ use crate::{ColoredBox, Container, SizedBox};
 ///     .build()
 /// ```
 #[derive(Debug, Clone, Builder)]
-#[builder(on(String, into), finish_fn = build_divider)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Divider {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -163,6 +163,16 @@ impl Default for Divider {
     }
 }
 
+// bon Builder Extensions
+use divider_builder::State;
+
+impl<S: State> DividerBuilder<S> {
+    /// Builds the Divider widget.
+    pub fn build(self) -> Divider {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for Divider {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
@@ -187,7 +197,7 @@ impl View for Divider {
                             .child(SizedBox::builder().height(self.thickness).build())
                             .build(),
                     )
-                    .build_container(),
+                    .build(),
             )
         } else {
             // Simple case: just a colored box with height

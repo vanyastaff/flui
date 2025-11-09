@@ -127,9 +127,10 @@ impl ComponentElement {
 
     /// Replace the state with a new value
     ///
-    /// Used internally by the build pipeline to manage HookContext state.
+    /// Used by the build pipeline to manage HookContext state.
+    /// Public to allow app initialization code to set initial HookContext.
     #[inline]
-    pub(crate) fn set_state(&mut self, state: Box<dyn Any>) {
+    pub fn set_state(&mut self, state: Box<dyn Any>) {
         self.state = state;
     }
 

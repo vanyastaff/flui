@@ -7,22 +7,15 @@ description = "Rendering engine for FLUI - Layer, Scene, Painter, Compositor"
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["egui"]
-egui = ["dep:egui", "dep:eframe", "dep:egui-winit", "dep:lyon", "dep:ttf-parser"]
-wgpu = [
-    "dep:wgpu",
-    "dep:winit",
-    "dep:bytemuck",
-    "dep:glyphon",
-    "dep:cosmic-text",
-    "dep:guillotiere",
-    "dep:lyon",
-    "dep:ttf-parser",
-    "dep:pollster",
-]
+default = []
+
 # DevTools integration
 devtools = ["dep:flui_devtools"]
 memory-profiler = ["devtools", "flui_devtools/memory-profiler"]
+
+# Debug logging features
+debug-logs = []  # Enable detailed rendering logs
+trace-logs = []  # Enable maximum verbosity logs
 
 [dependencies]
 # Internal dependencies
@@ -32,24 +25,16 @@ flui_devtools = { path = "../flui_devtools", optional = true }
 # Math
 glam = { workspace = true }
 
-# Optional backend implementations
-egui = { workspace = true, optional = true }
-eframe = { workspace = true, optional = true }
-egui-winit = { workspace = true, optional = true }
-
-# WGPU backend dependencies
-wgpu = { workspace = true, optional = true }
-winit = { workspace = true, optional = true }
-bytemuck = { workspace = true, optional = true }
-glyphon = { workspace = true, optional = true }
-cosmic-text = { workspace = true, optional = true }
-guillotiere = { workspace = true, optional = true }
-lyon = { workspace = true, optional = true }
-ttf-parser = { workspace = true, optional = true }
-pollster = { workspace = true, optional = true }
-
-# Skia backend (future)
-skia-safe = { version = "0.89.1", optional = true }
+# GPU rendering backend (mandatory)
+wgpu = { workspace = true }
+winit = { workspace = true }
+bytemuck = { workspace = true }
+glyphon = { workspace = true }
+cosmic-text = { workspace = true }
+guillotiere = { workspace = true }
+lyon = { workspace = true }
+ttf-parser = { workspace = true }
+pollster = { workspace = true }
 
 # Utilities
 parking_lot = { workspace = true }
@@ -57,6 +42,7 @@ ahash = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+bon.workspace = true
 
 [dev-dependencies]
 eframe = { version = "0.33", optional = false }

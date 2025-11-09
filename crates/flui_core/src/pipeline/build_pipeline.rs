@@ -507,19 +507,128 @@ impl BuildPipeline {
         rebuilt_count
     }
 
+    // ========== Helper Methods for Component Rebuild ==========
+
+    /// Insert element into tree and mount it to parent
+    ///
+    /// Helper for reconcile_child() to reduce duplication.
+    fn insert_and_mount_child(
+        tree_guard: &mut ElementTree,
+        element: crate::element::Element,
+        parent_id: ElementId,
+    ) -> ElementId {
+        let new_id = tree_guard.insert(element);
+
+        if let Some(child) = tree_guard.get_mut(new_id) {
+            child.mount(Some(parent_id), None);
+        }
+
+        new_id
+    }
+
+    /// Update ComponentElement's child reference
+    ///
+    /// Helper for reconcile_child() to reduce duplication.
+    fn update_component_child_reference(
+        tree_guard: &mut ElementTree,
+        parent_id: ElementId,
+        child_id: Option<ElementId>,
+    ) {
+        if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(parent_id) {
+            match child_id {
+                Some(id) => component.set_child(id),
+                None => component.clear_child(),
+            }
+        }
+    }
+
+    /// Reconcile child element: replace old with new, handling Slab ID reuse
+    ///
+    /// **CRITICAL**: Inserts new element BEFORE removing old to prevent Slab ID reuse.
+    /// This ensures new_element's children (already inserted during build) remain valid.
+    ///
+    /// # Cases
+    ///
+    /// 1. `(Some, Some)` - Replace existing child with new one
+    /// 2. `(None, Some)` - Add new child (no previous child)
+    /// 3. `(Some, None)` - Remove old child (no new child)
+    /// 4. `(None, None)` - No child before or after - nothing to do
+    fn reconcile_child(
+        tree_guard: &mut ElementTree,
+        parent_id: ElementId,
+        old_child_id: Option<ElementId>,
+        new_element: Option<crate::element::Element>,
+    ) {
+        match (old_child_id, new_element) {
+            // Replace existing child with new one
+            (Some(old_id), Some(new_element)) => {
+                // Insert-before-remove pattern prevents Slab ID reuse
+                let new_id = Self::insert_and_mount_child(tree_guard, new_element, parent_id);
+                Self::update_component_child_reference(tree_guard, parent_id, Some(new_id));
+                let _ = tree_guard.remove(old_id);
+
+                // NOTE: We don't schedule new_id for rebuild because:
+                // - It was just created and is already "fresh"
+                // - RenderElements don't rebuild (only layout/paint)
+                // - ComponentElements will be scheduled when they become dirty
+            }
+
+            // Add new child (no previous child)
+            (None, Some(new_element)) => {
+                let new_id = Self::insert_and_mount_child(tree_guard, new_element, parent_id);
+                Self::update_component_child_reference(tree_guard, parent_id, Some(new_id));
+            }
+
+            // Remove old child (no new child)
+            (Some(old_id), None) => {
+                let _ = tree_guard.remove(old_id);
+                Self::update_component_child_reference(tree_guard, parent_id, None);
+            }
+
+            // No child before or after - nothing to do
+            (None, None) => {}
+        }
+    }
+
+    /// Extract existing HookContext or create new one
+    ///
+    /// HookContext persists across rebuilds to maintain hook state.
+    fn extract_or_create_hook_context(
+        component: &mut crate::element::ComponentElement,
+    ) -> std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>> {
+        if let Some(ctx) = component
+            .state_mut()
+            .downcast_mut::<std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>>>()
+        {
+            // Reuse existing HookContext (preserves hook state across rebuilds!)
+            ctx.clone()
+        } else {
+            // First build - create new HookContext and store it
+            let ctx =
+                std::sync::Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
+            component.set_state(Box::new(ctx.clone()));
+            ctx
+        }
+    }
+
+    // ========== Component Rebuild ==========
+
     /// Rebuild a ComponentElement
     ///
-    /// Creates BuildContext, calls view.build(), and reconciles child elements.
+    /// Three-stage process:
+    /// 1. Extract component data (view, child, hooks) - minimize lock time
+    /// 2. Build new child element (outside locks) - this is the expensive part
+    /// 3. Reconcile old/new children in tree - update tree atomically
     fn rebuild_component(
         &mut self,
         tree: &Arc<parking_lot::RwLock<ElementTree>>,
         element_id: ElementId,
-        depth: usize,
+        _depth: usize,
     ) -> bool {
         #[cfg(debug_assertions)]
         tracing::debug!("Rebuilding component element {:?}", element_id);
 
-        // Phase 1: Extract component data (minimize lock time)
+        // Stage 1: Extract component data (minimize lock time)
         let (view, old_child_id, hook_context) = {
             let mut tree_guard = tree.write();
             let element = match tree_guard.get_mut(element_id) {
@@ -536,27 +645,13 @@ impl BuildPipeline {
             let view = component.view().clone_box();
             let old_child = component.child();
 
-            // Extract or create hook context from component state
-            let hook_context: std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>> =
-                if let Some(ctx) = component
-                    .state_mut()
-                    .downcast_mut::<std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>>>()
-                {
-                    // Reuse existing HookContext (preserves hook state across rebuilds!)
-                    ctx.clone()
-                } else {
-                    // First build - create new HookContext and store it
-                    let ctx =
-                        std::sync::Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
-                    // Replace the state Box with our new HookContext
-                    component.set_state(Box::new(ctx.clone()));
-                    ctx
-                };
+            // Extract or create hook context (helper method)
+            let hook_context = Self::extract_or_create_hook_context(component);
 
             (view, old_child, hook_context)
         };
 
-        // Phase 2: Build new child view (outside locks)
+        // Stage 2: Build new child view (outside locks - this is the expensive part)
         let ctx = crate::view::BuildContext::with_hook_context_and_queue(
             tree.clone(),
             element_id,
@@ -565,111 +660,27 @@ impl BuildPipeline {
         );
 
         // Set up ComponentId for hooks
-        // Convert ElementId to ComponentId (hooks use u64, ElementId is usize)
         let component_id = crate::hooks::ComponentId(element_id.get() as u64);
 
-        // Begin component rendering (locks temporarily)
+        // Begin component rendering
         {
             let mut hook_ctx = hook_context.lock();
             hook_ctx.begin_component(component_id);
         }
 
-        // Set up thread-local BuildContext and build
-        // Note: BuildContext will lock/unlock hook_context as needed during hooks
+        // Build with thread-local BuildContext
         let new_element = crate::view::with_build_context(&ctx, || view.build_any());
 
-        // End component rendering (locks temporarily)
+        // End component rendering
         {
             let mut hook_ctx = hook_context.lock();
             hook_ctx.end_component();
         }
 
-        // Phase 3: Reconcile child (write lock)
-
+        // Stage 3: Reconcile old/new children in tree (write lock, atomic update)
         {
             let mut tree_guard = tree.write();
-
-            // Reconcile based on old/new child state
-            match (old_child_id, Some(new_element)) {
-                (Some(old_id), Some(new_element)) => {
-                    // Check if we can update in-place or need to replace
-                    let can_update = {
-                        let old_elem = tree_guard.get(old_id);
-                        match old_elem {
-                            Some(old) => {
-                                // Check if types match
-                                std::mem::discriminant(old) == std::mem::discriminant(&new_element)
-                            }
-                            None => false,
-                        }
-                    };
-
-                    if can_update {
-                        // Update existing child element in-place
-                        if let Some(old) = tree_guard.get_mut(old_id) {
-                            *old = new_element;
-                            // Schedule child for rebuild
-                            self.schedule(old_id, depth + 1);
-                        }
-                    } else {
-                        // Type changed - need to replace
-                        // Remove old child
-                        let _ = tree_guard.remove(old_id);
-
-                        // Insert new child
-                        let new_id = tree_guard.insert(new_element);
-
-                        // Mount new child
-                        if let Some(child) = tree_guard.get_mut(new_id) {
-                            child.mount(Some(element_id), None);
-                        }
-
-                        // Update parent component's child reference
-                        if let Some(crate::element::Element::Component(component)) =
-                            tree_guard.get_mut(element_id)
-                        {
-                            component.set_child(new_id);
-                        }
-
-                        self.schedule(new_id, depth + 1);
-                    }
-                }
-
-                (None, Some(new_element)) => {
-                    // No old child - insert new one
-                    let new_id = tree_guard.insert(new_element);
-
-                    // Mount new child
-                    if let Some(child) = tree_guard.get_mut(new_id) {
-                        child.mount(Some(element_id), None);
-                    }
-
-                    // Update parent component's child reference
-                    if let Some(crate::element::Element::Component(component)) =
-                        tree_guard.get_mut(element_id)
-                    {
-                        component.set_child(new_id);
-                    }
-
-                    self.schedule(new_id, depth + 1);
-                }
-
-                (Some(old_id), None) => {
-                    // Had child before, none now - remove old child
-                    let _ = tree_guard.remove(old_id);
-
-                    // Update parent component
-                    if let Some(crate::element::Element::Component(component)) =
-                        tree_guard.get_mut(element_id)
-                    {
-                        component.clear_child();
-                    }
-                }
-
-                (None, None) => {
-                    // No child before, none now - nothing to do
-                }
-            }
+            Self::reconcile_child(&mut tree_guard, element_id, old_child_id, Some(new_element));
         }
 
         true

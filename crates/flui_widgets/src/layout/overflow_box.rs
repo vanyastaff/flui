@@ -75,7 +75,11 @@ use flui_types::Alignment;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(Alignment, into), finish_fn = build_overflow_box)]
+#[builder(
+    on(String, into),
+    on(Alignment, into),
+    finish_fn(name = build_internal, vis = "")
+)]
 pub struct OverflowBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -163,7 +167,7 @@ impl OverflowBox {
     /// let widget = OverflowBox::with_constraints(
     ///     Some(100.0), Some(300.0),  // width: 100-300
     ///     Some(50.0), Some(200.0),   // height: 50-200
-    ///     Box::new(child)
+    ///     child
     /// );
     /// ```
     pub fn with_constraints(
@@ -171,7 +175,7 @@ impl OverflowBox {
         max_width: Option<f32>,
         min_height: Option<f32>,
         max_height: Option<f32>,
-        child: Box<dyn AnyView>,
+        child: impl View + 'static,
     ) -> Self {
         Self {
             key: None,
@@ -180,7 +184,7 @@ impl OverflowBox {
             min_height,
             max_height,
             alignment: Alignment::CENTER,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -189,9 +193,9 @@ impl OverflowBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, Box::new(child));
+    /// let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, child);
     /// ```
-    pub fn with_alignment(alignment: Alignment, child: Box<dyn AnyView>) -> Self {
+    pub fn with_alignment(alignment: Alignment, child: impl View + 'static) -> Self {
         Self {
             key: None,
             min_width: None,
@@ -199,11 +203,12 @@ impl OverflowBox {
             min_height: None,
             max_height: None,
             alignment,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Sets the child widget.
+    #[deprecated(note = "Use builder pattern with .child() instead")]
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
@@ -238,8 +243,34 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// OverflowBox::builder()
+    ///     .max_width(200.0)
+    ///     .alignment(Alignment::CENTER)
+    ///     .child(Container::new())
+    ///     .build()
+    /// ```
     pub fn child(self, child: impl View + 'static) -> OverflowBoxBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+impl<S: State> OverflowBoxBuilder<S> {
+    /// Builds the OverflowBox with optional validation.
+    pub fn build(self) -> OverflowBox {
+        let overflow_box = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = overflow_box.validate() {
+                tracing::warn!("OverflowBox validation failed: {}", e);
+            }
+        }
+
+        overflow_box
     }
 }
 
@@ -277,7 +308,7 @@ mod tests {
             Some(300.0),
             Some(50.0),
             Some(200.0),
-            Box::new(crate::SizedBox::new()),
+            crate::SizedBox::new(),
         );
         assert_eq!(widget.min_width, Some(100.0));
         assert_eq!(widget.max_width, Some(300.0));
@@ -288,8 +319,7 @@ mod tests {
 
     #[test]
     fn test_overflow_box_with_alignment() {
-        let widget =
-            OverflowBox::with_alignment(Alignment::TOP_LEFT, Box::new(crate::SizedBox::new()));
+        let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, crate::SizedBox::new());
         assert_eq!(widget.alignment, Alignment::TOP_LEFT);
         assert!(widget.child.is_some());
     }
@@ -300,7 +330,7 @@ mod tests {
             .min_width(50.0)
             .max_width(250.0)
             .alignment(Alignment::BOTTOM_RIGHT)
-            .build_overflow_box();
+            .build();
         assert_eq!(widget.min_width, Some(50.0));
         assert_eq!(widget.max_width, Some(250.0));
         assert_eq!(widget.alignment, Alignment::BOTTOM_RIGHT);
@@ -313,7 +343,7 @@ mod tests {
             Some(200.0),
             Some(50.0),
             Some(150.0),
-            Box::new(crate::SizedBox::new()),
+            crate::SizedBox::new(),
         );
         assert!(widget.validate().is_ok());
     }
@@ -325,7 +355,7 @@ mod tests {
             Some(200.0),
             Some(50.0),
             Some(150.0),
-            Box::new(crate::SizedBox::new()),
+            crate::SizedBox::new(),
         );
         assert!(widget.validate().is_err());
     }
@@ -337,7 +367,7 @@ mod tests {
             Some(200.0),
             Some(200.0),
             Some(100.0),
-            Box::new(crate::SizedBox::new()),
+            crate::SizedBox::new(),
         );
         assert!(widget.validate().is_err());
     }

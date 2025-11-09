@@ -26,7 +26,7 @@ Assistant: [Automatically calls Context7 to get serde docs, then provides implem
 
 ## Project Overview
 
-FLUI is a production-ready, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built on egui 0.33 with support for both egui and wgpu backends.
+FLUI is a production-ready, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built with wgpu for high-performance GPU-accelerated rendering.
 
 **Key Architecture:**
 ```
@@ -475,17 +475,16 @@ features = ["parallel"]
 
 Enables rayon-based parallel processing for build pipeline. All thread-safety issues have been resolved through comprehensive Arc/Mutex refactoring.
 
-### Backend Selection
+### Rendering Backend
 
-Choose **ONE** backend:
+FLUI uses **wgpu** as its only rendering backend for GPU-accelerated graphics:
 
 ```toml
-# egui backend (default, recommended)
+# wgpu backend (GPU-accelerated, production-ready)
 flui = "0.1"
-
-# wgpu backend (experimental)
-flui = { version = "0.1", default-features = false, features = ["wgpu"] }
 ```
+
+The previous dual-backend system (egui/wgpu) has been replaced with a unified wgpu-only architecture for better performance and maintainability.
 
 ## Documentation
 
@@ -543,8 +542,9 @@ EOF
 
 Key dependencies and their purpose:
 
-- **egui 0.33** - Immediate mode GUI backend
-- **eframe 0.33** - Platform integration for egui
+- **wgpu** - Cross-platform GPU API (Vulkan/Metal/DX12/WebGPU)
+- **lyon** - Path tessellation (converts vector graphics to triangles)
+- **glyphon** - GPU text rendering with SDF (Signed Distance Field)
 - **parking_lot 0.12** - High-performance RwLock/Mutex (2-3x faster than std, no poisoning)
 - **tokio 1.43** - Async runtime
 - **glam 0.30** - Math and geometry
@@ -554,6 +554,9 @@ Key dependencies and their purpose:
 
 ## Performance Considerations
 
+- **GPU-Accelerated Rendering**: wgpu provides native GPU performance on all platforms
+- **Buffer Pooling**: Reuses GPU buffers across frames for minimal allocation overhead
+- **Mesh-Based Rendering**: All primitives tessellate to triangles for efficient GPU processing
 - Element enum is 3.75x faster than `Box<dyn>` trait objects
 - Option<ElementId> has zero overhead due to niche optimization (8 bytes)
 - parking_lot::Mutex is 2-3x faster than std::sync::Mutex (no poisoning, smaller footprint)

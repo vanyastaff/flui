@@ -71,7 +71,7 @@ use flui_rendering::RenderVisibility;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_visibility)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Visibility {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -201,25 +201,48 @@ impl Visibility {
         }
     }
 
+    /// Creates a Visibility widget with a child.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Visibility::with_child(true, Text::new("Visible text"))
+    /// ```
+    pub fn with_child(visible: bool, child: impl View + 'static) -> Self {
+        Self::builder().visible(visible).child(child).build()
+    }
+
     /// Creates a Visibility widget that maintains size when hidden.
     ///
     /// Useful for fade animations where you don't want layout to jump.
-    pub fn maintain_size(child: Box<dyn AnyView>) -> Self {
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Visibility::maintain_size(FadeTransition::new(child))
+    /// ```
+    pub fn maintain_size(child: impl View + 'static) -> Self {
         Self {
             key: None,
             visible: true,
             maintain_size: true,
-            maintain_state: true,  // Auto-enable
-            maintain_animation: true,  // Auto-enable
+            maintain_state: true,     // Auto-enable
+            maintain_animation: true, // Auto-enable
             maintain_interactivity: false,
             maintain_semantics: false,
             replacement: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Creates a Visibility widget that maintains state when hidden.
-    pub fn maintain_state_only(child: Box<dyn AnyView>) -> Self {
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Visibility::maintain_state_only(ExpensiveWidget::new())
+    /// ```
+    pub fn maintain_state_only(child: impl View + 'static) -> Self {
         Self {
             key: None,
             visible: true,
@@ -229,7 +252,7 @@ impl Visibility {
             maintain_interactivity: false,
             maintain_semantics: false,
             replacement: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -275,6 +298,14 @@ where
         replacement: impl View + 'static,
     ) -> VisibilityBuilder<SetReplacement<S>> {
         self.replacement_internal(Box::new(replacement))
+    }
+}
+
+// Build wrapper
+impl<S: State> VisibilityBuilder<S> {
+    /// Builds the Visibility widget.
+    pub fn build(self) -> Visibility {
+        self.build_internal()
     }
 }
 
@@ -343,26 +374,31 @@ mod tests {
 
     #[test]
     fn test_visibility_maintain_size() {
-        let child = Box::new(crate::SizedBox::new());
-        let widget = Visibility::maintain_size(child);
+        let widget = Visibility::maintain_size(crate::SizedBox::new());
         assert!(widget.maintain_size);
-        assert!(widget.maintain_state);  // Auto-enabled
-        assert!(widget.maintain_animation);  // Auto-enabled
+        assert!(widget.maintain_state); // Auto-enabled
+        assert!(widget.maintain_animation); // Auto-enabled
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_visibility_maintain_state_only() {
-        let child = Box::new(crate::SizedBox::new());
-        let widget = Visibility::maintain_state_only(child);
+        let widget = Visibility::maintain_state_only(crate::SizedBox::new());
         assert!(widget.maintain_state);
         assert!(!widget.maintain_size);
         assert!(widget.child.is_some());
     }
 
     #[test]
+    fn test_visibility_with_child() {
+        let widget = Visibility::with_child(false, crate::SizedBox::new());
+        assert!(!widget.visible);
+        assert!(widget.child.is_some());
+    }
+
+    #[test]
     fn test_visibility_builder() {
-        let widget = Visibility::builder().build_visibility();
+        let widget = Visibility::builder().build();
         assert!(widget.visible); // Default is true
     }
 
@@ -373,7 +409,7 @@ mod tests {
             .maintain_size(true)
             .maintain_state(true)
             .child(crate::SizedBox::new())
-            .build_visibility();
+            .build();
         assert!(!widget.visible);
         assert!(widget.maintain_size);
         assert!(widget.maintain_state);

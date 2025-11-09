@@ -28,10 +28,6 @@ pub mod sized_box;
 pub mod text;
 pub mod vertical_divider;
 
-
-
-
-
 // Re-exports
 pub use align::Align;
 pub use app_bar::AppBar;
@@ -53,7 +49,3 @@ pub use safe_area::SafeArea;
 pub use sized_box::SizedBox;
 pub use text::Text;
 pub use vertical_divider::VerticalDivider;
-
-
-
-

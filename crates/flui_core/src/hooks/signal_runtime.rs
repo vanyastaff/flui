@@ -36,7 +36,10 @@ pub struct SignalData<T> {
 }
 
 impl<T: Send + 'static> SignalData<T> {
-    fn new(initial: T, subscribers: Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>) -> Self {
+    fn new(
+        initial: T,
+        subscribers: Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>,
+    ) -> Self {
         Self {
             value: Arc::new(Mutex::new(initial)),
             subscribers,
@@ -57,6 +60,12 @@ pub struct SignalRuntime {
 impl SignalRuntime {
     /// Create a new signal runtime
     fn new() -> Self {
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "[SIGNAL_RUNTIME] new() called - creating SignalRuntime from thread {:?}",
+            std::thread::current().id()
+        );
+
         Self {
             signals: Mutex::new(HashMap::new()),
         }
@@ -86,11 +95,16 @@ impl SignalRuntime {
         self.signals.lock().insert(id, erased);
 
         #[cfg(debug_assertions)]
-        tracing::trace!(
-            "[SIGNAL_RUNTIME] Created signal {:?} with type {}",
-            id,
-            std::any::type_name::<T>()
-        );
+        {
+            let signal_count = self.signals.lock().len();
+            tracing::trace!(
+                "[SIGNAL_RUNTIME] Created signal {:?} with type {} from thread {:?}. Total signals: {}",
+                id,
+                std::any::type_name::<T>(),
+                std::thread::current().id(),
+                signal_count
+            );
+        }
 
         id
     }
@@ -99,9 +113,27 @@ impl SignalRuntime {
     pub fn get<T: Clone + Send + 'static>(&self, id: SignalId) -> T {
         let value_arc = {
             let signals = self.signals.lock();
-            let erased = signals
-                .get(&id)
-                .unwrap_or_else(|| panic!("Signal {:?} not found! This is a framework bug.", id));
+
+            #[cfg(debug_assertions)]
+            {
+                tracing::trace!(
+                    "[SIGNAL_RUNTIME] get() called for signal {:?} from thread {:?}",
+                    id,
+                    std::thread::current().id()
+                );
+                tracing::trace!(
+                    "[SIGNAL_RUNTIME] Available signals: {:?}",
+                    signals.keys().collect::<Vec<_>>()
+                );
+            }
+
+            let erased = signals.get(&id).unwrap_or_else(|| {
+                panic!(
+                    "Signal {:?} not found! This is a framework bug. Available signals: {:?}",
+                    id,
+                    signals.keys().collect::<Vec<_>>()
+                )
+            });
 
             // Type check
             let expected_type_id = TypeId::of::<T>();
@@ -222,10 +254,7 @@ impl SignalRuntime {
         let erased = signals.get(&id).expect("Signal not found");
 
         let sub_id = SubscriptionId::new();
-        erased
-            .subscribers
-            .lock()
-            .insert(sub_id, Arc::new(callback));
+        erased.subscribers.lock().insert(sub_id, Arc::new(callback));
 
         #[cfg(debug_assertions)]
         tracing::trace!(
@@ -261,10 +290,7 @@ impl SignalRuntime {
 
         #[cfg(debug_assertions)]
         if !callbacks.is_empty() {
-            tracing::trace!(
-                "[SIGNAL_RUNTIME] Notifying {} subscribers",
-                callbacks.len()
-            );
+            tracing::trace!("[SIGNAL_RUNTIME] Notifying {} subscribers", callbacks.len());
         }
 
         // Call each subscriber - safe because we own Arc clones
@@ -278,7 +304,15 @@ impl SignalRuntime {
         let mut signals = self.signals.lock();
         if signals.remove(&id).is_some() {
             #[cfg(debug_assertions)]
-            tracing::trace!("[SIGNAL_RUNTIME] Removed signal {:?}", id);
+            {
+                let signal_count = signals.len();
+                tracing::trace!(
+                    "[SIGNAL_RUNTIME] Removed signal {:?} from thread {:?}. Remaining signals: {}",
+                    id,
+                    std::thread::current().id(),
+                    signal_count
+                );
+            }
         }
     }
 

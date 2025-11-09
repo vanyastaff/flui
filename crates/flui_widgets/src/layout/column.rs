@@ -37,6 +37,8 @@ use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
+use crate::SizedBox;
+
 /// A widget that displays its children in a vertical array.
 ///
 /// Column is a flex container that lays out its children vertically (along the y-axis).
@@ -66,9 +68,18 @@ use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
     on(MainAxisAlignment, into),
     on(CrossAxisAlignment, into),
     on(MainAxisSize, into),
-    finish_fn = build_column
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Column {
+    /// The widgets to display in this column.
+    ///
+    /// Children are laid out vertically (top-to-bottom) in the order they appear in the vector.
+    /// Can be set via:
+    /// - `.children(vec![...])` to set all at once
+    /// - `.child(widget)` repeatedly to add one at a time (chainable)
+    #[builder(field)]
+    pub children: Vec<Box<dyn AnyView>>,
+
     /// Optional key for widget identification
     pub key: Option<String>,
 
@@ -92,29 +103,16 @@ pub struct Column {
     /// Defaults to MainAxisSize::Max.
     #[builder(default = MainAxisSize::Max)]
     pub main_axis_size: MainAxisSize,
-
-    /// The widgets to display in this column.
-    ///
-    /// Children are laid out vertically (top-to-bottom) in the order they appear in the vector.
-    #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn AnyView>>,
 }
 
 impl std::fmt::Debug for Column {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Column")
+            .field("children", &format!("[{} children]", self.children.len()))
             .field("key", &self.key)
             .field("main_axis_alignment", &self.main_axis_alignment)
             .field("cross_axis_alignment", &self.cross_axis_alignment)
             .field("main_axis_size", &self.main_axis_size)
-            .field(
-                "children",
-                &if !self.children.is_empty() {
-                    "<AnyView>"
-                } else {
-                    "None"
-                },
-            )
             .finish()
     }
 }
@@ -122,12 +120,41 @@ impl std::fmt::Debug for Column {
 impl Clone for Column {
     fn clone(&self) -> Self {
         Self {
+            children: self.children.clone(),
             key: self.key.clone(),
             main_axis_alignment: self.main_axis_alignment,
             cross_axis_alignment: self.cross_axis_alignment,
             main_axis_size: self.main_axis_size,
-            children: self.children.clone(),
         }
+    }
+}
+
+// Custom builder methods for ColumnBuilder
+impl<S: column_builder::State> ColumnBuilder<S> {
+    /// Sets all children at once.
+    pub fn children(mut self, children: Vec<Box<dyn AnyView>>) -> Self {
+        self.children = children;
+        self
+    }
+
+    /// Adds a single child widget (chainable).
+    pub fn child(mut self, child: impl AnyView + 'static) -> Self {
+        self.children.push(Box::new(child));
+        self
+    }
+
+    /// Builds the Column with optional validation.
+    pub fn build(self) -> Column {
+        let column = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = column.validate() {
+                tracing::warn!("Column validation failed: {}", e);
+            }
+        }
+
+        column
     }
 }
 
@@ -135,28 +162,100 @@ impl Column {
     /// Creates a new empty Column with default values.
     pub fn new() -> Self {
         Self {
+            children: Vec::new(),
             key: None,
             main_axis_alignment: MainAxisAlignment::Start,
             cross_axis_alignment: CrossAxisAlignment::Center,
             main_axis_size: MainAxisSize::Max,
-            children: Vec::new(),
         }
     }
 
+    // ========================================================================
+    // Convenience Methods
+    // ========================================================================
+
+    /// Creates a Column with centered alignment.
+    ///
+    /// Both main axis and cross axis are centered.
+    pub fn centered(children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .main_axis_alignment(MainAxisAlignment::Center)
+            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Column with spacing between children.
+    ///
+    /// Automatically inserts SizedBox spacers between children.
+    pub fn spaced(spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
+        if children.is_empty() {
+            return Self::builder().children(vec![]).build();
+        }
+
+        let mut spaced_children = Vec::with_capacity(children.len() * 2 - 1);
+        for (i, child) in children.into_iter().enumerate() {
+            if i > 0 {
+                spaced_children.push(Box::new(SizedBox::v_space(spacing)) as Box<dyn AnyView>);
+            }
+            spaced_children.push(child);
+        }
+
+        Self::builder().children(spaced_children).build()
+    }
+
+    /// Creates a Column with start alignment.
+    pub fn start(children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .main_axis_alignment(MainAxisAlignment::Start)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Column with end alignment.
+    pub fn end(children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .main_axis_alignment(MainAxisAlignment::End)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Column with space-between alignment.
+    pub fn space_between(children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Column with space-around alignment.
+    pub fn space_around(children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .main_axis_alignment(MainAxisAlignment::SpaceAround)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Column with space-evenly alignment.
+    pub fn space_evenly(children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
+            .children(children)
+            .build()
+    }
+
+    // ========================================================================
+    // Mutable API (Deprecated - use builder instead)
+    // ========================================================================
+
     /// Adds a child widget to the column.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut column = Column::new();
-    /// column.add_child(Text::new("Hello"));
-    /// column.add_child(Text::new("World"));
-    /// ```
+    #[deprecated(note = "Use builder pattern with chainable .child() instead")]
     pub fn add_child(&mut self, child: impl View + 'static) {
         self.children.push(Box::new(child));
     }
 
     /// Sets all children at once.
+    #[deprecated(note = "Use builder pattern with .children() instead")]
     pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
         self.children = children;
     }
@@ -187,58 +286,63 @@ impl View for Column {
     }
 }
 
-// bon Builder Extensions
-use column_builder::{IsUnset, SetChildren, State};
-
-// Custom children setter
-impl<S: State> ColumnBuilder<S>
-where
-    S::Children: IsUnset,
-{
-    /// Sets the children widgets (works in builder chain).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Column::builder()
-    ///     .children(vec![
-    ///         Box::new(Text::new("Hello")) as Box<dyn AnyView>,
-    ///         Box::new(Text::new("World")) as Box<dyn AnyView>,
-    ///     ])
-    ///     .build()
-    /// ```
-    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> ColumnBuilder<SetChildren<S>> {
-        self.children_internal(children)
-    }
-}
-
-// Build wrapper - available for all states
-impl<S: State> ColumnBuilder<S> {
-    /// Builds the Column widget.
-    pub fn build(self) -> Column {
-        self.build_column()
-    }
-}
-
 /// Macro for creating Column with declarative syntax.
 ///
 /// # Examples
 ///
 /// ```rust,ignore
+/// // Empty column
+/// column!()
+///
+/// // With properties only
 /// column! {
 ///     main_axis_alignment: MainAxisAlignment::Center,
+///     cross_axis_alignment: CrossAxisAlignment::Start
+/// }
+///
+/// // With children using vec!-like syntax
+/// column![
+///     Text::new("First"),
+///     Text::new("Second"),
+///     Text::new("Third")
+/// ]
+///
+/// // With both properties and children (separated by semicolon)
+/// column! {
+///     main_axis_alignment: MainAxisAlignment::Center;
+///     [
+///         Text::new("First"),
+///         Text::new("Second")
+///     ]
 /// }
 /// ```
 #[macro_export]
 macro_rules! column {
+    // Empty column
     () => {
         $crate::Column::new()
     };
-    ($($field:ident : $value:expr),* $(,)?) => {
-        $crate::Column {
-            $($field: $value,)*
-            ..Default::default()
-        }
+
+    // With children only (using bracket syntax like vec!)
+    [$($child:expr),* $(,)?] => {
+        $crate::Column::builder()
+            .children(vec![$(Box::new($child) as Box<dyn $crate::AnyView>),*])
+            .build()
+    };
+
+    // With properties only (using brace syntax) - uses builder
+    {$($field:ident : $value:expr),+ $(,)?} => {
+        $crate::Column::builder()
+            $(.$field($value))+
+            .build()
+    };
+
+    // With properties and children (separated by semicolon)
+    {$($field:ident : $value:expr),+ ; [$($child:expr),* $(,)?]} => {
+        $crate::Column::builder()
+            $(.$field($value))+
+            .children(vec![$(Box::new($child) as Box<dyn $crate::AnyView>),*])
+            .build()
     };
 }
 
@@ -246,9 +350,11 @@ macro_rules! column {
 mod tests {
     use super::*;
     use flui_core::view::LeafRenderBuilder;
+    use flui_rendering::RenderPadding;
+    use flui_types::layout::EdgeInsets;
 
     // Mock view for testing
-    #[derive()]
+    #[derive(Clone)]
     struct MockView;
 
     impl View for MockView {
@@ -316,6 +422,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_column_add_child() {
         let mut column = Column::new();
         column.add_child(MockView);
@@ -324,6 +431,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_column_set_children() {
         let mut column = Column::new();
         column.set_children(vec![Box::new(MockView), Box::new(MockView)]);

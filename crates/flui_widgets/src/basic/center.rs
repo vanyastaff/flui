@@ -5,24 +5,29 @@
 //!
 //! # Usage Patterns
 //!
-//! ## 1. Struct Literal
-//! ```rust,ignore
-//! Center {
-//!     child: Some(Box::new(some_widget)),
-//!     ..Default::default()
-//! }
-//! ```
-//!
-//! ## 2. Builder Pattern
+//! ## 1. Builder Pattern (Recommended)
 //! ```rust,ignore
 //! Center::builder()
 //!     .child(some_widget)
 //!     .build()
 //! ```
 //!
+//! ## 2. Convenience Methods
+//! ```rust,ignore
+//! // Most common - center with expand
+//! Center::with_child(some_widget)
+//!
+//! // Tight sizing (wraps child exactly)
+//! Center::tight(some_widget)
+//!
+//! // Custom factors
+//! Center::with_factors(some_widget, 2.0, 1.5)
+//! ```
+//!
 //! ## 3. Macro
 //! ```rust,ignore
-//! center! {}
+//! center!(child: some_widget)
+//! center!(child: some_widget, width_factor: 2.0)
 //! ```
 
 use bon::Builder;
@@ -38,29 +43,38 @@ use flui_types::Alignment;
 /// ## Layout Behavior
 ///
 /// - Centers child both horizontally and vertically
-/// - Takes all available space if unconstrained
-/// - If `width_factor` or `height_factor` are specified, the Center sizes itself
-///   as a multiple of the child's size
+/// - **Without factors**: Expands to fill all available space
+/// - **With factors**: Sizes itself as `child_size * factor` (clamped to constraints)
+///
+/// ## Performance Notes
+///
+/// - Center with factors (tight sizing) is more efficient as it doesn't expand
+/// - Without factors, Center takes all available space which may affect parent layouts
+/// - Consider using `Align` widget directly if you need different alignments
 ///
 /// ## Examples
 ///
 /// ```rust,ignore
-/// // Simple centering
-/// Center::builder()
-///     .child(Text::new("Hello"))
-///     .build()
+/// // Simple centering (expands to fill space)
+/// Center::with_child(Text::new("Hello"))
+///
+/// // Tight wrapping (1:1 with child size)
+/// Center::tight(some_widget)
 ///
 /// // With size factors
+/// Center::with_factors(some_widget, 2.0, 1.5)
+///
+/// // Using builder for more control
 /// Center::builder()
-///     .width_factor(2.0)  // Center takes 2x child width
-///     .height_factor(1.5) // Center takes 1.5x child height
-///     .child(some_widget)
+///     .child(Text::new("Hello"))
+///     .width_factor(2.0)
+///     .key("my-center".to_string())
 ///     .build()
 /// ```
 #[derive(Builder)]
 #[builder(
     on(String, into),
-    finish_fn = build_center
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Center {
     /// Optional key for widget identification
@@ -115,8 +129,10 @@ impl Clone for Center {
 }
 
 impl Center {
-    /// Creates a new Center widget.
-    pub fn new() -> Self {
+    /// Creates a new empty Center widget.
+    ///
+    /// Note: Prefer using `Center::with_child()` or `Center::builder()` for most cases.
+    pub const fn new() -> Self {
         Self {
             key: None,
             width_factor: None,
@@ -125,12 +141,55 @@ impl Center {
         }
     }
 
-    /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    /// Creates a Center with a child (most common use case).
+    ///
+    /// The Center will expand to fill available space and center the child.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let centered = Center::with_child(Text::new("Hello"));
+    /// ```
+    pub fn with_child(child: impl View + 'static) -> Self {
+        Self::builder().child(child).build()
+    }
+
+    /// Creates a Center that wraps the child tightly (factors = 1.0).
+    ///
+    /// This makes the Center exactly the same size as its child,
+    /// which is more efficient than expanding to fill space.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let tight_center = Center::tight(Text::new("Wrapped"));
+    /// ```
+    pub fn tight(child: impl View + 'static) -> Self {
+        Self::builder()
+            .child(child)
+            .width_factor(1.0)
+            .height_factor(1.0)
+            .build()
+    }
+
+    /// Creates a Center with custom size factors.
+    ///
+    /// The Center's size will be `child_size * factor` in each dimension.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Center is 2x child width and 1.5x child height
+    /// let scaled = Center::with_factors(some_widget, 2.0, 1.5);
+    /// ```
+    pub fn with_factors(child: impl View + 'static, width_factor: f32, height_factor: f32) -> Self {
+        Self::builder()
+            .child(child)
+            .width_factor(width_factor)
+            .height_factor(height_factor)
+            .build()
     }
 
     /// Validates Center configuration.
+    ///
+    /// Returns an error if factors are zero, negative, NaN, or infinite.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(width_factor) = self.width_factor {
             if width_factor <= 0.0 || width_factor.is_nan() || width_factor.is_infinite() {
@@ -174,21 +233,63 @@ where
     }
 }
 
-// Build wrapper
+// Build wrapper with validation
 impl<S: State> CenterBuilder<S> {
-    /// Builds the Center widget.
+    /// Builds the Center widget with automatic validation in debug mode.
     pub fn build(self) -> Center {
-        self.build_center()
+        let center = self.build_internal();
+
+        // In debug mode, validate configuration and warn on issues
+        #[cfg(debug_assertions)]
+        if let Err(e) = center.validate() {
+            tracing::warn!("Center validation warning: {}", e);
+        }
+
+        center
     }
 }
 
 /// Macro for creating Center with declarative syntax.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Empty center
+/// center!()
+///
+/// // With child only
+/// center!(child: Text::new("Hello"))
+///
+/// // With child and properties
+/// center!(child: some_widget, width_factor: 2.0)
+///
+/// // Properties only (no child)
+/// center!(width_factor: 2.0, height_factor: 1.5)
+/// ```
 #[macro_export]
 macro_rules! center {
+    // Empty center
     () => {
         $crate::Center::new()
     };
-    ($($field:ident : $value:expr),* $(,)?) => {
+
+    // With child only
+    (child: $child:expr) => {
+        $crate::Center::builder()
+            .child($child)
+            .build()
+    };
+
+    // With child and properties
+    (child: $child:expr, $($field:ident : $value:expr),+ $(,)?) => {
+        $crate::Center::builder()
+            .child($child)
+            $(.$field($value))+
+            .build()
+    };
+
+    // Without child, just properties
+    ($($field:ident : $value:expr),+ $(,)?) => {
         $crate::Center {
             $($field: Some($value.into()),)*
             ..Default::default()
@@ -199,7 +300,6 @@ macro_rules! center {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::LeafRenderBuilder;
     use flui_core::view::LeafRenderBuilder;
     use flui_rendering::RenderPadding;
     use flui_types::EdgeInsets;
@@ -252,16 +352,47 @@ mod tests {
     }
 
     #[test]
-    fn test_center_set_child() {
-        let mut center = Center::new();
-        center.set_child(MockView);
+    fn test_center_with_child() {
+        let center = Center::with_child(MockView);
         assert!(center.child.is_some());
+        assert!(center.width_factor.is_none());
+        assert!(center.height_factor.is_none());
+    }
+
+    #[test]
+    fn test_center_tight() {
+        let center = Center::tight(MockView);
+        assert!(center.child.is_some());
+        assert_eq!(center.width_factor, Some(1.0));
+        assert_eq!(center.height_factor, Some(1.0));
+    }
+
+    #[test]
+    fn test_center_with_factors() {
+        let center = Center::with_factors(MockView, 2.5, 3.0);
+        assert!(center.child.is_some());
+        assert_eq!(center.width_factor, Some(2.5));
+        assert_eq!(center.height_factor, Some(3.0));
     }
 
     #[test]
     fn test_center_macro_empty() {
         let center = center!();
         assert!(center.child.is_none());
+    }
+
+    #[test]
+    fn test_center_macro_with_child() {
+        let center = center!(child: MockView);
+        assert!(center.child.is_some());
+    }
+
+    #[test]
+    fn test_center_macro_with_child_and_factors() {
+        let center = center!(child: MockView, width_factor: 2.0, height_factor: 1.5);
+        assert!(center.child.is_some());
+        assert_eq!(center.width_factor, Some(2.0));
+        assert_eq!(center.height_factor, Some(1.5));
     }
 
     #[test]
@@ -305,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn test_center_with_factors() {
+    fn test_center_builder_full() {
         let center = Center::builder().width_factor(2.0).child(MockView).build();
 
         // Test child field

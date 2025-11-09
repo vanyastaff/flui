@@ -32,7 +32,7 @@ use flui_rendering::RenderOpacity;
 /// - Use `opacity: 1.0` when fully opaque (no overhead)
 /// - Avoid animating opacity on complex widget trees
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_opacity)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Opacity {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -88,6 +88,17 @@ impl Opacity {
             opacity: opacity.clamp(0.0, 1.0),
             child: None,
         }
+    }
+
+    /// Creates an Opacity widget with a child.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Opacity::with_child(0.5, Text::new("Semi-transparent"))
+    /// ```
+    pub fn with_child(opacity: f32, child: impl View + 'static) -> Self {
+        Self::builder().opacity(opacity).child(child).build()
     }
 
     /// Creates an Opacity widget that is fully transparent.
@@ -156,11 +167,18 @@ where
     }
 }
 
-// Public build() wrapper
+// Public build() wrapper with validation
 impl<S: State> OpacityBuilder<S> {
-    /// Builds the Opacity widget.
+    /// Builds the Opacity widget with automatic validation in debug mode.
     pub fn build(self) -> Opacity {
-        self.build_opacity()
+        let opacity = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        if let Err(e) = opacity.validate() {
+            tracing::warn!("Opacity validation warning: {}", e);
+        }
+
+        opacity
     }
 }
 

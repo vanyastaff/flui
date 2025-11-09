@@ -85,7 +85,6 @@ pub mod recovery;
 pub mod root_manager;
 pub mod triple_buffer;
 
-
 pub use build_pipeline::BuildPipeline;
 pub use cancellation::CancellationToken;
 pub use dirty_tracking::LockFreeDirtySet;
@@ -103,4 +102,3 @@ pub use rebuild_queue::RebuildQueue;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use root_manager::RootManager;
 pub use triple_buffer::TripleBuffer;
-

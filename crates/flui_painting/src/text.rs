@@ -74,6 +74,7 @@ impl TextPainter {
         color: Color,
         shadow_color: Color,
         shadow_offset: flui_types::Offset,
+        blur_radius: f32,
     ) {
         let paint = Paint::fill(color);
 
@@ -86,6 +87,7 @@ impl TextPainter {
             font_size,
             &paint,
             shadow_offset,
+            blur_radius,
             shadow_color,
         );
     }
@@ -175,6 +177,7 @@ impl TextPainter {
                 font_size,
                 &paint,
                 shadow_offset,
+                shadow.blur_radius as f32,
                 shadow.color,
             );
         } else {

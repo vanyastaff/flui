@@ -65,7 +65,7 @@ use flui_types::Color;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_physical_model)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct PhysicalModel {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -141,9 +141,9 @@ impl PhysicalModel {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let model = PhysicalModel::rectangle(8.0, Color::WHITE, Box::new(child));
+    /// let model = PhysicalModel::rectangle(8.0, Color::WHITE, child);
     /// ```
-    pub fn rectangle(elevation: f32, color: Color, child: Box<dyn AnyView>) -> Self {
+    pub fn rectangle(elevation: f32, color: Color, child: impl View + 'static) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::Rectangle,
@@ -151,7 +151,7 @@ impl PhysicalModel {
             elevation,
             color,
             shadow_color: Color::rgba(0, 0, 0, 128),
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -160,13 +160,13 @@ impl PhysicalModel {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let model = PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, Box::new(child));
+    /// let model = PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, child);
     /// ```
     pub fn rounded_rectangle(
         elevation: f32,
         border_radius: f32,
         color: Color,
-        child: Box<dyn AnyView>,
+        child: impl View + 'static,
     ) -> Self {
         Self {
             key: None,
@@ -175,7 +175,7 @@ impl PhysicalModel {
             elevation,
             color,
             shadow_color: Color::rgba(0, 0, 0, 128),
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -184,9 +184,9 @@ impl PhysicalModel {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let model = PhysicalModel::circle(4.0, Color::BLUE, Box::new(icon));
+    /// let model = PhysicalModel::circle(4.0, Color::BLUE, icon);
     /// ```
-    pub fn circle(elevation: f32, color: Color, child: Box<dyn AnyView>) -> Self {
+    pub fn circle(elevation: f32, color: Color, child: impl View + 'static) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::Circle,
@@ -194,7 +194,7 @@ impl PhysicalModel {
             elevation,
             color,
             shadow_color: Color::rgba(0, 0, 0, 128),
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 }
@@ -226,6 +226,14 @@ where
     }
 }
 
+// Build wrapper
+impl<S: State> PhysicalModelBuilder<S> {
+    /// Builds the PhysicalModel widget.
+    pub fn build(self) -> PhysicalModel {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for PhysicalModel {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
@@ -244,24 +252,22 @@ mod tests {
 
     #[test]
     fn test_physical_model_rectangle() {
-        let child = Box::new(crate::SizedBox::new());
-        let model = PhysicalModel::rectangle(8.0, Color::WHITE, child);
+        let model = PhysicalModel::rectangle(8.0, Color::WHITE, crate::SizedBox::new());
         assert_eq!(model.shape, PhysicalShape::Rectangle);
         assert_eq!(model.elevation, 8.0);
     }
 
     #[test]
     fn test_physical_model_rounded_rectangle() {
-        let child = Box::new(crate::SizedBox::new());
-        let model = PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, child);
+        let model =
+            PhysicalModel::rounded_rectangle(8.0, 4.0, Color::WHITE, crate::SizedBox::new());
         assert_eq!(model.shape, PhysicalShape::RoundedRectangle);
         assert_eq!(model.border_radius, 4.0);
     }
 
     #[test]
     fn test_physical_model_circle() {
-        let child = Box::new(crate::SizedBox::new());
-        let model = PhysicalModel::circle(4.0, Color::BLUE, child);
+        let model = PhysicalModel::circle(4.0, Color::BLUE, crate::SizedBox::new());
         assert_eq!(model.shape, PhysicalShape::Circle);
     }
 
@@ -271,7 +277,7 @@ mod tests {
             .shape(PhysicalShape::RoundedRectangle)
             .elevation(12.0)
             .border_radius(8.0)
-            .build_physical_model();
+            .build();
         assert_eq!(model.elevation, 12.0);
     }
 

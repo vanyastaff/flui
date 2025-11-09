@@ -64,7 +64,7 @@ use flui_rendering::RenderAbsorbPointer;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_absorb_pointer)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct AbsorbPointer {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -122,6 +122,17 @@ impl AbsorbPointer {
         }
     }
 
+    /// Creates an AbsorbPointer with a child widget.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// AbsorbPointer::with_child(true, Button::new("Disabled"))
+    /// ```
+    pub fn with_child(absorbing: bool, child: impl View + 'static) -> Self {
+        Self::builder().absorbing(absorbing).child(child).build()
+    }
+
     /// Sets the child widget.
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
@@ -147,6 +158,14 @@ where
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl View + 'static) -> AbsorbPointerBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Build wrapper
+impl<S: State> AbsorbPointerBuilder<S> {
+    /// Builds the AbsorbPointer widget.
+    pub fn build(self) -> AbsorbPointer {
+        self.build_internal()
     }
 }
 
@@ -187,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_absorb_pointer_builder() {
-        let widget = AbsorbPointer::builder().build_absorb_pointer();
+        let widget = AbsorbPointer::builder().build();
         assert!(widget.absorbing); // Default is true
     }
 
@@ -195,16 +214,21 @@ mod tests {
     fn test_absorb_pointer_builder_with_child() {
         let widget = AbsorbPointer::builder()
             .child(crate::SizedBox::new())
-            .build_absorb_pointer();
+            .build();
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_absorb_pointer_builder_with_absorbing_false() {
-        let widget = AbsorbPointer::builder()
-            .absorbing(false)
-            .build_absorb_pointer();
+        let widget = AbsorbPointer::builder().absorbing(false).build();
         assert!(!widget.absorbing);
+    }
+
+    #[test]
+    fn test_absorb_pointer_with_child() {
+        let widget = AbsorbPointer::with_child(true, crate::SizedBox::new());
+        assert!(widget.absorbing);
+        assert!(widget.child.is_some());
     }
 
     #[test]

@@ -164,7 +164,7 @@ impl BlurLayer {
     }
 
     /// Apply image filter by rendering with layer composition
-    fn apply_filter(&self, painter: &mut dyn Painter, bounds: Rect) {
+    fn apply_filter(&self, painter: &mut dyn Painter, _bounds: Rect) {
         // Use save_layer to create an offscreen context,
         // then apply the filter using apply_image_filter()
         //
@@ -179,10 +179,11 @@ impl BlurLayer {
             painter.save();
 
             // Create a layer for filtered rendering
-            painter.save_layer(bounds, &crate::painter::Paint::default());
+            painter.save_layer();
 
             // Apply the image filter to the layer
-            painter.apply_image_filter(&self.filter, bounds);
+            // Note: apply_image_filter is stubbed in compat layer - filter effects not yet implemented
+            painter.apply_image_filter(&format!("{:?}", self.filter));
 
             // Render child content into the filtered layer
             child.paint(painter);
@@ -213,8 +214,7 @@ impl Layer for BlurLayer {
                 // Uses save_layer_backdrop() to capture the backdrop for filtering
                 // Note: Full effect requires GPU backend with framebuffer capture
 
-                let child_bounds = child.bounds();
-                painter.save_layer_backdrop(child_bounds);
+                painter.save_layer_backdrop();
 
                 // In a full implementation with GPU backend:
                 // 1. save_layer_backdrop() captures what's already painted

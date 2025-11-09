@@ -92,10 +92,12 @@ impl ImagePainter {
 
         // For now, use the entire image as source
         // TODO: Handle fitted.source size to crop the source image if needed
-        let src_rect = None;
+        let src_rect: Option<Rect> = None;
 
-        // Draw the image
-        painter.draw_image(image, src_rect, dest_rect, &paint);
+        // Draw the image (stubbed API - only accepts image name and position)
+        // TODO: Full implementation will use src_rect, dest_rect, and paint
+        let image_name = format!("Image({:?})", image);
+        painter.draw_image(&image_name, dest_rect.top_left());
     }
 
     /// Paint a repeated image (tiled)

@@ -66,7 +66,10 @@ use flui_types::prelude::TextDirection;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_positioned_directional)]
+#[builder(
+    on(String, into),
+    finish_fn(name = build_internal, vis = "")
+)]
 pub struct PositionedDirectional {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -159,7 +162,7 @@ impl PositionedDirectional {
     }
 
     /// Creates a PositionedDirectional that fills the entire Stack.
-    pub fn fill(child: Box<dyn AnyView>) -> Self {
+    pub fn fill(child: impl View + 'static) -> Self {
         Self {
             key: None,
             start: Some(0.0),
@@ -169,12 +172,12 @@ impl PositionedDirectional {
             width: None,
             height: None,
             text_direction: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Creates a PositionedDirectional positioned from start.
-    pub fn from_start(start: f32, top: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn from_start(start: f32, top: f32, child: impl View + 'static) -> Self {
         Self {
             key: None,
             start: Some(start),
@@ -184,12 +187,12 @@ impl PositionedDirectional {
             width: None,
             height: None,
             text_direction: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Creates a PositionedDirectional positioned from end.
-    pub fn from_end(end: f32, top: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn from_end(end: f32, top: f32, child: impl View + 'static) -> Self {
         Self {
             key: None,
             start: None,
@@ -199,7 +202,7 @@ impl PositionedDirectional {
             width: None,
             height: None,
             text_direction: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -225,6 +228,7 @@ impl PositionedDirectional {
     }
 
     /// Sets the child widget.
+    #[deprecated(note = "Use builder pattern with .child() instead")]
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
@@ -236,7 +240,37 @@ impl Default for PositionedDirectional {
     }
 }
 
-// bon Builder Extensions - no builder customization needed since build() doesn't return Element directly
+// bon Builder Extensions
+use positioned_directional_builder::{IsUnset, SetChild, State};
+
+// Custom setter for child
+impl<S: State> PositionedDirectionalBuilder<S>
+where
+    S::Child: IsUnset,
+{
+    /// Sets the child widget (works in builder chain).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// PositionedDirectional::builder()
+    ///     .start(16.0)
+    ///     .top(24.0)
+    ///     .child(Text::new("Content"))
+    ///     .build()
+    /// ```
+    pub fn child(self, child: impl View + 'static) -> PositionedDirectionalBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
+    }
+}
+
+// Public build() wrapper
+impl<S: State> PositionedDirectionalBuilder<S> {
+    /// Builds the PositionedDirectional.
+    pub fn build(self) -> PositionedDirectional {
+        self.build_internal()
+    }
+}
 
 // Implement View trait
 impl View for PositionedDirectional {
@@ -275,8 +309,7 @@ mod tests {
 
     #[test]
     fn test_positioned_directional_fill() {
-        let child = Box::new(crate::SizedBox::new());
-        let widget = PositionedDirectional::fill(child);
+        let widget = PositionedDirectional::fill(crate::SizedBox::new());
         assert_eq!(widget.start, Some(0.0));
         assert_eq!(widget.top, Some(0.0));
         assert_eq!(widget.end, Some(0.0));
@@ -286,8 +319,7 @@ mod tests {
 
     #[test]
     fn test_positioned_directional_from_start() {
-        let child = Box::new(crate::SizedBox::new());
-        let widget = PositionedDirectional::from_start(16.0, 24.0, child);
+        let widget = PositionedDirectional::from_start(16.0, 24.0, crate::SizedBox::new());
         assert_eq!(widget.start, Some(16.0));
         assert_eq!(widget.top, Some(24.0));
         assert!(widget.end.is_none());
@@ -296,8 +328,7 @@ mod tests {
 
     #[test]
     fn test_positioned_directional_from_end() {
-        let child = Box::new(crate::SizedBox::new());
-        let widget = PositionedDirectional::from_end(16.0, 24.0, child);
+        let widget = PositionedDirectional::from_end(16.0, 24.0, crate::SizedBox::new());
         assert_eq!(widget.end, Some(16.0));
         assert_eq!(widget.top, Some(24.0));
         assert!(widget.start.is_none());
@@ -349,7 +380,7 @@ mod tests {
 
     #[test]
     fn test_positioned_directional_builder() {
-        let widget = PositionedDirectional::builder().build_positioned_directional();
+        let widget = PositionedDirectional::builder().build();
         assert!(widget.start.is_none());
         assert!(widget.child.is_none());
     }
@@ -360,7 +391,7 @@ mod tests {
             .start(10.0)
             .top(20.0)
             .child(crate::SizedBox::new())
-            .build_positioned_directional();
+            .build();
         assert_eq!(widget.start, Some(10.0));
         assert_eq!(widget.top, Some(20.0));
         assert!(widget.child.is_some());

@@ -80,7 +80,11 @@ pub use flui_types::geometry::QuarterTurns as WidgetQuarterTurns;
 /// RotatedBox::new(QuarterTurns::from_int(5), widget)  // Same as One
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(QuarterTurns, into), finish_fn = build_rotated_box)]
+#[builder(
+    on(String, into),
+    on(QuarterTurns, into),
+    finish_fn(name = build_internal, vis = "")
+)]
 pub struct RotatedBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -128,13 +132,13 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::new(QuarterTurns::One, Box::new(child));
+    /// let widget = RotatedBox::new(QuarterTurns::One, child);
     /// ```
-    pub fn new(quarter_turns: QuarterTurns, child: Box<dyn AnyView>) -> Self {
+    pub fn new(quarter_turns: QuarterTurns, child: impl View + 'static) -> Self {
         Self {
             key: None,
             quarter_turns,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -143,9 +147,9 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::rotate_90(Box::new(Text::new("Vertical")));
+    /// let widget = RotatedBox::rotate_90(Text::new("Vertical"));
     /// ```
-    pub fn rotate_90(child: Box<dyn AnyView>) -> Self {
+    pub fn rotate_90(child: impl View + 'static) -> Self {
         Self::new(QuarterTurns::One, child)
     }
 
@@ -154,9 +158,9 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::rotate_180(Box::new(my_widget));
+    /// let widget = RotatedBox::rotate_180(child);
     /// ```
-    pub fn rotate_180(child: Box<dyn AnyView>) -> Self {
+    pub fn rotate_180(child: impl View + 'static) -> Self {
         Self::new(QuarterTurns::Two, child)
     }
 
@@ -165,13 +169,14 @@ impl RotatedBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = RotatedBox::rotate_270(Box::new(child));
+    /// let widget = RotatedBox::rotate_270(child);
     /// ```
-    pub fn rotate_270(child: Box<dyn AnyView>) -> Self {
+    pub fn rotate_270(child: impl View + 'static) -> Self {
         Self::new(QuarterTurns::Three, child)
     }
 
     /// Sets the child widget.
+    #[deprecated(note = "Use builder pattern with .child() instead")]
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
@@ -195,8 +200,24 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// RotatedBox::builder()
+    ///     .quarter_turns(QuarterTurns::One)
+    ///     .child(Text::new("Rotated"))
+    ///     .build()
+    /// ```
     pub fn child(self, child: impl View + 'static) -> RotatedBoxBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+impl<S: State> RotatedBoxBuilder<S> {
+    /// Builds the RotatedBox.
+    pub fn build(self) -> RotatedBox {
+        self.build_internal()
     }
 }
 
@@ -244,7 +265,7 @@ mod tests {
     fn test_rotated_box_builder() {
         let widget = RotatedBox::builder()
             .quarter_turns(QuarterTurns::Two)
-            .build_rotated_box();
+            .build();
         assert_eq!(widget.quarter_turns, QuarterTurns::Two);
     }
 
@@ -256,6 +277,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_rotated_box_set_child() {
         let mut widget = RotatedBox::default();
         assert!(widget.child.is_none());
@@ -266,7 +288,7 @@ mod tests {
 
     #[test]
     fn test_quarter_turns_from_int() {
-        let widget = RotatedBox::new(QuarterTurns::from_int(5), Box::new(crate::SizedBox::new()));
+        let widget = RotatedBox::new(QuarterTurns::from_int(5), crate::SizedBox::new());
         assert_eq!(widget.quarter_turns, QuarterTurns::One); // 5 % 4 = 1
     }
 }

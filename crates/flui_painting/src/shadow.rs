@@ -1,9 +1,9 @@
 //! Shadow painting implementation
 
-use flui_engine::{Paint, Painter, RRect};
+use flui_engine::{Paint, Painter};
 use flui_types::{
     styling::{BoxShadow, Radius},
-    Rect,
+    Rect, RRect,
 };
 
 /// Painter for box shadows

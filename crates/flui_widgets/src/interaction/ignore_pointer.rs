@@ -64,7 +64,7 @@ use flui_rendering::RenderIgnorePointer;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_ignore_pointer)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct IgnorePointer {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -122,6 +122,17 @@ impl IgnorePointer {
         }
     }
 
+    /// Creates an IgnorePointer with a child widget.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// IgnorePointer::with_child(true, Button::new("Disabled"))
+    /// ```
+    pub fn with_child(ignoring: bool, child: impl View + 'static) -> Self {
+        Self::builder().ignoring(ignoring).child(child).build()
+    }
+
     /// Sets the child widget.
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
@@ -147,6 +158,14 @@ where
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl View + 'static) -> IgnorePointerBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Build wrapper
+impl<S: State> IgnorePointerBuilder<S> {
+    /// Builds the IgnorePointer widget.
+    pub fn build(self) -> IgnorePointer {
+        self.build_internal()
     }
 }
 
@@ -187,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_ignore_pointer_builder() {
-        let widget = IgnorePointer::builder().build_ignore_pointer();
+        let widget = IgnorePointer::builder().build();
         assert!(widget.ignoring); // Default is true
     }
 
@@ -195,16 +214,21 @@ mod tests {
     fn test_ignore_pointer_builder_with_child() {
         let widget = IgnorePointer::builder()
             .child(crate::SizedBox::new())
-            .build_ignore_pointer();
+            .build();
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_ignore_pointer_builder_with_ignoring_false() {
-        let widget = IgnorePointer::builder()
-            .ignoring(false)
-            .build_ignore_pointer();
+        let widget = IgnorePointer::builder().ignoring(false).build();
         assert!(!widget.ignoring);
+    }
+
+    #[test]
+    fn test_ignore_pointer_with_child() {
+        let widget = IgnorePointer::with_child(true, crate::SizedBox::new());
+        assert!(widget.ignoring);
+        assert!(widget.child.is_some());
     }
 
     #[test]

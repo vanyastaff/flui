@@ -307,7 +307,10 @@ impl FrameCoordinator {
     ///
     /// Rebuilds all dirty elements in depth order (with parallel execution when enabled).
     pub fn flush_build(&mut self, tree: &Arc<RwLock<ElementTree>>) {
-        self.build.rebuild_dirty_parallel(tree);
+        // TEMP FIX: Use rebuild_dirty() instead of rebuild_dirty_parallel()
+        // parallel_build::rebuild_element() doesn't support ComponentElement yet (Issue #2)
+        // Once ComponentElement rebuild is implemented in parallel_build.rs, switch back to rebuild_dirty_parallel()
+        self.build.rebuild_dirty(tree);
     }
 
     /// Flush the layout phase
@@ -348,23 +351,57 @@ impl FrameCoordinator {
                     );
                     size_opt
                 }
+                Some(crate::element::Element::Component(comp)) => {
+                    // Root is ComponentElement - use its child's size
+                    #[cfg(debug_assertions)]
+                    tracing::debug!("flush_layout: Root is ComponentElement, using child for size");
+
+                    match comp.child() {
+                        Some(child_id) => match tree_guard.get(child_id) {
+                            Some(crate::element::Element::Render(child_render)) => {
+                                let render_state_lock = child_render.render_state();
+                                let render_state = render_state_lock.read();
+                                let size_opt = render_state.size();
+                                #[cfg(debug_assertions)]
+                                tracing::debug!(
+                                    "flush_layout: ComponentElement child (ID: {:?}) size: {:?}",
+                                    child_id,
+                                    size_opt
+                                );
+                                size_opt
+                            }
+                            _ => {
+                                #[cfg(debug_assertions)]
+                                tracing::warn!(
+                                    "flush_layout: ComponentElement child is not RenderElement"
+                                );
+                                None
+                            }
+                        },
+                        None => {
+                            #[cfg(debug_assertions)]
+                            tracing::warn!("flush_layout: ComponentElement has no child");
+                            None
+                        }
+                    }
+                }
                 Some(elem) => {
                     #[cfg(debug_assertions)]
-                    println!(
-                        "[DEBUG] flush_layout: Root element is not Render! Type: {:?}",
+                    tracing::warn!(
+                        "flush_layout: Root element is not Render or Component! Type: {:?}",
                         std::any::type_name_of_val(elem)
                     );
                     None
                 }
                 None => {
                     #[cfg(debug_assertions)]
-                    println!("[DEBUG] flush_layout: Root element not found! ID: {:?}", id);
+                    tracing::error!("flush_layout: Root element not found! ID: {:?}", id);
                     None
                 }
             },
             None => {
                 #[cfg(debug_assertions)]
-                println!("[DEBUG] flush_layout: No root_id provided!");
+                tracing::warn!("flush_layout: No root_id provided!");
                 None
             }
         };
@@ -403,7 +440,9 @@ impl FrameCoordinator {
                 if let Some(elem) = &element_opt {
                     match elem {
                         crate::element::Element::Component(_) => {
-                            tracing::warn!("flush_paint: Root is ComponentElement - returning empty ContainerLayer");
+                            tracing::debug!(
+                                "flush_paint: Root is ComponentElement - will handle below"
+                            );
                         }
                         crate::element::Element::Provider(_) => {
                             tracing::warn!("flush_paint: Root is ProviderElement - returning empty ContainerLayer");
@@ -418,17 +457,53 @@ impl FrameCoordinator {
                     tracing::error!("flush_paint: Root element not found in tree!");
                 }
 
-                if let Some(crate::element::Element::Render(render_elem)) = element_opt {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    let offset = render_state.offset();
-                    drop(render_state);
+                match element_opt {
+                    Some(crate::element::Element::Render(render_elem)) => {
+                        let render_state_lock = render_elem.render_state();
+                        let render_state = render_state_lock.read();
+                        let offset = render_state.offset();
+                        drop(render_state);
 
-                    let render_object = render_elem.render_object();
-                    Some(render_object.paint(&tree_guard, offset))
-                } else {
-                    // Root is ComponentElement or ProviderElement
-                    Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
+                        let render_object = render_elem.render_object();
+                        Some(render_object.paint(&tree_guard, offset))
+                    }
+                    Some(crate::element::Element::Component(comp)) => {
+                        // Root is ComponentElement - paint its child
+                        #[cfg(debug_assertions)]
+                        tracing::debug!("flush_paint: Root is ComponentElement, painting child");
+
+                        match comp.child() {
+                            Some(child_id) => {
+                                match tree_guard.get(child_id) {
+                                    Some(crate::element::Element::Render(child_render)) => {
+                                        let render_state_lock = child_render.render_state();
+                                        let render_state = render_state_lock.read();
+                                        let offset = render_state.offset();
+                                        drop(render_state);
+
+                                        let render_object = child_render.render_object();
+                                        Some(render_object.paint(&tree_guard, offset))
+                                    }
+                                    _ => {
+                                        #[cfg(debug_assertions)]
+                                        tracing::warn!("flush_paint: ComponentElement child is not RenderElement");
+                                        Some(Box::new(flui_engine::ContainerLayer::new())
+                                            as crate::BoxedLayer)
+                                    }
+                                }
+                            }
+                            None => {
+                                #[cfg(debug_assertions)]
+                                tracing::warn!("flush_paint: ComponentElement has no child");
+                                Some(Box::new(flui_engine::ContainerLayer::new())
+                                    as crate::BoxedLayer)
+                            }
+                        }
+                    }
+                    _ => {
+                        // Root is ProviderElement or other type
+                        Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
+                    }
                 }
             }
             None => None,

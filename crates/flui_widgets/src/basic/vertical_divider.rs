@@ -79,7 +79,7 @@ use crate::{ColoredBox, Container, SizedBox};
 ///     .build()
 /// ```
 #[derive(Debug, Clone, Builder)]
-#[builder(on(String, into), finish_fn = build_vertical_divider)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct VerticalDivider {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -187,7 +187,7 @@ impl View for VerticalDivider {
                             .child(SizedBox::builder().width(self.thickness).build())
                             .build(),
                     )
-                    .build_container(),
+                    .build(),
             )
         } else {
             // Simple case: just a colored box with width

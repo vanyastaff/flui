@@ -70,7 +70,7 @@ use flui_types::typography::TextBaseline;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(TextBaseline, into), finish_fn = build_baseline)]
+#[builder(on(String, into), on(TextBaseline, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Baseline {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -224,11 +224,18 @@ where
     }
 }
 
-// Public build() wrapper
+// Public build() wrapper with validation
 impl<S: State> BaselineBuilder<S> {
-    /// Builds the Baseline widget.
+    /// Builds the Baseline widget with automatic validation in debug mode.
     pub fn build(self) -> Baseline {
-        self.build_baseline()
+        let baseline = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        if let Err(e) = baseline.validate() {
+            tracing::warn!("Baseline validation warning: {}", e);
+        }
+
+        baseline
     }
 }
 

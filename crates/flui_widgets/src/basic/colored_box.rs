@@ -65,7 +65,7 @@ use flui_types::Color;
 /// ColoredBox::new(Color::TRANSPARENT, widget)  // No visual effect
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(Color, into), finish_fn = build_colored_box)]
+#[builder(on(String, into), on(Color, into), finish_fn(name = build_internal, vis = ""))]
 pub struct ColoredBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -157,7 +157,7 @@ where
 impl<S: State> ColoredBoxBuilder<S> {
     /// Builds the ColoredBox widget.
     pub fn build(self) -> ColoredBox {
-        self.build_colored_box()
+        self.build_internal()
     }
 }
 

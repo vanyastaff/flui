@@ -7,5 +7,3 @@
 
 pub mod simplified_view;
 pub mod thread_safe_hooks;
-
-

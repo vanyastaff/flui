@@ -7,13 +7,35 @@
 //!
 //! # Usage Patterns
 //!
-//! ## 1. Builder Pattern
+//! ## 1. Chainable Builder Pattern
 //! ```rust,ignore
+//! // Chainable child() method (recommended for multiple children)
 //! Flex::builder()
 //!     .direction(Axis::Horizontal)
+//!     .child(child1)
+//!     .child(child2)
+//!     .child(child3)
 //!     .main_axis_alignment(MainAxisAlignment::Center)
-//!     .children(vec![child1, child2])
 //!     .build()
+//!
+//! // All children at once
+//! Flex::builder()
+//!     .direction(Axis::Horizontal)
+//!     .children(vec![child1, child2, child3])
+//!     .main_axis_alignment(MainAxisAlignment::Center)
+//!     .build()
+//! ```
+//!
+//! ## 2. Convenience Methods
+//! ```rust,ignore
+//! // Centered alignment
+//! Flex::centered(Axis::Horizontal, vec![child1, child2])
+//!
+//! // Spaced with padding between items
+//! Flex::spaced(Axis::Vertical, 16.0, vec![child1, child2])
+//!
+//! // Start aligned
+//! Flex::start(Axis::Horizontal, vec![child1, child2])
 //! ```
 
 use bon::Builder;
@@ -21,6 +43,8 @@ use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+
+use crate::SizedBox;
 
 /// A widget that displays its children in a one-dimensional array.
 ///
@@ -63,9 +87,17 @@ use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSi
     on(MainAxisAlignment, into),
     on(CrossAxisAlignment, into),
     on(MainAxisSize, into),
-    finish_fn = build_flex
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Flex {
+    /// The children widgets.
+    ///
+    /// Can be set via:
+    /// - `.children(vec![...])` to set all at once
+    /// - `.child(widget)` repeatedly to add one at a time (chainable)
+    #[builder(field)]
+    pub children: Vec<Box<dyn AnyView>>,
+
     /// Optional key for widget identification
     pub key: Option<String>,
 
@@ -94,21 +126,17 @@ pub struct Flex {
     /// - MainAxisSize::Min: Shrinks to fit children
     #[builder(default = MainAxisSize::Max)]
     pub main_axis_size: MainAxisSize,
-
-    /// The children widgets
-    #[builder(default = vec![])]
-    pub children: Vec<Box<dyn AnyView>>,
 }
 
 impl std::fmt::Debug for Flex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Flex")
+            .field("children", &format!("[{} children]", self.children.len()))
             .field("key", &self.key)
             .field("direction", &self.direction)
             .field("main_axis_alignment", &self.main_axis_alignment)
             .field("cross_axis_alignment", &self.cross_axis_alignment)
             .field("main_axis_size", &self.main_axis_size)
-            .field("children", &format!("[{} children]", self.children.len()))
             .finish()
     }
 }
@@ -116,17 +144,72 @@ impl std::fmt::Debug for Flex {
 impl Clone for Flex {
     fn clone(&self) -> Self {
         Self {
+            children: self.children.clone(),
             key: self.key.clone(),
             direction: self.direction,
             main_axis_alignment: self.main_axis_alignment,
             cross_axis_alignment: self.cross_axis_alignment,
             main_axis_size: self.main_axis_size,
-            children: self.children.clone(),
         }
     }
 }
 
+// Custom builder methods for FlexBuilder
+impl<S: flex_builder::State> FlexBuilder<S> {
+    /// Sets all children at once.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Flex::builder()
+    ///     .direction(Axis::Horizontal)
+    ///     .children(vec![child1, child2, child3])
+    ///     .build()
+    /// ```
+    pub fn children(mut self, children: Vec<Box<dyn AnyView>>) -> Self {
+        self.children = children;
+        self
+    }
+
+    /// Adds a single child widget (chainable).
+    ///
+    /// This method allows you to add children one at a time:
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Flex::builder()
+    ///     .direction(Axis::Horizontal)
+    ///     .child(widget1)
+    ///     .child(widget2)
+    ///     .child(widget3)
+    ///     .build()
+    /// ```
+    pub fn child(mut self, child: impl AnyView + 'static) -> Self {
+        self.children.push(Box::new(child));
+        self
+    }
+
+    /// Builds the Flex with optional validation.
+    pub fn build(self) -> Flex {
+        let flex = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = flex.validate() {
+                tracing::warn!("Flex validation failed: {}", e);
+            }
+        }
+
+        flex
+    }
+}
+
 impl Flex {
+    /// Validates the Flex configuration
+    fn validate(&self) -> Result<(), String> {
+        // Add validation logic if needed
+        Ok(())
+    }
+
     /// Creates a new Flex widget with the specified direction.
     ///
     /// # Parameters
@@ -134,12 +217,12 @@ impl Flex {
     /// - `direction`: The main axis direction (Horizontal or Vertical)
     pub fn new(direction: Axis) -> Self {
         Self {
+            children: vec![],
             key: None,
             direction,
             main_axis_alignment: MainAxisAlignment::Start,
             cross_axis_alignment: CrossAxisAlignment::Center,
             main_axis_size: MainAxisSize::Max,
-            children: vec![],
         }
     }
 
@@ -153,14 +236,142 @@ impl Flex {
         Self::new(Axis::Vertical)
     }
 
-    /// Sets the children widgets.
-    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
-        self.children = children;
+    // ========================================================================
+    // Convenience Methods
+    // ========================================================================
+
+    /// Creates a Flex with centered alignment.
+    ///
+    /// Both main axis and cross axis are centered.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let flex = Flex::centered(Axis::Horizontal, vec![child1, child2]);
+    /// ```
+    pub fn centered(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .direction(direction)
+            .main_axis_alignment(MainAxisAlignment::Center)
+            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .children(children)
+            .build()
     }
 
-    /// Adds a child widget.
-    pub fn add_child(&mut self, child: Box<dyn AnyView>) {
-        self.children.push(child);
+    /// Creates a Flex with spacing between children.
+    ///
+    /// Automatically inserts SizedBox spacers between children.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Vertical layout with 16px spacing
+    /// let flex = Flex::spaced(Axis::Vertical, 16.0, vec![child1, child2]);
+    /// ```
+    pub fn spaced(direction: Axis, spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
+        if children.is_empty() {
+            return Self::builder()
+                .direction(direction)
+                .children(vec![])
+                .build();
+        }
+
+        let mut spaced_children = Vec::with_capacity(children.len() * 2 - 1);
+
+        for (i, child) in children.into_iter().enumerate() {
+            if i > 0 {
+                // Add spacer between children
+                let spacer: Box<dyn AnyView> = match direction {
+                    Axis::Horizontal => Box::new(SizedBox::h_space(spacing)),
+                    Axis::Vertical => Box::new(SizedBox::v_space(spacing)),
+                };
+                spaced_children.push(spacer);
+            }
+            spaced_children.push(child);
+        }
+
+        Self::builder()
+            .direction(direction)
+            .children(spaced_children)
+            .build()
+    }
+
+    /// Creates a Flex with start alignment.
+    ///
+    /// Children are aligned at the start of the main axis.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let flex = Flex::start(Axis::Horizontal, vec![child1, child2]);
+    /// ```
+    pub fn start(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .direction(direction)
+            .main_axis_alignment(MainAxisAlignment::Start)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Flex with end alignment.
+    ///
+    /// Children are aligned at the end of the main axis.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let flex = Flex::end(Axis::Horizontal, vec![child1, child2]);
+    /// ```
+    pub fn end(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .direction(direction)
+            .main_axis_alignment(MainAxisAlignment::End)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Flex with space-between alignment.
+    ///
+    /// Children are evenly distributed with space between them.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let flex = Flex::space_between(Axis::Horizontal, vec![child1, child2, child3]);
+    /// ```
+    pub fn space_between(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .direction(direction)
+            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Flex with space-around alignment.
+    ///
+    /// Children are evenly distributed with space around them.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let flex = Flex::space_around(Axis::Horizontal, vec![child1, child2, child3]);
+    /// ```
+    pub fn space_around(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .direction(direction)
+            .main_axis_alignment(MainAxisAlignment::SpaceAround)
+            .children(children)
+            .build()
+    }
+
+    /// Creates a Flex with space-evenly alignment.
+    ///
+    /// Children are evenly distributed with equal space between and around them.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let flex = Flex::space_evenly(Axis::Horizontal, vec![child1, child2, child3]);
+    /// ```
+    pub fn space_evenly(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+        Self::builder()
+            .direction(direction)
+            .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
+            .children(children)
+            .build()
     }
 }
 
@@ -234,16 +445,88 @@ mod tests {
         let widget = Flex::builder()
             .direction(Axis::Vertical)
             .main_axis_alignment(MainAxisAlignment::Center)
-            .build_flex();
+            .build();
         assert_eq!(widget.direction, Axis::Vertical);
         assert_eq!(widget.main_axis_alignment, MainAxisAlignment::Center);
     }
 
     #[test]
-    fn test_flex_add_child() {
-        let mut widget = Flex::new(Axis::Horizontal);
-        widget.add_child(Box::new(crate::SizedBox::new()));
-        assert_eq!(widget.children.len(), 1);
+    fn test_flex_chainable_child() {
+        let widget = Flex::builder()
+            .direction(Axis::Horizontal)
+            .child(crate::SizedBox::new())
+            .child(crate::SizedBox::new())
+            .child(crate::SizedBox::new())
+            .build();
+        assert_eq!(widget.direction, Axis::Horizontal);
+        assert_eq!(widget.children.len(), 3);
+    }
+
+    #[test]
+    fn test_flex_centered() {
+        let widget = Flex::centered(
+            Axis::Horizontal,
+            vec![
+                Box::new(crate::SizedBox::new()),
+                Box::new(crate::SizedBox::new()),
+            ],
+        );
+        assert_eq!(widget.direction, Axis::Horizontal);
+        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::Center);
+        assert_eq!(widget.cross_axis_alignment, CrossAxisAlignment::Center);
+        assert_eq!(widget.children.len(), 2);
+    }
+
+    #[test]
+    fn test_flex_spaced() {
+        let widget = Flex::spaced(
+            Axis::Vertical,
+            16.0,
+            vec![
+                Box::new(crate::SizedBox::new()),
+                Box::new(crate::SizedBox::new()),
+                Box::new(crate::SizedBox::new()),
+            ],
+        );
+        assert_eq!(widget.direction, Axis::Vertical);
+        // 3 children + 2 spacers = 5 total
+        assert_eq!(widget.children.len(), 5);
+    }
+
+    #[test]
+    fn test_flex_spaced_empty() {
+        let widget = Flex::spaced(Axis::Horizontal, 16.0, vec![]);
+        assert_eq!(widget.children.len(), 0);
+    }
+
+    #[test]
+    fn test_flex_start() {
+        let widget = Flex::start(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
+        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::Start);
+    }
+
+    #[test]
+    fn test_flex_end() {
+        let widget = Flex::end(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
+        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::End);
+    }
+
+    #[test]
+    fn test_flex_space_between() {
+        let widget = Flex::space_between(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
+        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceBetween);
+    }
+
+    #[test]
+    fn test_flex_space_around() {
+        let widget = Flex::space_around(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
+        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceAround);
+    }
+
+    #[test]
+    fn test_flex_space_evenly() {
+        let widget = Flex::space_evenly(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
+        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceEvenly);
     }
 
     #[test]

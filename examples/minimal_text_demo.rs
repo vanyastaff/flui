@@ -49,7 +49,7 @@ impl View for MinimalApp {
 fn main() -> Result<(), eframe::Error> {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
     println!("=== Minimal Flui Demo - Text Rendering ===");

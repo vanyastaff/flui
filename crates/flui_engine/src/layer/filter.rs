@@ -149,10 +149,8 @@ impl Layer for FilterLayer {
 
         // Use save_layer to render child to offscreen buffer for filtering
         // Note: Full color filter implementation requires GPU backend with shader support
-        let child_bounds = child.bounds();
-        let paint = crate::painter::Paint::default(); // TODO: Apply color matrix via paint/shader
 
-        painter.save_layer(child_bounds, &paint);
+        painter.save_layer();
 
         // In a full GPU backend implementation:
         // 1. save_layer() creates offscreen render target

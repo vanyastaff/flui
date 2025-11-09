@@ -20,7 +20,7 @@ impl View for CounterApp {
         let mut container = Container::builder()
             .padding(EdgeInsets::all(40.0))
             .color(Color::rgb(245, 245, 250))
-            .build_container();
+            .build();
 
         container.child = Some(Box::new(CounterContent));
         container
@@ -50,15 +50,15 @@ impl View for CounterContent {
                 .build(),
         ));
 
-        column.children.push(Box::new(
-            SizedBox::builder().height(20.0).build(),
-        ));
+        column
+            .children
+            .push(Box::new(SizedBox::builder().height(20.0).build()));
 
         // Counter display
         let mut counter_container = Container::builder()
             .padding(EdgeInsets::symmetric(32.0, 16.0))
             .color(Color::rgb(33, 150, 243))
-            .build_container();
+            .build();
 
         counter_container.child = Some(Box::new(
             Text::builder()
@@ -70,9 +70,9 @@ impl View for CounterContent {
 
         column.children.push(Box::new(counter_container));
 
-        column.children.push(Box::new(
-            SizedBox::builder().height(20.0).build(),
-        ));
+        column
+            .children
+            .push(Box::new(SizedBox::builder().height(20.0).build()));
 
         // Increment button
         column.children.push(Box::new(
@@ -84,9 +84,9 @@ impl View for CounterContent {
                 .build(),
         ));
 
-        column.children.push(Box::new(
-            SizedBox::builder().height(8.0).build(),
-        ));
+        column
+            .children
+            .push(Box::new(SizedBox::builder().height(8.0).build()));
 
         // Decrement button
         column.children.push(Box::new(
@@ -98,9 +98,9 @@ impl View for CounterContent {
                 .build(),
         ));
 
-        column.children.push(Box::new(
-            SizedBox::builder().height(8.0).build(),
-        ));
+        column
+            .children
+            .push(Box::new(SizedBox::builder().height(8.0).build()));
 
         // Reset button
         column.children.push(Box::new(

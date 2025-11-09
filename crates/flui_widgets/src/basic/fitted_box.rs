@@ -83,7 +83,7 @@ pub use flui_types::styling::BoxFit;
 /// FittedBox::new(BoxFit::FitWidth, child)
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(BoxFit, into), on(Alignment, into), finish_fn = build_fitted_box)]
+#[builder(on(String, into), on(BoxFit, into), on(Alignment, into), finish_fn(name = build_internal, vis = ""))]
 pub struct FittedBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -210,7 +210,7 @@ where
 impl<S: State> FittedBoxBuilder<S> {
     /// Builds the FittedBox widget.
     pub fn build(self) -> FittedBox {
-        self.build_fitted_box()
+        self.build_internal()
     }
 }
 

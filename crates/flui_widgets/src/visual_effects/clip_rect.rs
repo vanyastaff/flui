@@ -54,7 +54,7 @@ use flui_types::painting::Clip;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_clip_rect)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct ClipRect {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -109,6 +109,20 @@ impl ClipRect {
         }
     }
 
+    /// Creates a ClipRect widget with a child.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// ClipRect::with_child(Clip::HardEdge, OverflowingWidget::new())
+    /// ```
+    pub fn with_child(clip_behavior: Clip, child: impl View + 'static) -> Self {
+        Self::builder()
+            .clip_behavior(clip_behavior)
+            .child(child)
+            .build()
+    }
+
     /// Sets the child widget.
     pub fn set_child(&mut self, child: impl View + 'static) {
         self.child = Some(Box::new(child));
@@ -147,7 +161,7 @@ where
 impl<S: State> ClipRectBuilder<S> {
     /// Builds the ClipRect widget.
     pub fn build(self) -> ClipRect {
-        self.build_clip_rect()
+        self.build_internal()
     }
 }
 

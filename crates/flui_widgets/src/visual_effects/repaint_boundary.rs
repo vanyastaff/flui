@@ -49,7 +49,7 @@ use flui_rendering::RenderRepaintBoundary;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_repaint_boundary)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 #[derive(Default)]
 pub struct RepaintBoundary {
     /// Optional key for widget identification
@@ -86,17 +86,17 @@ impl Clone for RepaintBoundary {
 }
 
 impl RepaintBoundary {
-    /// Creates a new RepaintBoundary.
+    /// Creates a new RepaintBoundary wrapping a child widget.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let boundary = RepaintBoundary::new(Box::new(child));
+    /// let boundary = RepaintBoundary::new(AnimatedWidget::new());
     /// ```
-    pub fn new(child: Box<dyn AnyView>) -> Self {
+    pub fn new(child: impl View + 'static) -> Self {
         Self {
             key: None,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -107,13 +107,12 @@ impl RepaintBoundary {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let boundary = RepaintBoundary::wrap(Box::new(animated_widget));
+    /// let boundary = RepaintBoundary::wrap(animated_widget);
     /// ```
-    pub fn wrap(child: Box<dyn AnyView>) -> Self {
+    pub fn wrap(child: impl View + 'static) -> Self {
         Self::new(child)
     }
 }
-
 
 // bon Builder Extensions
 use repaint_boundary_builder::{IsUnset, SetChild, State};
@@ -125,6 +124,14 @@ where
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl View + 'static) -> RepaintBoundaryBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Build wrapper
+impl<S: State> RepaintBoundaryBuilder<S> {
+    /// Builds the RepaintBoundary widget.
+    pub fn build(self) -> RepaintBoundary {
+        self.build_internal()
     }
 }
 
@@ -141,19 +148,19 @@ mod tests {
 
     #[test]
     fn test_repaint_boundary_new() {
-        let boundary = RepaintBoundary::new(Box::new(crate::SizedBox::new()));
+        let boundary = RepaintBoundary::new(crate::SizedBox::new());
         assert!(boundary.child.is_some());
     }
 
     #[test]
     fn test_repaint_boundary_wrap() {
-        let boundary = RepaintBoundary::wrap(Box::new(crate::SizedBox::new()));
+        let boundary = RepaintBoundary::wrap(crate::SizedBox::new());
         assert!(boundary.child.is_some());
     }
 
     #[test]
     fn test_repaint_boundary_builder() {
-        let boundary = RepaintBoundary::builder().build_repaint_boundary();
+        let boundary = RepaintBoundary::builder().build();
         assert!(boundary.child.is_none());
     }
 

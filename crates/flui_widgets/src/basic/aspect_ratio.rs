@@ -86,7 +86,7 @@ use flui_rendering::RenderAspectRatio;
 #[derive(Builder)]
 #[builder(
     on(String, into),
-    finish_fn = build_aspect_ratio
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct AspectRatio {
     /// Optional key for widget identification
@@ -260,7 +260,7 @@ where
 impl<S: State> AspectRatioBuilder<S> {
     /// Builds the AspectRatio widget.
     pub fn build(self) -> AspectRatio {
-        self.build_aspect_ratio()
+        self.build_internal()
     }
 }
 

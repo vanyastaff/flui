@@ -59,6 +59,7 @@ pub mod error;
 pub mod gestures;
 pub mod interaction;
 pub mod layout;
+pub mod style;
 pub mod visual_effects;
 
 // Re-exports for convenient top-level access
@@ -73,14 +74,16 @@ pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 pub use layout::{
     Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
     IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-    RotatedBox, Row, Scaffold, SingleChildScrollView, SizedOverflowBox, Spacer, Stack, Wrap,
+    RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
+    Stack, Viewport, Wrap,
 };
 pub use visual_effects::{
-    BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
+    BackdropFilter, ClipOval, ClipRRect, ClipRect, Material, Offstage, Opacity, PhysicalModel,
     RepaintBoundary, Transform, Visibility,
 };
 
 // Re-export commonly used types
+pub use flui_core::view::AnyView;
 pub use flui_rendering::DecorationPosition;
 pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
@@ -96,15 +99,16 @@ pub mod prelude {
     // Re-export essential widgets for Container and Flex layout
     pub use crate::basic::{
         Align, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox, Container,
-        DecoratedBox, Divider, FittedBox, LayoutBuilder, LimitedBox, Padding, SafeArea, SizedBox, Text,
-        VerticalDivider,
+        DecoratedBox, Divider, FittedBox, LayoutBuilder, LimitedBox, Padding, SafeArea, SizedBox,
+        Text, VerticalDivider,
     };
     pub use crate::gestures::GestureDetector;
     pub use crate::interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
     pub use crate::layout::{
         Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
         IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
-        RotatedBox, Row, SingleChildScrollView, SizedOverflowBox, Spacer, Stack, Wrap,
+        RotatedBox, Row, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer, Stack,
+        Viewport, Wrap,
     };
     pub use crate::visual_effects::{
         BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,

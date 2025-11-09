@@ -67,7 +67,7 @@ use flui_rendering::RenderFractionallySizedBox;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_fractionally_sized_box)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct FractionallySizedBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -244,7 +244,7 @@ where
 impl<S: State> FractionallySizedBoxBuilder<S> {
     /// Builds the FractionallySizedBox widget.
     pub fn build(self) -> FractionallySizedBox {
-        self.build_fractionally_sized_box()
+        self.build_internal()
     }
 }
 

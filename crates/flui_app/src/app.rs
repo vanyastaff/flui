@@ -193,6 +193,13 @@ impl FluiApp {
             // Mark size changed for relayout
             self.last_size = None;
 
+            // CRITICAL: Request layout immediately on resize to prevent visual glitches
+            // Without this, the UI continues rendering with old layout until next update()
+            if let Some(root_id) = self.root_id {
+                self.pipeline.request_layout(root_id);
+                tracing::debug!("Requested layout after resize to {}x{}", width, height);
+            }
+
             tracing::info!("Window resized to {}x{}", width, height);
         }
     }
@@ -214,7 +221,7 @@ impl FluiApp {
         }
 
         // Layout phase - compute positions and sizes
-        if let Some(root_id) = self.root_id {
+        if self.root_id.is_some() {
             let constraints = BoxConstraints::tight(size);
             match self.pipeline.flush_layout(constraints) {
                 Ok(_) => {
@@ -283,8 +290,22 @@ impl FluiApp {
         // Get current frame
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                // Surface is outdated or lost - reconfigure and retry next frame
+                tracing::warn!("Surface outdated/lost, reconfiguring...");
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                tracing::error!("Out of GPU memory!");
+                return;
+            }
+            Err(wgpu::SurfaceError::Timeout) => {
+                tracing::warn!("Surface timeout, skipping frame");
+                return;
+            }
             Err(e) => {
-                tracing::warn!("Failed to get current texture: {:?}", e);
+                tracing::error!("Unknown surface error: {:?}", e);
                 return;
             }
         };
@@ -341,7 +362,10 @@ impl FluiApp {
         layer.paint(&mut painter);
 
         // Actually render to GPU
-        painter.render(&view, &mut encoder);
+        if let Err(e) = painter.render(&view, &mut encoder) {
+            tracing::error!("Failed to render frame: {:?}", e);
+            return;
+        }
 
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));

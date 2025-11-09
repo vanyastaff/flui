@@ -5,12 +5,21 @@
 //!
 //! # Usage Patterns
 //!
-//! ## 1. Struct Literal
+//! ## 1. Convenience Methods (Recommended)
 //! ```rust,ignore
-//! Align {
-//!     alignment: Alignment::CENTER,
-//!     ..Default::default()
-//! }
+//! // Common alignments (9 presets)
+//! Align::top_left(child)
+//! Align::top_center(child)
+//! Align::top_right(child)
+//! Align::center_left(child)
+//! Align::center(child)
+//! Align::center_right(child)
+//! Align::bottom_left(child)
+//! Align::bottom_center(child)
+//! Align::bottom_right(child)
+//!
+//! // Custom alignment
+//! Align::with_alignment(Alignment::new(0.5, -0.5), child)
 //! ```
 //!
 //! ## 2. Builder Pattern
@@ -23,9 +32,7 @@
 //!
 //! ## 3. Macro
 //! ```rust,ignore
-//! align! {
-//!     alignment: Alignment::BOTTOM_RIGHT,
-//! }
+//! align!(child: widget, alignment: Alignment::BOTTOM_RIGHT)
 //! ```
 
 use bon::Builder;
@@ -72,7 +79,7 @@ use flui_types::Alignment;
 #[builder(
     on(String, into),
     on(Alignment, into),
-    finish_fn = build_align
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Align {
     /// Optional key for widget identification
@@ -135,8 +142,10 @@ impl Clone for Align {
 }
 
 impl Align {
-    /// Creates a new Align widget with center alignment.
-    pub fn new() -> Self {
+    /// Creates a new empty Align widget with center alignment.
+    ///
+    /// Note: Prefer using convenience methods like `Align::center(child)` for most cases.
+    pub const fn new() -> Self {
         Self {
             key: None,
             alignment: Alignment::CENTER,
@@ -146,78 +155,109 @@ impl Align {
         }
     }
 
-    /// Creates an Align widget with top-left alignment.
-    pub fn top_left() -> Self {
-        Self {
-            alignment: Alignment::TOP_LEFT,
-            ..Self::new()
-        }
+    /// Creates an Align with custom alignment and child.
+    ///
+    /// Use this for custom alignment values not covered by presets.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Custom position: slightly right and up from center
+    /// Align::with_alignment(Alignment::new(0.3, -0.2), widget)
+    /// ```
+    pub fn with_alignment(alignment: Alignment, child: impl View + 'static) -> Self {
+        Self::builder().alignment(alignment).child(child).build()
     }
 
-    /// Creates an Align widget with top-center alignment.
-    pub fn top_center() -> Self {
-        Self {
-            alignment: Alignment::TOP_CENTER,
-            ..Self::new()
-        }
+    // ========== 9 Standard Alignment Presets ==========
+
+    /// Aligns child to top-left corner.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::top_left(close_button)
+    /// ```
+    pub fn top_left(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::TOP_LEFT, child)
     }
 
-    /// Creates an Align widget with top-right alignment.
-    pub fn top_right() -> Self {
-        Self {
-            alignment: Alignment::TOP_RIGHT,
-            ..Self::new()
-        }
+    /// Aligns child to top-center.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::top_center(title_text)
+    /// ```
+    pub fn top_center(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::TOP_CENTER, child)
     }
 
-    /// Creates an Align widget with center-left alignment.
-    pub fn center_left() -> Self {
-        Self {
-            alignment: Alignment::CENTER_LEFT,
-            ..Self::new()
-        }
+    /// Aligns child to top-right corner.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::top_right(menu_button)
+    /// ```
+    pub fn top_right(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::TOP_RIGHT, child)
     }
 
-    /// Creates an Align widget with center alignment.
-    pub fn center() -> Self {
-        Self::new()
+    /// Aligns child to center-left.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::center_left(sidebar)
+    /// ```
+    pub fn center_left(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::CENTER_LEFT, child)
     }
 
-    /// Creates an Align widget with center-right alignment.
-    pub fn center_right() -> Self {
-        Self {
-            alignment: Alignment::CENTER_RIGHT,
-            ..Self::new()
-        }
+    /// Aligns child to center (same as `Center::with_child`).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::center(logo)
+    /// ```
+    pub fn center(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::CENTER, child)
     }
 
-    /// Creates an Align widget with bottom-left alignment.
-    pub fn bottom_left() -> Self {
-        Self {
-            alignment: Alignment::BOTTOM_LEFT,
-            ..Self::new()
-        }
+    /// Aligns child to center-right.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::center_right(scroll_indicator)
+    /// ```
+    pub fn center_right(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::CENTER_RIGHT, child)
     }
 
-    /// Creates an Align widget with bottom-center alignment.
-    pub fn bottom_center() -> Self {
-        Self {
-            alignment: Alignment::BOTTOM_CENTER,
-            ..Self::new()
-        }
+    /// Aligns child to bottom-left corner.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::bottom_left(back_button)
+    /// ```
+    pub fn bottom_left(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::BOTTOM_LEFT, child)
     }
 
-    /// Creates an Align widget with bottom-right alignment.
-    pub fn bottom_right() -> Self {
-        Self {
-            alignment: Alignment::BOTTOM_RIGHT,
-            ..Self::new()
-        }
+    /// Aligns child to bottom-center.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::bottom_center(action_button)
+    /// ```
+    pub fn bottom_center(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::BOTTOM_CENTER, child)
     }
 
-    /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    /// Aligns child to bottom-right corner.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// Align::bottom_right(fab_button)
+    /// ```
+    pub fn bottom_right(child: impl View + 'static) -> Self {
+        Self::with_alignment(Alignment::BOTTOM_RIGHT, child)
     }
 
     /// Validates Align configuration.
@@ -264,21 +304,63 @@ where
     }
 }
 
-// Build wrapper
+// Build wrapper with validation
 impl<S: State> AlignBuilder<S> {
-    /// Builds the Align widget.
+    /// Builds the Align widget with automatic validation in debug mode.
     pub fn build(self) -> Align {
-        self.build_align()
+        let align = self.build_internal();
+
+        // In debug mode, validate configuration and warn on issues
+        #[cfg(debug_assertions)]
+        if let Err(e) = align.validate() {
+            tracing::warn!("Align validation warning: {}", e);
+        }
+
+        align
     }
 }
 
 /// Macro for creating Align with declarative syntax.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Empty align
+/// align!()
+///
+/// // With child only (center alignment)
+/// align!(child: Text::new("Hello"))
+///
+/// // With child and alignment
+/// align!(child: widget, alignment: Alignment::TOP_RIGHT)
+///
+/// // Properties only (no child)
+/// align!(alignment: Alignment::BOTTOM_LEFT)
+/// ```
 #[macro_export]
 macro_rules! align {
+    // Empty align
     () => {
         $crate::Align::new()
     };
-    ($($field:ident : $value:expr),* $(,)?) => {
+
+    // With child only (center alignment)
+    (child: $child:expr) => {
+        $crate::Align::builder()
+            .child($child)
+            .build()
+    };
+
+    // With child and properties
+    (child: $child:expr, $($field:ident : $value:expr),+ $(,)?) => {
+        $crate::Align::builder()
+            .child($child)
+            $(.$field($value))+
+            .build()
+    };
+
+    // Without child, just properties
+    ($($field:ident : $value:expr),+ $(,)?) => {
         $crate::Align {
             $($field: $value.into(),)*
             ..Default::default()
@@ -321,32 +403,45 @@ mod tests {
 
     #[test]
     fn test_align_top_left() {
-        let align = Align::top_left();
+        let align = Align::top_left(MockView);
         assert_eq!(align.alignment, Alignment::TOP_LEFT);
+        assert!(align.child.is_some());
     }
 
     #[test]
     fn test_align_top_center() {
-        let align = Align::top_center();
+        let align = Align::top_center(MockView);
         assert_eq!(align.alignment, Alignment::TOP_CENTER);
+        assert!(align.child.is_some());
     }
 
     #[test]
     fn test_align_top_right() {
-        let align = Align::top_right();
+        let align = Align::top_right(MockView);
         assert_eq!(align.alignment, Alignment::TOP_RIGHT);
+        assert!(align.child.is_some());
     }
 
     #[test]
     fn test_align_center() {
-        let align = Align::center();
+        let align = Align::center(MockView);
         assert_eq!(align.alignment, Alignment::CENTER);
+        assert!(align.child.is_some());
     }
 
     #[test]
     fn test_align_bottom_right() {
-        let align = Align::bottom_right();
+        let align = Align::bottom_right(MockView);
         assert_eq!(align.alignment, Alignment::BOTTOM_RIGHT);
+        assert!(align.child.is_some());
+    }
+
+    #[test]
+    fn test_align_with_alignment() {
+        let custom = Alignment::new(0.5, -0.5);
+        let align = Align::with_alignment(custom, MockView);
+        assert_eq!(align.alignment, custom);
+        assert!(align.child.is_some());
     }
 
     #[test]
@@ -372,16 +467,23 @@ mod tests {
     }
 
     #[test]
-    fn test_align_set_child() {
-        let mut align = Align::new();
-        align.set_child(MockView);
-        assert!(align.child.is_some());
-    }
-
-    #[test]
     fn test_align_macro_empty() {
         let align = align!();
         assert_eq!(align.alignment, Alignment::CENTER);
+    }
+
+    #[test]
+    fn test_align_macro_with_child() {
+        let align = align!(child: MockView);
+        assert!(align.child.is_some());
+        assert_eq!(align.alignment, Alignment::CENTER);
+    }
+
+    #[test]
+    fn test_align_macro_with_child_and_alignment() {
+        let align = align!(child: MockView, alignment: Alignment::TOP_RIGHT);
+        assert!(align.child.is_some());
+        assert_eq!(align.alignment, Alignment::TOP_RIGHT);
     }
 
     #[test]
@@ -419,15 +521,33 @@ mod tests {
     #[test]
     fn test_align_all_factory_methods() {
         // Test all 9 alignment factory methods
-        assert_eq!(Align::top_left().alignment, Alignment::TOP_LEFT);
-        assert_eq!(Align::top_center().alignment, Alignment::TOP_CENTER);
-        assert_eq!(Align::top_right().alignment, Alignment::TOP_RIGHT);
-        assert_eq!(Align::center_left().alignment, Alignment::CENTER_LEFT);
-        assert_eq!(Align::center().alignment, Alignment::CENTER);
-        assert_eq!(Align::center_right().alignment, Alignment::CENTER_RIGHT);
-        assert_eq!(Align::bottom_left().alignment, Alignment::BOTTOM_LEFT);
-        assert_eq!(Align::bottom_center().alignment, Alignment::BOTTOM_CENTER);
-        assert_eq!(Align::bottom_right().alignment, Alignment::BOTTOM_RIGHT);
+        assert_eq!(Align::top_left(MockView).alignment, Alignment::TOP_LEFT);
+        assert_eq!(Align::top_center(MockView).alignment, Alignment::TOP_CENTER);
+        assert_eq!(Align::top_right(MockView).alignment, Alignment::TOP_RIGHT);
+        assert_eq!(
+            Align::center_left(MockView).alignment,
+            Alignment::CENTER_LEFT
+        );
+        assert_eq!(Align::center(MockView).alignment, Alignment::CENTER);
+        assert_eq!(
+            Align::center_right(MockView).alignment,
+            Alignment::CENTER_RIGHT
+        );
+        assert_eq!(
+            Align::bottom_left(MockView).alignment,
+            Alignment::BOTTOM_LEFT
+        );
+        assert_eq!(
+            Align::bottom_center(MockView).alignment,
+            Alignment::BOTTOM_CENTER
+        );
+        assert_eq!(
+            Align::bottom_right(MockView).alignment,
+            Alignment::BOTTOM_RIGHT
+        );
+
+        // Verify all have children
+        assert!(Align::center(MockView).child.is_some());
     }
 
     #[test]

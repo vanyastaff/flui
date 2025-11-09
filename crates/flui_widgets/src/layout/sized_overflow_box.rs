@@ -67,7 +67,10 @@ use flui_types::Alignment;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_sized_overflow_box)]
+#[builder(
+    on(String, into),
+    finish_fn(name = build_internal, vis = "")
+)]
 pub struct SizedOverflowBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -173,9 +176,9 @@ impl SizedOverflowBox {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let box = SizedOverflowBox::new(Some(100.0), Some(100.0), Box::new(child));
+    /// let box = SizedOverflowBox::new(Some(100.0), Some(100.0), child);
     /// ```
-    pub fn new(width: Option<f32>, height: Option<f32>, child: Box<dyn AnyView>) -> Self {
+    pub fn new(width: Option<f32>, height: Option<f32>, child: impl View + 'static) -> Self {
         Self {
             key: None,
             width,
@@ -185,7 +188,7 @@ impl SizedOverflowBox {
             child_min_height: None,
             child_max_height: None,
             alignment: Alignment::CENTER,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -198,7 +201,7 @@ impl SizedOverflowBox {
     ///     Some(100.0), Some(100.0),
     ///     None, Some(200.0),
     ///     None, Some(200.0),
-    ///     Box::new(child)
+    ///     child
     /// );
     /// ```
     pub fn with_child_constraints(
@@ -208,7 +211,7 @@ impl SizedOverflowBox {
         child_max_width: Option<f32>,
         child_min_height: Option<f32>,
         child_max_height: Option<f32>,
-        child: Box<dyn AnyView>,
+        child: impl View + 'static,
     ) -> Self {
         Self {
             key: None,
@@ -219,8 +222,70 @@ impl SizedOverflowBox {
             child_min_height,
             child_max_height,
             alignment: Alignment::CENTER,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
+    }
+
+    /// Validates SizedOverflowBox configuration.
+    pub fn validate(&self) -> Result<(), String> {
+        // Validate width
+        if let Some(width) = self.width {
+            if width < 0.0 || width.is_nan() {
+                return Err(format!(
+                    "Invalid width: {}. Width must be non-negative and finite.",
+                    width
+                ));
+            }
+        }
+
+        // Validate height
+        if let Some(height) = self.height {
+            if height < 0.0 || height.is_nan() {
+                return Err(format!(
+                    "Invalid height: {}. Height must be non-negative and finite.",
+                    height
+                ));
+            }
+        }
+
+        // Validate child constraints
+        if let Some(child_min_width) = self.child_min_width {
+            if child_min_width < 0.0 || child_min_width.is_nan() {
+                return Err(format!(
+                    "Invalid child_min_width: {}. Must be non-negative and finite.",
+                    child_min_width
+                ));
+            }
+        }
+
+        if let Some(child_max_width) = self.child_max_width {
+            if child_max_width < 0.0 || child_max_width.is_nan() {
+                return Err(format!(
+                    "Invalid child_max_width: {}. Must be non-negative and finite.",
+                    child_max_width
+                ));
+            }
+        }
+
+        if let Some(child_min_height) = self.child_min_height {
+            if child_min_height < 0.0 || child_min_height.is_nan() {
+                return Err(format!(
+                    "Invalid child_min_height: {}. Must be non-negative and finite.",
+                    child_min_height
+                ));
+            }
+        }
+
+        if let Some(child_max_height) = self.child_max_height {
+            if child_max_height < 0.0 || child_max_height.is_nan() {
+                return Err(format!(
+                    "Invalid child_max_height: {}. Must be non-negative and finite.",
+                    child_max_height
+                ));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -243,13 +308,41 @@ impl Default for SizedOverflowBox {
 // bon Builder Extensions
 use sized_overflow_box_builder::{IsUnset, SetChild, State};
 
+// Custom setter for child
 impl<S: State> SizedOverflowBoxBuilder<S>
 where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// SizedOverflowBox::builder()
+    ///     .width(100.0)
+    ///     .height(100.0)
+    ///     .child(Container::new())
+    ///     .build()
+    /// ```
     pub fn child(self, child: impl View + 'static) -> SizedOverflowBoxBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Public build() wrapper
+impl<S: State> SizedOverflowBoxBuilder<S> {
+    /// Builds the SizedOverflowBox with optional validation.
+    pub fn build(self) -> SizedOverflowBox {
+        let sized_overflow_box = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = sized_overflow_box.validate() {
+                tracing::warn!("SizedOverflowBox validation failed: {}", e);
+            }
+        }
+
+        sized_overflow_box
     }
 }
 
@@ -284,8 +377,7 @@ mod tests {
 
     #[test]
     fn test_sized_overflow_box_new() {
-        let box_widget =
-            SizedOverflowBox::new(Some(100.0), Some(100.0), Box::new(crate::SizedBox::new()));
+        let box_widget = SizedOverflowBox::new(Some(100.0), Some(100.0), crate::SizedBox::new());
         assert_eq!(box_widget.width, Some(100.0));
         assert_eq!(box_widget.height, Some(100.0));
         assert!(box_widget.child.is_some());
@@ -300,7 +392,7 @@ mod tests {
             Some(200.0),
             None,
             Some(200.0),
-            Box::new(crate::SizedBox::new()),
+            crate::SizedBox::new(),
         );
         assert_eq!(box_widget.child_max_width, Some(200.0));
         assert_eq!(box_widget.child_max_height, Some(200.0));
@@ -313,11 +405,33 @@ mod tests {
             .height(100.0)
             .child_max_width(200.0)
             .alignment(Alignment::TOP_LEFT)
-            .build_sized_overflow_box();
+            .build();
         assert_eq!(box_widget.width, Some(100.0));
         assert_eq!(box_widget.height, Some(100.0));
         assert_eq!(box_widget.child_max_width, Some(200.0));
         assert_eq!(box_widget.alignment, Alignment::TOP_LEFT);
+    }
+
+    #[test]
+    fn test_sized_overflow_box_validate_ok() {
+        let box_widget = SizedOverflowBox::new(Some(100.0), Some(100.0), crate::SizedBox::new());
+        assert!(box_widget.validate().is_ok());
+    }
+
+    #[test]
+    fn test_sized_overflow_box_validate_invalid_width() {
+        let mut box_widget =
+            SizedOverflowBox::new(Some(100.0), Some(100.0), crate::SizedBox::new());
+        box_widget.width = Some(-1.0);
+        assert!(box_widget.validate().is_err());
+    }
+
+    #[test]
+    fn test_sized_overflow_box_validate_invalid_child_constraint() {
+        let mut box_widget =
+            SizedOverflowBox::new(Some(100.0), Some(100.0), crate::SizedBox::new());
+        box_widget.child_max_width = Some(-1.0);
+        assert!(box_widget.validate().is_err());
     }
 
     #[test]

@@ -126,7 +126,7 @@ use flui_types::layout::{Alignment, StackFit};
 #[builder(
     on(String, into),
     on(Alignment, into),
-    finish_fn = build_indexed_stack
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct IndexedStack {
     /// Optional key for widget identification
@@ -327,7 +327,7 @@ where
 impl<S: State> IndexedStackBuilder<S> {
     /// Builds the IndexedStack widget.
     pub fn build(self) -> IndexedStack {
-        self.build_indexed_stack()
+        self.build_internal()
     }
 }
 

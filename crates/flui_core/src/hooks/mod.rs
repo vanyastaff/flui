@@ -49,7 +49,6 @@ pub mod signal;
 pub mod signal_runtime;
 pub mod test_harness;
 
-
 pub use effect::{use_effect, use_effect_simple, CleanupFn, Effect, EffectHook as EffectHookImpl};
 pub use hook_context::{ComponentId, HookContext, HookId, HookIndex};
 pub use hook_trait::{AsyncHook, DependencyId, EffectHook, Hook, ReactiveHook};
@@ -64,4 +63,3 @@ pub use test_harness::{HookTestHarness, MultiHookTestHarness};
 
 // TODO(2025-03): Add compile-time hook rules enforcement.
 // Use marker traits like ComponentHook to enforce hook rules at compile time.
-

@@ -35,7 +35,7 @@ use flui_types::BoxConstraints;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(BoxConstraints, into), finish_fn = build_constrained_box)]
+#[builder(on(String, into), on(BoxConstraints, into), finish_fn(name = build_internal, vis = ""))]
 pub struct ConstrainedBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -87,6 +87,7 @@ impl ConstrainedBox {
     }
 
     /// Sets the child widget.
+    #[deprecated(note = "Use builder pattern with .child() instead")]
     pub fn set_child(&mut self, child: impl View + 'static) {
         self.child = Some(Box::new(child));
     }
@@ -131,9 +132,16 @@ where
 }
 
 impl<S: State> ConstrainedBoxBuilder<S> {
-    /// Builds the ConstrainedBox widget.
+    /// Builds the ConstrainedBox widget with optional validation.
     pub fn build(self) -> ConstrainedBox {
-        self.build_constrained_box()
+        let constrained_box = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        if let Err(e) = constrained_box.validate() {
+            tracing::warn!("ConstrainedBox validation failed: {}", e);
+        }
+
+        constrained_box
     }
 }
 

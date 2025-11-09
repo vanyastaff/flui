@@ -766,7 +766,8 @@ impl ClipPathLayer {
 impl Layer for ClipPathLayer {
     fn paint(&self, painter: &mut dyn Painter) {
         painter.save();
-        painter.clip_path(&self.clip_path, self.path_bounds);
+        // Note: clip_path is stubbed in compat layer - path clipping not yet implemented
+        painter.clip_path(&format!("{:?}", self.clip_path));
         self.base.paint_children(painter);
         painter.restore();
     }

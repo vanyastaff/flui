@@ -58,7 +58,7 @@ use flui_rendering::RenderOffstage;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_offstage)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Offstage {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -115,6 +115,17 @@ impl Offstage {
         }
     }
 
+    /// Creates an Offstage widget with a child.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// Offstage::with_child(true, ExpensiveWidget::new())
+    /// ```
+    pub fn with_child(offstage: bool, child: impl View + 'static) -> Self {
+        Self::builder().offstage(offstage).child(child).build()
+    }
+
     /// Sets the child widget.
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
@@ -140,6 +151,14 @@ where
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl View + 'static) -> OffstageBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Build wrapper
+impl<S: State> OffstageBuilder<S> {
+    /// Builds the Offstage widget.
+    pub fn build(self) -> Offstage {
+        self.build_internal()
     }
 }
 
@@ -187,22 +206,27 @@ mod tests {
 
     #[test]
     fn test_offstage_builder() {
-        let widget = Offstage::builder().build_offstage();
+        let widget = Offstage::builder().build();
         assert!(widget.offstage); // Default is true
     }
 
     #[test]
     fn test_offstage_builder_with_child() {
-        let widget = Offstage::builder()
-            .child(crate::SizedBox::new())
-            .build_offstage();
+        let widget = Offstage::builder().child(crate::SizedBox::new()).build();
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_offstage_builder_with_offstage_false() {
-        let widget = Offstage::builder().offstage(false).build_offstage();
+        let widget = Offstage::builder().offstage(false).build();
         assert!(!widget.offstage);
+    }
+
+    #[test]
+    fn test_offstage_with_child() {
+        let widget = Offstage::with_child(true, crate::SizedBox::new());
+        assert!(widget.offstage);
+        assert!(widget.child.is_some());
     }
 
     #[test]

@@ -73,7 +73,7 @@ use flui_types::painting::Clip;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(Clip, into), finish_fn = build_clip_oval)]
+#[builder(on(String, into), on(Clip, into), finish_fn(name = build_internal, vis = ""))]
 pub struct ClipOval {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -186,7 +186,7 @@ where
 impl<S: State> ClipOvalBuilder<S> {
     /// Builds the ClipOval widget.
     pub fn build(self) -> ClipOval {
-        self.build_clip_oval()
+        self.build_internal()
     }
 }
 

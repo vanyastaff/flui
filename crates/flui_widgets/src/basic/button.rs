@@ -88,7 +88,7 @@ impl View for Button {
                 border_radius: Some(self.border_radius),
                 ..Default::default()
             })
-            .build_container();
+            .build();
 
         container.child = Some(Box::new(text));
 

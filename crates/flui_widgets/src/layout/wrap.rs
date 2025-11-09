@@ -90,7 +90,7 @@ pub use flui_rendering::{
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_wrap)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Wrap {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -259,7 +259,7 @@ where
 impl<S: State> WrapBuilder<S> {
     /// Builds the Wrap widget.
     pub fn build(self) -> Wrap {
-        self.build_wrap()
+        self.build_internal()
     }
 }
 

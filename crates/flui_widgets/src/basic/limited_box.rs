@@ -65,7 +65,7 @@ use flui_rendering::RenderLimitedBox;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_limited_box)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct LimitedBox {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -158,7 +158,7 @@ where
 impl<S: State> LimitedBoxBuilder<S> {
     /// Builds the LimitedBox widget.
     pub fn build(self) -> LimitedBox {
-        self.build_limited_box()
+        self.build_internal()
     }
 }
 

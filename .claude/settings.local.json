@@ -16,7 +16,10 @@
       "Bash(timeout 3 cargo run:*)",
       "WebSearch",
       "WebFetch(domain:api.flutter.dev)",
-      "Bash(timeout 60 cargo run:*)"
+      "Bash(timeout 60 cargo run:*)",
+      "Bash(git restore:*)",
+      "Bash(timeout 10 cargo run:*)",
+      "Bash(RUST_LOG=debug timeout 5 cargo run:*)"
     ],
     "deny": [],
     "ask": []

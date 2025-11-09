@@ -117,7 +117,7 @@ use flui_types::styling::BorderRadius;
 #[builder(
     on(String, into),
     on(BorderRadius, into),
-    finish_fn = build_clip_rrect
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct ClipRRect {
     /// Optional key for widget identification
@@ -355,11 +355,18 @@ where
     }
 }
 
-// Public build() wrapper
+// Public build() wrapper with validation
 impl<S: State> ClipRRectBuilder<S> {
-    /// Builds the ClipRRect widget.
+    /// Builds the ClipRRect widget with automatic validation in debug mode.
     pub fn build(self) -> ClipRRect {
-        self.build_clip_rrect()
+        let clip_rrect = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        if let Err(e) = clip_rrect.validate() {
+            tracing::warn!("ClipRRect validation warning: {}", e);
+        }
+
+        clip_rrect
     }
 }
 

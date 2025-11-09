@@ -3,6 +3,7 @@
 //! Based on Flutter's SingleChildScrollView. Scrolls a single child
 //! widget that can exceed the viewport size.
 
+use super::scroll_controller::ScrollController;
 use flui_core::view::{AnyView, BuildContext, IntoElement, View};
 use flui_types::layout::Axis;
 
@@ -14,11 +15,14 @@ use flui_types::layout::Axis;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_widgets::SingleChildScrollView;
+/// use flui_widgets::{SingleChildScrollView, ScrollController};
 /// use flui_types::layout::Axis;
+///
+/// let controller = ScrollController::new();
 ///
 /// SingleChildScrollView::builder()
 ///     .direction(Axis::Vertical)
+///     .controller(controller.clone())
 ///     .child(Column::new()
 ///         .children(many_items))
 ///     .build()
@@ -36,6 +40,15 @@ pub struct SingleChildScrollView {
 
     /// Padding around the scrollable child
     pub padding: Option<flui_types::EdgeInsets>,
+
+    /// Optional controller for programmatic scrolling
+    pub controller: Option<ScrollController>,
+
+    /// Whether to show scroll bars
+    pub show_scrollbar: bool,
+
+    /// Scroll bar thickness in pixels
+    pub scrollbar_thickness: f32,
 }
 
 impl SingleChildScrollView {
@@ -46,6 +59,9 @@ impl SingleChildScrollView {
             direction: Axis::Vertical,
             reverse: false,
             padding: None,
+            controller: None,
+            show_scrollbar: true,
+            scrollbar_thickness: 8.0,
         }
     }
 
@@ -61,7 +77,16 @@ impl SingleChildScrollView {
             direction: Axis::Horizontal,
             reverse: false,
             padding: None,
+            controller: None,
+            show_scrollbar: true,
+            scrollbar_thickness: 8.0,
         }
+    }
+
+    /// Set the scroll controller
+    pub fn with_controller(mut self, controller: ScrollController) -> Self {
+        self.controller = Some(controller);
+        self
     }
 
     /// Builder for SingleChildScrollView
@@ -69,7 +94,6 @@ impl SingleChildScrollView {
         SingleChildScrollViewBuilder::new()
     }
 }
-
 
 impl std::fmt::Debug for SingleChildScrollView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,6 +112,9 @@ pub struct SingleChildScrollViewBuilder {
     direction: Axis,
     reverse: bool,
     padding: Option<flui_types::EdgeInsets>,
+    controller: Option<ScrollController>,
+    show_scrollbar: bool,
+    scrollbar_thickness: f32,
 }
 
 impl SingleChildScrollViewBuilder {
@@ -98,6 +125,9 @@ impl SingleChildScrollViewBuilder {
             direction: Axis::Vertical,
             reverse: false,
             padding: None,
+            controller: None,
+            show_scrollbar: true,
+            scrollbar_thickness: 8.0,
         }
     }
 
@@ -125,6 +155,24 @@ impl SingleChildScrollViewBuilder {
         self
     }
 
+    /// Set the scroll controller
+    pub fn controller(mut self, controller: ScrollController) -> Self {
+        self.controller = Some(controller);
+        self
+    }
+
+    /// Set whether to show scroll bars
+    pub fn show_scrollbar(mut self, show: bool) -> Self {
+        self.show_scrollbar = show;
+        self
+    }
+
+    /// Set scroll bar thickness in pixels
+    pub fn scrollbar_thickness(mut self, thickness: f32) -> Self {
+        self.scrollbar_thickness = thickness;
+        self
+    }
+
     /// Build the SingleChildScrollView
     pub fn build(self) -> SingleChildScrollView {
         SingleChildScrollView {
@@ -132,6 +180,9 @@ impl SingleChildScrollViewBuilder {
             direction: self.direction,
             reverse: self.reverse,
             padding: self.padding,
+            controller: self.controller,
+            show_scrollbar: self.show_scrollbar,
+            scrollbar_thickness: self.scrollbar_thickness,
         }
     }
 }
@@ -190,14 +241,31 @@ mod tests {
 }
 impl View for SingleChildScrollView {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        // For now, ignore padding - child is used directly
-        // TODO: Add proper padding support when needed
-        let child = self.child;
+        // Apply padding if specified
+        let child = match self.padding {
+            Some(padding) => Box::new(crate::Padding {
+                key: None,
+                padding,
+                child: Some(self.child),
+            }),
+            None => self.child,
+        };
 
-        // Create RenderScrollView
-        (
-            flui_rendering::objects::RenderScrollView::new(self.direction, self.reverse),
-            Some(child),
-        )
+        // Create render object with or without controller
+        let mut render = match self.controller {
+            Some(controller) => flui_rendering::objects::RenderScrollView::with_controller_arcs(
+                self.direction,
+                self.reverse,
+                controller.offset_arc(),
+                controller.max_offset_arc(),
+            ),
+            None => flui_rendering::objects::RenderScrollView::new(self.direction, self.reverse),
+        };
+
+        // Configure scroll bar
+        render.set_show_scrollbar(self.show_scrollbar);
+        render.set_scrollbar_thickness(self.scrollbar_thickness);
+
+        (render, Some(child))
     }
 }

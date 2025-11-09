@@ -58,7 +58,7 @@ use flui_types::prelude::Color;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(Color, into), finish_fn = build_scaffold)]
+#[builder(on(String, into), on(Color, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Scaffold {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -108,7 +108,10 @@ impl std::fmt::Debug for Scaffold {
             .field("drawer", &self.drawer.as_ref().map(|_| "<AnyView>"))
             .field("end_drawer", &self.end_drawer.as_ref().map(|_| "<AnyView>"))
             .field("background_color", &self.background_color)
-            .field("resize_to_avoid_bottom_inset", &self.resize_to_avoid_bottom_inset)
+            .field(
+                "resize_to_avoid_bottom_inset",
+                &self.resize_to_avoid_bottom_inset,
+            )
             .finish()
     }
 }
@@ -181,10 +184,18 @@ where
     }
 }
 
+// Build wrapper
+impl<S: State> ScaffoldBuilder<S> {
+    /// Builds the Scaffold widget.
+    pub fn build(self) -> Scaffold {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for Scaffold {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        use crate::{Column, ColoredBox, Stack};
+        use crate::{ColoredBox, Column, Stack};
 
         // Build the scaffold layout as a column
         let mut children: Vec<Box<dyn AnyView>> = Vec::new();
@@ -196,7 +207,10 @@ impl View for Scaffold {
 
         // Add body (wrapped in Expanded to fill remaining space)
         if let Some(body) = self.body {
-            children.push(Box::new(crate::Expanded::new(body)));
+            children.push(Box::new(crate::Expanded {
+                flex: 1,
+                child: body,
+            }));
         }
 
         // Add bottom navigation bar if present
@@ -205,13 +219,13 @@ impl View for Scaffold {
         }
 
         // Create the main column
-        let column = Column::builder().children(children).build_column();
+        let column = Column::builder().children(children).build();
 
         // Wrap in colored background
-        let mut with_background = ColoredBox::builder()
+        let with_background = ColoredBox::builder()
             .color(self.background_color)
-            .build_colored_box();
-        with_background.child = Some(Box::new(column));
+            .child(column)
+            .build();
 
         // Always use Stack to support FAB and drawers
         // Even if they're not present, Stack with single child works fine
@@ -219,11 +233,16 @@ impl View for Scaffold {
 
         // Add FAB if present (positioned bottom-right)
         if let Some(fab) = self.floating_action_button {
-            let mut positioned = crate::Positioned::builder()
-                .right(16.0)
-                .bottom(16.0)
-                .build_positioned();
-            positioned.child = Some(fab);
+            let positioned = crate::Positioned {
+                key: None,
+                left: None,
+                top: None,
+                right: Some(16.0),
+                bottom: Some(16.0),
+                width: None,
+                height: None,
+                child: Some(fab),
+            };
             stack_children.push(Box::new(positioned));
         }
 
@@ -231,17 +250,42 @@ impl View for Scaffold {
         // which is beyond the scope of this basic implementation
         // For now, we just note their presence in the structure
 
-        Stack::builder()
-            .children(stack_children)
-            .build_stack()
+        Stack::builder().children(stack_children).build()
     }
 }
 
 /// Macro for creating Scaffold with declarative syntax.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Empty scaffold
+/// scaffold!()
+///
+/// // With body
+/// scaffold! {
+///     body: my_widget
+/// }
+///
+/// // With all properties
+/// scaffold! {
+///     background_color: Color::WHITE,
+///     body: content,
+///     app_bar: my_app_bar
+/// }
+/// ```
 #[macro_export]
 macro_rules! scaffold {
+    // Empty scaffold
     () => {
         $crate::Scaffold::new()
+    };
+
+    // With properties using builder pattern
+    ($($field:ident : $value:expr),+ $(,)?) => {
+        $crate::Scaffold::builder()
+            $(.$field($value))+
+            .build()
     };
 }
 

@@ -142,30 +142,28 @@ impl RenderPointerListener {
     /// Create the unified event handler from individual callbacks
     fn create_handler(&self) -> PointerEventHandler {
         let callbacks = self.callbacks.clone();
-        Arc::new(move |event: &PointerEvent| {
-            match event {
-                PointerEvent::Down(_) => {
-                    if let Some(callback) = &callbacks.on_pointer_down {
-                        callback(event);
-                    }
+        Arc::new(move |event: &PointerEvent| match event {
+            PointerEvent::Down(_) => {
+                if let Some(callback) = &callbacks.on_pointer_down {
+                    callback(event);
                 }
-                PointerEvent::Up(_) => {
-                    if let Some(callback) = &callbacks.on_pointer_up {
-                        callback(event);
-                    }
-                }
-                PointerEvent::Move(_) => {
-                    if let Some(callback) = &callbacks.on_pointer_move {
-                        callback(event);
-                    }
-                }
-                PointerEvent::Cancel(_) => {
-                    if let Some(callback) = &callbacks.on_pointer_cancel {
-                        callback(event);
-                    }
-                }
-                _ => {}
             }
+            PointerEvent::Up(_) => {
+                if let Some(callback) = &callbacks.on_pointer_up {
+                    callback(event);
+                }
+            }
+            PointerEvent::Move(_) => {
+                if let Some(callback) = &callbacks.on_pointer_move {
+                    callback(event);
+                }
+            }
+            PointerEvent::Cancel(_) => {
+                if let Some(callback) = &callbacks.on_pointer_cancel {
+                    callback(event);
+                }
+            }
+            _ => {}
         })
     }
 }

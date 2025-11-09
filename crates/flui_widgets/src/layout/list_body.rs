@@ -57,7 +57,7 @@ use flui_types::Axis;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_list_body)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct ListBody {
     /// Optional key for widget identification
     pub key: Option<String>,

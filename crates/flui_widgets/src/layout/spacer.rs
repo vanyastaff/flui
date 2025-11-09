@@ -17,7 +17,15 @@
 //! ```rust,ignore
 //! Spacer::with_flex(2)  // Takes 2x the space
 //! ```
+//!
+//! ## 3. Builder Pattern
+//! ```rust,ignore
+//! Spacer::builder()
+//!     .flex(2)
+//!     .build()
+//! ```
 
+use bon::Builder;
 use flui_core::view::{IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
@@ -127,7 +135,11 @@ use flui_rendering::{FlexItemMetadata, RenderFlexItem};
 /// - Expanded: For flexible children with content
 /// - SizedBox: For fixed-size empty space
 /// - Padding: For consistent spacing around widgets
-#[derive(Debug, Clone)]
+#[derive(Builder, Debug, Clone)]
+#[builder(
+    on(i32, into),
+    finish_fn(name = build_internal, vis = "")
+)]
 pub struct Spacer {
     /// The flex factor.
     ///
@@ -135,6 +147,7 @@ pub struct Spacer {
     /// flexible children (Expanded/Spacer) in the flex container.
     ///
     /// Default is 1.
+    #[builder(default = 1)]
     pub flex: i32,
 }
 
@@ -177,6 +190,26 @@ impl Spacer {
             ));
         }
         Ok(())
+    }
+}
+
+// bon Builder Extensions
+use spacer_builder::State;
+
+// Public build() wrapper
+impl<S: State> SpacerBuilder<S> {
+    /// Builds the Spacer with optional validation.
+    pub fn build(self) -> Spacer {
+        let spacer = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = spacer.validate() {
+                tracing::warn!("Spacer validation failed: {}", e);
+            }
+        }
+
+        spacer
     }
 }
 

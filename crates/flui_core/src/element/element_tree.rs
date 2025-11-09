@@ -502,7 +502,8 @@ impl ElementTree {
                 );
                 panic!("Layout depth limit exceeded - infinite recursion");
             }
-            self.layout_depth.store(current_depth + 1, std::sync::atomic::Ordering::Relaxed);
+            self.layout_depth
+                .store(current_depth + 1, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Check for re-entrant layout (element trying to layout itself)
@@ -516,8 +517,10 @@ impl ElementTree {
 
             #[cfg(debug_assertions)]
             self.layout_depth.store(
-                self.layout_depth.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1),
-                std::sync::atomic::Ordering::Relaxed
+                self.layout_depth
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .saturating_sub(1),
+                std::sync::atomic::Ordering::Relaxed,
             );
 
             // Re-fetch to get cached size safely (Issue #3)
@@ -541,8 +544,10 @@ impl ElementTree {
         // Decrement depth
         #[cfg(debug_assertions)]
         self.layout_depth.store(
-            self.layout_depth.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1),
-            std::sync::atomic::Ordering::Relaxed
+            self.layout_depth
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_sub(1),
+            std::sync::atomic::Ordering::Relaxed,
         );
 
         // Scope 3: Update state (re-fetch again to be safe - Issue #3)

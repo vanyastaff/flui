@@ -6,14 +6,15 @@
 use bon::Builder;
 use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
-use flui_types::styling::{BorderRadius, BoxDecoration, BoxShadow};
+use flui_types::styling::BorderRadius;
 use flui_types::{Color, EdgeInsets};
 
-use crate::{Container, DecoratedBox};
+use crate::visual_effects::Material;
+use crate::Container;
 
 /// A Material Design card.
 ///
-/// Card is a composite widget that combines DecoratedBox with rounded corners,
+/// Card is a composite widget that combines Material surface with rounded corners,
 /// elevation (shadow), and optional margin/padding.
 ///
 /// ## Key Properties
@@ -70,7 +71,7 @@ use crate::{Container, DecoratedBox};
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_card)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct Card {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -137,16 +138,16 @@ impl Card {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let card = Card::new(Box::new(child));
+    /// let card = Card::new(child_widget);
     /// ```
-    pub fn new(child: Box<dyn AnyView>) -> Self {
+    pub fn new(child: impl View + 'static) -> Self {
         Self {
             key: None,
             color: Color::rgb(255, 255, 255),
             elevation: 1.0,
             margin: None,
             shape: BorderRadius::circular(4.0),
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -155,16 +156,16 @@ impl Card {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let card = Card::with_elevation(4.0, Box::new(child));
+    /// let card = Card::with_elevation(4.0, child_widget);
     /// ```
-    pub fn with_elevation(elevation: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn with_elevation(elevation: f32, child: impl View + 'static) -> Self {
         Self {
             key: None,
             color: Color::rgb(255, 255, 255),
             elevation,
             margin: None,
             shape: BorderRadius::circular(4.0),
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 }
@@ -195,49 +196,39 @@ where
     }
 }
 
+impl<S: State> CardBuilder<S> {
+    /// Builds the Card widget.
+    pub fn build(self) -> Card {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for Card {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        // Calculate shadow based on elevation
-        let shadows = if self.elevation > 0.0 {
-            vec![BoxShadow {
-                color: Color::rgba(0, 0, 0, (0.2 * self.elevation.min(10.0) / 10.0) as u8),
-                offset: flui_types::Offset::new(0.0, self.elevation * 0.5),
-                blur_radius: self.elevation * 2.0,
-                spread_radius: 0.0,
-                inset: false,
-            }]
-        } else {
-            vec![]
-        };
-
-        let decoration = BoxDecoration {
-            color: Some(self.color),
-            border_radius: Some(self.shape),
-            box_shadow: if shadows.is_empty() {
-                None
-            } else {
-                Some(shadows)
-            },
-            ..Default::default()
-        };
-
+        // Create child widget
         let child_view: Box<dyn AnyView> = if let Some(child) = self.child {
             child
         } else {
             Box::new(crate::SizedBox::new())
         };
 
-        let mut decorated = DecoratedBox::builder().decoration(decoration).build();
-        decorated.child = Some(child_view);
+        // Create Material surface for Material Design elevation effect
+        let material = Material {
+            key: None,
+            elevation: self.elevation,
+            color: self.color,
+            shadow_color: None,
+            border_radius: self.shape,
+            child: Some(child_view),
+        };
 
         // Wrap with margin if specified
         if let Some(margin) = self.margin {
-            let mut container = Container::builder().margin(margin).build_container();
-            container.child = Some(Box::new(decorated));
-            Box::new(container) as Box<dyn AnyView>
+            Box::new(Container::builder().margin(margin).child(material).build())
+                as Box<dyn AnyView>
         } else {
-            Box::new(decorated) as Box<dyn AnyView>
+            Box::new(material) as Box<dyn AnyView>
         }
     }
 }

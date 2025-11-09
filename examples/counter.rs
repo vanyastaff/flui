@@ -53,7 +53,7 @@ impl View for CounterApp {
         let mut counter_container = Container::builder()
             .padding(EdgeInsets::symmetric(32.0, 16.0))
             .color(Color::rgb(33, 150, 243))
-            .build_container();
+            .build();
 
         // Get current count value for display (untracked read - doesn't create dependency)
         let current_count = count.get_untracked();
@@ -119,7 +119,7 @@ impl View for CounterApp {
         let mut container = Container::builder()
             .padding(EdgeInsets::all(40.0))
             .color(Color::rgb(245, 245, 250))
-            .build_container();
+            .build();
         container.child = Some(Box::new(center));
         container
     }

@@ -67,7 +67,7 @@ use flui_types::painting::{BlendMode, ImageFilter};
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_backdrop_filter)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct BackdropFilter {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -112,14 +112,14 @@ impl BackdropFilter {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let filter = BackdropFilter::blur(10.0, Box::new(child));
+    /// let filter = BackdropFilter::blur(10.0, child);
     /// ```
-    pub fn blur(radius: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn blur(radius: f32, child: impl View + 'static) -> Self {
         Self {
             key: None,
             filter: ImageFilter::blur(radius),
             blend_mode: BlendMode::SrcOver,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -130,15 +130,15 @@ impl BackdropFilter {
     /// ```rust,ignore
     /// let filter = BackdropFilter::new(
     ///     ImageFilter::brightness(1.2),
-    ///     Box::new(child)
+    ///     child
     /// );
     /// ```
-    pub fn new(filter: ImageFilter, child: Box<dyn AnyView>) -> Self {
+    pub fn new(filter: ImageFilter, child: impl View + 'static) -> Self {
         Self {
             key: None,
             filter,
             blend_mode: BlendMode::SrcOver,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -150,19 +150,19 @@ impl BackdropFilter {
     /// let filter = BackdropFilter::blur_with_blend_mode(
     ///     10.0,
     ///     BlendMode::Multiply,
-    ///     Box::new(child)
+    ///     child
     /// );
     /// ```
     pub fn blur_with_blend_mode(
         radius: f32,
         blend_mode: BlendMode,
-        child: Box<dyn AnyView>,
+        child: impl View + 'static,
     ) -> Self {
         Self {
             key: None,
             filter: ImageFilter::blur(radius),
             blend_mode,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 }
@@ -202,6 +202,14 @@ where
     }
 }
 
+// Build wrapper
+impl<S: State> BackdropFilterBuilder<S> {
+    /// Builds the BackdropFilter widget.
+    pub fn build(self) -> BackdropFilter {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for BackdropFilter {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
@@ -219,15 +227,13 @@ mod tests {
 
     #[test]
     fn test_backdrop_filter_blur() {
-        let child = Box::new(crate::SizedBox::new());
-        let filter = BackdropFilter::blur(10.0, child);
+        let filter = BackdropFilter::blur(10.0, crate::SizedBox::new());
         assert!(matches!(filter.filter, ImageFilter::Blur { radius } if radius == 10.0));
     }
 
     #[test]
     fn test_backdrop_filter_new() {
-        let child = Box::new(crate::SizedBox::new());
-        let filter = BackdropFilter::new(ImageFilter::brightness(1.5), child);
+        let filter = BackdropFilter::new(ImageFilter::brightness(1.5), crate::SizedBox::new());
         assert!(matches!(filter.filter, ImageFilter::Brightness { factor } if factor == 1.5));
     }
 
@@ -236,7 +242,7 @@ mod tests {
         let filter = BackdropFilter::builder()
             .filter(ImageFilter::saturation(0.8))
             .blend_mode(BlendMode::Screen)
-            .build_backdrop_filter();
+            .build();
         assert!(matches!(filter.filter, ImageFilter::Saturation { factor } if factor == 0.8));
         assert_eq!(filter.blend_mode, BlendMode::Screen);
     }

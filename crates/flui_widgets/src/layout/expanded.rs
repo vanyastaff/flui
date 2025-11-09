@@ -16,7 +16,16 @@
 //! ```rust,ignore
 //! Expanded::with_flex(2, widget)
 //! ```
+//!
+//! ## 3. Builder Pattern
+//! ```rust,ignore
+//! Expanded::builder()
+//!     .flex(2)
+//!     .child(widget)
+//!     .build()
+//! ```
 
+use bon::Builder;
 use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 
 use flui_core::BuildContext;
@@ -102,15 +111,21 @@ use flui_rendering::{FlexItemMetadata, RenderFlexItem};
 /// - Flexible: For children that can be smaller than allocated space
 /// - Row: Horizontal flex layout
 /// - Column: Vertical flex layout
-#[derive(Clone)]
+#[derive(Builder, Clone)]
+#[builder(
+    on(i32, into),
+    finish_fn(name = build_internal, vis = "")
+)]
 pub struct Expanded {
     /// The flex factor.
     ///
     /// Determines how much space this child gets relative to other flexible children.
     /// Default is 1.
+    #[builder(default = 1)]
     pub flex: i32,
 
     /// The child widget.
+    #[builder(setters(vis = "", name = child_internal))]
     pub child: Box<dyn AnyView>,
 }
 
@@ -124,6 +139,49 @@ impl std::fmt::Debug for Expanded {
     }
 }
 
+// bon Builder Extensions
+use expanded_builder::{IsSet, IsUnset, SetChild, State};
+
+// Custom setter for child
+impl<S: State> ExpandedBuilder<S>
+where
+    S::Child: IsUnset,
+{
+    /// Sets the child widget (works in builder chain).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// Expanded::builder()
+    ///     .flex(2)
+    ///     .child(Container::new())
+    ///     .build()
+    /// ```
+    pub fn child(self, child: impl View + 'static) -> ExpandedBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
+    }
+}
+
+// Public build() wrapper
+impl<S: State> ExpandedBuilder<S>
+where
+    S::Child: IsSet,
+{
+    /// Builds the Expanded with optional validation.
+    pub fn build(self) -> Expanded {
+        let expanded = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = expanded.validate() {
+                tracing::warn!("Expanded validation failed: {}", e);
+            }
+        }
+
+        expanded
+    }
+}
+
 impl Expanded {
     /// Creates a new Expanded widget with flex factor 1.
     ///
@@ -134,10 +192,13 @@ impl Expanded {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Expanded::new(Box::new(Container::new()));
+    /// let widget = Expanded::new(Container::new());
     /// ```
-    pub fn new(child: Box<dyn AnyView>) -> Self {
-        Self { flex: 1, child }
+    pub fn new(child: impl View + 'static) -> Self {
+        Self {
+            flex: 1,
+            child: Box::new(child),
+        }
     }
 
     /// Creates an Expanded widget with a custom flex factor.
@@ -151,10 +212,13 @@ impl Expanded {
     ///
     /// ```rust,ignore
     /// // This child gets twice as much space as flex: 1
-    /// let widget = Expanded::with_flex(2, Box::new(Container::new()));
+    /// let widget = Expanded::with_flex(2, Container::new());
     /// ```
-    pub fn with_flex(flex: i32, child: Box<dyn AnyView>) -> Self {
-        Self { flex, child }
+    pub fn with_flex(flex: i32, child: impl View + 'static) -> Self {
+        Self {
+            flex,
+            child: Box::new(child),
+        }
     }
 
     /// Validates Expanded configuration.

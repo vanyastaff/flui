@@ -158,6 +158,12 @@ impl MultiRender for RenderStack {
             ),
         };
 
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "RenderStack::layout: fit={:?}, constraints={:?}, max_child_size=({:.1}, {:.1}), final_size={:?}",
+            self.fit, constraints, max_width, max_height, size
+        );
+
         // Calculate and save child offsets
         for (i, &child) in child_ids.iter().enumerate() {
             let child_size = self.child_sizes[i];

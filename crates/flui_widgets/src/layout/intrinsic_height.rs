@@ -80,9 +80,8 @@ use flui_rendering::RenderIntrinsicHeight;
 ///     .child(widget)
 ///     .build()
 /// ```
-#[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_intrinsic_height)]
-#[derive(Default)]
+#[derive(Builder, Default)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct IntrinsicHeight {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -177,7 +176,6 @@ impl IntrinsicHeight {
     }
 }
 
-
 // bon Builder Extensions
 use intrinsic_height_builder::{IsUnset, SetChild, State};
 
@@ -188,6 +186,14 @@ where
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl View + 'static) -> IntrinsicHeightBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Public build() wrapper
+impl<S: State> IntrinsicHeightBuilder<S> {
+    /// Builds the IntrinsicHeight widget.
+    pub fn build(self) -> IntrinsicHeight {
+        self.build_internal()
     }
 }
 

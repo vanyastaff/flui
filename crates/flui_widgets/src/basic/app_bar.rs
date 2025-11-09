@@ -57,7 +57,7 @@ use flui_types::prelude::Color;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), on(Color, into), finish_fn = build_app_bar)]
+#[builder(on(String, into), on(Color, into), finish_fn(name = build_internal, vis = ""))]
 pub struct AppBar {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -172,6 +172,14 @@ where
     }
 }
 
+// Build wrapper
+impl<S: State> AppBarBuilder<S> {
+    /// Builds the AppBar widget.
+    pub fn build(self) -> AppBar {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for AppBar {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
@@ -183,59 +191,63 @@ impl View for AppBar {
 
         // Add leading widget (with padding)
         if let Some(leading) = self.leading {
-            let mut padding_widget = Padding::builder()
-                .padding(EdgeInsets::symmetric(8.0, 0.0))
-                .build_padding();
-            padding_widget.child = Some(leading);
+            let padding_widget = Padding {
+                key: None,
+                padding: EdgeInsets::symmetric(8.0, 0.0),
+                child: Some(leading),
+            };
             row_children.push(Box::new(padding_widget));
         } else {
             // Add horizontal spacing if no leading widget
-            row_children.push(Box::new(SizedBox::builder().width(16.0).build_sized_box()));
+            row_children.push(Box::new(SizedBox::builder().width(16.0).build()));
         }
 
         // Add title (aligned to start, takes up remaining space)
         if let Some(title) = self.title {
-            let mut align_widget = Align::builder()
-                .alignment(Alignment::CENTER_LEFT)
-                .build_align();
-            align_widget.child = Some(title);
-            row_children.push(Box::new(crate::Expanded::new(Box::new(align_widget))));
+            let align_widget = Align {
+                key: None,
+                alignment: Alignment::CENTER_LEFT,
+                width_factor: None,
+                height_factor: None,
+                child: Some(title),
+            };
+            row_children.push(Box::new(crate::Expanded::new(align_widget)));
         }
 
         // Add actions (with padding between each)
         for action in self.actions {
-            let mut padding_widget = Padding::builder()
-                .padding(EdgeInsets::symmetric(8.0, 0.0))
-                .build_padding();
-            padding_widget.child = Some(action);
+            let padding_widget = Padding {
+                key: None,
+                padding: EdgeInsets::symmetric(8.0, 0.0),
+                child: Some(action),
+            };
             row_children.push(Box::new(padding_widget));
         }
 
         // Add trailing spacing
-        row_children.push(Box::new(SizedBox::builder().width(8.0).build_sized_box()));
+        row_children.push(Box::new(SizedBox::builder().width(8.0).build()));
 
         // Create the row
         let row = Row::builder()
             .children(row_children)
             .cross_axis_alignment(flui_types::layout::CrossAxisAlignment::Center)
-            .build_row();
+            .build();
 
         // Wrap in SizedBox to set height
-        let mut sized = SizedBox::builder().height(self.height).build_sized_box();
-        sized.child = Some(Box::new(row));
+        let sized = SizedBox::builder().height(self.height).child(row).build();
 
         // Wrap in colored background
-        let mut colored = ColoredBox::builder()
+        let colored = ColoredBox::builder()
             .color(self.background_color)
-            .build_colored_box();
-        colored.child = Some(Box::new(sized));
+            .child(sized)
+            .build();
 
         // Always wrap in PhysicalModel (elevation=0 if no shadow needed)
         PhysicalModel::builder()
             .elevation(self.elevation)
             .color(self.background_color)
             .child(colored)
-            .build_physical_model()
+            .build()
     }
 }
 

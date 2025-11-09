@@ -79,9 +79,8 @@ use flui_rendering::RenderIntrinsicWidth;
 ///     .child(widget)
 ///     .build()
 /// ```
-#[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_intrinsic_width)]
-#[derive(Default)]
+#[derive(Builder, Default)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct IntrinsicWidth {
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -176,7 +175,6 @@ impl IntrinsicWidth {
     }
 }
 
-
 // bon Builder Extensions
 use intrinsic_width_builder::{IsUnset, SetChild, State};
 
@@ -187,6 +185,14 @@ where
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl View + 'static) -> IntrinsicWidthBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
+    }
+}
+
+// Public build() wrapper
+impl<S: State> IntrinsicWidthBuilder<S> {
+    /// Builds the IntrinsicWidth widget.
+    pub fn build(self) -> IntrinsicWidth {
+        self.build_internal()
     }
 }
 
@@ -232,9 +238,7 @@ mod tests {
 
     #[test]
     fn test_intrinsic_width_builder() {
-        let widget = IntrinsicWidth::builder()
-            .step_width(25.0)
-            .build_intrinsic_width();
+        let widget = IntrinsicWidth::builder().step_width(25.0).build();
         assert_eq!(widget.step_width, Some(25.0));
     }
 

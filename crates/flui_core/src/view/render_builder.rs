@@ -202,10 +202,7 @@ impl<R: MultiRender> MultiRenderBuilder<R> {
         I: IntoIterator,
         I::Item: IntoElement,
     {
-        self.children = children
-            .into_iter()
-            .map(AnyElement::new)
-            .collect();
+        self.children = children.into_iter().map(AnyElement::new).collect();
         self
     }
 

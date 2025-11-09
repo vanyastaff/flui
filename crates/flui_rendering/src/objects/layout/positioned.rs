@@ -53,8 +53,7 @@ use flui_types::{constraints::BoxConstraints, Offset, Size};
 ///     bottom: None,
 /// };
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PositionedMetadata {
     /// Position from left edge (for positioned children)
     pub left: Option<f32>,
@@ -198,10 +197,15 @@ impl PositionedMetadata {
             (stack_size.height - child_size.height) / 2.0
         };
 
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "PositionedMetadata::calculate_offset: left={:?}, top={:?}, right={:?}, bottom={:?}, child_size={:?}, stack_size={:?}, result=({:.1}, {:.1})",
+            self.left, self.top, self.right, self.bottom, child_size, stack_size, x, y
+        );
+
         Some(Offset::new(x, y))
     }
 }
-
 
 /// RenderObject that wraps a child and provides positioned metadata
 ///

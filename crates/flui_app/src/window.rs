@@ -1,15 +1,22 @@
 //! Window management and application entry point
 //!
 //! This module provides window configuration and the main entry point
-//! for running Flui applications.
+//! for running Flui applications using winit + wgpu.
 
 use crate::app::FluiApp;
 use flui_core::view::AnyView;
+use std::sync::Arc;
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    window::{Window, WindowId},
+};
 
 /// Run a Flui application
 ///
 /// This is the main entry point for running a Flui app. It creates a window
-/// using eframe and runs the app's event loop.
+/// using winit and runs the app's event loop with wgpu rendering.
 ///
 /// # Parameters
 ///
@@ -20,16 +27,12 @@ use flui_core::view::AnyView;
 /// ```rust,ignore
 /// use flui_app::*;
 /// use flui_core::view::View;
-/// use flui_core::element::ComponentElement;
 ///
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug)]
 /// struct MyApp;
 ///
 /// impl View for MyApp {
-///     type State = ();
-///     type Element = ComponentElement;
-///
-///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
 ///         // Build your UI here
 ///         todo!()
 ///     }
@@ -39,20 +42,93 @@ use flui_core::view::AnyView;
 ///     run_app(Box::new(MyApp)).unwrap();
 /// }
 /// ```
-pub fn run_app(root_view: Box<dyn AnyView>) -> Result<(), eframe::Error> {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([800.0, 600.0])
-            .with_title("Flui App"),
-        ..Default::default()
+pub fn run_app(root_view: Box<dyn AnyView>) -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing for logging
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
+    // Create event loop
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    // Create application state
+    let mut app_state = AppState {
+        root_view: Some(root_view),
+        window: None,
+        flui_app: None,
     };
 
-    eframe::run_native(
-        "Flui App",
-        options,
-        Box::new(|_cc| {
-            let app = FluiApp::new(root_view);
-            Ok(Box::new(app))
-        }),
-    )
+    // Run event loop
+    event_loop.run_app(&mut app_state)?;
+
+    Ok(())
+}
+
+/// Application state for winit event loop
+struct AppState {
+    root_view: Option<Box<dyn AnyView>>,
+    window: Option<Arc<Window>>,
+    flui_app: Option<FluiApp>,
+}
+
+impl ApplicationHandler for AppState {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_none() {
+            // Create window
+            let window_attributes = Window::default_attributes()
+                .with_title("Flui App")
+                .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
+
+            let window = Arc::new(
+                event_loop
+                    .create_window(window_attributes)
+                    .expect("Failed to create window"),
+            );
+
+            // Initialize Flui app with wgpu
+            let root_view = self.root_view.take().expect("Root view already taken");
+            let flui_app = FluiApp::new(root_view, Arc::clone(&window));
+
+            self.window = Some(window);
+            self.flui_app = Some(flui_app);
+
+            tracing::info!("Window and Flui app initialized");
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        match event {
+            WindowEvent::CloseRequested => {
+                tracing::info!("Close requested");
+                event_loop.exit();
+            }
+            WindowEvent::Resized(physical_size) => {
+                if let Some(app) = &mut self.flui_app {
+                    app.resize(physical_size.width, physical_size.height);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Some(app) = &mut self.flui_app {
+                    app.update();
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // Request redraw on every iteration
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
 }

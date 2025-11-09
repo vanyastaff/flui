@@ -261,6 +261,13 @@ impl<T> Signal<T> {
     where
         T: Clone + Send + 'static,
     {
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "[SIGNAL] update() called for signal {:?} from thread {:?}",
+            self.id,
+            std::thread::current().id()
+        );
+
         SIGNAL_RUNTIME.with(|runtime| runtime.update(self.id, f));
     }
 
@@ -370,7 +377,21 @@ impl<T> Drop for SignalState<T> {
         SIGNAL_RUNTIME.with(|runtime| runtime.remove_signal(self.id));
 
         #[cfg(debug_assertions)]
-        tracing::debug!("Dropping SignalState for signal {:?}", self.id);
+        {
+            tracing::trace!(
+                "[SIGNAL_STATE] Dropping signal {:?} from thread {:?}",
+                self.id,
+                std::thread::current().id()
+            );
+
+            // Expensive backtrace - only enabled via env var for deep debugging
+            if std::env::var("FLUI_DEBUG_SIGNAL_DROP").is_ok() {
+                tracing::trace!(
+                    "[SIGNAL_STATE] Backtrace:\n{:?}",
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
+        }
     }
 }
 

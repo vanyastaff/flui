@@ -5,12 +5,19 @@
 //!
 //! # Usage Patterns
 //!
-//! ## 1. Struct Literal
+//! ## 1. Convenience Methods (Recommended)
 //! ```rust,ignore
-//! DecoratedBox {
-//!     decoration: BoxDecoration::default().with_color(Color::RED),
-//!     ..Default::default()
-//! }
+//! // Solid color background
+//! DecoratedBox::colored(Color::RED, child)
+//!
+//! // Rounded corners with color
+//! DecoratedBox::rounded(Color::BLUE, 12.0, child)
+//!
+//! // Card with shadow
+//! DecoratedBox::card(child)
+//!
+//! // Custom decoration
+//! DecoratedBox::with_decoration(decoration, child)
 //! ```
 //!
 //! ## 2. Builder Pattern
@@ -23,9 +30,7 @@
 //!
 //! ## 3. Macro
 //! ```rust,ignore
-//! decorated_box! {
-//!     decoration: BoxDecoration::default().with_color(Color::RED),
-//! }
+//! decorated_box!(child: widget, decoration: BoxDecoration::default().with_color(Color::RED))
 //! ```
 
 use bon::Builder;
@@ -33,6 +38,7 @@ use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
+use flui_types::Color;
 
 /// A widget that paints a Decoration either before or after its child paints.
 ///
@@ -103,7 +109,7 @@ use flui_types::styling::BoxDecoration;
 #[builder(
     on(String, into),
     on(BoxDecoration, into),
-    finish_fn = build_decorated_box
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct DecoratedBox {
     /// Optional key for widget identification
@@ -158,22 +164,99 @@ impl Clone for DecoratedBox {
 }
 
 impl DecoratedBox {
-    /// Creates a new DecoratedBox with background decoration.
+    /// Creates a new empty DecoratedBox with default decoration.
     ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let decorated = DecoratedBox::new(
-    ///     BoxDecoration::default().with_color(Color::RED)
-    /// );
-    /// ```
-    pub fn new(decoration: BoxDecoration) -> Self {
+    /// Note: Prefer using convenience methods like `DecoratedBox::colored()` for most cases.
+    pub fn new() -> Self {
         Self {
             key: None,
-            decoration,
+            decoration: BoxDecoration::default(),
             position: DecorationPosition::Background,
             child: None,
         }
+    }
+
+    /// Creates a DecoratedBox with custom decoration and child.
+    ///
+    /// Use this when you have a pre-built BoxDecoration.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let decoration = BoxDecoration::with_color(Color::RED)
+    ///     .set_border_radius(Some(BorderRadius::circular(8.0)));
+    /// DecoratedBox::with_decoration(decoration, child)
+    /// ```
+    pub fn with_decoration(decoration: BoxDecoration, child: impl View + 'static) -> Self {
+        Self::builder().decoration(decoration).child(child).build()
+    }
+
+    // ========== Common Decoration Patterns ==========
+
+    /// Creates a DecoratedBox with solid color background.
+    ///
+    /// Most common use case - simple colored background.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// DecoratedBox::colored(Color::BLUE, Text::new("Hello"))
+    /// ```
+    pub fn colored(color: Color, child: impl View + 'static) -> Self {
+        Self::with_decoration(BoxDecoration::with_color(color), child)
+    }
+
+    /// Creates a DecoratedBox with color and rounded corners.
+    ///
+    /// Perfect for buttons, cards, and rounded elements.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Blue rounded box with 12px radius
+    /// DecoratedBox::rounded(Color::BLUE, 12.0, content)
+    /// ```
+    pub fn rounded(color: Color, radius: f32, child: impl View + 'static) -> Self {
+        let decoration = BoxDecoration::with_color(color)
+            .set_border_radius(Some(flui_types::styling::BorderRadius::circular(radius)));
+        Self::with_decoration(decoration, child)
+    }
+
+    /// Creates a card-style DecoratedBox with elevation shadow.
+    ///
+    /// Material Design card with white background, rounded corners, and shadow.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// DecoratedBox::card(content)
+    /// ```
+    pub fn card(child: impl View + 'static) -> Self {
+        use flui_types::{
+            styling::{BorderRadius, BoxShadow},
+            Color, Offset,
+        };
+
+        let shadow = BoxShadow::new(
+            Color::rgba(0, 0, 0, 25),
+            Offset::new(0.0, 2.0),
+            4.0, // blur_radius
+            0.0, // spread_radius
+        );
+
+        let decoration = BoxDecoration::with_color(Color::WHITE)
+            .set_border_radius(Some(BorderRadius::circular(8.0)))
+            .set_box_shadow(Some(vec![shadow]));
+
+        Self::with_decoration(decoration, child)
+    }
+
+    /// Creates a DecoratedBox with gradient background.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use flui_types::styling::Gradient;
+    /// let gradient = Gradient::linear(...);
+    /// DecoratedBox::gradient(gradient, child)
+    /// ```
+    pub fn gradient(gradient: flui_types::styling::Gradient, child: impl View + 'static) -> Self {
+        Self::with_decoration(BoxDecoration::with_gradient(gradient), child)
     }
 
     /// Creates a DecoratedBox with foreground decoration.
@@ -181,32 +264,20 @@ impl DecoratedBox {
     /// The decoration will be painted in front of the child,
     /// useful for overlays or masks.
     ///
-    /// # Examples
-    ///
+    /// # Example
     /// ```rust,ignore
-    /// let decorated = DecoratedBox::foreground(
-    ///     BoxDecoration::default().with_color(Color::from_rgba(0, 0, 0, 128))
-    /// );
+    /// // Semi-transparent overlay
+    /// DecoratedBox::foreground_colored(
+    ///     Color::rgba(0, 0, 0, 128),
+    ///     image_widget
+    /// )
     /// ```
-    pub fn foreground(decoration: BoxDecoration) -> Self {
-        Self {
-            key: None,
-            decoration,
-            position: DecorationPosition::Foreground,
-            child: None,
-        }
-    }
-
-    /// Sets the child widget.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut decorated = DecoratedBox::new(decoration);
-    /// decorated.set_child(Text::new("Hello"));
-    /// ```
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    pub fn foreground_colored(color: Color, child: impl View + 'static) -> Self {
+        Self::builder()
+            .decoration(BoxDecoration::with_color(color))
+            .position(DecorationPosition::Foreground)
+            .child(child)
+            .build()
     }
 
     /// Validates DecoratedBox configuration.
@@ -221,7 +292,7 @@ impl DecoratedBox {
 
 impl Default for DecoratedBox {
     fn default() -> Self {
-        Self::new(BoxDecoration::default())
+        Self::new()
     }
 }
 
@@ -264,9 +335,17 @@ where
 
 // Public build() wrapper
 impl<S: State> DecoratedBoxBuilder<S> {
-    /// Builds the DecoratedBox widget.
+    /// Builds the DecoratedBox widget with automatic validation in debug mode.
     pub fn build(self) -> DecoratedBox {
-        self.build_decorated_box()
+        let decorated_box = self.build_internal();
+
+        // In debug mode, validate configuration and warn on issues
+        #[cfg(debug_assertions)]
+        if let Err(e) = decorated_box.validate() {
+            tracing::warn!("DecoratedBox validation warning: {}", e);
+        }
+
+        decorated_box
     }
 }
 
@@ -275,23 +354,42 @@ impl<S: State> DecoratedBoxBuilder<S> {
 /// # Examples
 ///
 /// ```rust,ignore
-/// // Simple decoration
-/// decorated_box! {
-///     decoration: BoxDecoration::default().with_color(Color::RED),
-/// }
+/// // Empty decorated box
+/// decorated_box!()
 ///
-/// // With foreground position
-/// decorated_box! {
-///     decoration: my_decoration,
-///     position: DecorationPosition::Foreground,
-/// }
+/// // With child only (default decoration)
+/// decorated_box!(child: Text::new("Hello"))
+///
+/// // With child and decoration
+/// decorated_box!(child: widget, decoration: BoxDecoration::default().with_color(Color::RED))
+///
+/// // Properties only (no child)
+/// decorated_box!(decoration: BoxDecoration::default().with_color(Color::RED))
 /// ```
 #[macro_export]
 macro_rules! decorated_box {
+    // Empty decorated box
     () => {
-        $crate::DecoratedBox::default()
+        $crate::DecoratedBox::new()
     };
-    ($($field:ident : $value:expr),* $(,)?) => {
+
+    // With child only (default decoration)
+    (child: $child:expr) => {
+        $crate::DecoratedBox::builder()
+            .child($child)
+            .build()
+    };
+
+    // With child and properties
+    (child: $child:expr, $($field:ident : $value:expr),+ $(,)?) => {
+        $crate::DecoratedBox::builder()
+            .child($child)
+            $(.$field($value))+
+            .build()
+    };
+
+    // Without child, just properties
+    ($($field:ident : $value:expr),+ $(,)?) => {
         $crate::DecoratedBox {
             $($field: $value.into(),)*
             ..Default::default()
@@ -304,27 +402,59 @@ macro_rules! decorated_box {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::view::LeafRenderBuilder;
+    use flui_rendering::RenderPadding;
     use flui_types::styling::{BorderRadius, BoxShadow, Gradient, LinearGradient, TileMode};
-    use flui_types::{Alignment, Color, Offset};
+    use flui_types::{Alignment, Color, EdgeInsets, Offset};
+
+    // Mock view for testing
+    #[derive(Debug, Clone)]
+    struct MockView;
+
+    impl View for MockView {
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
+        }
+    }
 
     #[test]
     fn test_decorated_box_new() {
-        let decoration = BoxDecoration::with_color(Color::RED);
-        let widget = DecoratedBox::new(decoration.clone());
-
+        let widget = DecoratedBox::new();
         assert!(widget.key.is_none());
-        assert_eq!(widget.decoration, decoration);
+        assert_eq!(widget.decoration, BoxDecoration::default());
         assert_eq!(widget.position, DecorationPosition::Background);
         assert!(widget.child.is_none());
     }
 
     #[test]
-    fn test_decorated_box_foreground() {
-        let decoration = BoxDecoration::with_color(Color::BLUE);
-        let widget = DecoratedBox::foreground(decoration.clone());
+    fn test_decorated_box_colored() {
+        let widget = DecoratedBox::colored(Color::RED, MockView);
+        assert_eq!(widget.decoration, BoxDecoration::with_color(Color::RED));
+        assert!(widget.child.is_some());
+    }
 
-        assert_eq!(widget.decoration, decoration);
+    #[test]
+    fn test_decorated_box_rounded() {
+        let widget = DecoratedBox::rounded(Color::BLUE, 12.0, MockView);
+        assert_eq!(widget.decoration.color, Some(Color::BLUE));
+        assert!(widget.decoration.border_radius.is_some());
+        assert!(widget.child.is_some());
+    }
+
+    #[test]
+    fn test_decorated_box_card() {
+        let widget = DecoratedBox::card(MockView);
+        assert_eq!(widget.decoration.color, Some(Color::WHITE));
+        assert!(widget.decoration.border_radius.is_some());
+        assert!(widget.decoration.box_shadow.is_some());
+        assert!(widget.child.is_some());
+    }
+
+    #[test]
+    fn test_decorated_box_foreground_colored() {
+        let widget = DecoratedBox::foreground_colored(Color::rgba(0, 0, 0, 128), MockView);
         assert_eq!(widget.position, DecorationPosition::Foreground);
+        assert!(widget.child.is_some());
     }
 
     #[test]
@@ -374,7 +504,16 @@ mod tests {
     }
 
     #[test]
-    fn test_decorated_box_with_gradient() {
+    fn test_decorated_box_with_decoration() {
+        let decoration = BoxDecoration::with_color(Color::RED)
+            .set_border_radius(Some(BorderRadius::circular(8.0)));
+        let widget = DecoratedBox::with_decoration(decoration.clone(), MockView);
+        assert_eq!(widget.decoration, decoration);
+        assert!(widget.child.is_some());
+    }
+
+    #[test]
+    fn test_decorated_box_gradient() {
         let gradient = Gradient::Linear(LinearGradient::new(
             Alignment::TOP_LEFT,
             Alignment::BOTTOM_RIGHT,
@@ -383,34 +522,22 @@ mod tests {
             TileMode::Clamp,
         ));
 
-        let decoration = BoxDecoration::with_gradient(gradient);
-        let widget = DecoratedBox::new(decoration.clone());
-
-        assert_eq!(widget.decoration, decoration);
+        let widget = DecoratedBox::gradient(gradient.clone(), MockView);
+        assert_eq!(widget.decoration, BoxDecoration::with_gradient(gradient));
+        assert!(widget.child.is_some());
     }
 
     #[test]
-    fn test_decorated_box_with_border_radius() {
-        let decoration = BoxDecoration::with_color(Color::WHITE)
-            .set_border_radius(Some(BorderRadius::circular(12.0)));
+    fn test_decorated_box_builder_with_child() {
+        let decoration = BoxDecoration::with_color(Color::WHITE);
 
-        let widget = DecoratedBox::new(decoration.clone());
+        let widget = DecoratedBox::builder()
+            .decoration(decoration.clone())
+            .child(MockView)
+            .build();
+
         assert_eq!(widget.decoration, decoration);
-    }
-
-    #[test]
-    fn test_decorated_box_with_shadow() {
-        let shadow = BoxShadow::new(
-            Color::rgba(0, 0, 0, 64),
-            Offset::new(0.0, 4.0),
-            8.0, // blur_radius
-            0.0, // spread_radius
-        );
-
-        let decoration = BoxDecoration::default().set_box_shadow(Some(vec![shadow]));
-
-        let widget = DecoratedBox::new(decoration.clone());
-        assert_eq!(widget.decoration, decoration);
+        assert!(widget.child.is_some());
     }
 
     #[test]
@@ -418,8 +545,7 @@ mod tests {
         let widget = DecoratedBox::default();
         assert!(widget.validate().is_ok());
 
-        let decoration = BoxDecoration::with_color(Color::RED);
-        let widget = DecoratedBox::new(decoration);
+        let widget = DecoratedBox::colored(Color::RED, MockView);
         assert!(widget.validate().is_ok());
     }
 
@@ -430,11 +556,51 @@ mod tests {
     }
 
     #[test]
+    fn test_decorated_box_macro_with_child() {
+        let widget = decorated_box!(child: MockView);
+        assert!(widget.child.is_some());
+        assert_eq!(widget.decoration, BoxDecoration::default());
+    }
+
+    #[test]
+    fn test_decorated_box_macro_with_child_and_decoration() {
+        let decoration = BoxDecoration::with_color(Color::RED);
+        let widget = decorated_box!(child: MockView, decoration: decoration.clone());
+        assert!(widget.child.is_some());
+        assert_eq!(widget.decoration, decoration);
+    }
+
+    #[test]
     fn test_decorated_box_macro_with_decoration() {
         let decoration = BoxDecoration::with_color(Color::RED);
         let widget = decorated_box! {
             decoration: decoration.clone(),
         };
         assert_eq!(widget.decoration, decoration);
+    }
+
+    #[test]
+    fn test_all_convenience_methods() {
+        // Test that all convenience methods create widgets with children
+        assert!(DecoratedBox::colored(Color::RED, MockView).child.is_some());
+        assert!(DecoratedBox::rounded(Color::BLUE, 12.0, MockView)
+            .child
+            .is_some());
+        assert!(DecoratedBox::card(MockView).child.is_some());
+        assert!(
+            DecoratedBox::foreground_colored(Color::rgba(0, 0, 0, 128), MockView)
+                .child
+                .is_some()
+        );
+
+        // Verify positions
+        assert_eq!(
+            DecoratedBox::foreground_colored(Color::BLACK, MockView).position,
+            DecorationPosition::Foreground
+        );
+        assert_eq!(
+            DecoratedBox::colored(Color::BLACK, MockView).position,
+            DecorationPosition::Background
+        );
     }
 }

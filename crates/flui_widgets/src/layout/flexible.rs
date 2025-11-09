@@ -124,7 +124,7 @@ use flui_types::layout::FlexFit;
 #[builder(
     on(String, into),
     on(i32, into),
-    finish_fn = build_flexible
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Flexible {
     /// Optional key for widget identification
@@ -180,6 +180,46 @@ impl Clone for Flexible {
     }
 }
 
+// bon Builder Extensions
+use flexible_builder::{IsUnset, SetChild, State};
+
+// Custom setter for child
+impl<S: State> FlexibleBuilder<S>
+where
+    S::Child: IsUnset,
+{
+    /// Sets the child widget (works in builder chain).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// Flexible::builder()
+    ///     .flex(2)
+    ///     .child(Container::new())
+    ///     .build()
+    /// ```
+    pub fn child(self, child: impl View + 'static) -> FlexibleBuilder<SetChild<S>> {
+        self.child_internal(Box::new(child))
+    }
+}
+
+// Public build() wrapper
+impl<S: State> FlexibleBuilder<S> {
+    /// Builds the Flexible with optional validation.
+    pub fn build(self) -> Flexible {
+        let flexible = self.build_internal();
+
+        #[cfg(debug_assertions)]
+        {
+            if let Err(e) = flexible.validate() {
+                tracing::warn!("Flexible validation failed: {}", e);
+            }
+        }
+
+        flexible
+    }
+}
+
 impl Flexible {
     /// Creates a new Flexible widget.
     ///
@@ -191,14 +231,14 @@ impl Flexible {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Flexible::new(1, Box::new(Container::new()));
+    /// let widget = Flexible::new(1, Container::new());
     /// ```
-    pub fn new(flex: i32, child: Box<dyn AnyView>) -> Self {
+    pub fn new(flex: i32, child: impl View + 'static) -> Self {
         Self {
             key: None,
             flex,
             fit: FlexFit::Loose,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
@@ -214,25 +254,19 @@ impl Flexible {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let widget = Flexible::tight(2, Box::new(Container::new()));
+    /// let widget = Flexible::tight(2, Container::new());
     /// ```
-    pub fn tight(flex: i32, child: Box<dyn AnyView>) -> Self {
+    pub fn tight(flex: i32, child: impl View + 'static) -> Self {
         Self {
             key: None,
             flex,
             fit: FlexFit::Tight,
-            child: Some(child),
+            child: Some(Box::new(child)),
         }
     }
 
     /// Sets the child widget.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut widget = Flexible::builder().flex(1).build_flexible();
-    /// widget.set_child(Box::new(Container::new()));
-    /// ```
+    #[deprecated(note = "Use builder pattern with .child() instead")]
     pub fn set_child(&mut self, child: Box<dyn AnyView>) {
         self.child = Some(child);
     }
@@ -277,29 +311,6 @@ impl View for Flexible {
             fit: self.fit,
         }))
         .with_optional_child(self.child)
-    }
-}
-
-// bon Builder Extensions
-use flexible_builder::{IsUnset, SetChild, State};
-
-// Custom setter for child
-impl<S: State> FlexibleBuilder<S>
-where
-    S::Child: IsUnset,
-{
-    /// Sets the child widget (works in builder chain).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Flexible::builder()
-    ///     .flex(2)
-    ///     .child(Container::new())
-    ///     .build_flexible()
-    /// ```
-    pub fn child(self, child: impl View + 'static) -> FlexibleBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
     }
 }
 

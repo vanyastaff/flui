@@ -60,7 +60,7 @@ use flui_types::EdgeInsets;
 ///     .build()
 /// ```
 #[derive(Builder)]
-#[builder(on(String, into), finish_fn = build_safe_area)]
+#[builder(on(String, into), finish_fn(name = build_internal, vis = ""))]
 pub struct SafeArea {
     /// Optional key for widget identification
     pub key: Option<String>,

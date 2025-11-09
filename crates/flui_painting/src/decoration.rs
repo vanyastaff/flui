@@ -1,8 +1,8 @@
 //! BoxDecoration painting implementation
 
 use crate::{BorderPainter, GradientPainter, ShadowPainter};
-use flui_engine::{Paint, Painter, RRect};
-use flui_types::{styling::BoxDecoration, Rect};
+use flui_engine::{Paint, Painter};
+use flui_types::{styling::BoxDecoration, Rect, RRect};
 
 /// Painter for BoxDecoration
 ///
