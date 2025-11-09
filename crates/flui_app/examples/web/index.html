@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flui WebAssembly Demo</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 900px;
+            width: 100%;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 2em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 20px;
+            font-size: 1.1em;
+        }
+
+        #flui-canvas {
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            display: block;
+            margin: 20px auto;
+            background: #f5f5f5;
+        }
+
+        .info {
+            background: #f0f7ff;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .info h3 {
+            margin: 0 0 10px 0;
+            color: #667eea;
+        }
+
+        .info ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .info li {
+            margin: 5px 0;
+            color: #555;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+
+        .loading:after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        .error {
+            background: #fee;
+            border-left: 4px solid #e44;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+            color: #c33;
+        }
+
+        .footer {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            text-align: center;
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Flui WebAssembly Demo</h1>
+        <p class="subtitle">Flutter-inspired UI framework for Rust, running in your browser!</p>
+
+        <div class="info">
+            <h3>✨ Features</h3>
+            <ul>
+                <li><strong>GPU-Accelerated</strong> - Uses WebGPU for native performance</li>
+                <li><strong>Reactive State</strong> - Flutter-like hooks and signals</li>
+                <li><strong>Cross-Platform</strong> - Same code runs on desktop and web</li>
+                <li><strong>Type-Safe</strong> - Full Rust type safety in the browser</li>
+            </ul>
+        </div>
+
+        <div id="loading" class="loading">Loading Flui application</div>
+        <div id="error" style="display: none;"></div>
+
+        <canvas id="flui-canvas" width="800" height="600"></canvas>
+
+        <div class="info">
+            <h3>🎮 Try These</h3>
+            <ul>
+                <li>Resize the browser window</li>
+                <li>Click on/off the canvas (focus events)</li>
+                <li>Check browser console for event logs</li>
+                <li>Try dark/light mode (if supported)</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <p>
+                Built with <a href="https://github.com/anthropics/flui" target="_blank">Flui</a>
+                | Powered by <a href="https://www.rust-lang.org/" target="_blank">Rust</a>
+                + <a href="https://webassembly.org/" target="_blank">WebAssembly</a>
+                + <a href="https://www.w3.org/TR/webgpu/" target="_blank">WebGPU</a>
+            </p>
+        </div>
+    </div>
+
+    <script type="module">
+        import init from './flui_web_demo.js';
+
+        async function main() {
+            try {
+                await init();
+                document.getElementById('loading').style.display = 'none';
+                console.log('✅ Flui app initialized successfully!');
+            } catch (err) {
+                console.error('Failed to initialize Flui app:', err);
+                document.getElementById('loading').style.display = 'none';
+                const errorDiv = document.getElementById('error');
+                errorDiv.className = 'error';
+                errorDiv.innerHTML = `
+                    <h3>❌ Failed to initialize</h3>
+                    <p>${err.message}</p>
+                    <p><strong>Note:</strong> This demo requires a browser with WebGPU support. Try Chrome 113+ or Edge 113+.</p>
+                `;
+                errorDiv.style.display = 'block';
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>

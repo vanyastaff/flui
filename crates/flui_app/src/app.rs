@@ -121,6 +121,41 @@ pub struct FluiApp {
 }
 
 impl FluiApp {
+    /// Create FluiApp from pre-initialized components
+    ///
+    /// This is used internally by platform-specific initialization code (e.g., WASM).
+    /// Most users should use `new()` instead.
+    #[doc(hidden)]
+    pub fn from_components(
+        root_view: Box<dyn AnyView>,
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+        window: Arc<Window>,
+        painter: flui_engine::painter::WgpuPainter,
+    ) -> Self {
+        Self {
+            pipeline: PipelineOwner::new(),
+            root_view,
+            root_id: None,
+            stats: FrameStats::default(),
+            last_size: None,
+            root_built: false,
+            event_router: EventRouter::new(),
+            instance,
+            surface,
+            device,
+            queue,
+            config,
+            window,
+            painter,
+            on_cleanup: None,
+            event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
+        }
+    }
+
     /// Create a new Flui application
     ///
     /// # Arguments

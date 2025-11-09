@@ -1,0 +1,11 @@
+# Generated WASM files
+*.wasm
+*.js
+!index.html
+
+# wasm-pack outputs
+package.json
+.gitignore
+
+# Don't ignore this .gitignore itself
+!.gitignore
