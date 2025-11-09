@@ -29,6 +29,15 @@ pub struct EventRouter {
     /// Layers that were hit on the last pointer down
     /// Used for tracking dragging and ensuring up events go to the same layer
     pointer_down_layers: Vec<usize>,
+
+    /// Whether the window is currently focused
+    /// When unfocused, we should reset pointer state as user may have
+    /// released buttons outside the window
+    is_focused: bool,
+
+    /// Whether the window is currently visible (not minimized/occluded)
+    /// When invisible, we can skip event processing for efficiency
+    is_visible: bool,
 }
 
 impl EventRouter {
@@ -37,7 +46,96 @@ impl EventRouter {
         Self {
             last_pointer_position: None,
             pointer_down_layers: Vec::new(),
+            is_focused: true, // Assume focused on creation
+            is_visible: true, // Assume visible on creation
         }
+    }
+
+    /// Handle window focus change
+    ///
+    /// When the window loses focus, we reset pointer state because:
+    /// - User may have released mouse buttons outside the window
+    /// - Hover state is no longer meaningful
+    /// - Prevents stuck button states
+    ///
+    /// # Arguments
+    ///
+    /// * `focused` - true if window gained focus, false if lost
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // In your window event handler
+    /// router.on_focus_changed(false); // Window lost focus
+    /// ```
+    pub fn on_focus_changed(&mut self, focused: bool) {
+        tracing::debug!(
+            "EventRouter: Focus changed to {}",
+            if focused { "focused" } else { "unfocused" }
+        );
+
+        self.is_focused = focused;
+
+        if !focused {
+            // Lost focus - reset pointer state
+            self.reset_pointer_state();
+        }
+    }
+
+    /// Handle window visibility change (minimized/restored)
+    ///
+    /// When window is minimized, we can skip event processing.
+    /// When restored, we reset state to prevent stale interactions.
+    ///
+    /// # Arguments
+    ///
+    /// * `visible` - true if window is visible, false if minimized/occluded
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Window minimized
+    /// router.on_visibility_changed(false);
+    ///
+    /// // Window restored
+    /// router.on_visibility_changed(true);
+    /// ```
+    pub fn on_visibility_changed(&mut self, visible: bool) {
+        tracing::debug!(
+            "EventRouter: Visibility changed to {}",
+            if visible { "visible" } else { "hidden" }
+        );
+
+        self.is_visible = visible;
+
+        if !visible {
+            // Window hidden - reset all state
+            self.reset_pointer_state();
+        }
+    }
+
+    /// Reset all pointer-related state
+    ///
+    /// This should be called when:
+    /// - Window loses focus
+    /// - Window is minimized
+    /// - DPI changes significantly
+    /// - Any other situation where pointer state may be invalid
+    pub fn reset_pointer_state(&mut self) {
+        tracing::debug!("EventRouter: Resetting pointer state");
+
+        self.last_pointer_position = None;
+        self.pointer_down_layers.clear();
+    }
+
+    /// Check if the window is currently focused
+    pub fn is_focused(&self) -> bool {
+        self.is_focused
+    }
+
+    /// Check if the window is currently visible (not minimized)
+    pub fn is_visible(&self) -> bool {
+        self.is_visible
     }
 
     /// Route an event through the layer tree
@@ -75,10 +173,20 @@ impl EventRouter {
         root: &mut dyn crate::layer::Layer,
         event: &PointerEvent,
     ) -> bool {
+        // Skip processing if window is not visible
+        // This prevents unnecessary work when minimized
+        if !self.is_visible {
+            tracing::trace!("Skipping pointer event - window not visible");
+            return false;
+        }
+
         let position = event.position();
 
-        // Update last pointer position
-        self.last_pointer_position = Some(position);
+        // Update last pointer position (only if focused)
+        // When unfocused, we don't track pointer position as it's not meaningful
+        if self.is_focused {
+            self.last_pointer_position = Some(position);
+        }
 
         // Perform hit testing
         let mut result = HitTestResult::new();

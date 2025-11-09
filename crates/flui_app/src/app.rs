@@ -284,6 +284,12 @@ impl FluiApp {
     /// Use this to register callbacks for system events like focus changes,
     /// minimization, DPI changes, theme changes, etc.
     ///
+    /// # Note
+    ///
+    /// Focus and visibility events are automatically integrated with EventRouter
+    /// to ensure proper event handling state management. Your custom callbacks
+    /// will be called in addition to the internal EventRouter updates.
+    ///
     /// # Example
     ///
     /// ```rust,ignore
@@ -309,12 +315,46 @@ impl FluiApp {
         &mut self.event_callbacks
     }
 
+    /// Get mutable reference to event router
+    ///
+    /// The event router is automatically synchronized with window events
+    /// (focus, visibility), but you can access it directly if needed.
+    pub fn event_router_mut(&mut self) -> &mut EventRouter {
+        &mut self.event_router
+    }
+
     /// Handle a window event
     ///
-    /// This dispatches the event to registered callbacks.
+    /// This dispatches the event to registered callbacks AND synchronizes
+    /// the EventRouter state with window events.
+    ///
     /// You typically don't need to call this manually - it's called
     /// automatically by the event loop.
+    ///
+    /// # Integration with EventRouter
+    ///
+    /// The EventRouter is automatically updated based on window events:
+    /// - Focus changes → reset pointer state when focus lost
+    /// - Minimization → skip event processing when minimized
+    /// - This prevents stuck button states and improves efficiency
     pub fn handle_window_event(&mut self, event: &winit::event::WindowEvent) {
+        // IMPORTANT: Update EventRouter BEFORE user callbacks
+        // This ensures EventRouter state is correct before any user code runs
+        match event {
+            winit::event::WindowEvent::Focused(focused) => {
+                self.event_router.on_focus_changed(*focused);
+            }
+            winit::event::WindowEvent::Occluded(occluded) => {
+                // Occluded = true means window is NOT visible (minimized/covered)
+                // So we need to invert it for is_visible
+                self.event_router.on_visibility_changed(!occluded);
+            }
+            _ => {
+                // Other events don't affect EventRouter state
+            }
+        }
+
+        // Then dispatch to user callbacks
         self.event_callbacks.handle_event(event);
     }
 
