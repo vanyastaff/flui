@@ -107,6 +107,9 @@ pub struct FluiApp {
 
     /// Window reference
     window: Arc<Window>,
+
+    /// GPU painter (persistent, created once)
+    painter: flui_engine::painter::WgpuPainter,
 }
 
 impl FluiApp {
@@ -166,6 +169,14 @@ impl FluiApp {
         };
         surface.configure(&device, &config);
 
+        // Create GPU painter once (not every frame!)
+        let painter = flui_engine::painter::WgpuPainter::new(
+            device.clone(),
+            queue.clone(),
+            config.format,
+            (config.width, config.height),
+        );
+
         Self {
             pipeline: PipelineOwner::new(),
             root_view,
@@ -180,6 +191,7 @@ impl FluiApp {
             queue,
             config,
             window,
+            painter,
         }
     }
 
@@ -189,6 +201,9 @@ impl FluiApp {
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
+
+            // Update painter viewport (critical for correct rendering!)
+            self.painter.resize(width, height);
 
             // Mark size changed for relayout
             self.last_size = None;
@@ -205,28 +220,46 @@ impl FluiApp {
     }
 
     /// Update and render a frame
-    pub fn update(&mut self) {
+    ///
+    /// Returns `true` if another redraw is needed (e.g., for animations or pending work),
+    /// `false` if the frame is stable and no redraw is needed.
+    pub fn update(&mut self) -> bool {
         let size = Size::new(self.config.width as f32, self.config.height as f32);
+        let mut needs_redraw = false;
 
         // Build phase - create/update element tree
         if !self.root_built {
             self.build_root();
             self.root_built = true;
+            needs_redraw = true; // Initial build always needs redraw
+        }
+
+        // Check if there are pending rebuilds (from signals, etc.)
+        let has_pending_rebuilds = self.pipeline.rebuild_queue().has_pending();
+        if has_pending_rebuilds {
+            tracing::debug!("Processing pending rebuilds");
+            needs_redraw = true;
         }
 
         // Check if size changed
         let size_changed = self.last_size.map_or(true, |last| last != size);
         if size_changed {
             self.last_size = Some(size);
+            needs_redraw = true;
         }
 
-        // Layout phase - compute positions and sizes
+        // Layout phase - always run but pipeline will skip if no dirty elements
         if self.root_id.is_some() {
             let constraints = BoxConstraints::tight(size);
             match self.pipeline.flush_layout(constraints) {
-                Ok(_) => {
+                Ok(Some(_size)) => {
                     self.stats.layout_count += 1;
                     tracing::debug!("Layout complete for size {:?}", size);
+                    needs_redraw = true;
+                }
+                Ok(None) => {
+                    // No layout happened (no dirty elements or no root)
+                    tracing::debug!("Layout skipped - no changes");
                 }
                 Err(e) => {
                     tracing::error!("Layout failed: {:?}", e);
@@ -234,18 +267,18 @@ impl FluiApp {
             }
         }
 
-        // Paint phase - generate layer tree
+        // Paint phase - only if layout ran or paint is dirty
         if let Some(_root_id) = self.root_id {
             match self.pipeline.flush_paint() {
                 Ok(Some(root_layer)) => {
-                    // Note: BoxedLayer cannot be cloned (trait object), so we render directly
                     self.stats.paint_count += 1;
 
                     // Render to surface
                     self.render(root_layer);
+                    needs_redraw = false; // Frame rendered, no immediate redraw needed
                 }
                 Ok(None) => {
-                    tracing::warn!("Paint phase returned no layer");
+                    tracing::debug!("Paint phase skipped - no dirty elements");
                 }
                 Err(e) => {
                     tracing::error!("Paint phase failed: {:?}", e);
@@ -255,6 +288,8 @@ impl FluiApp {
 
         self.stats.frame_count += 1;
         self.stats.log();
+
+        needs_redraw
     }
 
     /// Build the root view
@@ -285,8 +320,6 @@ impl FluiApp {
 
     /// Render a layer tree to the wgpu surface
     fn render(&mut self, layer: BoxedLayer) {
-        use flui_engine::painter::WgpuPainter;
-
         // Get current frame
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -344,25 +377,14 @@ impl FluiApp {
             });
         }
 
-        // Create GPU painter with device and queue references
+        // Use the persistent painter (created once, not every frame!)
         tracing::debug!("Painting layer tree");
-        let surface_format = self.config.format;
-        let size = (self.config.width, self.config.height);
-
-        // We need to clone device and queue for the painter
-        // wgpu types are Arc-based internally, so cloning is cheap
-        let mut painter = WgpuPainter::new(
-            self.device.clone(),
-            self.queue.clone(),
-            surface_format,
-            size,
-        );
 
         // Collect all paint commands into the painter
-        layer.paint(&mut painter);
+        layer.paint(&mut self.painter);
 
         // Actually render to GPU
-        if let Err(e) = painter.render(&view, &mut encoder) {
+        if let Err(e) = self.painter.render(&view, &mut encoder) {
             tracing::error!("Failed to render frame: {:?}", e);
             return;
         }

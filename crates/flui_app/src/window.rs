@@ -50,7 +50,9 @@ pub fn run_app(root_view: Box<dyn AnyView>) -> Result<(), Box<dyn std::error::Er
 
     // Create event loop
     let event_loop = EventLoop::new()?;
-    event_loop.set_control_flow(ControlFlow::Poll);
+    // Use Wait mode instead of Poll for better performance and power efficiency
+    // Will only wake up when there are events or redraw is requested
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     // Create application state
     let mut app_state = AppState {
@@ -90,10 +92,13 @@ impl ApplicationHandler for AppState {
             let root_view = self.root_view.take().expect("Root view already taken");
             let flui_app = FluiApp::new(root_view, Arc::clone(&window));
 
-            self.window = Some(window);
+            self.window = Some(Arc::clone(&window));
             self.flui_app = Some(flui_app);
 
             tracing::info!("Window and Flui app initialized");
+
+            // Request initial redraw to render the first frame
+            window.request_redraw();
         }
     }
 
@@ -111,13 +116,22 @@ impl ApplicationHandler for AppState {
             WindowEvent::Resized(physical_size) => {
                 if let Some(app) = &mut self.flui_app {
                     app.resize(physical_size.width, physical_size.height);
+                    // Request redraw after resize (layout will change)
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
                 if let Some(app) = &mut self.flui_app {
-                    app.update();
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
+                    let needs_redraw = app.update();
+
+                    // Only request another redraw if there's pending work
+                    // This prevents infinite redraw loop and saves CPU/GPU
+                    if needs_redraw {
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
                     }
                 }
             }
@@ -126,9 +140,12 @@ impl ApplicationHandler for AppState {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // Request redraw on every iteration
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        // Don't request redraw here - only redraw when actually needed
+        // This prevents CPU/GPU waste and improves power efficiency
+        // Redraw will be triggered by:
+        // 1. Window resize
+        // 2. User input events (when implemented)
+        // 3. Timer/animation events (when implemented)
+        // 4. State changes via signals (when they request rebuild)
     }
 }
