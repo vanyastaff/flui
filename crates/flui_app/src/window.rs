@@ -59,6 +59,7 @@ pub fn run_app(root_view: Box<dyn AnyView>) -> Result<(), Box<dyn std::error::Er
         root_view: Some(root_view),
         window: None,
         flui_app: None,
+        on_cleanup: None,
     };
 
     // Run event loop
@@ -72,6 +73,7 @@ struct AppState {
     root_view: Option<Box<dyn AnyView>>,
     window: Option<Arc<Window>>,
     flui_app: Option<FluiApp>,
+    on_cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl ApplicationHandler for AppState {
@@ -90,7 +92,12 @@ impl ApplicationHandler for AppState {
 
             // Initialize Flui app with wgpu
             let root_view = self.root_view.take().expect("Root view already taken");
-            let flui_app = FluiApp::new(root_view, Arc::clone(&window));
+            let mut flui_app = FluiApp::new(root_view, Arc::clone(&window));
+
+            // Set cleanup callback if provided
+            if let Some(cleanup) = self.on_cleanup.take() {
+                flui_app.set_on_cleanup(cleanup);
+            }
 
             self.window = Some(Arc::clone(&window));
             self.flui_app = Some(flui_app);
@@ -110,7 +117,14 @@ impl ApplicationHandler for AppState {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                tracing::info!("Close requested");
+                tracing::info!("Close requested - performing graceful shutdown");
+
+                // Perform cleanup before exiting
+                if let Some(app) = &mut self.flui_app {
+                    app.cleanup();
+                }
+
+                tracing::info!("Cleanup complete, exiting event loop");
                 event_loop.exit();
             }
             WindowEvent::Resized(physical_size) => {

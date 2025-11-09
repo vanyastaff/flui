@@ -110,6 +110,10 @@ pub struct FluiApp {
 
     /// GPU painter (persistent, created once)
     painter: flui_engine::painter::WgpuPainter,
+
+    /// Cleanup callback called on app shutdown
+    /// Use this to clean up resources, stop background tasks, etc.
+    on_cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl FluiApp {
@@ -192,6 +196,46 @@ impl FluiApp {
             config,
             window,
             painter,
+            on_cleanup: None,
+        }
+    }
+
+    /// Set cleanup callback
+    ///
+    /// This callback will be called when the app is shutting down.
+    /// Use it to clean up resources, stop background tasks, close connections, etc.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// app.set_on_cleanup(|| {
+    ///     println!("Cleaning up...");
+    ///     // Stop background tasks
+    ///     // Close database connections
+    ///     // Save state to disk
+    /// });
+    /// ```
+    pub fn set_on_cleanup<F>(&mut self, cleanup: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.on_cleanup = Some(Box::new(cleanup));
+    }
+
+    /// Perform cleanup
+    ///
+    /// This is called automatically on Drop, but can be called manually
+    /// for more controlled shutdown.
+    ///
+    /// # Note
+    ///
+    /// After calling this, the cleanup callback is consumed and won't
+    /// be called again on Drop.
+    pub fn cleanup(&mut self) {
+        if let Some(cleanup) = self.on_cleanup.take() {
+            tracing::info!("Running cleanup callback...");
+            cleanup();
+            tracing::info!("Cleanup complete");
         }
     }
 
@@ -392,5 +436,18 @@ impl FluiApp {
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();
+    }
+}
+
+/// Automatic cleanup on drop
+///
+/// Ensures cleanup callback is called even if shutdown is not graceful.
+impl Drop for FluiApp {
+    fn drop(&mut self) {
+        // Call cleanup if it hasn't been called yet
+        if self.on_cleanup.is_some() {
+            tracing::info!("FluiApp dropping, running cleanup...");
+            self.cleanup();
+        }
     }
 }
