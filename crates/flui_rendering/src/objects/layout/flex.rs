@@ -222,11 +222,13 @@ impl MultiRender for RenderFlex {
         };
 
         // Step 1: Separate inflexible and flexible children
-        let mut inflexible_children: Vec<(ElementId, Size)> = Vec::new();
-        let mut flexible_children: Vec<(ElementId, i32, flui_types::layout::FlexFit)> = Vec::new();
+        // IMPORTANT: Track original index to preserve child order!
+        let mut inflexible_children: Vec<(usize, ElementId, Size)> = Vec::new();
+        let mut flexible_children: Vec<(usize, ElementId, i32, flui_types::layout::FlexFit)> =
+            Vec::new();
         let mut total_flex = 0i32;
 
-        for &child in child_ids.iter() {
+        for (index, &child) in child_ids.iter().enumerate() {
             // Check if child has FlexItemMetadata (via RenderFlexItem wrapper)
             if let Some(element) = tree.get(child) {
                 if let Some(render_node_guard) = element.render_object() {
@@ -238,7 +240,12 @@ impl MultiRender for RenderFlex {
                         {
                             if flex_meta.is_flexible() {
                                 // Child is flexible
-                                flexible_children.push((child, flex_meta.flex, flex_meta.fit));
+                                flexible_children.push((
+                                    index,
+                                    child,
+                                    flex_meta.flex,
+                                    flex_meta.fit,
+                                ));
                                 total_flex += flex_meta.flex;
                                 continue;
                             }
@@ -248,7 +255,7 @@ impl MultiRender for RenderFlex {
             }
 
             // Child is inflexible (no FlexItemMetadata or flex == 0)
-            inflexible_children.push((child, Size::ZERO)); // Size will be filled in next step
+            inflexible_children.push((index, child, Size::ZERO)); // Size will be filled in next step
         }
 
         // Step 2: Layout inflexible children
@@ -260,7 +267,10 @@ impl MultiRender for RenderFlex {
         let mut allocated_main_size = 0.0f32;
         let mut max_cross_size = 0.0f32;
 
-        for (child, size_slot) in inflexible_children.iter_mut() {
+        // Store child sizes with their original indices
+        let mut child_data: Vec<(usize, Size)> = Vec::with_capacity(child_ids.len());
+
+        for (index, child, size_slot) in inflexible_children.iter_mut() {
             let child_constraints = match direction {
                 Axis::Horizontal => BoxConstraints::new(
                     0.0,
@@ -278,7 +288,7 @@ impl MultiRender for RenderFlex {
 
             let child_size = tree.layout_child(*child, child_constraints);
             *size_slot = child_size;
-            child_sizes.push(child_size);
+            child_data.push((*index, child_size));
 
             let child_main_size = match direction {
                 Axis::Horizontal => child_size.width,
@@ -289,7 +299,8 @@ impl MultiRender for RenderFlex {
                 Axis::Vertical => child_size.width,
             };
 
-            allocated_main_size += child_main_size;
+            // Use safe arithmetic to prevent overflow (Rust 1.91.0 strict arithmetic)
+            allocated_main_size = (allocated_main_size + child_main_size).min(f32::MAX);
             max_cross_size = max_cross_size.max(child_cross_size);
         }
 
@@ -302,7 +313,7 @@ impl MultiRender for RenderFlex {
         };
 
         // Step 4 & 5: Layout flexible children
-        for (child, flex, fit) in flexible_children.iter() {
+        for (index, child, flex, fit) in flexible_children.iter() {
             let allocated_space = space_per_flex * (*flex as f32);
 
             let child_constraints = match (direction, fit) {
@@ -339,7 +350,7 @@ impl MultiRender for RenderFlex {
             };
 
             let child_size = tree.layout_child(*child, child_constraints);
-            child_sizes.push(child_size);
+            child_data.push((*index, child_size));
 
             let child_main_size = match direction {
                 Axis::Horizontal => child_size.width,
@@ -350,8 +361,17 @@ impl MultiRender for RenderFlex {
                 Axis::Vertical => child_size.width,
             };
 
-            allocated_main_size += child_main_size;
+            // Use safe arithmetic to prevent overflow (Rust 1.91.0 strict arithmetic)
+            allocated_main_size = (allocated_main_size + child_main_size).min(f32::MAX);
             max_cross_size = max_cross_size.max(child_cross_size);
+        }
+
+        // Sort child_data by original index to preserve child order
+        child_data.sort_by_key(|(index, _)| *index);
+
+        // Extract child_sizes in correct order
+        for (_, size) in child_data {
+            child_sizes.push(size);
         }
 
         let total_main_size = allocated_main_size;

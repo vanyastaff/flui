@@ -1,125 +1,113 @@
-//! FLUI Rendering Engine
+//! FLUI Rendering Engine - wgpu-only GPU rendering
 //!
-//! Backend-agnostic rendering infrastructure for FLUI. This crate provides:
+//! This crate provides high-performance GPU-accelerated rendering for FLUI:
 //!
-//! - **Layer System**: Composable scene graph nodes (Container, Opacity, Transform, Clip, Picture)
-//! - **Painter Abstraction**: Backend-agnostic drawing API
-//! - **Scene & Compositor**: Build and render scene from layers
+//! - **Layer System**: Composable scene graph nodes for complex UIs
+//! - **GpuPainter**: Modern wgpu-based rendering with Lyon tessellation
+//! - **Event Router**: Pointer event handling and gesture recognition
 //!
 //! # Architecture
 //!
 //! ```text
-//! RenderObject.paint() -> Layer
-//!                          │
-//!                          ▼
-//!                    Scene Builder
-//!                          │
-//!                          ▼
-//!                     Layer Tree
-//!                          │
-//!                          ▼
-//!                     Compositor
-//!                          │
-//!                          ▼
-//!                   Painter (backend)
-//!                     │         │
-//!                     ▼         ▼
-//!                  egui     wgpu/skia
+//! RenderObject.paint() → Layer Tree → GpuPainter → wgpu → GPU
+//!                           │
+//!                           ├─ PictureLayer (drawing commands)
+//!                           ├─ ClipLayer (clipping)
+//!                           ├─ TransformLayer (transformations)
+//!                           ├─ OpacityLayer (transparency)
+//!                           └─ ContainerLayer (grouping)
 //! ```
 //!
-//! # Example
+//! # Layer System
+//!
+//! The layer system provides a retained-mode scene graph that RenderObjects
+//! paint into. Layers are composable and handle common operations:
 //!
 //! ```rust,ignore
-//! // Create a picture layer with drawing commands
-//! let mut picture = PictureLayer::new();
-//! picture.draw_rect(
-//!     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-//!     Paint {
-//!         color: [1.0, 0.0, 0.0, 1.0],  // Red
-//!         ..Default::default()
-//!     }
-//! );
+//! // RenderObject creates layers
+//! fn paint(&self, offset: Offset) -> BoxedLayer {
+//!     let mut picture = PictureLayer::new();
+//!     picture.draw_rect(rect, &Paint::fill(Color::RED));
 //!
-//! // Wrap in opacity layer
-//! let opacity = OpacityLayer::new(Box::new(picture), 0.5);
-//!
-//! // Wrap in transform layer
-//! let transform = TransformLayer::translate(
-//!     Box::new(opacity),
-//!     Offset::new(10.0, 20.0)
-//! );
-//!
-//! // Paint to backend
-//! transform.paint(&mut egui_painter);
+//!     // Wrap in transform
+//!     TransformLayer::translate(
+//!         Box::new(picture),
+//!         offset
+//!     )
+//! }
 //! ```
 //!
-//! # Feature Flags
+//! # GPU Painter
 //!
-//! - `egui` (default): Enable egui backend
-//! - `wgpu`: Enable wgpu backend (future)
-//! - `skia`: Enable skia backend (future)
+//! For direct GPU rendering, use `GpuPainter`:
+//!
+//! ```rust,ignore
+//! use flui_engine::painter::{GpuPainter, Paint};
+//!
+//! let mut painter = GpuPainter::new(&instance, surface, 800, 600).await?;
+//! painter.begin_frame()?;
+//! painter.rect(rect, &Paint::solid(Color::RED))?;
+//! painter.end_frame()?;
+//! ```
 
-pub mod app;
-pub mod backend;
-pub mod backends;
-pub mod compositor;
 pub mod devtools;
 pub mod event_router;
 pub mod layer;
-pub mod paint_context;
 pub mod painter;
-pub mod scene;
-pub mod scene_builder;
-pub mod surface;
 pub mod text;
 
-// Re-export commonly used types
-pub use backend::{BackendCapabilities, BackendInfo, RenderBackend};
-pub use compositor::{CompositionStats, Compositor, CompositorOptions};
-pub use event_router::EventRouter;
+// Re-export commonly used layer types
 pub use layer::{
-    // Filters
-    BackdropFilterLayer,
-    BlurLayer,
-    // Filter types from flui_types
-    BlurMode,
-    BlurQuality,
-    // Core types
+    // Core layer types
     BoxedLayer,
-    // Clipping
-    ClipOvalLayer,
-    ClipPathLayer,
-    ClipRRectLayer,
-    ClipRectLayer,
-    ColorFilter,
-    ColorMatrix,
-    // Basic composition
-    ContainerLayer,
-    // Drawing commands
-    DrawCommand,
-    FilterLayer,
-    ImageFilter,
     Layer,
+
+    // Basic composition layers
+    ContainerLayer,
     OffsetLayer,
     OpacityLayer,
-    PictureLayer,
-    // Pointer listener
-    PointerListenerLayer,
-    // Pooled layers
-    PooledClipRectLayer,
-    PooledContainerLayer,
-    PooledPictureLayer,
-    Transform,
     TransformLayer,
-};
-pub use paint_context::PaintContext;
-pub use painter::{Paint, Painter, RRect};
-pub use scene::{Scene, SceneMetadata};
-pub use scene_builder::SceneBuilder;
-pub use surface::{Frame, Surface};
+    Transform,
 
-// Re-export unified app API
-pub use app::{App, AppConfig, AppLogic, Backend, WindowConfig};
+    // Drawing layer
+    PictureLayer,
+    DrawCommand,
+
+    // Clipping layers
+    ClipRectLayer,
+    ClipRRectLayer,
+    ClipOvalLayer,
+    ClipPathLayer,
+
+    // Effect layers
+    FilterLayer,
+    BlurLayer,
+    BackdropFilterLayer,
+    ColorFilter,
+    ColorMatrix,
+    ImageFilter,
+
+    // Interaction
+    PointerListenerLayer,
+
+    // Pooled variants (for performance)
+    PooledContainerLayer,
+    PooledClipRectLayer,
+    PooledPictureLayer,
+
+    // Re-exports from flui_types
+    BlurMode,
+    BlurQuality,
+};
+
+// Re-export painter types
+// Note: Two painter systems coexist:
+// - compat::Painter trait (used by layer system)
+// - GpuPainter struct (new direct GPU rendering)
+pub use painter::{Paint, Painter, Stroke};
+
+// Re-export event router
+pub use event_router::EventRouter;
 
 // Re-export devtools integration (when feature enabled)
 #[cfg(feature = "devtools")]
@@ -131,11 +119,9 @@ pub use devtools::{
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
 pub use devtools::MemoryGraph;
 
-// Re-export backend implementations when features are enabled
-#[cfg(feature = "egui")]
-pub use backends::egui::EguiPainter;
 
-#[cfg(feature = "wgpu")]
-pub use backends::wgpu::{
-    TextAlign, TextCommand, TextRenderError, TextRenderer, WgpuPainter, WgpuRenderer,
-};
+
+
+
+
+

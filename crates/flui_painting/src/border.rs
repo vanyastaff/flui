@@ -1,9 +1,9 @@
 //! Border painting implementation
 
-use flui_engine::{Paint, Painter, RRect};
+use flui_engine::{Paint, Painter, Stroke};
 use flui_types::{
     styling::{Border, BorderRadius},
-    Point, Rect,
+    Point, Rect, RRect,
 };
 
 /// Painter for borders
@@ -47,7 +47,7 @@ impl BorderPainter {
     ) {
         let Some(side) = border.top else { return };
 
-        let paint = Paint::stroke(side.width, side.color);
+        let paint = Paint::stroke(side.color).with_stroke(Stroke::new(side.width));
 
         // Adjust rect for stroke alignment
         let adjusted_rect = if side.stroke_align == 0.0 {
@@ -100,7 +100,7 @@ impl BorderPainter {
         // Top
         if let Some(top) = border.top {
             if top.is_visible() {
-                let paint = Paint::stroke(top.width, top.color);
+                let paint = Paint::stroke(top.color).with_stroke(Stroke::new(top.width));
 
                 painter.line(
                     Point::new(rect.left(), rect.top()),
@@ -113,7 +113,7 @@ impl BorderPainter {
         // Right
         if let Some(right) = border.right {
             if right.is_visible() {
-                let paint = Paint::stroke(right.width, right.color);
+                let paint = Paint::stroke(right.color).with_stroke(Stroke::new(right.width));
 
                 painter.line(
                     Point::new(rect.right(), rect.top()),
@@ -126,7 +126,7 @@ impl BorderPainter {
         // Bottom
         if let Some(bottom) = border.bottom {
             if bottom.is_visible() {
-                let paint = Paint::stroke(bottom.width, bottom.color);
+                let paint = Paint::stroke(bottom.color).with_stroke(Stroke::new(bottom.width));
 
                 painter.line(
                     Point::new(rect.right(), rect.bottom()),
@@ -139,7 +139,7 @@ impl BorderPainter {
         // Left
         if let Some(left) = border.left {
             if left.is_visible() {
-                let paint = Paint::stroke(left.width, left.color);
+                let paint = Paint::stroke(left.color).with_stroke(Stroke::new(left.width));
 
                 painter.line(
                     Point::new(rect.left(), rect.bottom()),

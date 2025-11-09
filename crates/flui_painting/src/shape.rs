@@ -3,9 +3,9 @@
 //! Provides painting functionality for various shape borders including
 //! rounded rectangles, circles, ovals, stars, and more.
 
-use flui_engine::{Paint, Painter, RRect};
+use flui_engine::{Paint, Painter, Stroke};
 use flui_types::{
-    geometry::{Point, Rect},
+    geometry::{Point, Rect, RRect},
     styling::{
         BeveledRectangleBorder, CircleBorder, ContinuousRectangleBorder, LinearBorder, OvalBorder,
         Radius, RoundedRectangleBorder, StadiumBorder, StarBorder,
@@ -49,7 +49,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         // Create rounded rectangle
         let rrect = RRect {
@@ -81,7 +81,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         // Get bevel distances (using border_radius as bevel distance)
         let tl = border.border_radius.top_left.x;
@@ -134,7 +134,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         let center = rect.center();
         let radius = rect.width().min(rect.height()) / 2.0;
@@ -154,7 +154,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         let center = rect.center();
         let rx = rect.width() / 2.0;
@@ -175,7 +175,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         // Stadium is a rounded rect with corner radius = half of the shorter side
         let radius = rect.width().min(rect.height()) / 2.0;
@@ -203,7 +203,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         let center = rect.center();
         let outer_radius = rect.width().min(rect.height()) / 2.0;
@@ -231,7 +231,8 @@ impl ShapePainter {
         }
 
         // Draw the star
-        painter.polygon(&points, &paint);
+        let points_arc = std::sync::Arc::new(points);
+        painter.polygon(&points_arc, &paint);
     }
 
     /// Paints a continuous rectangle border.
@@ -253,7 +254,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         // For now, approximate with rounded rect
         // TODO: Implement true continuous curve (squircle)
@@ -282,7 +283,7 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.width, border.side.color);
+        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
 
         let left = rect.left();
         let top = rect.top();

@@ -70,34 +70,80 @@ impl RenderFittedBox {
 
     /// Calculate fitted size and offset for given child and container sizes
     pub fn calculate_fit(&self, child_size: Size, container_size: Size) -> (Size, Offset) {
+        // Epsilon for safe float comparisons (Rust 1.91.0 strict arithmetic)
+        const EPSILON: f32 = 1e-6;
+
         let scale = match self.fit {
-            BoxFit::Fill => (
-                container_size.width / child_size.width,
-                container_size.height / child_size.height,
-            ),
+            BoxFit::Fill => {
+                let scale_x = if child_size.width.abs() > EPSILON {
+                    container_size.width / child_size.width
+                } else {
+                    1.0
+                };
+                let scale_y = if child_size.height.abs() > EPSILON {
+                    container_size.height / child_size.height
+                } else {
+                    1.0
+                };
+                (scale_x, scale_y)
+            }
             BoxFit::Cover => {
-                let scale = (container_size.width / child_size.width)
-                    .max(container_size.height / child_size.height);
+                let scale_x = if child_size.width.abs() > EPSILON {
+                    container_size.width / child_size.width
+                } else {
+                    1.0
+                };
+                let scale_y = if child_size.height.abs() > EPSILON {
+                    container_size.height / child_size.height
+                } else {
+                    1.0
+                };
+                let scale = scale_x.max(scale_y);
                 (scale, scale)
             }
             BoxFit::Contain => {
-                let scale = (container_size.width / child_size.width)
-                    .min(container_size.height / child_size.height);
+                let scale_x = if child_size.width.abs() > EPSILON {
+                    container_size.width / child_size.width
+                } else {
+                    1.0
+                };
+                let scale_y = if child_size.height.abs() > EPSILON {
+                    container_size.height / child_size.height
+                } else {
+                    1.0
+                };
+                let scale = scale_x.min(scale_y);
                 (scale, scale)
             }
             BoxFit::None => (1.0, 1.0),
             BoxFit::ScaleDown => {
-                let scale = (container_size.width / child_size.width)
-                    .min(container_size.height / child_size.height)
-                    .min(1.0);
+                let scale_x = if child_size.width.abs() > EPSILON {
+                    container_size.width / child_size.width
+                } else {
+                    1.0
+                };
+                let scale_y = if child_size.height.abs() > EPSILON {
+                    container_size.height / child_size.height
+                } else {
+                    1.0
+                };
+                let scale = scale_x.min(scale_y).min(1.0);
                 (scale, scale)
             }
             BoxFit::FitWidth => {
-                let scale = container_size.width / child_size.width;
+                let scale = if child_size.width.abs() > EPSILON {
+                    container_size.width / child_size.width
+                } else {
+                    1.0
+                };
                 (scale, scale)
             }
             BoxFit::FitHeight => {
-                let scale = container_size.height / child_size.height;
+                let scale = if child_size.height.abs() > EPSILON {
+                    container_size.height / child_size.height
+                } else {
+                    1.0
+                };
                 (scale, scale)
             }
         };

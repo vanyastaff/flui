@@ -2,11 +2,11 @@
 
 use flui_core::element::{ElementId, ElementTree};
 use flui_core::render::SingleRender;
-use flui_engine::{layer::pool, BoxedLayer, Paint, RRect};
+use flui_engine::{layer::pool, BoxedLayer, Paint};
 use flui_types::{
     constraints::BoxConstraints,
     styling::{BorderPosition, BoxDecoration, Radius},
-    Offset, Point, Rect, Size,
+    Offset, Point, Rect, RRect, Size,
 };
 
 /// Position of decoration relative to child
@@ -198,7 +198,7 @@ impl RenderDecoratedBox {
         position: BorderPosition,
         border_radius: Option<f32>,
     ) {
-        let paint = Paint::stroke(side.width, side.color);
+        let paint = Paint::stroke(side.color).with_stroke(flui_engine::Stroke::new(side.width));
 
         // If we have rounded corners, draw using rounded rect
         if let Some(radius) = border_radius {

@@ -2,6 +2,9 @@
 
 use crate::geometry::Size;
 
+/// Epsilon for safe float comparisons (Rust 1.91.0 strict arithmetic)
+const EPSILON: f32 = 1e-6;
+
 /// How a box should inscribe into another box.
 ///
 /// This is similar to CSS `object-fit` property and Flutter's `BoxFit`.
@@ -138,13 +141,13 @@ impl BoxFit {
     /// - `source_size` is the portion of the source image to use
     #[must_use]
     pub fn apply(self, input_size: Size, output_size: Size) -> FittedSizes {
-        let input_aspect_ratio = if input_size.height != 0.0 {
+        let input_aspect_ratio = if input_size.height.abs() > EPSILON {
             input_size.width / input_size.height
         } else {
             0.0
         };
 
-        let output_aspect_ratio = if output_size.height != 0.0 {
+        let output_aspect_ratio = if output_size.height.abs() > EPSILON {
             output_size.width / output_size.height
         } else {
             0.0
@@ -157,13 +160,13 @@ impl BoxFit {
             },
 
             BoxFit::Contain => {
-                if output_aspect_ratio > input_aspect_ratio && input_aspect_ratio != 0.0 {
+                if output_aspect_ratio > input_aspect_ratio && input_aspect_ratio.abs() > EPSILON {
                     let width = output_size.height * input_aspect_ratio;
                     FittedSizes {
                         source: input_size,
                         destination: Size::new(width, output_size.height),
                     }
-                } else if output_aspect_ratio != 0.0 {
+                } else if output_aspect_ratio.abs() > EPSILON {
                     let height = output_size.width / input_aspect_ratio;
                     FittedSizes {
                         source: input_size,
@@ -179,14 +182,14 @@ impl BoxFit {
 
             BoxFit::Cover => {
                 // Cover needs to fill the entire output, scaling to the smallest dimension
-                if output_aspect_ratio < input_aspect_ratio && input_aspect_ratio != 0.0 {
+                if output_aspect_ratio < input_aspect_ratio && input_aspect_ratio.abs() > EPSILON {
                     // Output is taller, fit to height
                     let width = output_size.height * input_aspect_ratio;
                     FittedSizes {
                         source: input_size,
                         destination: Size::new(width, output_size.height),
                     }
-                } else if output_aspect_ratio != 0.0 {
+                } else if output_aspect_ratio.abs() > EPSILON {
                     // Output is wider, fit to width
                     let height = output_size.width / input_aspect_ratio;
                     FittedSizes {
@@ -202,7 +205,11 @@ impl BoxFit {
             }
 
             BoxFit::FitWidth => {
-                let height = output_size.width / input_aspect_ratio;
+                let height = if input_aspect_ratio.abs() > EPSILON {
+                    output_size.width / input_aspect_ratio
+                } else {
+                    output_size.height
+                };
                 FittedSizes {
                     source: input_size,
                     destination: Size::new(output_size.width, height),
@@ -331,7 +338,7 @@ impl FittedSizes {
     #[inline]
     #[must_use]
     pub fn scale_factor(&self) -> f32 {
-        if self.source.width > 0.0 {
+        if self.source.width.abs() > EPSILON {
             self.destination.width / self.source.width
         } else {
             1.0

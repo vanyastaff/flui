@@ -2,7 +2,7 @@
 //!
 //! Provides PathPainter for rendering vector paths with various fill and stroke styles.
 
-use flui_engine::{Paint, Painter};
+use flui_engine::{Paint, Painter, Stroke};
 use flui_types::painting::path::Path;
 use flui_types::styling::Color;
 
@@ -51,7 +51,7 @@ impl PathPainter {
     /// * `color` - The stroke color
     /// * `stroke_width` - The width of the stroke
     pub fn stroke(painter: &mut dyn Painter, path: &Path, color: Color, stroke_width: f32) {
-        let paint = Paint::stroke(stroke_width, color);
+        let paint = Paint::stroke(color).with_stroke(Stroke::new(stroke_width));
         Self::paint_path(painter, path, &paint, true);
     }
 
@@ -67,7 +67,8 @@ impl PathPainter {
         // Use the native path() method which has a default implementation
         // that decomposes paths into primitives. Backends can override this
         // for more efficient native path rendering.
-        painter.path(path, paint);
+        // Note: stubbed API expects &str, convert path to debug string
+        painter.path(&format!("{:?}", path), paint);
     }
 
     /// Paints a path with both fill and stroke.

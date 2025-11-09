@@ -404,6 +404,58 @@ pub trait Painter {
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::draw_image: not implemented");
     }
+
+    // Gradient methods (stubs for legacy compatibility)
+    fn horizontal_gradient(&mut self, _rect: Rect, _start_color: flui_types::styling::Color, _end_color: flui_types::styling::Color) {
+        // No-op by default - use Paint::gradient() instead
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::horizontal_gradient: not implemented - use Paint::gradient() instead");
+    }
+
+    fn vertical_gradient(&mut self, _rect: Rect, _start_color: flui_types::styling::Color, _end_color: flui_types::styling::Color) {
+        // No-op by default - use Paint::gradient() instead
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::vertical_gradient: not implemented - use Paint::gradient() instead");
+    }
+
+    fn radial_gradient(&mut self, _rect: Rect, _center_color: flui_types::styling::Color, _edge_color: flui_types::styling::Color) {
+        // No-op by default - use Paint::gradient() instead
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::radial_gradient: not implemented - use Paint::gradient() instead");
+    }
+
+    fn sweep_gradient(&mut self, _rect: Rect, _colors: &[flui_types::styling::Color]) {
+        // No-op by default - use Paint::gradient() instead
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::sweep_gradient: not implemented - use Paint::gradient() instead");
+    }
+
+    fn text_with_shadow(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint, _shadow_offset: Offset, _shadow_blur: f32, _shadow_color: flui_types::styling::Color) {
+        // Fallback to regular text() method
+        self.text(text, position, font_size, paint);
+    }
+
+    fn radial_gradient_simple(&mut self, _center: Point, _inner_radius: f32, _outer_radius: f32, _start_color: flui_types::styling::Color, _end_color: flui_types::styling::Color) {
+        // No-op by default - use Paint::gradient() instead
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::radial_gradient_simple: not implemented - use Paint::gradient() instead");
+    }
+
+    fn rrect_with_shadow(&mut self, rrect: RRect, paint: &Paint, _shadow_offset: Offset, _shadow_blur: f32, _shadow_color: flui_types::styling::Color) {
+        // Fallback to regular rrect() method
+        self.rrect(rrect, paint);
+    }
+
+    fn rect_with_shadow(&mut self, rect: Rect, paint: &Paint, _shadow_offset: Offset, _shadow_blur: f32, _shadow_color: flui_types::styling::Color) {
+        // Fallback to regular rect() method
+        self.rect(rect, paint);
+    }
+
+    fn ellipse(&mut self, _center: Point, _rx: f32, _ry: f32, _paint: &Paint) {
+        // No-op by default
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::ellipse: not implemented");
+    }
 }
 
 impl Painter for WgpuPainter {

@@ -239,13 +239,9 @@ fn paint_border(picture: &mut flui_engine::layer::PictureLayer, rect: Rect) {
         a: 255,
     };
 
-    let border_paint = Paint {
-        color: BORDER_COLOR,
-        style: PaintingStyle::Stroke,
-        stroke_width: 3.0, // Thicker border for visibility
-        anti_alias: true,
-        ..Default::default()
-    };
+    let border_paint = Paint::stroke(BORDER_COLOR)
+        .with_stroke(flui_engine::Stroke::new(3.0)) // Thicker border for visibility
+        .with_anti_alias(true);
 
     picture.add_command(DrawCommand::Rect {
         rect,
@@ -336,13 +332,9 @@ impl RenderOverflowIndicator {
         });
 
         // Add red border for emphasis
-        let border_paint = Paint {
-            color: BORDER_COLOR,
-            style: PaintingStyle::Stroke,
-            stroke_width: 2.0,
-            anti_alias: true,
-            ..Default::default()
-        };
+        let border_paint = Paint::stroke(BORDER_COLOR)
+            .with_stroke(flui_engine::Stroke::new(2.0))
+            .with_anti_alias(true);
 
         picture.add_command(DrawCommand::Rect {
             rect,

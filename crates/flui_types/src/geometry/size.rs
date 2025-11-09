@@ -3,6 +3,9 @@
 use std::fmt;
 use std::ops::{Add, Div, Mul, Sub};
 
+/// Epsilon for safe float comparisons (Rust 1.91.0 strict arithmetic)
+const EPSILON: f32 = 1e-6;
+
 /// A 2D size with width and height
 ///
 /// Similar to Flutter's Size.
@@ -53,7 +56,7 @@ impl Size {
     #[inline]
     #[must_use]
     pub fn is_zero(&self) -> bool {
-        self.width == 0.0 && self.height == 0.0
+        self.width.abs() < EPSILON && self.height.abs() < EPSILON
     }
 
     /// Check if this size has finite dimensions
@@ -74,7 +77,7 @@ impl Size {
     #[inline]
     #[must_use]
     pub fn aspect_ratio(&self) -> f32 {
-        if self.height == 0.0 {
+        if self.height.abs() < EPSILON {
             0.0
         } else {
             self.width / self.height
@@ -135,7 +138,7 @@ impl Size {
     /// Returns the largest size that fits completely within `bounds`.
     #[must_use]
     pub fn fit_within(&self, bounds: Size) -> Size {
-        if self.width == 0.0 || self.height == 0.0 {
+        if self.width.abs() < EPSILON || self.height.abs() < EPSILON {
             return Size::ZERO;
         }
 
@@ -148,7 +151,7 @@ impl Size {
     /// Returns the smallest size that completely covers `bounds`.
     #[must_use]
     pub fn fill_bounds(&self, bounds: Size) -> Size {
-        if self.width == 0.0 || self.height == 0.0 {
+        if self.width.abs() < EPSILON || self.height.abs() < EPSILON {
             return Size::ZERO;
         }
 
