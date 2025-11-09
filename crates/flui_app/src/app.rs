@@ -114,6 +114,10 @@ pub struct FluiApp {
     /// Cleanup callback called on app shutdown
     /// Use this to clean up resources, stop background tasks, etc.
     on_cleanup: Option<Box<dyn FnOnce() + Send>>,
+
+    /// Window event callbacks for system events
+    /// Handles focus, minimization, DPI changes, etc.
+    event_callbacks: crate::event_callbacks::WindowEventCallbacks,
 }
 
 impl FluiApp {
@@ -197,6 +201,7 @@ impl FluiApp {
             window,
             painter,
             on_cleanup: None,
+            event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
         }
     }
 
@@ -237,6 +242,45 @@ impl FluiApp {
             cleanup();
             tracing::info!("Cleanup complete");
         }
+    }
+
+    /// Get mutable reference to window event callbacks
+    ///
+    /// Use this to register callbacks for system events like focus changes,
+    /// minimization, DPI changes, theme changes, etc.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut app = FluiApp::new(root_view, window);
+    ///
+    /// app.event_callbacks_mut().on_focus(|focused| {
+    ///     if focused {
+    ///         println!("Window gained focus");
+    ///     } else {
+    ///         println!("Window lost focus");
+    ///     }
+    /// });
+    ///
+    /// app.event_callbacks_mut().on_minimized(|minimized| {
+    ///     if minimized {
+    ///         println!("Window minimized - pausing background tasks");
+    ///     } else {
+    ///         println!("Window restored - resuming");
+    ///     }
+    /// });
+    /// ```
+    pub fn event_callbacks_mut(&mut self) -> &mut crate::event_callbacks::WindowEventCallbacks {
+        &mut self.event_callbacks
+    }
+
+    /// Handle a window event
+    ///
+    /// This dispatches the event to registered callbacks.
+    /// You typically don't need to call this manually - it's called
+    /// automatically by the event loop.
+    pub fn handle_window_event(&mut self, event: &winit::event::WindowEvent) {
+        self.event_callbacks.handle_event(event);
     }
 
     /// Handle window resize

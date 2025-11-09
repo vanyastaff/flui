@@ -115,6 +115,12 @@ impl ApplicationHandler for AppState {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Dispatch event to user callbacks first
+        if let Some(app) = &mut self.flui_app {
+            app.handle_window_event(&event);
+        }
+
+        // Then handle internal events
         match event {
             WindowEvent::CloseRequested => {
                 tracing::info!("Close requested - performing graceful shutdown");

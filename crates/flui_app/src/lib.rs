@@ -31,11 +31,14 @@
 //! ```
 
 pub mod app;
+pub mod event_callbacks;
 pub mod window;
+
 
 
 // Re-exports
 pub use app::FluiApp;
+pub use event_callbacks::WindowEventCallbacks;
 pub use window::run_app;
 
 // Re-export commonly used types from flui_core
@@ -51,5 +54,6 @@ pub use flui_core::{
     // View system (new API)
     view::{AnyView, BuildContext, ChangeFlags, View, ViewElement},
 };
+
 
 
