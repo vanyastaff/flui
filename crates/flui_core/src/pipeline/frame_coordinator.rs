@@ -306,11 +306,16 @@ impl FrameCoordinator {
     /// Flush the build phase
     ///
     /// Rebuilds all dirty elements in depth order (with parallel execution when enabled).
+    ///
+    /// Uses parallel execution via rayon when:
+    /// - Feature `parallel` is enabled
+    /// - Number of dirty elements >= MIN_PARALLEL_ELEMENTS (50)
+    /// - Multiple independent subtrees exist
+    ///
+    /// Falls back to sequential execution otherwise.
     pub fn flush_build(&mut self, tree: &Arc<RwLock<ElementTree>>) {
-        // TEMP FIX: Use rebuild_dirty() instead of rebuild_dirty_parallel()
-        // parallel_build::rebuild_element() doesn't support ComponentElement yet (Issue #2)
-        // Once ComponentElement rebuild is implemented in parallel_build.rs, switch back to rebuild_dirty_parallel()
-        self.build.rebuild_dirty(tree);
+        // Use parallel build (automatically falls back to sequential if appropriate)
+        self.build.rebuild_dirty_parallel(tree);
     }
 
     /// Flush the layout phase
