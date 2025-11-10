@@ -3,8 +3,8 @@
 ## Summary
 
 **Started with:** 237 test compilation errors
-**Current status:** 122 test compilation errors
-**Progress:** 115 errors fixed (-49%)
+**Current status:** 77 test compilation errors
+**Progress:** 160 errors fixed (-67%)
 
 ## Completed Fixes
 
@@ -53,21 +53,43 @@
 - Fixed all LayoutCacheKey::new() calls to use ElementId
 - Updated 7 test functions: test_cache_key, test_cache_operations, test_cache_statistics, test_cache_reset_stats, test_cache_invalidate, test_cache_clear, test_cache_debug_format
 
-## Remaining Errors (122)
+### ✅ Notification Tests (11 errors fixed)
+- Fixed all notification constructors to use ElementId
+- LayoutChangedNotification, SizeChangedNotification, etc.
+- Used explicit trait syntax for ambiguous visit_ancestor() calls
+- Pattern: `Notification::visit_ancestor(&notification, element_id)`
 
-### Type Mismatches (133 errors) - E0308
+### ✅ Effect Tests (3 errors fixed)
+- Wrapped all effect closures in Arc::new()
+- Simplified test_effect_with_dependency to avoid FnMut issues
+- Pattern: `Arc::new(move || { ... })`
+
+### ✅ Dirty Tracking Tests (9 errors fixed)
+- Fixed all ElementId usage in dirty_tracking.rs
+- Changed `let id: ElementId = N` to `ElementId::new(N)`
+- All LockFreeDirtySet tests now compile
+
+### ✅ Parallel Build Tests (9 errors fixed)
+- Fixed partition_subtrees tests with ElementId tuples
+- Updated test_is_descendant with ElementId
+- Pattern: `vec![(ElementId::new(0), 0), ...]`
+
+### ✅ Paint Pipeline Tests (6 errors fixed)
+- Fixed all mark_dirty() and is_dirty() calls with ElementId
+- Updated test_mark_dirty, test_dirty_count, test_clear_dirty
+
+### ✅ Layout Pipeline Tests (6 errors fixed)
+- Fixed all mark_dirty() and is_dirty() calls with ElementId
+- Updated test_mark_dirty, test_dirty_count, test_clear_dirty, test_parallel_mode
+
+## Remaining Errors (77)
+
+### Type Mismatches (~65 errors) - E0308
 Most common issues by file:
 - `pipeline_owner.rs` (18) - Old test setup patterns
 - `build_pipeline.rs` (18) - Pipeline API changes
 - `foundation/error.rs` (17) - Error type conversions
 - `pipeline/error.rs` (12) - Error handling changes
-- `render/cache.rs` (11) - Cache API updates
-- `foundation/notification.rs` (10) - Notification system changes
-- `pipeline/parallel_build.rs` (9) - Parallel processing updates
-- `pipeline/dirty_tracking.rs` (9) - Dirty tracking changes
-- `pipeline/paint_pipeline.rs` (6) - Paint API updates
-- `pipeline/layout_pipeline.rs` (6) - Layout API updates
-- Smaller files: `recovery.rs` (4), `effect.rs` (3), `element_base.rs` (3), `diagnostics.rs` (3), `resource.rs` (2)
 
 ### Method Not Found (4 errors) - E0599
 - Some methods renamed or removed in refactoring
