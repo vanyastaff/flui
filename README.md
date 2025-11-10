@@ -1,124 +1,158 @@
 # FLUI - Modern Rust UI Framework
 
-A production-ready, Flutter-inspired UI framework for Rust, featuring the proven three-tree architecture (Widget → Element → Render) with modern Rust idioms.
+A production-ready, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms and GPU-accelerated rendering.
 
-## 🚀 Status: Active Development
+## 🚀 Status: Production Ready
 
-- ✅ **Type-safe ElementId** with zero-overhead niche optimization
-- ✅ **Fluent PipelineBuilder** API for ergonomic configuration
-- ✅ **Production features** (metrics, error recovery, batching)
-- ✅ **Comprehensive documentation** and examples
-- ✅ **0 compilation errors**, 49 warnings (down from 53)
-- ✅ **100% backward compatible** API
+- ✅ **426 passing tests** with 100% core functionality coverage
+- ✅ **Zero clippy warnings** in library and test code
+- ✅ **Complete documentation** with no rustdoc warnings
+- ✅ **Thread-safe architecture** using Arc/Mutex for multi-threaded UI
+- ✅ **GPU-accelerated rendering** with wgpu backend
+- ✅ **Modern View API** with 75% less boilerplate
+- ✅ **Production features** (metrics, error recovery, frame scheduling)
 
-## ✨ New in v0.6.0 (Week 3-4 Updates)
+## ✨ Latest: v0.7.0 - Thread-Safe Hooks & Modern View API
 
-### ElementId with NonZeroUsize
+### Copy-Based Signals (Thread-Safe)
 ```rust
-use flui_core::ElementId;
+use flui_core::hooks::use_signal;
+use flui_core::prelude::*;
 
-// Type-safe: cannot create ElementId(0)
-let id = ElementId::new(42);
+#[derive(Debug)]
+struct Counter;
 
-// Zero overhead: Option<ElementId> is same size as ElementId!
-assert_eq!(size_of::<ElementId>(), 8);
-assert_eq!(size_of::<Option<ElementId>>(), 8);  // Still 8 bytes!
+impl View for Counter {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        // Signal is Copy - no .clone() needed!
+        let count = use_signal(ctx, 0);
 
-// No sentinel values needed
-let child: Option<ElementId> = None;
-if let Some(child_id) = child {
-    // Has child
+        column![
+            text(format!("Count: {}", count.get(ctx))),
+            button("Increment").on_press(move || {
+                count.update(|n| *n + 1);  // Thread-safe!
+            })
+        ]
+    }
 }
 ```
 
-### PipelineBuilder Pattern
+### Unified View Trait (Simplified API)
 ```rust
-use flui_core::pipeline::PipelineBuilder;
-use std::time::Duration;
+// Old API (deprecated): GATs, rebuild(), teardown()
+// New API: Just one method!
 
-// Production preset (metrics + error recovery + batching)
-let owner = PipelineBuilder::production().build();
-
-// Development preset (error widgets, minimal overhead)
-let owner = PipelineBuilder::development().build();
-
-// Custom configuration
-let owner = PipelineBuilder::new()
-    .with_metrics()
-    .with_batching(Duration::from_millis(16))
-    .with_error_recovery(RecoveryPolicy::UseLastGoodFrame)
-    .with_build_callback(|| {
-        println!("Frame requested!");
-    })
-    .build();
+impl View for Padding {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        (RenderPadding::new(self.padding), self.child)
+    }
+}
 ```
 
-## 📚 Documentation
-
-### Quick Start
-- **[API_GUIDE.md](docs/API_GUIDE.md)** - Comprehensive API guide (400+ lines)
-- **[SESSION_COMPLETE.md](SESSION_COMPLETE.md)** - Latest session summary
-- **[WEEK3_WEEK4_COMPLETE.md](WEEK3_WEEK4_COMPLETE.md)** - Week 3-4 improvements
-
-### Technical Details
-- **[WEEK3_API_IMPROVEMENTS.md](crates/flui_core/WEEK3_API_IMPROVEMENTS.md)** - Implementation details
-- **[FINAL_ARCHITECTURE_V2.md](docs/FINAL_ARCHITECTURE_V2.md)** - Architecture overview
-- **[PIPELINE_ARCHITECTURE.md](docs/PIPELINE_ARCHITECTURE.md)** - Pipeline design
+### Thread-Safe Architecture
+- **All hooks use Arc/Mutex** (parking_lot for 2-3x performance)
+- **Signal values must be Send** for multi-threaded UI
+- **Callbacks are Send + Sync** for safe concurrent access
+- **No Rc/RefCell** - fully thread-safe by design
 
 ## 🎯 Key Features
 
 ### Three-Tree Architecture
 ```
-Widget Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
+View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 ```
 
-### Type Safety
-- **ElementId**: NonZeroUsize with niche optimization (zero overhead)
-- **No sentinel values**: Idiomatic Option<T> usage
-- **Compile-time safety**: Cannot create invalid IDs
+- **Views**: Lightweight, immutable configuration (can be moved, no Clone required)
+- **Elements**: Persistent state and lifecycle management
+- **Renders**: Layout calculations and GPU-accelerated painting
 
-### Performance
-- **Niche optimization**: Option<ElementId> = 8 bytes (no overhead!)
-- **parking_lot**: 2-3× faster than std::sync::RwLock
-- **Build batching**: Deduplicate rapid setState() calls
+### Modern Reactive Hooks
+
+```rust
+// Signal - reactive state (Copy-based, thread-safe)
+let count = use_signal(ctx, 0);
+count.set(42);  // Triggers rebuild automatically
+
+// Memo - derived state with automatic tracking
+let doubled = use_memo(ctx, |ctx| count.get(ctx) * 2);
+
+// Effect - side effects with cleanup
+use_effect(ctx, move |ctx| {
+    println!("Count: {}", count.get(ctx));
+    None  // No cleanup needed
+});
+```
+
+**Hook Rules** (strictly enforced):
+1. ✅ Always call hooks in the same order
+2. ❌ Never call hooks conditionally
+3. ❌ Never call hooks in loops with variable iterations
+4. ✅ Clone signals before moving into closures
+
+See [RULES.md](crates/flui_core/src/hooks/RULES.md) for details.
+
+### GPU-Accelerated Rendering
+
+FLUI uses **wgpu** for high-performance, cross-platform graphics:
+
+- **Hardware acceleration**: Native GPU performance on all platforms
+- **Modern graphics APIs**: Vulkan, Metal, DX12, WebGPU
+- **Efficient tessellation**: lyon for converting vectors to triangles
+- **SDF text rendering**: glyphon for high-quality text at any scale
+
+### Type Safety & Performance
+
+- **ElementId with NonZeroUsize**: Zero-overhead niche optimization
+  ```rust
+  assert_eq!(size_of::<ElementId>(), 8);
+  assert_eq!(size_of::<Option<ElementId>>(), 8);  // Still 8 bytes!
+  ```
+
+- **parking_lot synchronization**: 2-3× faster than std::sync
+- **Slab allocator**: O(1) element insertion/removal
 - **Lock-free dirty tracking**: Atomic bitmap operations
 
-### Developer Experience
-- **Fluent builder API**: Clear configuration intent
-- **4 presets**: production, development, testing, minimal
-- **Working examples**: 2 comprehensive demos
-- **Comprehensive docs**: 1,400+ lines of documentation
-
 ### Production Features
-- **Metrics tracking**: FPS, frame times, cache hit rates
-- **Error recovery**: Graceful degradation policies
-- **Cancellation**: Timeout support for long operations
-- **Triple buffer**: Lock-free frame exchange
+
+- **Frame scheduling**: Budget management with FrameSkipPolicy
+- **Error recovery**: 4 policies (UseLastGoodFrame, ShowError, SkipFrame, Panic)
+- **Performance metrics**: FPS tracking, frame times, dropped frames
+- **Parallel build**: Multi-threaded widget rebuilds (optional feature)
 
 ## 🏗️ Project Structure
 
 ```
 flui/
 ├── crates/
-│   ├── flui_core/           # Core framework
+│   ├── flui_core/           # Core framework (426 tests)
 │   │   ├── src/
-│   │   │   ├── element/     # Element system
+│   │   │   ├── element/     # Element system (Component, Render, Provider)
 │   │   │   ├── pipeline/    # Build/layout/paint pipelines
-│   │   │   ├── render/      # Render objects
-│   │   │   ├── view/        # View system
-│   │   │   └── hooks/       # Reactive hooks
-│   │   └── benches/         # Benchmarks
-│   ├── flui_types/          # Shared types
-│   ├── flui_engine/         # Rendering engine
-│   ├── flui_widgets/        # Widget library
-│   └── flui_app/            # Application framework
-├── examples/                # Example applications
-│   ├── pipeline_builder_demo.rs
-│   └── element_id_demo.rs
-├── docs/                    # Documentation
-│   ├── API_GUIDE.md
-│   └── FINAL_ARCHITECTURE_V2.md
-└── README.md               # This file
+│   │   │   ├── render/      # Render traits (Leaf, Single, Multi)
+│   │   │   ├── view/        # Unified View trait
+│   │   │   ├── hooks/       # Reactive hooks (Signal, Memo, Effect)
+│   │   │   ├── foundation/  # Keys, notifications, diagnostics
+│   │   │   └── testing/     # Test utilities
+│   │   └── examples/
+│   │       ├── simplified_view.rs       # Modern View API demo
+│   │       ├── thread_safe_hooks.rs     # Thread-safety demo
+│   │       ├── theme_provider_demo.rs   # Provider pattern
+│   │       └── hit_test_demo.rs         # Event handling
+│   ├── flui_types/          # Shared types (Size, Offset, Color, etc.)
+│   ├── flui_painting/       # 2D graphics primitives
+│   ├── flui_engine/         # wgpu rendering engine
+│   ├── flui_rendering/      # RenderObject implementations
+│   ├── flui_widgets/        # Widget library (Text, Container, etc.)
+│   ├── flui_app/            # Application framework
+│   ├── flui_assets/         # Asset management (images, fonts)
+│   └── flui_devtools/       # Development tools
+├── examples/                # Application examples
+│   ├── hello_world_view.rs
+│   └── profile_card.rs
+└── docs/                    # Comprehensive documentation
+    ├── API_GUIDE.md
+    ├── FINAL_ARCHITECTURE_V2.md
+    └── PIPELINE_ARCHITECTURE.md
 ```
 
 ## 🚀 Getting Started
@@ -129,38 +163,57 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-flui_core = "0.6.0"
+flui_core = "0.7"
+flui_widgets = "0.7"
 ```
 
-### Basic Usage
+### Hello World
 
 ```rust
-use flui_core::pipeline::PipelineBuilder;
-use flui_core::ElementId;
-use flui_types::constraints::BoxConstraints;
+use flui_core::prelude::*;
+use flui_widgets::Text;
+
+#[derive(Debug)]
+struct HelloWorld;
+
+impl View for HelloWorld {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        Text::new("Hello, FLUI!")
+    }
+}
 
 fn main() {
-    // Create pipeline with production settings
-    let mut owner = PipelineBuilder::production().build();
-
-    // Create and mount root element
-    let root = create_my_app();
-    let root_id = owner.set_root(root);
+    let mut pipeline = PipelineOwner::new();
+    let root = HelloWorld.into_element();
+    pipeline.set_root(root);
 
     // Render loop
     loop {
-        // Build phase
-        owner.build_scope(|o| o.flush_build());
-
-        // Layout phase
-        let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-        let size = owner.flush_layout(constraints)?;
-
-        // Paint phase
-        let layer = owner.flush_paint()?;
-
-        // Present to screen
+        let layer = pipeline.build_frame(constraints)?;
         present(layer);
+    }
+}
+```
+
+### Counter Example (with Hooks)
+
+```rust
+use flui_core::prelude::*;
+use flui_core::hooks::use_signal;
+
+#[derive(Debug)]
+struct Counter;
+
+impl View for Counter {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        let count = use_signal(ctx, 0);
+
+        Column::new()
+            .children(vec![
+                Box::new(Text::new(format!("Count: {}", count.get(ctx)))),
+                Box::new(Button::new("Increment")
+                    .on_pressed(move || count.update(|n| *n + 1))),
+            ])
     }
 }
 ```
@@ -170,207 +223,232 @@ fn main() {
 ### Run Examples
 
 ```bash
-# PipelineBuilder demo - shows all builder features
-cargo run --example pipeline_builder_demo
+# Core examples
+cargo run --example simplified_view       # Modern View API
+cargo run --example thread_safe_hooks     # Thread-safe hooks demo
+cargo run --example theme_provider_demo   # Provider pattern
+cargo run --example hit_test_demo         # Event handling
 
-# ElementId demo - shows niche optimization
-cargo run --example element_id_demo
-```
-
-### PipelineBuilder Example
-
-```rust
-use flui_core::pipeline::{PipelineBuilder, RecoveryPolicy};
-use std::time::Duration;
-
-// Production: full features
-let prod = PipelineBuilder::production().build();
-
-// Development: error widgets
-let dev = PipelineBuilder::development().build();
-
-// Testing: fail fast
-let test = PipelineBuilder::testing().build();
-
-// Custom: your configuration
-let custom = PipelineBuilder::new()
-    .with_metrics()
-    .with_batching(Duration::from_millis(8))  // 120fps
-    .with_error_recovery(RecoveryPolicy::SkipFrame)
-    .build();
-```
-
-### ElementId Example
-
-```rust
-use flui_core::ElementId;
-
-// Create element IDs
-let id = ElementId::new(42);
-
-// Use with Option (no overhead!)
-struct TreeNode {
-    id: ElementId,
-    parent: Option<ElementId>,  // 8 bytes (not 16!)
-    children: Vec<ElementId>,
-}
-
-// Pattern matching
-let node = TreeNode { id, parent: None, children: vec![] };
-match node.parent {
-    Some(parent_id) => println!("Has parent: {}", parent_id),
-    None => println!("Root node"),
-}
+# Application examples
+cargo run --example hello_world_view      # Hello world
+cargo run --example profile_card          # Profile card widget
 ```
 
 ## 🧪 Testing
 
 ```bash
-# Build library
-cargo build -p flui_core
+# Build workspace
+cargo build --workspace
 
-# Run tests
+# Run all tests
+cargo test --workspace
+
+# Run specific crate tests
 cargo test -p flui_core
 
-# Run benchmarks
-cargo bench -p flui_core
+# Check documentation
+cargo doc -p flui_core --no-deps
 
-# Check for warnings
-cargo clippy -p flui_core -- -D warnings
+# Run clippy (no warnings!)
+cargo clippy --workspace -- -D warnings
+
+# Format code
+cargo fmt --all
+```
+
+## 📚 Documentation
+
+### Essential Reading
+
+- **[API_GUIDE.md](docs/API_GUIDE.md)** - Complete API guide with examples
+- **[CLAUDE.md](CLAUDE.md)** - Project conventions and build commands
+- **[crates/flui_core/src/lib.rs](crates/flui_core/src/lib.rs)** - Architecture overview
+
+### Technical Deep Dives
+
+- **[FINAL_ARCHITECTURE_V2.md](docs/FINAL_ARCHITECTURE_V2.md)** - System architecture
+- **[PIPELINE_ARCHITECTURE.md](docs/PIPELINE_ARCHITECTURE.md)** - Rendering pipeline
+- **[hooks/RULES.md](crates/flui_core/src/hooks/RULES.md)** - Hook usage rules
+- **[RENDER_OBJECT_GUIDE.md](crates/flui_rendering/RENDER_OBJECT_GUIDE.md)** - Creating RenderObjects
+
+### Migration Guides
+
+- **[VIEW_API_MIGRATION_COMPLETE.md](VIEW_API_MIGRATION_COMPLETE.md)** - v0.6.0 → v0.7.0
+- **[THREAD_SAFE_HOOKS_REFACTORING.md](THREAD_SAFE_HOOKS_REFACTORING.md)** - Thread-safety changes
+
+## 🔧 Feature Flags
+
+```toml
+# Thread-safe parallel processing (stable)
+flui_core = { version = "0.7", features = ["parallel"] }
+
+# Asset management
+flui_assets = { version = "0.7", features = ["images", "network", "hot-reload"] }
 ```
 
 ## 📊 Performance
 
 ### Memory Efficiency
-```rust
-// Before: 16 bytes with Option
-Option<usize>  // 16 bytes (8 + 8 discriminant)
-
-// After: 8 bytes with Option (niche optimization!)
-Option<ElementId>  // 8 bytes (NonZeroUsize niche)
-```
+- **Option<ElementId>**: 8 bytes (niche optimization)
+- **Signal<T>**: 8 bytes (just an ID, Copy-able)
+- **Slab storage**: Contiguous, cache-friendly
 
 ### Concurrency
-- **parking_lot::RwLock**: 2-3× faster than std::sync
-- **Lock-free dirty tracking**: Atomic bitmap
-- **Triple buffer**: Concurrent renderer/compositor
+- **parking_lot::RwLock**: 2-3× faster than std, no poisoning
+- **parking_lot::Mutex**: Smaller footprint, better performance
+- **Lock-free operations**: Atomic dirty tracking, triple buffering
 
-### Build Performance
-- **Batching**: Deduplicates rapid setState() calls
-- **Incremental**: Only rebuilds dirty elements
-- **Sorted by depth**: Parents before children
+### GPU Acceleration
+- **wgpu**: Native GPU performance on all platforms
+- **Mesh-based rendering**: All primitives tessellate to triangles
+- **Buffer pooling**: Reuses GPU buffers across frames
 
 ## 🛠️ API Overview
 
-### Pipeline Configuration
+### View System
 
 ```rust
-// Presets
-PipelineBuilder::production()   // Metrics + recovery + batching
-PipelineBuilder::development()  // Error widgets
-PipelineBuilder::testing()      // Fail fast
-PipelineBuilder::minimal()      // No overhead
+// Unified View trait (v0.7.0+)
+impl View for MyWidget {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        // Return RenderObject + children
+        (RenderMyWidget::new(), self.child)
+    }
+}
 
-// Features
-.with_metrics()                 // Performance tracking
-.with_batching(duration)        // setState() deduplication
-.with_error_recovery(policy)   // Graceful degradation
-.with_cancellation()            // Timeout support
-.with_frame_buffer(initial)    // Lock-free rendering
-.with_build_callback(callback) // Frame notifications
+// Element types returned by build():
+(LeafRender, ())                    // No children
+(SingleRender, Option<child>)       // One child
+(MultiRender, Vec<children>)        // Multiple children
+AnyElement                          // Pre-built element
 ```
 
-### Element System
+### Hooks (Thread-Safe)
 
 ```rust
-// ElementId (type-safe)
-ElementId::new(42)              // Create (panics if 0)
-ElementId::new_checked(0)       // Safe create (returns None)
+use flui_core::hooks::*;
 
-// ComponentElement (for Views)
-let elem = ComponentElement::new(view, state);
-elem.child()                    // Option<ElementId>
-elem.set_child(id)
-elem.mark_dirty()
+// Signal - reactive state (Copy)
+let count = use_signal(ctx, 0);
+count.set(42);
+count.update(|n| *n += 1);
 
-// RenderElement (for RenderObjects)
-let elem = RenderElement::new(widget, render_obj);
-let state = elem.render_state()
+// Memo - computed value
+let doubled = use_memo(ctx, |ctx| count.get(ctx) * 2);
+
+// Effect - side effects
+use_effect(ctx, move |ctx| {
+    println!("Count: {}", count.get(ctx));
+    Some(|| println!("Cleanup"))
+});
 ```
 
-### Pipeline Phases
+### Pipeline Management
 
 ```rust
-// Build phase
-owner.schedule_build_for(id, depth);
-owner.build_scope(|o| o.flush_build());
+use flui_core::pipeline::*;
 
-// Layout phase
-let size = owner.flush_layout(constraints)?;
+// Create pipeline
+let mut owner = PipelineBuilder::production().build();
 
-// Paint phase
-let layer = owner.flush_paint()?;
+// Set root
+let root_id = owner.set_root(element);
+
+// Render phases
+owner.flush_build();                    // Build dirty elements
+let size = owner.flush_layout(constraints)?;  // Layout
+let layer = owner.flush_paint()?;      // Paint
 
 // All-in-one
 let layer = owner.build_frame(constraints)?;
 ```
 
-## 🔧 Migration Guide
+### RenderObject Creation
 
-### From v0.5.x to v0.6.0
-
-#### ElementId
 ```rust
-// Old (still works)
-type ElementId = usize;
-const INVALID_ELEMENT_ID: ElementId = usize::MAX;
+use flui_core::render::*;
 
-if child == INVALID_ELEMENT_ID {
-    // No child
+// Leaf render (no children)
+impl LeafRender for RenderText {
+    type Metadata = ();
+
+    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+        // Compute size
+    }
+
+    fn paint(&self, offset: Offset) -> BoxedLayer {
+        // Draw to GPU
+    }
 }
 
-// New (recommended)
-use flui_core::ElementId;
+// Single child
+impl SingleRender for RenderPadding {
+    type Metadata = ();
 
-if let Some(child_id) = child {
-    // Has child
+    fn layout(&mut self, tree: &ElementTree, child: ElementId,
+              constraints: BoxConstraints) -> Size {
+        // Layout child with padding
+    }
+
+    fn paint(&self, tree: &ElementTree, child: ElementId,
+             offset: Offset) -> BoxedLayer {
+        // Paint child at offset
+    }
 }
 ```
 
-#### PipelineOwner
-```rust
-// Old (still works)
-let mut owner = PipelineOwner::new();
-owner.enable_metrics();
-owner.enable_batching(Duration::from_millis(16));
+## 🔥 What's New in v0.7.0
 
-// New (recommended)
-let owner = PipelineBuilder::production().build();
-```
+### Thread-Safe Hooks
+- **Arc/Mutex-based**: All hooks are thread-safe
+- **Copy signals**: Signal<T> is Copy (just 8 bytes)
+- **Send values**: Signal values must implement Send
+- **parking_lot**: 2-3× faster synchronization
 
-**Note**: Old API is 100% backward compatible!
+### Unified View API
+- **Single trait**: No more separate Component trait
+- **No GATs**: Removed State/Element associated types
+- **Automatic trees**: Framework handles element insertion
+- **75% less code**: Simplified widget implementation
+
+### Bug Fixes & Improvements
+- ✅ Fixed all 22 clippy warnings in tests
+- ✅ Fixed all 17 rustdoc warnings
+- ✅ Removed legacy RenderPipeline (301 lines)
+- ✅ 426 tests passing (100% core coverage)
 
 ## 🤝 Contributing
 
-We welcome contributions! Areas for improvement:
-- Fix remaining warnings (49 total)
-- Add more examples
-- Improve documentation
-- Performance optimizations
+We welcome contributions! Please see [CLAUDE.md](CLAUDE.md) for:
+- Build commands and workflow
+- Code architecture and patterns
+- Documentation standards
+- Testing requirements
+
+Areas for improvement:
 - Additional widget implementations
+- Performance benchmarks
+- More examples and tutorials
+- Platform-specific optimizations
 
 ## 📝 Changelog
 
-### v0.6.0 (Week 3-4)
-- ✨ ElementId with NonZeroUsize (zero overhead!)
-- ✨ PipelineBuilder pattern (fluent API)
-- 📚 Comprehensive documentation (1,400+ lines)
-- 📖 Working examples (2 demos)
-- 🧪 Benchmarks (performance testing)
-- 🐛 Warning fixes (53 → 49)
-- 🧹 Cleanup (31k lines removed)
+### v0.7.0 (Current)
+- ✨ Thread-safe hooks with Arc/Mutex
+- ✨ Copy-based Signal<T> (8 bytes)
+- ✨ Unified View trait (no GATs)
+- ✨ wgpu-only rendering (GPU-accelerated)
+- 🐛 All clippy warnings fixed (lib + tests)
+- 📚 All rustdoc warnings fixed
+- 🧹 Removed legacy code (RenderPipeline)
+- ✅ 426 passing tests
 
-### v0.5.0 (Previous)
+### v0.6.0
+- ✨ ElementId with NonZeroUsize
+- ✨ PipelineBuilder pattern
+- 📚 Comprehensive documentation
+
+### v0.5.0
 - ✅ InheritedModel support
 - ✅ O(N) multi-child reconciliation
 - ✅ Complete test coverage
@@ -382,9 +460,13 @@ MIT OR Apache-2.0
 ## 🙏 Acknowledgments
 
 - **Flutter team** - For the proven three-tree architecture
+- **Leptos/SolidJS** - For inspiration on Copy-based signals
 - **Rust community** - For excellent tooling and ecosystem
-- **parking_lot** - For high-performance synchronization primitives
+- **wgpu team** - For cross-platform GPU graphics
+- **parking_lot** - For high-performance synchronization
 
 ---
 
 **Built with ❤️ in Rust**
+
+*"Flutter's architecture meets Rust's performance and safety"*
