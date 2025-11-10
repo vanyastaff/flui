@@ -19,6 +19,7 @@ use flui_types::{Offset, Rect};
 ///   └─ OpacityLayer
 ///       └─ PictureLayer
 /// ```
+#[derive(Default)]
 pub struct ContainerLayer {
     /// Base multi-child layer functionality
     base: MultiChildLayerBase,
@@ -27,9 +28,7 @@ pub struct ContainerLayer {
 impl ContainerLayer {
     /// Create a new empty container layer
     pub fn new() -> Self {
-        Self {
-            base: MultiChildLayerBase::new(),
-        }
+        Self::default()
     }
 
     /// Add a child layer
@@ -48,11 +47,6 @@ impl ContainerLayer {
     }
 }
 
-impl Default for ContainerLayer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl Layer for ContainerLayer {
     fn paint(&self, painter: &mut dyn Painter) {

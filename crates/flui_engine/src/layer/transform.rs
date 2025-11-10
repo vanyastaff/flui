@@ -6,7 +6,7 @@ use flui_types::events::{Event, HitTestResult};
 use flui_types::{Offset, Rect};
 
 /// Type of transform to apply
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Transform {
     /// Translate by offset
     Translate(Offset),

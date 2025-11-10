@@ -198,12 +198,17 @@ impl TextureCache {
     /// # Errors
     /// Returns error if texture file cannot be loaded or decoded
     pub fn get_or_load(&mut self, id: TextureId) -> Result<&CachedTexture, String> {
-        // Check if in cache (without borrowing mutably)
+        use std::collections::hash_map::Entry;
+
+        // Check cache first
         if self.textures.contains_key(&id) {
             self.cache_hits += 1;
-            let cached = self.textures.get_mut(&id).unwrap();
+            let cached = self.textures.get_mut(&id)
+                .expect("Key must exist: just checked with contains_key");
             cached.record_use();
-            return Ok(cached);
+            // Return immutable reference to avoid lifetime issues
+            return Ok(self.textures.get(&id)
+                .expect("Key must exist: just checked with contains_key"));
         }
 
         // Cache miss - load texture
@@ -219,9 +224,11 @@ impl TextureCache {
             }
         };
 
-        // Insert into cache and return reference
-        self.textures.insert(id.clone(), texture);
-        Ok(self.textures.get_mut(&id).unwrap())
+        // Use entry API for insert - this avoids double lookup on insert
+        match self.textures.entry(id) {
+            Entry::Vacant(entry) => Ok(entry.insert(texture)),
+            Entry::Occupied(entry) => Ok(entry.into_mut()), // Should never happen
+        }
     }
 
     /// Load texture from RGBA bytes
@@ -248,60 +255,65 @@ impl TextureCache {
             ));
         }
 
-        // Check if in cache (without borrowing mutably)
-        if self.textures.contains_key(&id) {
-            self.cache_hits += 1;
-            let cached = self.textures.get_mut(&id).unwrap();
-            cached.record_use();
-            return Ok(cached);
+        use std::collections::hash_map::Entry;
+
+        // Use entry API to avoid double lookup
+        match self.textures.entry(id) {
+            Entry::Occupied(mut entry) => {
+                // Cache hit
+                self.cache_hits += 1;
+                entry.get_mut().record_use();
+                Ok(entry.into_mut())
+            }
+            Entry::Vacant(entry) => {
+                // Cache miss - create texture
+                self.cache_misses += 1;
+
+                let device = unsafe { &*self.device };
+                let queue = unsafe { &*self.queue };
+
+                let texture = device.create_texture(&TextureDescriptor {
+                    label: Some("Cached Texture"),
+                    size: Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::Rgba8UnormSrgb,
+                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+
+                // Upload data
+                queue.write_texture(
+                    TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    data,
+                    TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(4 * width),
+                        rows_per_image: Some(height),
+                    },
+                    Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                let view = texture.create_view(&Default::default());
+                let cached_texture = CachedTexture::new(texture, view, width, height);
+
+                Ok(entry.insert(cached_texture))
+            }
         }
-
-        // Create texture
-        let device = unsafe { &*self.device };
-        let queue = unsafe { &*self.queue };
-
-        let texture = device.create_texture(&TextureDescriptor {
-            label: Some("Cached Texture"),
-            size: Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8UnormSrgb,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // Upload data
-        queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            data,
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width),
-                rows_per_image: Some(height),
-            },
-            Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        let view = texture.create_view(&Default::default());
-        let cached_texture = CachedTexture::new(texture, view, width, height);
-
-        self.cache_misses += 1;
-        self.textures.insert(id.clone(), cached_texture);
-        Ok(self.textures.get_mut(&id).unwrap())
     }
 
     /// Load texture from file (PNG, JPEG, etc.)

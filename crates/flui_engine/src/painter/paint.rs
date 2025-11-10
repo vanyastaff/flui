@@ -530,11 +530,13 @@ mod tests {
 
     #[test]
     fn test_stroke_builder() {
-        let stroke = Stroke::new(2.5)
-            .with_cap(StrokeCap::Round)
-            .with_join(StrokeJoin::Bevel);
-        assert_eq!(stroke.width, 2.5);
-        assert_eq!(stroke.cap, StrokeCap::Round);
-        assert_eq!(stroke.join, StrokeJoin::Bevel);
+        let stroke = Stroke::builder()
+            .width(2.5)
+            .cap(StrokeCap::Round)
+            .join(StrokeJoin::Bevel)
+            .build();
+        assert_eq!(stroke.width(), 2.5);
+        assert_eq!(stroke.cap(), StrokeCap::Round);
+        assert_eq!(stroke.join(), StrokeJoin::Bevel);
     }
 }

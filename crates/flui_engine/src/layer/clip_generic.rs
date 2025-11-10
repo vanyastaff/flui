@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn test_generic_clip_rrect_layer() {
         let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
-        let mut layer = ClipRRectLayer::new(rrect.clone());
+        let layer = ClipRRectLayer::new(rrect.clone());
 
         assert!(!layer.is_disposed());
         assert_eq!(*layer.clip_shape(), rrect);
@@ -372,7 +372,7 @@ mod tests {
         // Add a child
         let mut picture = PictureLayer::new();
         picture.draw_rect(rect, Paint::default());
-        layer.child(Box::new(picture));
+        layer.add_child(Box::new(picture));
 
         let mut result = HitTestResult::new();
 

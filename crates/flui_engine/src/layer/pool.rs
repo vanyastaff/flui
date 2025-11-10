@@ -321,7 +321,7 @@ mod tests {
         clear_all_pools();
 
         // Acquire and add children
-        let mut container = acquire_container();
+        let container = acquire_container();
         // Can't actually add children in test without BoxedLayer, but we test the API
 
         // Release back to pool
@@ -371,7 +371,7 @@ mod tests {
         release_container(acquire_container());
         release_clip_rect(acquire_clip_rect());
 
-        let (c, r) = pool_sizes();
+        let (c, r, _p) = pool_sizes();
         assert_eq!(c, 1);
         assert_eq!(r, 1);
     }

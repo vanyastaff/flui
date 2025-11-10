@@ -52,6 +52,7 @@ struct PooledBuffer {
 /// Maintains separate pools for different buffer types (vertex, index, uniform).
 /// Buffers are matched by size - if requested size matches pooled buffer size,
 /// the buffer is reused. Otherwise, a new buffer is created.
+#[derive(Default)]
 pub struct BufferPool {
     vertex_buffers: Vec<PooledBuffer>,
     index_buffers: Vec<PooledBuffer>,
@@ -65,13 +66,7 @@ pub struct BufferPool {
 impl BufferPool {
     /// Create a new buffer pool
     pub fn new() -> Self {
-        Self {
-            vertex_buffers: Vec::new(),
-            index_buffers: Vec::new(),
-            uniform_buffers: Vec::new(),
-            allocations: 0,
-            reuses: 0,
-        }
+        Self::default()
     }
 
     /// Get or create a vertex buffer
@@ -206,13 +201,15 @@ impl BufferPool {
             usage,
         });
 
+        let index = pool.len();
         pool.push(PooledBuffer {
             buffer,
             size,
             in_use: true,
         });
 
-        &pool.last().unwrap().buffer
+        // Safe: We just pushed, so pool[index] exists
+        &pool[index].buffer
     }
 
     /// Reset pool for next frame
@@ -284,11 +281,6 @@ impl BufferPool {
     }
 }
 
-impl Default for BufferPool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// Buffer pool statistics
 #[derive(Debug, Clone, Copy)]

@@ -129,8 +129,6 @@ impl Layer for ScrollableLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::events::ScrollEventData;
-    use flui_types::Size;
 
     #[test]
     fn test_delta_to_pixels() {

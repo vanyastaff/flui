@@ -144,7 +144,6 @@ mod tests {
     use super::*;
     use crate::layer::PictureLayer;
     use flui_types::events::PointerEvent;
-    use flui_types::Size;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 

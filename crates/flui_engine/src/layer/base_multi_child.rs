@@ -34,6 +34,7 @@ use flui_types::{
 ///     // ... other methods
 /// }
 /// ```
+#[derive(Default)]
 pub struct MultiChildLayerBase {
     /// Child layers
     children: Vec<BoxedLayer>,
@@ -48,11 +49,7 @@ pub struct MultiChildLayerBase {
 impl MultiChildLayerBase {
     /// Create a new empty multi-child base
     pub fn new() -> Self {
-        Self {
-            children: Vec::new(),
-            disposed: false,
-            cached_bounds: None,
-        }
+        Self::default()
     }
 
     /// Create with initial capacity
@@ -244,8 +241,3 @@ impl MultiChildLayerBase {
     }
 }
 
-impl Default for MultiChildLayerBase {
-    fn default() -> Self {
-        Self::new()
-    }
-}
