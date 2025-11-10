@@ -2,7 +2,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::{layer::pool, BoxedLayer, Paint};
+use flui_engine::{layer::pool, Paint};
 use flui_types::{
     styling::{BorderPosition, BoxDecoration, Radius},
     Offset, Point, RRect, Rect, Size,
@@ -259,7 +259,7 @@ impl Render for RenderDecoratedBox {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

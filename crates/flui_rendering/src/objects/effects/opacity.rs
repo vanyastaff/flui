@@ -2,7 +2,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::{BoxedLayer, OpacityLayer};
+use flui_painting::Canvas;
 use flui_types::Size;
 
 /// RenderObject that applies opacity to its child
@@ -46,15 +46,28 @@ impl Render for RenderOpacity {
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Paint child
-        let child_layer = tree.paint_child(child_id, offset);
 
-        // Wrap in OpacityLayer
-        Box::new(OpacityLayer::new(child_layer, self.opacity))
+        // If fully transparent, return empty canvas
+        if self.opacity <= 0.0 {
+            return Canvas::new();
+        }
+
+        // Get child canvas
+        let child_canvas = tree.paint_child(child_id, offset);
+
+        // If fully opaque, return child canvas directly
+        if self.opacity >= 1.0 {
+            return child_canvas;
+        }
+
+        // For partial opacity, we need Canvas-level opacity support
+        // TODO: Add Canvas::set_opacity() method or opacity parameter to append_canvas
+        // For now, just return child canvas (opacity will need to be handled at layer level)
+        child_canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

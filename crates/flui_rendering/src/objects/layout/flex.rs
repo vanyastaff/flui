@@ -2,6 +2,7 @@
 
 use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::{
     layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize},
@@ -492,35 +493,30 @@ impl Render for RenderFlex {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
         let offset = ctx.offset;
 
-        let mut container = pool::acquire_container();
+        let mut canvas = flui_painting::Canvas::new();
 
         // Paint children with their calculated offsets
         for (i, &child_id) in child_ids.iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
 
-            // Paint child and apply offset transform
-            let child_layer = tree.paint_child(child_id, offset + child_offset);
-            container.add_child(child_layer);
+            // Paint child and append to canvas
+            let child_canvas = tree.paint_child(child_id, offset + child_offset);
+            canvas.append_canvas(child_canvas);
         }
 
-        // Wrap container with overflow indicator layer if overflow detected (debug only)
-        // TODO: Re-enable when OverflowIndicatorLayer is migrated to Canvas API
+        // TODO: Add overflow indicator drawing via Canvas API in debug mode
         // #[cfg(debug_assertions)]
         // if self.overflow_pixels > 0.0 {
         //     let (overflow_h, overflow_v) = self.get_overflow();
-        //     let indicator_layer = flui_engine::layer::OverflowIndicatorLayer::new(Box::new(
-        //         container,
-        //     ))
-        //     .with_overflow(overflow_h, overflow_v, self.container_size, offset);
-        //     return Box::new(indicator_layer);
+        //     // Draw overflow indicators using canvas.draw_* methods
         // }
 
-        Box::new(flui_engine::PooledContainerLayer::new(container))
+        canvas
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

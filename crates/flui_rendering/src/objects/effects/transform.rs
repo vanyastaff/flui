@@ -2,7 +2,8 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::{BoxedLayer, Transform, TransformLayer};
+use flui_engine::Transform;
+use flui_painting::Canvas;
 use flui_types::{Offset, Size};
 
 /// RenderObject that applies a transformation to its child
@@ -64,15 +65,47 @@ impl Render for RenderTransform {
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Capture child layer
-        let child_layer = tree.paint_child(child_id, offset);
 
-        // Wrap in TransformLayer
-        Box::new(TransformLayer::new(child_layer, self.transform))
+        // Create a new canvas for the transformed content
+        let mut canvas = Canvas::new();
+
+        // Apply transform using Canvas API
+        canvas.save();
+
+        // Apply the specific transform based on type
+        match self.transform {
+            Transform::Translate(t_offset) => {
+                canvas.translate(t_offset.dx, t_offset.dy);
+            }
+            Transform::Rotate(angle) => {
+                // Apply alignment offset, rotate, then reverse alignment
+                canvas.translate(self.alignment.dx, self.alignment.dy);
+                canvas.rotate(angle);
+                canvas.translate(-self.alignment.dx, -self.alignment.dy);
+            }
+            Transform::Scale(scale) => {
+                canvas.translate(self.alignment.dx, self.alignment.dy);
+                canvas.scale(scale, None);
+                canvas.translate(-self.alignment.dx, -self.alignment.dy);
+            }
+            Transform::ScaleXY(sx, sy) => {
+                canvas.translate(self.alignment.dx, self.alignment.dy);
+                canvas.scale(sx, Some(sy));
+                canvas.translate(-self.alignment.dx, -self.alignment.dy);
+            }
+        }
+
+        // Paint child and append its canvas
+        let child_canvas = tree.paint_child(child_id, offset);
+        canvas.append_canvas(child_canvas);
+
+        canvas.restore();
+
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

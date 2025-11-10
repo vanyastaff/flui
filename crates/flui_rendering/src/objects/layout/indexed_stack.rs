@@ -1,6 +1,7 @@
 //! RenderIndexedStack - shows only one child by index
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 
 use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::{Alignment, Size};
@@ -100,11 +101,13 @@ impl Render for RenderIndexedStack {
         self.size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
         let offset = ctx.offset;
-        let mut container = pool::acquire_container();
+
+        // Create canvas
+        let mut canvas = Canvas::new();
 
         // Only paint the selected child
         if let Some(index) = self.index {
@@ -114,13 +117,13 @@ impl Render for RenderIndexedStack {
                 // Calculate aligned position
                 let child_offset = self.alignment.calculate_offset(child_size, self.size);
 
-                // Paint child with combined offset
-                let child_layer = tree.paint_child(child_id, offset + child_offset);
-                container.add_child(child_layer);
+                // Paint child and append to canvas
+                let child_canvas = tree.paint_child(child_id, offset + child_offset);
+                canvas.append_canvas(child_canvas);
             }
         }
 
-        Box::new(container)
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

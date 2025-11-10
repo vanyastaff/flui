@@ -1,6 +1,6 @@
 //! RenderClipRRect - clips child to rounded rectangle
 
-use flui_engine::{painter::RRect, BoxedLayer, ClipRRectLayer};
+use flui_engine::{painter::RRect, ClipRRectLayer};
 use flui_types::{painting::Clip, styling::BorderRadius, Rect, Size};
 
 use super::clip_base::{ClipShape, RenderClip};

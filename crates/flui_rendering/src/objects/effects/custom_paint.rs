@@ -2,7 +2,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::{BoxedLayer, PictureLayer};
+use flui_engine::{, PictureLayer};
 use flui_types::Size;
 
 /// Custom painter trait
@@ -155,7 +155,7 @@ impl Render for RenderCustomPaint {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

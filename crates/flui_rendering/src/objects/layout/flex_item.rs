@@ -196,7 +196,7 @@ impl Render for RenderFlexItem {
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

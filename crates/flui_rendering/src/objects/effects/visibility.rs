@@ -4,7 +4,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::{layer::pool, BoxedLayer};
+use flui_engine::{layer::pool};
 use flui_types::Size;
 
 /// RenderObject that controls visibility with fine-grained options
@@ -122,7 +122,7 @@ impl Render for RenderVisibility {
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

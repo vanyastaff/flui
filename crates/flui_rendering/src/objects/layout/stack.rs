@@ -1,6 +1,7 @@
 //! RenderStack - layering container
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 
 use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::constraints::BoxConstraints;
@@ -190,22 +191,22 @@ impl Render for RenderStack {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
         let offset = ctx.offset;
-        let mut container = pool::acquire_container();
+        let mut canvas = flui_painting::Canvas::new();
 
         // Paint children in order (first child in back, last child on top)
         for (i, &child_id) in child_ids.iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
 
-            // Paint child with combined offset
-            let child_layer = tree.paint_child(child_id, offset + child_offset);
-            container.add_child(child_layer);
+            // Paint child with combined offset and append to canvas
+            let child_canvas = tree.paint_child(child_id, offset + child_offset);
+            canvas.append_canvas(child_canvas);
         }
 
-        Box::new(container)
+        canvas
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

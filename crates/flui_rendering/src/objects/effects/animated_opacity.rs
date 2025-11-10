@@ -2,7 +2,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::{BoxedLayer, OpacityLayer};
+use flui_engine::{, OpacityLayer};
 use flui_types::Size;
 
 /// RenderObject that applies animated opacity to its child
@@ -76,7 +76,7 @@ impl Render for RenderAnimatedOpacity {
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

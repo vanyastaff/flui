@@ -2,7 +2,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::BoxedLayer;
+use flui_painting::Canvas;
 use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 
 /// RenderObject that scales and positions its child_id according to BoxFit
@@ -181,7 +181,7 @@ impl Render for RenderFittedBox {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

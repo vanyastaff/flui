@@ -2,7 +2,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::BoxedLayer;
+use flui_painting::Canvas;
 use flui_types::Size;
 
 /// RenderObject that prevents pointer events from reaching its child
@@ -59,7 +59,7 @@ impl Render for RenderAbsorbPointer {
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

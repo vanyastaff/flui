@@ -1,6 +1,6 @@
 //! RenderClipPath - clips child to an arbitrary path
 
-use flui_engine::BoxedLayer;
+use flui_painting::Canvas;
 use flui_types::{
     painting::{path::Path, Clip},
     Size,

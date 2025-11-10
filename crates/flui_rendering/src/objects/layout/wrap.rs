@@ -1,6 +1,7 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 
 use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::constraints::BoxConstraints;
@@ -209,7 +210,7 @@ impl Render for RenderWrap {
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
         let offset = ctx.offset;

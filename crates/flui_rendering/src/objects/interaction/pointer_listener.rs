@@ -5,7 +5,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::{BoxedLayer, PointerListenerLayer};
+use flui_engine::{, PointerListenerLayer};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 use flui_types::{Rect, Size};
 use std::sync::Arc;
@@ -182,7 +182,7 @@ impl Render for RenderPointerListener {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;

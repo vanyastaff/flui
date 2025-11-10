@@ -1,7 +1,7 @@
 //! RenderPadding - adds padding around a child
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_engine::BoxedLayer;
+use flui_painting::Canvas;
 use flui_types::{EdgeInsets, Size};
 
 /// RenderObject that adds padding around its child
@@ -54,7 +54,7 @@ impl Render for RenderPadding {
         )
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let child_id = ctx.children.single();
 
         // Apply padding offset and paint child

@@ -119,7 +119,7 @@ impl Render for RenderPositionedBox {
         tree.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
