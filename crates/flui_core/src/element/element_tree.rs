@@ -221,7 +221,18 @@ impl ElementTree {
     /// let render_elem = RenderElement::new(render_object);
     /// let root_id = tree.insert(Element::Render(render_elem));
     /// ```
-    pub fn insert(&mut self, element: Element) -> ElementId {
+    /// Insert an element into the tree (raw insertion without mounting children)
+    ///
+    /// This is an internal method. Use `insert()` which handles unmounted children automatically.
+    ///
+    /// # Arguments
+    ///
+    /// - `element`: The element to insert
+    ///
+    /// # Returns
+    ///
+    /// The ElementId of the inserted element
+    fn insert_raw(&mut self, element: Element) -> ElementId {
         // Create the node
         let node = ElementNode { element };
 
@@ -229,6 +240,74 @@ impl ElementTree {
         // Add 1 because ElementId uses NonZeroUsize (0 is invalid)
         let id = self.nodes.insert(node);
         ElementId::new(id + 1)
+    }
+
+    /// Insert an element into the tree
+    ///
+    /// Automatically handles mounting of unmounted children if present.
+    /// This is the main entry point for inserting elements created by Views.
+    ///
+    /// # Arguments
+    ///
+    /// - `element`: The element to insert
+    ///
+    /// # Returns
+    ///
+    /// The ElementId of the inserted element
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let render_elem = RenderElement::new(render_object);
+    /// let root_id = tree.insert(Element::Render(render_elem));
+    /// ```
+    pub fn insert(&mut self, mut element: Element) -> ElementId {
+        // First, check if there are unmounted children and mount them
+        let child_ids = match &mut element {
+            Element::Render(render_elem) => {
+                if let Some(unmounted) = render_elem.take_unmounted_children() {
+                    // Recursively insert each unmounted child
+                    let mut ids = Vec::with_capacity(unmounted.len());
+                    for child in unmounted {
+                        let child_id = self.insert(child); // Recursive call
+                        ids.push(child_id);
+                    }
+                    Some(ids)
+                } else {
+                    None
+                }
+            }
+            Element::Component(comp_elem) => {
+                // TODO: Handle ComponentElement unmounted child if needed
+                None
+            }
+            Element::Provider(_) => None,
+        };
+
+        // Insert the parent element (using raw insertion to avoid recursion)
+        let parent_id = self.insert_raw(element);
+
+        // Link children to parent
+        if let Some(child_ids) = child_ids {
+            // Access the element we just inserted
+            if let Some(node) = self.nodes.get_mut(parent_id.get() - 1) {
+                match &mut node.element {
+                    Element::Render(render_elem) => {
+                        render_elem.set_children(child_ids.clone());
+                    }
+                    _ => {}
+                }
+            }
+
+            // Set parent for each child
+            for child_id in child_ids {
+                if let Some(child_node) = self.nodes.get_mut(child_id.get() - 1) {
+                    child_node.element.mount(Some(parent_id), None);
+                }
+            }
+        }
+
+        parent_id
     }
 
     /// Remove an element and all its descendants from the tree

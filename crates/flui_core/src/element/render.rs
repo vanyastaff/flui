@@ -92,6 +92,13 @@ pub struct RenderElement {
 
     /// Child elements (count enforced by Render arity at runtime)
     children: Vec<ElementId>,
+
+    /// Unmounted child elements waiting to be inserted into tree
+    ///
+    /// When RenderBuilder creates child elements, they are stored here.
+    /// When this RenderElement is inserted into ElementTree, these children
+    /// are automatically inserted and linked.
+    unmounted_children: Option<Vec<Element>>,
 }
 
 // Manual Debug implementation because RwLock<Box<dyn Trait>> doesn't auto-derive
@@ -104,6 +111,7 @@ impl std::fmt::Debug for RenderElement {
             .field("offset", &self.offset)
             .field("parent_data", &self.parent_data.is_some())
             .field("children", &self.children)
+            .field("unmounted_children", &self.unmounted_children.as_ref().map(|c| c.len()))
             .finish()
     }
 }
@@ -129,6 +137,23 @@ impl RenderElement {
             offset: flui_types::Offset::ZERO,
             parent_data: None,
             children: Vec::new(),
+            unmounted_children: None,
+        }
+    }
+
+    /// Create a new RenderElement with unmounted children
+    ///
+    /// This is used by RenderBuilder to create elements with children
+    /// that will be mounted when this element is inserted into the tree.
+    pub fn new_with_children(render_object: Box<dyn Render>, children: Vec<Element>) -> Self {
+        Self {
+            base: ElementBase::new(),
+            render_object: RwLock::new(render_object),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            parent_data: None,
+            children: Vec::new(),
+            unmounted_children: Some(children),
         }
     }
 
@@ -339,6 +364,19 @@ impl RenderElement {
     #[allow(dead_code)]
     pub(crate) fn remove_child(&mut self, child_id: ElementId) {
         self.children.retain(|&id| id != child_id);
+    }
+
+    /// Check if there are unmounted children waiting to be inserted
+    pub(crate) fn has_unmounted_children(&self) -> bool {
+        self.unmounted_children.is_some()
+    }
+
+    /// Take unmounted children (consumes them)
+    ///
+    /// Returns the unmounted children and sets the field to None.
+    /// This is called by ElementTree during insertion to mount the children.
+    pub(crate) fn take_unmounted_children(&mut self) -> Option<Vec<Element>> {
+        self.unmounted_children.take()
     }
 
     // ========== DynElement-like Interface ==========

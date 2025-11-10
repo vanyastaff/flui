@@ -207,19 +207,19 @@ impl SingleRenderBuilder {
 
 impl IntoElement for SingleRenderBuilder {
     fn into_element(self) -> Element {
-        // Convert child to element and get its ID
-        let child_element = self.child.map(|c| c.into_element());
+        // Convert child to element
+        let child_elements: Vec<Element> = self
+            .child
+            .into_iter()
+            .map(|c| c.into_element())
+            .collect();
 
-        // Create RenderElement with render object
-        let render_element = RenderElement::new(self.render);
-
-        // If we have a child element, we need to handle it
-        // This is a simplified version - full implementation would require
-        // element tree integration
-        if let Some(_child_elem) = child_element {
-            // TODO: Store child for later mounting
-            // This requires changes to RenderElement or element tree
-        }
+        // Create RenderElement with unmounted children
+        let render_element = if child_elements.is_empty() {
+            RenderElement::new(self.render)
+        } else {
+            RenderElement::new_with_children(self.render, child_elements)
+        };
 
         // Convert to Element enum
         Element::Render(render_element)
@@ -305,15 +305,18 @@ impl MultiRenderBuilder {
 impl IntoElement for MultiRenderBuilder {
     fn into_element(self) -> Element {
         // Convert children to elements
-        let _child_elements: Vec<Element> = self
+        let child_elements: Vec<Element> = self
             .children
             .into_iter()
             .map(|c| c.into_element())
             .collect();
 
-        // Create RenderElement with render object (children will be set during mounting)
-        // TODO: This needs to be handled by the element tree mounting logic
-        let render_element = RenderElement::new(self.render);
+        // Create RenderElement with unmounted children
+        let render_element = if child_elements.is_empty() {
+            RenderElement::new(self.render)
+        } else {
+            RenderElement::new_with_children(self.render, child_elements)
+        };
 
         // Convert to Element enum
         Element::Render(render_element)
