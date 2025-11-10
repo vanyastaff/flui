@@ -382,11 +382,11 @@ impl Tessellator {
 /// Helper trait for creating lyon paths from FLUI types
 pub trait IntoLyonPath {
     /// Convert to lyon path
-    fn into_lyon_path(&self) -> Path;
+    fn to_lyon_path(&self) -> Path;
 }
 
 impl IntoLyonPath for Rect {
-    fn into_lyon_path(&self) -> Path {
+    fn to_lyon_path(&self) -> Path {
         let mut builder = Path::builder();
 
         builder.begin(lyon::geom::point(self.left(), self.top()));

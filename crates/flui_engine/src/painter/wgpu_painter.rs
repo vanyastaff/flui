@@ -1089,6 +1089,7 @@ pub trait Painter {
         tracing::warn!("Painter::sweep_gradient: not implemented - use Paint::gradient() instead");
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn text_with_shadow(
         &mut self,
         text: &str,
@@ -1297,7 +1298,7 @@ impl Painter for WgpuPainter {
         );
 
         // Load or get cached texture
-        let cached_texture = match self.texture_cache.get_or_load(texture_id.clone()) {
+        let _cached_texture = match self.texture_cache.get_or_load(texture_id.clone()) {
             Ok(texture) => texture,
             Err(e) => {
                 #[cfg(debug_assertions)]
@@ -1360,7 +1361,7 @@ impl Painter for WgpuPainter {
         tracing::debug!("WgpuPainter::translate: offset={:?}", offset);
 
         let translation = glam::Mat4::from_translation(glam::vec3(offset.dx, offset.dy, 0.0));
-        self.current_transform = self.current_transform * translation;
+        self.current_transform *= translation;
     }
 
     fn rotate(&mut self, angle: f32) {
@@ -1368,7 +1369,7 @@ impl Painter for WgpuPainter {
         tracing::debug!("WgpuPainter::rotate: angle={}", angle);
 
         let rotation = glam::Mat4::from_rotation_z(angle);
-        self.current_transform = self.current_transform * rotation;
+        self.current_transform *= rotation;
     }
 
     fn scale(&mut self, sx: f32, sy: f32) {
@@ -1376,7 +1377,7 @@ impl Painter for WgpuPainter {
         tracing::debug!("WgpuPainter::scale: sx={}, sy={}", sx, sy);
 
         let scaling = glam::Mat4::from_scale(glam::vec3(sx, sy, 1.0));
-        self.current_transform = self.current_transform * scaling;
+        self.current_transform *= scaling;
     }
 
     // ===== Clipping (TODO) =====

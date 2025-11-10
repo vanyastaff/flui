@@ -117,10 +117,10 @@ impl Layer for PointerListenerLayer {
 
         // Also hit test child
         // Child might add additional entries (e.g., nested listeners)
-        let child_hit = self.child.hit_test(position, result);
+        let _child_hit = self.child.hit_test(position, result);
 
-        // We're hit if either we're in bounds OR child was hit
-        true || child_hit
+        // We're hit since we're in bounds (checked above)
+        true
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {

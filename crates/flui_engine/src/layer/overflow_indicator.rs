@@ -2,17 +2,19 @@
 //!
 //! This layer automatically adds diagonal stripe indicators when content overflows
 //! its container. Zero cost in release builds - completely compiled out.
+//!
+//! **TODO**: Migrate to flui_painting::Canvas API once draw_polygon is implemented
 
 #[cfg(debug_assertions)]
-use crate::layer::picture::{DrawCommand, PictureLayer};
+use crate::layer::picture::PictureLayer;
 #[cfg(debug_assertions)]
 use crate::layer::{base_single_child::SingleChildLayerBase, BoxedLayer, Layer};
 #[cfg(debug_assertions)]
-use crate::painter::{Paint, Painter};
+use crate::painter::Painter;
+#[cfg(debug_assertions)]
+use flui_painting::{Canvas, Paint};
 #[cfg(debug_assertions)]
 use flui_types::events::{Event, HitTestResult};
-#[cfg(debug_assertions)]
-use flui_types::painting::PaintingStyle;
 #[cfg(debug_assertions)]
 use flui_types::{Color, Offset, Point, Rect, Size};
 

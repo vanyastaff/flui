@@ -94,14 +94,16 @@ pub mod filter;
 pub mod handle;
 pub mod offset;
 pub mod opacity;
-#[cfg(debug_assertions)]
-pub mod overflow_indicator;
+// TODO: Re-enable once migrated to flui_painting::Canvas API
+// #[cfg(debug_assertions)]
+// pub mod overflow_indicator;
 pub mod picture;
 pub mod pointer_listener_layer;
 pub mod pool;
 pub mod pooled;
 pub mod scrollable;
 pub mod transform;
+
 
 // Basic composition layers
 
@@ -125,7 +127,7 @@ pub use pooled::{
 pub use container::ContainerLayer;
 pub use offset::OffsetLayer;
 pub use opacity::OpacityLayer;
-pub use picture::{DrawCommand, PictureLayer};
+pub use picture::PictureLayer;
 pub use pointer_listener_layer::PointerListenerLayer;
 pub use scrollable::{ScrollCallback, ScrollableLayer};
 pub use transform::{Transform, TransformLayer};
@@ -142,8 +144,9 @@ pub use blur::BlurLayer;
 pub use filter::FilterLayer;
 
 // Debug layers
-#[cfg(debug_assertions)]
-pub use overflow_indicator::OverflowIndicatorLayer;
+// TODO: Re-enable once migrated to flui_painting::Canvas API
+// #[cfg(debug_assertions)]
+// pub use overflow_indicator::OverflowIndicatorLayer;
 
 // Re-export filter types from flui_types
 pub use flui_types::painting::effects::{
@@ -155,3 +158,5 @@ pub use flui_types::painting::effects::{
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+
+

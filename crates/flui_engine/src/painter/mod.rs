@@ -58,17 +58,18 @@ pub mod buffer_pool;
 pub mod instancing;
 pub mod multi_draw;
 mod paint;
-mod painter;
 pub mod pipeline;
 pub mod tessellator;
 mod text;
 pub mod texture_cache;
 mod vertex;
+pub mod wgpu_painter;
+
 
 // ===== Public API =====
 
 // Main painter
-pub use painter::{Painter, WgpuPainter};
+pub use wgpu_painter::{Painter, WgpuPainter};
 
 // Paint types
 pub use paint::{Gradient, GradientStop, GradientType, Paint, Shadow, Stroke};
@@ -81,3 +82,5 @@ pub use tessellator::Tessellator;
 
 // Re-export RRect from flui_types
 pub use flui_types::geometry::RRect;
+
+

@@ -75,7 +75,6 @@ pub use layer::{
     ColorMatrix,
     // Basic composition layers
     ContainerLayer,
-    DrawCommand,
 
     // Effect layers
     FilterLayer,

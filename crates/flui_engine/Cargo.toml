@@ -21,6 +21,7 @@ memory-profiler = ["devtools", "flui_devtools/memory-profiler"]
 [dependencies]
 # Internal dependencies
 flui_types = { path = "../flui_types" }
+flui_painting = { path = "../flui_painting" }
 flui_devtools = { path = "../flui_devtools", optional = true }
 
 # Math
