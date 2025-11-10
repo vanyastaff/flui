@@ -1,6 +1,39 @@
 //! ElementTree - Slab-based tree for managing Element instances
 //!
 //! Provides efficient O(1) access to elements via slab allocation.
+//!
+//! # Critical Implementation Detail: Slab Offset Pattern
+//!
+//! **IMPORTANT:** The ElementTree uses a +1/-1 offset pattern between ElementId and Slab indices:
+//!
+//! - **ElementId**: 1-based (uses `NonZeroUsize`, where 0 is invalid)
+//! - **Slab indices**: 0-based (standard Vec-like indexing)
+//!
+//! ```text
+//! ElementId (user-facing)  →  Slab index (internal)
+//! ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//! ElementId(1)             →  nodes[0]
+//! ElementId(2)             →  nodes[1]
+//! ElementId(3)             →  nodes[2]
+//! ```
+//!
+//! **Why the offset?**
+//! - ElementId uses `NonZeroUsize` for niche optimization (Option<ElementId> = 8 bytes)
+//! - NonZeroUsize cannot be 0, so we add 1 when creating IDs
+//! - We subtract 1 when accessing the Slab
+//!
+//! **Pattern in code:**
+//! ```rust,ignore
+//! // Insert: Slab index → ElementId (+1)
+//! let slab_index = self.nodes.insert(node);  // Returns 0, 1, 2, ...
+//! ElementId::new(slab_index + 1)              // Returns 1, 2, 3, ...
+//!
+//! // Get: ElementId → Slab index (-1)
+//! let element_id = ElementId::new(5);         // User has ID 5
+//! self.nodes.get(element_id.get() - 1)        // Access nodes[4]
+//! ```
+//!
+//! **Common mistake:** Forgetting the offset leads to off-by-one errors and panics.
 
 use flui_types::constraints::BoxConstraints;
 use slab::Slab;

@@ -210,18 +210,19 @@ pub fn layout_cache() -> &'static LayoutCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ElementId;
 
     #[test]
     fn test_cache_key() {
-        let key1 = LayoutCacheKey::new(0, BoxConstraints::tight(Size::ZERO));
-        let key2 = LayoutCacheKey::new(0, BoxConstraints::tight(Size::ZERO));
+        let key1 = LayoutCacheKey::new(ElementId::new(0), BoxConstraints::tight(Size::ZERO));
+        let key2 = LayoutCacheKey::new(ElementId::new(0), BoxConstraints::tight(Size::ZERO));
 
         assert_eq!(key1, key2);
     }
 
     #[test]
     fn test_cache_with_child_count() {
-        let key1 = LayoutCacheKey::new(0, BoxConstraints::tight(Size::ZERO));
+        let key1 = LayoutCacheKey::new(ElementId::new(0), BoxConstraints::tight(Size::ZERO));
         let key2 = key1.with_child_count(5);
 
         assert_ne!(key1, key2);
@@ -232,7 +233,7 @@ mod tests {
         let cache = layout_cache();
         cache.reset_stats(); // Clear any previous stats
 
-        let key = LayoutCacheKey::new(42, BoxConstraints::tight(Size::new(100.0, 100.0)));
+        let key = LayoutCacheKey::new(ElementId::new(42), BoxConstraints::tight(Size::new(100.0, 100.0)));
         let result = LayoutResult::new(Size::new(50.0, 50.0));
 
         cache.insert(key, result);
@@ -253,7 +254,7 @@ mod tests {
         assert_eq!(hit_rate, 0.0);
 
         // Insert and get (hit)
-        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        let key = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
         cache.insert(key, LayoutResult::new(Size::new(10.0, 10.0)));
 
         assert!(cache.get(&key).is_some());
@@ -264,7 +265,7 @@ mod tests {
         assert_eq!(hit_rate, 100.0);
 
         // Get non-existent (miss)
-        let key2 = LayoutCacheKey::new(2, BoxConstraints::tight(Size::ZERO));
+        let key2 = LayoutCacheKey::new(ElementId::new(2), BoxConstraints::tight(Size::ZERO));
         assert!(cache.get(&key2).is_none());
 
         let (hits, misses, total, hit_rate) = cache.detailed_stats();
@@ -278,7 +279,7 @@ mod tests {
     fn test_cache_reset_stats() {
         let cache = LayoutCache::new();
 
-        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        let key = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
         cache.insert(key, LayoutResult::new(Size::ZERO));
         cache.get(&key);
 
@@ -298,7 +299,7 @@ mod tests {
     fn test_cache_invalidate() {
         let cache = LayoutCache::new();
 
-        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        let key = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
         cache.insert(key, LayoutResult::new(Size::ZERO));
 
         assert!(cache.get(&key).is_some());
@@ -317,8 +318,8 @@ mod tests {
     fn test_cache_clear() {
         let cache = LayoutCache::new();
 
-        let key1 = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
-        let key2 = LayoutCacheKey::new(2, BoxConstraints::tight(Size::ZERO));
+        let key1 = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
+        let key2 = LayoutCacheKey::new(ElementId::new(2), BoxConstraints::tight(Size::ZERO));
 
         cache.insert(key1, LayoutResult::new(Size::ZERO));
         cache.insert(key2, LayoutResult::new(Size::ZERO));
@@ -335,7 +336,7 @@ mod tests {
         let cache = LayoutCache::new();
         cache.reset_stats();
 
-        let key = LayoutCacheKey::new(1, BoxConstraints::tight(Size::ZERO));
+        let key = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
         cache.insert(key, LayoutResult::new(Size::ZERO));
         cache.get(&key);
 
