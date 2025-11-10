@@ -62,14 +62,23 @@ pub const MAX_LAYOUT_DEPTH: usize = 1000;
 
 /// Element tree managing Element instances with efficient slab allocation
 ///
-/// # New Architecture
+/// The ElementTree is the central storage for all elements in the UI tree.
+/// It provides O(1) insertion, removal, and access using a slab-based arena allocator.
 ///
-/// ElementTree now stores heterogeneous Elements (ComponentElement, InheritedElement,
-/// RenderElement) instead of Renders directly. This provides:
-/// - Unified tree structure for all element types
-/// - View lifecycle management (build, rebuild, mount, unmount)
-/// - Dependency tracking for InheritedElements
-/// - RenderState is now inside RenderElement
+/// # Three-Tree Architecture
+///
+/// ElementTree is the middle layer in FLUI's three-tree architecture:
+///
+/// ```text
+/// View Tree (immutable)  →  Element Tree (mutable)  →  Render Tree (layout/paint)
+///     Configuration             State Management          Visual Output
+/// ```
+///
+/// **Element Tree responsibilities:**
+/// - Stores all elements (Component, Provider, Render)
+/// - Manages element lifecycle (mount, unmount, dirty tracking)
+/// - Provides parent-child relationships
+/// - Enables efficient tree traversal and updates
 ///
 /// # Memory Layout
 ///
@@ -79,27 +88,60 @@ pub const MAX_LAYOUT_DEPTH: usize = 1000;
 /// }
 ///
 /// ElementNode {
-///     element: Element  ← Enum-based heterogeneous storage (3-4x faster!)
-///         ├─ Element::Component(ComponentElement)
-///         ├─ Element::Provider(InheritedElement)
-///         └─ Element::Render(RenderElement)
+///     element: Element  ← Enum-based heterogeneous storage (3-4x faster than Box<dyn>!)
+///         ├─ Element::Component(ComponentElement)  - Composable widgets
+///         ├─ Element::Provider(ProviderElement)    - Inherited data
+///         └─ Element::Render(RenderElement)        - Layout & paint
 /// }
 /// ```
+///
+/// **Why Slab?**
+/// - O(1) insertion and removal
+/// - Stable indices (ElementIds remain valid until explicit removal)
+/// - Contiguous memory layout (better cache locality than tree of pointers)
+/// - Automatic slot reuse (memory efficient)
+///
+/// # Slab Offset Pattern (CRITICAL)
+///
+/// See module-level documentation for the +1/-1 offset pattern between
+/// ElementId (1-based) and Slab indices (0-based).
+///
+/// # Thread Safety
+///
+/// ElementTree is `Send + Sync` (marked with `unsafe impl`):
+/// - Slab storage is thread-safe (owned data only)
+/// - Interior mutability handled by parking_lot::RwLock at higher levels
+/// - Layout operations use thread-local stacks for re-entrancy detection
 ///
 /// # Usage
 ///
 /// ```rust,ignore
-/// use flui_core::{ElementTree, RenderElement};
+/// use flui_core::{ElementTree, Element, RenderElement};
 ///
 /// let mut tree = ElementTree::new();
 ///
-/// // Insert root element (now stores Element, not Render)
-/// let root_element = RenderElement::new(render_object);
-/// let root_id = tree.insert(Box::new(root_element));
+/// // Insert root element
+/// let root_element = Element::Render(RenderElement::new(render_object));
+/// let root_id = tree.insert(root_element);
 ///
-/// // Access element
-/// let element = tree.get(root_id).unwrap();
+/// // Access element (remember: ElementId is 1-based!)
+/// if let Some(element) = tree.get(root_id) {
+///     println!("Element has {} children", element.children().count());
+/// }
+///
+/// // Layout and paint
+/// let size = tree.layout_render_object(root_id, constraints);
+/// let layer = tree.paint_render_object(root_id, Offset::ZERO);
 /// ```
+///
+/// # Performance Characteristics
+///
+/// | Operation | Complexity | Notes |
+/// |-----------|------------|-------|
+/// | Insert | O(1) | Slab amortized insertion |
+/// | Remove | O(k) | k = number of descendants |
+/// | Get | O(1) | Direct slab indexing |
+/// | Layout/Paint | O(n) | n = subtree size |
 #[derive(Debug)]
 pub struct ElementTree {
     /// Slab-based arena for element nodes
@@ -258,21 +300,31 @@ impl ElementTree {
     ///
     /// This is an internal method. Use `insert()` which handles unmounted children automatically.
     ///
+    /// # Slab Offset Pattern
+    ///
+    /// This method demonstrates the critical +1 offset when creating ElementIds:
+    /// ```rust,ignore
+    /// let slab_index = self.nodes.insert(node);  // Returns 0, 1, 2, ...
+    /// ElementId::new(slab_index + 1)              // Returns 1, 2, 3, ...
+    /// ```
+    ///
+    /// **Why +1?** ElementId uses NonZeroUsize, so 0 is not a valid ID.
+    ///
     /// # Arguments
     ///
     /// - `element`: The element to insert
     ///
     /// # Returns
     ///
-    /// The ElementId of the inserted element
+    /// The ElementId of the inserted element (1-based)
     fn insert_raw(&mut self, element: Element) -> ElementId {
         // Create the node
         let node = ElementNode { element };
 
         // Insert into slab and get ID (convert usize to ElementId)
-        // Add 1 because ElementId uses NonZeroUsize (0 is invalid)
-        let id = self.nodes.insert(node);
-        ElementId::new(id + 1)
+        // CRITICAL: Add 1 because ElementId uses NonZeroUsize (0 is invalid)
+        let slab_index = self.nodes.insert(node);
+        ElementId::new(slab_index + 1)  // Slab index (0-based) → ElementId (1-based)
     }
 
     /// Insert an element into the tree
@@ -408,6 +460,16 @@ impl ElementTree {
 
     /// Get a reference to an element
     ///
+    /// # Slab Offset Pattern
+    ///
+    /// This method demonstrates the critical -1 offset when accessing the Slab:
+    /// ```rust,ignore
+    /// let element_id = ElementId::new(5);              // User has ID 5 (1-based)
+    /// self.nodes.get(element_id.get() - 1)             // Access nodes[4] (0-based)
+    /// ```
+    ///
+    /// **Why -1?** ElementId is 1-based (uses NonZeroUsize), Slab is 0-based.
+    ///
     /// # Returns
     ///
     /// `Some(&Element)` if the element exists, `None` otherwise
@@ -421,9 +483,9 @@ impl ElementTree {
     /// ```
     #[inline]
     pub fn get(&self, element_id: ElementId) -> Option<&Element> {
-        // Subtract 1 to convert ElementId (1-based) to slab index (0-based)
+        // CRITICAL: Subtract 1 to convert ElementId (1-based) to slab index (0-based)
         self.nodes
-            .get(element_id.get() - 1)
+            .get(element_id.get() - 1)  // ElementId(1) → nodes[0], ElementId(2) → nodes[1], etc.
             .map(|node| &node.element)
     }
 

@@ -74,48 +74,92 @@ pub(crate) mod sealed_into_element {
 
 /// IntoElement trait - converts types into Elements
 ///
-/// **Internal trait** - Do NOT implement this trait directly.
-/// The trait is sealed - you cannot implement it outside of flui-core.
+/// IntoElement is the universal interface for converting any type into an Element.
+/// This trait enables FLUI's flexible composition system where Views, RenderObjects,
+/// and various helper types can all be used interchangeably.
 ///
-/// Instead, implement the `View` trait to create widgets.
+/// # Purpose
 ///
-/// This is the core trait that enables the simplified View API.
-/// Any type that implements `IntoElement` can be used as a widget.
+/// IntoElement serves as the bridge between the **View tree** (immutable configuration)
+/// and the **Element tree** (mutable state). It enables:
+///
+/// 1. Automatic conversion: `View → Element`
+/// 2. Tuple syntax: `(RenderObject, children) → Element`
+/// 3. Type erasure: `Box<dyn AnyView> → Element`
+/// 4. Flexible composition: Mix different types in the same tree
+///
+/// # Sealed Trait
+///
+/// **You cannot implement this trait directly!** It is sealed - only flui-core
+/// can provide implementations.
+///
+/// Instead:
+/// - Implement `View` trait for composable widgets
+/// - Use tuple syntax for render objects: `(RenderObject, children)`
+/// - Framework provides `IntoElement` automatically
 ///
 /// # Automatic Implementations
 ///
-/// The framework provides automatic implementations for:
-/// - All `View` types (via blanket impl)
-/// - Tuple syntax for render objects: `(R, ())`, `(R, Option<child>)`, `(R, Vec<children>)`
-/// - Convenience wrappers for `Box<dyn AnyView>` types
+/// The framework provides implementations for:
+///
+/// | Type | Description | Example |
+/// |------|-------------|---------|
+/// | `impl View` | All views automatically | `Text::new("Hello")` |
+/// | `(R, ())` | Leaf render (no children) | `(RenderBox::new(), ())` |
+/// | `(R, Option<child>)` | Single child | `(RenderPadding::new(), child)` |
+/// | `(R, Vec<children>)` | Multiple children | `(RenderFlex::column(), children)` |
+/// | `Box<dyn AnyView>` | Type-erased view | `box_view` |
+/// | `AnyElement` | Type-erased element | `AnyElement::new(view)` |
+/// | `Option<T>` | Optional element | `Some(view)` or `None` |
+///
+/// # Design Rationale
+///
+/// IntoElement unifies different widget patterns under a single interface:
+///
+/// ```text
+/// View ────────┐
+///              ├──→ IntoElement ──→ Element ──→ ElementTree
+/// RenderObject ┘
+/// ```
+///
+/// This is similar to:
+/// - **GPUI**: `IntoElement` trait for unified element creation
+/// - **Xilem**: Element conversion protocols
+/// - **React**: JSX transpiles to `React.createElement()`
 ///
 /// # Usage
 ///
-/// You typically don't implement this directly. Instead:
-/// 1. Implement `View` for composable widgets
-/// 2. Use tuple syntax for render objects: `(render, children)`
-/// 3. Use the provided implementations for type conversions
-///
-/// # Example
+/// ## Views (Automatic)
 ///
 /// ```rust,ignore
-/// // Views automatically impl IntoElement
 /// impl View for MyWidget {
 ///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         // Use tuple syntax to combine render object with children
-///         (RenderColumn::new(), vec![
-///             AnyElement::new(Text::new("Hello")),
-///             AnyElement::new(Text::new("Hi")),
-///         ])
+///         // Return another View - IntoElement impl is automatic!
+///         Column::new()
+///             .child(Text::new(self.title))
+///             .child(Text::new(self.body))
 ///     }
 /// }
 /// ```
 ///
-/// # Not dyn-compatible
+/// ## Tuple Syntax (Wrapping RenderObjects)
 ///
-/// Like GPUI's `IntoElement`, this trait is not object-safe due to
-/// `Sized` bound and `impl Trait` in methods. Use `Box<dyn IntoElement>`
-/// if you need dynamic dispatch (will be added separately).
+/// ```rust,ignore
+/// impl View for Padding {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         // Tuple: (RenderObject, children) → IntoElement impl is automatic!
+///         (RenderPadding::new(self.padding), self.child)
+///     }
+/// }
+/// ```
+///
+/// # Not Object-Safe
+///
+/// Like GPUI's `IntoElement`, this trait is not object-safe due to:
+/// - `Sized` bound
+/// - `impl Trait` return type
+///
+/// For dynamic dispatch, use `Box<dyn AnyView>` or `AnyElement` instead.
 pub trait IntoElement: sealed_into_element::Sealed + Sized + 'static {
     /// Convert this type into an Element
     ///

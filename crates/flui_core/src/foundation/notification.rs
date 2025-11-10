@@ -420,11 +420,12 @@ mod tests {
 
     #[test]
     fn test_notification_default_visit() {
+        use crate::ElementId;
         let notification = TestNotification { value: 42 };
 
         // Default implementation should continue bubbling (return false)
-        let element_id = 123;
-        assert!(!notification.visit_ancestor(element_id));
+        let element_id = ElementId::new(123);
+        assert!(!Notification::visit_ancestor(&notification, element_id));
     }
 
     #[test]
@@ -474,7 +475,8 @@ mod tests {
 
     #[test]
     fn test_layout_changed_notification() {
-        let element_id = 42;
+        use crate::ElementId;
+        let element_id = ElementId::new(42);
         let notification = LayoutChangedNotification::new(element_id);
 
         assert_eq!(notification.element_id, element_id);
@@ -482,9 +484,10 @@ mod tests {
 
     #[test]
     fn test_size_changed_notification() {
+        use crate::ElementId;
         use flui_types::Size;
 
-        let element_id = 42;
+        let element_id = ElementId::new(42);
         let old_size = Size::new(100.0, 200.0);
         let new_size = Size::new(150.0, 250.0);
 
@@ -505,10 +508,11 @@ mod tests {
 
     #[test]
     fn test_size_changed_no_change() {
+        use crate::ElementId;
         use flui_types::Size;
 
         let size = Size::new(100.0, 200.0);
-        let notification = SizeChangedNotification::new(42, size, size);
+        let notification = SizeChangedNotification::new(ElementId::new(42), size, size);
 
         assert!(!notification.width_changed());
         assert!(!notification.height_changed());
@@ -516,7 +520,8 @@ mod tests {
 
     #[test]
     fn test_keep_alive_notification() {
-        let element_id = 42;
+        use crate::ElementId;
+        let element_id = ElementId::new(42);
         let notification = KeepAliveNotification::new(element_id, 123);
 
         assert_eq!(notification.element_id, element_id);
@@ -525,7 +530,8 @@ mod tests {
 
     #[test]
     fn test_focus_changed_notification() {
-        let element_id = 42;
+        use crate::ElementId;
+        let element_id = ElementId::new(42);
         let gained = FocusChangedNotification::new(element_id, true);
         let lost = FocusChangedNotification::new(element_id, false);
 
@@ -540,13 +546,17 @@ mod tests {
 
     #[test]
     fn test_multiple_notification_types() {
+        use crate::ElementId;
         use flui_types::Size;
 
         // Should be able to have different notification types
         let scroll = ScrollNotification::new(1.0, 2.0, 3.0);
-        let layout = LayoutChangedNotification::new(42);
-        let size_changed =
-            SizeChangedNotification::new(43, Size::new(10.0, 20.0), Size::new(30.0, 40.0));
+        let layout = LayoutChangedNotification::new(ElementId::new(42));
+        let size_changed = SizeChangedNotification::new(
+            ElementId::new(43),
+            Size::new(10.0, 20.0),
+            Size::new(30.0, 40.0),
+        );
 
         // Store in vec of trait objects
         let notifications: Vec<&dyn DynNotification> = vec![&scroll, &layout, &size_changed];

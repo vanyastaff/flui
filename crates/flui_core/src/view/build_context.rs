@@ -1,30 +1,58 @@
-//! BuildContext - context for building widgets
+//! BuildContext - context for building views
 //!
-//! Provides read-only access to the element tree, InheritedWidgets, and hooks during build phase.
+//! BuildContext is the main interface between Views and the framework, providing
+//! access to hooks, tree navigation, and inherited data during the build phase.
 //!
-//! # Design Philosophy
+//! # What is BuildContext?
 //!
-//! BuildContext is intentionally **read-only** during the build phase. It represents
-//! the context in which a view is being built, not the ability to schedule future builds.
-//! This design:
+//! Similar to:
+//! - **Flutter**: BuildContext (access to element tree, inherited widgets)
+//! - **React**: Component context (hooks, context providers)
+//! - **SwiftUI**: Environment (access to environment values)
 //!
-//! - Enables parallel builds (multiple components can build concurrently)
-//! - Matches Flutter's BuildContext semantics (immutable context)
-//! - Prevents lock contention during the build phase
-//! - Makes the build phase truly side-effect-free
+//! # Design Philosophy: Read-Only During Build
+//!
+//! BuildContext is intentionally **read-only** during the build phase. This design:
+//!
+//! - **Enables parallel builds**: Multiple components can build concurrently
+//! - **Prevents race conditions**: No write locks needed during build
+//! - **Matches Flutter semantics**: BuildContext is immutable in Flutter too
+//! - **Enforces purity**: Build phase is side-effect-free
 //!
 //! # Rebuild Scheduling
 //!
-//! State changes that trigger rebuilds should NOT go through BuildContext.
-//! Instead, use hooks and signals which manage their own rebuild callbacks:
+//! **IMPORTANT:** You cannot schedule rebuilds via BuildContext!
+//!
+//! State changes that trigger rebuilds happen through hooks/signals,
+//! which manage their own rebuild callbacks:
 //!
 //! ```rust,ignore
-//! // ✅ Correct: Signal handles rebuild scheduling internally
-//! let signal = use_signal(ctx, 0);
-//! signal.set(42);  // Triggers rebuild via callback
+//! // ✅ Correct: Signal handles rebuild scheduling automatically
+//! let count = use_signal(ctx, 0);
+//! count.set(42);  // Schedules rebuild via internal callback
 //!
-//! // ❌ Wrong: Don't schedule rebuilds during build
-//! // ctx.schedule_rebuild();  // This method was removed!
+//! // ✅ Correct: Effect runs after build completes
+//! use_effect(ctx, move || {
+//!     count.set(100);  // Safe: effect runs outside build phase
+//!     None
+//! });
+//!
+//! // ❌ Wrong: BuildContext doesn't have this method!
+//! // ctx.schedule_rebuild();  // Doesn't exist!
+//! ```
+//!
+//! # Thread-Local Access
+//!
+//! BuildContext is stored in thread-local storage for ergonomic access:
+//!
+//! ```text
+//! Framework:                    User Code:
+//! ┌──────────────────┐         ┌─────────────────┐
+//! │ with_context()   │  ────>  │ View::build()   │
+//! │  (sets up TLS)   │         │   use_signal()  │
+//! └──────────────────┘         └─────────────────┘
+//!         │
+//!         └─> current_build_context() → &BuildContext
 //! ```
 
 use crate::hooks::HookContext;

@@ -52,34 +52,102 @@ use crate::element::{Element, ElementId};
 #[cfg(debug_assertions)]
 use crate::debug_println;
 
-/// PipelineOwner - thin facade over focused components
+/// PipelineOwner - orchestrates the three-phase rendering pipeline
 ///
-/// This is a facade that composes focused components to provide a clean API.
-/// It follows the Facade Pattern from Gang of Four design patterns.
+/// PipelineOwner is the main entry point for FLUI's rendering system. It coordinates
+/// the three phases of frame rendering: **Build**, **Layout**, and **Paint**.
 ///
-/// # Responsibilities (Delegated)
+/// # Three-Phase Pipeline
 ///
-/// - **Frame Coordination** → FrameCoordinator
-/// - **Root Management** → RootManager
-/// - **Element Storage** → ElementTree
-/// - **Build Scheduling** → FrameCoordinator.build
-/// - **Layout Scheduling** → FrameCoordinator.layout
-/// - **Paint Scheduling** → FrameCoordinator.paint
+/// Every frame goes through three sequential phases:
 ///
-/// # Example
+/// ```text
+/// ┌─────────┐     ┌────────┐     ┌───────┐     ┌────────────┐
+/// │  Build  │ ──> │ Layout │ ──> │ Paint │ ──> │ GPU Render │
+/// └─────────┘     └────────┘     └───────┘     └────────────┘
+///     ↓               ↓              ↓
+/// Rebuild dirty   Compute sizes  Generate layers
+/// components      and positions  for GPU
+/// ```
+///
+/// **1. Build Phase** (`flush_build`)
+/// - Rebuilds dirty components (Views marked as needing rebuild)
+/// - Calls `View::build()` to create/update Elements
+/// - Updates the Element tree with new configurations
+/// - **Output**: Updated Element tree
+///
+/// **2. Layout Phase** (`flush_layout`)
+/// - Computes sizes and positions for all dirty RenderObjects
+/// - Calls `Render::layout()` with BoxConstraints
+/// - Propagates constraints down, sizes up (like Flutter)
+/// - **Output**: Size information stored in RenderState
+///
+/// **3. Paint Phase** (`flush_paint`)
+/// - Generates layer tree for GPU rendering
+/// - Calls `Render::paint()` with computed offsets
+/// - Creates PictureLayers, TransformLayers, etc.
+/// - **Output**: BoxedLayer tree ready for compositor
+///
+/// # Architecture (Facade Pattern)
+///
+/// PipelineOwner is a facade that delegates to focused components:
+///
+/// ```text
+/// PipelineOwner (Facade)
+///   ├─ tree: Arc<RwLock<ElementTree>>   ← Element storage
+///   ├─ coordinator: FrameCoordinator     ← Phase orchestration
+///   │   ├─ build: BuildPipeline          ← Build phase logic
+///   │   ├─ layout: LayoutPipeline        ← Layout phase logic
+///   │   └─ paint: PaintPipeline          ← Paint phase logic
+///   ├─ root_mgr: RootManager            ← Root element tracking
+///   └─ rebuild_queue: RebuildQueue      ← Deferred rebuilds
+/// ```
+///
+/// **Why Facade?**
+/// - Simple API for common operations
+/// - Hides internal complexity
+/// - Easy to test (mock components)
+/// - SOLID principles (Single Responsibility)
+///
+/// # Critical Pattern: request_layout() Must Set Both Flags
+///
+/// When requesting layout, you must set **both**:
+/// 1. Dirty set flag: `coordinator.layout_mut().mark_dirty(node_id)`
+/// 2. RenderState flag: `render_state.mark_needs_layout()`
+///
+/// **Failing to set both will cause layout to skip elements!**
+///
+/// # Usage
 ///
 /// ```rust,ignore
+/// use flui_core::{PipelineOwner, Element, RenderElement};
+///
+/// // Create pipeline
 /// let mut owner = PipelineOwner::new();
 ///
-/// // Set root
-/// let root_id = owner.set_root(my_element);
+/// // Set root element
+/// let root_element = Element::Render(RenderElement::new(my_render));
+/// let root_id = owner.set_root(root_element);
 ///
-/// // Mark element dirty
+/// // Mark element dirty (triggers rebuild on next frame)
 /// owner.schedule_build_for(element_id, depth);
 ///
-/// // Build frame
+/// // Build complete frame (all three phases)
+/// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 /// let layer = owner.build_frame(constraints)?;
+///
+/// // Or run phases individually:
+/// owner.flush_build()?;                          // Phase 1: Build
+/// owner.flush_layout(root_id, constraints)?;     // Phase 2: Layout
+/// let layer = owner.flush_paint(root_id)?;       // Phase 3: Paint
 /// ```
+///
+/// # Thread Safety
+///
+/// - ElementTree: Protected by `Arc<RwLock<>>` for multi-threaded access
+/// - Build phase: Can run in parallel with `parallel` feature
+/// - Layout/Paint: Single-threaded (uses thread-local stacks)
+/// - Rebuild queue: Lock-free with atomic operations
 pub struct PipelineOwner {
     /// The element tree (shared storage)
     tree: Arc<RwLock<ElementTree>>,

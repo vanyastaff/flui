@@ -10,17 +10,43 @@ use std::any::Any;
 
 /// View trait - simplified API for reactive UI
 ///
-/// Views are lightweight, immutable descriptions of what the UI should look like.
-/// They use hooks for state management and return `impl IntoElement` for composition.
+/// The View trait is FLUI's core abstraction for building user interfaces.
+/// It represents a lightweight, immutable description of what the UI should look like.
 ///
-/// # Design Philosophy
+/// # What is a View?
 ///
-/// - **No GAT State**: Use hooks (`use_signal`, `use_memo`) for state management
-/// - **No GAT Element**: Return `impl IntoElement` for flexible composition
+/// A View is similar to:
+/// - **Flutter**: Widget (declarative UI description)
+/// - **React**: Component (returns JSX/elements)
+/// - **SwiftUI**: View protocol
+///
+/// Views are **configuration objects**, not widgets themselves. The framework converts
+/// Views into Elements (mutable state) which manage RenderObjects (layout/paint).
+///
+/// # Three-Tree Architecture
+///
+/// Views are the first layer in FLUI's architecture:
+///
+/// ```text
+/// View Tree          →    Element Tree    →    Render Tree
+/// (immutable)             (mutable)             (layout/paint)
+/// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/// View::build()      →    Element state   →    Render::layout()
+/// Returns elements        Lifecycle mgmt       Render::paint()
+/// ```
+///
+/// # Design Philosophy (v0.6.0+)
+///
+/// The View API has been radically simplified:
+///
+/// - **No GAT State**: Use hooks (`use_signal`, `use_memo`) instead of generic state types
+/// - **No GAT Element**: Return `impl IntoElement` instead of associated Element types
 /// - **No rebuild()**: Framework handles efficient diffing automatically
-/// - **Immutable**: Views are created fresh each frame and must be cheap to clone
 /// - **Clone Required**: Views must implement `Clone` for type erasure with `AnyView`
-/// - **Composable**: Views can contain other views via `IntoElement`
+/// - **'static Required**: Views must be `'static` to enable safe storage and lifecycle
+/// - **Composable**: Views compose via `IntoElement` trait
+///
+/// **Result:** 75% less boilerplate compared to the old API!
 ///
 /// # Examples
 ///
@@ -94,50 +120,95 @@ use std::any::Any;
 pub trait View: Clone + 'static {
     /// Build this view into an element
     ///
-    /// Returns anything that implements `IntoElement` - typically:
-    /// - Other View implementations (composition)
-    /// - Tuples of (Render impl, children) for wrapping renderers
-    /// - Example: `(RenderPadding::new(...), child)` for single-child convenience
+    /// This is the only required method for the View trait. It describes what
+    /// the UI should look like based on the current view configuration.
     ///
-    /// # State Management
+    /// # Return Types
     ///
-    /// Use hooks instead of GAT State:
+    /// Returns anything that implements `IntoElement`:
+    ///
+    /// 1. **Other Views** (composition):
+    ///    ```rust,ignore
+    ///    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    ///        Column::new()
+    ///            .child(Text::new(self.title))
+    ///            .child(Text::new(self.body))
+    ///    }
+    ///    ```
+    ///
+    /// 2. **Tuple of (RenderObject, children)** (wrapping renderers):
+    ///    ```rust,ignore
+    ///    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    ///        // Leaf: (RenderObject, ())
+    ///        (RenderText::new(self.text), ())
+    ///
+    ///        // Single child: (RenderObject, Option<child>)
+    ///        (RenderPadding::new(self.padding), self.child)
+    ///
+    ///        // Multiple children: (RenderObject, Vec<children>)
+    ///        (RenderFlex::column(), self.children)
+    ///    }
+    ///    ```
+    ///
+    /// # State Management with Hooks
+    ///
+    /// Use hooks instead of GAT State parameter:
     /// ```rust,ignore
     /// fn build(self, ctx: &BuildContext) -> impl IntoElement {
-    ///     let count = use_signal(ctx, 0);      // Signal for reactive state
-    ///     let doubled = use_memo(ctx, |_| {    // Memo for derived state
-    ///         count.get() * 2
+    ///     // Reactive state
+    ///     let count = use_signal(ctx, 0);
+    ///
+    ///     // Derived state (memoized)
+    ///     let doubled = use_memo(ctx, move |_| count.get() * 2);
+    ///
+    ///     // Side effects
+    ///     use_effect(ctx, move || {
+    ///         println!("Count changed: {}", count.get());
+    ///         None  // No cleanup
     ///     });
     ///
-    ///     use_effect(ctx, move |_| {           // Effect for side effects
-    ///         println!("Count: {}", count.get());
-    ///     });
-    ///
-    ///     // Compose UI...
+    ///     // Build UI using state
+    ///     Column::new()
+    ///         .child(Text::new(format!("Count: {}", count.get())))
+    ///         .child(Button::new("Increment")
+    ///             .on_click(move || count.update(|n| n + 1)))
     /// }
     /// ```
     ///
     /// # BuildContext Parameter
     ///
     /// The `ctx: &BuildContext` parameter provides:
-    /// - Access to hooks: `use_signal(ctx, ...)`, `use_memo(ctx, ...)`, etc.
-    /// - Tree queries (rarely needed): `ctx.parent()`, `ctx.size()`, etc.
-    /// - Inherited data (future): `ctx.depend_on::<Theme>()`
+    /// - **Hooks API**: `use_signal(ctx, ...)`, `use_memo(ctx, ...)`, `use_effect(ctx, ...)`
+    /// - **Tree queries** (rarely needed): `ctx.parent()`, `ctx.size()`
+    /// - **Inherited data**: `ctx.depend_on::<Theme>()` (Provider pattern)
     ///
-    /// # Performance
+    /// # Performance & Optimization
     ///
     /// The framework automatically handles rebuild optimization:
-    /// - Compares views by type and props
-    /// - Only rebuilds when necessary
+    /// - Compares views by type ID at runtime
+    /// - Only rebuilds when parent marks child as dirty
     /// - No manual `rebuild()` method needed
     ///
     /// For custom optimization, implement `PartialEq`:
     /// ```rust,ignore
-    /// #[derive(Clone, PartialEq)]  // ← Automatic optimization
+    /// #[derive(Clone, PartialEq)]  // ← Enables value-based comparison
     /// struct MyView {
     ///     text: String,
     /// }
+    /// // Framework skips rebuild if new view == old view
     /// ```
+    ///
+    /// # Lifecycle
+    ///
+    /// Views are **immutable** and **ephemeral**:
+    /// - Created fresh every rebuild
+    /// - Consumed by `build()` (takes `self` by value)
+    /// - Framework manages Element lifecycle (mount, unmount, dirty tracking)
+    ///
+    /// # Thread-Local BuildContext
+    ///
+    /// BuildContext is accessed via thread-local storage for ergonomics.
+    /// The framework sets up the context before calling `build()` using RAII guards.
     fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }
 
