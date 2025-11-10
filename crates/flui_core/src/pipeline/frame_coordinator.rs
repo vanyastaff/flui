@@ -139,6 +139,54 @@ impl FrameCoordinator {
         &mut self.scheduler
     }
 
+    /// Extract root element's computed size after layout
+    ///
+    /// Helper method to retrieve the size from a RenderElement.
+    /// Returns None if root is not a RenderElement or has no size.
+    fn extract_root_size(
+        tree_guard: &ElementTree,
+        root_id: Option<ElementId>,
+    ) -> Option<flui_types::Size> {
+        match root_id {
+            Some(id) => {
+                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
+                    let render_state_lock = render_elem.render_state();
+                    let render_state = render_state_lock.read();
+                    render_state.size()
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+
+    /// Extract root element's layer after paint
+    ///
+    /// Helper method to retrieve the painted layer from a RenderElement.
+    /// Returns empty ContainerLayer if root is a ComponentElement.
+    fn extract_root_layer(
+        tree_guard: &ElementTree,
+        root_id: Option<ElementId>,
+    ) -> Option<crate::BoxedLayer> {
+        match root_id {
+            Some(id) => {
+                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
+                    let render_state_lock = render_elem.render_state();
+                    let render_state = render_state_lock.read();
+                    let offset = render_state.offset();
+                    drop(render_state);
+
+                    Some(render_elem.paint_render(tree_guard, offset))
+                } else {
+                    // Root is ComponentElement or ProviderElement - return empty container
+                    Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
+                }
+            }
+            None => None,
+        }
+    }
+
     /// Build a complete frame
     ///
     /// Orchestrates the three phases: build → layout → paint.
@@ -224,20 +272,7 @@ impl FrameCoordinator {
             }
 
             // Get root element's computed size
-            let size = match root_id {
-                Some(id) => {
-                    if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                        let render_state_lock = render_elem.render_state();
-                        let render_state = render_state_lock.read();
-                        render_state.size()
-                    } else {
-                        None
-                    }
-                }
-                None => None,
-            };
-
-            size
+            Self::extract_root_size(&tree_guard, root_id)
         };
 
         #[cfg(debug_assertions)]
@@ -267,22 +302,7 @@ impl FrameCoordinator {
             }
 
             // Get root element's layer
-            match root_id {
-                Some(id) => {
-                    if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                        let render_state_lock = render_elem.render_state();
-                        let render_state = render_state_lock.read();
-                        let offset = render_state.offset();
-                        drop(render_state);
-
-                        Some(render_elem.paint_render(&tree_guard, offset))
-                    } else {
-                        // Root is ComponentElement or ProviderElement - return empty container
-                        Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
-                    }
-                }
-                None => None,
-            }
+            Self::extract_root_layer(&tree_guard, root_id)
         };
 
         // Finish frame and update metrics
@@ -342,20 +362,17 @@ impl FrameCoordinator {
 
         // Get root element's computed size
         let size = match root_id {
-            Some(id) => match tree_guard.get(id) {
-                Some(crate::element::Element::Render(render_elem)) => {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    let size_opt = render_state.size();
+            Some(id) => {
+                // Try direct size from RenderElement
+                if let Some(size_opt) = Self::extract_root_size(&tree_guard, root_id) {
                     #[cfg(debug_assertions)]
                     tracing::debug!(
                         "flush_layout: Root (ID: {:?}) RenderState size: {:?}",
                         id,
                         size_opt
                     );
-                    size_opt
-                }
-                Some(crate::element::Element::Component(comp)) => {
+                    Some(size_opt)
+                } else if let Some(crate::element::Element::Component(comp)) = tree_guard.get(id) {
                     // Root is ComponentElement - use its child's size
                     #[cfg(debug_assertions)]
                     tracing::debug!("flush_layout: Root is ComponentElement, using child for size");
@@ -388,21 +405,14 @@ impl FrameCoordinator {
                             None
                         }
                     }
-                }
-                Some(elem) => {
+                } else {
                     #[cfg(debug_assertions)]
                     tracing::warn!(
-                        "flush_layout: Root element is not Render or Component! Type: {:?}",
-                        std::any::type_name_of_val(elem)
+                        "flush_layout: Root element type not supported for size extraction"
                     );
                     None
                 }
-                None => {
-                    #[cfg(debug_assertions)]
-                    tracing::error!("flush_layout: Root element not found! ID: {:?}", id);
-                    None
-                }
-            },
+            }
             None => {
                 #[cfg(debug_assertions)]
                 tracing::warn!("flush_layout: No root_id provided!");

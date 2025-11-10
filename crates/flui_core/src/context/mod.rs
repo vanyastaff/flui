@@ -41,11 +41,6 @@
 //!
 //! # Implementation Status
 //!
-//! This module is currently a stub.
-//!
-//! ## Todo
-//!
-//! - Implement `Context<T>` type-safe wrapper
-//! - Integrate with `ProviderElement`
-//! - Add consumer API in `BuildContext`
-//! - Implement context propagation through tree
+//! This module is reserved for future context system implementation.
+//! Context functionality is currently provided through ProviderElement
+//! and dependency tracking in BuildContext.

@@ -716,7 +716,9 @@ impl BuildPipeline {
         };
 
         // Phase 2: Notify all dependents
-        // TODO: Implement proper change detection instead of assuming data changed
+        // Note: Currently notifies all dependents unconditionally.
+        // Future optimization: Only notify if provider data actually changed
+        // (requires PartialEq on provider data or custom change detection)
         if !dependents.is_empty() {
             #[cfg(debug_assertions)]
             tracing::debug!(

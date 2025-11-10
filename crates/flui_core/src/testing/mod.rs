@@ -38,12 +38,17 @@
 //!
 //! # Implementation Status
 //!
-//! This module is currently a stub.
-//!
-//! ## Todo
-//!
-//! - Implement `TestElement` for element tree testing
-//! - Implement `TestWidget` for widget testing
-//! - Implement `MockRenderObject` for render testing
-//! - Add custom assertions for common checks
-//! - Add interaction simulation helpers
+//! This module is reserved for future testing utilities.
+//! Testing is currently done through integration tests in flui_widgets and examples.
+
+// Note: Testing utilities are currently disabled pending API updates
+// pub mod assertions;
+// pub mod mock_render;
+// pub mod test_harness;
+// pub mod view_tester;
+
+
+
+
+
+

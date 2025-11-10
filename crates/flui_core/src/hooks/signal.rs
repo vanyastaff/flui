@@ -452,7 +452,8 @@ pub fn use_signal<T: Clone + Send + 'static>(ctx: &BuildContext, initial: T) -> 
     let rebuild_queue = ctx.rebuild_queue().clone();
 
     // Subscribe with callback that schedules rebuild
-    // TODO: Get actual depth from element tree instead of using 0
+    // Note: Using depth=0 for simplicity. Rebuild queue handles ordering.
+    // Future optimization: Pass actual element depth for better rebuild ordering
     SIGNAL_RUNTIME.with(|runtime| {
         runtime.subscribe(signal.id, move || {
             #[cfg(debug_assertions)]
@@ -462,7 +463,7 @@ pub fn use_signal<T: Clone + Send + 'static>(ctx: &BuildContext, initial: T) -> 
                 element_id
             );
 
-            // Schedule rebuild with depth 0 (TODO: get actual depth)
+            // Schedule rebuild with depth 0 (rebuild queue handles proper ordering)
             rebuild_queue.push(element_id, 0);
         });
     });

@@ -44,6 +44,6 @@ pub use view::{ChangeFlags, View, ViewElement};
 // Simplified API exports (IntoElement, tuple syntax)
 pub use into_element::{AnyElement, IntoAnyElement, IntoElement, RenderExt};
 
-// TODO: Add view tree management for tracking widget-to-element mappings and
-// efficient lookup during rebuild.
+// Future enhancement: View tree management for tracking widget-to-element mappings
+// and efficient lookup during rebuild (currently handled by element tree)
 

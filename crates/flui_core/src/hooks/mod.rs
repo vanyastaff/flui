@@ -58,6 +58,5 @@ pub use signal::{use_signal, Signal, SignalHook, SignalId};
 pub use signal_runtime::{SignalRuntime, SIGNAL_RUNTIME};
 pub use test_harness::{HookTestHarness, MultiHookTestHarness};
 
-// TODO: Add hook composition support via ComposableHook trait
-
-// TODO: Add compile-time hook rules enforcement using marker traits like ComponentHook
+// Future enhancement: Hook composition via ComposableHook trait
+// Future enhancement: Compile-time hook rules enforcement using marker traits

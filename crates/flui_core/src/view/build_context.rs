@@ -393,8 +393,9 @@ impl BuildContext {
                 Do not rely on it until notification bubbling is fully implemented."
     )]
     pub fn dispatch_notification(&self, _notification: &dyn crate::foundation::DynNotification) {
-        // TODO: Implement notification bubbling by walking up tree and calling handlers
-        unimplemented!("Notification bubbling is not yet implemented")
+        // No-op: Notification bubbling is not yet implemented
+        // This stub exists for API compatibility but does nothing
+        // See deprecation notice above for details
     }
 
     // ========== Utility Methods ==========

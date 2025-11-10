@@ -624,14 +624,6 @@ impl Element {
         }
     }
 
-    // TODO: Implement View-based rebuild method:
-    // pub fn rebuild(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags
-    //
-    // Each element type will call View::rebuild() to efficiently update:
-    // - Component: view.rebuild(prev_view, state, element)
-    // - Provider: view.rebuild(prev_view, (), element)
-    // - Render: Updates render object directly
-
     /// Get raw pointer to RenderState if this is a RenderElement
     ///
     /// Returns None for ComponentElement, StatefulElement, etc.

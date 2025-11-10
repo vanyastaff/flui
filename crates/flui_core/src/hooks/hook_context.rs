@@ -105,9 +105,6 @@ type CleanupFn = Box<dyn FnOnce(Box<dyn Any>) + Send>;
 pub struct HookState {
     state: Box<dyn Any + Send>,
     type_id: TypeId,
-    // TODO: Implement update tracking
-    #[allow(dead_code)]
-    needs_update: bool,
     /// Explicit cleanup function called on unmount (Send + Sync for thread-safety)
     cleanup_fn: Option<CleanupFn>,
 }
@@ -116,7 +113,6 @@ impl std::fmt::Debug for HookState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HookState")
             .field("type_id", &self.type_id)
-            .field("needs_update", &self.needs_update)
             .field("has_cleanup", &self.cleanup_fn.is_some())
             .finish()
     }
@@ -134,7 +130,6 @@ impl HookState {
         Self {
             state: Box::new(state),
             type_id: TypeId::of::<H::State>(),
-            needs_update: false,
             cleanup_fn: Some(Box::new(|state_any| {
                 // Downcast and call Hook::cleanup()
                 if let Ok(state) = state_any.downcast::<H::State>() {
@@ -171,9 +166,6 @@ pub struct HookContext {
     current_hook_index: usize,
     hooks: HashMap<HookId, HookState>,
     effect_queue: Vec<HookId>,
-    // TODO: Implement cleanup
-    #[allow(dead_code)]
-    cleanup_queue: Vec<HookId>,
     current_dependencies: Vec<DependencyId>,
     is_tracking: bool,
 }
@@ -186,7 +178,6 @@ impl HookContext {
             current_hook_index: 0,
             hooks: HashMap::new(),
             effect_queue: Vec::new(),
-            cleanup_queue: Vec::new(),
             current_dependencies: Vec::new(),
             is_tracking: false,
         }
@@ -337,10 +328,14 @@ impl HookContext {
     }
 
     /// Flush all pending effects
+    ///
+    /// # Implementation Status
+    ///
+    /// Currently a no-op. Effects are executed immediately in use_effect.
+    /// This method exists for future batching optimization.
     pub fn flush_effects(&mut self) {
-        for _hook_id in std::mem::take(&mut self.effect_queue) {
-            // TODO: Run pending effects
-        }
+        // Clear effect queue (effects currently run immediately in use_effect)
+        self.effect_queue.clear();
     }
 
     /// Clean up all hooks for a component
