@@ -131,25 +131,63 @@ use std::fmt::Debug;
 
 /// Render trait for all renderers
 ///
-/// Single trait that handles all child count patterns (0, 1, or many)
-/// via the `Children` enum passed through context structs.
+/// The Render trait is FLUI's abstraction for layout and painting. It's the
+/// final layer in the three-tree architecture, responsible for computing sizes
+/// and generating the visual output.
+///
+/// # What is a Renderer?
+///
+/// Similar to:
+/// - **Flutter**: RenderObject (handles layout and paint)
+/// - **SwiftUI**: Layout protocol (computes sizes and positions)
+/// - **DOM**: Layout engine (computes box model)
+///
+/// # Three Render Patterns
+///
+/// FLUI supports three patterns based on child count:
+///
+/// | Pattern | Children | Arity | Example |
+/// |---------|----------|-------|---------|
+/// | **Leaf** | 0 | `Arity::Exact(0)` | Text, Image, Box |
+/// | **Single** | 1 | `Arity::Exact(1)` | Padding, Opacity, Transform |
+/// | **Multi** | N | `Arity::Variable` | Column, Row, Stack |
+///
+/// All three patterns use the same `Render` trait - just differ in how they
+/// access children via `LayoutContext` and `PaintContext`.
 ///
 /// # Required Methods
 ///
-/// - `layout`: Compute size given constraints (via LayoutContext)
-/// - `paint`: Generate layer tree (via PaintContext)
+/// 1. **`layout`**: Compute size given constraints
+///    - Input: `LayoutContext` (contains constraints and children)
+///    - Output: `Size` (computed size)
+///    - Side effects: Updates children's sizes via `ctx.layout_child()`
+///
+/// 2. **`paint`**: Generate layer tree for rendering
+///    - Input: `PaintContext` (contains offset and children)
+///    - Output: `BoxedLayer` (layer tree for GPU)
+///    - Side effects: Paints children via `ctx.paint_child()`
+///
+/// 3. **`as_any`**: Enable downcasting for metadata access
+///    - Required for type-safe metadata (e.g., FlexFit for Flexible)
+///
+/// 4. **`arity`**: Specify expected child count
+///    - Default: `Arity::Variable` (any number of children)
+///    - Override with `Arity::Exact(n)` for strict validation
 ///
 /// # Optional Methods
 ///
-/// - `arity`: Specify expected child count (default: `Arity::Variable`)
-/// - `intrinsic_width`: Compute intrinsic width
-/// - `intrinsic_height`: Compute intrinsic height
+/// - `intrinsic_width`: Compute intrinsic width (for sizing)
+/// - `intrinsic_height`: Compute intrinsic height (for sizing)
 /// - `debug_name`: Get debug name for diagnostics
 ///
 /// # Thread Safety
 ///
-/// All renderers must be `Send + Sync + 'static` to enable
-/// concurrent rendering across threads.
+/// All renderers must be `Send + Sync + 'static`:
+/// - **`Send`**: Can be moved between threads
+/// - **`Sync`**: Can be accessed concurrently from multiple threads
+/// - **`'static`**: No borrowed data (owns all state)
+///
+/// This enables parallel layout and concurrent rendering.
 ///
 /// # Examples
 ///
