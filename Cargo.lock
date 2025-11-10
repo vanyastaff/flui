@@ -1172,6 +1172,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui_animation"
+version = "0.1.0"
+dependencies = [
+ "flui_core",
+ "flui_types",
+ "parking_lot",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flui_app"
 version = "0.1.0"
 dependencies = [

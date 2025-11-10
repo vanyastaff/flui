@@ -36,8 +36,8 @@ pub mod recognizers;
 pub use arena::{GestureArena, GestureArenaMember, GestureDisposition, PointerId};
 pub use detector::GestureDetector;
 pub use recognizers::{
-    DragGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer,
-    ScaleGestureRecognizer, TapGestureRecognizer,
+    DoubleTapGestureRecognizer, DragGestureRecognizer, GestureRecognizer,
+    LongPressGestureRecognizer, ScaleGestureRecognizer, TapGestureRecognizer,
 };
 
 
@@ -46,8 +46,9 @@ pub mod prelude {
     pub use crate::arena::*;
     pub use crate::detector::*;
     pub use crate::recognizers::{
-        drag::*, long_press::*, scale::*, tap::*, DragGestureRecognizer,
-        LongPressGestureRecognizer, ScaleGestureRecognizer, TapGestureRecognizer,
+        double_tap::*, drag::*, long_press::*, scale::*, tap::*, DoubleTapGestureRecognizer,
+        DragGestureRecognizer, LongPressGestureRecognizer, ScaleGestureRecognizer,
+        TapGestureRecognizer,
     };
 }
 
