@@ -39,7 +39,7 @@
 use bon::Builder;
 use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
-use flui_rendering::RenderConstrainedBox;
+use flui_rendering::objects::RenderSizedBox;
 use flui_types::BoxConstraints;
 
 /// A box with a specified size.
@@ -643,8 +643,13 @@ mod tests {
 // Implement View for SizedBox - New architecture
 impl View for SizedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        let constraints = BoxConstraints::tight_for(self.width, self.height);
-        (RenderConstrainedBox::new(constraints), self.child)
+        use crate::basic::Empty;
+
+        // Use RenderSizedBox (requires exactly one child)
+        // If no child provided, use Empty as a placeholder
+        let child = self.child.or_else(|| Some(Box::new(Empty) as Box<dyn AnyView>));
+
+        (RenderSizedBox::new(self.width, self.height), child)
     }
 }
 
