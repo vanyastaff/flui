@@ -11,6 +11,7 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 /// - `Point`: Absolute position in coordinate system (x, y)
 /// - `Offset`: Relative displacement/translation (dx, dy) - in flui_rendering
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Point {
     /// X coordinate
     pub x: f32,

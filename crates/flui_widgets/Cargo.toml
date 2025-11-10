@@ -1,26 +1,33 @@
 [package]
 name = "flui_widgets"
-version = "0.1.0"
-edition = "2021"
-authors = ["Flui Contributors"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Widget implementations for Flui framework"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-org/flui"
 keywords = ["ui", "gui", "widgets", "flutter"]
 categories = ["gui"]
 
 [dependencies]
-flui_core = { path = "../flui_core", version = "0.1.0" }
-flui_rendering = { path = "../flui_rendering", version = "0.1.0" }
-flui_engine = { path = "../flui_engine", version = "0.1.0" }
-flui_types = { path = "../flui_types", version = "0.1.0" }
-flui_gestures = { path = "../flui_gestures", version = "0.1.0" }
+flui_core = { path = "../flui_core" }
+flui_rendering = { path = "../flui_rendering" }
+flui_engine = { path = "../flui_engine" }
+flui_types = { path = "../flui_types" }
+flui_gestures = { path = "../flui_gestures" }
 bon = { workspace = true }
 dyn-clone = { workspace = true }
-egui = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[features]
+default = []
+
+# === Serialization ===
+# Serde support for widget state serialization
+serde = ["flui_core/serde", "flui_types/serde", "flui_rendering/serde"]
 
 [dev-dependencies]

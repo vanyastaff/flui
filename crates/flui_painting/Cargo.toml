@@ -12,8 +12,8 @@ flui_types = { path = "../flui_types" }
 flui_engine = { path = "../flui_engine" }
 
 # Math for transformations
-glam.workspace = true
-thiserror.workspace = true
-tracing = "0.1"
+glam = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]

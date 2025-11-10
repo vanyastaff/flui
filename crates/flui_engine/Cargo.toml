@@ -1,21 +1,22 @@
 [package]
 name = "flui_engine"
-version = "0.1.0"
-edition = "2021"
-authors = ["FLUI Team"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Rendering engine for FLUI - Layer, Scene, Painter, Compositor"
-license = "MIT OR Apache-2.0"
 
 [features]
 default = []
 
-# DevTools integration
+# === DevTools ===
+# Developer tools integration
 devtools = ["dep:flui_devtools"]
-memory-profiler = ["devtools", "flui_devtools/memory-profiler"]
 
-# Debug logging features
-debug-logs = []  # Enable detailed rendering logs
-trace-logs = []  # Enable maximum verbosity logs
+# Memory profiling (requires devtools)
+memory-profiler = ["devtools", "flui_devtools/memory-profiler"]
 
 [dependencies]
 # Internal dependencies
@@ -48,8 +49,8 @@ bon.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]
-eframe = { version = "0.33", optional = false }
 pollster = { workspace = true }
 env_logger = "0.11"
-tokio = { version = "1", features = ["rt-multi-thread"] }
-flui_types = { path = "../flui_types", features = ["network-images"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+# For examples that need asset loading, use flui_assets instead
+# flui_assets = { path = "../flui_assets", features = ["images", "network"] }

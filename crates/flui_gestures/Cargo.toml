@@ -15,8 +15,8 @@ flui_engine = { path = "../flui_engine" }
 flui_rendering = { path = "../flui_rendering" }
 
 # Utilities
-parking_lot = "0.12"
-tracing = "0.1"
+parking_lot = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1.43", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }

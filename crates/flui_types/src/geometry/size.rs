@@ -10,6 +10,7 @@ const EPSILON: f32 = 1e-6;
 ///
 /// Similar to Flutter's Size.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Size {
     /// Width in logical pixels
     pub width: f32,

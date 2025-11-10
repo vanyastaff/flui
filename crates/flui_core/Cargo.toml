@@ -38,8 +38,17 @@ criterion.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde"]
+
+# === Serialization ===
+# Serde support for element tree and state
+serde = ["dep:serde", "flui_types/serde"]
+
+# === Profiling ===
+# Performance profiling with puffin
 profiling = ["dep:puffin"]
+
+# === Performance ===
+# Multi-threaded parallel build pipeline
 parallel = ["dep:rayon"]
 
 [lib]

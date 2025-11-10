@@ -9,32 +9,21 @@ repository.workspace = true
 
 [dependencies]
 # No dependencies on other flui crates - this is the base!
+# flui_types provides ONLY type definitions, no asset loading!
+# Asset loading is in flui_assets crate.
+
+# Serialization support (optional)
 serde = { workspace = true, optional = true }
 
-# Lazy static for font loader
-once_cell = "1.20"
+# Logging support (optional, for debugging)
+tracing = { workspace = true, optional = true }
 
-# Font parsing for metadata extraction
-ttf-parser = "0.24"
-
-# Logging (optional)
-tracing = { version = "0.1", optional = true }
-
-# Async runtime for font loading
-tokio = { version = "1", features = ["fs", "io-util"] }
-
-# Image decoding support (optional)
-image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
-
-# Async HTTP for NetworkImage (optional)
-reqwest = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls"] }
-
-# Stack-allocated Vec for small collections (animation curves)
-smallvec = "1.13"
+# Stack-allocated Vec for small collections (animation curves, color stops)
+smallvec = { workspace = true }
 
 [dev-dependencies]
-criterion.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+criterion = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [[bench]]
 name = "performance_verification"
@@ -42,16 +31,23 @@ harness = false
 
 [features]
 default = []
+
+# === Serialization ===
+# Serde support for all types (Color, Size, Rect, etc.)
 serde = ["dep:serde"]
+
+# === Logging ===
+# Tracing/logging support (optional, for type validation and debugging)
 tracing = ["dep:tracing"]
 
-# Image loading features
-image-loading = ["dep:image"]
-network-images = ["dep:reqwest", "image-loading"]
-
-# SIMD acceleration for matrix and vector operations
-# Automatically detects and uses SSE/AVX on x86_64, NEON on ARM
+# === Performance ===
+# SIMD acceleration for math operations
+# Auto-detects SSE/AVX (x86_64) or NEON (ARM)
 simd = []
 
-# All features enabled
-full = ["serde", "tracing", "image-loading", "network-images", "simd"]
+# === Convenience ===
+# Enable all features
+full = ["serde", "tracing", "simd"]
+
+# NOTE: Image and font loading moved to flui_assets crate.
+# flui_types only provides type definitions!

@@ -10,6 +10,7 @@ use std::fmt;
 ///
 /// Represents an axis-aligned bounding box in 2D space.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Rect {
     /// Minimum corner (typically top-left).
     pub min: Point,

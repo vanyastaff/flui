@@ -17,11 +17,11 @@ flui_types = { path = "../flui_types" }
 instant = "0.1"
 
 # Serialization (for devtools protocol)
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Async runtime (for devtools server)
-tokio = { version = "1.0", features = ["full"], optional = true }
+tokio = { workspace = true, optional = true }
 
 # WebSocket server (for remote debugging)
 tokio-tungstenite = { version = "0.24", optional = true }
@@ -33,32 +33,45 @@ notify = { version = "7.0", optional = true }
 dhat = { version = "0.3", optional = true }
 
 # Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", optional = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
 
 # Data structures
-parking_lot = "0.12"
-dashmap = "6.1"
+parking_lot = { workspace = true }
+dashmap = { version = "6.1" }
 
 # Platform-specific (Windows memory info)
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [features]
-default = ["profiling"]
+default = []
 
-# Core features (all standalone, no flui_core dependency)
+# === Core Features ===
+# Performance profiling support
 profiling = []
+
+# Timeline/frame history tracking
 timeline = []
 
-# Advanced features
+# === Advanced Features ===
+# Hot code reload for development
 hot-reload = ["notify"]
+
+# Network traffic monitoring
 network-monitor = ["tokio", "tokio-tungstenite"]
+
+# Memory allocation profiling with dhat
 memory-profiler = ["dhat"]
+
+# Remote debugging server
 remote-debug = ["tokio", "tokio-tungstenite"]
+
+# Tracing/logging integration
 tracing-support = ["tracing-subscriber"]
 
-# All features (no inspector - moved to separate crate)
+# === Convenience Features ===
+# Enable all features
 full = [
     "profiling",
     "timeline",
@@ -70,7 +83,7 @@ full = [
 ]
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { workspace = true }
 
 # [[bench]]
 # name = "profiler_bench"

@@ -12,17 +12,19 @@ flui_types = { path = "../flui_types" }
 flui_core = { path = "../flui_core" }
 flui_painting = { path = "../flui_painting" }
 flui_engine = { path = "../flui_engine" }
-parking_lot.workspace = true
+parking_lot = { workspace = true }
 serde = { workspace = true, optional = true }
-thiserror.workspace = true
-egui.workspace = true
-downcast-rs.workspace = true
-bitflags.workspace = true
-tracing.workspace = true
+thiserror = { workspace = true }
+downcast-rs = { workspace = true }
+bitflags = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 criterion.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde"]
+
+# === Serialization ===
+# Serde support for render objects
+serde = ["dep:serde", "flui_core/serde", "flui_types/serde"]

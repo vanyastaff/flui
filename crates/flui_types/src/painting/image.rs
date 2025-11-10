@@ -34,6 +34,16 @@ pub struct Image {
     data: Arc<Vec<u8>>,
 }
 
+impl Default for Image {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            data: Arc::new(Vec::new()),
+        }
+    }
+}
+
 impl Image {
     /// Creates a new image from RGBA8 pixel data.
     ///

@@ -10,7 +10,14 @@ description = "Application framework for Flui - Flutter-inspired UI"
 
 [features]
 default = []
-widgets = ["dep:flui_widgets"]  # Optional widgets library (currently broken, needs migration to View API)
+
+# === Optional Components ===
+# Widget library (basic widgets like Text, Button, etc.)
+widgets = ["dep:flui_widgets"]
+
+# === DevTools Features ===
+# Developer tools integration
+devtools = ["flui_engine/devtools"]
 
 [dependencies]
 # Flui crates

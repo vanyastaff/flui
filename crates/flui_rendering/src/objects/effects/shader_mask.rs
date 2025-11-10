@@ -6,7 +6,7 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::{painting::BlendMode, Size};
+use flui_types::{painting::BlendMode, styling::Color32, Size};
 
 // ===== Data Structure =====
 /// FIXME: This is a placeholder structure for shader mask data. All types should be in flui_types.
@@ -20,7 +20,7 @@ pub enum ShaderSpec {
         /// End point (relative to size)
         end: (f32, f32),
         /// Colors
-        colors: Vec<egui::Color32>,
+        colors: Vec<Color32>,
     },
     /// Radial gradient shader
     RadialGradient {
@@ -29,10 +29,10 @@ pub enum ShaderSpec {
         /// Radius (relative to size)
         radius: f32,
         /// Colors
-        colors: Vec<egui::Color32>,
+        colors: Vec<Color32>,
     },
     /// Solid color (for testing)
-    Solid(egui::Color32),
+    Solid(Color32),
 }
 
 // ===== RenderObject =====
@@ -49,14 +49,15 @@ pub enum ShaderSpec {
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderShaderMask;
+/// use flui_types::styling::Color32;
 ///
 /// // Create gradient fade mask
 /// let mask = RenderShaderMask::linear_gradient(
 ///     (0.0, 0.0),
 ///     (1.0, 0.0),
 ///     vec![
-///         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 0),
-///         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 255),
+///         Color32::from_rgba_unmultiplied(255, 255, 255, 0),
+///         Color32::from_rgba_unmultiplied(255, 255, 255, 255),
 ///     ],
 /// );
 /// ```
@@ -72,7 +73,7 @@ pub struct RenderShaderMask {
 
 impl RenderShaderMask {
     /// Create new shader mask with linear gradient
-    pub fn linear_gradient(start: (f32, f32), end: (f32, f32), colors: Vec<egui::Color32>) -> Self {
+    pub fn linear_gradient(start: (f32, f32), end: (f32, f32), colors: Vec<Color32>) -> Self {
         Self {
             shader: ShaderSpec::LinearGradient { start, end, colors },
             blend_mode: BlendMode::default(),
@@ -80,7 +81,7 @@ impl RenderShaderMask {
     }
 
     /// Create new shader mask with radial gradient
-    pub fn radial_gradient(center: (f32, f32), radius: f32, colors: Vec<egui::Color32>) -> Self {
+    pub fn radial_gradient(center: (f32, f32), radius: f32, colors: Vec<Color32>) -> Self {
         Self {
             shader: ShaderSpec::RadialGradient {
                 center,
@@ -92,7 +93,7 @@ impl RenderShaderMask {
     }
 
     /// Create with solid color (for testing)
-    pub fn solid(color: egui::Color32) -> Self {
+    pub fn solid(color: Color32) -> Self {
         Self {
             shader: ShaderSpec::Solid(color),
             blend_mode: BlendMode::default(),
@@ -173,11 +174,11 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_new() {
-        let mask = RenderShaderMask::solid(egui::Color32::WHITE);
+        let mask = RenderShaderMask::solid(Color32::WHITE);
 
         match mask.shader() {
             ShaderSpec::Solid(color) => {
-                assert_eq!(*color, egui::Color32::WHITE);
+                assert_eq!(*color, Color32::WHITE);
             }
             _ => panic!("Expected solid shader"),
         }
@@ -186,14 +187,14 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_set_shader() {
-        let mut mask = RenderShaderMask::solid(egui::Color32::WHITE);
+        let mut mask = RenderShaderMask::solid(Color32::WHITE);
 
-        let new_shader = ShaderSpec::Solid(egui::Color32::BLACK);
+        let new_shader = ShaderSpec::Solid(Color32::BLACK);
         mask.set_shader(new_shader);
 
         match mask.shader() {
             ShaderSpec::Solid(color) => {
-                assert_eq!(*color, egui::Color32::BLACK);
+                assert_eq!(*color, Color32::BLACK);
             }
             _ => panic!("Expected solid shader"),
         }
@@ -201,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_set_blend_mode() {
-        let mut mask = RenderShaderMask::solid(egui::Color32::WHITE);
+        let mut mask = RenderShaderMask::solid(Color32::WHITE);
 
         mask.set_blend_mode(BlendMode::Multiply);
         assert_eq!(mask.blend_mode(), BlendMode::Multiply);
@@ -210,13 +211,13 @@ mod tests {
     #[test]
     fn test_render_shader_mask_with_blend_mode() {
         let mask =
-            RenderShaderMask::solid(egui::Color32::WHITE).with_blend_mode(BlendMode::Multiply);
+            RenderShaderMask::solid(Color32::WHITE).with_blend_mode(BlendMode::Multiply);
         assert_eq!(mask.blend_mode(), BlendMode::Multiply);
     }
 
     #[test]
     fn test_render_shader_mask_linear_gradient() {
-        let colors = vec![egui::Color32::WHITE, egui::Color32::BLACK];
+        let colors = vec![Color32::WHITE, Color32::BLACK];
         let mask = RenderShaderMask::linear_gradient((0.0, 0.0), (1.0, 1.0), colors);
 
         match mask.shader() {
@@ -230,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_radial_gradient() {
-        let colors = vec![egui::Color32::RED, egui::Color32::BLUE];
+        let colors = vec![Color32::RED, Color32::BLUE];
         let mask = RenderShaderMask::radial_gradient((0.5, 0.5), 1.0, colors);
 
         match mask.shader() {

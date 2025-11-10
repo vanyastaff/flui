@@ -25,93 +25,69 @@ authors = ["Flui Contributors"]
 repository = "https://github.com/yourusername/flui"
 
 [workspace.dependencies]
-# CORE EGUI & PLATFORM (v0.33 - latest)
-egui = { version = "0.33", features = ["default", "serde"] }
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
-egui-winit = { version = "0.33", default-features = false, features = ["accesskit", "links", "wayland", "x11"] }
-egui_extras = { version = "0.33", features = ["image", "svg", "file"] }
-
-# ASYNC RUNTIME (Stable: 1.43 LTS - March 2026, compatible with current Rust)
-tokio = { version = "1.43", features = ["full", "rt-multi-thread", "macros", "sync", "time"] }
-async-trait = "0.1"
+# ASYNC RUNTIME (Stable: 1.43 LTS - March 2026)
+tokio = { version = "1.43", features = ["full"] }
 futures = "0.3"
 
-# SYNCHRONIZATION
+# SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"
 once_cell = "1.20"
-dashmap = "6.1"
-arc-swap = "1.7"
 
-# COLLECTIONS
-indexmap = { version = "2.5", features = ["serde"] }
+# COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union"] }
-slotmap = "1.0"
 
-# SERIALIZATION
+# SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 
-# BUILDER UTILITIES
-bon = { version = "3.8" }
+# BUILDER UTILITIES - Used by widgets
+bon = "3.8"
 
-# ERROR HANDLING & LOGGING
+# ERROR HANDLING & LOGGING - Used everywhere
 thiserror = "2.0"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-# MATH & GEOMETRY (Latest: 0.30.8 - September 2025)
+# MATH & GEOMETRY - Core rendering math
 glam = { version = "0.30", features = ["serde", "bytemuck"] }
-ordered-float = "5.1.0"
 
-# IMAGE PROCESSING
+# IMAGE PROCESSING - Used by flui_types and flui_engine
 image = { version = "0.25", features = ["png", "jpeg", "gif", "webp"] }
-resvg = "0.45"
-usvg = "0.45"
 
-# GPU RENDERING (WGPU BACKEND - Compatible with eframe 0.33)
-wgpu = { version = "25.0", features = ["wgsl"] }  # Compatible with eframe 0.33
-winit = "0.30.10"  # Stable: 0.30.10 (April 2025)
-bytemuck = { version = "1.18", features = ["derive"] }  # Stable compatible
-glyphon = "0.9"  # GPU text rendering (Latest: 0.9.0)
-cosmic-text = "0.14"  # Text shaping (via glyphon)
-guillotiere = "0.6"  # Texture atlas bin packing
-lyon = "1.0"  # Path tesselation
-ttf-parser = "0.25"  # TrueType/OpenType font parser for glyph outlines
-pollster = "0.3"  # Block on async for examples
+# GPU RENDERING (WGPU BACKEND)
+wgpu = { version = "25.0", features = ["wgsl"] }
+winit = "0.30.10"
+bytemuck = { version = "1.18", features = ["derive"] }
+glyphon = "0.9"
+cosmic-text = "0.14"
+guillotiere = "0.6"
+lyon = "1.0"
+ttf-parser = "0.25"
+pollster = "0.3"
 
-# MEMORY & CACHING
-lru = "0.16.2"  # Simple LRU (keep for compatibility)
-moka = { version = "0.12", features = ["future"] }  # High-performance cache
-bumpalo = "3.16"  # Bump allocator for frame-temp data
-typed-arena = "2.0"  # Type-safe arena allocator
+# CACHING - Used by flui_core and flui_assets
+moka = { version = "0.12", features = ["future"] }
 
-# NETWORKING
+# NETWORKING - Used by flui_assets
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
-url = { version = "2.5", features = ["serde"] }
 
-# UTILITIES
-itertools = "0.14.0"
+# UTILITIES - Used by multiple crates
 ahash = "0.8"
-rustc-hash = "2.0"  # FxHash - faster for small keys
 bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
-fastrand = "2.0"  # Fast RNG for widget IDs, jitter
 
-# STRING INTERNING
-lasso = { version = "0.7", features = ["multi-threaded"] }  # Fast string interning
+# STRING INTERNING - Used by flui_assets
+lasso = { version = "0.7", features = ["multi-threaded"] }
 
-# OPTIMIZED SMART POINTERS
-triomphe = "0.1"  # Arc optimized for immutable data
-
-# SPECIALIZED COLLECTIONS
-tinyvec = { version = "1.8", features = ["alloc"] }  # Smaller than SmallVec
+# OPTIMIZED SMART POINTERS - Used by flui_assets
+triomphe = "0.1"
 
 # PERFORMANCE & PROFILING
 criterion = "0.7"
-tracing-tracy = "0.11"  # Tracy profiler integration
-puffin_http = "0.16"  # Puffin HTTP server
+tracing-tracy = "0.11"
+puffin_http = "0.16"
 
 [package]
 name = "flui"
@@ -119,8 +95,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Flutter-inspired declarative UI framework built on egui 0.33"
-keywords = ["gui", "ui", "egui", "flutter", "reactive"]
+description = "Flutter-inspired declarative UI framework with wgpu rendering"
+keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 
 [dependencies]
 # Flui crates - all included in workspace
@@ -145,7 +121,6 @@ tracing-subscriber.workspace = true
 
 # Optional profiling dependencies
 puffin = { version = "0.19", optional = true }
-puffin_egui = { version = "0.29", optional = true }
 tracing-tracy = { workspace = true, optional = true }
 puffin_http = { workspace = true, optional = true }
 
@@ -155,23 +130,38 @@ puffin_http = { workspace = true, optional = true }
 [features]
 default = []
 
-# Optional features (removed - no longer needed)
-# persistence = ["eframe/persistence"]
+# === Core Features ===
+# Serialization support across all crates
+serde = [
+    "flui_core/serde",
+    "flui_types/serde",
+    "flui_rendering/serde",
+]
 
-# Profiling features
-profiling = ["puffin", "puffin_egui", "puffin_http", "flui_core/profiling"]
-tracy = ["tracing-tracy"]
-full-profiling = ["profiling", "tracy"]
-
-# Performance features
+# === Performance Features ===
+# Multi-threaded parallel processing
 parallel = ["flui_core/parallel"]
 
-# Serialization support
-serde = ["flui_core/serde"]
+# === Profiling & Debug Features ===
+# Basic profiling with puffin
+profiling = ["puffin", "puffin_http", "flui_core/profiling"]
 
-# DevTools features
+# Tracy profiler integration (for production profiling)
+tracy = ["tracing-tracy"]
+
+# All profiling features combined
+full-profiling = ["profiling", "tracy"]
+
+# === DevTools Features ===
+# Developer tools integration
 devtools = ["flui_engine/devtools"]
+
+# Memory profiling
 memory-profiler = ["devtools", "flui_engine/memory-profiler"]
+
+# === Convenience Features ===
+# Enable all stable features (excludes experimental)
+full = ["serde", "parallel", "profiling", "devtools"]
 
 [profile.release]
 opt-level = 3
