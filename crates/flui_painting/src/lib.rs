@@ -38,7 +38,9 @@
 
 #![warn(missing_docs)]
 pub mod border;
+pub mod canvas;
 pub mod decoration;
+pub mod display_list;
 pub mod error;
 pub mod gradient;
 pub mod image;
@@ -47,7 +49,16 @@ pub mod shadow;
 pub mod shape;
 pub mod text;
 
-// Re-export main painting traits
+
+
+// Re-export Canvas API (primary interface)
+pub use canvas::Canvas;
+pub use display_list::{
+    BlendMode, DisplayList, DrawCommand, Paint, PaintBuilder, PaintStyle, Shader, StrokeCap,
+    StrokeJoin,
+};
+
+// Re-export legacy painting traits
 pub use border::BorderPainter;
 pub use decoration::BoxDecorationPainter;
 pub use gradient::GradientPainter;
@@ -59,6 +70,13 @@ pub use text::TextPainter;
 
 /// Prelude module for convenient imports
 pub mod prelude {
+    // Canvas API (primary)
+    pub use crate::canvas::Canvas;
+    pub use crate::display_list::{
+        BlendMode, DisplayList, DrawCommand, Paint, PaintStyle, Shader,
+    };
+
+    // Legacy painters
     pub use crate::border::BorderPainter;
     pub use crate::decoration::BoxDecorationPainter;
     pub use crate::gradient::GradientPainter;
@@ -68,3 +86,5 @@ pub mod prelude {
     pub use crate::shape::ShapePainter;
     pub use crate::text::TextPainter;
 }
+
+
