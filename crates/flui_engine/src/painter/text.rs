@@ -32,9 +32,6 @@ pub struct TextRenderer {
     /// Swash cache (rasterizes glyphs)
     swash_cache: SwashCache,
 
-    /// Cache (GPU glyph cache)
-    cache: Cache,
-
     /// Text atlas (texture atlas for glyphs)
     text_atlas: TextAtlas,
 
@@ -89,7 +86,6 @@ impl TextRenderer {
         Self {
             font_system,
             swash_cache,
-            cache,
             text_atlas,
             renderer,
             viewport,
@@ -230,13 +226,6 @@ impl TextRenderer {
         self.text_buffers.clear();
 
         Ok(())
-    }
-
-    /// Clear all batched text without rendering
-    ///
-    /// Useful if you need to start a new frame without rendering the previous one.
-    pub fn clear(&mut self) {
-        self.text_buffers.clear();
     }
 
     /// Get number of batched text buffers

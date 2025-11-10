@@ -54,11 +54,21 @@
 
 // ===== Core modules =====
 
+pub mod buffer_pool;
+pub mod instancing;
+pub mod multi_draw;
 mod paint;
 mod painter;
-mod text;
-mod vertex;
+pub mod pipeline;
 pub mod tessellator;
+mod text;
+pub mod texture_cache;
+mod vertex;
+
+
+
+
+
 
 // ===== Public API =====
 
@@ -71,10 +81,15 @@ pub use paint::{
 };
 
 // Vertex types
-pub use vertex::{ShaderUniforms, Vertex};
+pub use vertex::Vertex;
 
 // Tessellator (public for advanced use)
 pub use tessellator::Tessellator;
 
 // Re-export RRect from flui_types
 pub use flui_types::geometry::RRect;
+
+
+
+
+

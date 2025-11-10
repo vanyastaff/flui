@@ -44,6 +44,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 bon.workspace = true
 
+# Image loading
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
 [dev-dependencies]
 eframe = { version = "0.33", optional = false }
 pollster = { workspace = true }

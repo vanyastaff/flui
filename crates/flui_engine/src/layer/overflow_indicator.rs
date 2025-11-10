@@ -113,18 +113,20 @@ impl OverflowIndicatorLayer {
         const ANGLE_FACTOR: f32 = 1.0; // Текущий угол
 
         // Fill background with yellow
-        let bg_paint = Paint {
-            color: BG_COLOR,
-            style: PaintingStyle::Fill,
-            anti_alias: false,
-            ..Default::default()
-        };
+        let bg_paint = Paint::builder()
+            .color(BG_COLOR)
+            .style(PaintingStyle::Fill)
+            .anti_alias(false)
+            .build();
         painter.rect(rect, &bg_paint);
 
         // Draw diagonal red stripes as thick lines
-        let stripe_paint = Paint::stroke(STRIPE_COLOR)
-            .with_stroke(crate::painter::Stroke::new(STRIPE_WIDTH))
-            .with_anti_alias(false);
+        let stripe_paint = Paint::builder()
+            .color(STRIPE_COLOR)
+            .style(PaintingStyle::Stroke)
+            .stroke(crate::painter::Stroke::new(STRIPE_WIDTH))
+            .anti_alias(false)
+            .build();
 
         let left = rect.min.x;
         let right = rect.max.x;
@@ -174,9 +176,12 @@ impl OverflowIndicatorLayer {
             a: 255,
         };
 
-        let border_paint = Paint::stroke(BORDER_COLOR)
-            .with_stroke(crate::painter::Stroke::new(3.0))
-            .with_anti_alias(true);
+        let border_paint = Paint::builder()
+            .color(BORDER_COLOR)
+            .style(PaintingStyle::Stroke)
+            .stroke(crate::painter::Stroke::new(3.0))
+            .anti_alias(true)
+            .build();
 
         painter.rect(rect, &border_paint);
     }
@@ -205,12 +210,11 @@ impl OverflowIndicatorLayer {
         }; // Красный текст
         const TEXT_SIZE: f32 = 10.0; // Мелкий шрифт
 
-        let text_paint = Paint {
-            color: TEXT_COLOR,
-            style: PaintingStyle::Fill,
-            anti_alias: true,
-            ..Default::default()
-        };
+        let text_paint = Paint::builder()
+            .color(TEXT_COLOR)
+            .style(PaintingStyle::Fill)
+            .anti_alias(true)
+            .build();
 
         // Позиционируем текст по центру прямоугольника
         let text_x = rect.min.x + (rect.width() / 2.0) - (text.len() as f32 * TEXT_SIZE / 3.0);
@@ -237,19 +241,17 @@ impl OverflowIndicatorLayer {
             a: 255,
         };
 
-        let paint_red = Paint {
-            color: RED,
-            style: PaintingStyle::Fill,
-            anti_alias: true,
-            ..Default::default()
-        };
+        let paint_red = Paint::builder()
+            .color(RED)
+            .style(PaintingStyle::Fill)
+            .anti_alias(true)
+            .build();
 
-        let paint_yellow = Paint {
-            color: YELLOW,
-            style: PaintingStyle::Fill,
-            anti_alias: true,
-            ..Default::default()
-        };
+        let paint_yellow = Paint::builder()
+            .color(YELLOW)
+            .style(PaintingStyle::Fill)
+            .anti_alias(true)
+            .build();
 
         let left = rect.min.x;
         let right = rect.max.x;
@@ -302,9 +304,12 @@ impl OverflowIndicatorLayer {
             a: 255,
         };
 
-        let border_paint = Paint::stroke(BORDER_COLOR)
-            .with_stroke(crate::painter::Stroke::new(3.0))
-            .with_anti_alias(true);
+        let border_paint = Paint::builder()
+            .color(BORDER_COLOR)
+            .style(PaintingStyle::Stroke)
+            .stroke(crate::painter::Stroke::new(3.0))
+            .anti_alias(true)
+            .build();
 
         picture.add_command(DrawCommand::Rect {
             rect,

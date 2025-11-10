@@ -107,7 +107,7 @@ impl Tessellator {
                 &options,
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
-                    FillVertexConstructor { color: paint.color },
+                    FillVertexConstructor { color: paint.get_color() },
                 ),
             )
             .map_err(|e| TessellationError::FillFailed(e.to_string()))?;
@@ -139,18 +139,18 @@ impl Tessellator {
         // Convert Stroke to lyon StrokeOptions
         use lyon::tessellation::{LineCap, LineJoin};
         let options = StrokeOptions::default()
-            .with_line_width(stroke.width)
-            .with_line_cap(match stroke.cap {
+            .with_line_width(stroke.width())
+            .with_line_cap(match stroke.cap() {
                 flui_types::painting::StrokeCap::Butt => LineCap::Butt,
                 flui_types::painting::StrokeCap::Round => LineCap::Round,
                 flui_types::painting::StrokeCap::Square => LineCap::Square,
             })
-            .with_line_join(match stroke.join {
+            .with_line_join(match stroke.join() {
                 flui_types::painting::StrokeJoin::Miter => LineJoin::Miter,
                 flui_types::painting::StrokeJoin::Round => LineJoin::Round,
                 flui_types::painting::StrokeJoin::Bevel => LineJoin::Bevel,
             })
-            .with_miter_limit(stroke.miter_limit);
+            .with_miter_limit(stroke.miter_limit());
 
         self.stroke_tessellator
             .tessellate_path(
@@ -158,7 +158,7 @@ impl Tessellator {
                 &options,
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
-                    StrokeVertexConstructor { color: paint.color },
+                    StrokeVertexConstructor { color: paint.get_color() },
                 ),
             )
             .map_err(|e| TessellationError::StrokeFailed(e.to_string()))?;

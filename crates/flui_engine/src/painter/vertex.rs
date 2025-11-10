@@ -86,81 +86,6 @@ impl Vertex {
     }
 }
 
-/// Shader uniforms for GPU shaders
-///
-/// Uploaded to the GPU as a uniform buffer and accessible to all shaders.
-/// Total size: 96 bytes (properly aligned for GPU).
-///
-/// # Example
-/// ```ignore
-/// let uniforms = ShaderUniforms::ortho(800.0, 600.0);
-/// ```
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct ShaderUniforms {
-    /// View-projection matrix (4x4 matrix, column-major)
-    pub view_proj: [[f32; 4]; 4],
-
-    /// Viewport size (width, height, unused, unused)
-    pub viewport_size: [f32; 4],
-
-    /// Time in seconds (for animated effects)
-    pub time: f32,
-
-    /// Padding to ensure 16-byte alignment
-    pub _padding: [f32; 3],
-}
-
-impl Default for ShaderUniforms {
-    fn default() -> Self {
-        Self {
-            view_proj: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            viewport_size: [800.0, 600.0, 0.0, 0.0],
-            time: 0.0,
-            _padding: [0.0; 3],
-        }
-    }
-}
-
-impl ShaderUniforms {
-    /// Create orthographic projection matrix for 2D rendering
-    ///
-    /// Maps (0, 0) to top-left corner and (width, height) to bottom-right corner.
-    /// This is the standard 2D coordinate system.
-    pub fn ortho(width: f32, height: f32) -> Self {
-        let left = 0.0;
-        let right = width;
-        let bottom = height;
-        let top = 0.0;
-        let near = -1.0;
-        let far = 1.0;
-
-        let view_proj = [
-            [2.0 / (right - left), 0.0, 0.0, 0.0],
-            [0.0, 2.0 / (top - bottom), 0.0, 0.0],
-            [0.0, 0.0, 1.0 / (far - near), 0.0],
-            [
-                -(right + left) / (right - left),
-                -(top + bottom) / (top - bottom),
-                -near / (far - near),
-                1.0,
-            ],
-        ];
-
-        Self {
-            view_proj,
-            viewport_size: [width, height, 0.0, 0.0],
-            time: 0.0,
-            _padding: [0.0; 3],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,12 +106,5 @@ mod tests {
 
         assert_eq!(vertex.position, [100.0, 200.0]);
         assert_eq!(vertex.uv, [0.5, 0.5]);
-    }
-
-    #[test]
-    fn test_shader_uniforms_size() {
-        // ShaderUniforms should be properly aligned
-        // 16 floats (matrix) + 4 floats (viewport) + 4 floats (time + padding) = 24 floats * 4 = 96 bytes
-        assert_eq!(std::mem::size_of::<ShaderUniforms>(), 96);
     }
 }

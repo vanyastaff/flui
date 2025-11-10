@@ -88,7 +88,7 @@ pub mod base;
 pub mod base_multi_child;
 pub mod base_single_child;
 pub mod blur;
-pub mod clip;
+pub mod clip_generic;
 pub mod container;
 pub mod filter;
 pub mod handle;
@@ -102,6 +102,7 @@ pub mod pool;
 pub mod pooled;
 pub mod scrollable;
 pub mod transform;
+
 
 // Basic composition layers
 
@@ -130,8 +131,11 @@ pub use pointer_listener_layer::PointerListenerLayer;
 pub use scrollable::{ScrollCallback, ScrollableLayer};
 pub use transform::{Transform, TransformLayer};
 
-// Clipping layers
-pub use clip::{ClipOvalLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer};
+// Clipping layers (generic implementation - eliminates duplication)
+pub use clip_generic::{
+    ClipLayer, ClipOvalLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipStrategy,
+    OvalStrategy, PathStrategy, RRectStrategy, RectStrategy,
+};
 
 // Filter layers
 pub use backdrop_filter::BackdropFilterLayer;
@@ -152,3 +156,4 @@ pub use flui_types::painting::effects::{
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
+

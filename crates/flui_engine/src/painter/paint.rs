@@ -5,7 +5,10 @@
 //! - Paint handles fill and stroke style
 //! - Stroke is a separate struct for stroke-specific properties
 //! - Gradient is optional and overrides solid color
+//!
+//! All types support the `bon` builder pattern for ergonomic construction.
 
+use bon::Builder;
 use flui_types::{
     painting::{BlendMode, PaintingStyle, StrokeCap, StrokeJoin},
     styling::Color,
@@ -23,11 +26,18 @@ use flui_types::{
 ///
 /// # Examples
 /// ```ignore
-/// // Solid fill
+/// // Solid fill (convenience method)
 /// let fill = Paint::fill(Color::RED);
 ///
-/// // Stroke with width
+/// // Stroke with width (convenience method)
 /// let stroke = Paint::stroke(Color::BLUE).with_stroke(Stroke::new(2.0));
+///
+/// // Using bon builder
+/// let paint = Paint::builder()
+///     .color(Color::RED)
+///     .style(PaintingStyle::Fill)
+///     .anti_alias(true)
+///     .build();
 ///
 /// // Gradient fill
 /// let gradient = Gradient::linear(
@@ -40,25 +50,31 @@ use flui_types::{
 /// );
 /// let paint = Paint::gradient(gradient);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
 pub struct Paint {
     /// Base color (used when gradient is None)
-    pub color: Color,
+    #[builder(default = Color::BLACK)]
+    color: Color,
 
     /// Painting style: fill or stroke
-    pub style: PaintingStyle,
+    #[builder(default = PaintingStyle::Fill)]
+    style: PaintingStyle,
 
     /// Optional gradient (overrides color if present)
-    pub gradient: Option<Gradient>,
+    #[builder(into)]
+    gradient: Option<Gradient>,
 
     /// Optional stroke properties (only relevant for stroke style)
-    pub stroke: Option<Stroke>,
+    #[builder(into)]
+    stroke: Option<Stroke>,
 
     /// Anti-aliasing enabled
-    pub anti_alias: bool,
+    #[builder(default = true)]
+    anti_alias: bool,
 
     /// Blend mode for compositing
-    pub blend_mode: BlendMode,
+    #[builder(default = BlendMode::SrcOver)]
+    blend_mode: BlendMode,
 }
 
 impl Default for Paint {
@@ -81,7 +97,7 @@ impl Paint {
         Self::default()
     }
 
-    /// Create a fill paint with solid color
+    /// Create a fill paint with solid color (convenience constructor)
     #[inline]
     pub fn fill(color: Color) -> Self {
         Self {
@@ -94,22 +110,22 @@ impl Paint {
         }
     }
 
-    /// Create a stroke paint with solid color
+    /// Create a stroke paint with solid color (convenience constructor)
     ///
-    /// Note: Use with_stroke() to set stroke width and other properties
+    /// Note: Chain with `.with_stroke(Stroke::new(width))` to set stroke properties
     #[inline]
     pub fn stroke(color: Color) -> Self {
         Self {
             color,
             style: PaintingStyle::Stroke,
             gradient: None,
-            stroke: None, // Set via with_stroke()
+            stroke: None,
             anti_alias: true,
             blend_mode: BlendMode::SrcOver,
         }
     }
 
-    /// Create a gradient fill paint
+    /// Create a gradient fill paint (convenience constructor)
     #[inline]
     pub fn gradient(gradient: Gradient) -> Self {
         Self {
@@ -122,48 +138,42 @@ impl Paint {
         }
     }
 
-    // ===== Builder methods =====
+    // ===== Getters =====
 
-    /// Set color
+    /// Get the paint color
     #[inline]
-    pub fn with_color(mut self, color: Color) -> Self {
-        self.color = color;
-        self
+    pub fn get_color(&self) -> Color {
+        self.color
     }
 
-    /// Set painting style (fill or stroke)
+    /// Get the painting style
     #[inline]
-    pub fn with_style(mut self, style: PaintingStyle) -> Self {
-        self.style = style;
-        self
+    pub fn get_style(&self) -> PaintingStyle {
+        self.style
     }
 
-    /// Set gradient
+    /// Get the gradient (if any)
     #[inline]
-    pub fn with_gradient(mut self, gradient: Gradient) -> Self {
-        self.gradient = Some(gradient);
-        self
+    pub fn get_gradient(&self) -> Option<&Gradient> {
+        self.gradient.as_ref()
     }
 
-    /// Set stroke properties
+    /// Get the stroke properties (if any)
     #[inline]
-    pub fn with_stroke(mut self, stroke: Stroke) -> Self {
-        self.stroke = Some(stroke);
-        self
+    pub fn get_stroke(&self) -> Option<&Stroke> {
+        self.stroke.as_ref()
     }
 
-    /// Set blend mode
+    /// Check if anti-aliasing is enabled
     #[inline]
-    pub fn with_blend_mode(mut self, blend_mode: BlendMode) -> Self {
-        self.blend_mode = blend_mode;
-        self
+    pub fn get_anti_alias(&self) -> bool {
+        self.anti_alias
     }
 
-    /// Set anti-aliasing
+    /// Get the blend mode
     #[inline]
-    pub fn with_anti_alias(mut self, anti_alias: bool) -> Self {
-        self.anti_alias = anti_alias;
-        self
+    pub fn get_blend_mode(&self) -> BlendMode {
+        self.blend_mode
     }
 
     // ===== Query methods =====
@@ -196,23 +206,32 @@ impl Paint {
 ///
 /// # Examples
 /// ```ignore
-/// let stroke = Stroke::new(2.0)
-///     .with_cap(StrokeCap::Round)
-///     .with_join(StrokeJoin::Round);
+/// // Convenience constructor
+/// let stroke = Stroke::new(2.0);
+///
+/// // Using bon builder
+/// let stroke = Stroke::builder()
+///     .width(2.0)
+///     .cap(StrokeCap::Round)
+///     .join(StrokeJoin::Round)
+///     .build();
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Builder)]
 pub struct Stroke {
     /// Stroke width in pixels
-    pub width: f32,
+    width: f32,
 
     /// Cap style for line endings
-    pub cap: StrokeCap,
+    #[builder(default = StrokeCap::Butt)]
+    cap: StrokeCap,
 
     /// Join style for corners
-    pub join: StrokeJoin,
+    #[builder(default = StrokeJoin::Miter)]
+    join: StrokeJoin,
 
     /// Miter limit (only applies when join is Miter)
-    pub miter_limit: f32,
+    #[builder(default = 4.0)]
+    miter_limit: f32,
 }
 
 impl Default for Stroke {
@@ -227,7 +246,7 @@ impl Default for Stroke {
 }
 
 impl Stroke {
-    /// Create a new stroke with specified width
+    /// Create a new stroke with specified width (convenience constructor)
     #[inline]
     pub fn new(width: f32) -> Self {
         Self {
@@ -236,25 +255,30 @@ impl Stroke {
         }
     }
 
-    /// Set cap style
+    // ===== Getters =====
+
+    /// Get stroke width
     #[inline]
-    pub fn with_cap(mut self, cap: StrokeCap) -> Self {
-        self.cap = cap;
-        self
+    pub fn width(&self) -> f32 {
+        self.width
     }
 
-    /// Set join style
+    /// Get cap style
     #[inline]
-    pub fn with_join(mut self, join: StrokeJoin) -> Self {
-        self.join = join;
-        self
+    pub fn cap(&self) -> StrokeCap {
+        self.cap
     }
 
-    /// Set miter limit
+    /// Get join style
     #[inline]
-    pub fn with_miter_limit(mut self, miter_limit: f32) -> Self {
-        self.miter_limit = miter_limit;
-        self
+    pub fn join(&self) -> StrokeJoin {
+        self.join
+    }
+
+    /// Get miter limit
+    #[inline]
+    pub fn miter_limit(&self) -> f32 {
+        self.miter_limit
     }
 }
 
@@ -266,7 +290,7 @@ impl Stroke {
 ///
 /// # Examples
 /// ```ignore
-/// // Linear gradient from red to blue
+/// // Linear gradient from red to blue (convenience constructor)
 /// let gradient = Gradient::linear(
 ///     Point::new(0.0, 0.0),
 ///     Point::new(100.0, 0.0),
@@ -276,7 +300,7 @@ impl Stroke {
 ///     ],
 /// );
 ///
-/// // Radial gradient
+/// // Radial gradient (convenience constructor)
 /// let gradient = Gradient::radial(
 ///     Point::new(50.0, 50.0),
 ///     50.0,
@@ -285,8 +309,19 @@ impl Stroke {
 ///         GradientStop::new(1.0, Color::BLACK),
 ///     ],
 /// );
+///
+/// // Using bon builder
+/// let gradient = Gradient::builder()
+///     .gradient_type(GradientType::Linear)
+///     .start(Point::new(0.0, 0.0))
+///     .end(Point::new(100.0, 0.0))
+///     .stops(vec![
+///         GradientStop::new(0.0, Color::RED),
+///         GradientStop::new(1.0, Color::BLUE),
+///     ])
+///     .build();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
 pub struct Gradient {
     /// Type of gradient
     pub gradient_type: GradientType,
@@ -298,17 +333,20 @@ pub struct Gradient {
     pub start: Point,
 
     /// End point (for linear only)
+    #[builder(default = Point::ZERO)]
     pub end: Point,
 
     /// Radius (for radial only)
+    #[builder(default = 0.0)]
     pub radius: f32,
 
     /// Rotation angle in radians (for conic only)
+    #[builder(default = 0.0)]
     pub rotation: f32,
 }
 
 impl Gradient {
-    /// Create a linear gradient
+    /// Create a linear gradient (convenience constructor)
     pub fn linear(start: Point, end: Point, stops: Vec<GradientStop>) -> Self {
         Self {
             gradient_type: GradientType::Linear,
@@ -320,7 +358,7 @@ impl Gradient {
         }
     }
 
-    /// Create a radial gradient
+    /// Create a radial gradient (convenience constructor)
     pub fn radial(center: Point, radius: f32, stops: Vec<GradientStop>) -> Self {
         Self {
             gradient_type: GradientType::Radial,
@@ -332,7 +370,7 @@ impl Gradient {
         }
     }
 
-    /// Create a conic (sweep) gradient
+    /// Create a conic (sweep) gradient (convenience constructor)
     pub fn conic(center: Point, rotation: f32, stops: Vec<GradientStop>) -> Self {
         Self {
             gradient_type: GradientType::Conic,
@@ -359,7 +397,19 @@ pub enum GradientType {
 /// Gradient color stop
 ///
 /// Defines a color at a specific position (0.0 to 1.0) along the gradient.
-#[derive(Debug, Clone, Copy)]
+///
+/// # Examples
+/// ```ignore
+/// // Convenience constructor
+/// let stop = GradientStop::new(0.5, Color::RED);
+///
+/// // Using bon builder
+/// let stop = GradientStop::builder()
+///     .position(0.5)
+///     .color(Color::RED)
+///     .build();
+/// ```
+#[derive(Debug, Clone, Copy, Builder)]
 pub struct GradientStop {
     /// Position in gradient (0.0 = start, 1.0 = end)
     pub position: f32,
@@ -368,7 +418,7 @@ pub struct GradientStop {
 }
 
 impl GradientStop {
-    /// Create a new gradient stop
+    /// Create a new gradient stop (convenience constructor)
     #[inline]
     pub fn new(position: f32, color: Color) -> Self {
         Self { position, color }
@@ -383,13 +433,22 @@ impl GradientStop {
 ///
 /// # Examples
 /// ```ignore
+/// // Convenience constructor
 /// let shadow = Shadow::new(
 ///     Color::rgba(0, 0, 0, 128),
 ///     Point::new(4.0, 4.0),
 ///     8.0,
 /// );
+///
+/// // Using bon builder
+/// let shadow = Shadow::builder()
+///     .color(Color::rgba(0, 0, 0, 128))
+///     .offset(Point::new(4.0, 4.0))
+///     .blur_radius(8.0)
+///     .spread_radius(2.0)
+///     .build();
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Builder)]
 pub struct Shadow {
     /// Shadow color
     pub color: Color,
@@ -401,11 +460,12 @@ pub struct Shadow {
     pub blur_radius: f32,
 
     /// Spread radius (expand shadow before blur)
+    #[builder(default = 0.0)]
     pub spread_radius: f32,
 }
 
 impl Shadow {
-    /// Create a new shadow
+    /// Create a new shadow (convenience constructor)
     pub fn new(color: Color, offset: Point, blur_radius: f32) -> Self {
         Self {
             color,
@@ -415,7 +475,7 @@ impl Shadow {
         }
     }
 
-    /// Set spread radius
+    /// Set spread radius (for chaining)
     #[inline]
     pub fn with_spread(mut self, spread_radius: f32) -> Self {
         self.spread_radius = spread_radius;

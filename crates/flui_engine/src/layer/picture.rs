@@ -209,10 +209,10 @@ impl PictureLayer {
     fn command_bounds(command: &DrawCommand) -> Rect {
         match command {
             DrawCommand::Rect { rect, paint } => {
-                if let Some(stroke) = &paint.stroke {
-                    if stroke.width > 0.0 {
+                if let Some(stroke) = paint.get_stroke() {
+                    if stroke.width() > 0.0 {
                         // Add stroke width to bounds
-                        rect.expand(stroke.width / 2.0)
+                        rect.expand(stroke.width() / 2.0)
                     } else {
                         *rect
                     }
@@ -221,9 +221,9 @@ impl PictureLayer {
                 }
             }
             DrawCommand::RRect { rrect, paint } => {
-                if let Some(stroke) = &paint.stroke {
-                    if stroke.width > 0.0 {
-                        rrect.rect.expand(stroke.width / 2.0)
+                if let Some(stroke) = paint.get_stroke() {
+                    if stroke.width() > 0.0 {
+                        rrect.rect.expand(stroke.width() / 2.0)
                     } else {
                         rrect.rect
                     }
@@ -236,9 +236,9 @@ impl PictureLayer {
                 radius,
                 paint,
             } => {
-                let r = if let Some(stroke) = &paint.stroke {
-                    if stroke.width > 0.0 {
-                        radius + stroke.width / 2.0
+                let r = if let Some(stroke) = paint.get_stroke() {
+                    if stroke.width() > 0.0 {
+                        radius + stroke.width() / 2.0
                     } else {
                         *radius
                     }
@@ -255,8 +255,8 @@ impl PictureLayer {
                 let max_x = p1.x.max(p2.x);
                 let max_y = p1.y.max(p2.y);
 
-                let stroke = if let Some(stroke_info) = &paint.stroke {
-                    stroke_info.width / 2.0
+                let stroke = if let Some(stroke_info) = paint.get_stroke() {
+                    stroke_info.width() / 2.0
                 } else {
                     0.5 // Default stroke width
                 };
@@ -296,9 +296,9 @@ impl PictureLayer {
             DrawCommand::Image {
                 dst_rect, paint, ..
             } => {
-                if let Some(stroke) = &paint.stroke {
-                    if stroke.width > 0.0 {
-                        dst_rect.expand(stroke.width / 2.0)
+                if let Some(stroke) = paint.get_stroke() {
+                    if stroke.width() > 0.0 {
+                        dst_rect.expand(stroke.width() / 2.0)
                     } else {
                         *dst_rect
                     }
@@ -329,9 +329,9 @@ impl PictureLayer {
                     }
                 });
 
-                if let Some(stroke) = &paint.stroke {
-                    if stroke.width > 0.0 {
-                        bounds.expand(stroke.width / 2.0)
+                if let Some(stroke) = paint.get_stroke() {
+                    if stroke.width() > 0.0 {
+                        bounds.expand(stroke.width() / 2.0)
                     } else {
                         bounds
                     }
@@ -340,9 +340,9 @@ impl PictureLayer {
                 }
             }
             DrawCommand::Arc { rect, paint, .. } => {
-                if let Some(stroke) = &paint.stroke {
-                    if stroke.width > 0.0 {
-                        rect.expand(stroke.width / 2.0)
+                if let Some(stroke) = paint.get_stroke() {
+                    if stroke.width() > 0.0 {
+                        rect.expand(stroke.width() / 2.0)
                     } else {
                         *rect
                     }
@@ -367,8 +367,8 @@ impl PictureLayer {
                     max_y = max_y.max(p.y);
                 }
 
-                let stroke = if let Some(stroke_info) = &paint.stroke {
-                    stroke_info.width / 2.0
+                let stroke = if let Some(stroke_info) = paint.get_stroke() {
+                    stroke_info.width() / 2.0
                 } else {
                     0.5 // Default stroke width
                 };
