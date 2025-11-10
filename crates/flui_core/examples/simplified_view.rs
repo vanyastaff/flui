@@ -3,7 +3,7 @@
 //! This example shows the new simplified View API with no GATs,
 //! automatic tree management, and hooks for state.
 
-use flui_core::{AnyView, BuildContext, IntoElement, LeafSingleView};
+use flui_core::{AnyView, BuildContext, IntoElement, View};
 
 // ============================================================================
 // Example 1: Simple Text Component
@@ -18,8 +18,8 @@ struct SimpleText {
 impl View for SimpleText {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // In real code, this would use RenderParagraph from flui_rendering
-        // For now, we just demonstrate the API pattern
-        Leaf(MockTextRender { text: self.text }, ())
+        // For now, we just demonstrate the API pattern with tuple syntax
+        (MockTextRender { text: self.text }, ())
     }
 }
 

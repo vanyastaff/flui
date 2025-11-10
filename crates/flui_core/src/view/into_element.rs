@@ -25,16 +25,17 @@
 //! // Views implement IntoElement automatically
 //! impl View for Button {
 //!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+//!         // Compose views - Container is also a View
 //!         Container::new()
-//!             .child(Text::new(self.label))  // ← Text also IntoElement
+//!             .child(Text::new(self.label))
 //!     }
 //! }
 //!
-//! // RenderObjects use builders that implement IntoElement
+//! // RenderObjects use tuple syntax
 //! impl View for Padding {
 //!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         RenderPadding::new(self.padding)  // ← Returns builder
-//!             .child(self.child)       // ← Builder impl IntoElement
+//!         // Tuple: (render object, Option<child>)
+//!         (RenderPadding::new(self.padding), self.child)
 //!     }
 //! }
 //! ```
@@ -50,15 +51,15 @@ use crate::element::Element;
 ///
 /// The framework provides automatic implementations for:
 /// - All `View` types (via blanket impl)
-/// - `RenderBuilder<R>` for render objects
-/// - Common types like `String`, `&str` (converted to Text)
+/// - Tuple syntax for render objects: `(R, ())`, `(R, Option<child>)`, `(R, Vec<children>)`
+/// - Convenience wrappers for `Box<dyn AnyView>` types
 ///
 /// # Usage
 ///
 /// You typically don't implement this directly. Instead:
 /// 1. Implement `View` for composable widgets
-/// 2. Use `RenderBuilder` for render objects
-/// 3. Use the provided implementations for primitives
+/// 2. Use tuple syntax for render objects: `(render, children)`
+/// 3. Use the provided implementations for type conversions
 ///
 /// # Example
 ///
@@ -66,9 +67,11 @@ use crate::element::Element;
 /// // Views automatically impl IntoElement
 /// impl View for MyWidget {
 ///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         Column::new()
-///             .child("Hello")          // &str impl IntoElement
-///             .child(Text::new("Hi"))  // View impl IntoElement
+///         // Use tuple syntax to combine render object with children
+///         (RenderColumn::new(), vec![
+///             AnyElement::new(Text::new("Hello")),
+///             AnyElement::new(Text::new("Hi")),
+///         ])
 ///     }
 /// }
 /// ```
@@ -90,8 +93,8 @@ pub trait IntoElement: Sized + 'static {
     /// # Implementation Note
     ///
     /// Most types don't implement this directly. Instead:
-    /// - Views use the blanket impl
-    /// - RenderObjects use RenderBuilder
+    /// - Views use the blanket impl (automatic)
+    /// - RenderObjects use tuple syntax: `(render, children)`
     ///
     /// # Example
     ///
