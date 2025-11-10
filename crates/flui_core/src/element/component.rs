@@ -276,6 +276,41 @@ impl ComponentElement {
             ChangeFlags::NEEDS_BUILD
         }
     }
+
+    /// Handle an event
+    ///
+    /// ComponentElements typically don't need to handle events directly,
+    /// as their child elements will handle them. However, this can be overridden
+    /// if needed for special component behavior.
+    ///
+    /// Default implementation: does not handle events (returns false)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// match event {
+    ///     Event::Window(WindowEvent::FocusChanged { focused }) => {
+    ///         // Custom focus handling for this component
+    ///         true
+    ///     }
+    ///     _ => false
+    /// }
+    /// ```
+    #[inline]
+    pub fn handle_event(&mut self, _event: &flui_types::Event) -> bool {
+        false // ComponentElements don't handle events by default
+    }
+
+    /// Hit test - delegate to child
+    ///
+    /// ComponentElements don't have bounds themselves, they just wrap their child.
+    /// Hit testing is delegated to the child element.
+    ///
+    /// Returns the child ElementId that should be tested (if any).
+    #[inline]
+    pub fn hit_test_child(&self) -> Option<ElementId> {
+        self.child()
+    }
 }
 
 // ========== ViewElement Implementation ==========

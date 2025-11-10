@@ -72,6 +72,17 @@ pub struct RenderElement {
     /// Atomic flags inside RenderState provide lock-free checks.
     render_state: RwLock<RenderState>,
 
+    /// Position of this element relative to parent
+    ///
+    /// Set during layout phase by parent. Used for:
+    /// - Hit testing (to check if pointer is within bounds)
+    /// - Painting (to position child layers)
+    /// - Coordinate transformation during event dispatch
+    ///
+    /// **Important**: This is in parent's coordinate space.
+    /// Root element has offset (0, 0).
+    offset: flui_types::Offset,
+
     /// Parent data attached by parent Render
     ///
     /// This metadata is set by the parent's layout algorithm (e.g., FlexParentData for Flex,
@@ -90,6 +101,7 @@ impl std::fmt::Debug for RenderElement {
             .field("base", &self.base)
             .field("render_object", &"<RwLock<RenderNode>>")
             .field("render_state", &self.render_state)
+            .field("offset", &self.offset)
             .field("parent_data", &self.parent_data.is_some())
             .field("children", &self.children)
             .finish()
@@ -114,6 +126,7 @@ impl RenderElement {
             base: ElementBase::new(),
             render_object: RwLock::new(render_object),
             render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
             parent_data: None,
             children: Vec::new(),
         }
@@ -170,6 +183,19 @@ impl RenderElement {
     #[must_use]
     pub fn render_state(&self) -> &RwLock<RenderState> {
         &self.render_state
+    }
+
+    /// Get the offset (position relative to parent)
+    #[inline]
+    #[must_use]
+    pub fn offset(&self) -> flui_types::Offset {
+        self.offset
+    }
+
+    /// Set the offset (called by parent during layout)
+    #[inline]
+    pub fn set_offset(&mut self, offset: flui_types::Offset) {
+        self.offset = offset;
     }
 
     /// Get parent data attached to this element
@@ -369,6 +395,39 @@ impl RenderElement {
     /// Slot is managed by parent, children don't need to track it.
     pub(crate) fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
         // Slot is managed by parent
+    }
+
+    /// Handle an event
+    ///
+    /// RenderElements typically don't need to handle events directly,
+    /// as they focus on layout and painting. However, this can be overridden
+    /// for specific render objects that need to react to events.
+    ///
+    /// **Possible Use Cases:**
+    /// - **RenderImage**: Reload textures on `Event::Window(WindowEvent::ScaleChanged)`
+    /// - **RenderVideo**: Pause playback on `Event::Window(WindowEvent::VisibilityChanged)`
+    /// - **RenderAnimated**: Stop animations on focus loss
+    ///
+    /// Default implementation: does not handle events (returns false)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the event was handled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// match event {
+    ///     Event::Window(WindowEvent::ScaleChanged { scale }) => {
+    ///         self.reload_textures_at_scale(*scale);
+    ///         true // Handled
+    ///     }
+    ///     _ => false // Ignore other events
+    /// }
+    /// ```
+    #[inline]
+    pub fn handle_event(&mut self, _event: &flui_types::Event) -> bool {
+        false // RenderElements don't handle events by default
     }
 }
 

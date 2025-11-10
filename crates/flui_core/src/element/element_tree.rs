@@ -898,6 +898,27 @@ impl ElementTree {
         }
     }
 
+    /// Visit all elements with mutable access
+    ///
+    /// Allows dispatching events or performing mutations on all elements.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// tree.visit_all_elements_mut(|element_id, element| {
+    ///     element.handle_window_event(&event);
+    /// });
+    /// ```
+    pub fn visit_all_elements_mut<F>(&mut self, mut visitor: F)
+    where
+        F: FnMut(ElementId, &mut Element),
+    {
+        for (element_id, node) in &mut self.nodes {
+            // Add 1 to convert slab index (0-based) to ElementId (1-based)
+            visitor(ElementId::new(element_id + 1), &mut node.element);
+        }
+    }
+
     // ========== Dependency Tracking ==========
 
     /// Register a dependent element on an InheritedElement
@@ -975,6 +996,132 @@ impl ElementTree {
 impl Default for ElementTree {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ElementTree {
+    // ========== Hit Testing ==========
+
+    /// Perform hit testing on the element tree
+    ///
+    /// Tests whether the given position hits any elements, starting from root.
+    /// Returns ElementHitTestResult with all hit elements in depth-first order
+    /// (children before parents).
+    ///
+    /// Following Flutter's `RenderObject.hitTest()` pattern:
+    /// 1. Check if position is within element bounds
+    /// 2. Recursively test children (front to back)
+    /// 3. Add self to result if hit
+    ///
+    /// # Arguments
+    ///
+    /// * `root_id` - The root element to start testing from
+    /// * `position` - Global position to test (in window coordinates)
+    ///
+    /// # Returns
+    ///
+    /// ElementHitTestResult containing all hit elements
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = tree.hit_test(root_id, Offset::new(100.0, 50.0));
+    /// for entry in result.iter() {
+    ///     println!("Hit element: {:?} at local position: {:?}",
+    ///              entry.element_id, entry.local_position);
+    /// }
+    /// ```
+    pub fn hit_test(&self, root_id: ElementId, position: flui_types::Offset) -> crate::element::ElementHitTestResult {
+        use crate::element::ElementHitTestResult;
+
+        let mut result = ElementHitTestResult::new();
+        self.hit_test_recursive(root_id, position, &mut result);
+        result
+    }
+
+    /// Recursive hit testing helper
+    ///
+    /// Returns true if the element (or any of its children) was hit.
+    fn hit_test_recursive(
+        &self,
+        element_id: ElementId,
+        position: flui_types::Offset,
+        result: &mut crate::element::ElementHitTestResult,
+    ) -> bool {
+        let element = match self.get(element_id) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        match element {
+            Element::Render(render_elem) => {
+                self.hit_test_render(element_id, render_elem, position, result)
+            }
+            Element::Component(comp_elem) => {
+                // ComponentElement delegates to child
+                if let Some(child_id) = comp_elem.child() {
+                    self.hit_test_recursive(child_id, position, result)
+                } else {
+                    false
+                }
+            }
+            Element::Provider(prov_elem) => {
+                // ProviderElement delegates to child
+                if let Some(child_id) = prov_elem.child() {
+                    self.hit_test_recursive(child_id, position, result)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Hit test for RenderElement
+    ///
+    /// Checks if position is within element bounds and recursively tests children.
+    /// Adds hit elements to result in depth-first order (children before parents).
+    fn hit_test_render(
+        &self,
+        element_id: ElementId,
+        render_elem: &crate::element::RenderElement,
+        position: flui_types::Offset,
+        result: &mut crate::element::ElementHitTestResult,
+    ) -> bool {
+        // Get size from render state
+        let render_state = render_elem.render_state().read();
+        let size = match render_state.size() {
+            Some(s) => s,
+            None => return false, // No layout yet
+        };
+        drop(render_state);
+
+        // Get offset (position relative to parent)
+        let offset = render_elem.offset();
+
+        // Transform position to local coordinates
+        let local_position = position - offset;
+
+        // Check if position is within bounds
+        if local_position.dx < 0.0
+            || local_position.dy < 0.0
+            || local_position.dx > size.width
+            || local_position.dy > size.height
+        {
+            return false; // Outside bounds
+        }
+
+        // Test children first (front to back)
+        // Continue testing all children even after finding a hit,
+        // since overlapping elements should all register hits
+        for &child_id in render_elem.children() {
+            self.hit_test_recursive(child_id, position, result);
+        }
+
+        // Add self to result (even if child was hit)
+        // This maintains depth-first order: children added before parents
+        result.add_element(element_id, local_position);
+
+        true
     }
 }
 

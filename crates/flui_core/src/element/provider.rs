@@ -205,6 +205,54 @@ impl InheritedElement {
         // InheritedElement always has exactly one child at slot 0
         // Nothing to update
     }
+
+    /// Handle an event
+    ///
+    /// ProviderElements (like ThemeProvider) can override this to react to events.
+    ///
+    /// **Common Use Cases:**
+    /// - **ThemeProvider**: Listen to `Event::Window(WindowEvent::ThemeChanged)` to update theme
+    /// - **LocaleProvider**: React to `Event::Window` locale changes
+    /// - **AnimationController**: Pause on `Event::Window(WindowEvent::VisibilityChanged)`
+    ///
+    /// When handling events, providers typically:
+    /// 1. Update their internal state
+    /// 2. Mark all dependents as dirty for rebuild
+    /// 3. Return `true` to indicate handling
+    ///
+    /// Default implementation: does not handle events (returns false)
+    ///
+    /// # Returns
+    ///
+    /// `true` if the event was handled, `false` otherwise
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// match event {
+    ///     Event::Window(WindowEvent::ThemeChanged { theme }) => {
+    ///         self.theme = *theme;
+    ///         self.mark_all_dependents_dirty();
+    ///         true // Handled
+    ///     }
+    ///     _ => false // Ignore other events
+    /// }
+    /// ```
+    #[inline]
+    pub fn handle_event(&mut self, _event: &flui_types::Event) -> bool {
+        false // ProviderElements don't handle events by default
+    }
+
+    /// Hit test - delegate to child
+    ///
+    /// ProviderElements don't have bounds themselves, they just wrap their child.
+    /// Hit testing is delegated to the child element.
+    ///
+    /// Returns the child ElementId that should be tested (if any).
+    #[inline]
+    pub fn hit_test_child(&self) -> Option<ElementId> {
+        self.child()
+    }
 }
 
 // ========== ViewElement Implementation ==========

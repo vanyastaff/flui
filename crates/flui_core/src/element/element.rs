@@ -430,6 +430,56 @@ impl Element {
         }
     }
 
+    /// Handle an event (unified event system)
+    ///
+    /// Allows elements to react to any type of event: window events (theme, focus, DPI),
+    /// pointer events (clicks, moves), keyboard events, etc.
+    ///
+    /// Elements can match on the event types they care about and ignore others.
+    ///
+    /// # Use Cases
+    ///
+    /// - **ThemeProvider**: Listen to `Event::Window(WindowEvent::ThemeChanged)` to update colors
+    /// - **FocusScope**: Track `Event::Window(WindowEvent::FocusChanged)` for focus state
+    /// - **Button**: Handle `Event::Pointer(PointerEvent::Down)` for clicks
+    /// - **TextField**: Process `Event::Key(KeyEvent::Down)` for text input
+    ///
+    /// # Returns
+    ///
+    /// `true` if the event was handled, `false` to allow propagation
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::{Event, WindowEvent, PointerEvent};
+    ///
+    /// fn handle_event(&mut self, event: &Event) -> bool {
+    ///     match event {
+    ///         Event::Window(WindowEvent::ThemeChanged { theme }) => {
+    ///             self.update_theme(*theme);
+    ///             true // Handled
+    ///         }
+    ///         Event::Pointer(PointerEvent::Down(_)) => {
+    ///             self.on_click();
+    ///             true // Handled
+    ///         }
+    ///         _ => false // Ignore other events
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn handle_event(&mut self, event: &flui_types::Event) -> bool {
+        match self {
+            Self::Component(c) => c.handle_event(event),
+            Self::Provider(p) => p.handle_event(event),
+            Self::Render(r) => r.handle_event(event),
+        }
+    }
+
+    // Note: hit_test() method removed - use ElementTree::hit_test() instead
+    // Hit testing is now performed on the entire tree for better coordinate
+    // transformation and to avoid needing ElementTree access in Element methods.
+
     /// Deactivate element
     ///
     /// Called when element is temporarily deactivated (e.g., moved to cache).

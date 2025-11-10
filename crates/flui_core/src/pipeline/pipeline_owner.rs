@@ -608,6 +608,146 @@ impl PipelineOwner {
             buffer.swap();
         }
     }
+
+    // =========================================================================
+    // Event Dispatching (Unified System)
+    // =========================================================================
+
+    /// Dispatch an event to all elements in the tree
+    ///
+    /// This unified method handles all types of events: window events (theme, focus, DPI),
+    /// pointer events (future), keyboard events (future), etc.
+    ///
+    /// Elements can override `handle_event()` to respond to specific event types using match:
+    ///
+    /// **Common Use Cases:**
+    /// - `ThemeProvider` → `Event::Window(WindowEvent::ThemeChanged)` to update theme
+    /// - `AnimationController` → `Event::Window(WindowEvent::VisibilityChanged)` to pause
+    /// - `Button` → `Event::Pointer(PointerEvent::Down)` for clicks (future)
+    /// - `TextField` → `Event::Key(KeyEvent::Down)` for input (future)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::{Event, WindowEvent, Theme};
+    ///
+    /// // Dispatch theme changed event
+    /// let event = Event::Window(WindowEvent::ThemeChanged { theme: Theme::Dark });
+    /// owner.dispatch_event(&event);
+    ///
+    /// // All elements receive this, but only ThemeProvider handles it
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// Iterates through all elements in the tree. Most elements return `false` (not handled)
+    /// quickly via match. Only specialized elements process specific event types.
+    pub fn dispatch_event(&mut self, event: &flui_types::Event) {
+        let mut tree = self.tree.write();
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("dispatch_event: {:?}", event);
+
+        // Visit all elements and dispatch the event
+        tree.visit_all_elements_mut(|_element_id, element| {
+            // Call handle_event on each element
+            // Most will return false (not handled), but specialized elements
+            // can return true and trigger updates
+            let _handled = element.handle_event(event);
+
+            #[cfg(debug_assertions)]
+            if _handled {
+                tracing::debug!(
+                    "dispatch_event: element {:?} handled event {:?}",
+                    _element_id,
+                    event
+                );
+            }
+        });
+    }
+
+    /// Dispatch a pointer event to elements under the pointer
+    ///
+    /// Uses hit testing to determine which elements are under the pointer position,
+    /// then dispatches the event only to those elements.
+    ///
+    /// This is more efficient than broadcasting to all elements and follows Flutter's
+    /// pattern where only hit elements receive pointer events.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The pointer event to dispatch
+    /// * `position` - Position of the pointer in global (window) coordinates
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::{Event, PointerEvent, PointerEventData, Offset};
+    ///
+    /// let position = Offset::new(100.0, 50.0);
+    /// let pointer_event = PointerEvent::Down(PointerEventData {
+    ///     position,
+    ///     device: 0,
+    /// });
+    /// let event = Event::Pointer(pointer_event);
+    ///
+    /// owner.dispatch_pointer_event(&event, position);
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// Hit testing is performed once, then the event is dispatched to only the hit elements.
+    /// This is much more efficient than broadcasting to all elements for pointer events.
+    pub fn dispatch_pointer_event(
+        &mut self,
+        event: &flui_types::Event,
+        position: flui_types::Offset,
+    ) {
+        let root_id = match self.root_mgr.root_id() {
+            Some(id) => id,
+            None => {
+                #[cfg(debug_assertions)]
+                tracing::warn!("dispatch_pointer_event: no root element");
+                return;
+            }
+        };
+
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "dispatch_pointer_event: position={:?}, event={:?}",
+            position,
+            event
+        );
+
+        // Perform hit testing
+        let hit_result = {
+            let tree = self.tree.read();
+            tree.hit_test(root_id, position)
+        };
+
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "dispatch_pointer_event: hit {} elements",
+            hit_result.entries().len()
+        );
+
+        // Dispatch event to hit elements
+        let mut tree = self.tree.write();
+        for entry in hit_result.iter() {
+            if let Some(element) = tree.get_mut(entry.element_id) {
+                let handled = element.handle_event(event);
+
+                #[cfg(debug_assertions)]
+                if handled {
+                    tracing::debug!(
+                        "dispatch_pointer_event: element {:?} handled event at local position {:?}",
+                        entry.element_id,
+                        entry.local_position
+                    );
+                }
+            }
+        }
+    }
 }
 
 impl Default for PipelineOwner {
