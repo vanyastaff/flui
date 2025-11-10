@@ -3,13 +3,12 @@
 //! This is a Leaf RenderObject that renders multi-line text with styling,
 //! line breaks, and text wrapping.
 
-use flui_core::render::LeafRender;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::{
-    constraints::BoxConstraints,
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextStyle},
-    Offset, Point, Size,
+    Point, Size,
 };
 
 // ===== Data Structure =====
@@ -175,11 +174,9 @@ impl RenderParagraph {
 
 // ===== RenderObject Implementation =====
 
-impl LeafRender for RenderParagraph {
-    /// No metadata needed
-    type Metadata = ();
-
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+impl Render for RenderParagraph {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let constraints = ctx.constraints;
         #[cfg(debug_assertions)]
         tracing::debug!(
             "RenderParagraph::layout: text='{}', constraints={:?}",
@@ -247,7 +244,8 @@ impl LeafRender for RenderParagraph {
         size
     }
 
-    fn paint(&self, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let offset = ctx.offset;
         #[cfg(debug_assertions)]
         tracing::debug!(
             "RenderParagraph::paint: text='{}', offset={:?}, size={:?}",
@@ -291,6 +289,10 @@ impl LeafRender for RenderParagraph {
         tracing::debug!("RenderParagraph::paint: returning layer");
 
         result
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(0) // Leaf render - no children
     }
 }
 

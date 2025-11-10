@@ -1,10 +1,9 @@
 //! RenderFlex - flex layout container (Row/Column)
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::MultiRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::{
-    constraints::BoxConstraints,
     layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize},
     typography::TextBaseline,
     Axis, Offset, Size,
@@ -167,16 +166,11 @@ impl Default for RenderFlex {
     }
 }
 
-impl MultiRender for RenderFlex {
-    /// No metadata needed
-    type Metadata = ();
-
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_ids: &[ElementId],
-        constraints: BoxConstraints,
-    ) -> Size {
+impl Render for RenderFlex {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let constraints = ctx.constraints;
         // Clear overflow from previous layout (important for resize!)
         #[cfg(debug_assertions)]
         tree.set_current_overflow(self.direction, 0.0);
@@ -503,7 +497,11 @@ impl MultiRender for RenderFlex {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let offset = ctx.offset;
+
         let mut container = pool::acquire_container();
 
         // Paint children with their calculated offsets
@@ -527,6 +525,10 @@ impl MultiRender for RenderFlex {
         }
 
         Box::new(container)
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable // Multi-child render - variable number of children
     }
 }
 

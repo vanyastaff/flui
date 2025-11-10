@@ -1,9 +1,8 @@
 //! RenderPadding - adds padding around a child
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, EdgeInsets, Offset, Size};
+use flui_types::{EdgeInsets, Size};
 
 /// RenderObject that adds padding around its child
 ///
@@ -37,23 +36,16 @@ impl RenderPadding {
     }
 }
 
-impl SingleRender for RenderPadding {
-    /// No metadata needed
-    type Metadata = ();
-
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+impl Render for RenderPadding {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let child_id = ctx.children.single();
         let padding = self.padding;
 
         // Deflate constraints by padding
-        let child_constraints = constraints.deflate(&padding);
+        let child_constraints = ctx.constraints.deflate(&padding);
 
         // Layout child with deflated constraints
-        let child_size = tree.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints);
 
         // Add padding to child size
         Size::new(
@@ -62,10 +54,16 @@ impl SingleRender for RenderPadding {
         )
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let child_id = ctx.children.single();
+
         // Apply padding offset and paint child
-        let child_offset = Offset::new(self.padding.left, self.padding.top);
-        tree.paint_child(child_id, offset + child_offset)
+        let child_offset = flui_types::Offset::new(self.padding.left, self.padding.top);
+        ctx.paint_child(child_id, ctx.offset + child_offset)
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1) // Single-child render
     }
 }
 
