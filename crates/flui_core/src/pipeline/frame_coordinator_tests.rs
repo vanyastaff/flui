@@ -42,8 +42,8 @@ mod tests {
             Size::new(100.0, 100.0)
         }
 
-        fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
-            Box::new(flui_engine::ContainerLayer::new())
+        fn paint(&self, _ctx: &PaintContext) -> flui_painting::Canvas {
+            flui_painting::Canvas::new()
         }
 
         fn as_any(&self) -> &dyn std::any::Any {

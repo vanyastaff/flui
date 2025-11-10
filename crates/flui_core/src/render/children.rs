@@ -137,18 +137,10 @@ impl Children {
         match self {
             Children::Single(id) => *id,
             Children::None => panic!("Expected Children::Single, got Children::None"),
-            Children::Multi(v) => {
-                // FIXME: Workaround for Children::Multi with 1 child
-                // Ideally should always be Children::Single for single child
-                if v.len() == 1 {
-                    v[0]
-                } else {
-                    panic!(
-                        "Expected Children::Single, got Children::Multi with {} children",
-                        v.len()
-                    )
-                }
-            }
+            Children::Multi(v) => panic!(
+                "Expected Children::Single, got Children::Multi with {} children",
+                v.len()
+            ),
         }
     }
 
@@ -221,16 +213,34 @@ impl Children {
         Children::Single(id)
     }
 
-    /// Create Children::Multi from Vec
+    /// Create Children from Vec
+    ///
+    /// Returns appropriate variant based on vec length:
+    /// - Empty vec → Children::None
+    /// - Single element → Children::Single
+    /// - Multiple elements → Children::Multi
     #[inline]
     pub fn from_multi(ids: Vec<ElementId>) -> Self {
-        Children::Multi(ids)
+        match ids.len() {
+            0 => Children::None,
+            1 => Children::Single(ids[0]),
+            _ => Children::Multi(ids),
+        }
     }
 
-    /// Create Children::Multi from slice
+    /// Create Children from slice
+    ///
+    /// Returns appropriate variant based on slice length:
+    /// - Empty slice → Children::None
+    /// - Single element → Children::Single
+    /// - Multiple elements → Children::Multi
     #[inline]
     pub fn from_slice(ids: &[ElementId]) -> Self {
-        Children::Multi(ids.to_vec())
+        match ids.len() {
+            0 => Children::None,
+            1 => Children::Single(ids[0]),
+            _ => Children::Multi(ids.to_vec()),
+        }
     }
 }
 
@@ -244,13 +254,13 @@ impl From<ElementId> for Children {
 
 impl From<Vec<ElementId>> for Children {
     fn from(ids: Vec<ElementId>) -> Self {
-        Children::Multi(ids)
+        Self::from_multi(ids)
     }
 }
 
 impl From<&[ElementId]> for Children {
     fn from(ids: &[ElementId]) -> Self {
-        Children::Multi(ids.to_vec())
+        Self::from_slice(ids)
     }
 }
 
