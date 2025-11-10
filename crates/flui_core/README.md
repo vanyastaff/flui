@@ -154,29 +154,25 @@ pub trait Render: Send + Sync + Debug + 'static {
 // - PaintContext: offset, children, tree access for painting
 ```
 
-## View Types
+## View Patterns
 
-FLUI provides three core view types for building UIs:
+FLUI provides a unified View trait with different implementation patterns:
 
-### Component Views
+### Composable Views
 
-Composable views that build UIs from other views. They can have optional state managed via hooks or the State type parameter:
+Views that build UIs from other views:
 
 ```rust
 use flui_core::prelude::*;
-use flui_core::hooks::use_signal;
 
 #[derive(Debug, Clone)]
 struct Greeting {
     name: String,
 }
 
-impl Component for Greeting {
-    fn build(&self, ctx: &BuildContext) -> View {
-        Text::builder()
-            .data(format!("Hello, {}!", self.name))
-            .size(18.0)
-            .build()
+impl View for Greeting {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        Text::new(format!("Hello, {}!", self.name))
     }
 }
 
@@ -186,25 +182,25 @@ struct Toggle {
     initial: bool,
 }
 
-impl Component for Toggle {
-    fn build(&self, ctx: &BuildContext) -> View {
-        let enabled = use_signal(ctx, || self.initial);
+impl View for Toggle {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        let enabled = use_signal(ctx, self.initial);
+        let enabled_clone = enabled.clone();
 
-        Checkbox::builder()
-            .value(enabled.get())
-            .on_change(move |val| enabled.set(val))
-            .build()
+        Checkbox {
+            value: enabled.get(),
+            on_change: Some(Box::new(move |val| enabled_clone.set(val))),
+        }
     }
 }
 ```
 
 **When to use**: Display components, user interactions, animations, form inputs, most UI composition.
 
-**State management options**:
+**State management**:
 - Hooks: `use_signal`, `use_effect`, `use_memo` for reactive state
-- State type parameter: Traditional approach similar to Flutter's StatefulWidget
 
-### Provider Views
+### Provider Pattern
 
 Efficient data propagation with automatic dependency tracking:
 
@@ -214,16 +210,14 @@ use flui_core::prelude::*;
 #[derive(Debug, Clone)]
 struct Theme {
     color: Color,
-    child: View,
+    child: Box<dyn AnyView>,
 }
 
-impl Provider for Theme {
-    fn should_notify(&self, old: &Self) -> bool {
-        self.color != old.color
-    }
-
-    fn child(&self) -> View {
-        self.child.clone()
+impl View for Theme {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        // Providers are implemented via Element::Provider variant
+        // This provides theme data to descendants
+        Element::Provider(ProviderElement::new(self, self.child))
     }
 }
 
@@ -239,13 +233,14 @@ let color = theme.color;
 - Only rebuilds dependents when data changes
 - Type-safe access via generics
 
-### Render Views
+### Custom Renderers
 
-Direct control over layout and painting for custom render objects:
+Direct control over layout and painting using tuple syntax:
 
 ```rust
 use flui_core::prelude::*;
 
+// View that wraps a custom renderer
 #[derive(Debug, Clone)]
 struct CustomBox {
     width: f32,
@@ -253,43 +248,48 @@ struct CustomBox {
     color: Color,
 }
 
-impl Render for CustomBox {
-    type Renderer = RenderCustomBox;
-
-    fn create_render(&self) -> Self::Renderer {
-        RenderCustomBox {
+impl View for CustomBox {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        // Tuple syntax: (Renderer, ())
+        // The () indicates no children (leaf renderer)
+        (RenderCustomBox {
             width: self.width,
             height: self.height,
             color: self.color,
-        }
-    }
-
-    fn update_render(&self, render: &mut Self::Renderer) {
-        render.width = self.width;
-        render.height = self.height;
-        render.color = self.color;
+        }, ())
     }
 }
 
-// Implement LeafRender, SingleRender, or MultiRender
-impl LeafRender for RenderCustomBox {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
-        constraints.constrain(Size::new(self.width, self.height))
+// Implement the Render trait
+#[derive(Debug)]
+struct RenderCustomBox {
+    width: f32,
+    height: f32,
+    color: Color,
+}
+
+impl Render for RenderCustomBox {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        ctx.constraints.constrain(Size::new(self.width, self.height))
     }
 
-    fn paint(&self, offset: Offset) -> BoxedLayer {
-        Box::new(PictureLayer::new(/* ... */))
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        Box::new(PictureLayer::new(/* draw at ctx.offset */))
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(0)  // No children
     }
 }
 ```
 
 **When to use**: Custom layouts, complex drawing, performance-critical rendering.
 
-## Render Traits
+## Render Patterns
 
-Implement one of three traits based on your render's child count:
+The Render trait handles all child counts through context structs:
 
-### LeafRender (No Children)
+### Leaf Renderer (No Children)
 
 ```rust
 use flui_core::prelude::*;
@@ -300,20 +300,24 @@ struct RenderCircle {
     color: Color,
 }
 
-impl LeafRender for RenderCircle {
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+impl Render for RenderCircle {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let size = self.radius * 2.0;
-        constraints.constrain(Size::new(size, size))
+        ctx.constraints.constrain(Size::new(size, size))
     }
 
-    fn paint(&self, offset: Offset) -> BoxedLayer {
-        // Draw circle
-        Box::new(PictureLayer::circle(offset, self.radius, self.color))
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        // Draw circle at ctx.offset
+        Box::new(PictureLayer::circle(ctx.offset, self.radius, self.color))
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(0)  // No children
     }
 }
 ```
 
-### SingleRender (One Child)
+### Single Child Renderer
 
 ```rust
 use flui_core::prelude::*;
@@ -323,30 +327,27 @@ struct RenderOpacity {
     opacity: f32,
 }
 
-impl SingleRender for RenderOpacity {
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+impl Render for RenderOpacity {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        // Get single child from context
+        let child_id = ctx.children.single();
         // Layout child with same constraints
-        tree.layout_child(child_id, constraints)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(
-        &self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        offset: Offset,
-    ) -> BoxedLayer {
-        let child_layer = tree.paint_child(child_id, offset);
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let child_id = ctx.children.single();
+        let child_layer = ctx.paint_child(child_id, ctx.offset);
         Box::new(OpacityLayer::new(child_layer, self.opacity))
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)  // Exactly one child
     }
 }
 ```
 
-### MultiRender (Multiple Children)
+### Multiple Children Renderer
 
 ```rust
 use flui_core::prelude::*;
@@ -356,18 +357,14 @@ struct RenderRow {
     spacing: f32,
 }
 
-impl MultiRender for RenderRow {
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        children: &[ElementId],
-        constraints: BoxConstraints,
-    ) -> Size {
+impl Render for RenderRow {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let mut x = 0.0;
         let mut max_height = 0.0;
 
-        for &child in children {
-            let child_size = tree.layout_child(child, constraints);
+        // Iterate over children
+        for &child_id in ctx.children.as_slice() {
+            let child_size = ctx.layout_child(child_id, ctx.constraints);
             x += child_size.width + self.spacing;
             max_height = max_height.max(child_size.height);
         }
@@ -375,57 +372,48 @@ impl MultiRender for RenderRow {
         Size::new(x, max_height)
     }
 
-    fn paint(
-        &self,
-        tree: &ElementTree,
-        children: &[ElementId],
-        offset: Offset,
-    ) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
         let mut container = ContainerLayer::new();
-        let mut x = offset.x;
+        let mut x = 0.0;
 
-        for &child in children {
-            let layer = tree.paint_child(child, Offset::new(x, offset.y));
+        for &child_id in ctx.children.as_slice() {
+            let offset = Offset::new(x, 0.0);
+            let layer = ctx.paint_child(child_id, ctx.offset + offset);
             container.add_child(layer);
-            x += tree.get_size(child).width + self.spacing;
+            x += ctx.get_size(child_id).width + self.spacing;
         }
 
         Box::new(container)
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Any number of children
     }
 }
 ```
 
 ## Key Features Explained
 
-### 🎯 Type-Safe View Composition
+### 🎯 Unified View Trait
 
-FLUI uses trait-based view composition for type safety and ergonomics:
+FLUI uses a single unified View trait for all UI components:
 
 ```rust
-// Component views
-impl Component for MyView {
-    fn build(&self, ctx: &BuildContext) -> View { /* ... */ }
+pub trait View: 'static {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }
 
-// Provider views
-impl Provider for MyTheme {
-    fn should_notify(&self, old: &Self) -> bool { /* ... */ }
-    fn child(&self) -> View { /* ... */ }
-}
-
-// Render views
-impl Render for MyCustomBox {
-    type Renderer = RenderMyCustomBox;
-    fn create_render(&self) -> Self::Renderer { /* ... */ }
-    fn update_render(&self, render: &mut Self::Renderer) { /* ... */ }
-}
+// All views implement this single trait:
+// - Composable views return other views
+// - Custom renderers return tuples (Renderer, children)
+// - Providers create Element::Provider directly
 ```
 
 **Benefits**:
-- Compile-time type checking for view composition
-- Cleaner, more ergonomic API
-- Works seamlessly with builder patterns
-- Zero-cost abstractions
+- Single trait to learn (no Component/Provider/Render distinctions)
+- Compile-time type checking via impl IntoElement
+- Thread-local BuildContext (no &mut needed)
+- Zero-cost abstractions with inline expansion
 
 ### 🏗️ Builder Pattern
 

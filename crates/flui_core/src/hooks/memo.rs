@@ -379,24 +379,27 @@ mod tests {
     use super::*;
     use crate::hooks::hook_context::{ComponentId, HookContext};
     use crate::hooks::signal::{use_signal, SignalHook};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     #[test]
     fn test_memo_basic() {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let mut call_count = 0;
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(|| {
-            call_count += 1;
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = call_count.clone();
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+            *call_count_clone.lock() += 1;
             42
-        });
+        }));
 
-        assert_eq!(memo.get(), 42);
-        assert_eq!(call_count, 1);
+        assert_eq!(memo.get(&mut ctx), 42);
+        assert_eq!(*call_count.lock(), 1);
 
         // Second access should use cached value
-        assert_eq!(memo.get(), 42);
-        assert_eq!(call_count, 1);
+        assert_eq!(memo.get(&mut ctx), 42);
+        assert_eq!(*call_count.lock(), 1);
     }
 
     #[test]
@@ -406,21 +409,23 @@ mod tests {
 
         let signal = ctx.use_hook::<SignalHook<i32>>(5);
 
-        let mut call_count = 0;
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(move || {
-            call_count += 1;
-            signal.get() * 2
-        });
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = call_count.clone();
+        let signal_clone = signal.clone();
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {
+            *call_count_clone.lock() += 1;
+            signal_clone.get(ctx) * 2
+        }));
 
-        assert_eq!(memo.get(), 10);
-        assert_eq!(call_count, 1);
+        assert_eq!(memo.get(&mut ctx), 10);
+        assert_eq!(*call_count.lock(), 1);
 
         // Change signal
         signal.set(10);
 
         // Memo should recompute
-        assert_eq!(memo.get(), 20);
-        assert_eq!(call_count, 2);
+        assert_eq!(memo.get(&mut ctx), 20);
+        assert_eq!(*call_count.lock(), 2);
     }
 
     #[test]
@@ -428,19 +433,20 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let mut call_count = 0;
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(|| {
-            call_count += 1;
+        let call_count = Arc::new(Mutex::new(0));
+        let call_count_clone = call_count.clone();
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+            *call_count_clone.lock() += 1;
             42
-        });
+        }));
 
-        assert_eq!(memo.get(), 42);
-        assert_eq!(call_count, 1);
+        assert_eq!(memo.get(&mut ctx), 42);
+        assert_eq!(*call_count.lock(), 1);
 
         memo.invalidate();
 
-        assert_eq!(memo.get(), 42);
-        assert_eq!(call_count, 2);
+        assert_eq!(memo.get(&mut ctx), 42);
+        assert_eq!(*call_count.lock(), 2);
     }
 
     // =========================================================================
