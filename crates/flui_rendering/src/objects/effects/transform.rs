@@ -27,6 +27,21 @@ pub enum Transform {
         /// Y-axis skew angle in radians
         skew_y: f32
     },
+    /// Arbitrary 2D affine transformation matrix
+    Matrix {
+        /// X-axis scale/rotation component
+        a: f32,
+        /// Y-axis shear component
+        b: f32,
+        /// X-axis shear component
+        c: f32,
+        /// Y-axis scale/rotation component
+        d: f32,
+        /// X-axis translation
+        tx: f32,
+        /// Y-axis translation
+        ty: f32,
+    },
 }
 
 /// RenderObject that applies a transformation to its child
@@ -120,9 +135,25 @@ impl Render for RenderTransform {
                 canvas.scale(sx, Some(sy));
                 canvas.translate(-self.alignment.dx, -self.alignment.dy);
             }
-            _ => {
-                // TODO: Handle other transform types (Skew, Matrix)
-                // For now, just pass through without transform
+            Transform::Skew { skew_x, skew_y } => {
+                canvas.translate(self.alignment.dx, self.alignment.dy);
+                // Use Matrix4::skew_2d for skew transformation
+                use flui_types::Matrix4;
+                let skew_matrix = Matrix4::skew_2d(skew_x, skew_y);
+                canvas.set_transform(skew_matrix);
+                canvas.translate(-self.alignment.dx, -self.alignment.dy);
+            }
+            Transform::Matrix { a, b, c, d, tx, ty } => {
+                // Apply 2D affine transformation matrix
+                // Matrix4 stores in column-major order: [m00, m10, m20, m30, m01, m11, ...]
+                use flui_types::Matrix4;
+                let matrix = Matrix4::new(
+                    a, b, 0.0, 0.0,      // column 0
+                    c, d, 0.0, 0.0,      // column 1
+                    0.0, 0.0, 1.0, 0.0,  // column 2
+                    tx, ty, 0.0, 1.0,    // column 3
+                );
+                canvas.set_transform(matrix);
             }
         }
 
