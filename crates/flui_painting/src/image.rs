@@ -7,7 +7,7 @@ use flui_engine::{Paint, Painter};
 use flui_types::{
     layout::Alignment,
     painting::{BoxFit, ColorFilter, Image, ImageRepeat},
-    styling::DecorationImage,
+    styling::{Color, DecorationImage},
     Rect,
 };
 
@@ -84,8 +84,9 @@ impl ImagePainter {
         let dest_rect = Self::align_rect(fitted.destination, rect, alignment);
 
         // Create paint with opacity
-        let mut paint = Paint::default();
-        paint.color = paint.color.with_opacity(opacity);
+        let paint = Paint::builder()
+            .color(Color::BLACK.with_opacity(opacity))
+            .build();
 
         // TODO: Apply color_filter - need to convert from painting::ColorFilter
         // to effects::ColorFilter for apply_image_filter

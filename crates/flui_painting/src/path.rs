@@ -51,7 +51,10 @@ impl PathPainter {
     /// * `color` - The stroke color
     /// * `stroke_width` - The width of the stroke
     pub fn stroke(painter: &mut dyn Painter, path: &Path, color: Color, stroke_width: f32) {
-        let paint = Paint::stroke(color).with_stroke(Stroke::new(stroke_width));
+        let paint = Paint::builder()
+            .color(color)
+            .stroke(Stroke::new(stroke_width))
+            .build();
         Self::paint_path(painter, path, &paint, true);
     }
 

@@ -49,7 +49,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         // Create rounded rectangle
         let rrect = RRect {
@@ -81,7 +84,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         // Get bevel distances (using border_radius as bevel distance)
         let tl = border.border_radius.top_left.x;
@@ -134,7 +140,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         let center = rect.center();
         let radius = rect.width().min(rect.height()) / 2.0;
@@ -154,7 +163,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         let center = rect.center();
         let rx = rect.width() / 2.0;
@@ -175,7 +187,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         // Stadium is a rounded rect with corner radius = half of the shorter side
         let radius = rect.width().min(rect.height()) / 2.0;
@@ -203,7 +218,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         let center = rect.center();
         let outer_radius = rect.width().min(rect.height()) / 2.0;
@@ -254,7 +272,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         // For now, approximate with rounded rect
         // TODO: Implement true continuous curve (squircle)
@@ -283,7 +304,10 @@ impl ShapePainter {
             return;
         }
 
-        let paint = Paint::stroke(border.side.color).with_stroke(Stroke::new(border.side.width));
+        let paint = Paint::builder()
+            .color(border.side.color)
+            .stroke(Stroke::new(border.side.width))
+            .build();
 
         let left = rect.left();
         let top = rect.top();

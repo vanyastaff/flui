@@ -14,7 +14,7 @@ impl ClipShape for RectShape {
         let clip_rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
         // Use pool for allocation efficiency
         let mut clip_layer = flui_engine::layer::pool::acquire_clip_rect();
-        clip_layer.set_clip_rect(clip_rect);
+        clip_layer.set_clip_shape(clip_rect);
         clip_layer.add_child(child_layer);
         Box::new(clip_layer)
     }

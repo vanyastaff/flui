@@ -178,19 +178,15 @@ fn paint_diagonal_stripes(picture: &mut flui_engine::layer::PictureLayer, rect: 
         a: 255,
     };
 
-    let paint_red = Paint {
-        color: RED,
-        style: PaintingStyle::Fill,
-        anti_alias: true,
-        ..Default::default()
-    };
+    let paint_red = Paint::builder()
+        .color(RED)
+        .anti_alias(true)
+        .build();
 
-    let paint_yellow = Paint {
-        color: YELLOW,
-        style: PaintingStyle::Fill,
-        anti_alias: true,
-        ..Default::default()
-    };
+    let paint_yellow = Paint::builder()
+        .color(YELLOW)
+        .anti_alias(true)
+        .build();
 
     let left = rect.min.x;
     let right = rect.max.x;
@@ -239,9 +235,11 @@ fn paint_border(picture: &mut flui_engine::layer::PictureLayer, rect: Rect) {
         a: 255,
     };
 
-    let border_paint = Paint::stroke(BORDER_COLOR)
-        .with_stroke(flui_engine::Stroke::new(3.0)) // Thicker border for visibility
-        .with_anti_alias(true);
+    let border_paint = Paint::builder()
+        .color(BORDER_COLOR)
+        .stroke(flui_engine::Stroke::new(3.0)) // Thicker border for visibility
+        .anti_alias(true)
+        .build();
 
     picture.add_command(DrawCommand::Rect {
         rect,
@@ -319,12 +317,10 @@ impl RenderOverflowIndicator {
         }; // Red
 
         // Fill stripe with warning color
-        let fill_paint = Paint {
-            color: STRIPE_COLOR,
-            style: PaintingStyle::Fill,
-            anti_alias: true,
-            ..Default::default()
-        };
+        let fill_paint = Paint::builder()
+            .color(STRIPE_COLOR)
+            .anti_alias(true)
+            .build();
 
         picture.add_command(DrawCommand::Rect {
             rect,
@@ -332,9 +328,11 @@ impl RenderOverflowIndicator {
         });
 
         // Add red border for emphasis
-        let border_paint = Paint::stroke(BORDER_COLOR)
-            .with_stroke(flui_engine::Stroke::new(2.0))
-            .with_anti_alias(true);
+        let border_paint = Paint::builder()
+            .color(BORDER_COLOR)
+            .stroke(flui_engine::Stroke::new(2.0))
+            .anti_alias(true)
+            .build();
 
         picture.add_command(DrawCommand::Rect {
             rect,

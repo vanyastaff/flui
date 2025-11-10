@@ -144,10 +144,9 @@ impl SingleRender for RenderPhysicalModel {
         let mut picture = PictureLayer::new();
         let size = self.size;
 
-        let paint = Paint {
-            color: self.color,
-            ..Default::default()
-        };
+        let paint = Paint::builder()
+            .color(self.color)
+            .build();
 
         match self.shape {
             PhysicalShape::Rectangle => {

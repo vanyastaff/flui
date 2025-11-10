@@ -198,7 +198,10 @@ impl RenderDecoratedBox {
         position: BorderPosition,
         border_radius: Option<f32>,
     ) {
-        let paint = Paint::stroke(side.color).with_stroke(flui_engine::Stroke::new(side.width));
+        let paint = Paint::builder()
+            .color(side.color)
+            .stroke(flui_engine::Stroke::new(side.width))
+            .build();
 
         // If we have rounded corners, draw using rounded rect
         if let Some(radius) = border_radius {
