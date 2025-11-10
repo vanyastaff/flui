@@ -512,6 +512,135 @@ Comprehensive documentation is available in:
 - `crates/flui_core/examples/simplified_view.rs` - Modern View API example
 - `crates/flui_core/examples/thread_safe_hooks.rs` - Thread-safety demonstration
 
+## Asset Management (flui-assets)
+
+FLUI provides a high-performance asset management system in the `flui-assets` crate for loading and caching images, fonts, and other resources.
+
+### Architecture
+
+The asset system uses a **Clean Architecture + Performance** approach:
+
+- **Generic `Asset<T>` trait**: Type-safe, extensible system for any asset type
+- **High-performance caching**: Moka-based cache with TinyLFU eviction (lock-free, async)
+- **Interned keys**: 4-byte `AssetKey` using lasso for fast hashing and comparison
+- **Arc-based handles**: Efficient shared ownership with weak references
+- **Multiple loaders**: File, memory, and network sources (network requires feature flag)
+- **Async I/O**: Non-blocking loading with tokio
+
+### Basic Usage
+
+```rust
+use flui_assets::{AssetRegistry, ImageAsset, FontAsset};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Get the global registry
+    let registry = AssetRegistry::global();
+
+    // Load an image (requires 'images' feature)
+    let image = ImageAsset::file("assets/logo.png");
+    let handle = registry.load(image).await?;
+    println!("Loaded: {}x{}", handle.width(), handle.height());
+
+    // Load a font
+    let font = FontAsset::file("assets/Roboto-Regular.ttf");
+    let font_handle = registry.load(font).await?;
+    println!("Font loaded: {} bytes", font_handle.bytes.len());
+
+    // Subsequent loads use the cache
+    let image2 = ImageAsset::file("assets/logo.png");
+    let handle2 = registry.load(image2).await?; // Cache hit!
+
+    Ok(())
+}
+```
+
+### Adding New Asset Types
+
+To add a new asset type, implement the `Asset` trait:
+
+```rust
+use flui_assets::core::{Asset, AssetMetadata};
+use flui_assets::types::AssetKey;
+use flui_assets::error::AssetError;
+
+pub struct AudioAsset {
+    path: String,
+}
+
+impl Asset for AudioAsset {
+    type Data = AudioData;  // Your audio data type
+    type Key = AssetKey;
+    type Error = AssetError;
+
+    fn key(&self) -> AssetKey {
+        AssetKey::new(&self.path)
+    }
+
+    async fn load(&self) -> Result<AudioData, AssetError> {
+        // Load and decode audio file
+        let bytes = tokio::fs::read(&self.path).await?;
+        Ok(AudioData::from_bytes(bytes)?)
+    }
+
+    fn metadata(&self) -> Option<AssetMetadata> {
+        Some(AssetMetadata {
+            format: Some("MP3".to_string()),
+            ..Default::default()
+        })
+    }
+}
+```
+
+The cache, registry, and loaders automatically work with your new asset type!
+
+### Feature Flags
+
+```toml
+[dependencies]
+flui-assets = { version = "0.1", features = ["images", "network"] }
+```
+
+Available features:
+- `images` - Enable image loading (PNG, JPEG, GIF, WebP, etc.)
+- `bundles` - Asset bundling and manifest support
+- `network` - Network-based asset loading via HTTP
+- `hot-reload` - File watching for development
+- `mmap-fonts` - Memory-mapped font loading (performance optimization)
+- `parallel-decode` - Parallel image/video decoding with rayon
+
+### Loaders
+
+**FileLoader** - Load from filesystem:
+```rust
+use flui_assets::BytesFileLoader;
+
+let loader = BytesFileLoader::new("assets");
+let bytes = loader.load_bytes("logo.png").await?;
+let text = loader.load_string("config.json").await?;
+```
+
+**MemoryLoader** - Load from in-memory storage:
+```rust
+use flui_assets::MemoryLoader;
+
+let loader = MemoryLoader::new();
+loader.insert(AssetKey::new("data"), vec![1, 2, 3, 4, 5]);
+
+let data = loader.load(&key).await?;
+```
+
+### Examples
+
+- `crates/flui_assets/examples/basic_usage.rs` - Demonstrates core features
+
+### Performance Notes
+
+- **Cache**: Uses Moka's TinyLFU algorithm for better hit rates than LRU
+- **Keys**: Interned strings reduce memory and speed up comparisons (4 bytes vs 24+)
+- **Handles**: Arc-based for cheap cloning, weak references prevent cache bloat
+- **Async**: All I/O is non-blocking for maximum concurrency
+
 ## Git Workflow
 
 ### Commit Message Format

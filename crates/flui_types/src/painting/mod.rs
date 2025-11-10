@@ -8,7 +8,6 @@ pub mod canvas;
 pub mod clipping;
 pub mod effects;
 pub mod image;
-pub mod image_provider;
 pub mod path;
 pub mod shader;
 
@@ -31,9 +30,6 @@ pub use effects::{
     StrokeOptions,
 };
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
-pub use image_provider::{
-    AssetImage, FileImage, ImageError, ImageProvider, ImageResult, MemoryImage, NetworkImage,
-    ResolvedImageProvider, TransformedImageProvider,
-};
 pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};
+
