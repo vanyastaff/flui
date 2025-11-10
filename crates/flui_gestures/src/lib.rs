@@ -32,11 +32,21 @@ pub mod arena;
 pub mod detector;
 pub mod recognizers;
 
+// Re-export key types at crate root for convenience
+pub use arena::{GestureArena, GestureArenaMember, GestureDisposition, PointerId};
+pub use detector::GestureDetector;
+pub use recognizers::{
+    DragGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer,
+};
+
 
 pub mod prelude {
     //! Commonly used types and traits
     pub use crate::arena::*;
     pub use crate::detector::*;
-    pub use crate::recognizers::tap::*;
+    pub use crate::recognizers::{
+        drag::*, long_press::*, tap::*, DragGestureRecognizer, LongPressGestureRecognizer,
+        TapGestureRecognizer,
+    };
 }
 

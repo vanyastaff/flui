@@ -414,6 +414,12 @@ impl DragGestureRecognizer {
             DragAxis::Free => velocity.distance(),
         }
     }
+
+    /// Check if velocity is sufficient for a fling gesture
+    pub fn is_fling(&self, velocity: &Velocity) -> bool {
+        let speed = velocity.pixels_per_second.distance();
+        speed >= self.min_fling_velocity
+    }
 }
 
 impl GestureRecognizer for DragGestureRecognizer {
