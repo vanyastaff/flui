@@ -19,7 +19,11 @@
       "Bash(timeout 60 cargo run:*)",
       "Bash(git restore:*)",
       "Bash(timeout 10 cargo run:*)",
-      "Bash(RUST_LOG=debug timeout 5 cargo run:*)"
+      "Bash(RUST_LOG=debug timeout 5 cargo run:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "mcp__ide__getDiagnostics",
+      "Bash(mkdir:*)"
     ],
     "deny": [],
     "ask": []
