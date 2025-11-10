@@ -224,23 +224,25 @@ mod tests {
 
     #[test]
     fn test_mark_dirty() {
+        use crate::ElementId;
         let paint = PaintPipeline::new();
 
         assert!(!paint.has_dirty());
 
-        paint.mark_dirty(1);
+        paint.mark_dirty(ElementId::new(1));
 
         assert!(paint.has_dirty());
-        assert!(paint.is_dirty(1));
-        assert!(!paint.is_dirty(2));
+        assert!(paint.is_dirty(ElementId::new(1)));
+        assert!(!paint.is_dirty(ElementId::new(2)));
     }
 
     #[test]
     fn test_dirty_count() {
+        use crate::ElementId;
         let paint = PaintPipeline::new();
 
-        paint.mark_dirty(1);
-        paint.mark_dirty(2);
+        paint.mark_dirty(ElementId::new(1));
+        paint.mark_dirty(ElementId::new(2));
 
         assert_eq!(paint.dirty_count(), 2);
     }
@@ -259,9 +261,10 @@ mod tests {
 
     #[test]
     fn test_clear_dirty() {
+        use crate::ElementId;
         let mut paint = PaintPipeline::new();
 
-        paint.mark_dirty(1);
+        paint.mark_dirty(ElementId::new(1));
         paint.clear_dirty();
 
         assert!(!paint.has_dirty());

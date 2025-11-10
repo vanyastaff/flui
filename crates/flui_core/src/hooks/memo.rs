@@ -533,7 +533,7 @@ mod tests {
 
         // Create a memo that tries to call itself recursively
         // We need to use Arc<Mutex<Option<Memo<i32>>>> to allow self-reference
-        let memo_cell = Arc::new(Mutex::new(None));
+        let memo_cell: Arc<Mutex<Option<Memo<i32>>>> = Arc::new(Mutex::new(None));
         let memo_cell_clone = Arc::clone(&memo_cell);
 
         let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {
@@ -557,7 +557,7 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let memo_cell = Arc::new(Mutex::new(None));
+        let memo_cell: Arc<Mutex<Option<Memo<i32>>>> = Arc::new(Mutex::new(None));
         let memo_cell_clone = Arc::clone(&memo_cell);
 
         let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {

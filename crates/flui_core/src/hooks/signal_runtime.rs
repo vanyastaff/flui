@@ -395,7 +395,7 @@ mod tests {
     fn test_update() {
         SIGNAL_RUNTIME.with(|runtime| {
             let id = runtime.create_signal(5i32);
-            runtime.update(id, |n| n * 2);
+            runtime.update(id, |n: i32| n * 2);
             assert_eq!(runtime.get::<i32>(id), 10);
         });
     }
