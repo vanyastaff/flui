@@ -3,11 +3,12 @@
 //! This RenderObject wraps a child and listens for pointer events,
 //! calling the appropriate callbacks when events occur.
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, PointerListenerLayer};
 use flui_types::events::{PointerEvent, PointerEventHandler};
-use flui_types::{constraints::BoxConstraints, Offset, Rect, Size};
+use flui_types::{Offset, Rect, Size};
 use std::sync::Arc;
 
 /// Pointer event callbacks
@@ -168,16 +169,12 @@ impl RenderPointerListener {
     }
 }
 
-impl SingleRender for RenderPointerListener {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderPointerListener {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child with same constraints
         let size = tree.layout_child(child_id, constraints);
 
@@ -187,7 +184,10 @@ impl SingleRender for RenderPointerListener {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Paint child first
         let child_layer = tree.paint_child(child_id, offset);
 
@@ -200,6 +200,14 @@ impl SingleRender for RenderPointerListener {
         // Wrap in PointerListenerLayer for hit testing
         Box::new(PointerListenerLayer::new(child_layer, handler, bounds))
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -261,5 +269,13 @@ mod tests {
         assert!(callbacks.on_pointer_up.is_some());
         assert!(callbacks.on_pointer_move.is_some());
         assert!(callbacks.on_pointer_cancel.is_some());
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

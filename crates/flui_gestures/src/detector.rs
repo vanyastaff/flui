@@ -3,7 +3,7 @@
 //! Based on Flutter's GestureDetector. Wraps a child widget and provides
 //! callbacks for various pointer events.
 
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{AnyView, BuildContext, IntoElement, RenderBuilder, View};
 use flui_rendering::objects::PointerCallbacks;
 use flui_types::events::{PointerEvent, PointerEventData};
 use std::sync::Arc;
@@ -138,10 +138,8 @@ impl View for GestureDetector {
         // Return RenderPointerListener with child
         // The RenderPointerListener will create PointerListenerLayer
         // which registers hit test handlers with EventRouter
-        (
-            flui_rendering::objects::RenderPointerListener::new(callbacks),
-            Some(self.child),
-        )
+        RenderBuilder::single(flui_rendering::objects::RenderPointerListener::new(callbacks))
+            .with_child(self.child)
     }
 }
 

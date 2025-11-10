@@ -120,7 +120,7 @@ pub use objects::{
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::{LeafRender, MultiRender, RenderFlags, RenderState, SingleRender};
+    pub use crate::{Render, RenderFlags, RenderState};
 
     pub use crate::objects::*;
 }

@@ -3,8 +3,9 @@
 //! A viewport shows a subset of large content through a fixed-size window.
 //! It applies an offset to its child to show different portions of the content.
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::layer::{BoxedLayer, ClipRectLayer, OffsetLayer};
 use flui_types::layout::Axis;
 use flui_types::{BoxConstraints, Offset, Rect, Size};
@@ -84,15 +85,12 @@ impl RenderViewport {
     }
 }
 
-impl SingleRender for RenderViewport {
-    type Metadata = ();
+impl Render for RenderViewport {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Calculate child constraints (infinite in scroll direction)
         let child_constraints = self.calculate_child_constraints(constraints);
 
@@ -114,7 +112,10 @@ impl SingleRender for RenderViewport {
         self.viewport_size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Calculate paint offset for child
         let paint_offset = self.calculate_paint_offset();
         let child_offset = offset + paint_offset;
@@ -141,8 +142,12 @@ impl SingleRender for RenderViewport {
         }
     }
 
-    fn metadata(&self) -> Option<&dyn std::any::Any> {
-        None
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
     }
 }
 

@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -306,7 +306,7 @@ impl Default for Flexible {
 // Implement View trait - Simplified API
 impl View for Flexible {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderFlexItem::new(FlexItemMetadata {
+        RenderBuilder::single(RenderFlexItem::new(FlexItemMetadata {
             flex: self.flex,
             fit: self.fit,
         }))

@@ -4,7 +4,7 @@
 //! potentially causing the child to overflow the widget's bounds.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderSizedOverflowBox;
@@ -367,7 +367,7 @@ impl View for SizedOverflowBox {
         };
         render.alignment = self.alignment;
 
-        SingleRenderBuilder::new(render).with_optional_child(self.child)
+        RenderBuilder::single(render).with_optional_child(self.child)
     }
 }
 

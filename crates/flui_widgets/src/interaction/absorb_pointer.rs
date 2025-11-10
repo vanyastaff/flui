@@ -23,7 +23,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAbsorbPointer;
 
@@ -254,7 +254,7 @@ mod tests {
 // Implement View trait
 impl View for AbsorbPointer {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderAbsorbPointer::new(self.absorbing))
+        RenderBuilder::single(RenderAbsorbPointer::new(self.absorbing))
             .with_optional_child(self.child)
     }
 }

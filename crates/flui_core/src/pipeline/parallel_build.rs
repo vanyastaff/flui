@@ -312,7 +312,28 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
 mod tests {
     use super::*;
     use crate::element::{Element, RenderElement};
-    use crate::render::LeafRender;
+    use crate::render::{Arity, LayoutContext, PaintContext, Render};
+
+    #[derive(Debug)]
+    struct MockRender;
+
+    impl Render for MockRender {
+        fn layout(&mut self, _ctx: &LayoutContext) -> flui_types::Size {
+            flui_types::Size::new(100.0, 100.0)
+        }
+
+        fn paint(&self, _ctx: &PaintContext) -> flui_engine::BoxedLayer {
+            Box::new(flui_engine::ContainerLayer::new())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn arity(&self) -> Arity {
+            Arity::Exact(0)
+        }
+    }
 
     fn create_test_tree() -> Arc<RwLock<ElementTree>> {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
@@ -331,7 +352,7 @@ mod tests {
 
         // Helper to create a simple render element
         fn create_render_elem() -> Element {
-            Element::Render(RenderElement::new(Box::new(LeafRender)))
+            Element::Render(RenderElement::new(Box::new(MockRender)))
         }
 
         // Root

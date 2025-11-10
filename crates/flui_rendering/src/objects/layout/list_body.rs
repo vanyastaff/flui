@@ -1,9 +1,11 @@
 //! RenderListBody - simple scrollable list layout
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::MultiRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{layer::pool, BoxedLayer};
-use flui_types::{constraints::BoxConstraints, Axis, Offset, Size};
+use flui_types::{Axis, Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// RenderObject that arranges children in a simple scrollable list
 ///
@@ -74,16 +76,12 @@ impl Default for RenderListBody {
     }
 }
 
-impl MultiRender for RenderListBody {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderListBody {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_ids: &[ElementId],
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let constraints = ctx.constraints;
         if child_ids.is_empty() {
             self.child_sizes.clear();
             return constraints.smallest();
@@ -150,7 +148,10 @@ impl MultiRender for RenderListBody {
         }
     }
 
-    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let offset = ctx.offset;
         let mut container = pool::acquire_container();
 
         let mut current_offset = 0.0_f32;
@@ -175,6 +176,14 @@ impl MultiRender for RenderListBody {
 
         Box::new(container)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -224,5 +233,13 @@ mod tests {
         let mut list = RenderListBody::default();
         list.set_spacing(8.0);
         assert_eq!(list.spacing, 8.0);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable
+    }
     }
 }

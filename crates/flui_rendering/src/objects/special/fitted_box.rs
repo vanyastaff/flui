@@ -1,7 +1,8 @@
 //! RenderFittedBox - scales and positions child_id according to BoxFit
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
 use flui_types::{
     constraints::BoxConstraints, layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size,
@@ -167,16 +168,12 @@ impl Default for RenderFittedBox {
 
 // ===== RenderObject Implementation =====
 
-impl SingleRender for RenderFittedBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderFittedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Our size is determined by constraints (we try to be as large as possible)
         let size = constraints.biggest();
 
@@ -188,7 +185,10 @@ impl SingleRender for RenderFittedBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Get child_id layer and calculate fit
         // TODO: Apply transform for scaling based on self.data.calculate_fit()
         // For now, just return child_id layer as-is
@@ -196,6 +196,14 @@ impl SingleRender for RenderFittedBox {
 
         (tree.paint_child(child_id, offset)) as _
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -305,5 +313,13 @@ mod tests {
         let fitted = RenderFittedBox::default();
         assert_eq!(fitted.fit, BoxFit::Contain);
         assert_eq!(fitted.alignment, Alignment::CENTER);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

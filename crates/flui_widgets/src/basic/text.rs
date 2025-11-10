@@ -42,7 +42,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{IntoElement, LeafRenderBuilder, View};
+use flui_core::view::{IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::{ParagraphData, RenderParagraph};
 use flui_types::{
@@ -317,7 +317,7 @@ impl View for Text {
         data.soft_wrap = self.soft_wrap;
 
         // Create and return RenderParagraph via LeafRenderBuilder
-        LeafRenderBuilder::new(RenderParagraph::new(data))
+        RenderBuilder::leaf(RenderParagraph::new(data))
     }
 }
 

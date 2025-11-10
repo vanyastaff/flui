@@ -1,9 +1,10 @@
 //! RenderPositionedBox - positions child_id with explicit coordinates
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that positions child_id with explicit coordinates
 ///
@@ -85,16 +86,12 @@ impl Default for RenderPositionedBox {
     }
 }
 
-impl SingleRender for RenderPositionedBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderPositionedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Calculate child_id constraints based on positioning
         let child_constraints = if let (Some(left), Some(right)) = (self.left, self.right) {
             // Width determined by left and right
@@ -124,7 +121,10 @@ impl SingleRender for RenderPositionedBox {
         tree.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate paint offset based on positioning
@@ -133,6 +133,14 @@ impl SingleRender for RenderPositionedBox {
         // Use TransformLayer to position child_id
         Box::new(TransformLayer::translate(child_layer, offset))
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -176,5 +184,13 @@ mod tests {
         let mut positioned = RenderPositionedBox::new();
         positioned.set_top(Some(25.0));
         assert_eq!(positioned.top, Some(25.0));
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

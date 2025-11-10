@@ -184,6 +184,10 @@ impl crate::render::Render for EmptyRender {
         Box::new(flui_engine::ContainerLayer::new())
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn arity(&self) -> crate::render::Arity {
         crate::render::Arity::Exact(0)
     }

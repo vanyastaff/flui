@@ -1,9 +1,10 @@
 //! RenderColoredBox - simple solid color box
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{constraints::BoxConstraints, Color, Offset, Rect, Size};
+use flui_types::{Color, Offset, Rect, Size};
 
 /// RenderObject that paints a solid color background
 ///
@@ -51,16 +52,12 @@ impl Default for RenderColoredBox {
     }
 }
 
-impl SingleRender for RenderColoredBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderColoredBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // SingleArity always has exactly one child
         // Pass through constraints
         let size = tree.layout_child(child_id, constraints);
@@ -69,7 +66,10 @@ impl SingleRender for RenderColoredBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         #[cfg(debug_assertions)]
         tracing::debug!(
             "RenderColoredBox::paint: color={:?}, size={:?}, offset={:?}",
@@ -109,6 +109,14 @@ impl SingleRender for RenderColoredBox {
 
         Box::new(offset_layer)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -132,5 +140,13 @@ mod tests {
         let mut colored = RenderColoredBox::new(Color::RED);
         colored.set_color(Color::GREEN);
         assert_eq!(colored.color, Color::GREEN);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

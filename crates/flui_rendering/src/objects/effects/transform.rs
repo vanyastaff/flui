@@ -1,9 +1,10 @@
 //! RenderTransform - applies matrix transformation to child
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, Transform, TransformLayer};
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that applies a transformation to its child
 ///
@@ -55,27 +56,34 @@ impl RenderTransform {
     }
 }
 
-impl SingleRender for RenderTransform {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderTransform {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child with same constraints (transform doesn't affect layout)
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Capture child layer
         let child_layer = tree.paint_child(child_id, offset);
 
         // Wrap in TransformLayer
         Box::new(TransformLayer::new(child_layer, self.transform))
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -101,5 +109,13 @@ mod tests {
         let mut transform = RenderTransform::new(Transform::Translate(Offset::ZERO));
         transform.set_transform(Transform::Rotate(1.5));
         assert!(matches!(transform.transform, Transform::Rotate(_)));
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

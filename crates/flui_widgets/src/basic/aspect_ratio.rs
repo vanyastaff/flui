@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAspectRatio;
 
@@ -228,7 +228,7 @@ impl Default for AspectRatio {
 // Implement View for AspectRatio - New architecture
 impl View for AspectRatio {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderAspectRatio::new(self.aspect_ratio))
+        RenderBuilder::single(RenderAspectRatio::new(self.aspect_ratio))
             .with_optional_child(self.child)
     }
 }

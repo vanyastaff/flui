@@ -162,6 +162,24 @@ impl RenderNode {
         self.render.debug_name()
     }
 
+    /// Downcast render object to access metadata
+    ///
+    /// Allows parent render objects to downcast children to access metadata.
+    /// Used by layouts like Flex and Stack to query child-specific metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Access FlexItemMetadata from child
+    /// if let Some(flex_item) = node.as_any().downcast_ref::<RenderFlexItem>() {
+    ///     let flex_factor = flex_item.metadata.flex;
+    ///     // Use flex factor in layout calculations...
+    /// }
+    /// ```
+    pub fn as_any(&self) -> &dyn std::any::Any {
+        self.render.as_any()
+    }
+
     /// Get children reference
     ///
     /// Returns a reference to the children enum.

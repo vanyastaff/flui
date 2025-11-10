@@ -26,6 +26,7 @@ use flui_types::{
 /// ```rust,ignore
 /// use flui_rendering::objects::layout::RenderFlex;
 /// use flui_types::Axis;
+use flui_types::constraints::BoxConstraints;
 ///
 /// let mut flex = RenderFlex::row();
 /// ```
@@ -226,23 +227,21 @@ impl Render for RenderFlex {
             // Check if child has FlexItemMetadata (via RenderFlexItem wrapper)
             if let Some(element) = tree.get(child) {
                 if let Some(render_node_guard) = element.render_object() {
-                    // Try to access FlexItemMetadata via the metadata() method
-                    if let Some(metadata_any) = render_node_guard.metadata() {
-                        // Downcast to FlexItemMetadata
-                        if let Some(flex_meta) =
-                            metadata_any.downcast_ref::<super::flex_item::FlexItemMetadata>()
-                        {
-                            if flex_meta.is_flexible() {
-                                // Child is flexible
-                                flexible_children.push((
-                                    index,
-                                    child,
-                                    flex_meta.flex,
-                                    flex_meta.fit,
-                                ));
-                                total_flex += flex_meta.flex;
-                                continue;
-                            }
+                    // Try to downcast to RenderFlexItem to access metadata
+                    if let Some(flex_item) =
+                        render_node_guard.as_any().downcast_ref::<super::flex_item::RenderFlexItem>()
+                    {
+                        let flex_meta = &flex_item.metadata;
+                        if flex_meta.is_flexible() {
+                            // Child is flexible
+                            flexible_children.push((
+                                index,
+                                child,
+                                flex_meta.flex,
+                                flex_meta.fit,
+                            ));
+                            total_flex += flex_meta.flex;
+                            continue;
                         }
                     }
                 }
@@ -525,6 +524,10 @@ impl Render for RenderFlex {
         }
 
         Box::new(container)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
     fn arity(&self) -> Arity {

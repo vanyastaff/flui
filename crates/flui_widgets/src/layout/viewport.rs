@@ -3,7 +3,7 @@
 //! Based on Flutter's Viewport. Shows a portion of content through a
 //! fixed-size window, applying an offset to show different parts.
 
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{AnyView, BuildContext, IntoElement, RenderBuilder, View};
 use flui_rendering::objects::RenderViewport;
 use flui_types::layout::Axis;
 use flui_types::Offset;
@@ -107,7 +107,7 @@ impl View for Viewport {
         let mut render = RenderViewport::new(self.axis, self.offset);
         render.set_clip(self.clip);
 
-        (render, Some(self.child))
+        RenderBuilder::single(render).with_child(self.child)
     }
 }
 

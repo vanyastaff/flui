@@ -23,7 +23,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderIgnorePointer;
 
@@ -254,7 +254,7 @@ mod tests {
 // Implement View trait
 impl View for IgnorePointer {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderIgnorePointer::new(self.ignoring))
+        RenderBuilder::single(RenderIgnorePointer::new(self.ignoring))
             .with_optional_child(self.child)
     }
 }

@@ -1,9 +1,10 @@
 //! RenderAlign - aligns child within available space
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Alignment, Offset, Size};
+use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject that aligns its child within the available space
 ///
@@ -97,16 +98,12 @@ impl Default for RenderAlign {
     }
 }
 
-impl SingleRender for RenderAlign {
-    /// No metadata needed for RenderAlign
-    type Metadata = ();
+impl Render for RenderAlign {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child with loose constraints to get its natural size
         // Loose constraints allow the child to be smaller than max constraints
         let child_size = tree.layout_child(child_id, constraints.loosen());
@@ -138,7 +135,10 @@ impl SingleRender for RenderAlign {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Use cached values from layout phase
         let size = self.size;
         let child_size = self.child_size;
@@ -169,6 +169,14 @@ impl SingleRender for RenderAlign {
             child_layer
         }
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -211,5 +219,13 @@ mod tests {
         align.set_height_factor(Some(1.5));
         assert_eq!(align.width_factor, Some(2.0));
         assert_eq!(align.height_factor, Some(1.5));
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

@@ -407,6 +407,33 @@ pub trait Render: Send + Sync + Debug + 'static {
         None
     }
 
+    /// Downcast to Any for metadata access
+    ///
+    /// Allows parent render objects to downcast children to access metadata.
+    /// This is used by layouts like Flex and Stack to query child-specific metadata
+    /// (e.g., FlexItemMetadata, PositionedMetadata).
+    ///
+    /// # Implementation
+    ///
+    /// All implementations should simply return `self`:
+    ///
+    /// ```rust,ignore
+    /// fn as_any(&self) -> &dyn std::any::Any {
+    ///     self
+    /// }
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Parent accessing child metadata
+    /// if let Some(flex_item) = child_render.as_any().downcast_ref::<RenderFlexItem>() {
+    ///     let flex = flex_item.metadata.flex;
+    ///     // Use flex factor...
+    /// }
+    /// ```
+    fn as_any(&self) -> &dyn std::any::Any;
+
     /// Debug name for diagnostics
     ///
     /// Returns a human-readable name for this render object.

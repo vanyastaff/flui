@@ -291,6 +291,10 @@ impl Render for RenderParagraph {
         result
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn arity(&self) -> Arity {
         Arity::Exact(0) // Leaf render - no children
     }

@@ -34,7 +34,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
@@ -302,7 +302,7 @@ impl View for DecoratedBox {
         let child = self
             .child
             .or_else(|| Some(Box::new(crate::SizedBox::new())));
-        SingleRenderBuilder::new(RenderDecoratedBox::with_position(
+        RenderBuilder::single(RenderDecoratedBox::with_position(
             self.decoration.clone(),
             self.position,
         ))
@@ -402,7 +402,7 @@ macro_rules! decorated_box {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::RenderBuilder;
     use flui_rendering::RenderPadding;
     use flui_types::styling::{BorderRadius, BoxShadow, Gradient, LinearGradient, TileMode};
     use flui_types::{Alignment, Color, EdgeInsets, Offset};
@@ -413,7 +413,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

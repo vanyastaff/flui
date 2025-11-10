@@ -1,9 +1,10 @@
 //! RenderOffstage - hides widget from display
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{layer::pool, BoxedLayer};
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that hides its child from display
 ///
@@ -45,16 +46,12 @@ impl Default for RenderOffstage {
     }
 }
 
-impl SingleRender for RenderOffstage {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderOffstage {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // SingleArity always has exactly one child - layout it to maintain state
         let child_size = tree.layout_child(child_id, constraints);
 
@@ -68,7 +65,10 @@ impl SingleRender for RenderOffstage {
         }
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Don't paint if offstage
         if !self.offstage {
             tree.paint_child(child_id, offset)
@@ -77,6 +77,14 @@ impl SingleRender for RenderOffstage {
             Box::new(pool::acquire_container())
         }
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -103,5 +111,13 @@ mod tests {
         let mut offstage = RenderOffstage::new(true);
         offstage.set_offstage(false);
         assert!(!offstage.offstage);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

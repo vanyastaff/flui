@@ -29,8 +29,8 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::BoxedLayer;
 use flui_types::{constraints::BoxConstraints, painting::Clip, Offset, Size};
 
@@ -120,16 +120,12 @@ impl<S: ClipShape> RenderClip<S> {
     }
 }
 
-impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
-    /// No metadata needed
-    type Metadata = ();
+impl<S: ClipShape + 'static> Render for RenderClip<S> {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child_id with same constraints (pass-through)
         let size = tree.layout_child(child_id, constraints);
         // Cache size for paint
@@ -137,7 +133,10 @@ impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // If no clipping needed, just return child_id layer
         if !self.clip_behavior.clips() {
             return tree.paint_child(child_id, offset);
@@ -153,6 +152,14 @@ impl<S: ClipShape + 'static> SingleRender for RenderClip<S> {
 
         // Let the shape create its specific clip layer
         self.shape.create_clip_layer(child_layer, size)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
     }
 }
 

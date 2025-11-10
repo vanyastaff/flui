@@ -3,10 +3,11 @@
 //! This render object applies a shader (gradient, pattern, etc.) as a mask
 //! to its child_id, controlling which parts are visible.
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, painting::BlendMode, Offset, Size};
+use flui_types::{painting::BlendMode, Offset, Size};
 
 // ===== Data Structure =====
 /// FIXME: This is a placeholder structure for shader mask data. All types should be in flui_types.
@@ -128,21 +129,20 @@ impl RenderShaderMask {
 
 // ===== RenderObject Implementation =====
 
-impl SingleRender for RenderShaderMask {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderShaderMask {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child_id with same constraints
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Capture child_id layer
         // Note: Full shader masking requires compositor support
         // For now, we'll paint child_id normally
@@ -153,6 +153,14 @@ impl SingleRender for RenderShaderMask {
 
         (tree.paint_child(child_id, offset)) as _
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 // ===== Tests =====
@@ -235,5 +243,13 @@ mod tests {
             }
             _ => panic!("Expected radial gradient"),
         }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

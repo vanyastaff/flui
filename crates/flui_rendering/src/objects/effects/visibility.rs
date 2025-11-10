@@ -2,10 +2,11 @@
 //!
 //! More advanced than RenderOffstage, supports maintaining size, state, and other properties.
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{layer::pool, BoxedLayer};
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that controls visibility with fine-grained options
 ///
@@ -94,16 +95,12 @@ impl Default for RenderVisibility {
     }
 }
 
-impl SingleRender for RenderVisibility {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderVisibility {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child if visible OR if we need to maintain state/size
         let should_layout = self.visible || self.maintain_state || self.maintain_size;
 
@@ -127,7 +124,10 @@ impl SingleRender for RenderVisibility {
         }
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Only paint if visible
         if self.visible {
             tree.paint_child(child_id, offset)
@@ -140,6 +140,14 @@ impl SingleRender for RenderVisibility {
     // Note: In a full implementation, you would also override:
     // - hit_test() - to control interactivity based on maintain_interactivity
     // - visit_children_for_semantics() - to control semantics based on maintain_semantics
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -174,5 +182,13 @@ mod tests {
         assert!(!visibility.visible);
         assert!(visibility.maintain_size);
         assert!(visibility.maintain_state);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

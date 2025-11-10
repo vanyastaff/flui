@@ -39,7 +39,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
@@ -389,7 +389,7 @@ impl View for Flex {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        MultiRenderBuilder::new(render_flex).with_children(self.children)
+        RenderBuilder::multi(render_flex).with_children(self.children)
     }
 }
 

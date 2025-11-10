@@ -3,8 +3,8 @@
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::BoxedLayer;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
@@ -70,24 +70,31 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 
 // ===== RenderObject Implementation =====
 
-impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> SingleRender for RenderAnnotatedRegion<T> {
-    /// No metadata needed
-    type Metadata = ();
+impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> Render for RenderAnnotatedRegion<T> {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child_id with same constraints (pass-through)
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // This is a pass-through - just paint child_id
         // The annotation value is used by ancestors, not painted
         tree.paint_child(child_id, offset)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
     }
 }
 

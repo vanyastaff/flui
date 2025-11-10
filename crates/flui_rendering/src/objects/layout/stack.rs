@@ -1,10 +1,12 @@
 //! RenderStack - layering container
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::MultiRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::layout::StackFit;
-use flui_types::{constraints::BoxConstraints, Alignment, Offset, Size};
+use flui_types::constraints::BoxConstraints;
+use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject for stack layout (layering)
 ///
@@ -80,16 +82,12 @@ impl Default for RenderStack {
     }
 }
 
-impl MultiRender for RenderStack {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderStack {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_ids: &[ElementId],
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let constraints = ctx.constraints;
         if child_ids.is_empty() {
             self.child_sizes.clear();
             self.child_offsets.clear();
@@ -108,13 +106,10 @@ impl MultiRender for RenderStack {
             // Check if child has PositionedMetadata (via RenderPositioned wrapper)
             let positioned_metadata = if let Some(element) = tree.get(child) {
                 if let Some(render_node_guard) = element.render_object() {
-                    if let Some(metadata_any) = render_node_guard.metadata() {
-                        metadata_any
-                            .downcast_ref::<super::positioned::PositionedMetadata>()
-                            .copied()
-                    } else {
-                        None
-                    }
+                    render_node_guard
+                        .as_any()
+                        .downcast_ref::<super::positioned::RenderPositioned>()
+                        .map(|pos| pos.metadata)
                 } else {
                     None
                 }
@@ -171,13 +166,10 @@ impl MultiRender for RenderStack {
             // Check if child has PositionedMetadata
             let positioned_metadata = if let Some(element) = tree.get(child) {
                 if let Some(render_node_guard) = element.render_object() {
-                    if let Some(metadata_any) = render_node_guard.metadata() {
-                        metadata_any
-                            .downcast_ref::<super::positioned::PositionedMetadata>()
-                            .copied()
-                    } else {
-                        None
-                    }
+                    render_node_guard
+                        .as_any()
+                        .downcast_ref::<super::positioned::RenderPositioned>()
+                        .map(|pos| pos.metadata)
                 } else {
                     None
                 }
@@ -204,7 +196,10 @@ impl MultiRender for RenderStack {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let offset = ctx.offset;
         let mut container = pool::acquire_container();
 
         // Paint children in order (first child in back, last child on top)
@@ -217,6 +212,14 @@ impl MultiRender for RenderStack {
         }
 
         Box::new(container)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable
     }
 }
 

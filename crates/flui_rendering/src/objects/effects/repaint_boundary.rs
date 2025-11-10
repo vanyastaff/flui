@@ -1,9 +1,10 @@
 //! RenderRepaintBoundary - optimization boundary for repainting
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that creates a repaint boundary
 ///
@@ -55,21 +56,20 @@ impl Default for RenderRepaintBoundary {
     }
 }
 
-impl SingleRender for RenderRepaintBoundary {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderRepaintBoundary {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // SingleArity always has exactly one child
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Paint child
         // TODO: In a full implementation with layer caching support:
         // - Create a cached layer if is_repaint_boundary is true
@@ -82,6 +82,14 @@ impl SingleRender for RenderRepaintBoundary {
         // For now, we just paint the child directly
         tree.paint_child(child_id, offset)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -111,5 +119,13 @@ mod tests {
         let mut boundary = RenderRepaintBoundary::new();
         boundary.set_is_repaint_boundary(false);
         assert!(!boundary.is_repaint_boundary);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

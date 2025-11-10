@@ -624,7 +624,7 @@ macro_rules! container {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::RenderBuilder;
     use flui_rendering::RenderPadding;
     use flui_types::Size;
 
@@ -634,7 +634,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

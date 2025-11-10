@@ -1,9 +1,10 @@
 //! RenderBaseline - aligns child based on baseline
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{constraints::BoxConstraints, typography::TextBaseline, Offset, Size};
+use flui_types::{typography::TextBaseline, Offset, Size};
 
 /// RenderObject that positions child based on baseline
 ///
@@ -60,16 +61,12 @@ impl RenderBaseline {
 
 // ===== RenderObject Implementation =====
 
-impl SingleRender for RenderBaseline {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderBaseline {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child with same constraints
         let child_size = tree.layout_child(child_id, constraints);
 
@@ -81,7 +78,10 @@ impl SingleRender for RenderBaseline {
         )
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Capture child layer with baseline offset
         let child_layer = tree.paint_child(child_id, offset);
 
@@ -89,6 +89,14 @@ impl SingleRender for RenderBaseline {
         let offset = Offset::new(0.0, self.baseline);
         Box::new(TransformLayer::translate(child_layer, offset))
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -121,5 +129,13 @@ mod tests {
 
         baseline.set_baseline_type(TextBaseline::Ideographic);
         assert_eq!(baseline.baseline_type, TextBaseline::Ideographic);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

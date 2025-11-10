@@ -1,9 +1,10 @@
 //! RenderAbsorbPointer - prevents pointer events from reaching children
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that prevents pointer events from reaching its child
 ///
@@ -50,21 +51,20 @@ impl Default for RenderAbsorbPointer {
     }
 }
 
-impl SingleRender for RenderAbsorbPointer {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderAbsorbPointer {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child with same constraints
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Paint child normally - absorbing only affects hit testing
         tree.paint_child(child_id, offset)
 
@@ -73,6 +73,14 @@ impl SingleRender for RenderAbsorbPointer {
         // 2. Return true from hit_test to absorb events
         // 3. Prevent events from propagating to child
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -103,5 +111,13 @@ mod tests {
 
         absorb.set_absorbing(true);
         assert!(absorb.absorbing());
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

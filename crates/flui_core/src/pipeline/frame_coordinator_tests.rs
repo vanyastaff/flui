@@ -22,7 +22,7 @@ mod tests {
     use super::super::{ElementTree, FrameCoordinator};
     use crate::element::{Element, ElementId, RenderElement};
     use crate::foundation::Slot;
-    use crate::render::LeafRender;
+    use crate::render::{Arity, LayoutContext, PaintContext, Render};
     use crate::BoxedLayer;
     use flui_types::constraints::BoxConstraints;
     use flui_types::{Offset, Size};
@@ -34,17 +34,24 @@ mod tests {
     // =========================================================================
 
     /// Mock render object for testing
+    #[derive(Debug)]
     struct MockRender;
 
-    impl LeafRender for MockRender {
-        type Metadata = ();
-
-        fn layout(&mut self, _constraints: BoxConstraints) -> Size {
+    impl Render for MockRender {
+        fn layout(&mut self, _ctx: &LayoutContext) -> Size {
             Size::new(100.0, 100.0)
         }
 
-        fn paint(&self, _offset: Offset) -> BoxedLayer {
+        fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
             Box::new(flui_engine::ContainerLayer::new())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn arity(&self) -> Arity {
+            Arity::Exact(0)
         }
     }
 

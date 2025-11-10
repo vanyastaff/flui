@@ -4,7 +4,7 @@
 //! Similar to Flutter's Baseline widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderBaseline;
 use flui_types::typography::TextBaseline;
@@ -196,7 +196,7 @@ impl View for Baseline {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let baseline = self.baseline.unwrap_or(0.0);
 
-        SingleRenderBuilder::new(RenderBaseline::new(baseline, self.baseline_type))
+        RenderBuilder::single(RenderBaseline::new(baseline, self.baseline_type))
             .with_optional_child(self.child)
     }
 }
@@ -244,7 +244,7 @@ impl<S: State> BaselineBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -252,7 +252,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

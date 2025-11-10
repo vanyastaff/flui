@@ -1,9 +1,10 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{constraints::BoxConstraints, Color, Offset, Size};
+use flui_types::{Color, Offset, Size};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,16 +111,12 @@ impl Default for RenderPhysicalModel {
     }
 }
 
-impl SingleRender for RenderPhysicalModel {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderPhysicalModel {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // SingleArity always has exactly one child_id
         let size = tree.layout_child(child_id, constraints);
 
@@ -129,7 +126,10 @@ impl SingleRender for RenderPhysicalModel {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Use pool for allocation efficiency
         let mut container = flui_engine::layer::pool::acquire_container();
 
@@ -181,6 +181,14 @@ impl SingleRender for RenderPhysicalModel {
 
         Box::new(container)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -242,5 +250,13 @@ mod tests {
         let mut model = RenderPhysicalModel::rectangle(4.0, Color::WHITE);
         model.set_color(Color::RED);
         assert_eq!(model.color, Color::RED);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

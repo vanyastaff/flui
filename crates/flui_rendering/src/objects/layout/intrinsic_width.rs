@@ -1,9 +1,11 @@
 //! RenderIntrinsicWidth - sizes child_id to its intrinsic width
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// RenderObject that sizes child_id to its intrinsic width
 ///
@@ -77,16 +79,12 @@ impl Default for RenderIntrinsicWidth {
     }
 }
 
-impl SingleRender for RenderIntrinsicWidth {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderIntrinsicWidth {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // SingleArity always has exactly one child_id
         // Layout child_id with infinite width to get intrinsic width
         // Get child_id's intrinsic width by giving it infinite width
@@ -116,9 +114,20 @@ impl SingleRender for RenderIntrinsicWidth {
         constraints.constrain(Size::new(width, height))
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         tree.paint_child(child_id, offset)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -165,5 +174,13 @@ mod tests {
         let mut intrinsic = RenderIntrinsicWidth::new();
         intrinsic.set_step_height(Some(4.0));
         assert_eq!(intrinsic.step_height, Some(4.0));
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

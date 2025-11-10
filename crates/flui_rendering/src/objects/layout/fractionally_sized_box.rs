@@ -1,9 +1,10 @@
 //! RenderFractionallySizedBox - sizes child_id as fraction of parent
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that sizes child_id as a fraction of available space
 ///
@@ -91,16 +92,12 @@ impl Default for RenderFractionallySizedBox {
     }
 }
 
-impl SingleRender for RenderFractionallySizedBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderFractionallySizedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Calculate target size based on factors
         let target_width = self.width_factor.map(|f| constraints.max_width * f);
         let target_height = self.height_factor.map(|f| constraints.max_height * f);
@@ -112,9 +109,20 @@ impl SingleRender for RenderFractionallySizedBox {
         tree.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         tree.paint_child(child_id, offset)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -166,5 +174,13 @@ mod tests {
         let mut fractional = RenderFractionallySizedBox::both(0.5);
         fractional.set_width_factor(Some(0.75));
         assert_eq!(fractional.width_factor, Some(0.75));
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

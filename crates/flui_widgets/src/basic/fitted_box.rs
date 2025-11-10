@@ -4,7 +4,7 @@
 //! Similar to Flutter's FittedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFittedBox;
 use flui_types::Alignment;
@@ -189,7 +189,7 @@ impl Default for FittedBox {
 // Implement View for FittedBox - New architecture
 impl View for FittedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderFittedBox::with_alignment(self.fit, self.alignment))
+        RenderBuilder::single(RenderFittedBox::with_alignment(self.fit, self.alignment))
             .with_optional_child(self.child)
     }
 }
@@ -219,7 +219,7 @@ impl<S: State> FittedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
@@ -227,7 +227,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

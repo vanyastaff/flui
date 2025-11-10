@@ -1,7 +1,8 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{layer::pool, BoxedLayer, Paint};
 use flui_types::{
     constraints::BoxConstraints,
@@ -246,16 +247,12 @@ impl RenderDecoratedBox {
 
 // ===== RenderObject Implementation =====
 
-impl SingleRender for RenderDecoratedBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderDecoratedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // SingleArity always has exactly one child
         let size = tree.layout_child(child_id, constraints);
 
@@ -265,7 +262,10 @@ impl SingleRender for RenderDecoratedBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Use pooled container for automatic return to pool on drop
         let mut container = pool::acquire_container();
         // Paint decoration in LOCAL coordinates (0, 0)
@@ -296,6 +296,14 @@ impl SingleRender for RenderDecoratedBox {
             container_layer
         }
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -406,5 +414,13 @@ mod tests {
             RenderDecoratedBox::with_position(decoration.clone(), DecorationPosition::Foreground);
         assert_eq!(decorated.decoration, decoration);
         assert_eq!(decorated.position, DecorationPosition::Foreground);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

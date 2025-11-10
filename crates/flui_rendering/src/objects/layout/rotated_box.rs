@@ -1,9 +1,11 @@
 //! RenderRotatedBox - rotates child_id by quarter turns (90°, 180°, 270°)
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{constraints::BoxConstraints, geometry::QuarterTurns, Offset, Size};
+use flui_types::{geometry::QuarterTurns, Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// RenderObject that rotates its child_id by quarter turns
 ///
@@ -61,16 +63,12 @@ impl RenderRotatedBox {
 
 // ===== RenderObject Implementation =====
 
-impl SingleRender for RenderRotatedBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderRotatedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // For odd quarter turns (90°, 270°), swap width and height constraints
         let child_constraints = if self.quarter_turns.swaps_dimensions() {
             // Manually flip constraints - swap width and height
@@ -99,7 +97,10 @@ impl SingleRender for RenderRotatedBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Calculate rotation offset based on quarter turns
         // Note: For now, this is a simplified implementation
         // TODO: Implement proper rotation transformation
@@ -132,6 +133,14 @@ impl SingleRender for RenderRotatedBox {
             child_layer
         }
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -161,5 +170,13 @@ mod tests {
 
         let rotated_270 = RenderRotatedBox::rotate_270();
         assert_eq!(rotated_270.quarter_turns, QuarterTurns::Three);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

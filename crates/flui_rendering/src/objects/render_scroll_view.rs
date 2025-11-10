@@ -3,8 +3,9 @@
 //! Handles layout of scrollable content with scroll offset state.
 //! Supports keyboard controls for scrolling.
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::layer::{BoxedLayer, ClipRectLayer, PictureLayer, ScrollableLayer};
 use flui_engine::painter::Paint;
 use flui_types::layout::Axis;
@@ -237,15 +238,12 @@ impl RenderScrollView {
     }
 }
 
-impl SingleRender for RenderScrollView {
-    type Metadata = ();
+impl Render for RenderScrollView {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Create constraints for child - infinite in scroll direction
         let child_constraints = match self.direction {
             Axis::Vertical => BoxConstraints::new(
@@ -286,7 +284,10 @@ impl SingleRender for RenderScrollView {
         self.viewport_size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Calculate child offset with scroll applied
         let child_offset = self.calculate_child_offset(offset);
 
@@ -329,8 +330,12 @@ impl SingleRender for RenderScrollView {
         }
     }
 
-    fn metadata(&self) -> Option<&dyn std::any::Any> {
-        None
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
     }
 }
 

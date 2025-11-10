@@ -1,9 +1,10 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, PictureLayer};
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// Custom painter trait
 ///
@@ -141,16 +142,12 @@ impl Default for RenderCustomPaint {
 
 // ===== RenderObject Implementation =====
 
-impl SingleRender for RenderCustomPaint {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderCustomPaint {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // SingleArity always has exactly one child_id
         // Layout child_id with our constraints
         let size = tree.layout_child(child_id, constraints);
@@ -160,7 +157,10 @@ impl SingleRender for RenderCustomPaint {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Use the size from layout phase
         let size = self.laid_out_size;
         let mut layers: Vec<BoxedLayer> = Vec::new();
@@ -189,6 +189,14 @@ impl SingleRender for RenderCustomPaint {
         }
         Box::new(container)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -252,5 +260,13 @@ mod tests {
         assert_eq!(custom.size(), Size::new(50.0, 75.0));
         assert!(custom.painter.is_none());
         assert!(custom.foreground_painter.is_some());
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

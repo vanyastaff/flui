@@ -3,8 +3,9 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
 use flui_types::{
     constraints::BoxConstraints, painting::BlendMode, painting::ImageFilter, Offset, Size,
@@ -87,21 +88,20 @@ impl RenderBackdropFilter {
 
 // ===== RenderObject Implementation =====
 
-impl SingleRender for RenderBackdropFilter {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderBackdropFilter {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child_id with same constraints
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Capture child_id layer
         // Note: Full backdrop filtering requires compositor support
         // In production, this would:
@@ -115,6 +115,14 @@ impl SingleRender for RenderBackdropFilter {
 
         (tree.paint_child(child_id, offset)) as _
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 // ===== Tests =====
@@ -148,5 +156,13 @@ mod tests {
     fn test_render_backdrop_filter_with_blend_mode() {
         let filter = RenderBackdropFilter::blur(10.0).with_blend_mode(BlendMode::Multiply);
         assert_eq!(filter.blend_mode(), BlendMode::Multiply);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

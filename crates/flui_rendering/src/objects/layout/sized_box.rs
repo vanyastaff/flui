@@ -1,9 +1,11 @@
 //! RenderSizedBox - enforces exact size constraints
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// RenderObject that enforces exact size constraints
 ///
@@ -86,16 +88,12 @@ impl Default for RenderSizedBox {
     }
 }
 
-impl SingleRender for RenderSizedBox {
-    /// No metadata needed for RenderSizedBox
-    type Metadata = ();
+impl Render for RenderSizedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Calculate our size based on explicit width/height
         // If not specified, use constraint's max (fill available space)
         let width = self.width.unwrap_or(constraints.max_width);
@@ -110,10 +108,21 @@ impl SingleRender for RenderSizedBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Pass-through: child painted at our offset
         tree.paint_child(child_id, offset)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -167,5 +176,13 @@ mod tests {
         let mut sized = RenderSizedBox::height(50.0);
         sized.set_height(Some(100.0));
         assert_eq!(sized.height, Some(100.0));
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

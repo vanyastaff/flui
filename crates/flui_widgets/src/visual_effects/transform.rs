@@ -31,7 +31,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_rendering::RenderTransform;
 use flui_types::Matrix4;
 
@@ -320,7 +320,7 @@ impl View for Transform {
             ty: m[13],
         };
 
-        SingleRenderBuilder::new(RenderTransform::new(transform)).with_optional_child(self.child)
+        RenderBuilder::single(RenderTransform::new(transform)).with_optional_child(self.child)
     }
 }
 

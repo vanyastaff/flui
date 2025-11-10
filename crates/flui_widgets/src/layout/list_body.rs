@@ -5,7 +5,7 @@
 //! are sized to their intrinsic size along the main axis.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, MultiRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderListBody;
@@ -195,7 +195,7 @@ impl View for ListBody {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
 
-        MultiRenderBuilder::new(render).with_children(self.children)
+        RenderBuilder::multi(render).with_children(self.children)
     }
 }
 

@@ -21,9 +21,10 @@
 //! ```
 
 #[cfg(debug_assertions)]
-use flui_core::element::{ElementId, ElementTree};
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 #[cfg(debug_assertions)]
-use flui_core::render::SingleRender;
+
 #[cfg(debug_assertions)]
 use flui_engine::layer::picture::DrawCommand;
 #[cfg(debug_assertions)]
@@ -33,7 +34,6 @@ use flui_engine::painter::Paint;
 #[cfg(debug_assertions)]
 use flui_engine::BoxedLayer;
 #[cfg(debug_assertions)]
-use flui_types::constraints::BoxConstraints;
 #[cfg(debug_assertions)]
 use flui_types::painting::PaintingStyle;
 #[cfg(debug_assertions)]
@@ -55,7 +55,7 @@ use flui_types::{Color, Offset, Rect, Size};
 ///
 /// # Example
 /// ```rust,ignore
-/// fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
+/// fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
 ///     let mut container = pool::acquire_container();
 ///     // ... paint children ...
 ///
@@ -342,21 +342,20 @@ impl RenderOverflowIndicator {
 }
 
 #[cfg(debug_assertions)]
-impl SingleRender for RenderOverflowIndicator {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderOverflowIndicator {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Pass through layout to child - no changes
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Paint child first
         let child_layer = tree.paint_child(child_id, offset);
 
@@ -401,6 +400,14 @@ impl SingleRender for RenderOverflowIndicator {
 
         Box::new(container)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -421,5 +428,13 @@ mod tests {
         let indicator = RenderOverflowIndicator::new(-10.0, -5.0, Size::new(100.0, 100.0));
         assert_eq!(indicator.overflow_h, 0.0);
         assert_eq!(indicator.overflow_v, 0.0);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

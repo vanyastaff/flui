@@ -16,7 +16,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_rendering::{RectShape, RenderClipRect};
 use flui_types::painting::Clip;
 
@@ -138,7 +138,7 @@ impl Default for ClipRect {
 // Implement View for ClipRect - New architecture
 impl View for ClipRect {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderClipRect::new(RectShape, self.clip_behavior))
+        RenderBuilder::single(RenderClipRect::new(RectShape, self.clip_behavior))
             .with_optional_child(self.child)
     }
 }

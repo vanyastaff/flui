@@ -1,9 +1,10 @@
 //! RenderMouseRegion - handles mouse hover events
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// Mouse hover event callbacks
 #[derive(Clone)]
@@ -86,21 +87,20 @@ impl RenderMouseRegion {
     }
 }
 
-impl SingleRender for RenderMouseRegion {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderMouseRegion {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child_id with same constraints
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Simply paint child_id - hover handling happens elsewhere
         tree.paint_child(child_id, offset)
 
@@ -109,6 +109,14 @@ impl SingleRender for RenderMouseRegion {
         // 2. Track mouse enter/exit events
         // 3. Call appropriate callbacks when hover state changes
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -176,5 +184,13 @@ mod tests {
         };
         let debug_str = format!("{:?}", callbacks);
         assert!(debug_str.contains("MouseCallbacks"));
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_rendering::RenderFractionallySizedBox;
 
 /// A widget that sizes its child to a fraction of the total available space.
@@ -209,7 +209,7 @@ impl FractionallySizedBox {
 // Implement View for FractionallySizedBox - Simplified API
 impl View for FractionallySizedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderFractionallySizedBox::new(
+        RenderBuilder::single(RenderFractionallySizedBox::new(
             self.width_factor,
             self.height_factor,
         ))
@@ -253,7 +253,7 @@ impl<S: State> FractionallySizedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -261,7 +261,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

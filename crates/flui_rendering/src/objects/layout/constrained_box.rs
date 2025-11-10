@@ -1,9 +1,11 @@
 //! RenderConstrainedBox - applies additional constraints to a child
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// RenderObject that applies additional constraints to its child
 ///
@@ -15,8 +17,7 @@ use flui_types::{constraints::BoxConstraints, Offset, Size};
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderConstrainedBox;
-/// use flui_types::constraints::BoxConstraints;
-///
+/// ///
 /// let constraints = BoxConstraints::tight_for(100.0, 100.0);
 /// let constrained = RenderConstrainedBox::new(constraints);
 /// ```
@@ -46,25 +47,32 @@ impl Default for RenderConstrainedBox {
     }
 }
 
-impl SingleRender for RenderConstrainedBox {
-    /// No metadata needed for RenderConstrainedBox
-    type Metadata = ();
+impl Render for RenderConstrainedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Enforce additional constraints by intersecting with incoming constraints
         let child_constraints = constraints.enforce(self.additional_constraints);
         tree.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Pass-through: child painted at our offset
         tree.paint_child(child_id, offset)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -95,5 +103,13 @@ mod tests {
         let constraints2 = BoxConstraints::tight(Size::new(200.0, 200.0));
         constrained.set_additional_constraints(constraints2);
         assert_eq!(constrained.additional_constraints, constraints2);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

@@ -1,9 +1,11 @@
 //! RenderLimitedBox - limits max width/height
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// RenderObject that limits maximum size when unconstrained
 ///
@@ -55,16 +57,12 @@ impl Default for RenderLimitedBox {
     }
 }
 
-impl SingleRender for RenderLimitedBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderLimitedBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Apply limits only if constraints are infinite
         let max_width = if constraints.max_width.is_infinite() {
             self.max_width
@@ -88,9 +86,20 @@ impl SingleRender for RenderLimitedBox {
         tree.layout_child(child_id, limited_constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         tree.paint_child(child_id, offset)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -123,5 +132,13 @@ mod tests {
         let mut limited = RenderLimitedBox::new(100.0, 200.0);
         limited.set_max_height(250.0);
         assert_eq!(limited.max_height, 250.0);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

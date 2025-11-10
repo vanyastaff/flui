@@ -1,9 +1,10 @@
 //! RenderIndexedStack - shows only one child by index
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::MultiRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{layer::pool, BoxedLayer};
-use flui_types::{constraints::BoxConstraints, Alignment, Offset, Size};
+use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject that shows only one child from a list
 ///
@@ -70,16 +71,12 @@ impl Default for RenderIndexedStack {
     }
 }
 
-impl MultiRender for RenderIndexedStack {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderIndexedStack {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_ids: &[ElementId],
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let constraints = ctx.constraints;
         if child_ids.is_empty() {
             self.child_sizes.clear();
             return constraints.smallest();
@@ -105,7 +102,10 @@ impl MultiRender for RenderIndexedStack {
         self.size
     }
 
-    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let offset = ctx.offset;
         let mut container = pool::acquire_container();
 
         // Only paint the selected child
@@ -124,6 +124,14 @@ impl MultiRender for RenderIndexedStack {
 
         Box::new(container)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -162,5 +170,13 @@ mod tests {
         let mut stack = RenderIndexedStack::new(Some(0));
         stack.set_alignment(Alignment::CENTER);
         assert_eq!(stack.alignment, Alignment::CENTER);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable
+    }
     }
 }

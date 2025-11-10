@@ -1,9 +1,11 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::MultiRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{layer::pool, BoxedLayer};
-use flui_types::{constraints::BoxConstraints, Axis, Offset, Size};
+use flui_types::{Axis, Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// Alignment for runs in wrap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,16 +117,12 @@ impl Default for RenderWrap {
     }
 }
 
-impl MultiRender for RenderWrap {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderWrap {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_ids: &[ElementId],
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let constraints = ctx.constraints;
         if child_ids.is_empty() {
             self.child_offsets.clear();
             return constraints.smallest();
@@ -213,7 +211,10 @@ impl MultiRender for RenderWrap {
         }
     }
 
-    fn paint(&self, tree: &ElementTree, child_ids: &[ElementId], offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_ids = ctx.children.as_slice();
+        let offset = ctx.offset;
         let mut container = pool::acquire_container();
 
         for (i, &child_id) in child_ids.iter().enumerate() {
@@ -226,6 +227,14 @@ impl MultiRender for RenderWrap {
 
         Box::new(container)
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -279,5 +288,13 @@ mod tests {
         let mut wrap = RenderWrap::default();
         wrap.set_spacing(8.0);
         assert_eq!(wrap.spacing, 8.0);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable
+    }
     }
 }

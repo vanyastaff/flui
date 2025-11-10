@@ -4,7 +4,7 @@
 //! Similar to Flutter's LimitedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderLimitedBox;
 
@@ -165,7 +165,7 @@ impl<S: State> LimitedBoxBuilder<S> {
 // Implement View for LimitedBox - New architecture
 impl View for LimitedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderLimitedBox::new(self.max_width, self.max_height))
+        RenderBuilder::single(RenderLimitedBox::new(self.max_width, self.max_height))
             .with_optional_child(self.child)
     }
 }

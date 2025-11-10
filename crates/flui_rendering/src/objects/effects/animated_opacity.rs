@@ -1,9 +1,10 @@
 //! RenderAnimatedOpacity - animated opacity transitions
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, OpacityLayer};
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::{Offset, Size};
 
 /// RenderObject that applies animated opacity to its child
 ///
@@ -67,21 +68,20 @@ impl Default for RenderAnimatedOpacity {
     }
 }
 
-impl SingleRender for RenderAnimatedOpacity {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderAnimatedOpacity {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Layout child with same constraints
         tree.layout_child(child_id, constraints)
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         // Skip painting if fully transparent
         if self.opacity <= 0.0 {
             // Return empty layer - use pool for efficiency even in error case
@@ -102,6 +102,14 @@ impl SingleRender for RenderAnimatedOpacity {
         // Wrap in OpacityLayer for partial opacity
         Box::new(OpacityLayer::new(child_layer, self.opacity))
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -157,5 +165,13 @@ mod tests {
         let mut opacity = RenderAnimatedOpacity::new(0.5, false);
         opacity.set_animating(true);
         assert!(opacity.animating);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

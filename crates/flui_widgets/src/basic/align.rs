@@ -36,7 +36,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, SingleRenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
@@ -371,7 +371,7 @@ macro_rules! align {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::LeafRenderBuilder;
+    use flui_core::view::RenderBuilder;
     use flui_rendering::RenderPadding;
     use flui_types::EdgeInsets;
 
@@ -381,7 +381,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            LeafRenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
@@ -576,7 +576,7 @@ mod tests {
 // Implement View for Align - Simplified API
 impl View for Align {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        SingleRenderBuilder::new(RenderAlign::with_factors(
+        RenderBuilder::single(RenderAlign::with_factors(
             self.alignment,
             self.width_factor,
             self.height_factor,

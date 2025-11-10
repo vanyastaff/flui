@@ -1,9 +1,11 @@
 //! RenderOverflowBox - allows child_id to overflow constraints
 
-use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::SingleRender;
+use flui_core::element::ElementId;
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{constraints::BoxConstraints, Alignment, Offset, Size};
+use flui_types::{Alignment, Offset, Size};
+use flui_types::constraints::BoxConstraints;
 
 /// RenderObject that allows child_id to overflow parent constraints
 ///
@@ -99,16 +101,12 @@ impl Default for RenderOverflowBox {
     }
 }
 
-impl SingleRender for RenderOverflowBox {
-    /// No metadata needed
-    type Metadata = ();
+impl Render for RenderOverflowBox {
 
-    fn layout(
-        &mut self,
-        tree: &ElementTree,
-        child_id: ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         // Calculate child_id constraints by overriding parent constraints
         let child_min_width = self.min_width.unwrap_or(constraints.min_width);
         let child_max_width = self.max_width.unwrap_or(constraints.max_width);
@@ -137,7 +135,10 @@ impl SingleRender for RenderOverflowBox {
         size
     }
 
-    fn paint(&self, tree: &ElementTree, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate aligned offset
@@ -152,6 +153,14 @@ impl SingleRender for RenderOverflowBox {
         // Use TransformLayer to position child_id at aligned offset
         Box::new(TransformLayer::translate(child_layer, offset))
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Variable  // Default - update if needed
+    }
+
 }
 
 #[cfg(test)]
@@ -194,5 +203,13 @@ mod tests {
         let mut overflow = RenderOverflowBox::new();
         overflow.set_alignment(Alignment::BOTTOM_RIGHT);
         assert_eq!(overflow.alignment, Alignment::BOTTOM_RIGHT);
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
+    }
     }
 }

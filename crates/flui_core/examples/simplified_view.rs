@@ -69,7 +69,7 @@ impl View for SimpleButton {
 // Mock Render Objects (for demonstration)
 // ============================================================================
 
-use flui_core::render::{LeafRender, SingleRender};
+use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::BoxedLayer;
 use flui_types::{BoxConstraints, Offset, Size};
 
@@ -78,15 +78,22 @@ struct MockTextRender {
     text: String,
 }
 
-impl LeafRender for MockTextRender {
-    type Metadata = ();
-
-    fn layout(&mut self, constraints: BoxConstraints) -> Size {
+impl Render for MockTextRender {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let constraints = ctx.constraints;
         constraints.constrain(Size::new(100.0, 20.0))
     }
 
-    fn paint(&self, _offset: Offset) -> BoxedLayer {
+    fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
         Box::new(flui_engine::ContainerLayer::new())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(0)
     }
 }
 
@@ -95,15 +102,11 @@ struct MockPaddingRender {
     padding: f32,
 }
 
-impl SingleRender for MockPaddingRender {
-    type Metadata = ();
-
-    fn layout(
-        &mut self,
-        tree: &flui_core::element::ElementTree,
-        child_id: flui_core::foundation::ElementId,
-        constraints: BoxConstraints,
-    ) -> Size {
+impl Render for MockPaddingRender {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let constraints = ctx.constraints;
         let child_size = tree.layout_child(child_id, constraints);
         Size::new(
             child_size.width + self.padding * 2.0,
@@ -111,16 +114,22 @@ impl SingleRender for MockPaddingRender {
         )
     }
 
-    fn paint(
-        &self,
-        tree: &flui_core::element::ElementTree,
-        child_id: flui_core::foundation::ElementId,
-        offset: Offset,
-    ) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        let tree = ctx.tree;
+        let child_id = ctx.children.single();
+        let offset = ctx.offset;
         tree.paint_child(
             child_id,
             Offset::new(offset.dx + self.padding, offset.dy + self.padding),
         )
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn arity(&self) -> Arity {
+        Arity::Exact(1)
     }
 }
 
