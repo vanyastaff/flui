@@ -214,15 +214,15 @@ mod tests {
 
     #[test]
     fn test_cache_key() {
-        let key1 = LayoutCacheKey::new(ElementId::new(0), BoxConstraints::tight(Size::ZERO));
-        let key2 = LayoutCacheKey::new(ElementId::new(0), BoxConstraints::tight(Size::ZERO));
+        let key1 = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
+        let key2 = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
 
         assert_eq!(key1, key2);
     }
 
     #[test]
     fn test_cache_with_child_count() {
-        let key1 = LayoutCacheKey::new(ElementId::new(0), BoxConstraints::tight(Size::ZERO));
+        let key1 = LayoutCacheKey::new(ElementId::new(1), BoxConstraints::tight(Size::ZERO));
         let key2 = key1.with_child_count(5);
 
         assert_ne!(key1, key2);
@@ -233,7 +233,10 @@ mod tests {
         let cache = layout_cache();
         cache.reset_stats(); // Clear any previous stats
 
-        let key = LayoutCacheKey::new(ElementId::new(42), BoxConstraints::tight(Size::new(100.0, 100.0)));
+        let key = LayoutCacheKey::new(
+            ElementId::new(42),
+            BoxConstraints::tight(Size::new(100.0, 100.0)),
+        );
         let result = LayoutResult::new(Size::new(50.0, 50.0));
 
         cache.insert(key, result);
@@ -324,9 +327,13 @@ mod tests {
         cache.insert(key1, LayoutResult::new(Size::ZERO));
         cache.insert(key2, LayoutResult::new(Size::ZERO));
 
+        // Moka uses background tasks - sync them
+        cache.cache.run_pending_tasks();
+
         assert_eq!(cache.entry_count(), 2);
 
         cache.clear();
+        cache.cache.run_pending_tasks();
 
         assert_eq!(cache.entry_count(), 0);
     }

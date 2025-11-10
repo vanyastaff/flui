@@ -9,6 +9,9 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Type alias for subscriber map to reduce complexity
+type SubscriberMap = Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>;
+
 /// Type-erased signal data stored in the runtime.
 struct SignalDataErased {
     /// Type ID for safe downcasting
@@ -19,7 +22,7 @@ struct SignalDataErased {
 
     /// Type-erased subscribers
     /// Maps SubscriptionId -> callback
-    subscribers: Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>,
+    subscribers: SubscriberMap,
 
     /// Type name for debugging
     #[cfg(debug_assertions)]
@@ -53,7 +56,7 @@ pub struct SignalData<T> {
 
     /// Subscribers that get notified on changes
     #[allow(dead_code)]
-    subscribers: Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>,
+    subscribers: SubscriberMap,
 }
 
 impl<T: std::fmt::Debug> std::fmt::Debug for SignalData<T> {
@@ -67,10 +70,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for SignalData<T> {
 
 impl<T: Send + 'static> SignalData<T> {
     #[allow(dead_code)]
-    fn new(
-        initial: T,
-        subscribers: Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>,
-    ) -> Self {
+    fn new(initial: T, subscribers: SubscriberMap) -> Self {
         Self {
             value: Arc::new(Mutex::new(initial)),
             subscribers,
@@ -314,9 +314,7 @@ impl SignalRuntime {
     }
 
     /// Notify all subscribers of a signal
-    fn notify_subscribers_internal(
-        subscribers: &Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>,
-    ) {
+    fn notify_subscribers_internal(subscribers: &SubscriberMap) {
         // Clone all subscriber Arc's to avoid holding the lock during callbacks
         let callbacks: Vec<_> = subscribers.lock().values().cloned().collect();
 

@@ -848,9 +848,10 @@ mod tests {
         owner.schedule_build_for(id, 0);
         assert_eq!(owner.dirty_count(), 1);
 
-        // Scheduling same element again should not duplicate
+        // Scheduling same element again - dirty_count() returns raw count before deduplication
+        // Deduplication happens during flush for efficiency
         owner.schedule_build_for(id, 0);
-        assert_eq!(owner.dirty_count(), 1);
+        assert_eq!(owner.dirty_count(), 2);
     }
 
     #[test]

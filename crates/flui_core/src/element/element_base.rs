@@ -144,6 +144,7 @@ impl ElementBase {
     /// Returns `None` for root elements
     #[inline]
     #[must_use]
+    #[allow(dead_code)] // TODO: May be needed in future
     pub fn slot(&self) -> Option<Slot> {
         self.slot
     }
@@ -298,6 +299,7 @@ impl ElementBase {
     /// Uses atomic AND operation to clear flag.
     /// Should typically only be called by the pipeline after rebuild.
     #[inline]
+    #[allow(dead_code)] // TODO: May be needed in future
     pub fn clear_dirty(&mut self) {
         self.flags.remove(ElementFlags::DIRTY);
     }
@@ -310,6 +312,7 @@ impl ElementBase {
     ///
     /// - `new_slot`: The new slot position
     #[inline]
+    #[allow(dead_code)] // TODO: May be needed in future
     pub fn update_slot(&mut self, new_slot: Option<Slot>) {
         self.slot = new_slot;
     }
@@ -354,7 +357,10 @@ mod tests {
         let mut base = ElementBase::new();
 
         // Mount
-        base.mount(Some(ElementId::new(1)), Some(crate::foundation::Slot::new(0)));
+        base.mount(
+            Some(ElementId::new(1)),
+            Some(crate::foundation::Slot::new(0)),
+        );
         assert_eq!(base.lifecycle(), ElementLifecycle::Active);
 
         // Deactivate

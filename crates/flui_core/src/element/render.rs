@@ -110,7 +110,10 @@ impl std::fmt::Debug for RenderElement {
             .field("offset", &self.offset)
             .field("parent_data", &self.parent_data.is_some())
             .field("children", &self.children)
-            .field("unmounted_children", &self.unmounted_children.as_ref().map(|c| c.len()))
+            .field(
+                "unmounted_children",
+                &self.unmounted_children.as_ref().map(|c| c.len()),
+            )
             .finish()
     }
 }

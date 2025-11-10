@@ -200,12 +200,12 @@ mod tests {
         let queue_clone = queue.clone();
 
         let handle = thread::spawn(move || {
-            for i in 0..100 {
+            for i in 1..101 {
                 queue_clone.push(ElementId::new(i), 0);
             }
         });
 
-        for i in 100..200 {
+        for i in 101..201 {
             queue.push(ElementId::new(i), 0);
         }
 

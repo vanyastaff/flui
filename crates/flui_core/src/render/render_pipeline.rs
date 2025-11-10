@@ -68,6 +68,7 @@ use crate::element::ElementTree;
 /// - `nodes_needing_paint` - Renders that need repaint
 /// - `flush_layout()` processes only dirty nodes, sorted by depth
 /// - `flush_paint()` processes only dirty nodes
+#[allow(dead_code)] // TODO: Will be used when render pipeline is refactored
 pub(crate) struct RenderPipeline {
     /// The element tree
     tree: ElementTree,
@@ -96,6 +97,7 @@ impl std::fmt::Debug for RenderPipeline {
     }
 }
 
+#[allow(dead_code)] // TODO: Will be used when render pipeline is refactored
 impl RenderPipeline {
     /// Create a new render pipeline
     ///

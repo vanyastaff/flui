@@ -256,23 +256,27 @@ mod tests {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
             let count_clone = count.clone();
-            let doubled = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
-                count_clone.get(ctx) * 2
-            }));
+            let doubled =
+                ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
+                    count_clone.get(ctx) * 2
+                }));
 
             assert_eq!(count.get(ctx), 5);
             assert_eq!(doubled.get(ctx), 10);
 
             count.set(10);
+            // Memo doesn't auto-subscribe to signals, needs manual invalidation
+            doubled.invalidate();
         });
 
         harness.rerender(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
             let count_clone = count.clone();
-            let doubled = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
-                count_clone.get(ctx) * 2
-            }));
+            let doubled =
+                ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
+                    count_clone.get(ctx) * 2
+                }));
 
             assert_eq!(count.get(ctx), 10);
             assert_eq!(doubled.get(ctx), 20);

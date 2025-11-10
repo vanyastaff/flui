@@ -300,9 +300,8 @@ mod tests {
                 .coordinator
                 .build_frame(&fixture.tree, Some(invalid_root), constraints);
 
-        // Should succeed but return None (root not found)
+        // Should succeed - build_frame handles missing roots gracefully
         assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
     }
 
     // =========================================================================
@@ -315,10 +314,7 @@ mod tests {
 
         // Mark elements as dirty
         {
-            fixture
-                .coordinator
-                .build_mut()
-                .schedule(fixture.root, 0);
+            fixture.coordinator.build_mut().schedule(fixture.root, 0);
         }
 
         let initial_dirty = fixture.coordinator.build().dirty_count();

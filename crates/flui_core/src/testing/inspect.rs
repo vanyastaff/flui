@@ -116,7 +116,7 @@ impl<'a> TreeInspector<'a> {
                     Element::Provider(_) => "Provider ",
                 };
                 let dirty = if element.is_dirty() { " [DIRTY]" } else { "" };
-                println!("  {} (ID: {}){}",type_name, id.get(), dirty);
+                println!("  {} (ID: {}){}", type_name, id.get(), dirty);
             }
         }
         println!();

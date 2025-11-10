@@ -534,7 +534,9 @@ impl Element {
     /// The guard ensures safe access through RwLock's read locking.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> Option<parking_lot::RwLockReadGuard<'_, Box<dyn crate::render::Render>>> {
+    pub fn render_object(
+        &self,
+    ) -> Option<parking_lot::RwLockReadGuard<'_, Box<dyn crate::render::Render>>> {
         match self {
             Self::Render(r) => Some(r.render_object()),
             _ => None,
@@ -547,7 +549,9 @@ impl Element {
     /// The guard ensures safe mutable access through RwLock's write locking.
     #[inline]
     #[must_use]
-    pub fn render_object_mut(&self) -> Option<parking_lot::RwLockWriteGuard<'_, Box<dyn crate::render::Render>>> {
+    pub fn render_object_mut(
+        &self,
+    ) -> Option<parking_lot::RwLockWriteGuard<'_, Box<dyn crate::render::Render>>> {
         match self {
             Self::Render(r) => Some(r.render_object_mut()),
             _ => None,

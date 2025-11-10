@@ -36,9 +36,12 @@ struct SimplePadding {
 impl View for SimplePadding {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Using tuple syntax: (Render, Option<child>)
-        (MockPaddingRender {
-            padding: self.padding,
-        }, self.child)
+        (
+            MockPaddingRender {
+                padding: self.padding,
+            },
+            self.child,
+        )
     }
 }
 

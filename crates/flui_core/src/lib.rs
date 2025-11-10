@@ -269,8 +269,6 @@ pub mod render;
 pub mod testing;
 pub mod view;
 
-
-
 // Re-export debug types
 pub use debug::DebugFlags;
 
@@ -334,7 +332,6 @@ pub use render::{Arity, Children, LayoutContext, PaintContext, Render, RenderSta
 /// ```
 // Prelude module is now in separate file (src/prelude.rs)
 // See prelude module documentation for details
-
 /// FLUI version string
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -368,10 +365,9 @@ mod tests {
         let _element: Option<Element> = None;
 
         // Test hooks are available
-        let _signal: Option<Signal<i32>> = None;  // Signal from prelude
+        let _signal: Option<Signal<i32>> = None; // Signal from prelude
 
         // Test render types are available
         let _arity = Arity::Variable;
     }
 }
-

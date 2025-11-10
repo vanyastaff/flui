@@ -69,11 +69,7 @@ impl<'a> LayoutContext<'a> {
     /// - `tree`: Reference to the element tree
     /// - `children`: Reference to children enum
     /// - `constraints`: Layout constraints from parent
-    pub fn new(
-        tree: &'a ElementTree,
-        children: &'a Children,
-        constraints: BoxConstraints,
-    ) -> Self {
+    pub fn new(tree: &'a ElementTree, children: &'a Children, constraints: BoxConstraints) -> Self {
         Self {
             tree,
             children,
@@ -297,7 +293,9 @@ impl<'a> PaintContext<'a> {
         child_ids
             .iter()
             .zip(offsets.iter())
-            .map(|(&child_id, &child_offset)| self.paint_child(child_id, self.offset + child_offset))
+            .map(|(&child_id, &child_offset)| {
+                self.paint_child(child_id, self.offset + child_offset)
+            })
             .collect()
     }
 

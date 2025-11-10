@@ -100,7 +100,7 @@ impl<T: Clone + Send + 'static, E: Clone + Send + 'static> Resource<T, E> {
 impl<T: Clone + 'static, E: Clone + 'static> Clone for Resource<T, E> {
     fn clone(&self) -> Self {
         Self {
-            loading: self.loading.clone(),
+            loading: self.loading, // Signal<bool> is Copy
             data: self.data.clone(),
             error: self.error.clone(),
         }
@@ -161,7 +161,7 @@ where
         _input: (Arc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>),
     ) -> Self::Output {
         Resource::new(
-            state.loading.clone(),
+            state.loading, // Signal<bool> is Copy
             state.data.clone(),
             state.error.clone(),
         )

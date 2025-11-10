@@ -22,7 +22,10 @@ fn main() {
     let mut root_elem = RenderElement::new(root_render);
     root_elem.set_offset(Offset::ZERO);
     // Set size manually (normally done by layout)
-    root_elem.render_state().write().set_size(Size::new(400.0, 400.0));
+    root_elem
+        .render_state()
+        .write()
+        .set_size(Size::new(400.0, 400.0));
 
     // Child element: 200x200 box at offset (50,50) from root
     let child_render = create_box_render("Child", Size::new(200.0, 200.0));

@@ -272,10 +272,10 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
 
             // Mark child for layout if exists
             if let Some(child_id) = comp.child() {
-                if let Some(child_elem) = tree_guard.get_mut(child_id) {
-                    if let crate::element::Element::Render(render_elem) = child_elem {
-                        render_elem.render_state().write().mark_needs_layout();
-                    }
+                if let Some(crate::element::Element::Render(render_elem)) =
+                    tree_guard.get_mut(child_id)
+                {
+                    render_elem.render_state().write().mark_needs_layout();
                 }
             }
         }
@@ -390,13 +390,13 @@ mod tests {
 
         // Tree: 1 → 2 → 4
         //       1 → 3 → 5
-        // IDs: 0, 1, 2, 3, 4
+        // IDs: 1, 2, 3, 4, 5
 
-        let id1 = ElementId::new(0);
-        let id2 = ElementId::new(1);
-        let id3 = ElementId::new(3);
-        let id4 = ElementId::new(2);
-        let id5 = ElementId::new(4);
+        let id1 = ElementId::new(1);
+        let id2 = ElementId::new(2);
+        let id3 = ElementId::new(4);
+        let id4 = ElementId::new(3);
+        let id5 = ElementId::new(5);
 
         // id4 is descendant of id2 and id1
         assert!(is_descendant(&tree_guard, id4, id2));
@@ -420,9 +420,9 @@ mod tests {
 
         // All elements in one subtree (from root)
         let dirty = vec![
-            (ElementId::new(0), 0),
-            (ElementId::new(1), 1),
-            (ElementId::new(2), 2),
+            (ElementId::new(1), 0),
+            (ElementId::new(2), 1),
+            (ElementId::new(3), 2),
         ];
 
         let subtrees = partition_subtrees(&dirty, &tree);
@@ -438,10 +438,10 @@ mod tests {
 
         // Two independent subtrees
         let dirty = vec![
-            (ElementId::new(1), 1),
-            (ElementId::new(2), 2),
-            (ElementId::new(3), 1),
-            (ElementId::new(4), 2),
+            (ElementId::new(2), 1),
+            (ElementId::new(3), 2),
+            (ElementId::new(4), 1),
+            (ElementId::new(5), 2),
         ];
 
         let subtrees = partition_subtrees(&dirty, &tree);
@@ -456,9 +456,9 @@ mod tests {
         let tree = create_test_tree();
 
         let dirty = vec![
-            (ElementId::new(0), 0),
-            (ElementId::new(1), 1),
-            (ElementId::new(2), 2),
+            (ElementId::new(1), 0),
+            (ElementId::new(2), 1),
+            (ElementId::new(3), 2),
         ];
 
         let count = rebuild_sequential(&tree, dirty);

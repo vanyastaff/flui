@@ -46,7 +46,6 @@ pub mod lifecycle;
 pub mod provider;
 pub mod render;
 
-
 // Re-exports
 pub use component::ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
@@ -73,4 +72,3 @@ pub use render::RenderElement;
 // - pipeline depends on foundation + element (OK)
 // Previously: element → render → pipeline → element (CIRCULAR!)
 pub use crate::foundation::ElementId;
-

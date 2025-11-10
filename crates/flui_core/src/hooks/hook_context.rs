@@ -8,7 +8,8 @@ use std::collections::HashMap;
 ///
 /// Extracted to reduce code duplication and improve maintainability.
 fn format_hook_ordering_error(component: ComponentId, index: usize, type_name: &str) -> String {
-    format!("\n\
+    format!(
+        "\n\
         ╔════════════════════════════════════════════════════════════════╗\n\
         ║          HOOK ORDERING VIOLATION DETECTED                      ║\n\
         ╚════════════════════════════════════════════════════════════════╝\n\
@@ -39,7 +40,9 @@ fn format_hook_ordering_error(component: ComponentId, index: usize, type_name: &
         📚 For detailed rules and examples, see:\n\
         crates/flui_core/src/hooks/RULES.md\n\
         \n\
-        ", component, index, type_name)
+        ",
+        component, index, type_name
+    )
 }
 
 /// Unique identifier for a component instance.

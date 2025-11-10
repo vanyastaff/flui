@@ -28,7 +28,7 @@ use crate::element::ElementId;
 /// // Multi-child render
 /// let children = Children::Multi(vec![child1, child2, child3]);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Children {
     /// No children (leaf nodes)
     ///
@@ -37,6 +37,7 @@ pub enum Children {
     /// - Image rendering (RenderImage)
     /// - Placeholder boxes (RenderSizedBox with no child)
     /// - Custom painters (RenderCustomPaint)
+    #[default]
     None,
 
     /// Exactly one child
@@ -225,11 +226,7 @@ impl Children {
     }
 }
 
-impl Default for Children {
-    fn default() -> Self {
-        Children::None
-    }
-}
+// Default is now derived with #[default] annotation above
 
 impl From<ElementId> for Children {
     fn from(id: ElementId) -> Self {

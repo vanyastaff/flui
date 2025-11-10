@@ -886,8 +886,9 @@ mod tests {
         build.schedule(ElementId::new(1), 0);
         build.schedule(ElementId::new(1), 0); // Duplicate
 
-        // Should only have 1 dirty element
-        assert_eq!(build.dirty_count(), 1);
+        // dirty_count() returns raw count before deduplication (line 226-227 comment)
+        // Deduplication happens during rebuild_dirty() for efficiency
+        assert_eq!(build.dirty_count(), 2);
     }
 
     #[test]

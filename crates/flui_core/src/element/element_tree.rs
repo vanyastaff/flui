@@ -293,7 +293,7 @@ impl ElementTree {
         // Insert into slab and get ID (convert usize to ElementId)
         // CRITICAL: Add 1 because ElementId uses NonZeroUsize (0 is invalid)
         let slab_index = self.nodes.insert(node);
-        ElementId::new(slab_index + 1)  // Slab index (0-based) → ElementId (1-based)
+        ElementId::new(slab_index + 1) // Slab index (0-based) → ElementId (1-based)
     }
 
     /// Inserts an element into the tree.
@@ -345,11 +345,8 @@ impl ElementTree {
         if let Some(child_ids) = child_ids {
             // Access the element we just inserted
             if let Some(node) = self.nodes.get_mut(parent_id.get() - 1) {
-                match &mut node.element {
-                    Element::Render(render_elem) => {
-                        render_elem.set_children(child_ids.clone());
-                    }
-                    _ => {}
+                if let Element::Render(render_elem) = &mut node.element {
+                    render_elem.set_children(child_ids.clone());
                 }
             }
 
@@ -457,7 +454,7 @@ impl ElementTree {
     pub fn get(&self, element_id: ElementId) -> Option<&Element> {
         // CRITICAL: Subtract 1 to convert ElementId (1-based) to slab index (0-based)
         self.nodes
-            .get(element_id.get() - 1)  // ElementId(1) → nodes[0], ElementId(2) → nodes[1], etc.
+            .get(element_id.get() - 1) // ElementId(1) → nodes[0], ElementId(2) → nodes[1], etc.
             .map(|node| &node.element)
     }
 
@@ -958,7 +955,11 @@ impl ElementTree {
     /// ```
     pub fn visit_all_render_objects<F>(&self, mut visitor: F)
     where
-        F: FnMut(ElementId, &Box<dyn crate::render::Render>, parking_lot::RwLockReadGuard<RenderState>),
+        F: FnMut(
+            ElementId,
+            &Box<dyn crate::render::Render>,
+            parking_lot::RwLockReadGuard<RenderState>,
+        ),
     {
         for (element_id, node) in &self.nodes {
             // Only visit elements with Renders
@@ -1157,7 +1158,11 @@ impl ElementTree {
     ///              entry.element_id, entry.local_position);
     /// }
     /// ```
-    pub fn hit_test(&self, root_id: ElementId, position: flui_types::Offset) -> crate::element::ElementHitTestResult {
+    pub fn hit_test(
+        &self,
+        root_id: ElementId,
+        position: flui_types::Offset,
+    ) -> crate::element::ElementHitTestResult {
         use crate::element::ElementHitTestResult;
 
         let mut result = ElementHitTestResult::new();

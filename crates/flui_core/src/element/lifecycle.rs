@@ -122,11 +122,12 @@
 ///     eprintln!("Warning: Operating on non-active element {:?}", element);
 /// }
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ElementLifecycle {
     /// Element created but not yet mounted
     ///
     /// This is the initial state when an element is first created.
+    #[default]
     Initial,
 
     /// Element is active in the tree
@@ -171,11 +172,7 @@ impl ElementLifecycle {
     }
 }
 
-impl Default for ElementLifecycle {
-    fn default() -> Self {
-        Self::Initial
-    }
-}
+// Default is now derived with #[default] annotation above
 
 #[cfg(test)]
 mod tests {

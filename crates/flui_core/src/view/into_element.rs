@@ -403,7 +403,10 @@ impl<R: crate::render::Render> IntoElement for (R, Option<Box<dyn crate::view::A
         let (render, child) = self;
         // Convert Option<Box<dyn AnyView>> to Option<AnyElement>
         let child_element = child.map(AnyElement::new);
-        let children: Vec<Element> = child_element.into_iter().map(|c| c.into_element()).collect();
+        let children: Vec<Element> = child_element
+            .into_iter()
+            .map(|c| c.into_element())
+            .collect();
 
         let render_element = if children.is_empty() {
             crate::element::RenderElement::new(Box::new(render))
@@ -461,10 +464,7 @@ impl<R: crate::render::Render> IntoElement for (R, Vec<Box<dyn crate::view::AnyV
 impl<R: crate::render::Render> IntoElement for (R, Vec<AnyElement>) {
     fn into_element(self) -> Element {
         let (render, children) = self;
-        let child_elements: Vec<Element> = children
-            .into_iter()
-            .map(|c| c.into_element())
-            .collect();
+        let child_elements: Vec<Element> = children.into_iter().map(|c| c.into_element()).collect();
 
         let render_element = if child_elements.is_empty() {
             crate::element::RenderElement::new(Box::new(render))

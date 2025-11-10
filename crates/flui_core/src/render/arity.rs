@@ -110,11 +110,7 @@ impl Arity {
     /// Returns `true` for `Exact(0)` or `Variable`.
     #[inline]
     pub fn allows_zero(&self) -> bool {
-        match self {
-            Arity::Exact(0) => true,
-            Arity::Variable => true,
-            _ => false,
-        }
+        matches!(self, Arity::Exact(0) | Arity::Variable)
     }
 
     /// Check if this arity requires exactly one child

@@ -174,9 +174,9 @@ impl<T: Clone> TripleBuffer<T> {
     /// Swap buffers atomically
     ///
     /// Rotates the three buffer indices:
-    /// - Read buffer becomes write buffer (old data discarded)
-    /// - Write buffer becomes swap buffer (new data ready)
-    /// - Swap buffer becomes read buffer (compositor gets latest)
+    /// - Write buffer becomes read buffer (new data becomes available)
+    /// - Read buffer becomes swap buffer (old data goes to reserve)
+    /// - Swap buffer becomes write buffer (reserve becomes writable)
     ///
     /// This operation is atomic and lock-free.
     ///
@@ -212,10 +212,13 @@ impl<T: Clone> TripleBuffer<T> {
         let write = self.write_idx.load(Ordering::Acquire);
         let swap = self.swap_idx.load(Ordering::Acquire);
 
-        // Rotate: read → write, write → swap, swap → read
-        self.read_idx.store(swap, Ordering::Release);
-        self.write_idx.store(read, Ordering::Release);
-        self.swap_idx.store(write, Ordering::Release);
+        // Rotate buffers so written data becomes readable:
+        // - Write buffer → Read buffer (new data becomes available)
+        // - Read buffer → Swap buffer (old read goes to reserve)
+        // - Swap buffer → Write buffer (reserve becomes writable)
+        self.read_idx.store(write, Ordering::Release);
+        self.swap_idx.store(read, Ordering::Release);
+        self.write_idx.store(swap, Ordering::Release);
     }
 
     /// Get current read index (for debugging/testing)
@@ -359,10 +362,10 @@ mod tests {
 
         buffer.swap();
 
-        // Check rotation: read → write, write → swap, swap → read
-        assert_eq!(buffer.read_index(), initial_swap);
-        assert_eq!(buffer.write_index(), initial_read);
-        assert_eq!(buffer.swap_index(), initial_write);
+        // Check rotation: write → read, read → swap, swap → write
+        assert_eq!(buffer.read_index(), initial_write);
+        assert_eq!(buffer.swap_index(), initial_read);
+        assert_eq!(buffer.write_index(), initial_swap);
     }
 
     #[test]

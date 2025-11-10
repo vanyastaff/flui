@@ -649,10 +649,12 @@ mod tests {
     #[test]
     fn test_error_phase() {
         use crate::ElementId;
-        let layout_error = PipelineError::layout_error(ElementId::new(42), "Constraint violation").unwrap();
+        let layout_error =
+            PipelineError::layout_error(ElementId::new(42), "Constraint violation").unwrap();
         assert_eq!(layout_error.phase(), PipelinePhase::Layout);
 
-        let paint_error = PipelineError::paint_error(ElementId::new(42), "Layer creation failed").unwrap();
+        let paint_error =
+            PipelineError::paint_error(ElementId::new(42), "Layer creation failed").unwrap();
         assert_eq!(paint_error.phase(), PipelinePhase::Paint);
     }
 
@@ -758,7 +760,8 @@ mod tests {
     #[test]
     fn test_layout_error_constructor_valid() {
         use crate::ElementId;
-        let error = PipelineError::layout_error(ElementId::new(42), "Constraint violation").unwrap();
+        let error =
+            PipelineError::layout_error(ElementId::new(42), "Constraint violation").unwrap();
         match error {
             PipelineError::LayoutError {
                 element_id,
@@ -785,7 +788,8 @@ mod tests {
     #[test]
     fn test_paint_error_constructor_valid() {
         use crate::ElementId;
-        let error = PipelineError::paint_error(ElementId::new(42), "Layer creation failed").unwrap();
+        let error =
+            PipelineError::paint_error(ElementId::new(42), "Layer creation failed").unwrap();
         match error {
             PipelineError::PaintError {
                 element_id,
@@ -812,7 +816,8 @@ mod tests {
     #[test]
     fn test_build_error_constructor_valid() {
         use crate::ElementId;
-        let error = PipelineError::build_error(ElementId::new(42), "Widget rebuild failed").unwrap();
+        let error =
+            PipelineError::build_error(ElementId::new(42), "Widget rebuild failed").unwrap();
         match error {
             PipelineError::BuildError {
                 element_id,

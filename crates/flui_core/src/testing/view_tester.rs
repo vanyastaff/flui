@@ -2,11 +2,7 @@
 //!
 //! Provides utilities for testing individual views in isolation.
 
-use crate::{
-    element::ElementId,
-    view::BuildContext,
-    View,
-};
+use crate::{element::ElementId, view::BuildContext, View};
 
 use super::test_harness::TestHarness;
 

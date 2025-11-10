@@ -46,4 +46,3 @@ pub use into_element::{AnyElement, IntoAnyElement, IntoElement, RenderExt};
 
 // Future enhancement: View tree management for tracking widget-to-element mappings
 // and efficient lookup during rebuild (currently handled by element tree)
-
