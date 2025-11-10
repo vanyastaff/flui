@@ -1,10 +1,9 @@
 //! RenderMouseRegion - handles mouse hover events
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size};
+use flui_types::Size;
 
 /// Mouse hover event callbacks
 #[derive(Clone)]

@@ -3,12 +3,11 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
 use flui_types::{
-    constraints::BoxConstraints, painting::BlendMode, painting::ImageFilter, Offset, Size,
+    painting::BlendMode, painting::ImageFilter, Size,
 };
 
 // ===== RenderObject =====

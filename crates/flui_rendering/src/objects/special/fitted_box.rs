@@ -1,11 +1,10 @@
 //! RenderFittedBox - scales and positions child_id according to BoxFit
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
 use flui_types::{
-    constraints::BoxConstraints, layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size,
+    layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size,
 };
 
 /// RenderObject that scales and positions its child_id according to BoxFit

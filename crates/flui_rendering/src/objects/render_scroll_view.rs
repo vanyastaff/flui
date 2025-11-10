@@ -3,7 +3,6 @@
 //! Handles layout of scrollable content with scroll offset state.
 //! Supports keyboard controls for scrolling.
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::layer::{BoxedLayer, ClipRectLayer, PictureLayer, ScrollableLayer};

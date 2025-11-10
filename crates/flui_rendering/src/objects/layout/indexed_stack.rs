@@ -1,10 +1,9 @@
 //! RenderIndexedStack - shows only one child by index
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{layer::pool, BoxedLayer};
-use flui_types::{Alignment, Offset, Size};
+use flui_types::{Alignment, Size};
 
 /// RenderObject that shows only one child from a list
 ///

@@ -20,8 +20,6 @@
 //! }
 //! ```
 
-#[cfg(debug_assertions)]
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 #[cfg(debug_assertions)]
 
@@ -33,9 +31,6 @@ use flui_engine::layer::pool;
 use flui_engine::painter::Paint;
 #[cfg(debug_assertions)]
 use flui_engine::BoxedLayer;
-#[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
-use flui_types::painting::PaintingStyle;
 #[cfg(debug_assertions)]
 use flui_types::{Color, Offset, Rect, Size};
 
@@ -257,7 +252,7 @@ fn paint_border(picture: &mut flui_engine::layer::PictureLayer, rect: Rect) {
 ///
 /// # Architecture
 ///
-/// This is a **SingleRender** object that:
+/// This render object has arity Exact(1) and:
 /// 1. Passes through layout to its child (no constraint changes)
 /// 2. Wraps the child's layer during paint with indicator layers
 ///

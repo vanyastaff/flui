@@ -3,10 +3,9 @@
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, Offset, Size};
+use flui_types::Size;
 
 /// RenderAnnotatedRegion - Annotates a region with a value
 ///

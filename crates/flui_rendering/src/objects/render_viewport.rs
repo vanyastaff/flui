@@ -3,10 +3,9 @@
 //! A viewport shows a subset of large content through a fixed-size window.
 //! It applies an offset to its child to show different portions of the content.
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::layer::{BoxedLayer, ClipRectLayer, OffsetLayer};
+use flui_engine::layer::{BoxedLayer, ClipRectLayer};
 use flui_types::layout::Axis;
 use flui_types::{BoxConstraints, Offset, Rect, Size};
 

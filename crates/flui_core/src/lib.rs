@@ -99,7 +99,9 @@
 //! Render views create custom render objects for layout and painting.
 //!
 //! ```rust,ignore
-//! use flui_core::{Render, View, LayoutCx, PaintCx, LeafArity};
+//! use flui_core::render::{Render, Arity, LayoutContext, PaintContext};
+//! use flui_types::Size;
+//! use flui_engine::BoxedLayer;
 //!
 //! #[derive(Debug)]
 //! struct CustomBox {
@@ -108,14 +110,21 @@
 //! }
 //!
 //! impl Render for CustomBox {
-//!     type Arity = LeafArity;
-//!
-//!     fn layout(&mut self, cx: &mut LayoutCx<Self::Arity>) -> Size {
+//!     fn layout(&mut self, ctx: &LayoutContext) -> Size {
 //!         Size::new(self.width, self.height)
 //!     }
 //!
-//!     fn paint(&self, cx: &PaintCx<Self::Arity>) -> BoxedLayer {
+//!     fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
 //!         // Custom painting code
+//!         Box::new(flui_engine::ContainerLayer::new())
+//!     }
+//!
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
+//!     }
+//!
+//!     fn arity(&self) -> Arity {
+//!         Arity::Exact(0)  // Leaf render object
 //!     }
 //! }
 //! ```

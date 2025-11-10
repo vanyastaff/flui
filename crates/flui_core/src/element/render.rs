@@ -277,7 +277,7 @@ impl RenderElement {
         self.children = children;
     }
 
-    /// Add a child (for MultiArity or SingleArity)
+    /// Add a child (for render objects with arity Exact(1) or Variable)
     ///
     /// NOTE: This should only be called with RenderElement children!
     /// ComponentElements should not be added as children to RenderElements.

@@ -29,10 +29,9 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::BoxedLayer;
-use flui_types::{constraints::BoxConstraints, painting::Clip, Offset, Size};
+use flui_types::{painting::Clip, Size};
 
 /// Trait for defining clip shapes
 ///

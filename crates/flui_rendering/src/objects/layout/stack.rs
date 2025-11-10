@@ -1,6 +1,5 @@
 //! RenderStack - layering container
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{layer::pool, BoxedLayer};
@@ -70,10 +69,6 @@ impl RenderStack {
     pub fn set_fit(&mut self, fit: StackFit) {
         self.fit = fit;
     }
-
-    // TODO: Positioned children support will be implemented via GAT Metadata
-    // (similar to FlexItemMetadata pattern shown in FINAL_ARCHITECTURE_V2.md)
-    // For now, all children are treated as non-positioned and aligned according to stack alignment.
 }
 
 impl Default for RenderStack {

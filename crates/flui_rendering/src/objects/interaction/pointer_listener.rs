@@ -3,12 +3,11 @@
 //! This RenderObject wraps a child and listens for pointer events,
 //! calling the appropriate callbacks when events occur.
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{BoxedLayer, PointerListenerLayer};
 use flui_types::events::{PointerEvent, PointerEventHandler};
-use flui_types::{Offset, Rect, Size};
+use flui_types::{Rect, Size};
 use std::sync::Arc;
 
 /// Pointer event callbacks

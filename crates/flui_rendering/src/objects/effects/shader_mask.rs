@@ -3,11 +3,10 @@
 //! This render object applies a shader (gradient, pattern, etc.) as a mask
 //! to its child_id, controlling which parts are visible.
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::{painting::BlendMode, Offset, Size};
+use flui_types::{painting::BlendMode, Size};
 
 // ===== Data Structure =====
 /// FIXME: This is a placeholder structure for shader mask data. All types should be in flui_types.

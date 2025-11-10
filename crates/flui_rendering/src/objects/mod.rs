@@ -11,9 +11,6 @@ pub mod render_viewport;
 pub mod special;
 pub mod text;
 
-/// Special-purpose render objects
-// Re-exports for convenience
-pub use basic::*;
 pub use effects::*;
 pub use interaction::*;
 pub use layout::*;

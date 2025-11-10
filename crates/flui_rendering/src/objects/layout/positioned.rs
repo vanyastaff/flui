@@ -10,7 +10,6 @@
 //! - Parent (RenderStack) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using positioned children
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;

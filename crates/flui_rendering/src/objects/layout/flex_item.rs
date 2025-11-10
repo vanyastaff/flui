@@ -10,11 +10,10 @@
 //! - Parent (RenderFlex) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using flexible children
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::{layout::FlexFit, Offset, Size};
+use flui_types::{layout::FlexFit, Size};
 
 /// Metadata for flexible children in Flex layout
 ///

@@ -1,10 +1,9 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{BoxedLayer, Paint, PictureLayer};
-use flui_types::{Color, Offset, Size};
+use flui_types::{Color, Size};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

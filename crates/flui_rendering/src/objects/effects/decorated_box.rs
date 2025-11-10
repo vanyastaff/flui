@@ -1,11 +1,9 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{layer::pool, BoxedLayer, Paint};
 use flui_types::{
-    constraints::BoxConstraints,
     styling::{BorderPosition, BoxDecoration, Radius},
     Offset, Point, Rect, RRect, Size,
 };

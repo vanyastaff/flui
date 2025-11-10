@@ -24,16 +24,17 @@
 //! egui::Painter
 //! ```
 //!
-//! ## Generic Architecture
+//! ## Unified Render Trait Architecture
 //!
-//! Instead of implementing 200+ lines per RenderObject, we use 3 generic base types:
+//! All render objects implement a single unified `Render` trait with:
 //!
-//! - **LeafRenderBox<T>**: For widgets with no children (9 types)
-//! - **SingleRenderBox<T>**: For widgets with one child (34 types)
-//! - **ContainerRenderBox<T>**: For widgets with multiple children (38 types)
+//! - **layout()**: Computes size given constraints (uses LayoutContext)
+//! - **paint()**: Generates layers for rendering (uses PaintContext)
+//! - **arity()**: Specifies child count (Exact(0), Exact(1), or Variable)
+//! - **as_any()**: Enables metadata access via downcasting
 //!
-//! This reduces code to ~20 lines per RenderObject and provides 10-100x performance
-//! improvements through Element-level caching.
+//! This unified approach provides clean abstractions while maintaining
+//! type safety and zero-cost performance.
 //!
 //! ## Key Principles
 //!

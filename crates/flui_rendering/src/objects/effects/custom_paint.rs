@@ -1,10 +1,9 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use flui_core::element::ElementId;
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{BoxedLayer, PictureLayer};
-use flui_types::{Offset, Size};
+use flui_types::Size;
 
 /// Custom painter trait
 ///
