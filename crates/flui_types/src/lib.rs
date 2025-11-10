@@ -73,8 +73,10 @@ pub mod semantics;
 pub mod styling;
 pub mod typography;
 
+
 // Re-exports for convenience - Most commonly used types
 pub use constraints::BoxConstraints;
+pub use events::{Event, KeyEvent, PointerEvent, Theme, WindowEvent};
 pub use geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
 pub use layout::{Alignment, Axis, EdgeInsets};
 pub use styling::{Color, Color32};
@@ -109,3 +111,4 @@ pub mod prelude {
     // Events - Common
     pub use crate::events::{KeyEvent, PointerEvent, WindowEvent};
 }
+

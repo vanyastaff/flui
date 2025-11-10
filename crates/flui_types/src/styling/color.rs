@@ -392,6 +392,33 @@ impl Color {
         )
     }
 
+    /// Convert color to f32 array [r, g, b, a] in 0.0-1.0 range.
+    ///
+    /// Useful for GPU shaders that expect normalized color values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::Color;
+    ///
+    /// let color = Color::rgba(255, 128, 0, 255);
+    /// let array = color.to_f32_array();
+    /// assert_eq!(array[0], 1.0);    // R
+    /// assert_eq!(array[1], 0.5019608); // G (128/255)
+    /// assert_eq!(array[2], 0.0);    // B
+    /// assert_eq!(array[3], 1.0);    // A
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn to_f32_array(&self) -> [f32; 4] {
+        [
+            self.r as f32 / 255.0,
+            self.g as f32 / 255.0,
+            self.b as f32 / 255.0,
+            self.a as f32 / 255.0,
+        ]
+    }
+
     /// Get the red component as f32 (0.0-1.0 range).
     #[inline]
     #[must_use]

@@ -500,6 +500,33 @@ impl ScrollEventData {
     }
 }
 
+/// System theme
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Theme {
+    /// Light theme
+    Light,
+    /// Dark theme
+    Dark,
+}
+
+impl Theme {
+    /// Check if this is the dark theme
+    pub fn is_dark(&self) -> bool {
+        matches!(self, Theme::Dark)
+    }
+
+    /// Check if this is the light theme
+    pub fn is_light(&self) -> bool {
+        matches!(self, Theme::Light)
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme::Light
+    }
+}
+
 /// Window event types
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(missing_docs)]
@@ -507,17 +534,20 @@ pub enum WindowEvent {
     /// Window was resized
     Resized { width: u32, height: u32 },
 
-    /// Window gained focus
-    Focused,
+    /// Window gained or lost focus
+    FocusChanged { focused: bool },
 
-    /// Window lost focus
-    Unfocused,
+    /// Window visibility changed (minimized/restored)
+    VisibilityChanged { visible: bool },
 
     /// Window close was requested
     CloseRequested,
 
     /// Window scale factor changed (DPI change)
-    ScaleFactorChanged { scale_factor: f64 },
+    ScaleChanged { scale: f64 },
+
+    /// System theme changed (dark/light mode)
+    ThemeChanged { theme: Theme },
 }
 
 /// Unified event type
