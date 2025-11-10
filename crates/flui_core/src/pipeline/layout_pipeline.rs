@@ -180,72 +180,12 @@ impl LayoutPipeline {
             // Drop read guard before acquiring write lock
             drop(render_state);
 
-            // Perform layout based on RenderNode variant
-            let render_object = render_elem.render_object();
-            let computed_size = match &*render_object {
-                crate::render::RenderNode::Leaf(_leaf) => {
-                    // SAFETY: We need mutable access to call layout(), but we only have &self.
-                    // We use interior mutability through RwLock in the render object.
-                    // This is safe because:
-                    // 1. We're calling layout() which requires &mut self
-                    // 2. RwLock ensures exclusive access during layout
-                    // 3. No other code can access this render object during layout
-
-                    // Drop read guard to get write guard
-                    drop(render_object);
-                    let mut render_object_mut = render_elem.render_object_mut();
-
-                    if let crate::render::RenderNode::Leaf(leaf) = &mut *render_object_mut {
-                        leaf.layout(layout_constraints)
-                    } else {
-                        unreachable!("RenderNode variant changed during layout")
-                    }
-                }
-
-                crate::render::RenderNode::Single { child, .. } => {
-                    // Handle case where Single node doesn't have child yet (mounting phase)
-                    let child_id_copy = *child;
-
-                    match child_id_copy {
-                        Some(child_id) => {
-                            // Drop read guard to get write guard
-                            drop(render_object);
-                            let mut render_object_mut = render_elem.render_object_mut();
-
-                            if let crate::render::RenderNode::Single { render, .. } =
-                                &mut *render_object_mut
-                            {
-                                render.layout(tree, child_id, layout_constraints)
-                            } else {
-                                unreachable!("RenderNode variant changed during layout")
-                            }
-                        }
-                        None => {
-                            tracing::warn!(
-                                element_id = ?id,
-                                "Single render node has no child. Returning zero size."
-                            );
-                            // Return zero size constrained by layout_constraints
-                            layout_constraints.constrain(flui_types::Size::ZERO)
-                        }
-                    }
-                }
-
-                crate::render::RenderNode::Multi { .. } => {
-                    // Drop read guard to get write guard
-                    drop(render_object);
-                    let mut render_object_mut = render_elem.render_object_mut();
-
-                    if let crate::render::RenderNode::Multi { render, children } =
-                        &mut *render_object_mut
-                    {
-                        // Borrow children directly from RenderNode instead of cloning
-                        // This eliminates allocation + memcpy in layout hot path
-                        render.layout(tree, children, layout_constraints)
-                    } else {
-                        unreachable!("RenderNode variant changed during layout")
-                    }
-                }
+            // Perform layout using unified RenderNode API
+            // With the new unified API, we don't need to match on variants
+            let computed_size = {
+                let mut render_object_mut = render_elem.render_object_mut();
+                // RenderNode::layout() creates LayoutContext internally and calls unified Render trait
+                render_object_mut.layout(tree, layout_constraints)
             };
 
             // Store computed size in RenderState

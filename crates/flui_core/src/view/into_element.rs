@@ -162,7 +162,7 @@ impl<T: IntoElement> IntoElement for Option<T> {
                 use crate::element::RenderElement;
                 use crate::render::RenderNode;
 
-                let render_node = RenderNode::Leaf(Box::new(EmptyRender));
+                let render_node = RenderNode::leaf(Box::new(EmptyRender));
                 Element::Render(RenderElement::new(render_node))
             }
         }
@@ -175,18 +175,17 @@ impl<T: IntoElement> IntoElement for Option<T> {
 #[derive(Debug)]
 struct EmptyRender;
 
-impl crate::render::LeafRender for EmptyRender {
-    type Metadata = ();
-
-    fn layout(
-        &mut self,
-        _constraints: flui_types::constraints::BoxConstraints,
-    ) -> flui_types::Size {
+impl crate::render::Render for EmptyRender {
+    fn layout(&mut self, _ctx: &crate::render::LayoutContext) -> flui_types::Size {
         flui_types::Size::ZERO
     }
 
-    fn paint(&self, _offset: flui_types::Offset) -> flui_engine::BoxedLayer {
+    fn paint(&self, _ctx: &crate::render::PaintContext) -> flui_engine::BoxedLayer {
         Box::new(flui_engine::ContainerLayer::new())
+    }
+
+    fn arity(&self) -> crate::render::Arity {
+        crate::render::Arity::Exact(0)
     }
 }
 

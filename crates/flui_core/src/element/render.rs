@@ -242,7 +242,7 @@ impl RenderElement {
         let arity = render.arity();
 
         match arity {
-            Some(0) => {
+            crate::render::Arity::Exact(0) => {
                 // Leaf render - no children allowed
                 if !children.is_empty() {
                     panic!(
@@ -251,7 +251,7 @@ impl RenderElement {
                     );
                 }
             }
-            Some(1) => {
+            crate::render::Arity::Exact(1) => {
                 // Single render - exactly one child required
                 if children.len() != 1 {
                     panic!(
@@ -260,7 +260,7 @@ impl RenderElement {
                     );
                 }
             }
-            Some(n) => {
+            crate::render::Arity::Exact(n) => {
                 // Fixed arity > 1 - exactly n children required
                 if children.len() != n {
                     panic!(
@@ -269,7 +269,7 @@ impl RenderElement {
                     );
                 }
             }
-            None => {
+            crate::render::Arity::Variable => {
                 // Multi render - any number of children allowed
             }
         }
@@ -295,13 +295,11 @@ impl RenderElement {
         // (using the method would borrow all of &mut self)
         let render = self.render_object.get_mut();
 
-        if render.arity() == Some(1) {
-            render.set_child(child_id);
+        if matches!(render.arity(), crate::render::Arity::Exact(1)) {
+            render.set_children(crate::render::Children::from_single(child_id));
         } else {
-            // Pass slice reference - no clone needed!
-            // This works because we borrow self.render_object mutably
-            // and self.children immutably (different fields)
-            render.set_children(&self.children);
+            // Convert Vec to Children enum
+            render.set_children(crate::render::Children::from_slice(&self.children));
         }
     }
 

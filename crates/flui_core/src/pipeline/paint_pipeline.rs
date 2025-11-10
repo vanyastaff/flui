@@ -169,56 +169,12 @@ impl PaintPipeline {
             // Drop read guard before paint
             drop(render_state);
 
-            // Perform paint based on RenderNode variant
-            let render_object = render_elem.render_object();
-            let _layer = match &*render_object {
-                crate::render::RenderNode::Leaf(leaf) => {
-                    // Paint leaf render object
-                    leaf.paint(offset)
-                }
-
-                crate::render::RenderNode::Single { child, .. } => {
-                    // Handle case where Single node doesn't have child yet (mounting phase)
-                    let child_id_copy = *child;
-
-                    match child_id_copy {
-                        Some(child_id) => {
-                            // Drop read guard to access trait object
-                            drop(render_object);
-                            let render_object = render_elem.render_object();
-
-                            if let crate::render::RenderNode::Single { render, .. } =
-                                &*render_object
-                            {
-                                render.paint(tree, child_id, offset)
-                            } else {
-                                unreachable!("RenderNode variant changed during paint")
-                            }
-                        }
-                        None => {
-                            tracing::warn!(
-                                element_id = ?id,
-                                "Single render node has no child during paint. Returning empty layer."
-                            );
-                            // Return empty container layer
-                            Box::new(flui_engine::ContainerLayer::new())
-                        }
-                    }
-                }
-
-                crate::render::RenderNode::Multi { children, .. } => {
-                    let children_ids = children.clone();
-
-                    // Drop read guard to access trait object
-                    drop(render_object);
-                    let render_object = render_elem.render_object();
-
-                    if let crate::render::RenderNode::Multi { render, .. } = &*render_object {
-                        render.paint(tree, &children_ids, offset)
-                    } else {
-                        unreachable!("RenderNode variant changed during paint")
-                    }
-                }
+            // Perform paint using unified RenderNode API
+            // With the new unified API, we don't need to match on variants
+            let _layer = {
+                let render_object = render_elem.render_object();
+                // RenderNode::paint() creates PaintContext internally and calls unified Render trait
+                render_object.paint(tree, offset)
             };
 
             // TODO(future): Store layer for composition

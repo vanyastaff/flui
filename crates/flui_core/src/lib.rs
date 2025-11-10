@@ -352,7 +352,7 @@ pub use pipeline::{PipelineBuilder, PipelineOwner};
 // ============================================================================
 
 // Re-export render types
-pub use render::{LeafRender, MultiRender, RenderNode, RenderState, SingleRender};
+pub use render::{Arity, Children, LayoutContext, PaintContext, Render, RenderNode, RenderState};
 
 // ============================================================================
 // Macros
@@ -379,7 +379,7 @@ pub mod prelude {
     pub use crate::view::{AnyView, BuildContext, ChangeFlags, View, ViewElement};
 
     // Render system
-    pub use crate::render::{LeafRender, MultiRender, RenderNode, SingleRender};
+    pub use crate::render::{Arity, Children, LayoutContext, PaintContext, Render, RenderNode};
 }
 
 // ============================================================================

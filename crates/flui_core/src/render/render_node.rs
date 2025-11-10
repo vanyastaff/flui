@@ -1,345 +1,296 @@
 //! RenderNode - unified render tree node
 //!
-//! Defines the `RenderNode` enum which wraps three object-safe traits:
-//! - LeafRender
-//! - SingleRender
-//! - MultiRender
+//! This module defines the `RenderNode` struct which wraps the unified `Render` trait
+//! and manages children storage inline for optimal performance.
 
 use flui_engine::BoxedLayer;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
-use super::render_traits::{LeafRender, MultiRender, SingleRender};
-use crate::element::ElementId;
+use super::{Arity, Children, LayoutContext, PaintContext, Render};
 use crate::element::ElementTree;
 
-/// Unified render tree node enum
+/// Unified render tree node
 ///
-/// Three variants for three child count patterns:
-/// - `Leaf`: No children
-/// - `Single`: Exactly one child
-/// - `Multi`: Multiple children
+/// Wraps any render object implementing the unified `Render` trait.
+/// Stores children inline for zero-cost access during layout and paint.
 ///
-/// # GAT and Trait Objects
+/// # Architecture
 ///
-/// Each render trait has a `Metadata` associated type. To use with trait objects,
-/// we specify `Metadata = ()` as the default. Render objects can still have their
-/// own parent data types - they just need to implement the trait with `Metadata = ()`.
+/// ```text
+/// RenderNode {
+///     render: Box<dyn Render>,  // ← Type-erased render object
+///     children: Children,        // ← Inline storage (None/Single/Multi)
+/// }
+/// ```
+///
+/// # Performance
+///
+/// - **Inline children storage**: No separate HashMap or Vec lookup
+/// - **Single trait dispatch**: One trait instead of three
+/// - **Cache-friendly**: Children stored contiguously with render object
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_core::render::{RenderNode, LeafRender};
+/// use flui_core::render::{RenderNode, Children};
 ///
-/// let paragraph = Paragraph::new("Hello");
-/// let render = RenderNode::new_leaf(Box::new(paragraph));
+/// // Leaf render (no children)
+/// let node = RenderNode::new(Box::new(RenderParagraph::new("Hello")), Children::None);
 ///
-/// let size = render.layout(tree, constraints);
-/// let layer = render.paint(tree, offset);
+/// // Single-child render
+/// let node = RenderNode::new(Box::new(RenderPadding::new(EdgeInsets::all(10.0))), Children::from_single(child_id));
+///
+/// // Multi-child render
+/// let node = RenderNode::new(Box::new(RenderFlex::row()), Children::from_multi(vec![id1, id2, id3]));
 /// ```
 #[derive(Debug)]
-pub enum RenderNode {
-    /// Leaf (no children)
+pub struct RenderNode {
+    /// The render object (unified trait)
     ///
-    /// Metadata fixed to () for object safety. Individual render objects can
-    /// store parent data internally if needed.
-    Leaf(Box<dyn LeafRender<Metadata = ()>>),
+    /// Type-erased to `Box<dyn Render>` for storage in the element tree.
+    /// Uses trait object for polymorphism while keeping element enum small.
+    render: Box<dyn Render>,
 
-    /// Single child
-    Single {
-        /// Render object (Metadata fixed to () for object safety)
-        render: Box<dyn SingleRender<Metadata = ()>>,
-        /// Child element ID (None if not yet mounted)
-        child: Option<ElementId>,
-    },
-
-    /// Multiple children
-    Multi {
-        /// Render object (Metadata fixed to () for object safety)
-        render: Box<dyn MultiRender<Metadata = ()>>,
-        /// Child element IDs
-        children: Vec<ElementId>,
-    },
+    /// Children storage (inline for performance)
+    ///
+    /// Stores children directly in the node to avoid separate lookups.
+    /// Three variants:
+    /// - `Children::None` for leaf nodes (0 bytes overhead)
+    /// - `Children::Single(id)` for single-child (8 bytes)
+    /// - `Children::Multi(vec)` for multi-child (24 bytes)
+    children: Children,
 }
 
 impl RenderNode {
     // ========== Constructors ==========
 
-    /// Create leaf render
-    pub fn new_leaf(render: Box<dyn LeafRender<Metadata = ()>>) -> Self {
-        Self::Leaf(render)
-    }
-
-    /// Create single-child render
-    pub fn new_single(render: Box<dyn SingleRender<Metadata = ()>>, child: ElementId) -> Self {
-        Self::Single {
-            render,
-            child: Some(child),
-        }
-    }
-
-    /// Create multi-child render
-    pub fn new_multi(
-        render: Box<dyn MultiRender<Metadata = ()>>,
-        children: Vec<ElementId>,
-    ) -> Self {
-        Self::Multi { render, children }
-    }
-
-    /// Create leaf render (alias for widget convenience)
-    pub fn leaf(render: Box<dyn LeafRender<Metadata = ()>>) -> Self {
-        Self::new_leaf(render)
-    }
-
-    /// Create single-child render without ElementId (for widgets)
+    /// Create a new render node
     ///
-    /// The element framework will set the child ElementId later during mounting.
-    pub fn single(render: Box<dyn SingleRender<Metadata = ()>>) -> Self {
-        Self::Single {
-            render,
-            child: None,
+    /// Validates that the children count matches the render object's arity.
+    ///
+    /// # Parameters
+    ///
+    /// - `render`: The render object (must implement `Render` trait)
+    /// - `children`: Children enum (None/Single/Multi)
+    ///
+    /// # Panics
+    ///
+    /// Panics if arity validation fails (children count doesn't match expected arity).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Leaf node
+    /// let node = RenderNode::new(
+    ///     Box::new(RenderParagraph::new("Hello")),
+    ///     Children::None
+    /// );
+    ///
+    /// // Single-child node
+    /// let node = RenderNode::new(
+    ///     Box::new(RenderPadding::new(EdgeInsets::all(10.0))),
+    ///     Children::from_single(child_id)
+    /// );
+    /// ```
+    pub fn new(render: Box<dyn Render>, children: Children) -> Self {
+        // Validate arity
+        let arity = render.arity();
+        if let Err(e) = arity.validate(children.len()) {
+            panic!("RenderNode arity validation failed: {}", e);
         }
+
+        Self { render, children }
     }
 
-    /// Create multi-child render without ElementIds (for widgets)
+    /// Create leaf render node (no children)
     ///
-    /// The element framework will set children ElementIds later during mounting.
-    pub fn multi(render: Box<dyn MultiRender<Metadata = ()>>) -> Self {
-        Self::Multi {
-            render,
-            children: Vec::new(),
-        }
+    /// Convenience constructor for leaf nodes.
+    /// Validates that the render object has `Arity::Exact(0)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the render object doesn't have `Arity::Exact(0)`.
+    pub fn leaf(render: Box<dyn Render>) -> Self {
+        Self::new(render, Children::None)
+    }
+
+    /// Create single-child render node (without child ID yet)
+    ///
+    /// Used during element mounting when the child ID isn't known yet.
+    /// The child ID will be set later via `set_children()`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the render object doesn't have `Arity::Exact(1)`.
+    pub fn single(render: Box<dyn Render>) -> Self {
+        Self::new(render, Children::None) // Temporary, will be updated
+    }
+
+    /// Create multi-child render node (without children yet)
+    ///
+    /// Used during element mounting when the children aren't known yet.
+    /// Children will be set later via `set_children()`.
+    pub fn multi(render: Box<dyn Render>) -> Self {
+        Self::new(render, Children::from_multi(Vec::new()))
     }
 
     // ========== Queries ==========
 
-    /// Get arity
+    /// Get arity of this render object
     ///
-    /// Returns:
-    /// - `Some(0)` for Leaf
-    /// - `Some(1)` for Single
-    /// - `None` for Multi
-    pub fn arity(&self) -> Option<usize> {
-        match self {
-            Self::Leaf(_) => Some(0),
-            Self::Single { .. } => Some(1),
-            Self::Multi { .. } => None,
-        }
+    /// Returns the expected child count pattern.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let arity = node.arity();
+    /// match arity {
+    ///     Arity::Exact(0) => println!("Leaf node"),
+    ///     Arity::Exact(1) => println!("Single-child node"),
+    ///     Arity::Variable => println!("Multi-child node"),
+    ///     _ => {}
+    /// }
+    /// ```
+    pub fn arity(&self) -> Arity {
+        self.render.arity()
     }
 
-    /// Get debug name
+    /// Get debug name of the render object
+    ///
+    /// Returns a human-readable name for diagnostics.
     pub fn debug_name(&self) -> &'static str {
-        match self {
-            Self::Leaf(r) => r.debug_name(),
-            Self::Single { render: r, .. } => r.debug_name(),
-            Self::Multi { render: r, .. } => r.debug_name(),
-        }
+        self.render.debug_name()
     }
 
-    /// Get child (Single only)
+    /// Get children reference
     ///
-    /// # Returns
-    ///
-    /// Returns `Some(ElementId)` if this is a Single variant with a mounted child,
-    /// `None` if Single but not yet mounted, or `None` if not a Single variant.
+    /// Returns a reference to the children enum.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// if let Some(child_id) = render.child() {
-    ///     // Process child
+    /// let children = node.children();
+    /// match children {
+    ///     Children::None => println!("No children"),
+    ///     Children::Single(id) => println!("One child: {:?}", id),
+    ///     Children::Multi(ids) => println!("{} children", ids.len()),
     /// }
     /// ```
-    pub fn child(&self) -> Option<ElementId> {
-        match self {
-            Self::Single { child, .. } => *child,
-            _ => None,
-        }
+    pub fn children(&self) -> &Children {
+        &self.children
     }
 
-    /// Set child (Single only)
+    /// Set children (with arity validation)
     ///
-    /// # Returns
+    /// Updates the children of this render node.
+    /// Validates that the new children count matches the arity.
     ///
-    /// Returns `true` if child was set (Single variant), `false` otherwise.
+    /// # Parameters
+    ///
+    /// - `children`: New children enum
+    ///
+    /// # Panics
+    ///
+    /// Panics if arity validation fails.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// if render.set_child(new_child_id) {
-    ///     // Child was set successfully
-    /// }
+    /// // Set single child
+    /// node.set_children(Children::from_single(child_id));
+    ///
+    /// // Set multiple children
+    /// node.set_children(Children::from_multi(vec![id1, id2, id3]));
     /// ```
-    pub fn set_child(&mut self, new_child: ElementId) -> bool {
-        match self {
-            Self::Single { child, .. } => {
-                *child = Some(new_child);
-                true
-            }
-            _ => false,
+    pub fn set_children(&mut self, children: Children) {
+        let arity = self.render.arity();
+        if let Err(e) = arity.validate(children.len()) {
+            panic!("RenderNode set_children arity validation failed: {}", e);
         }
+        self.children = children;
     }
 
-    /// Get children (Multi only)
-    ///
-    /// # Returns
-    ///
-    /// Returns `Some(&[ElementId])` if this is a Multi variant, `None` otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if let Some(children) = render.children() {
-    ///     for child_id in children {
-    ///         // Process each child
-    ///     }
-    /// }
-    /// ```
-    pub fn children(&self) -> Option<&[ElementId]> {
-        match self {
-            Self::Multi { children, .. } => Some(children),
-            _ => None,
-        }
-    }
-
-    /// Set children (Multi only)
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if children were set (Multi variant), `false` otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// if render.set_children(&new_children) {
-    ///     // Children were set successfully
-    /// }
-    /// ```
-    pub fn set_children(&mut self, new_children: &[ElementId]) -> bool {
-        match self {
-            Self::Multi { children, .. } => {
-                children.clear();
-                children.extend_from_slice(new_children);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Check if leaf
+    /// Check if this is a leaf node (no children)
     pub fn is_leaf(&self) -> bool {
-        matches!(self, Self::Leaf(_))
+        self.children.is_empty()
     }
 
-    /// Check if single
+    /// Check if this is a single-child node
     pub fn is_single(&self) -> bool {
-        matches!(self, Self::Single { .. })
+        matches!(self.children, Children::Single(_))
     }
 
-    /// Check if multi
+    /// Check if this is a multi-child node
     pub fn is_multi(&self) -> bool {
-        matches!(self, Self::Multi { .. })
-    }
-
-    /// Get metadata from the render object
-    ///
-    /// Returns `Some(&dyn Any)` if the render object provides metadata via its `metadata()` method.
-    /// The caller can then downcast to the specific metadata type.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use crate::objects::layout::flex_item::FlexItemMetadata;
-    ///
-    /// if let Some(metadata_any) = render_node.metadata() {
-    ///     if let Some(flex_meta) = metadata_any.downcast_ref::<FlexItemMetadata>() {
-    ///         // Use flex_meta.flex, flex_meta.fit, etc.
-    ///     }
-    /// }
-    /// ```
-    pub fn metadata(&self) -> Option<&dyn std::any::Any> {
-        match self {
-            Self::Leaf(r) => r.metadata(),
-            Self::Single { render: r, .. } => r.metadata(),
-            Self::Multi { render: r, .. } => r.metadata(),
-        }
+        matches!(self.children, Children::Multi(_))
     }
 
     // ========== Layout ==========
 
     /// Perform layout
     ///
-    /// # Single Child Handling
+    /// Calls the render object's `layout` method with a context
+    /// containing the element tree, children, and constraints.
     ///
-    /// For Single variant, if child is None (not yet mounted), returns zero size
-    /// constrained by the given constraints.
+    /// # Parameters
+    ///
+    /// - `tree`: Reference to the element tree
+    /// - `constraints`: Layout constraints from parent
+    ///
+    /// # Returns
+    ///
+    /// The computed size (must satisfy constraints).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let size = node.layout(&tree, BoxConstraints::tight(Size::new(100.0, 100.0)));
+    /// ```
     pub fn layout(&mut self, tree: &ElementTree, constraints: BoxConstraints) -> Size {
-        match self {
-            Self::Leaf(r) => r.layout(constraints),
-            Self::Single {
-                render: r, child, ..
-            } => {
-                if let Some(child_id) = child {
-                    r.layout(tree, *child_id, constraints)
-                } else {
-                    // Child not yet mounted - return zero size
-                    constraints.constrain(Size::ZERO)
-                }
-            }
-            Self::Multi {
-                render: r,
-                children,
-                ..
-            } => r.layout(tree, children, constraints),
-        }
+        let ctx = LayoutContext::new(tree, &self.children, constraints);
+        self.render.layout(&ctx)
     }
 
     // ========== Paint ==========
 
     /// Perform paint
     ///
-    /// # Single Child Handling
+    /// Calls the render object's `paint` method with a context
+    /// containing the element tree, children, and offset.
     ///
-    /// For Single variant, if child is None (not yet mounted), returns an empty
-    /// container layer.
+    /// # Parameters
+    ///
+    /// - `tree`: Reference to the element tree
+    /// - `offset`: Paint offset in parent's coordinate space
+    ///
+    /// # Returns
+    ///
+    /// A boxed layer containing the painted content.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let layer = node.paint(&tree, Offset::new(10.0, 20.0));
+    /// ```
     pub fn paint(&self, tree: &ElementTree, offset: Offset) -> BoxedLayer {
-        match self {
-            Self::Leaf(r) => r.paint(offset),
-            Self::Single {
-                render: r, child, ..
-            } => {
-                if let Some(child_id) = child {
-                    r.paint(tree, *child_id, offset)
-                } else {
-                    // Child not yet mounted - return empty layer
-                    Box::new(flui_engine::ContainerLayer::new())
-                }
-            }
-            Self::Multi {
-                render: r,
-                children,
-                ..
-            } => r.paint(tree, children, offset),
-        }
+        let ctx = PaintContext::new(tree, &self.children, offset);
+        self.render.paint(&ctx)
     }
 
     // ========== Intrinsics ==========
 
     /// Compute intrinsic width
+    ///
+    /// Delegates to the render object's `intrinsic_width` method.
     pub fn intrinsic_width(&self, height: Option<f32>) -> Option<f32> {
-        match self {
-            Self::Leaf(r) => r.intrinsic_width(height),
-            Self::Single { render: r, .. } => r.intrinsic_width(height),
-            Self::Multi { render: r, .. } => r.intrinsic_width(height),
-        }
+        self.render.intrinsic_width(height)
     }
 
     /// Compute intrinsic height
+    ///
+    /// Delegates to the render object's `intrinsic_height` method.
     pub fn intrinsic_height(&self, width: Option<f32>) -> Option<f32> {
-        match self {
-            Self::Leaf(r) => r.intrinsic_height(width),
-            Self::Single { render: r, .. } => r.intrinsic_height(width),
-            Self::Multi { render: r, .. } => r.intrinsic_height(width),
-        }
+        self.render.intrinsic_height(width)
     }
 }
 
@@ -351,110 +302,97 @@ mod tests {
     #[derive(Debug)]
     struct TestLeaf;
 
-    impl LeafRender for TestLeaf {
-        type Metadata = ();
-
-        fn layout(&mut self, constraints: BoxConstraints) -> Size {
-            constraints.constrain(Size::new(100.0, 100.0))
+    impl Render for TestLeaf {
+        fn layout(&mut self, ctx: &LayoutContext) -> Size {
+            ctx.constraints.constrain(Size::new(100.0, 100.0))
         }
 
-        fn paint(&self, _offset: Offset) -> BoxedLayer {
+        fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
             Box::new(ContainerLayer::new())
+        }
+
+        fn arity(&self) -> Arity {
+            Arity::Exact(0)
         }
     }
 
     #[derive(Debug)]
     struct TestSingle;
 
-    impl SingleRender for TestSingle {
-        type Metadata = ();
-
-        fn layout(
-            &mut self,
-            _tree: &ElementTree,
-            _child_id: ElementId,
-            constraints: BoxConstraints,
-        ) -> Size {
-            constraints.constrain(Size::new(200.0, 200.0))
+    impl Render for TestSingle {
+        fn layout(&mut self, ctx: &LayoutContext) -> Size {
+            let child_id = ctx.children.single();
+            ctx.layout_child(child_id, ctx.constraints)
         }
 
-        fn paint(&self, _tree: &ElementTree, _child_id: ElementId, _offset: Offset) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
+        fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+            let child_id = ctx.children.single();
+            ctx.paint_child(child_id, ctx.offset)
+        }
+
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
         }
     }
 
     #[derive(Debug)]
     struct TestMulti;
 
-    impl MultiRender for TestMulti {
-        type Metadata = ();
-
-        fn layout(
-            &mut self,
-            _tree: &ElementTree,
-            _children: &[ElementId],
-            constraints: BoxConstraints,
-        ) -> Size {
-            constraints.constrain(Size::new(300.0, 300.0))
+    impl Render for TestMulti {
+        fn layout(&mut self, ctx: &LayoutContext) -> Size {
+            ctx.constraints.biggest()
         }
 
-        fn paint(
-            &self,
-            _tree: &ElementTree,
-            _children: &[ElementId],
-            _offset: Offset,
-        ) -> BoxedLayer {
+        fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
             Box::new(ContainerLayer::new())
         }
+
+        fn arity(&self) -> Arity {
+            Arity::Variable
+        }
     }
 
     #[test]
-    fn test_leaf() {
-        let render = RenderNode::new_leaf(Box::new(TestLeaf));
-        assert!(render.is_leaf());
-        assert_eq!(render.arity(), Some(0));
+    fn test_leaf_node() {
+        let node = RenderNode::new(Box::new(TestLeaf), Children::None);
+        assert!(node.is_leaf());
+        assert_eq!(node.arity(), Arity::Exact(0));
     }
 
     #[test]
-    fn test_single() {
-        let render = RenderNode::new_single(Box::new(TestSingle), 1);
-        assert!(render.is_single());
-        assert_eq!(render.arity(), Some(1));
-        assert_eq!(render.child(), Some(1));
+    fn test_single_node() {
+        let node = RenderNode::new(Box::new(TestSingle), Children::from_single(1));
+        assert!(node.is_single());
+        assert_eq!(node.arity(), Arity::Exact(1));
     }
 
     #[test]
-    fn test_multi() {
-        let children = vec![1, 2];
-        let render = RenderNode::new_multi(Box::new(TestMulti), children.clone());
-        assert!(render.is_multi());
-        assert_eq!(render.arity(), None);
-        assert_eq!(render.children(), Some(&children[..]));
+    fn test_multi_node() {
+        let children = vec![1, 2, 3];
+        let node = RenderNode::new(Box::new(TestMulti), Children::from_multi(children.clone()));
+        assert!(node.is_multi());
+        assert_eq!(node.arity(), Arity::Variable);
+        assert_eq!(node.children().as_slice(), &children[..]);
     }
 
     #[test]
-    fn test_set_child() {
-        let mut render = RenderNode::new_single(Box::new(TestSingle), 1);
-        assert!(render.set_child(2));
-        assert_eq!(render.child(), Some(2));
+    #[should_panic(expected = "arity validation failed")]
+    fn test_arity_validation_fail() {
+        // Try to create leaf with children
+        RenderNode::new(Box::new(TestLeaf), Children::from_single(1));
     }
 
     #[test]
     fn test_set_children() {
-        let mut render = RenderNode::new_multi(Box::new(TestMulti), vec![]);
-        let new_children = vec![1];
-        assert!(render.set_children(&new_children));
-        assert_eq!(render.children(), Some(&new_children[..]));
+        let mut node = RenderNode::new(Box::new(TestMulti), Children::from_multi(vec![]));
+        node.set_children(Children::from_multi(vec![1, 2]));
+        assert_eq!(node.children().len(), 2);
     }
 
     #[test]
-    fn test_debug_names() {
-        let leaf = RenderNode::new_leaf(Box::new(TestLeaf));
-        let single = RenderNode::new_single(Box::new(TestSingle), 1);
-        let multi = RenderNode::new_multi(Box::new(TestMulti), vec![]);
-
-        assert!(leaf.debug_name().contains("TestLeaf"));
-        assert!(single.debug_name().contains("TestSingle"));
-        assert!(multi.debug_name().contains("TestMulti"));
+    fn test_debug_name() {
+        let node = RenderNode::new(Box::new(TestLeaf), Children::None);
+        let name = node.debug_name();
+        assert!(name.contains("TestLeaf"));
     }
 }

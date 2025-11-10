@@ -1,47 +1,67 @@
-//! Render system - Enum-based architecture
+//! Render system - Unified architecture
 //!
-//! # Architecture
+//! # Architecture (v0.1.0)
 //!
-//! - `RenderNode` enum: Unified render tree node (stores in Element tree)
-//! - `LeafRender`, `SingleRender`, `MultiRender` traits: Specialized render traits
+//! - `Render` trait: Unified trait for all render objects
+//! - `Children` enum: Unified child representation (None/Single/Multi)
+//! - `LayoutContext` / `PaintContext`: Context structs for operations
+//! - `Arity`: Runtime child count validation
+//! - `ParentData`: Metadata system (stored in RenderElement)
 //!
 //! # Pattern
 //!
 //! ```text
-//! View (trait) → Element (enum) → RenderNode (enum)
+//! View (trait) → Element (enum) → RenderNode → Render trait
 //!                                      ↓
-//!                                  LeafRender/SingleRender/MultiRender traits
+//!                                  LayoutContext / PaintContext
 //! ```
 //!
 //! # Implementation Guide
 //!
-//! To create a render object, implement one of the specialized traits:
+//! To create a render object, implement the unified `Render` trait:
 //!
-//! - `LeafRender`: For renders with no children (e.g., text, image)
-//! - `SingleRender`: For renders with exactly one child (e.g., opacity, transform)
-//! - `MultiRender`: For renders with multiple children (e.g., flex, stack)
+//! ```rust,ignore
+//! impl Render for MyRenderObject {
+//!     fn layout(&mut self, ctx: &LayoutContext) -> Size { /* ... */ }
+//!     fn paint(&self, ctx: &PaintContext) -> BoxedLayer { /* ... */ }
+//!     fn arity(&self) -> Arity { Arity::Variable }  // or Exact(n)
+//! }
+//! ```
 
 // Core modules
+pub mod arity;
 pub mod cache;
+pub mod children;
+pub mod context;
 pub mod parent_data;
 pub mod render_flags;
 pub mod render_node;
 pub mod render_pipeline;
 pub mod render_state;
-pub mod render_traits;
+pub mod render_unified;
+
+
+
+
 
 // ========== Public API ==========
 
+// New unified API (v0.1.0+)
+/// Unified Render trait - replaces LeafRender, SingleRender, MultiRender
+pub use render_unified::Render;
+
+/// Children enum - unified child representation
+pub use children::Children;
+
+/// Arity - child count specification
+pub use arity::Arity;
+
+/// Context structs for layout and paint
+pub use context::{LayoutContext, PaintContext};
+
+// Core types
 /// Unified render tree node enum
 pub use render_node::RenderNode;
-
-/// Object-safe render traits (specialized by child count)
-///
-/// These are the main traits for implementing render objects:
-/// - `LeafRender`: For renders with no children
-/// - `SingleRender`: For renders with exactly one child
-/// - `MultiRender`: For renders with multiple children
-pub use render_traits::{LeafRender, MultiRender, SingleRender};
 
 /// Parent data and metadata
 pub use parent_data::{
@@ -53,3 +73,8 @@ pub use cache::{LayoutCache, LayoutCacheKey, LayoutResult};
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
 pub use render_pipeline::RenderPipeline;
 pub use render_state::RenderState;
+
+
+
+
+

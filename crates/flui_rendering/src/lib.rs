@@ -47,10 +47,10 @@
 pub mod error;
 pub mod objects;
 
-// Re-export from flui_core - the new trait-based RenderObject architecture
+// Re-export from flui_core - the unified Render trait architecture
 pub use flui_core::render::{
-    LeafRender, MultiRender, ParentData, ParentDataWithOffset, RenderFlags, RenderPipeline,
-    RenderState, SingleRender,
+    Arity, Children, LayoutContext, PaintContext, ParentData, ParentDataWithOffset, Render,
+    RenderFlags, RenderPipeline, RenderState,
 };
 
 // Re-export from flui_engine for Layer types

@@ -46,8 +46,7 @@ pub use view::{ChangeFlags, View, ViewElement};
 // Simplified API exports (IntoElement, RenderBuilder)
 pub use into_element::{AnyElement, IntoAnyElement, IntoElement};
 pub use render_builder::{
-    LeafRenderBuilder, LeafRenderExt, MultiRenderBuilder, MultiRenderExt, SingleRenderBuilder,
-    SingleRenderExt,
+    LeafRenderBuilder, MultiRenderBuilder, RenderBuilder, SingleRenderBuilder,
 };
 
 // TODO(2025-02): Add view tree management.
