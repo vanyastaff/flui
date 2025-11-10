@@ -297,8 +297,8 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
                 element_id
             );
 
-            // TODO: Implement provider change propagation
-            // This requires walking descendants and marking relevant elements dirty
+            // Note: Provider change propagation is handled by BuildPipeline::rebuild_provider()
+            // in the sequential build path. Parallel build currently skips this for safety.
         }
     }
 

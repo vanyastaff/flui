@@ -163,8 +163,9 @@ pub fn assert_element_size(tree: &ElementTree, id: ElementId, expected: Size) {
 /// assert_key_exists(&tree, Key::from_str("submit-button"));
 /// ```
 pub fn assert_key_exists(tree: &ElementTree, key: Key) {
+    let found = find_element_by_key(tree, key);
     assert!(
-        tree.find_by_key(key).is_some(),
+        found.is_some(),
         "Expected to find element with key {:?}, but it was not found",
         key
     );
@@ -182,11 +183,27 @@ pub fn assert_key_exists(tree: &ElementTree, key: Key) {
 /// assert_key_not_exists(&tree, Key::from_str("removed-button"));
 /// ```
 pub fn assert_key_not_exists(tree: &ElementTree, key: Key) {
+    let found = find_element_by_key(tree, key);
     assert!(
-        tree.find_by_key(key).is_none(),
+        found.is_none(),
         "Expected not to find element with key {:?}, but it was found",
         key
     );
+}
+
+/// Helper function to find an element by key
+///
+/// Iterates through all elements in the tree to find one with matching key.
+fn find_element_by_key(tree: &ElementTree, key: Key) -> Option<ElementId> {
+    for i in 0..tree.len() {
+        let id = ElementId::new(i + 1);
+        if let Some(element) = tree.get(id) {
+            if element.key() == Some(&key) {
+                return Some(id);
+            }
+        }
+    }
+    None
 }
 
 /// Assert that the tree has a specific number of elements

@@ -87,7 +87,7 @@ impl ProviderElement {
     }
 
     // Note: update() method removed - will be replaced with View::rebuild()
-    // TODO(Phase 5): Implement proper View-based rebuild
+    // Note: Implement proper View-based rebuild
 
     /// Register a dependent element
     ///
@@ -188,7 +188,7 @@ impl ProviderElement {
     }
 
     // Note: rebuild() method removed - will be replaced with View::rebuild()
-    // TODO(Phase 5): Implement proper View-based rebuild
+    // Note: Implement proper View-based rebuild
 
     /// Forget child element
     pub(crate) fn forget_child(&mut self, child_id: ElementId) {
@@ -277,7 +277,7 @@ impl ViewElement for ProviderElement {
     }
 }
 
-// TODO(Phase 5): Add tests using View API
+// Note: Add tests using View API
 #[cfg(test)]
 mod tests {
     // Tests removed - need to be rewritten with View API

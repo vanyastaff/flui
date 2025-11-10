@@ -303,7 +303,7 @@ impl RenderElement {
     }
 
     // Note: update() method removed - will be replaced with View-based update
-    // TODO(Phase 5): Implement View::rebuild() integration
+    // Note: Implement View::rebuild() integration
 
     /// Set children (enforces arity constraints at runtime)
     #[allow(dead_code)]

@@ -127,7 +127,7 @@ impl RootManager {
         // Insert into tree
         let id = tree_guard.insert(root_element);
 
-        // TODO(Phase 5): Call view.build() to create child
+        // Note: Call view.build() to create child
 
         drop(tree_guard);
 

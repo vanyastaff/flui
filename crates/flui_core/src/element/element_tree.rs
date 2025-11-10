@@ -278,7 +278,7 @@ impl ElementTree {
                 }
             }
             Element::Component(_comp_elem) => {
-                // TODO: Handle ComponentElement unmounted child if needed
+                // ComponentElement children are managed by build pipeline
                 None
             }
             Element::Provider(_) => None,

@@ -3,10 +3,10 @@
 //! Provides utilities for testing FLUI views and elements in isolation.
 
 use crate::{
-    element::{ElementId, ElementTree},
+    element::{Element, ElementId, ElementTree},
     foundation::Key,
     pipeline::{PipelineBuilder, PipelineOwner},
-    view::{AnyView, BuildContext},
+    view::{AnyView, BuildContext, IntoElement},
     View,
 };
 use flui_types::{BoxConstraints, Size};
@@ -65,7 +65,7 @@ impl TestHarness {
     pub fn mount<V: View>(&mut self, view: V) -> ElementId {
         let tree = self.tree.clone();
         let element_id = {
-            let mut tree = tree.write().unwrap();
+            let mut tree_guard = tree.write().unwrap();
 
             // Create build context (minimal for testing)
             let ctx = BuildContext::new(
@@ -74,11 +74,11 @@ impl TestHarness {
                 Arc::new(RwLock::new(self.pipeline.coordinator().clone())),
             );
 
-            // Build the view
+            // Build the view into an element
             let element = view.build(&ctx).into_element();
 
-            // Mount the element
-            tree.mount_root(element)
+            // Insert the element into the tree
+            tree_guard.insert(element)
         };
 
         self.root_id = Some(element_id);
@@ -134,6 +134,8 @@ impl TestHarness {
 
     /// Find an element by key
     ///
+    /// Searches through all elements in the tree for one with the matching key.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
@@ -141,7 +143,18 @@ impl TestHarness {
     /// ```
     pub fn find_by_key(&self, key: Key) -> Option<ElementId> {
         let tree = self.tree.read().unwrap();
-        tree.find_by_key(key)
+
+        // Iterate through all elements to find one with the matching key
+        // Note: This is O(n) - for production use, consider adding an index
+        for i in 0..tree.len() {
+            let id = ElementId::new(i + 1);
+            if let Some(element) = tree.get(id) {
+                if element.key() == Some(&key) {
+                    return Some(id);
+                }
+            }
+        }
+        None
     }
 
     /// Get the number of elements in the tree
@@ -150,12 +163,12 @@ impl TestHarness {
         tree.len()
     }
 
-    /// Unmount the root element and clear the tree
+    /// Unmount the root element
+    ///
+    /// Note: This currently just clears the root_id reference.
+    /// Full unmounting would require implementing element cleanup in ElementTree.
     pub fn unmount(&mut self) {
-        if let Some(root_id) = self.root_id.take() {
-            let mut tree = self.tree.write().unwrap();
-            tree.unmount(root_id);
-        }
+        self.root_id = None;
     }
 }
 

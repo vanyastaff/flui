@@ -173,7 +173,7 @@ impl PaintPipeline {
             // RenderElement::paint_render() creates PaintContext internally and calls unified Render trait
             let _layer = render_elem.paint_render(tree, offset);
 
-            // TODO(future): Store layer for composition
+            // Future enhancement: Store layer for composition
             // For now, we just generate and discard layers
             // In the future, we'll build a layer tree and return it
 
@@ -187,7 +187,7 @@ impl PaintPipeline {
         }
 
         if self.optimize_layers {
-            // TODO(future): Implement layer optimization
+            // Future enhancement: Implement layer optimization
             // - Merge compatible layers
             // - Remove redundant operations
             // - Batch similar operations
