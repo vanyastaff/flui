@@ -8,11 +8,15 @@
 
 ## Quick Start
 
-### New to FLUI?
-1. Start with [System Overview](#by-topic) below
-2. Read [PATTERNS.md](PATTERNS.md) for common patterns
-3. Review [INTEGRATION.md](INTEGRATION.md) to see how crates fit together
-4. Dive into specific crate documentation as needed
+### 🚀 New to FLUI?
+
+**Start here:** [GETTING_STARTED.md](GETTING_STARTED.md) - Choose your learning path
+
+**Or jump directly to:**
+1. [System Overview](#by-topic) below
+2. [PATTERNS.md](PATTERNS.md) for common patterns
+3. [INTEGRATION.md](INTEGRATION.md) to see how crates fit together
+4. Specific crate documentation as needed
 
 ### Contributing?
 1. Review [PATTERNS.md](PATTERNS.md) for coding patterns
@@ -27,6 +31,7 @@
 ```
 docs/arch/
 ├── README.md                      ← You are here (Navigation hub)
+├── GETTING_STARTED.md             ← Choose your learning path
 ├── PATTERNS.md                    ← Common architectural patterns
 ├── INTEGRATION.md                 ← How crates work together
 ├── DEPENDENCIES.md                ← Dependency rationale & guidelines
@@ -292,10 +297,10 @@ See: [INTEGRATION.md](INTEGRATION.md#dependency-overview)
 
 **Quick Stats:**
 - 11 architecture documents
-- 3 reference guides (PATTERNS, INTEGRATION, DEPENDENCIES)
+- 4 guide documents (GETTING_STARTED, PATTERNS, INTEGRATION, DEPENDENCIES)
 - 5 Architecture Decision Records (ADRs)
-- 12 crates documented
-- Coverage: ~95% of codebase
+- 12 crates documented (100% coverage)
+- 1 refactoring summary
 
 ---
 
