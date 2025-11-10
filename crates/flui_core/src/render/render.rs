@@ -1,124 +1,125 @@
-//! Unified Render trait - single trait for all render objects
+//! Render trait - single trait for all render objects
 //!
-//! This module provides the new unified `Render` trait that replaces
-//! the three-trait system (LeafRender, SingleRender, MultiRender).
+//! This module provides the `Render` trait for implementing render objects
+//! with any number of children (0, 1, or multiple).
 //!
 //! # Architecture
 //!
-//! - **Single trait** instead of three (LeafRender, SingleRender, MultiRender)
+//! - **Single trait** for all render objects (regardless of child count)
 //! - **Children enum** to handle all child count patterns
 //! - **Context structs** (LayoutContext, PaintContext) for clean API
 //! - **Arity validation** at runtime via `arity()` method
 //! - **ParentData system** for metadata (stored in RenderElement)
 //!
-//! # Migration from Old API
+//! # Usage Patterns
 //!
-//! ## LeafRender → Render
+//! ## Leaf Render (0 children)
 //!
 //! ```rust,ignore
-//! // Old API
-//! impl LeafRender for RenderParagraph {
-//!     type Metadata = ();
-//!
-//!     fn layout(&mut self, constraints: BoxConstraints) -> Size {
-//!         // ...
-//!     }
-//!
-//!     fn paint(&self, offset: Offset) -> BoxedLayer {
-//!         // ...
-//!     }
+//! #[derive(Debug)]
+//! struct RenderText {
+//!     text: String,
 //! }
 //!
-//! // New API
-//! impl Render for RenderParagraph {
+//! impl Render for RenderText {
 //!     fn layout(&mut self, ctx: &LayoutContext) -> Size {
-//!         // Access constraints via ctx.constraints
+//!         // Compute text size
+//!         let size = measure_text(&self.text);
+//!         ctx.constraints.constrain(size)
 //!     }
 //!
 //!     fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
-//!         // Access offset via ctx.offset
+//!         let mut layer = pool::acquire_picture();
+//!         layer.draw_text(&self.text, ctx.offset);
+//!         Box::new(layer)
 //!     }
 //!
 //!     fn arity(&self) -> Arity {
 //!         Arity::Exact(0)  // No children
 //!     }
+//!
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
+//!     }
 //! }
 //! ```
 //!
-//! ## SingleRender → Render
+//! ## Single Child Render
 //!
 //! ```rust,ignore
-//! // Old API
-//! impl SingleRender for RenderPadding {
-//!     type Metadata = ();
-//!
-//!     fn layout(&mut self, tree: &ElementTree, child_id: ElementId,
-//!               constraints: BoxConstraints) -> Size {
-//!         let child_size = tree.layout_child(child_id, constraints);
-//!         // ...
-//!     }
-//!
-//!     fn paint(&self, tree: &ElementTree, child_id: ElementId,
-//!              offset: Offset) -> BoxedLayer {
-//!         tree.paint_child(child_id, offset)
-//!     }
+//! #[derive(Debug)]
+//! struct RenderPadding {
+//!     padding: EdgeInsets,
 //! }
 //!
-//! // New API
 //! impl Render for RenderPadding {
 //!     fn layout(&mut self, ctx: &LayoutContext) -> Size {
 //!         let child_id = ctx.children.single();
-//!         let child_size = ctx.layout_child(child_id, ctx.constraints);
-//!         // ...
+//!         let deflated = ctx.constraints.deflate(&self.padding);
+//!         let child_size = ctx.layout_child(child_id, deflated);
+//!         Size::new(
+//!             child_size.width + self.padding.horizontal_total(),
+//!             child_size.height + self.padding.vertical_total(),
+//!         )
 //!     }
 //!
 //!     fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
 //!         let child_id = ctx.children.single();
-//!         ctx.paint_child(child_id, ctx.offset)
+//!         let offset = ctx.offset + self.padding.top_left_offset();
+//!         ctx.paint_child(child_id, offset)
 //!     }
 //!
 //!     fn arity(&self) -> Arity {
 //!         Arity::Exact(1)  // Exactly one child
 //!     }
+//!
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
+//!     }
 //! }
 //! ```
 //!
-//! ## MultiRender → Render
+//! ## Multiple Children Render
 //!
 //! ```rust,ignore
-//! // Old API
-//! impl MultiRender for RenderFlex {
-//!     type Metadata = ();
-//!
-//!     fn layout(&mut self, tree: &ElementTree, children: &[ElementId],
-//!               constraints: BoxConstraints) -> Size {
-//!         for &child_id in children {
-//!             tree.layout_child(child_id, child_constraints);
-//!         }
-//!         // ...
-//!     }
-//!
-//!     fn paint(&self, tree: &ElementTree, children: &[ElementId],
-//!              offset: Offset) -> BoxedLayer {
-//!         // ...
-//!     }
+//! #[derive(Debug)]
+//! struct RenderColumn {
+//!     spacing: f32,
 //! }
 //!
-//! // New API
-//! impl Render for RenderFlex {
+//! impl Render for RenderColumn {
 //!     fn layout(&mut self, ctx: &LayoutContext) -> Size {
+//!         let mut y = 0.0;
+//!         let mut max_width = 0.0;
+//!
 //!         for &child_id in ctx.children.as_slice() {
-//!             ctx.layout_child(child_id, child_constraints);
+//!             let child_size = ctx.layout_child(child_id, ctx.constraints);
+//!             y += child_size.height + self.spacing;
+//!             max_width = max_width.max(child_size.width);
 //!         }
-//!         // ...
+//!
+//!         Size::new(max_width, y - self.spacing)
 //!     }
 //!
 //!     fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
-//!         // ...
+//!         let mut container = pool::acquire_container();
+//!         let mut y = 0.0;
+//!
+//!         for &child_id in ctx.children.as_slice() {
+//!             let offset = Offset::new(0.0, y);
+//!             container.child(ctx.paint_child(child_id, ctx.offset + offset));
+//!             y += child_sizes[i].height + self.spacing;
+//!         }
+//!
+//!         Box::new(container)
 //!     }
 //!
 //!     fn arity(&self) -> Arity {
 //!         Arity::Variable  // Any number of children
+//!     }
+//!
+//!     fn as_any(&self) -> &dyn std::any::Any {
+//!         self
 //!     }
 //! }
 //! ```
@@ -128,11 +129,10 @@ use flui_engine::BoxedLayer;
 use flui_types::Size;
 use std::fmt::Debug;
 
-/// Unified render trait for all render objects
+/// Render trait for all render objects
 ///
-/// Replaces the three-trait system (LeafRender, SingleRender, MultiRender)
-/// with a single trait that handles all child count patterns via the
-/// `Children` enum.
+/// Single trait that handles all child count patterns (0, 1, or many)
+/// via the `Children` enum passed through context structs.
 ///
 /// # Required Methods
 ///

@@ -366,11 +366,6 @@ impl RenderElement {
         self.children.retain(|&id| id != child_id);
     }
 
-    /// Check if there are unmounted children waiting to be inserted
-    pub(crate) fn has_unmounted_children(&self) -> bool {
-        self.unmounted_children.is_some()
-    }
-
     /// Take unmounted children (consumes them)
     ///
     /// Returns the unmounted children and sets the field to None.

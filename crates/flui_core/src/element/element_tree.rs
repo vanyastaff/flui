@@ -277,7 +277,7 @@ impl ElementTree {
                     None
                 }
             }
-            Element::Component(comp_elem) => {
+            Element::Component(_comp_elem) => {
                 // TODO: Handle ComponentElement unmounted child if needed
                 None
             }

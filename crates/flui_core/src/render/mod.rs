@@ -34,10 +34,11 @@ pub mod cache;
 pub mod children;
 pub mod context;
 pub mod parent_data;
+pub mod render;
 pub mod render_flags;
 pub mod render_pipeline;
 pub mod render_state;
-pub mod render_unified;
+
 
 
 
@@ -45,9 +46,9 @@ pub mod render_unified;
 
 // ========== Public API ==========
 
-// New unified API (v0.1.0+)
-/// Unified Render trait - replaces LeafRender, SingleRender, MultiRender
-pub use render_unified::Render;
+// Unified API (v0.1.0+)
+/// Render trait - single unified trait for all render objects
+pub use render::Render;
 
 /// Children enum - unified child representation
 pub use children::Children;
@@ -69,6 +70,8 @@ pub use cache::{LayoutCache, LayoutCacheKey, LayoutResult};
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
 pub use render_pipeline::RenderPipeline;
 pub use render_state::RenderState;
+
+
 
 
 

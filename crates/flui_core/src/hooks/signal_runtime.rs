@@ -26,16 +26,47 @@ struct SignalDataErased {
     type_name: &'static str,
 }
 
+impl std::fmt::Debug for SignalDataErased {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(debug_assertions)]
+        {
+            f.debug_struct("SignalDataErased")
+                .field("type_name", &self.type_name)
+                .field("type_id", &self.type_id)
+                .field("subscribers_count", &self.subscribers.lock().len())
+                .finish_non_exhaustive()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            f.debug_struct("SignalDataErased")
+                .field("type_id", &self.type_id)
+                .field("subscribers_count", &self.subscribers.lock().len())
+                .finish_non_exhaustive()
+        }
+    }
+}
+
 /// Typed signal data (stored inside SignalDataErased).
 pub struct SignalData<T> {
     /// The actual value (thread-safe)
     pub value: Arc<Mutex<T>>,
 
     /// Subscribers that get notified on changes
+    #[allow(dead_code)]
     subscribers: Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>,
 }
 
+impl<T: std::fmt::Debug> std::fmt::Debug for SignalData<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignalData")
+            .field("value", &self.value)
+            .field("subscribers_count", &self.subscribers.lock().len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl<T: Send + 'static> SignalData<T> {
+    #[allow(dead_code)]
     fn new(
         initial: T,
         subscribers: Arc<Mutex<HashMap<SubscriptionId, Arc<dyn Fn() + Send + Sync>>>>,
@@ -51,6 +82,7 @@ impl<T: Send + 'static> SignalData<T> {
 ///
 /// This is a thread-local singleton that manages the lifecycle of all signals.
 /// Signals store only their ID and access data through this runtime.
+#[derive(Debug)]
 pub struct SignalRuntime {
     /// Map of SignalId -> SignalDataErased
     /// Uses Mutex for thread-safety (signals can be accessed from multiple threads)
@@ -328,7 +360,12 @@ impl SignalRuntime {
 }
 
 // Global signal runtime instance (thread-local for safety)
+//
+// This thread-local storage provides a separate signal runtime for each thread,
+// ensuring thread-safety without requiring explicit synchronization when accessing
+// signal data within the same thread.
 thread_local! {
+    /// Global signal runtime instance (thread-local for safety)
     pub static SIGNAL_RUNTIME: SignalRuntime = SignalRuntime::new();
 }
 
