@@ -5,8 +5,8 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::layer::{BoxedLayer, ClipRectLayer, PictureLayer, ScrollableLayer};
-use flui_engine::painter::Paint;
+use flui_engine::layer::{pool, BoxedLayer, ClipRectLayer, ScrollableLayer};
+use flui_painting::{Canvas, Paint};
 use flui_types::layout::Axis;
 use flui_types::{BoxConstraints, Color, Offset, Rect, Size};
 use parking_lot::Mutex;
@@ -222,18 +222,28 @@ impl RenderScrollView {
             }
         };
 
-        // Create picture layer for scroll bar
-        let mut picture = PictureLayer::new();
+        // Use Canvas API for scrollbar rendering
+        let mut canvas = Canvas::new();
 
         // Draw track (light background)
         let track_paint = Paint::fill(Color::rgba(0, 0, 0, 26)); // 10% opacity = 26/255
-        picture.draw_rect(track_rect, track_paint);
+        canvas.draw_rect(track_rect, &track_paint);
 
         // Draw thumb (darker, semi-transparent)
         let thumb_paint = Paint::fill(Color::rgba(0, 0, 0, 102)); // 40% opacity = 102/255
-        picture.draw_rect(thumb_rect, thumb_paint);
+        canvas.draw_rect(thumb_rect, &thumb_paint);
 
-        Some(Box::new(picture))
+        // Finish canvas
+        let _display_list = canvas.finish();
+
+        // Apply to engine picture layer
+        let mut picture = pool::acquire_picture();
+        let track_engine = flui_engine::Paint::fill(Color::rgba(0, 0, 0, 26));
+        picture.draw_rect(track_rect, track_engine);
+        let thumb_engine = flui_engine::Paint::fill(Color::rgba(0, 0, 0, 102));
+        picture.draw_rect(thumb_rect, thumb_engine);
+
+        Some(Box::new(flui_engine::PooledPictureLayer::new(picture)))
     }
 }
 

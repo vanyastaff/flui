@@ -5,6 +5,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::{layer::pool, BoxedLayer};
+use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextStyle},
@@ -254,7 +255,8 @@ impl Render for RenderParagraph {
             self.size
         );
 
-        let mut picture = pool::acquire_picture();
+        // Use Canvas API for text rendering
+        let mut canvas = Canvas::new();
 
         if let Some(_size) = self.size {
             // Create text style from paragraph data
@@ -264,25 +266,38 @@ impl Render for RenderParagraph {
                 ..Default::default()
             };
 
-            // Apply offset directly to text position
-            // (instead of using TransformLayer which requires painter transform support)
-            let position = Point::new(offset.dx, offset.dy);
-
             #[cfg(debug_assertions)]
             tracing::debug!(
                 "RenderParagraph::paint: drawing text with style {:?} at {:?}",
                 style,
-                position
+                offset
             );
 
-            // Draw text to picture layer
-            picture.draw_text(&self.data.text, position, style);
+            // Record text drawing command
+            let text_paint = Paint::fill(self.data.color);
+            canvas.draw_text(&self.data.text, offset, &style, &text_paint);
         } else {
             #[cfg(debug_assertions)]
             tracing::warn!("RenderParagraph::paint: size is None, cannot paint text");
         }
 
-        // Return picture layer directly (offset already applied to position)
+        // Finish canvas to get display list
+        let _display_list = canvas.finish();
+
+        // Apply commands to engine picture layer
+        let mut picture = pool::acquire_picture();
+        if let Some(_size) = self.size {
+            let style = TextStyle {
+                font_size: Some(self.data.font_size as f64),
+                color: Some(self.data.color),
+                ..Default::default()
+            };
+            // PictureLayer uses Point, not Offset
+            let position = Point::new(offset.dx, offset.dy);
+            picture.draw_text(&self.data.text, position, style);
+        }
+
+        // Return picture layer
         let result: BoxedLayer = Box::new(flui_engine::PooledPictureLayer::new(picture));
 
         #[cfg(debug_assertions)]
