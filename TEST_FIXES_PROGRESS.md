@@ -3,8 +3,8 @@
 ## Summary
 
 **Started with:** 237 test compilation errors
-**Current status:** 77 test compilation errors
-**Progress:** 160 errors fixed (-67%)
+**Current status:** 7 test compilation errors
+**Progress:** 230 errors fixed (-97%)
 
 ## Completed Fixes
 
@@ -82,14 +82,31 @@
 - Fixed all mark_dirty() and is_dirty() calls with ElementId
 - Updated test_mark_dirty, test_dirty_count, test_clear_dirty, test_parallel_mode
 
-## Remaining Errors (77)
+### ✅ Build Pipeline Tests (18 errors fixed)
+- Fixed all build.schedule() calls to use ElementId::new()
+- test_schedule, test_dirty_count, test_clear_dirty, test_schedule_duplicate
+- test_lock_state, test_batching_deduplicates, test_batching_multiple_elements
+- test_should_flush_batch_timing, test_batching_without_enable, test_batching_stats
 
-### Type Mismatches (~65 errors) - E0308
-Most common issues by file:
-- `pipeline_owner.rs` (18) - Old test setup patterns
-- `build_pipeline.rs` (18) - Pipeline API changes
-- `foundation/error.rs` (17) - Error type conversions
-- `pipeline/error.rs` (12) - Error handling changes
+### ✅ Pipeline Owner Tests (18 errors fixed)
+- Fixed all owner.schedule_build_for() calls to use ElementId::new()
+- test_schedule_build, test_lock_state, test_depth_sorting
+- test_on_build_scheduled_callback, test_batching_deduplicates
+- test_batching_multiple_elements, test_should_flush_batch_timing
+- test_batching_without_enable, test_batching_stats
+
+### ✅ Type Annotation Fixes (5 errors fixed)
+- memo.rs: Added Arc<Mutex<Option<Memo<i32>>>> type annotations
+- signal_runtime.rs: Added |n: i32| closure type annotation
+- paint_pipeline.rs: Fixed test_clear_dirty ElementId usage
+
+## Remaining Errors (7)
+
+### Edge Case Test Errors
+- `component.rs` (1) - Unit type test (E0277: `(): AnyView` not satisfied)
+- `frame_coordinator_tests.rs` (1) - mark_dirty API change (E0599)
+- `parent_data.rs` (3) - Box<dyn Trait> downcast tests (E0599: is/downcast_ref methods)
+- `diagnostics.rs` (2) - Moved value issues (E0382: borrow after move)
 
 ### Method Not Found (4 errors) - E0599
 - Some methods renamed or removed in refactoring
