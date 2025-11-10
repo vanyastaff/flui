@@ -246,3 +246,95 @@ pub trait IntoAnyElement: IntoElement {
 
 // Blanket implementation
 impl<T: IntoElement> IntoAnyElement for T {}
+
+// ============================================================================
+// Tuple Syntax for Render Objects
+// ============================================================================
+
+/// Extension trait for convenient boxing of Render objects
+///
+/// Allows writing `.boxed()` instead of `Box::new() as Box<dyn Render>`
+pub trait RenderExt: crate::render::Render + Sized {
+    /// Box this render object for use with tuple syntax
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// (RenderPadding::new().boxed(), self.child)
+    /// ```
+    fn boxed(self) -> Box<dyn crate::render::Render> {
+        Box::new(self)
+    }
+}
+
+// Blanket implementation for all Render types
+impl<T: crate::render::Render> RenderExt for T {}
+
+/// Implementation for Box<dyn Render> - direct render object usage
+///
+/// Allows using render objects directly without builder:
+/// ```rust,ignore
+/// impl View for Text {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         Box::new(RenderText::new(self.text)) as Box<dyn Render>
+///     }
+/// }
+/// ```
+impl IntoElement for Box<dyn crate::render::Render> {
+    fn into_element(self) -> Element {
+        Element::Render(crate::element::RenderElement::new(self))
+    }
+}
+
+/// Implementation for (Render, Option<child>) - single-child tuple syntax
+///
+/// Allows convenient single-child syntax:
+/// ```rust,ignore
+/// impl View for Padding {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         (RenderPadding::new(self.padding), self.child)
+///     }
+/// }
+/// ```
+impl IntoElement for (Box<dyn crate::render::Render>, Option<AnyElement>) {
+    fn into_element(self) -> Element {
+        let (render, child) = self;
+        let children: Vec<Element> = child.into_iter().map(|c| c.into_element()).collect();
+
+        let render_element = if children.is_empty() {
+            crate::element::RenderElement::new(render)
+        } else {
+            crate::element::RenderElement::new_with_children(render, children)
+        };
+
+        Element::Render(render_element)
+    }
+}
+
+/// Implementation for (Render, Vec<children>) - multi-child tuple syntax
+///
+/// Allows convenient multi-child syntax:
+/// ```rust,ignore
+/// impl View for Column {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         (RenderColumn::new(), self.children)
+///     }
+/// }
+/// ```
+impl IntoElement for (Box<dyn crate::render::Render>, Vec<AnyElement>) {
+    fn into_element(self) -> Element {
+        let (render, children) = self;
+        let child_elements: Vec<Element> = children
+            .into_iter()
+            .map(|c| c.into_element())
+            .collect();
+
+        let render_element = if child_elements.is_empty() {
+            crate::element::RenderElement::new(render)
+        } else {
+            crate::element::RenderElement::new_with_children(render, child_elements)
+        };
+
+        Element::Render(render_element)
+    }
+}

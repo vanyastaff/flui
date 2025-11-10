@@ -1,17 +1,31 @@
-//! Render builders - convenient API for creating render elements
+//! Render builder - convenient API for creating render elements
 //!
-//! This module provides builder types that simplify creating render elements
-//! from render objects. Builders handle tree insertion and RenderNode creation
-//! automatically.
+//! This module provides a unified builder for creating render elements
+//! from render objects. The builder handles tree insertion and child
+//! management automatically.
 //!
-//! # Unified API (v0.1.0)
+//! # Unified API (v0.2.0)
 //!
-//! With the unified `Render` trait, we still provide three builder types
-//! based on child count for API convenience:
+//! With the unified `Render` trait, we now have a single builder for all cases:
 //!
-//! - `RenderBuilder::leaf()` - For renders with no children
-//! - `RenderBuilder::single()` - For renders with one child
-//! - `RenderBuilder::multi()` - For renders with multiple children
+//! ```rust,ignore
+//! // Leaf render (no children)
+//! RenderBuilder::new(RenderText::new("Hello"))
+//!
+//! // Single-child render
+//! RenderBuilder::new(RenderPadding::new(padding))
+//!     .child(child_view)
+//!
+//! // Multi-child render
+//! RenderBuilder::new(RenderColumn::new())
+//!     .child(child1)
+//!     .child(child2)
+//!     .child(child3)
+//!
+//! // Or use .children() for vec
+//! RenderBuilder::new(RenderColumn::new())
+//!     .children(vec![child1, child2, child3])
+//! ```
 //!
 //! # Examples
 //!
@@ -20,7 +34,7 @@
 //! ```rust,ignore
 //! impl View for Text {
 //!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         RenderBuilder::leaf(RenderParagraph::new(&self.text))
+//!         RenderBuilder::new(RenderParagraph::new(&self.text))
 //!     }
 //! }
 //! ```
@@ -30,8 +44,8 @@
 //! ```rust,ignore
 //! impl View for Padding {
 //!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         RenderBuilder::single(RenderPadding::new(self.padding))
-//!             .with_child(self.child)
+//!         RenderBuilder::new(RenderPadding::new(self.padding))
+//!             .maybe_child(self.child)
 //!     }
 //! }
 //! ```
@@ -41,8 +55,8 @@
 //! ```rust,ignore
 //! impl View for Column {
 //!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         RenderBuilder::multi(RenderFlex::column())
-//!             .with_children(self.children)
+//!         RenderBuilder::new(RenderFlex::column())
+//!             .children(self.children)
 //!     }
 //! }
 //! ```
@@ -51,13 +65,20 @@ use super::{AnyElement, IntoElement};
 use crate::element::{Element, RenderElement};
 use crate::render::Render;
 
-/// Builder for creating render elements
+/// Unified builder for creating render elements
 ///
-/// Provides static methods to create builders for different child count patterns.
-pub struct RenderBuilder;
+/// Works with any render object (leaf, single-child, or multi-child).
+/// Arity checking is performed at runtime by RenderElement.set_children().
+pub struct RenderBuilder {
+    render: Box<dyn Render>,
+    children: Vec<AnyElement>,
+}
 
 impl RenderBuilder {
-    /// Create a leaf render builder (no children)
+    /// Create a new render builder
+    ///
+    /// Works with any render object - leaf, single-child, or multi-child.
+    /// Arity checking happens at runtime when mounting.
     ///
     /// # Parameters
     ///
@@ -66,123 +87,37 @@ impl RenderBuilder {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// RenderBuilder::leaf(RenderParagraph::new("Hello"))
+    /// // Leaf render (no children)
+    /// RenderBuilder::new(RenderText::new("Hello"))
+    ///
+    /// // Single-child render
+    /// RenderBuilder::new(RenderPadding::new(padding))
+    ///     .child(child_view)
+    ///
+    /// // Multi-child render
+    /// RenderBuilder::new(RenderColumn::new())
+    ///     .children(vec![child1, child2])
     /// ```
-    pub fn leaf(render: impl Render) -> LeafRenderBuilder {
-        LeafRenderBuilder {
-            render: Box::new(render),
-        }
-    }
-
-    /// Create a single-child render builder
-    ///
-    /// # Parameters
-    ///
-    /// - `render`: Any type implementing `Render` trait
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// RenderBuilder::single(RenderPadding::new(EdgeInsets::all(10.0)))
-    ///     .with_child(child_view)
-    /// ```
-    pub fn single(render: impl Render) -> SingleRenderBuilder {
-        SingleRenderBuilder {
-            render: Box::new(render),
-            child: None,
-        }
-    }
-
-    /// Create a multi-child render builder
-    ///
-    /// # Parameters
-    ///
-    /// - `render`: Any type implementing `Render` trait
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// RenderBuilder::multi(RenderFlex::column())
-    ///     .with_children(vec![child1, child2, child3])
-    /// ```
-    pub fn multi(render: impl Render) -> MultiRenderBuilder {
-        MultiRenderBuilder {
+    pub fn new(render: impl Render) -> Self {
+        Self {
             render: Box::new(render),
             children: Vec::new(),
         }
     }
-}
 
-// ============================================================================
-// LeafRenderBuilder
-// ============================================================================
-
-/// Builder for leaf render objects (no children)
-///
-/// Created via `RenderBuilder::leaf()`. Automatically creates a RenderElement
-/// with no children.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// impl View for Text {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         RenderBuilder::leaf(RenderParagraph::new(&self.text))
-///     }
-/// }
-/// ```
-pub struct LeafRenderBuilder {
-    render: Box<dyn Render>,
-}
-
-impl IntoElement for LeafRenderBuilder {
-    fn into_element(self) -> Element {
-        // Wrap render object in RenderElement (no children)
-        let render_element = RenderElement::new(self.render);
-
-        // Convert to Element enum
-        Element::Render(render_element)
-    }
-}
-
-// ============================================================================
-// SingleRenderBuilder
-// ============================================================================
-
-/// Builder for single-child render objects
-///
-/// Created via `RenderBuilder::single()`. Provides chainable `.with_child()`
-/// method that automatically handles tree insertion.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// impl View for Padding {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         RenderBuilder::single(RenderPadding::new(self.padding))
-///             .with_child(self.child)
-///     }
-/// }
-/// ```
-pub struct SingleRenderBuilder {
-    render: Box<dyn Render>,
-    child: Option<AnyElement>,
-}
-
-impl SingleRenderBuilder {
-    /// Add a child (chainable)
+    /// Add a single child (chainable)
     ///
-    /// This method accepts any `impl IntoElement` and stores it
-    /// for later conversion. The tree insertion happens in `into_element()`.
+    /// Can be called multiple times to add multiple children.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// RenderBuilder::single(render)
-    ///     .with_child(Text::new("Hello"))
+    /// RenderBuilder::new(render)
+    ///     .child(Text::new("First"))
+    ///     .child(Text::new("Second"))
     /// ```
-    pub fn with_child(mut self, child: impl IntoElement) -> Self {
-        self.child = Some(AnyElement::new(child));
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(AnyElement::new(child));
         self
     }
 
@@ -194,63 +129,16 @@ impl SingleRenderBuilder {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// RenderBuilder::single(render)
-    ///     .with_optional_child(self.child)  // child: Option<Box<dyn View>>
+    /// RenderBuilder::new(render)
+    ///     .maybe_child(self.optional_child)
     /// ```
-    pub fn with_optional_child(mut self, child: Option<impl IntoElement>) -> Self {
+    pub fn maybe_child(mut self, child: Option<impl IntoElement>) -> Self {
         if let Some(child) = child {
-            self.child = Some(AnyElement::new(child));
+            self.children.push(AnyElement::new(child));
         }
         self
     }
-}
 
-impl IntoElement for SingleRenderBuilder {
-    fn into_element(self) -> Element {
-        // Convert child to element
-        let child_elements: Vec<Element> = self
-            .child
-            .into_iter()
-            .map(|c| c.into_element())
-            .collect();
-
-        // Create RenderElement with unmounted children
-        let render_element = if child_elements.is_empty() {
-            RenderElement::new(self.render)
-        } else {
-            RenderElement::new_with_children(self.render, child_elements)
-        };
-
-        // Convert to Element enum
-        Element::Render(render_element)
-    }
-}
-
-// ============================================================================
-// MultiRenderBuilder
-// ============================================================================
-
-/// Builder for multi-child render objects
-///
-/// Created via `RenderBuilder::multi()`. Provides chainable `.with_children()`
-/// and `.add_child()` methods for flexible child management.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// impl View for Column {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         RenderBuilder::multi(RenderFlex::column())
-///             .with_children(self.children)
-///     }
-/// }
-/// ```
-pub struct MultiRenderBuilder {
-    render: Box<dyn Render>,
-    children: Vec<AnyElement>,
-}
-
-impl MultiRenderBuilder {
     /// Set all children at once (chainable)
     ///
     /// Replaces any existing children with the provided vec.
@@ -258,51 +146,68 @@ impl MultiRenderBuilder {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// RenderBuilder::multi(render)
-    ///     .with_children(vec![child1, child2, child3])
+    /// RenderBuilder::new(render)
+    ///     .children(vec![child1, child2, child3])
     /// ```
-    pub fn with_children(mut self, children: Vec<impl IntoElement>) -> Self {
+    pub fn children(mut self, children: Vec<impl IntoElement>) -> Self {
         self.children = children.into_iter().map(AnyElement::new).collect();
         self
     }
 
-    /// Add a single child (chainable)
-    ///
-    /// Appends the child to the existing children list.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// RenderBuilder::multi(render)
-    ///     .add_child(Text::new("First"))
-    ///     .add_child(Text::new("Second"))
-    /// ```
-    pub fn add_child(mut self, child: impl IntoElement) -> Self {
-        self.children.push(AnyElement::new(child));
-        self
+    // ============================================================================
+    // Backward compatibility aliases
+    // ============================================================================
+
+    /// Alias for `new()` - backward compatibility
+    #[deprecated(note = "Use RenderBuilder::new() instead")]
+    pub fn leaf(render: impl Render) -> Self {
+        Self::new(render)
     }
 
-    /// Add an optional child (chainable)
-    ///
-    /// If `Some`, appends the child. If `None`, does nothing.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// RenderBuilder::multi(render)
-    ///     .add_optional_child(optional_header)
-    ///     .with_children(body_children)
-    ///     .add_optional_child(optional_footer)
-    /// ```
-    pub fn add_optional_child(mut self, child: Option<impl IntoElement>) -> Self {
-        if let Some(child) = child {
-            self.children.push(AnyElement::new(child));
-        }
-        self
+    /// Alias for `new()` - backward compatibility
+    #[deprecated(note = "Use RenderBuilder::new() instead")]
+    pub fn single(render: impl Render) -> Self {
+        Self::new(render)
+    }
+
+    /// Alias for `new()` - backward compatibility
+    #[deprecated(note = "Use RenderBuilder::new() instead")]
+    pub fn multi(render: impl Render) -> Self {
+        Self::new(render)
+    }
+
+    /// Alias for `child()` - backward compatibility
+    #[deprecated(note = "Use .child() instead")]
+    pub fn with_child(self, child: impl IntoElement) -> Self {
+        self.child(child)
+    }
+
+    /// Alias for `maybe_child()` - backward compatibility
+    #[deprecated(note = "Use .maybe_child() instead")]
+    pub fn with_optional_child(self, child: Option<impl IntoElement>) -> Self {
+        self.maybe_child(child)
+    }
+
+    /// Alias for `children()` - backward compatibility
+    #[deprecated(note = "Use .children() instead")]
+    pub fn with_children(self, children: Vec<impl IntoElement>) -> Self {
+        self.children(children)
+    }
+
+    /// Alias for `child()` - backward compatibility
+    #[deprecated(note = "Use .child() instead")]
+    pub fn add_child(self, child: impl IntoElement) -> Self {
+        self.child(child)
+    }
+
+    /// Alias for `maybe_child()` - backward compatibility
+    #[deprecated(note = "Use .maybe_child() instead")]
+    pub fn add_optional_child(self, child: Option<impl IntoElement>) -> Self {
+        self.maybe_child(child)
     }
 }
 
-impl IntoElement for MultiRenderBuilder {
+impl IntoElement for RenderBuilder {
     fn into_element(self) -> Element {
         // Convert children to elements
         let child_elements: Vec<Element> = self
@@ -311,7 +216,7 @@ impl IntoElement for MultiRenderBuilder {
             .map(|c| c.into_element())
             .collect();
 
-        // Create RenderElement with unmounted children
+        // Create RenderElement with unmounted children if any
         let render_element = if child_elements.is_empty() {
             RenderElement::new(self.render)
         } else {
@@ -383,19 +288,36 @@ mod tests {
 
     #[test]
     fn test_leaf_builder() {
-        let builder = RenderBuilder::leaf(TestLeafRender);
+        let builder = RenderBuilder::new(TestLeafRender);
         let _element = builder.into_element();
     }
 
     #[test]
     fn test_single_builder() {
-        let builder = RenderBuilder::single(TestSingleRender);
+        let builder = RenderBuilder::new(TestSingleRender);
         let _element = builder.into_element();
     }
 
     #[test]
     fn test_multi_builder() {
-        let builder = RenderBuilder::multi(TestMultiRender);
+        let builder = RenderBuilder::new(TestMultiRender);
+        let _element = builder.into_element();
+    }
+
+    #[test]
+    fn test_builder_with_child() {
+        let builder = RenderBuilder::new(TestSingleRender)
+            .child(RenderBuilder::new(TestLeafRender));
+        let _element = builder.into_element();
+    }
+
+    #[test]
+    fn test_builder_with_children() {
+        let builder = RenderBuilder::new(TestMultiRender)
+            .children(vec![
+                RenderBuilder::new(TestLeafRender),
+                RenderBuilder::new(TestLeafRender),
+            ]);
         let _element = builder.into_element();
     }
 }
