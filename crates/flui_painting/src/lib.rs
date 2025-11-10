@@ -1,55 +1,43 @@
 //! # flui_painting
 //!
-//! Visual primitives layer between RenderObjects and egui::Painter.
+//! Canvas-based painting abstraction for FLUI.
 //!
-//! This crate provides the implementation of painting logic for visual primitives
-//! defined in flui_types. It bridges the gap between declarative styling types
-//! (BoxDecoration, Border, Gradient, Shadow) and actual rendering via egui::Painter.
+//! This crate provides a high-level Canvas API for recording drawing commands
+//! into a DisplayList. It's a backend-agnostic layer that decouples rendering
+//! logic from GPU implementation details.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! RenderObject (flui_rendering)
+//! Widget/RenderObject (flui_rendering)
 //!     ↓
-//! BoxDecoration, Border, etc. (flui_types - data structures)
+//! Canvas API (flui_painting - this crate)
 //!     ↓
-//! Painting Traits (flui_painting - this crate)
+//! DisplayList (recorded draw commands)
 //!     ↓
-//! egui::Painter (rendering backend)
+//! GPU Backend (flui_engine - executes commands)
 //! ```
 //!
 //! ## Key Components
 //!
-//! - **BoxDecorationPainter**: Paints BoxDecoration (background, border, shadow, gradient)
-//! - **BorderPainter**: Paints Border with rounded corners
-//! - **GradientPainter**: Paints Linear/Radial/Sweep gradients
-//! - **ShadowPainter**: Paints box shadows with blur
-//! - **TextPainter**: Paints text with alignment, direction, overflow handling
-//! - **ImagePainter**: Paints images with fit, repeat, and alignment
-//! - **PathPainter**: Paints vector paths with fill and stroke
-//! - **ShapePainter**: Paints shape borders (rounded, circle, star, etc.)
+//! - **Canvas**: High-level drawing API with state management (save/restore, transforms)
+//! - **DisplayList**: Recorded sequence of drawing commands for GPU execution
+//! - **DrawCommand**: Individual drawing operations (rect, path, text, image, etc.)
+//! - **Paint**: Styling information (color, stroke, blend mode, shader)
 //!
 //! ## Design Principles
 //!
 //! 1. **Pure functions**: All painting methods are pure (no state)
-//! 2. **Zero allocations**: Reuse egui primitives, no intermediate buffers
+//! 2. **Zero allocations**: Minimal intermediate buffers
 //! 3. **Type safety**: Leverage Rust's type system for correctness
 //! 4. **Separation of concerns**: Data (flui_types) vs Logic (flui_painting)
 
 #![warn(missing_docs)]
-pub mod border;
+
+// Core modules
 pub mod canvas;
-pub mod decoration;
 pub mod display_list;
 pub mod error;
-pub mod gradient;
-pub mod image;
-pub mod path;
-pub mod shadow;
-pub mod shape;
-pub mod text;
-
-
 
 // Re-export Canvas API (primary interface)
 pub use canvas::Canvas;
@@ -58,33 +46,14 @@ pub use display_list::{
     StrokeJoin,
 };
 
-// Re-export legacy painting traits
-pub use border::BorderPainter;
-pub use decoration::BoxDecorationPainter;
-pub use gradient::GradientPainter;
-pub use image::ImagePainter;
-pub use path::PathPainter;
-pub use shadow::ShadowPainter;
-pub use shape::ShapePainter;
-pub use text::TextPainter;
-
 /// Prelude module for convenient imports
 pub mod prelude {
-    // Canvas API (primary)
+    //! Common painting types and utilities for FLUI applications.
+
     pub use crate::canvas::Canvas;
     pub use crate::display_list::{
         BlendMode, DisplayList, DrawCommand, Paint, PaintStyle, Shader,
     };
-
-    // Legacy painters
-    pub use crate::border::BorderPainter;
-    pub use crate::decoration::BoxDecorationPainter;
-    pub use crate::gradient::GradientPainter;
-    pub use crate::image::ImagePainter;
-    pub use crate::path::PathPainter;
-    pub use crate::shadow::ShadowPainter;
-    pub use crate::shape::ShapePainter;
-    pub use crate::text::TextPainter;
 }
 
 

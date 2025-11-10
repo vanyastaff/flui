@@ -441,7 +441,11 @@ struct CanvasState {
 }
 
 /// Clip operation (for clip stack tracking)
+///
+/// NOTE: Fields are stored for future use (query clip bounds, optimize rendering)
+/// but not currently read. This is intentional for now.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum ClipOp {
     Rect(Rect),
     RRect(RRect),

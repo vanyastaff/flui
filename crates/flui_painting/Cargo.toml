@@ -4,12 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Painting infrastructure for Flui - image loading, text painting, decorations (future)"
+description = "Canvas-based painting abstraction for FLUI - records drawing commands into DisplayList"
 repository.workspace = true
 
 [dependencies]
 flui_types = { path = "../flui_types" }
-flui_engine = { path = "../flui_engine" }
 
 # Math for transformations
 glam = { workspace = true }
