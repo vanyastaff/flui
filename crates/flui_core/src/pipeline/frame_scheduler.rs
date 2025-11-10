@@ -655,17 +655,28 @@ mod tests {
         let mut scheduler = FrameScheduler::with_target_fps(1000); // 1ms budget
         scheduler.set_skip_policy(FrameSkipPolicy::OnConsecutiveMisses(2));
 
-        // First miss - don't skip
+        // First miss - consecutive_misses will be 0 when checked, 1 after finish
         scheduler.start_frame();
-        thread::sleep(Duration::from_millis(2));
-        assert!(!scheduler.should_skip_frame());
-        scheduler.finish_frame();
+        thread::sleep(Duration::from_millis(5));
+        assert!(!scheduler.should_skip_frame()); // consecutive_misses = 0 < 2
+        scheduler.finish_frame(); // Sets consecutive_misses = 1
 
-        // Second miss - should skip
+        assert_eq!(scheduler.consecutive_misses(), 1);
+
+        // Second miss - consecutive_misses will be 1 when checked, 2 after finish
         scheduler.start_frame();
-        thread::sleep(Duration::from_millis(2));
-        assert!(scheduler.should_skip_frame());
-        scheduler.finish_frame();
+        thread::sleep(Duration::from_millis(5));
+        assert!(!scheduler.should_skip_frame()); // consecutive_misses = 1 < 2
+        scheduler.finish_frame(); // Sets consecutive_misses = 2
+
+        assert_eq!(scheduler.consecutive_misses(), 2);
+
+        // Third frame - NOW should_skip_frame() returns true
+        scheduler.start_frame();
+        assert!(scheduler.should_skip_frame()); // consecutive_misses = 2 >= 2
+        scheduler.skip_frame();
+
+        assert_eq!(scheduler.skipped_frames(), 1);
     }
 
     #[test]
