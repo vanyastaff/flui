@@ -127,7 +127,7 @@ impl Render for RenderIndexedStack {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable // Default - update if needed
+        Arity::Variable // Multi-child container
     }
 }
 

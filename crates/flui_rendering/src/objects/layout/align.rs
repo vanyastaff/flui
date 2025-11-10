@@ -172,7 +172,7 @@ impl Render for RenderAlign {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable // Default - update if needed
+        Arity::Exact(1)
     }
 }
 
