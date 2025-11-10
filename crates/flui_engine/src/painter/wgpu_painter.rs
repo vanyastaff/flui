@@ -998,9 +998,64 @@ pub trait Painter {
     }
 
     fn path(&mut self, _path: &str, _paint: &Paint) {
+        // Legacy method - deprecated, use draw_flui_path instead
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::path: deprecated, use draw_flui_path instead");
+    }
+
+    fn draw_flui_path(&mut self, _path: &flui_types::painting::path::Path, _paint: &Paint) {
         // No-op by default
         #[cfg(debug_assertions)]
-        tracing::warn!("Painter::path: not implemented");
+        tracing::warn!("Painter::draw_flui_path: not implemented");
+    }
+
+    fn oval(&mut self, _rect: Rect, _paint: &Paint) {
+        // No-op by default
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::oval: not implemented");
+    }
+
+    fn draw_arc(&mut self, _rect: Rect, _start_angle: f32, _sweep_angle: f32, _use_center: bool, _paint: &Paint) {
+        // No-op by default
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::draw_arc: not implemented");
+    }
+
+    fn draw_drrect(&mut self, _outer: RRect, _inner: RRect, _paint: &Paint) {
+        // No-op by default
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::draw_drrect: not implemented");
+    }
+
+    fn draw_shadow(&mut self, _path: &flui_types::painting::path::Path, _color: flui_types::styling::Color, _elevation: f32) {
+        // No-op by default
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::draw_shadow: not implemented");
+    }
+
+    fn draw_vertices(
+        &mut self,
+        _vertices: &[Point],
+        _colors: Option<&[flui_types::styling::Color]>,
+        _tex_coords: Option<&[Point]>,
+        _indices: &[u16],
+        _paint: &Paint,
+    ) {
+        // No-op by default
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::draw_vertices: not implemented");
+    }
+
+    fn draw_atlas(
+        &mut self,
+        _image: &flui_types::painting::Image,
+        _sprites: &[Rect],
+        _transforms: &[flui_types::Matrix4],
+        _colors: Option<&[flui_types::styling::Color]>,
+    ) {
+        // No-op by default
+        #[cfg(debug_assertions)]
+        tracing::warn!("Painter::draw_atlas: not implemented");
     }
 
     fn arc(
@@ -1039,7 +1094,7 @@ pub trait Painter {
         self.text(text, position, font_size, paint);
     }
 
-    fn draw_image(&mut self, _image_name: &str, _position: Point) {
+    fn draw_image(&mut self, _image: &flui_types::painting::Image, _dst_rect: Rect) {
         // No-op by default
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::draw_image: not implemented");
@@ -1221,6 +1276,82 @@ impl Painter for WgpuPainter {
         }
     }
 
+    fn oval(&mut self, rect: Rect, paint: &Paint) {
+        #[cfg(debug_assertions)]
+        tracing::debug!("WgpuPainter::oval: rect={:?}, paint={:?}", rect, paint);
+
+        // Tessellate the oval/ellipse
+        let center = rect.center();
+        let radii = Point::new(rect.width() / 2.0, rect.height() / 2.0);
+
+        if let Ok((vertices, indices)) = self.tessellator.tessellate_ellipse(center, radii, paint) {
+            self.add_tessellated(vertices, indices);
+        }
+    }
+
+    fn draw_arc(&mut self, rect: Rect, start_angle: f32, sweep_angle: f32, use_center: bool, paint: &Paint) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_arc: rect={:?}, start={}, sweep={}, use_center={}, paint={:?}",
+            rect,
+            start_angle,
+            sweep_angle,
+            use_center,
+            paint
+        );
+
+        let center = rect.center();
+        let radius = (rect.width() + rect.height()) / 4.0; // Average radius for elliptical arcs
+
+        if paint.is_fill() && use_center {
+            // Use GPU instancing for filled arcs with center (pie slices)
+            let instance = super::instancing::ArcInstance::new(
+                center,
+                radius,
+                start_angle,
+                sweep_angle,
+                paint.get_color(),
+            );
+            self.arc_batch.add(instance);
+        } else {
+            // For stroked arcs or arcs without center, use tessellation
+            // TODO: Implement proper arc tessellation in Tessellator
+            // For now, approximate with instanced arc (less accurate for strokes)
+            if paint.is_fill() {
+                let instance = super::instancing::ArcInstance::new(
+                    center,
+                    radius,
+                    start_angle,
+                    sweep_angle,
+                    paint.get_color(),
+                );
+                self.arc_batch.add(instance);
+            } else {
+                #[cfg(debug_assertions)]
+                tracing::warn!("WgpuPainter::draw_arc: stroked arcs not fully implemented yet");
+            }
+        }
+    }
+
+    fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_drrect: outer={:?}, inner={:?}, paint={:?}",
+            outer, inner, paint
+        );
+
+        // Tessellate the DRRect (ring with inner cutout)
+        match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
+            Ok((vertices, indices)) => {
+                self.add_tessellated(vertices, indices);
+            }
+            Err(e) => {
+                #[cfg(debug_assertions)]
+                tracing::error!("Failed to tessellate DRRect: {}", e);
+            }
+        }
+    }
+
     fn line(&mut self, p1: Point, p2: Point, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::debug!(
@@ -1329,6 +1460,286 @@ impl Painter for WgpuPainter {
         // per-texture bind group management
     }
 
+    fn draw_flui_path(&mut self, path: &flui_types::painting::path::Path, paint: &Paint) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_flui_path: commands={}, paint={:?}",
+            path.commands().len(),
+            paint
+        );
+
+        // Tessellate the path
+        let result = if paint.is_fill() {
+            self.tessellator.tessellate_flui_path_fill(path, paint)
+        } else {
+            let default_stroke = Stroke::new(1.0);
+            let stroke = paint.get_stroke().unwrap_or(&default_stroke);
+            self.tessellator.tessellate_flui_path_stroke(path, paint, stroke)
+        };
+
+        match result {
+            Ok((vertices, indices)) => {
+                self.add_tessellated(vertices, indices);
+            }
+            Err(e) => {
+                #[cfg(debug_assertions)]
+                tracing::error!("Failed to tessellate path: {}", e);
+            }
+        }
+    }
+
+    fn draw_image(&mut self, image: &flui_types::painting::Image, dst_rect: Rect) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_image: size={}x{}, dst={:?}",
+            image.width(),
+            image.height(),
+            dst_rect
+        );
+
+        // Create texture ID from image data hash
+        let texture_id = super::texture_cache::TextureId::from_data(image.data());
+
+        // Load or get cached texture
+        match self.texture_cache.load_from_rgba(
+            texture_id,
+            image.width(),
+            image.height(),
+            image.data(),
+        ) {
+            Ok(_cached_texture) => {
+                // Create a texture instance for GPU-instanced rendering
+                let instance = super::instancing::TextureInstance::new(
+                    dst_rect,
+                    flui_types::styling::Color::WHITE, // No tint
+                );
+                self.texture_batch.add(instance);
+            }
+            Err(e) => {
+                #[cfg(debug_assertions)]
+                tracing::error!("Failed to load image texture: {}", e);
+            }
+        }
+    }
+
+    fn draw_shadow(&mut self, path: &flui_types::painting::path::Path, color: flui_types::styling::Color, elevation: f32) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_shadow: elevation={}, color={:?}",
+            elevation,
+            color
+        );
+
+        // Calculate blur radius from elevation (Material Design style)
+        // elevation controls both offset and blur amount
+        let blur_radius = elevation.max(0.0);
+        let offset_y = elevation / 2.0; // Shadow offset downwards
+
+        if blur_radius < 0.1 {
+            // No shadow for very small elevations
+            return;
+        }
+
+        // Multi-pass blur approximation
+        // Draw the shadow path multiple times with decreasing alpha to simulate blur
+        let num_layers = (blur_radius / 2.0).ceil().min(8.0) as usize; // Max 8 layers for performance
+
+        if num_layers == 0 {
+            return;
+        }
+
+        let alpha_per_layer = color.a as f32 / num_layers as f32;
+
+        for i in 0..num_layers {
+            let offset_scale = (i as f32 + 1.0) / num_layers as f32;
+            let current_blur = blur_radius * offset_scale;
+
+            // Create shadow paint with decreasing alpha
+            let shadow_alpha = (alpha_per_layer * (1.0 - offset_scale * 0.5)) as u8;
+            let shadow_color = flui_types::styling::Color::rgba(
+                color.r,
+                color.g,
+                color.b,
+                shadow_alpha,
+            );
+
+            let shadow_paint = Paint::fill(shadow_color);
+
+            // Save transform, apply shadow offset
+            self.save();
+            self.translate(flui_types::Offset::new(current_blur * 0.5, offset_y + current_blur * 0.5));
+
+            // Draw the shadow layer
+            match self.tessellator.tessellate_flui_path_fill(path, &shadow_paint) {
+                Ok((vertices, indices)) => {
+                    self.add_tessellated(vertices, indices);
+                }
+                Err(e) => {
+                    #[cfg(debug_assertions)]
+                    tracing::error!("Failed to tessellate shadow path: {}", e);
+                }
+            }
+
+            // Restore transform
+            self.restore();
+        }
+    }
+
+    fn draw_vertices(
+        &mut self,
+        vertices: &[Point],
+        colors: Option<&[flui_types::styling::Color]>,
+        _tex_coords: Option<&[Point]>, // TODO: Support texture coordinates
+        indices: &[u16],
+        paint: &Paint,
+    ) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_vertices: vertices={}, indices={}",
+            vertices.len(),
+            indices.len()
+        );
+
+        // Validate input
+        if vertices.is_empty() || indices.is_empty() {
+            return;
+        }
+
+        if let Some(colors_arr) = colors {
+            if colors_arr.len() != vertices.len() {
+                #[cfg(debug_assertions)]
+                tracing::error!(
+                    "DrawVertices: color count ({}) doesn't match vertex count ({})",
+                    colors_arr.len(),
+                    vertices.len()
+                );
+                return;
+            }
+        }
+
+        // Convert to our Vertex format
+        let default_color = paint.get_color();
+        let our_vertices: Vec<super::vertex::Vertex> = vertices
+            .iter()
+            .enumerate()
+            .map(|(i, pos)| {
+                let color = colors
+                    .and_then(|c| c.get(i))
+                    .copied()
+                    .unwrap_or(default_color);
+
+                let uv = _tex_coords
+                    .and_then(|tc| tc.get(i))
+                    .map(|p| [p.x, p.y])
+                    .unwrap_or([0.0, 0.0]);
+
+                super::vertex::Vertex {
+                    position: [pos.x, pos.y],
+                    color: color.to_f32_array(),
+                    uv,
+                }
+            })
+            .collect();
+
+        // Convert indices to u32
+        let our_indices: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
+
+        // Add to tessellated geometry (bypassing tessellator since we already have triangles)
+        self.add_tessellated(our_vertices, our_indices);
+    }
+
+    fn draw_atlas(
+        &mut self,
+        image: &flui_types::painting::Image,
+        sprites: &[Rect],
+        transforms: &[flui_types::Matrix4],
+        colors: Option<&[flui_types::styling::Color]>,
+    ) {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::draw_atlas: image={}x{}, sprites={}",
+            image.width(),
+            image.height(),
+            sprites.len()
+        );
+
+        // Validate input
+        if sprites.len() != transforms.len() {
+            #[cfg(debug_assertions)]
+            tracing::error!(
+                "DrawAtlas: sprite count ({}) doesn't match transform count ({})",
+                sprites.len(),
+                transforms.len()
+            );
+            return;
+        }
+
+        if let Some(colors_arr) = colors {
+            if colors_arr.len() != sprites.len() {
+                #[cfg(debug_assertions)]
+                tracing::error!(
+                    "DrawAtlas: color count ({}) doesn't match sprite count ({})",
+                    colors_arr.len(),
+                    sprites.len()
+                );
+                return;
+            }
+        }
+
+        // Load texture into cache
+        let texture_id = super::texture_cache::TextureId::from_data(image.data());
+
+        match self.texture_cache.load_from_rgba(
+            texture_id,
+            image.width(),
+            image.height(),
+            image.data(),
+        ) {
+            Ok(_cached_texture) => {
+                let image_width = image.width() as f32;
+                let image_height = image.height() as f32;
+
+                // Create texture instances for each sprite
+                for (i, (sprite_rect, transform)) in sprites.iter().zip(transforms.iter()).enumerate() {
+                    // Get color tint for this sprite (default to white)
+                    let tint = colors
+                        .and_then(|c| c.get(i))
+                        .copied()
+                        .unwrap_or(flui_types::styling::Color::WHITE);
+
+                    // Calculate UV coordinates from sprite rect
+                    let src_uv = [
+                        sprite_rect.left() / image_width,
+                        sprite_rect.top() / image_height,
+                        sprite_rect.right() / image_width,
+                        sprite_rect.bottom() / image_height,
+                    ];
+
+                    // Extract position from transform matrix
+                    // Matrix4 is column-major: m[12] = x translation, m[13] = y translation
+                    let dst_x = transform.m[12];
+                    let dst_y = transform.m[13];
+                    let dst_width = sprite_rect.width();
+                    let dst_height = sprite_rect.height();
+
+                    let dst_rect = Rect::from_xywh(dst_x, dst_y, dst_width, dst_height);
+
+                    // Create texture instance
+                    let instance = super::instancing::TextureInstance::with_uv(
+                        dst_rect,
+                        src_uv,
+                        tint,
+                    );
+                    self.texture_batch.add(instance);
+                }
+            }
+            Err(e) => {
+                #[cfg(debug_assertions)]
+                tracing::error!("Failed to load atlas texture: {}", e);
+            }
+        }
+    }
+
     // ===== Transform Stack =====
 
     fn save(&mut self) {
@@ -1397,7 +1808,7 @@ impl Painter for WgpuPainter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::WgpuPainter;
 
     // Note: Full tests require wgpu device initialization
     // These would be integration tests with headless rendering

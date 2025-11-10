@@ -62,6 +62,7 @@ impl lyon::tessellation::StrokeVertexConstructor<Vertex> for StrokeVertexConstru
 ///
 /// Converts vector paths into triangle meshes using Lyon.
 /// Provides both fill and stroke tessellation.
+#[derive(Default)]
 pub struct Tessellator {
     /// Lyon fill tessellator
     fill_tessellator: FillTessellator,
@@ -73,20 +74,10 @@ pub struct Tessellator {
     geometry: VertexBuffers<Vertex, u32>,
 }
 
-impl Default for Tessellator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Tessellator {
     /// Create a new tessellator
     pub fn new() -> Self {
-        Self {
-            fill_tessellator: FillTessellator::new(),
-            stroke_tessellator: StrokeTessellator::new(),
-            geometry: VertexBuffers::new(),
-        }
+        Self::default()
     }
 
     /// Tessellate a filled path
@@ -298,6 +289,139 @@ impl Tessellator {
         self.tessellate_fill(&path, paint)
     }
 
+    /// Tessellate a double rounded rectangle (ring/border with inner cutout)
+    ///
+    /// Creates a path with two contours: outer (positive winding) and inner (negative winding).
+    /// The result is a ring or border where the inner RRect is cut out from the outer RRect.
+    ///
+    /// # Arguments
+    /// * `outer` - Outer rounded rectangle
+    /// * `inner` - Inner rounded rectangle (cutout)
+    /// * `paint` - Paint style (color)
+    ///
+    /// # Returns
+    /// Tuple of (vertices, indices) ready for GPU upload
+    pub fn tessellate_drrect(
+        &mut self,
+        outer: &RRect,
+        inner: &RRect,
+        paint: &Paint,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let mut path_builder = Path::builder();
+
+        // Helper to add an RRect to the path builder with specified winding
+        let add_rrect = |builder: &mut lyon::path::path::Builder, rrect: &RRect, winding: lyon::path::Winding| {
+            let rect = rrect.rect;
+            let left = rect.left();
+            let top = rect.top();
+            let right = rect.right();
+            let bottom = rect.bottom();
+
+            // Get corner radii (clamp to half the smallest dimension)
+            let max_radius_x = rect.width() / 2.0;
+            let max_radius_y = rect.height() / 2.0;
+
+            let tl_x = rrect.top_left.x.min(max_radius_x);
+            let tl_y = rrect.top_left.y.min(max_radius_y);
+            let tr_x = rrect.top_right.x.min(max_radius_x);
+            let tr_y = rrect.top_right.y.min(max_radius_y);
+            let br_x = rrect.bottom_right.x.min(max_radius_x);
+            let br_y = rrect.bottom_right.y.min(max_radius_y);
+            let bl_x = rrect.bottom_left.x.min(max_radius_x);
+            let bl_y = rrect.bottom_left.y.min(max_radius_y);
+
+            // Build the path based on winding direction
+            match winding {
+                lyon::path::Winding::Positive => {
+                    // Clockwise: top-left -> top-right -> bottom-right -> bottom-left
+                    builder.begin(lyon::geom::point(left + tl_x, top));
+
+                    // Top edge to top-right corner
+                    builder.line_to(lyon::geom::point(right - tr_x, top));
+                    // Top-right corner
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(right, top),
+                        lyon::geom::point(right, top + tr_y),
+                    );
+
+                    // Right edge to bottom-right corner
+                    builder.line_to(lyon::geom::point(right, bottom - br_y));
+                    // Bottom-right corner
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(right, bottom),
+                        lyon::geom::point(right - br_x, bottom),
+                    );
+
+                    // Bottom edge to bottom-left corner
+                    builder.line_to(lyon::geom::point(left + bl_x, bottom));
+                    // Bottom-left corner
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(left, bottom),
+                        lyon::geom::point(left, bottom - bl_y),
+                    );
+
+                    // Left edge to top-left corner
+                    builder.line_to(lyon::geom::point(left, top + tl_y));
+                    // Top-left corner
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(left, top),
+                        lyon::geom::point(left + tl_x, top),
+                    );
+
+                    builder.close();
+                }
+                lyon::path::Winding::Negative => {
+                    // Counter-clockwise: top-left -> bottom-left -> bottom-right -> top-right
+                    builder.begin(lyon::geom::point(left + tl_x, top));
+
+                    // Top-left corner (reverse)
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(left, top),
+                        lyon::geom::point(left, top + tl_y),
+                    );
+
+                    // Left edge to bottom-left corner
+                    builder.line_to(lyon::geom::point(left, bottom - bl_y));
+                    // Bottom-left corner
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(left, bottom),
+                        lyon::geom::point(left + bl_x, bottom),
+                    );
+
+                    // Bottom edge to bottom-right corner
+                    builder.line_to(lyon::geom::point(right - br_x, bottom));
+                    // Bottom-right corner
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(right, bottom),
+                        lyon::geom::point(right, bottom - br_y),
+                    );
+
+                    // Right edge to top-right corner
+                    builder.line_to(lyon::geom::point(right, top + tr_y));
+                    // Top-right corner
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(right, top),
+                        lyon::geom::point(right - tr_x, top),
+                    );
+
+                    // Top edge back to start
+                    builder.line_to(lyon::geom::point(left + tl_x, top));
+
+                    builder.close();
+                }
+            }
+        };
+
+        // Add outer RRect with positive winding (filled)
+        add_rrect(&mut path_builder, outer, lyon::path::Winding::Positive);
+
+        // Add inner RRect with negative winding (cutout)
+        add_rrect(&mut path_builder, inner, lyon::path::Winding::Negative);
+
+        let path = path_builder.build();
+        self.tessellate_fill(&path, paint)
+    }
+
     /// Create a lyon path from points (polyline)
     pub fn create_polyline_path(points: &[Point], closed: bool) -> Path {
         if points.is_empty() {
@@ -377,6 +501,27 @@ impl Tessellator {
         let path = Self::create_polyline_path(&points, false);
         self.tessellate_stroke(&path, paint, stroke)
     }
+
+    /// Tessellate a FLUI Path (filled)
+    pub fn tessellate_flui_path_fill(
+        &mut self,
+        flui_path: &flui_types::painting::path::Path,
+        paint: &Paint,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let lyon_path = flui_path.to_lyon_path();
+        self.tessellate_fill(&lyon_path, paint)
+    }
+
+    /// Tessellate a FLUI Path (stroked)
+    pub fn tessellate_flui_path_stroke(
+        &mut self,
+        flui_path: &flui_types::painting::path::Path,
+        paint: &Paint,
+        stroke: &Stroke,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        let lyon_path = flui_path.to_lyon_path();
+        self.tessellate_stroke(&lyon_path, paint, stroke)
+    }
 }
 
 /// Helper trait for creating lyon paths from FLUI types
@@ -399,6 +544,134 @@ impl IntoLyonPath for Rect {
     }
 }
 
+impl IntoLyonPath for flui_types::painting::path::Path {
+    fn to_lyon_path(&self) -> Path {
+        use flui_types::painting::path::PathCommand;
+
+        let mut builder = Path::builder();
+        let mut current_pos: Option<Point> = None;
+
+        for command in self.commands() {
+            match command {
+                PathCommand::MoveTo(point) => {
+                    // End previous subpath if exists
+                    if current_pos.is_some() {
+                        builder.end(false);
+                    }
+                    builder.begin(lyon::geom::point(point.x, point.y));
+                    current_pos = Some(*point);
+                }
+
+                PathCommand::LineTo(point) => {
+                    builder.line_to(lyon::geom::point(point.x, point.y));
+                    current_pos = Some(*point);
+                }
+
+                PathCommand::QuadraticTo(control, end) => {
+                    builder.quadratic_bezier_to(
+                        lyon::geom::point(control.x, control.y),
+                        lyon::geom::point(end.x, end.y),
+                    );
+                    current_pos = Some(*end);
+                }
+
+                PathCommand::CubicTo(control1, control2, end) => {
+                    builder.cubic_bezier_to(
+                        lyon::geom::point(control1.x, control1.y),
+                        lyon::geom::point(control2.x, control2.y),
+                        lyon::geom::point(end.x, end.y),
+                    );
+                    current_pos = Some(*end);
+                }
+
+                PathCommand::Close => {
+                    builder.close();
+                }
+
+                PathCommand::AddRect(rect) => {
+                    // Start new subpath for rectangle
+                    if current_pos.is_some() {
+                        builder.end(false);
+                    }
+                    builder.begin(lyon::geom::point(rect.left(), rect.top()));
+                    builder.line_to(lyon::geom::point(rect.right(), rect.top()));
+                    builder.line_to(lyon::geom::point(rect.right(), rect.bottom()));
+                    builder.line_to(lyon::geom::point(rect.left(), rect.bottom()));
+                    builder.close();
+                    current_pos = None;
+                }
+
+                PathCommand::AddCircle(center, radius) => {
+                    // Start new subpath for circle
+                    if current_pos.is_some() {
+                        builder.end(false);
+                    }
+                    builder.add_circle(
+                        lyon::geom::point(center.x, center.y),
+                        *radius,
+                        lyon::path::Winding::Positive,
+                    );
+                    current_pos = None;
+                }
+
+                PathCommand::AddOval(rect) => {
+                    // Start new subpath for oval/ellipse
+                    if current_pos.is_some() {
+                        builder.end(false);
+                    }
+                    let center = rect.center();
+                    let radii = lyon::geom::vector(rect.width() / 2.0, rect.height() / 2.0);
+                    builder.add_ellipse(
+                        lyon::geom::point(center.x, center.y),
+                        radii,
+                        lyon::geom::Angle::radians(0.0),
+                        lyon::path::Winding::Positive,
+                    );
+                    current_pos = None;
+                }
+
+                PathCommand::AddArc(rect, start_angle, sweep_angle) => {
+                    // Start new subpath for arc
+                    if current_pos.is_some() {
+                        builder.end(false);
+                    }
+                    let center = rect.center();
+                    let radii = lyon::geom::vector(rect.width() / 2.0, rect.height() / 2.0);
+
+                    // Approximate arc with line segments
+                    // Use more segments for larger sweep angles
+                    let num_segments = ((sweep_angle.abs() / (std::f32::consts::PI / 6.0)).ceil() as i32).max(4);
+                    let angle_step = sweep_angle / num_segments as f32;
+
+                    let start_x = center.x + radii.x * start_angle.cos();
+                    let start_y = center.y + radii.y * start_angle.sin();
+
+                    builder.begin(lyon::geom::point(start_x, start_y));
+
+                    for i in 1..=num_segments {
+                        let angle = start_angle + angle_step * i as f32;
+                        let x = center.x + radii.x * angle.cos();
+                        let y = center.y + radii.y * angle.sin();
+                        builder.line_to(lyon::geom::point(x, y));
+                    }
+
+                    let end_angle = start_angle + sweep_angle;
+                    let end_x = center.x + radii.x * end_angle.cos();
+                    let end_y = center.y + radii.y * end_angle.sin();
+                    current_pos = Some(Point::new(end_x, end_y));
+                }
+            }
+        }
+
+        // End the final subpath if not closed
+        if current_pos.is_some() {
+            builder.end(false);
+        }
+
+        builder.build()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,7 +680,7 @@ mod tests {
     fn test_tessellate_rect() {
         let mut tessellator = Tessellator::new();
         let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let paint = Paint::solid(Color::RED);
+        let paint = Paint::fill(Color::RED);
 
         let result = tessellator.tessellate_rect(rect, &paint);
         assert!(result.is_ok());
@@ -422,7 +695,7 @@ mod tests {
     fn test_tessellate_circle() {
         let mut tessellator = Tessellator::new();
         let center = Point::new(50.0, 50.0);
-        let paint = Paint::solid(Color::BLUE);
+        let paint = Paint::fill(Color::BLUE);
 
         let result = tessellator.tessellate_circle(center, 25.0, &paint);
         assert!(result.is_ok());
@@ -436,7 +709,7 @@ mod tests {
     fn test_tessellate_rounded_rect() {
         let mut tessellator = Tessellator::new();
         let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let paint = Paint::solid(Color::GREEN);
+        let paint = Paint::fill(Color::GREEN);
 
         let result = tessellator.tessellate_rounded_rect(rect, 10.0, &paint);
         assert!(result.is_ok());
@@ -454,7 +727,7 @@ mod tests {
             Point::new(20.0, 0.0),
         ];
 
-        let path = Tessellator::create_polyline_path(&points, false);
+        let _path = Tessellator::create_polyline_path(&points, false);
         // Path should be created successfully
         // We can't easily test the internal structure, but we can verify it doesn't panic
     }

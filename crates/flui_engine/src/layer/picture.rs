@@ -22,6 +22,7 @@ use std::sync::Arc;
 ///
 /// PictureLayer now uses Canvas from flui_painting for recording commands,
 /// which are stored in a DisplayList for execution.
+#[derive(Default)]
 pub struct PictureLayer {
     /// Canvas for recording drawing commands
     canvas: Canvas,
@@ -30,9 +31,7 @@ pub struct PictureLayer {
 impl PictureLayer {
     /// Create a new picture layer
     pub fn new() -> Self {
-        Self {
-            canvas: Canvas::new(),
-        }
+        Self::default()
     }
 
     /// Create a picture layer from a display list
@@ -123,11 +122,6 @@ impl PictureLayer {
     }
 }
 
-impl Default for PictureLayer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl Layer for PictureLayer {
     fn paint(&self, painter: &mut dyn Painter) {
@@ -156,16 +150,13 @@ impl Layer for PictureLayer {
                 }
 
                 DrawCommand::DrawOval { rect, paint, .. } => {
-                    // Oval rendering: approximate as circle
-                    // TODO: Implement proper ellipse rendering in painter
-                    let center = rect.center();
-                    let radius = rect.width().min(rect.height()) / 2.0;
-                    painter.circle(center, radius, &Self::convert_paint_to_engine(paint));
+                    // Render oval/ellipse using proper ellipse rendering
+                    painter.oval(*rect, &Self::convert_paint_to_engine(paint));
                 }
 
                 DrawCommand::DrawPath { path, paint, .. } => {
-                    // Note: path is stubbed in compat layer - path rendering not yet implemented
-                    painter.path(&format!("{:?}", path), &Self::convert_paint_to_engine(paint));
+                    // Render path using tessellation
+                    painter.draw_flui_path(path, &Self::convert_paint_to_engine(paint));
                 }
 
                 DrawCommand::DrawText {
@@ -183,15 +174,87 @@ impl Layer for PictureLayer {
                 }
 
                 DrawCommand::DrawImage { image, dst, .. } => {
-                    // Note: draw_image is stubbed in compat layer - image rendering not yet implemented
-                    let image_name = format!("Image({:?})", image);
-                    painter.draw_image(&image_name, dst.top_left());
+                    // Image rendering using painter's draw_image method
+                    painter.draw_image(image, *dst);
                 }
 
-                DrawCommand::DrawShadow { .. } => {
-                    // Shadow rendering not yet implemented in painter
-                    #[cfg(debug_assertions)]
-                    tracing::warn!("PictureLayer: Shadow rendering not yet implemented in painter");
+                DrawCommand::DrawShadow { path, color, elevation, .. } => {
+                    // Multi-layer shadow rendering with blur approximation
+                    painter.draw_shadow(path, *color, *elevation);
+                }
+
+                DrawCommand::DrawArc { rect, start_angle, sweep_angle, use_center, paint, .. } => {
+                    // Full arc rendering with angles and use_center
+                    painter.draw_arc(*rect, *start_angle, *sweep_angle, *use_center, &Self::convert_paint_to_engine(paint));
+                }
+
+                DrawCommand::DrawDRRect { outer, inner, paint, .. } => {
+                    // Draw ring (outer - inner) with proper inner cutout
+                    painter.draw_drrect(*outer, *inner, &Self::convert_paint_to_engine(paint));
+                }
+
+                DrawCommand::DrawPoints { mode, points, paint, .. } => {
+                    // Draw points with specified mode
+                    use flui_painting::PointMode;
+                    match mode {
+                        PointMode::Points => {
+                            // Draw individual points as small circles
+                            let radius = paint.stroke_width / 2.0;
+                            for point in points {
+                                painter.circle(*point, radius, &Self::convert_paint_to_engine(paint));
+                            }
+                        }
+                        PointMode::Lines => {
+                            // Draw lines between consecutive points
+                            for i in (0..points.len()).step_by(2) {
+                                if i + 1 < points.len() {
+                                    painter.line(points[i], points[i + 1], &Self::convert_paint_to_engine(paint));
+                                }
+                            }
+                        }
+                        PointMode::Polygon => {
+                            // Draw connected lines (polygon)
+                            for i in 0..points.len().saturating_sub(1) {
+                                painter.line(points[i], points[i + 1], &Self::convert_paint_to_engine(paint));
+                            }
+                            // Close the polygon
+                            if points.len() > 2 {
+                                painter.line(points[points.len() - 1], points[0], &Self::convert_paint_to_engine(paint));
+                            }
+                        }
+                    }
+                }
+
+                DrawCommand::DrawVertices { vertices, colors, tex_coords, indices, paint, .. } => {
+                    // Custom vertex rendering with optional per-vertex colors
+                    painter.draw_vertices(
+                        vertices,
+                        colors.as_deref(),
+                        tex_coords.as_deref(),
+                        indices,
+                        &Self::convert_paint_to_engine(paint),
+                    );
+                }
+
+                DrawCommand::DrawColor { color, .. } => {
+                    // Fill entire canvas with color
+                    // Get the canvas bounds from display list
+                    let bounds = self.canvas.display_list().bounds();
+                    if !bounds.is_empty() {
+                        let paint = flui_painting::Paint::fill(*color);
+                        painter.rect(bounds, &Self::convert_paint_to_engine(&paint));
+                    }
+                }
+
+                DrawCommand::DrawAtlas { image, sprites, transforms, colors, .. } => {
+                    // Efficient sprite atlas rendering with GPU instancing
+                    // Note: BlendMode is currently ignored in the implementation
+                    painter.draw_atlas(
+                        image,
+                        sprites,
+                        transforms,
+                        colors.as_deref(),
+                    );
                 }
 
                 DrawCommand::ClipRect { .. }
