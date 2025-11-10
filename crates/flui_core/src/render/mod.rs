@@ -37,7 +37,6 @@ pub mod parent_data;
 #[allow(clippy::module_inception)] // render module contains Render trait
 pub mod render;
 pub mod render_flags;
-pub mod render_pipeline;
 pub mod render_state;
 
 /// Render trait - single unified trait for all render objects
@@ -61,8 +60,4 @@ pub use parent_data::{
 /// Supporting types
 pub use cache::{LayoutCache, LayoutCacheKey, LayoutResult};
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
-// RenderPipeline is internal - used by framework only
-// TODO: RenderPipeline is currently unused but may be needed in future
-#[allow(unused_imports)]
-pub(crate) use render_pipeline::RenderPipeline;
 pub use render_state::RenderState;
