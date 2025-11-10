@@ -4,12 +4,11 @@
 //! line breaks, and text wrapping.
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_engine::{layer::pool, BoxedLayer};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextStyle},
-    Point, Size,
+    Size,
 };
 
 // ===== Data Structure =====
@@ -245,7 +244,7 @@ impl Render for RenderParagraph {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
         let offset = ctx.offset;
         #[cfg(debug_assertions)]
         tracing::debug!(
@@ -255,7 +254,7 @@ impl Render for RenderParagraph {
             self.size
         );
 
-        // Use Canvas API for text rendering
+        // Use Canvas API from flui_painting
         let mut canvas = Canvas::new();
 
         if let Some(_size) = self.size {
@@ -266,6 +265,8 @@ impl Render for RenderParagraph {
                 ..Default::default()
             };
 
+            let paint = Paint::fill(self.data.color);
+
             #[cfg(debug_assertions)]
             tracing::debug!(
                 "RenderParagraph::paint: drawing text with style {:?} at {:?}",
@@ -273,37 +274,17 @@ impl Render for RenderParagraph {
                 offset
             );
 
-            // Record text drawing command
-            let text_paint = Paint::fill(self.data.color);
-            canvas.draw_text(&self.data.text, offset, &style, &text_paint);
+            // Record drawing command via Canvas API
+            canvas.draw_text(&self.data.text, offset, &style, &paint);
         } else {
             #[cfg(debug_assertions)]
             tracing::warn!("RenderParagraph::paint: size is None, cannot paint text");
         }
 
-        // Finish canvas to get display list
-        let _display_list = canvas.finish();
-
-        // Apply commands to engine picture layer
-        let mut picture = pool::acquire_picture();
-        if let Some(_size) = self.size {
-            let style = TextStyle {
-                font_size: Some(self.data.font_size as f64),
-                color: Some(self.data.color),
-                ..Default::default()
-            };
-            // PictureLayer uses Point, not Offset
-            let position = Point::new(offset.dx, offset.dy);
-            picture.draw_text(&self.data.text, position, style);
-        }
-
-        // Return picture layer
-        let result: BoxedLayer = Box::new(flui_engine::PooledPictureLayer::new(picture));
-
         #[cfg(debug_assertions)]
-        tracing::debug!("RenderParagraph::paint: returning layer");
+        tracing::debug!("RenderParagraph::paint: returning canvas");
 
-        result
+        canvas
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

@@ -1,8 +1,6 @@
 //! RenderColoredBox - simple solid color box
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_engine::{BoxedLayer, Paint, PictureLayer};
 use flui_types::{Color, Rect, Size};
 
 /// RenderObject that paints a solid color background
@@ -64,7 +62,7 @@ impl Render for RenderColoredBox {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
@@ -76,36 +74,27 @@ impl Render for RenderColoredBox {
             offset
         );
 
-        // Create picture layer for background color
-        let mut picture = PictureLayer::new();
+        // Create canvas for drawing
+        let mut canvas = flui_painting::Canvas::new();
 
         // Apply offset directly to background rect
-        // (instead of using TransformLayer which requires painter transform support)
         let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
 
         #[cfg(debug_assertions)]
         tracing::debug!("RenderColoredBox::paint: drawing rect={:?}", rect);
 
         // Create paint for the color
-        let paint = Paint::fill(self.color);
+        let paint = flui_painting::Paint::fill(self.color);
 
         // Draw the background rectangle
-        picture.draw_rect(rect, paint);
+        canvas.draw_rect(rect, &paint);
 
         // SingleArity always has exactly one child
-        // Paint child at the same offset
-        let child_layer = tree.paint_child(child_id, offset);
+        // Paint child at the same offset and append to our canvas
+        let child_canvas = tree.paint_child(child_id, offset);
+        canvas.append_canvas(child_canvas);
 
-        // Use ContainerLayer to stack background + child - use pool for efficiency
-        let mut container = flui_engine::layer::pool::acquire_container();
-        container.add_child(Box::new(picture));
-        container.add_child(child_layer);
-
-        // Wrap everything in OffsetLayer to apply the parent's offset
-        let offset_layer =
-            flui_engine::layer::OffsetLayer::new(Box::new(container)).with_offset(offset);
-
-        Box::new(offset_layer)
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

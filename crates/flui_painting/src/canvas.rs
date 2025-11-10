@@ -529,6 +529,30 @@ impl Canvas {
         }
     }
 
+    // ===== Canvas Composition =====
+
+    /// Appends all drawing commands from another canvas to this canvas
+    ///
+    /// This is useful for parent RenderObjects that need to draw their own content
+    /// and then draw their children on top.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut parent_canvas = Canvas::new();
+    /// parent_canvas.draw_rect(background_rect, &background_paint);
+    ///
+    /// let child_canvas = child.paint(ctx);
+    /// parent_canvas.append_canvas(child_canvas);
+    /// ```
+    pub fn append_canvas(&mut self, other: Canvas) {
+        // Take ownership of other canvas and append its commands
+        let other_display_list = other.display_list;
+        for command in other_display_list.commands() {
+            self.display_list.push(command.clone());
+        }
+    }
+
     // ===== Finalization =====
 
     /// Finishes recording and returns the display list
