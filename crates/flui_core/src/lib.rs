@@ -257,17 +257,12 @@
 pub use flui_engine::BoxedLayer;
 pub use flui_types::{Offset, Size};
 
-// ============================================================================
-// Debug Infrastructure
-// ============================================================================
-
 /// Debug flags, diagnostics, and validation
 pub mod debug;
 pub mod element;
 pub mod foundation;
 pub mod render;
 
-// New modules (Phase 1: Week 1)
 pub mod context;
 pub mod hooks;
 pub mod pipeline;
@@ -277,16 +272,8 @@ pub mod view;
 // Re-export debug types
 pub use debug::DebugFlags;
 
-// ============================================================================
-// Error Types
-// ============================================================================
-
-// Re-export error types from foundation (moved in Phase 1)
+// Re-export error types from foundation
 pub use foundation::error::{CoreError, Result};
-
-// ============================================================================
-// Foundation
-// ============================================================================
 
 // Re-export foundation types
 pub use foundation::{
@@ -299,7 +286,6 @@ pub use foundation::{
     DiagnosticsProperty,
     DiagnosticsTreeStyle,
     DynNotification,
-    // Element ID (moved from element module to break circular dependencies)
     ElementId,
     FocusChangedNotification,
     KeepAliveNotification,
@@ -318,10 +304,6 @@ pub use foundation::{
     Slot,
     ValueNotifier,
 };
-
-// ============================================================================
-// Element System
-// ============================================================================
 
 // Re-export element types
 pub use element::{
