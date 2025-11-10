@@ -845,11 +845,12 @@ mod tests {
 
     #[test]
     fn test_schedule() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
 
         assert!(!build.has_dirty());
 
-        build.schedule(1, 0);
+        build.schedule(ElementId::new(1), 0);
 
         assert!(build.has_dirty());
         assert_eq!(build.dirty_count(), 1);
@@ -857,19 +858,21 @@ mod tests {
 
     #[test]
     fn test_dirty_count() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
 
-        build.schedule(1, 0);
-        build.schedule(2, 1);
+        build.schedule(ElementId::new(1), 0);
+        build.schedule(ElementId::new(2), 1);
 
         assert_eq!(build.dirty_count(), 2);
     }
 
     #[test]
     fn test_clear_dirty() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
 
-        build.schedule(1, 0);
+        build.schedule(ElementId::new(1), 0);
         build.clear_dirty();
 
         assert!(!build.has_dirty());
@@ -877,10 +880,11 @@ mod tests {
 
     #[test]
     fn test_schedule_duplicate() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
 
-        build.schedule(1, 0);
-        build.schedule(1, 0); // Duplicate
+        build.schedule(ElementId::new(1), 0);
+        build.schedule(ElementId::new(1), 0); // Duplicate
 
         // Should only have 1 dirty element
         assert_eq!(build.dirty_count(), 1);
@@ -901,15 +905,16 @@ mod tests {
 
     #[test]
     fn test_lock_state() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
 
         // Normal scheduling works
-        build.schedule(1, 0);
+        build.schedule(ElementId::new(1), 0);
         assert_eq!(build.dirty_count(), 1);
 
         build.lock_state(|b| {
             // Scheduling while locked should be ignored
-            b.schedule(2, 0);
+            b.schedule(ElementId::new(2), 0);
             assert_eq!(b.dirty_count(), 1); // Still 1, not 2
         });
     }
@@ -933,10 +938,11 @@ mod tests {
 
     #[test]
     fn test_batching_deduplicates() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(16));
 
-        let id = 42;
+        let id = ElementId::new(42);
 
         // Schedule same element 3 times
         build.schedule(id, 0);
@@ -957,12 +963,13 @@ mod tests {
 
     #[test]
     fn test_batching_multiple_elements() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(16));
 
-        build.schedule(1, 0);
-        build.schedule(2, 1);
-        build.schedule(3, 2);
+        build.schedule(ElementId::new(1), 0);
+        build.schedule(ElementId::new(2), 1);
+        build.schedule(ElementId::new(3), 2);
 
         build.flush_batch();
 
@@ -972,10 +979,11 @@ mod tests {
 
     #[test]
     fn test_should_flush_batch_timing() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(10));
 
-        build.schedule(42, 0);
+        build.schedule(ElementId::new(42), 0);
 
         // Should not flush immediately
         assert!(!build.should_flush_batch());
@@ -989,10 +997,11 @@ mod tests {
 
     #[test]
     fn test_batching_without_enable() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
         // Batching not enabled
 
-        build.schedule(42, 0);
+        build.schedule(ElementId::new(42), 0);
 
         // Should add directly to dirty elements
         assert_eq!(build.dirty_count(), 1);
@@ -1004,6 +1013,7 @@ mod tests {
 
     #[test]
     fn test_batching_stats() {
+        use crate::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(16));
 
@@ -1011,8 +1021,8 @@ mod tests {
         assert_eq!(build.batching_stats(), (0, 0));
 
         // Schedule same element twice
-        build.schedule(42, 0);
-        build.schedule(42, 0); // Duplicate
+        build.schedule(ElementId::new(42), 0);
+        build.schedule(ElementId::new(42), 0); // Duplicate
 
         // Flush
         build.flush_batch();
