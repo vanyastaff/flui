@@ -307,50 +307,21 @@ pub use foundation::{
 
 // Re-export element types
 pub use element::{
-    // Element types
-    ComponentElement,
-    // Dependency tracking
-    DependencyInfo,
-    DependencyTracker,
-
-    // Core enum
-    Element,
-    // Note: ElementId is now exported from foundation (see above)
-
-    // ElementTree (moved from pipeline to break circular dependency - Issue #21)
-    ElementTree,
-
-    InheritedElement,
-
+    ComponentElement, DependencyInfo, DependencyTracker, Element, ElementTree, InheritedElement,
     RenderElement,
 };
 
-// Re-export view types (moved in Phase 1)
+// Re-export view types
 pub use view::BuildContext;
 
 // Re-export simplified API (View, IntoElement, tuple syntax)
 pub use view::{AnyElement, AnyView, IntoElement, RenderExt, View};
 
-// Re-export pipeline types (moved in Phase 1)
-// Note: ElementTree moved to element module (Issue #21)
+// Re-export pipeline types
 pub use pipeline::{PipelineBuilder, PipelineOwner};
-
-// ============================================================================
-// Render System
-// ============================================================================
 
 // Re-export render types
 pub use render::{Arity, Children, LayoutContext, PaintContext, Render, RenderState};
-
-// ============================================================================
-// Macros
-// ============================================================================
-
-// TODO(Phase 2): Add macros for common widget patterns
-
-// ============================================================================
-// Prelude
-// ============================================================================
 
 /// Prelude module for convenient imports
 ///
@@ -369,10 +340,6 @@ pub mod prelude {
     // Render system
     pub use crate::render::{Arity, Children, LayoutContext, PaintContext, Render};
 }
-
-// ============================================================================
-// Version Information
-// ============================================================================
 
 /// FLUI version string
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
