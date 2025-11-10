@@ -267,11 +267,11 @@ mod tests {
             None
         });
 
-        effect.run_if_needed();
+        effect.run_if_needed(&mut ctx);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
 
         // Second run should not execute (no dependency changes)
-        effect.run_if_needed();
+        effect.run_if_needed(&mut ctx);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 
@@ -290,7 +290,7 @@ mod tests {
             }) as CleanupFn)
         });
 
-        effect.run_if_needed();
+        effect.run_if_needed(&mut ctx);
         assert_eq!(cleanup_count.load(Ordering::Relaxed), 0);
 
         // Run cleanup manually
@@ -308,19 +308,19 @@ mod tests {
         let call_count_clone = call_count.clone();
 
         let effect = ctx.use_hook::<EffectHook<_>>(move || {
-            let _value = signal.get();
+            let _value = signal.get(&mut ctx);
             call_count_clone.fetch_add(1, Ordering::Relaxed);
             None
         });
 
-        effect.run_if_needed();
+        effect.run_if_needed(&mut ctx);
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
 
         // Change signal
         signal.set(10);
 
         // Effect should run again
-        effect.run_if_needed();
+        effect.run_if_needed(&mut ctx);
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
     }
 }

@@ -200,6 +200,7 @@
 
 pub mod assertions;
 pub mod fixtures;
+pub mod helpers;
 pub mod inspect;
 pub mod macros;
 pub mod mock_render;
@@ -211,14 +212,17 @@ pub mod view_tester;
 
 
 
+
 // Re-export main types for convenience
 pub use assertions::*;
 pub use fixtures::*;
+pub use helpers::{test_hook_context, test_hook_context_with_id};
 pub use inspect::{print_tree, tree_summary, TreeInspector, TreeSummary};
 pub use mock_render::{MockRender, SpyRender};
 pub use snapshot::{assert_tree_snapshot, ElementTreeSnapshot, SnapshotDiff};
 pub use test_harness::TestHarness;
 pub use view_tester::{TestView, TestWidget, ViewTestResult, ViewTester};
+
 
 
 

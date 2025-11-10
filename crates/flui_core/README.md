@@ -36,86 +36,64 @@ use flui_core::prelude::*;
 #[derive(Debug, Clone)]
 struct HelloWorld;
 
-impl Component for HelloWorld {
-    fn build(&self, ctx: &BuildContext) -> View {
-        Text::builder()
-            .data("Hello, World!")
-            .size(24.0)
-            .build()
+impl View for HelloWorld {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+        Text::new("Hello, World!")
     }
 }
 ```
 
-Components are composable views that build UIs from other views. They can optionally manage state using hooks or the State type parameter.
+Views are composable UI components that build UIs from other views or renderers. They can manage state using hooks.
 
-### Complete Example with Builder Pattern
-
-```rust
-use flui_core::prelude::*;
-use flui_widgets::prelude::*;
-
-#[derive(Debug, Clone)]
-struct WelcomeScreen;
-
-impl Component for WelcomeScreen {
-    fn build(&self, _ctx: &BuildContext) -> View {
-        Container::builder()
-            .padding(EdgeInsets::all(40.0))
-            .color(Color::rgb(245, 245, 245))
-            .child(
-                Center::builder()
-                    .child(
-                        Container::builder()
-                            .padding(EdgeInsets::all(24.0))
-                            .decoration(BoxDecoration {
-                                color: Some(Color::rgb(66, 165, 245)),
-                                border_radius: Some(BorderRadius::circular(12.0)),
-                                ..Default::default()
-                            })
-                            .child(
-                                Text::builder()
-                                    .data("Welcome to FLUI!")
-                                    .size(32.0)
-                                    .color(Color::WHITE)
-                                    .build()
-                            )
-                            .build()
-                    )
-                    .build()
-            )
-            .build()
-    }
-}
-```
-
-### Counter with Hooks
+### Counter with State
 
 ```rust
 use flui_core::prelude::*;
-use flui_core::hooks::use_signal;
 
 #[derive(Debug, Clone)]
 struct Counter {
     initial: i32,
 }
 
-impl Component for Counter {
-    fn build(&self, ctx: &BuildContext) -> View {
+impl View for Counter {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
         // Reactive state with hooks
-        let count = use_signal(ctx, || self.initial);
+        let count = use_signal(ctx, self.initial);
 
-        Column::builder()
-            .children(vec![
-                Text::builder()
-                    .data(format!("Count: {}", count.get()))
-                    .size(32.0)
-                    .build(),
-                Button::builder()
-                    .label("Increment")
-                    .on_press(move || count.update(|c| *c += 1))
-                    .build(),
-            ])
-            .build()
+        // Clone signal before moving into closure
+        let count_clone = count.clone();
+
+        // Return a tuple: (Renderer, Option<child>) or just another View
+        Column {
+            children: vec![
+                Box::new(Text::new(format!("Count: {}", count.get()))),
+                Box::new(Button {
+                    label: "Increment".to_string(),
+                    on_press: Some(Box::new(move || {
+                        count_clone.update(|c| *c += 1);
+                    })),
+                }),
+            ],
+        }
+    }
+}
+```
+
+### Tuple Syntax for Renderers
+
+```rust
+use flui_core::prelude::*;
+
+#[derive(Debug, Clone)]
+struct Padding {
+    padding: f32,
+    child: Option<Box<dyn AnyView>>,
+}
+
+impl View for Padding {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        // Tuple syntax: (Renderer, Option<child>)
+        (RenderPadding::new(self.padding), self.child)
     }
 }
 ```
@@ -138,14 +116,14 @@ FLUI uses a **three-tree architecture** for optimal performance:
 Views are lightweight, immutable descriptions of what the UI should look like:
 
 ```rust
-pub trait AnyView {
-    fn build(&self, ctx: &BuildContext) -> Element;
+pub trait View: 'static {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }
 
-// Three core view types:
-// - Component: Composable views with optional state (hooks or State<T>)
-// - Provider: Data propagation with dependency tracking
-// - Render: Custom layout and painting
+// Views return one of:
+// - Another View (composition)
+// - Tuple of (Renderer, children) for custom rendering
+// - Element (via IntoElement trait)
 ```
 
 ### Element Tree (Mutable State)
@@ -162,14 +140,18 @@ pub enum Element {
 
 ### Render Tree (Layout & Paint)
 
-Render nodes perform layout calculations and produce visual output:
+Renderers perform layout calculations and produce visual output:
 
 ```rust
-pub enum RenderNode {
-    Leaf(Box<dyn LeafRender>),                           // No children (e.g., text, image)
-    Single { render: Box<dyn SingleRender>, child },     // One child (e.g., opacity, padding)
-    Multi { render: Box<dyn MultiRender>, children },    // Multiple children (e.g., flex, stack)
+pub trait Render: Send + Sync + Debug + 'static {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size;
+    fn paint(&self, ctx: &PaintContext) -> BoxedLayer;
+    fn arity(&self) -> Arity { Arity::Variable }
 }
+
+// Context structs provide access to children and tree:
+// - LayoutContext: constraints, children, tree access for layout
+// - PaintContext: offset, children, tree access for painting
 ```
 
 ## View Types
@@ -272,9 +254,9 @@ struct CustomBox {
 }
 
 impl Render for CustomBox {
-    type RenderObject = RenderCustomBox;
+    type Renderer = RenderCustomBox;
 
-    fn create_render(&self) -> Self::RenderObject {
+    fn create_render(&self) -> Self::Renderer {
         RenderCustomBox {
             width: self.width,
             height: self.height,
@@ -282,7 +264,7 @@ impl Render for CustomBox {
         }
     }
 
-    fn update_render(&self, render: &mut Self::RenderObject) {
+    fn update_render(&self, render: &mut Self::Renderer) {
         render.width = self.width;
         render.height = self.height;
         render.color = self.color;
@@ -433,9 +415,9 @@ impl Provider for MyTheme {
 
 // Render views
 impl Render for MyCustomBox {
-    type RenderObject = RenderMyCustomBox;
-    fn create_render(&self) -> Self::RenderObject { /* ... */ }
-    fn update_render(&self, render: &mut Self::RenderObject) { /* ... */ }
+    type Renderer = RenderMyCustomBox;
+    fn create_render(&self) -> Self::Renderer { /* ... */ }
+    fn update_render(&self, render: &mut Self::Renderer) { /* ... */ }
 }
 ```
 
@@ -485,7 +467,7 @@ All traits are object-safe from the start - no need for wrapper traits:
 // ✅ Works directly!
 let render: Box<dyn LeafRender> = Box::new(RenderCircle { /* ... */ });
 
-// Old approach needed DynRenderObject wrapper - not anymore!
+// Old approach needed wrapper - not anymore!
 ```
 
 ### 🚀 Enum-Based Dispatch

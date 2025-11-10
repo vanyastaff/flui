@@ -263,12 +263,13 @@ mod tests {
 
     #[test]
     fn test_single() {
-        let children = Children::Single(1);
+        let id = ElementId::new(1);
+        let children = Children::Single(id);
         assert!(!children.is_empty());
         assert_eq!(children.len(), 1);
-        assert_eq!(children.as_slice(), &[1]);
-        assert_eq!(children.single(), 1);
-        assert_eq!(children.try_single(), Some(1));
+        assert_eq!(children.as_slice(), &[id]);
+        assert_eq!(children.single(), id);
+        assert_eq!(children.try_single(), Some(id));
     }
 
     #[test]
@@ -281,11 +282,12 @@ mod tests {
 
     #[test]
     fn test_multi() {
-        let children = Children::Multi(vec![1, 2, 3]);
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let children = Children::Multi(ids.clone());
         assert!(!children.is_empty());
         assert_eq!(children.len(), 3);
-        assert_eq!(children.as_slice(), &[1, 2, 3]);
-        assert_eq!(children.multi(), &[1, 2, 3]);
+        assert_eq!(children.as_slice(), ids.as_slice());
+        assert_eq!(children.multi(), ids.as_slice());
     }
 
     #[test]
@@ -298,7 +300,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Expected Children::Single, got Children::Multi")]
     fn test_single_panic_multi() {
-        let children = Children::Multi(vec![1, 2]);
+        let children = Children::Multi(vec![ElementId::new(1), ElementId::new(2)]);
         children.single();
     }
 
@@ -310,20 +312,22 @@ mod tests {
 
     #[test]
     fn test_from_element_id() {
-        let children: Children = 42.into();
-        assert_eq!(children.single(), 42);
+        let id = ElementId::new(42);
+        let children: Children = id.into();
+        assert_eq!(children.single(), id);
     }
 
     #[test]
     fn test_from_vec() {
-        let children: Children = vec![1, 2, 3].into();
-        assert_eq!(children.multi(), &[1, 2, 3]);
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let children: Children = ids.clone().into();
+        assert_eq!(children.multi(), ids.as_slice());
     }
 
     #[test]
     fn test_from_slice() {
-        let slice = &[1, 2, 3];
-        let children: Children = slice.into();
-        assert_eq!(children.multi(), &[1, 2, 3]);
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let children: Children = ids.as_slice().into();
+        assert_eq!(children.multi(), ids.as_slice());
     }
 }
