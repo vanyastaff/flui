@@ -266,11 +266,16 @@ impl FrameCoordinator {
         // Phase 2: Layout (compute sizes and positions)
         let _root_size = {
             let mut tree_guard = tree.write();
-            let _count = self.layout.compute_layout(&mut tree_guard, constraints)?;
+            let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
 
             #[cfg(debug_assertions)]
-            if _count > 0 {
-                tracing::debug!("build_frame: Layout phase computed {} layouts", _count);
+            if !laid_out_ids.is_empty() {
+                tracing::debug!("build_frame: Layout phase computed {} layouts", laid_out_ids.len());
+            }
+
+            // Mark all laid out elements for paint
+            for id in laid_out_ids {
+                self.paint.mark_dirty(id);
             }
 
             // Get root element's computed size
@@ -355,11 +360,16 @@ impl FrameCoordinator {
         let mut tree_guard = tree.write();
 
         // Process all dirty render objects
-        let _count = self.layout.compute_layout(&mut tree_guard, constraints)?;
+        let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
 
         #[cfg(debug_assertions)]
-        if _count > 0 {
-            tracing::debug!("flush_layout: Laid out {} render objects", _count);
+        if !laid_out_ids.is_empty() {
+            tracing::debug!("flush_layout: Laid out {} render objects", laid_out_ids.len());
+        }
+
+        // Mark all laid out elements for paint
+        for id in laid_out_ids {
+            self.paint.mark_dirty(id);
         }
 
         // Get root element's computed size

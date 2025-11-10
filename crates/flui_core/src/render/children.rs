@@ -137,10 +137,18 @@ impl Children {
         match self {
             Children::Single(id) => *id,
             Children::None => panic!("Expected Children::Single, got Children::None"),
-            Children::Multi(v) => panic!(
-                "Expected Children::Single, got Children::Multi with {} children",
-                v.len()
-            ),
+            Children::Multi(v) => {
+                // FIXME: Workaround for Children::Multi with 1 child
+                // Ideally should always be Children::Single for single child
+                if v.len() == 1 {
+                    v[0]
+                } else {
+                    panic!(
+                        "Expected Children::Single, got Children::Multi with {} children",
+                        v.len()
+                    )
+                }
+            }
         }
     }
 
