@@ -139,7 +139,10 @@ impl View for GestureDetector {
         // The RenderPointerListener will create PointerListenerLayer
         // which registers hit test handlers with EventRouter
         use flui_core::view::AnyElement;
-        (flui_rendering::objects::RenderPointerListener::new(callbacks), Some(AnyElement::new(self.child)))
+        (
+            flui_rendering::objects::RenderPointerListener::new(callbacks),
+            Some(AnyElement::new(self.child)),
+        )
     }
 }
 

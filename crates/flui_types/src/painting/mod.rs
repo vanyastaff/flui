@@ -32,4 +32,3 @@ pub use effects::{
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
 pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};
-

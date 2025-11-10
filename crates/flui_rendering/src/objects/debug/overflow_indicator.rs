@@ -22,7 +22,6 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 #[cfg(debug_assertions)]
-
 #[cfg(debug_assertions)]
 use flui_engine::layer::picture::DrawCommand;
 #[cfg(debug_assertions)]
@@ -173,15 +172,9 @@ fn paint_diagonal_stripes(picture: &mut flui_engine::layer::PictureLayer, rect: 
         a: 255,
     };
 
-    let paint_red = Paint::builder()
-        .color(RED)
-        .anti_alias(true)
-        .build();
+    let paint_red = Paint::builder().color(RED).anti_alias(true).build();
 
-    let paint_yellow = Paint::builder()
-        .color(YELLOW)
-        .anti_alias(true)
-        .build();
+    let paint_yellow = Paint::builder().color(YELLOW).anti_alias(true).build();
 
     let left = rect.min.x;
     let right = rect.max.x;
@@ -338,7 +331,6 @@ impl RenderOverflowIndicator {
 
 #[cfg(debug_assertions)]
 impl Render for RenderOverflowIndicator {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -400,9 +392,8 @@ impl Render for RenderOverflowIndicator {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -424,12 +415,12 @@ mod tests {
         assert_eq!(indicator.overflow_h, 0.0);
         assert_eq!(indicator.overflow_v, 0.0);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

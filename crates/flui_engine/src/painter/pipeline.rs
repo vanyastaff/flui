@@ -24,11 +24,11 @@ pub struct PipelineKey {
 
 impl PipelineKey {
     // Feature flags
-    const ALPHA_BLEND: u32 = 1 << 0;  // Requires alpha blending
-    const TEXTURED: u32 = 1 << 1;     // Uses textures
-    const MSAA_4X: u32 = 1 << 2;      // 4x MSAA enabled
-    const MSAA_8X: u32 = 1 << 3;      // 8x MSAA enabled
-    const HDR: u32 = 1 << 4;          // HDR color space
+    const ALPHA_BLEND: u32 = 1 << 0; // Requires alpha blending
+    const TEXTURED: u32 = 1 << 1; // Uses textures
+    const MSAA_4X: u32 = 1 << 2; // 4x MSAA enabled
+    const MSAA_8X: u32 = 1 << 3; // 8x MSAA enabled
+    const HDR: u32 = 1 << 4; // HDR color space
     const PREMUL_ALPHA: u32 = 1 << 5; // Premultiplied alpha
 
     /// Create opaque pipeline key (no blending, fastest)
@@ -38,12 +38,16 @@ impl PipelineKey {
 
     /// Create alpha blending pipeline key
     pub fn alpha_blend() -> Self {
-        Self { bits: Self::ALPHA_BLEND }
+        Self {
+            bits: Self::ALPHA_BLEND,
+        }
     }
 
     /// Create textured pipeline key
     pub fn textured() -> Self {
-        Self { bits: Self::TEXTURED }
+        Self {
+            bits: Self::TEXTURED,
+        }
     }
 
     /// Enable alpha blending
@@ -126,11 +130,7 @@ impl PipelineCache {
     /// * `device` - wgpu device
     /// * `shader_source` - WGSL shader source code
     /// * `format` - Surface texture format
-    pub fn new(
-        device: &wgpu::Device,
-        shader_source: &str,
-        format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, shader_source: &str, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shape Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
@@ -146,11 +146,7 @@ impl PipelineCache {
     /// Get or create a pipeline for the given key
     ///
     /// Returns cached pipeline if available, otherwise creates and caches new one.
-    pub fn get_or_create(
-        &mut self,
-        device: &wgpu::Device,
-        key: PipelineKey,
-    ) -> &RenderPipeline {
+    pub fn get_or_create(&mut self, device: &wgpu::Device, key: PipelineKey) -> &RenderPipeline {
         // Check if pipeline exists
         if !self.cache.contains_key(&key) {
             // Create and insert new pipeline
@@ -163,11 +159,7 @@ impl PipelineCache {
     }
 
     /// Create a new specialized pipeline
-    fn create_pipeline(
-        &self,
-        device: &wgpu::Device,
-        key: PipelineKey,
-    ) -> RenderPipeline {
+    fn create_pipeline(&self, device: &wgpu::Device, key: PipelineKey) -> RenderPipeline {
         #[cfg(debug_assertions)]
         tracing::debug!("PipelineCache::create_pipeline: key={:?}", key);
 
@@ -182,7 +174,7 @@ impl PipelineCache {
         let blend_state = if key.has_alpha_blend() {
             Some(wgpu::BlendState::ALPHA_BLENDING)
         } else {
-            None  // Opaque - no blending (faster!)
+            None // Opaque - no blending (faster!)
         };
 
         // Configure MSAA
@@ -273,9 +265,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_key_builder() {
-        let key = PipelineKey::opaque()
-            .with_alpha_blend()
-            .with_msaa_4x();
+        let key = PipelineKey::opaque().with_alpha_blend().with_msaa_4x();
 
         assert!(key.has_alpha_blend());
         assert_eq!(key.msaa_samples(), 4);
@@ -290,18 +280,14 @@ mod tests {
         assert_eq!(key_8x.msaa_samples(), 8);
 
         // 8x overrides 4x
-        let key_both = PipelineKey::opaque()
-            .with_msaa_4x()
-            .with_msaa_8x();
+        let key_both = PipelineKey::opaque().with_msaa_4x().with_msaa_8x();
         assert_eq!(key_both.msaa_samples(), 8);
     }
 
     #[test]
     fn test_pipeline_key_equality() {
         let key1 = PipelineKey::alpha_blend().with_msaa_4x();
-        let key2 = PipelineKey::opaque()
-            .with_alpha_blend()
-            .with_msaa_4x();
+        let key2 = PipelineKey::opaque().with_alpha_blend().with_msaa_4x();
 
         assert_eq!(key1, key2);
     }

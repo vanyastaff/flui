@@ -52,7 +52,6 @@ impl RenderBlockSemantics {
 // ===== RenderObject Implementation =====
 
 impl Render for RenderBlockSemantics {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -73,9 +72,8 @@ impl Render for RenderBlockSemantics {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -97,12 +95,12 @@ mod tests {
         block.set_blocking(true);
         assert!(block.blocking);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

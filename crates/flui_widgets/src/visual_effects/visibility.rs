@@ -323,14 +323,17 @@ impl View for Visibility {
             self.child
         };
 
-        (RenderVisibility::new(
-            self.visible,
-            self.maintain_size,
-            self.maintain_state,
-            self.maintain_animation,
-            self.maintain_interactivity,
-            self.maintain_semantics,
-        ), child)
+        (
+            RenderVisibility::new(
+                self.visible,
+                self.maintain_size,
+                self.maintain_state,
+                self.maintain_animation,
+                self.maintain_interactivity,
+                self.maintain_semantics,
+            ),
+            child,
+        )
     }
 }
 

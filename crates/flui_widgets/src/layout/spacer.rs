@@ -225,9 +225,10 @@ impl View for Spacer {
         // Build zero-sized SizedBox as child
         let sized_box = crate::SizedBox::builder().width(0.0).height(0.0).build();
 
-        (RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
-            self.flex,
-        )), Some(Box::new(sized_box) as Box<dyn flui_core::view::AnyView>))
+        (
+            RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)),
+            Some(Box::new(sized_box) as Box<dyn flui_core::view::AnyView>),
+        )
     }
 }
 

@@ -34,7 +34,11 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use wgpu::{Device, Queue, Texture, TextureView, Sampler, Extent3d, TextureDescriptor, TextureUsages, TextureDimension, TextureFormat, TexelCopyTextureInfo, TexelCopyBufferLayout, Origin3d, SamplerDescriptor, AddressMode, FilterMode};
+use wgpu::{
+    AddressMode, Device, Extent3d, FilterMode, Origin3d, Queue, Sampler, SamplerDescriptor,
+    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureDescriptor, TextureDimension,
+    TextureFormat, TextureUsages, TextureView,
+};
 
 /// Unique identifier for cached textures
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -399,11 +403,7 @@ impl TextureCache {
             0.0
         };
 
-        let memory_bytes = self
-            .textures
-            .values()
-            .map(|t| t.size_bytes)
-            .sum();
+        let memory_bytes = self.textures.values().map(|t| t.size_bytes).sum();
 
         TextureCacheStats {
             cached_textures,

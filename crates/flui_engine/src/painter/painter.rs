@@ -151,11 +151,8 @@ impl WgpuPainter {
         let queue = Arc::new(queue);
 
         // Create pipeline cache with shader
-        let pipeline_cache = PipelineCache::new(
-            &device,
-            include_str!("shaders/shape.wgsl"),
-            surface_format,
-        );
+        let pipeline_cache =
+            PipelineCache::new(&device, include_str!("shaders/shape.wgsl"), surface_format);
 
         // ===== Instanced Rendering Setup =====
 
@@ -604,15 +601,16 @@ impl WgpuPainter {
 
             // Get specialized pipeline (default to alpha blend for compatibility)
             // TODO: Track pipeline key per draw call for optimal batching
-            let pipeline_key = self.current_pipeline_key.unwrap_or(PipelineKey::alpha_blend());
+            let pipeline_key = self
+                .current_pipeline_key
+                .unwrap_or(PipelineKey::alpha_blend());
 
             #[cfg(debug_assertions)]
-            tracing::debug!(
-                "WgpuPainter::render: Using pipeline {:?}",
-                pipeline_key
-            );
+            tracing::debug!("WgpuPainter::render: Using pipeline {:?}", pipeline_key);
 
-            let pipeline = self.pipeline_cache.get_or_create(&self.device, pipeline_key);
+            let pipeline = self
+                .pipeline_cache
+                .get_or_create(&self.device, pipeline_key);
 
             // Render shapes in single pass
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -722,8 +720,7 @@ impl WgpuPainter {
         self.vertices.extend(vertices);
 
         // Add indices with offset
-        self.indices
-            .extend(indices.iter().map(|&i| i + base_index));
+        self.indices.extend(indices.iter().map(|&i| i + base_index));
     }
 
     /// Flush all instanced batches using SINGLE render pass (Phase 9 optimization)
@@ -760,8 +757,10 @@ impl WgpuPainter {
         );
 
         // Calculate total buffer size and offsets
-        let rect_size = self.rect_batch.len() * std::mem::size_of::<super::instancing::RectInstance>();
-        let circle_size = self.circle_batch.len() * std::mem::size_of::<super::instancing::CircleInstance>();
+        let rect_size =
+            self.rect_batch.len() * std::mem::size_of::<super::instancing::RectInstance>();
+        let circle_size =
+            self.circle_batch.len() * std::mem::size_of::<super::instancing::CircleInstance>();
         let arc_size = self.arc_batch.len() * std::mem::size_of::<super::instancing::ArcInstance>();
 
         // Build combined instance buffer
@@ -1004,7 +1003,14 @@ pub trait Painter {
         tracing::warn!("Painter::path: not implemented");
     }
 
-    fn arc(&mut self, _center: Point, _radius: f32, _start_angle: f32, _end_angle: f32, _paint: &Paint) {
+    fn arc(
+        &mut self,
+        _center: Point,
+        _radius: f32,
+        _start_angle: f32,
+        _end_angle: f32,
+        _paint: &Paint,
+    ) {
         // No-op by default
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::arc: not implemented");
@@ -1040,19 +1046,38 @@ pub trait Painter {
     }
 
     // Gradient methods (stubs for legacy compatibility)
-    fn horizontal_gradient(&mut self, _rect: Rect, _start_color: flui_types::styling::Color, _end_color: flui_types::styling::Color) {
+    fn horizontal_gradient(
+        &mut self,
+        _rect: Rect,
+        _start_color: flui_types::styling::Color,
+        _end_color: flui_types::styling::Color,
+    ) {
         // No-op by default - use Paint::gradient() instead
         #[cfg(debug_assertions)]
-        tracing::warn!("Painter::horizontal_gradient: not implemented - use Paint::gradient() instead");
+        tracing::warn!(
+            "Painter::horizontal_gradient: not implemented - use Paint::gradient() instead"
+        );
     }
 
-    fn vertical_gradient(&mut self, _rect: Rect, _start_color: flui_types::styling::Color, _end_color: flui_types::styling::Color) {
+    fn vertical_gradient(
+        &mut self,
+        _rect: Rect,
+        _start_color: flui_types::styling::Color,
+        _end_color: flui_types::styling::Color,
+    ) {
         // No-op by default - use Paint::gradient() instead
         #[cfg(debug_assertions)]
-        tracing::warn!("Painter::vertical_gradient: not implemented - use Paint::gradient() instead");
+        tracing::warn!(
+            "Painter::vertical_gradient: not implemented - use Paint::gradient() instead"
+        );
     }
 
-    fn radial_gradient(&mut self, _rect: Rect, _center_color: flui_types::styling::Color, _edge_color: flui_types::styling::Color) {
+    fn radial_gradient(
+        &mut self,
+        _rect: Rect,
+        _center_color: flui_types::styling::Color,
+        _edge_color: flui_types::styling::Color,
+    ) {
         // No-op by default - use Paint::gradient() instead
         #[cfg(debug_assertions)]
         tracing::warn!("Painter::radial_gradient: not implemented - use Paint::gradient() instead");
@@ -1064,23 +1089,55 @@ pub trait Painter {
         tracing::warn!("Painter::sweep_gradient: not implemented - use Paint::gradient() instead");
     }
 
-    fn text_with_shadow(&mut self, text: &str, position: Point, font_size: f32, paint: &Paint, _shadow_offset: Offset, _shadow_blur: f32, _shadow_color: flui_types::styling::Color) {
+    fn text_with_shadow(
+        &mut self,
+        text: &str,
+        position: Point,
+        font_size: f32,
+        paint: &Paint,
+        _shadow_offset: Offset,
+        _shadow_blur: f32,
+        _shadow_color: flui_types::styling::Color,
+    ) {
         // Fallback to regular text() method
         self.text(text, position, font_size, paint);
     }
 
-    fn radial_gradient_simple(&mut self, _center: Point, _inner_radius: f32, _outer_radius: f32, _start_color: flui_types::styling::Color, _end_color: flui_types::styling::Color) {
+    fn radial_gradient_simple(
+        &mut self,
+        _center: Point,
+        _inner_radius: f32,
+        _outer_radius: f32,
+        _start_color: flui_types::styling::Color,
+        _end_color: flui_types::styling::Color,
+    ) {
         // No-op by default - use Paint::gradient() instead
         #[cfg(debug_assertions)]
-        tracing::warn!("Painter::radial_gradient_simple: not implemented - use Paint::gradient() instead");
+        tracing::warn!(
+            "Painter::radial_gradient_simple: not implemented - use Paint::gradient() instead"
+        );
     }
 
-    fn rrect_with_shadow(&mut self, rrect: RRect, paint: &Paint, _shadow_offset: Offset, _shadow_blur: f32, _shadow_color: flui_types::styling::Color) {
+    fn rrect_with_shadow(
+        &mut self,
+        rrect: RRect,
+        paint: &Paint,
+        _shadow_offset: Offset,
+        _shadow_blur: f32,
+        _shadow_color: flui_types::styling::Color,
+    ) {
         // Fallback to regular rrect() method
         self.rrect(rrect, paint);
     }
 
-    fn rect_with_shadow(&mut self, rect: Rect, paint: &Paint, _shadow_offset: Offset, _shadow_blur: f32, _shadow_color: flui_types::styling::Color) {
+    fn rect_with_shadow(
+        &mut self,
+        rect: Rect,
+        paint: &Paint,
+        _shadow_offset: Offset,
+        _shadow_blur: f32,
+        _shadow_color: flui_types::styling::Color,
+    ) {
         // Fallback to regular rect() method
         self.rect(rect, paint);
     }
@@ -1106,7 +1163,9 @@ impl Painter for WgpuPainter {
             // Stroked rect - use tessellator (less common, fallback path)
             let default_stroke = Stroke::new(1.0);
             let stroke = paint.get_stroke().unwrap_or(&default_stroke);
-            if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint, stroke) {
+            if let Ok((vertices, indices)) =
+                self.tessellator.tessellate_rect_stroke(rect, paint, stroke)
+            {
                 self.add_tessellated(vertices, indices);
             }
         }
@@ -1122,10 +1181,10 @@ impl Painter for WgpuPainter {
             let instance = super::instancing::RectInstance::rounded_rect_corners(
                 rrect.rect,
                 paint.get_color(),
-                rrect.top_left.x.max(rrect.top_left.y),     // Top-left
-                rrect.top_right.x.max(rrect.top_right.y),   // Top-right
+                rrect.top_left.x.max(rrect.top_left.y), // Top-left
+                rrect.top_right.x.max(rrect.top_right.y), // Top-right
                 rrect.bottom_right.x.max(rrect.bottom_right.y), // Bottom-right
-                rrect.bottom_left.x.max(rrect.bottom_left.y),  // Bottom-left
+                rrect.bottom_left.x.max(rrect.bottom_left.y), // Bottom-left
             );
             self.rect_batch.add(instance);
         } else {
@@ -1147,12 +1206,15 @@ impl Painter for WgpuPainter {
 
         if paint.is_fill() {
             // Use GPU instancing for filled circles (100x faster!)
-            let instance = super::instancing::CircleInstance::new(center, radius, paint.get_color());
+            let instance =
+                super::instancing::CircleInstance::new(center, radius, paint.get_color());
             self.circle_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
             // Stroked circle - use tessellator (less common, fallback path)
-            if let Ok((vertices, indices)) = self.tessellator.tessellate_circle(center, radius, paint) {
+            if let Ok((vertices, indices)) =
+                self.tessellator.tessellate_circle(center, radius, paint)
+            {
                 self.add_tessellated(vertices, indices);
             }
         }
@@ -1175,14 +1237,7 @@ impl Painter for WgpuPainter {
         }
     }
 
-    fn arc(
-        &mut self,
-        center: Point,
-        radius: f32,
-        start_angle: f32,
-        end_angle: f32,
-        paint: &Paint,
-    ) {
+    fn arc(&mut self, center: Point, radius: f32, start_angle: f32, end_angle: f32, paint: &Paint) {
         #[cfg(debug_assertions)]
         tracing::debug!(
             "WgpuPainter::arc: center={:?}, radius={}, start={}, end={}, paint={:?}",
@@ -1255,12 +1310,8 @@ impl Painter for WgpuPainter {
         let top_left = self.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
         let bottom_right = self.apply_transform(Point::new(dst_rect.right(), dst_rect.bottom()));
 
-        let transformed_rect = Rect::from_ltrb(
-            top_left.x,
-            top_left.y,
-            bottom_right.x,
-            bottom_right.y,
-        );
+        let transformed_rect =
+            Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
         // Create texture instance (full UV mapping, no rotation, white tint)
         let instance = super::instancing::TextureInstance::new(
@@ -1281,7 +1332,10 @@ impl Painter for WgpuPainter {
 
     fn save(&mut self) {
         #[cfg(debug_assertions)]
-        tracing::debug!("WgpuPainter::save: stack depth={}", self.transform_stack.len());
+        tracing::debug!(
+            "WgpuPainter::save: stack depth={}",
+            self.transform_stack.len()
+        );
 
         self.transform_stack.push(self.current_transform);
     }

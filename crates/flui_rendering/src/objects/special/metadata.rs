@@ -111,7 +111,6 @@ impl Default for RenderMetaData {
 // ===== RenderObject Implementation =====
 
 impl Render for RenderMetaData {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -227,12 +226,12 @@ mod tests {
         meta.set_behavior(HitTestBehavior::Translucent);
         assert_eq!(meta.behavior, HitTestBehavior::Translucent);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

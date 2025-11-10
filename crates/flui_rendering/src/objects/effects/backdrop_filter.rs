@@ -6,9 +6,7 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::{
-    painting::BlendMode, painting::ImageFilter, Size,
-};
+use flui_types::{painting::BlendMode, painting::ImageFilter, Size};
 
 // ===== RenderObject =====
 
@@ -88,7 +86,6 @@ impl RenderBackdropFilter {
 // ===== RenderObject Implementation =====
 
 impl Render for RenderBackdropFilter {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -119,9 +116,8 @@ impl Render for RenderBackdropFilter {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 // ===== Tests =====
@@ -156,12 +152,12 @@ mod tests {
         let filter = RenderBackdropFilter::blur(10.0).with_blend_mode(BlendMode::Multiply);
         assert_eq!(filter.blend_mode(), BlendMode::Multiply);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

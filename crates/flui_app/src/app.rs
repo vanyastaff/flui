@@ -187,15 +187,13 @@ impl FluiApp {
         .expect("Failed to find adapter");
 
         // Request device and queue
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                label: None,
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: Default::default(),
-            },
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            label: None,
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: Default::default(),
+        }))
         .expect("Failed to create device");
 
         // Get window size
@@ -466,9 +464,7 @@ impl FluiApp {
         let ctx = BuildContext::new(self.pipeline.tree().clone(), temp_id);
 
         // Build the view within a context guard (sets up thread-local)
-        let root_element = with_build_context(&ctx, || {
-            self.root_view.build_any()
-        });
+        let root_element = with_build_context(&ctx, || self.root_view.build_any());
 
         // Mount the element and get the real root ID
         let root_id = self.pipeline.set_root(root_element);

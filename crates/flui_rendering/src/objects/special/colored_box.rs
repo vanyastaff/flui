@@ -52,7 +52,6 @@ impl Default for RenderColoredBox {
 }
 
 impl Render for RenderColoredBox {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -113,9 +112,8 @@ impl Render for RenderColoredBox {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -140,12 +138,12 @@ mod tests {
         colored.set_color(Color::GREEN);
         assert_eq!(colored.color, Color::GREEN);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

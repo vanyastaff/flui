@@ -3,7 +3,7 @@
 use flui_engine::{Paint, Painter};
 use flui_types::{
     styling::{BoxShadow, Radius},
-    Rect, RRect,
+    RRect, Rect,
 };
 
 /// Painter for box shadows

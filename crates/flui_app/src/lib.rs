@@ -37,9 +37,6 @@ pub mod window;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-
-
-
 // Re-exports
 pub use app::FluiApp;
 pub use event_callbacks::WindowEventCallbacks;
@@ -56,7 +53,3 @@ pub use flui_core::{
     // View system (new API)
     view::{AnyView, BuildContext, View, ViewElement},
 };
-
-
-
-

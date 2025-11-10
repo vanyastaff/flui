@@ -50,7 +50,6 @@ impl Default for RenderIgnorePointer {
 }
 
 impl Render for RenderIgnorePointer {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -76,9 +75,8 @@ impl Render for RenderIgnorePointer {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -110,12 +108,12 @@ mod tests {
         ignore.set_ignoring(true);
         assert!(ignore.ignoring());
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

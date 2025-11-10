@@ -142,7 +142,6 @@ impl Default for RenderCustomPaint {
 // ===== RenderObject Implementation =====
 
 impl Render for RenderCustomPaint {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -193,9 +192,8 @@ impl Render for RenderCustomPaint {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -260,12 +258,12 @@ mod tests {
         assert!(custom.painter.is_none());
         assert!(custom.foreground_painter.is_some());
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

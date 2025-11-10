@@ -89,7 +89,13 @@ impl RectInstance {
     }
 
     /// Create an instance with transform
-    pub fn with_transform(mut self, scale_x: f32, scale_y: f32, translate_x: f32, translate_y: f32) -> Self {
+    pub fn with_transform(
+        mut self,
+        scale_x: f32,
+        scale_y: f32,
+        translate_x: f32,
+        translate_y: f32,
+    ) -> Self {
         self.transform = [scale_x, scale_y, translate_x, translate_y];
         self
     }
@@ -144,7 +150,12 @@ impl CircleInstance {
         Self {
             center_radius: [center.x, center.y, radius_x.max(radius_y), 0.0],
             color: color.to_f32_array(),
-            transform: [radius_x / radius_x.max(radius_y), radius_y / radius_x.max(radius_y), 0.0, 0.0],
+            transform: [
+                radius_x / radius_x.max(radius_y),
+                radius_y / radius_x.max(radius_y),
+                0.0,
+                0.0,
+            ],
         }
     }
 
@@ -197,7 +208,13 @@ impl ArcInstance {
     /// * `start_angle` - Starting angle in radians (0 = right)
     /// * `sweep_angle` - Sweep angle in radians (positive = clockwise)
     /// * `color` - Arc color
-    pub fn new(center: Point, radius: f32, start_angle: f32, sweep_angle: f32, color: Color) -> Self {
+    pub fn new(
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        color: Color,
+    ) -> Self {
         Self {
             center_radius: [center.x, center.y, radius, 0.0],
             angles: [start_angle, sweep_angle, 0.0, 0.0],
@@ -278,7 +295,12 @@ impl TextureInstance {
     /// * `tint` - Color tint (use Color::WHITE for no tint)
     pub fn new(dst_rect: flui_types::Rect, tint: Color) -> Self {
         Self {
-            dst_rect: [dst_rect.left(), dst_rect.top(), dst_rect.width(), dst_rect.height()],
+            dst_rect: [
+                dst_rect.left(),
+                dst_rect.top(),
+                dst_rect.width(),
+                dst_rect.height(),
+            ],
             src_uv: [0.0, 0.0, 1.0, 1.0], // Full texture
             tint: tint.to_f32_array(),
             transform: [1.0, 0.0, 0.0, 0.0], // No rotation
@@ -291,13 +313,14 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `src_uv` - Source UV rectangle [u_min, v_min, u_max, v_max]
     /// * `tint` - Color tint
-    pub fn with_uv(
-        dst_rect: flui_types::Rect,
-        src_uv: [f32; 4],
-        tint: Color,
-    ) -> Self {
+    pub fn with_uv(dst_rect: flui_types::Rect, src_uv: [f32; 4], tint: Color) -> Self {
         Self {
-            dst_rect: [dst_rect.left(), dst_rect.top(), dst_rect.width(), dst_rect.height()],
+            dst_rect: [
+                dst_rect.left(),
+                dst_rect.top(),
+                dst_rect.width(),
+                dst_rect.height(),
+            ],
             src_uv,
             tint: tint.to_f32_array(),
             transform: [1.0, 0.0, 0.0, 0.0],
@@ -310,13 +333,14 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `angle` - Rotation angle in radians
     /// * `tint` - Color tint
-    pub fn with_rotation(
-        dst_rect: flui_types::Rect,
-        angle: f32,
-        tint: Color,
-    ) -> Self {
+    pub fn with_rotation(dst_rect: flui_types::Rect, angle: f32, tint: Color) -> Self {
         Self {
-            dst_rect: [dst_rect.left(), dst_rect.top(), dst_rect.width(), dst_rect.height()],
+            dst_rect: [
+                dst_rect.left(),
+                dst_rect.top(),
+                dst_rect.width(),
+                dst_rect.height(),
+            ],
             src_uv: [0.0, 0.0, 1.0, 1.0],
             tint: tint.to_f32_array(),
             transform: [angle.cos(), angle.sin(), 0.0, 0.0],
@@ -468,10 +492,7 @@ mod tests {
 
     #[test]
     fn test_color_conversion() {
-        let instance = RectInstance::rect(
-            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
-            Color::RED,
-        );
+        let instance = RectInstance::rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0), Color::RED);
 
         // RED should be [1.0, 0.0, 0.0, 1.0] in normalized form
         assert_eq!(instance.color[0], 1.0); // R

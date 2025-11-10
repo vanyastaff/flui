@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
+use flui_types::Size;
 
 /// RenderObject that enforces exact size constraints
 ///
@@ -88,7 +88,6 @@ impl Default for RenderSizedBox {
 }
 
 impl Render for RenderSizedBox {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -119,9 +118,8 @@ impl Render for RenderSizedBox {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -176,12 +174,12 @@ mod tests {
         sized.set_height(Some(100.0));
         assert_eq!(sized.height, Some(100.0));
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

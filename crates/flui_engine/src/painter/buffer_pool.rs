@@ -37,8 +37,8 @@
 //! pool.reset();  // Call at end of frame
 //! ```
 
-use wgpu::{Buffer, BufferUsages, Device};
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
+use wgpu::{Buffer, BufferUsages, Device};
 
 /// Buffer pool entry
 struct PooledBuffer {
@@ -86,12 +86,7 @@ impl BufferPool {
     ///
     /// # Returns
     /// Reference to buffer (valid until next reset())
-    pub fn get_vertex_buffer(
-        &mut self,
-        device: &Device,
-        label: &str,
-        contents: &[u8],
-    ) -> &Buffer {
+    pub fn get_vertex_buffer(&mut self, device: &Device, label: &str, contents: &[u8]) -> &Buffer {
         Self::get_buffer_internal(
             device,
             label,
@@ -104,12 +99,7 @@ impl BufferPool {
     }
 
     /// Get or create an index buffer
-    pub fn get_index_buffer(
-        &mut self,
-        device: &Device,
-        label: &str,
-        contents: &[u8],
-    ) -> &Buffer {
+    pub fn get_index_buffer(&mut self, device: &Device, label: &str, contents: &[u8]) -> &Buffer {
         Self::get_buffer_internal(
             device,
             label,
@@ -122,12 +112,7 @@ impl BufferPool {
     }
 
     /// Get or create a uniform buffer
-    pub fn get_uniform_buffer(
-        &mut self,
-        device: &Device,
-        label: &str,
-        contents: &[u8],
-    ) -> &Buffer {
+    pub fn get_uniform_buffer(&mut self, device: &Device, label: &str, contents: &[u8]) -> &Buffer {
         Self::get_buffer_internal(
             device,
             label,
@@ -152,7 +137,9 @@ impl BufferPool {
         let size = contents.len();
 
         // Try to find available buffer with matching size
-        let reuse_index = pool.iter().position(|entry| !entry.in_use && entry.size == size);
+        let reuse_index = pool
+            .iter()
+            .position(|entry| !entry.in_use && entry.size == size);
 
         if let Some(index) = reuse_index {
             // Reuse buffer
@@ -163,7 +150,11 @@ impl BufferPool {
             #[cfg(debug_assertions)]
             {
                 let total = *allocations + *reuses;
-                let reuse_rate = if total == 0 { 0.0 } else { *reuses as f32 / total as f32 };
+                let reuse_rate = if total == 0 {
+                    0.0
+                } else {
+                    *reuses as f32 / total as f32
+                };
                 tracing::trace!(
                     "BufferPool: Reusing buffer (size={}, reuse_rate={:.1}%)",
                     size,
@@ -195,7 +186,11 @@ impl BufferPool {
         #[cfg(debug_assertions)]
         {
             let total = *allocations + *reuses;
-            let reuse_rate = if total == 0 { 0.0 } else { *reuses as f32 / total as f32 };
+            let reuse_rate = if total == 0 {
+                0.0
+            } else {
+                *reuses as f32 / total as f32
+            };
             let pool_len = pool.len();
             tracing::trace!(
                 "BufferPool: Creating new buffer (size={}, pool_size={}, reuse_rate={:.1}%)",
@@ -267,13 +262,15 @@ impl BufferPool {
     /// Removes unused buffers from the pool. Call this periodically
     /// (e.g., every 60 frames) to prevent memory bloat.
     pub fn shrink(&mut self) {
-        let before = self.vertex_buffers.len() + self.index_buffers.len() + self.uniform_buffers.len();
+        let before =
+            self.vertex_buffers.len() + self.index_buffers.len() + self.uniform_buffers.len();
 
         self.vertex_buffers.retain(|entry| entry.in_use);
         self.index_buffers.retain(|entry| entry.in_use);
         self.uniform_buffers.retain(|entry| entry.in_use);
 
-        let after = self.vertex_buffers.len() + self.index_buffers.len() + self.uniform_buffers.len();
+        let after =
+            self.vertex_buffers.len() + self.index_buffers.len() + self.uniform_buffers.len();
 
         #[cfg(debug_assertions)]
         if before != after {

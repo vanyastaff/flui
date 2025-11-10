@@ -415,7 +415,8 @@ impl Layer for PictureLayer {
                 } => {
                     // Extract font size and create paint from style
                     let font_size = style.font_size.unwrap_or(14.0) as f32;
-                    let paint = Paint::fill(style.color.unwrap_or(flui_types::styling::Color::BLACK));
+                    let paint =
+                        Paint::fill(style.color.unwrap_or(flui_types::styling::Color::BLACK));
                     painter.text_styled(text, *position, font_size, &paint);
                 }
                 DrawCommand::Image {

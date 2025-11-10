@@ -5,9 +5,8 @@
 
 use flui_types::{styling::Color, Point};
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer,
-    Viewport,
+    Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonRenderer, Viewport,
 };
 
 /// Text rendering system using glyphon
@@ -52,11 +51,7 @@ impl TextRenderer {
     /// * `device` - wgpu device
     /// * `queue` - wgpu queue
     /// * `format` - Surface texture format
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         #[cfg(debug_assertions)]
         tracing::debug!("TextRenderer::new: format={:?}", format);
 

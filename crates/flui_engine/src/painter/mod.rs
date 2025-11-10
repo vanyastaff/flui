@@ -65,20 +65,13 @@ mod text;
 pub mod texture_cache;
 mod vertex;
 
-
-
-
-
-
 // ===== Public API =====
 
 // Main painter
 pub use painter::{Painter, WgpuPainter};
 
 // Paint types
-pub use paint::{
-    Gradient, GradientStop, GradientType, Paint, Shadow, Stroke,
-};
+pub use paint::{Gradient, GradientStop, GradientType, Paint, Shadow, Stroke};
 
 // Vertex types
 pub use vertex::Vertex;
@@ -88,8 +81,3 @@ pub use tessellator::Tessellator;
 
 // Re-export RRect from flui_types
 pub use flui_types::geometry::RRect;
-
-
-
-
-

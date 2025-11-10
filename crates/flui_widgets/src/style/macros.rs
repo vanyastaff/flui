@@ -38,8 +38,8 @@ pub mod prelude {
         Container, Divider, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
         IntrinsicHeight, IntrinsicWidth, ListBody, Material, Offstage, Opacity, OverflowBox,
         Padding, PhysicalModel, Positioned, PositionedDirectional, RepaintBoundary, RotatedBox,
-        Row, Scaffold, ScrollController, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        Spacer, Stack, Text, Transform, Viewport, Visibility, Wrap,
+        Row, Scaffold, ScrollController, SingleChildScrollView, SizedBox, SizedOverflowBox, Spacer,
+        Stack, Text, Transform, Viewport, Visibility, Wrap,
     };
 
     // Re-export common types
@@ -48,7 +48,8 @@ pub mod prelude {
             Axis, CrossAxisAlignment, FlexFit, MainAxisAlignment, MainAxisSize, StackFit,
             WrapAlignment, WrapCrossAlignment,
         },
-        styling::{BorderRadius, BoxDecoration, Radius}, painting::Clip,
+        painting::Clip,
+        styling::{BorderRadius, BoxDecoration, Radius},
         Alignment, BoxConstraints, Color, EdgeInsets, Matrix4, Offset, Size,
     };
 

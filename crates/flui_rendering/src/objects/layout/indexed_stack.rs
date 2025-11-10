@@ -71,7 +71,6 @@ impl Default for RenderIndexedStack {
 }
 
 impl Render for RenderIndexedStack {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
@@ -128,9 +127,8 @@ impl Render for RenderIndexedStack {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -170,12 +168,12 @@ mod tests {
         stack.set_alignment(Alignment::CENTER);
         assert_eq!(stack.alignment, Alignment::CENTER);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable
-    }
+        fn arity(&self) -> Arity {
+            Arity::Variable
+        }
     }
 }

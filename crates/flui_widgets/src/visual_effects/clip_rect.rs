@@ -138,7 +138,10 @@ impl Default for ClipRect {
 // Implement View for ClipRect - New architecture
 impl View for ClipRect {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderClipRect::new(RectShape, self.clip_behavior), self.child)
+        (
+            RenderClipRect::new(RectShape, self.clip_behavior),
+            self.child,
+        )
     }
 }
 

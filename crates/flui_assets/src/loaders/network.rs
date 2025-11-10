@@ -67,12 +67,15 @@ impl NetworkLoader {
     /// ```
     #[cfg(feature = "network")]
     pub async fn load_url(&self, url: &str) -> Result<Vec<u8>, AssetError> {
-        let response = self.client.get(url).send().await.map_err(|e| {
-            AssetError::LoadFailed {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| AssetError::LoadFailed {
                 path: url.to_string(),
                 reason: format!("HTTP request failed: {}", e),
-            }
-        })?;
+            })?;
 
         if !response.status().is_success() {
             return Err(AssetError::LoadFailed {
@@ -135,7 +138,9 @@ where
         // This is meant to be used with concrete implementations
         Err(AssetError::LoadFailed {
             path: url.to_string(),
-            reason: "Generic network loading not supported - use load_url() or concrete Asset types".to_string(),
+            reason:
+                "Generic network loading not supported - use load_url() or concrete Asset types"
+                    .to_string(),
         })
     }
 
@@ -152,12 +157,15 @@ where
     async fn metadata(&self, key: &T::Key) -> std::result::Result<Option<AssetMetadata>, T::Error> {
         let url = key.as_ref();
 
-        let response = self.client.head(url).send().await.map_err(|e| {
-            AssetError::LoadFailed {
+        let response = self
+            .client
+            .head(url)
+            .send()
+            .await
+            .map_err(|e| AssetError::LoadFailed {
                 path: url.to_string(),
                 reason: format!("HTTP HEAD request failed: {}", e),
-            }
-        })?;
+            })?;
 
         if !response.status().is_success() {
             return Ok(None);

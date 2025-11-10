@@ -80,12 +80,12 @@ where
             return Ok(None);
         }
 
-        let file_metadata = fs::metadata(&path).await.map_err(|e| {
-            AssetError::LoadFailed {
+        let file_metadata = fs::metadata(&path)
+            .await
+            .map_err(|e| AssetError::LoadFailed {
                 path: path.display().to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         Ok(Some(AssetMetadata {
             size_bytes: Some(file_metadata.len() as usize),
@@ -154,12 +154,12 @@ impl BytesFileLoader {
     pub async fn metadata(&self, path: impl AsRef<Path>) -> Result<AssetMetadata> {
         let full_path = self.base_path.join(path.as_ref());
 
-        let file_metadata = fs::metadata(&full_path).await.map_err(|e| {
-            AssetError::LoadFailed {
+        let file_metadata = fs::metadata(&full_path)
+            .await
+            .map_err(|e| AssetError::LoadFailed {
                 path: full_path.display().to_string(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         Ok(AssetMetadata {
             size_bytes: Some(file_metadata.len() as usize),

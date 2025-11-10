@@ -85,7 +85,6 @@ impl RenderViewport {
 }
 
 impl Render for RenderViewport {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();

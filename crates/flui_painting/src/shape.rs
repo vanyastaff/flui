@@ -5,7 +5,7 @@
 
 use flui_engine::{Paint, Painter, Stroke};
 use flui_types::{
-    geometry::{Point, Rect, RRect},
+    geometry::{Point, RRect, Rect},
     styling::{
         BeveledRectangleBorder, CircleBorder, ContinuousRectangleBorder, LinearBorder, OvalBorder,
         Radius, RoundedRectangleBorder, StadiumBorder, StarBorder,

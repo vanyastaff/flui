@@ -310,7 +310,8 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())}
+            (RenderPadding::new(EdgeInsets::ZERO), ())
+        }
     }
 
     #[test]
@@ -447,11 +448,10 @@ mod tests {
 // Implement View for Center - Simplified API
 impl View for Center {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderAlign::with_factors(
-            Alignment::CENTER,
-            self.width_factor,
-            self.height_factor,
-        ), self.child)
+        (
+            RenderAlign::with_factors(Alignment::CENTER, self.width_factor, self.height_factor),
+            self.child,
+        )
     }
 }
 

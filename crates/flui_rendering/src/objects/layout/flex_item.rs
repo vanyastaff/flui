@@ -188,7 +188,6 @@ impl RenderFlexItem {
 }
 
 impl Render for RenderFlexItem {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -212,9 +211,8 @@ impl Render for RenderFlexItem {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -284,12 +282,12 @@ mod tests {
         item.flex_metadata_mut().flex = 3;
         assert_eq!(item.flex_metadata().flex, 3);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
+use flui_types::Size;
 
 /// RenderObject that applies additional constraints to its child
 ///
@@ -47,7 +47,6 @@ impl Default for RenderConstrainedBox {
 }
 
 impl Render for RenderConstrainedBox {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -69,9 +68,8 @@ impl Render for RenderConstrainedBox {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -103,12 +101,12 @@ mod tests {
         constrained.set_additional_constraints(constraints2);
         assert_eq!(constrained.additional_constraints, constraints2);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

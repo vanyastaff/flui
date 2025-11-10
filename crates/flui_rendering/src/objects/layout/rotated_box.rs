@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{geometry::QuarterTurns, Offset, Size};
 use flui_types::constraints::BoxConstraints;
+use flui_types::{geometry::QuarterTurns, Offset, Size};
 
 /// RenderObject that rotates its child_id by quarter turns
 ///
@@ -63,7 +63,6 @@ impl RenderRotatedBox {
 // ===== RenderObject Implementation =====
 
 impl Render for RenderRotatedBox {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -137,9 +136,8 @@ impl Render for RenderRotatedBox {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -170,12 +168,12 @@ mod tests {
         let rotated_270 = RenderRotatedBox::rotate_270();
         assert_eq!(rotated_270.quarter_turns, QuarterTurns::Three);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

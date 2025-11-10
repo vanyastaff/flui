@@ -103,7 +103,6 @@ pub mod pooled;
 pub mod scrollable;
 pub mod transform;
 
-
 // Basic composition layers
 
 // Clipping layers
@@ -156,4 +155,3 @@ pub use flui_types::painting::effects::{
 /// Use `Box<dyn Layer>` when you need to store layers of different types together.
 /// For better resource management, consider using `AnyLayer` or `LayerHandle<T>`.
 pub type BoxedLayer = Box<dyn Layer>;
-

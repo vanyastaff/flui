@@ -10,9 +10,7 @@ pub mod handle;
 pub mod key;
 pub mod state;
 
-
 pub use font_data::FontData;
 pub use handle::{AssetHandle, WeakAssetHandle};
 pub use key::AssetKey;
 pub use state::LoadState;
-

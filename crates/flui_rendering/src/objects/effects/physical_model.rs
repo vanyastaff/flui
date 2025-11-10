@@ -111,7 +111,6 @@ impl Default for RenderPhysicalModel {
 }
 
 impl Render for RenderPhysicalModel {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -143,9 +142,7 @@ impl Render for RenderPhysicalModel {
         let mut picture = PictureLayer::new();
         let size = self.size;
 
-        let paint = Paint::builder()
-            .color(self.color)
-            .build();
+        let paint = Paint::builder().color(self.color).build();
 
         match self.shape {
             PhysicalShape::Rectangle => {
@@ -185,9 +182,8 @@ impl Render for RenderPhysicalModel {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -250,12 +246,12 @@ mod tests {
         model.set_color(Color::RED);
         assert_eq!(model.color, Color::RED);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

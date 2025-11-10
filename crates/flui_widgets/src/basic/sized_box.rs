@@ -406,7 +406,8 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())}
+            (RenderPadding::new(EdgeInsets::ZERO), ())
+        }
     }
 
     #[test]

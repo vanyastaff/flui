@@ -42,8 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let font_handle2 = registry.load(font2).await?;
 
     println!("  ✓ Font retrieved from cache");
-    println!("  ✓ Both handles point to same data: {}",
-        font_handle.bytes.as_ptr() == font_handle2.bytes.as_ptr());
+    println!(
+        "  ✓ Both handles point to same data: {}",
+        font_handle.bytes.as_ptr() == font_handle2.bytes.as_ptr()
+    );
     println!();
 
     // Example 3: Working with ImageAsset (requires 'images' feature)
@@ -69,7 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let image_handle = registry.load(image_asset).await?;
 
         println!("  ✓ Image loaded successfully");
-        println!("  ✓ Dimensions: {}x{}", image_handle.width(), image_handle.height());
+        println!(
+            "  ✓ Dimensions: {}x{}",
+            image_handle.width(),
+            image_handle.height()
+        );
         println!("  ✓ Data size: {} bytes", image_handle.data().len());
         println!();
     }
@@ -89,13 +95,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use flui_assets::AssetKey;
     let key = AssetKey::new("embedded_font.ttf");
 
-    println!("  • Font in cache before invalidation: {}",
-        registry.get::<FontAsset>(&key).await.is_some());
+    println!(
+        "  • Font in cache before invalidation: {}",
+        registry.get::<FontAsset>(&key).await.is_some()
+    );
 
     registry.invalidate::<FontAsset>(&key).await;
 
-    println!("  • Font in cache after invalidation: {}",
-        registry.get::<FontAsset>(&key).await.is_some());
+    println!(
+        "  • Font in cache after invalidation: {}",
+        registry.get::<FontAsset>(&key).await.is_some()
+    );
     println!();
 
     // Example 5: Preloading assets

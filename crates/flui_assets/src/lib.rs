@@ -99,26 +99,28 @@ pub mod assets;
 pub mod registry;
 
 // Optional: Asset bundles
-#[cfg(feature = "bundles")]
-pub mod bundle;
+// TODO: Implement bundle module
+// #[cfg(feature = "bundles")]
+// pub mod bundle;
 
 // Optional: Hot reload
-#[cfg(feature = "hot-reload")]
-pub mod hot_reload;
+// TODO: Implement hot_reload module
+// #[cfg(feature = "hot-reload")]
+// pub mod hot_reload;
 
 // Re-exports for convenience
+pub use crate::cache::AssetCache;
 pub use crate::core::{Asset, AssetLoader, AssetMetadata};
 pub use crate::error::{AssetError, Result};
-pub use crate::types::{AssetHandle, AssetKey, FontData, LoadState};
-pub use crate::cache::AssetCache;
 pub use crate::registry::{AssetRegistry, AssetRegistryBuilder};
+pub use crate::types::{AssetHandle, AssetKey, FontData, LoadState};
 
 // Re-export loaders
 pub use crate::loaders::{BytesFileLoader, FileLoader, MemoryLoader, NetworkLoader};
 
 // Re-export concrete asset types
-pub use crate::assets::image::ImageAsset;
 pub use crate::assets::font::FontAsset;
+pub use crate::assets::image::ImageAsset;
 
 // Re-export Image from flui_types
 pub use flui_types::painting::Image;

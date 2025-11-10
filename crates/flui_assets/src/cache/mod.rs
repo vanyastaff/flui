@@ -381,7 +381,9 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
 
-        cache.insert(AssetKey::new("test"), TestData { value: 1 }).await;
+        cache
+            .insert(AssetKey::new("test"), TestData { value: 1 })
+            .await;
         cache.sync().await;
 
         assert!(!cache.is_empty());

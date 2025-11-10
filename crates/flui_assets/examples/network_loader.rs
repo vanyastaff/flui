@@ -54,7 +54,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("3. Error Handling (Invalid URL)");
         println!("--------------------------------");
 
-        match loader.load_url("https://this-domain-does-not-exist-12345.com/data").await {
+        match loader
+            .load_url("https://this-domain-does-not-exist-12345.com/data")
+            .await
+        {
             Ok(_) => {
                 println!("  ✗ Unexpected success");
             }

@@ -19,7 +19,7 @@ impl View for HelloWorldApp {
         // Create a container with padding and background color
         let mut container = Container::builder()
             .padding(EdgeInsets::all(40.0))
-            .color(Color::rgb(100, 150, 200))  // Более яркий синий цвет для теста
+            .color(Color::rgb(100, 150, 200)) // Более яркий синий цвет для теста
             .build();
 
         // Add centered text
@@ -39,7 +39,7 @@ impl View for HelloWorldContent {
             Text::builder()
                 .data("Hello, World!")
                 .size(32.0)
-                .color(Color::rgb(255, 255, 255))  // Белый текст для контраста
+                .color(Color::rgb(255, 255, 255)) // Белый текст для контраста
                 .build(),
         ));
         center

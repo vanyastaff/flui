@@ -194,9 +194,9 @@ impl AssetRegistry {
         let caches = self.caches.read();
         let type_id = TypeId::of::<T>();
 
-        caches.get(&type_id).and_then(|any| {
-            any.downcast_ref::<AssetCache<T>>().cloned()
-        })
+        caches
+            .get(&type_id)
+            .and_then(|any| any.downcast_ref::<AssetCache<T>>().cloned())
     }
 
     /// Gets or creates the cache for a specific asset type.
@@ -369,15 +369,27 @@ mod tests {
         }
 
         // All should be cached
-        assert!(registry.get::<FontAsset>(&AssetKey::new("test0.ttf")).await.is_some());
-        assert!(registry.get::<FontAsset>(&AssetKey::new("test1.ttf")).await.is_some());
+        assert!(registry
+            .get::<FontAsset>(&AssetKey::new("test0.ttf"))
+            .await
+            .is_some());
+        assert!(registry
+            .get::<FontAsset>(&AssetKey::new("test1.ttf"))
+            .await
+            .is_some());
 
         // Clear all FontAssets
         registry.clear::<FontAsset>().await;
 
         // Should all be gone
-        assert!(registry.get::<FontAsset>(&AssetKey::new("test0.ttf")).await.is_none());
-        assert!(registry.get::<FontAsset>(&AssetKey::new("test1.ttf")).await.is_none());
+        assert!(registry
+            .get::<FontAsset>(&AssetKey::new("test0.ttf"))
+            .await
+            .is_none());
+        assert!(registry
+            .get::<FontAsset>(&AssetKey::new("test1.ttf"))
+            .await
+            .is_none());
     }
 
     #[test]

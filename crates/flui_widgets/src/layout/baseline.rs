@@ -196,7 +196,10 @@ impl View for Baseline {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let baseline = self.baseline.unwrap_or(0.0);
 
-        (RenderBaseline::new(baseline, self.baseline_type), self.child)
+        (
+            RenderBaseline::new(baseline, self.baseline_type),
+            self.child,
+        )
     }
 }
 
@@ -250,7 +253,8 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())}
+            (RenderPadding::new(EdgeInsets::ZERO), ())
+        }
     }
 
     #[test]

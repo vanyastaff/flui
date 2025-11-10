@@ -223,7 +223,8 @@ impl MultiDrawBatcher {
     ///
     /// Returns byte array suitable for upload to GPU
     pub fn create_indirect_buffer(&self) -> Vec<u8> {
-        let mut buffer = Vec::with_capacity(self.commands.len() * mem::size_of::<DrawIndexedIndirectArgs>());
+        let mut buffer =
+            Vec::with_capacity(self.commands.len() * mem::size_of::<DrawIndexedIndirectArgs>());
 
         for command in &self.commands {
             buffer.extend_from_slice(bytemuck::bytes_of(&command.args));
@@ -259,7 +260,7 @@ mod tests {
         // Must match WGPU's expected size
         assert_eq!(
             std::mem::size_of::<DrawIndexedIndirectArgs>(),
-            20  // 5 u32s = 20 bytes
+            20 // 5 u32s = 20 bytes
         );
     }
 
@@ -288,7 +289,7 @@ mod tests {
         batcher.add_quad_draw(PipelineId::Circle, 50, 6400, 2400);
 
         let buffer = batcher.create_indirect_buffer();
-        assert_eq!(buffer.len(), 40);  // 2 commands * 20 bytes each
+        assert_eq!(buffer.len(), 40); // 2 commands * 20 bytes each
     }
 
     #[test]

@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
+use flui_types::Size;
 
 /// RenderObject that limits maximum size when unconstrained
 ///
@@ -57,7 +57,6 @@ impl Default for RenderLimitedBox {
 }
 
 impl Render for RenderLimitedBox {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -96,9 +95,8 @@ impl Render for RenderLimitedBox {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -132,12 +130,12 @@ mod tests {
         limited.set_max_height(250.0);
         assert_eq!(limited.max_height, 250.0);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

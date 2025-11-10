@@ -33,6 +33,6 @@
 //! flui_widgets = { version = "0.1", features = ["style-macros"] }
 //! ```
 
-pub mod macros;
 pub mod builder;
 pub mod hybrid;
+pub mod macros;

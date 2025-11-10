@@ -2,7 +2,7 @@
 
 use crate::{BorderPainter, GradientPainter, ShadowPainter};
 use flui_engine::{Paint, Painter};
-use flui_types::{styling::BoxDecoration, Rect, RRect};
+use flui_types::{styling::BoxDecoration, RRect, Rect};
 
 /// Painter for BoxDecoration
 ///

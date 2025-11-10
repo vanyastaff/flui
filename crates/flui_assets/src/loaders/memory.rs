@@ -166,7 +166,9 @@ mod tests {
         assert_eq!(loader.len(), 1);
 
         // Load the data using AssetLoader trait
-        let loaded: Vec<u8> = AssetLoader::<DummyAsset>::load(&loader, &key).await.unwrap();
+        let loaded: Vec<u8> = AssetLoader::<DummyAsset>::load(&loader, &key)
+            .await
+            .unwrap();
         assert_eq!(loaded, data);
     }
 
@@ -231,8 +233,9 @@ mod tests {
 
         loader.insert_with_metadata(key, data, metadata.clone());
 
-        let loaded_meta: Option<AssetMetadata> =
-            AssetLoader::<DummyAsset>::metadata(&loader, &key).await.unwrap();
+        let loaded_meta: Option<AssetMetadata> = AssetLoader::<DummyAsset>::metadata(&loader, &key)
+            .await
+            .unwrap();
         assert_eq!(loaded_meta, Some(metadata));
     }
 
@@ -241,11 +244,15 @@ mod tests {
         let loader: MemoryLoader<AssetKey, Vec<u8>> = MemoryLoader::new();
         let key = AssetKey::new("test");
 
-        assert!(!AssetLoader::<DummyAsset>::exists(&loader, &key).await.unwrap());
+        assert!(!AssetLoader::<DummyAsset>::exists(&loader, &key)
+            .await
+            .unwrap());
 
         loader.insert(key, vec![1, 2, 3]);
 
-        assert!(AssetLoader::<DummyAsset>::exists(&loader, &key).await.unwrap());
+        assert!(AssetLoader::<DummyAsset>::exists(&loader, &key)
+            .await
+            .unwrap());
     }
 
     // Dummy asset for testing

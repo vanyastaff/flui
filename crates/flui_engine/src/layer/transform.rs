@@ -228,10 +228,10 @@ impl Layer for TransformLayer {
                 // [0  0  1  0 ]
                 // [0  0  0  1 ]
                 let matrix: [f32; 16] = [
-                    a, b, 0.0, 0.0,    // Column 0
-                    c, d, 0.0, 0.0,    // Column 1
-                    0.0, 0.0, 1.0, 0.0,  // Column 2
-                    tx, ty, 0.0, 1.0,  // Column 3
+                    a, b, 0.0, 0.0, // Column 0
+                    c, d, 0.0, 0.0, // Column 1
+                    0.0, 0.0, 1.0, 0.0, // Column 2
+                    tx, ty, 0.0, 1.0, // Column 3
                 ];
                 painter.transform_matrix(&matrix);
             }

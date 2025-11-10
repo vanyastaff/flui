@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{layer::pool, BoxedLayer};
-use flui_types::layout::StackFit;
 use flui_types::constraints::BoxConstraints;
+use flui_types::layout::StackFit;
 use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject for stack layout (layering)
@@ -78,7 +78,6 @@ impl Default for RenderStack {
 }
 
 impl Render for RenderStack {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();

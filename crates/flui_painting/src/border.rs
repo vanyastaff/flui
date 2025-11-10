@@ -3,7 +3,7 @@
 use flui_engine::{Paint, Painter, Stroke};
 use flui_types::{
     styling::{Border, BorderRadius},
-    Point, Rect, RRect,
+    Point, RRect, Rect,
 };
 
 /// Painter for borders

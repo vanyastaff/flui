@@ -289,10 +289,10 @@ impl Default for IndexedStack {
 // Implement View for IndexedStack - New architecture
 impl View for IndexedStack {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderIndexedStack::with_alignment(
-            self.index,
-            self.alignment,
-        ), self.children)
+        (
+            RenderIndexedStack::with_alignment(self.index, self.alignment),
+            self.children,
+        )
     }
 }
 
@@ -384,7 +384,8 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())}
+            (RenderPadding::new(EdgeInsets::ZERO), ())
+        }
     }
 
     #[test]

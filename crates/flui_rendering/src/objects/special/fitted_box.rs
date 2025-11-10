@@ -3,9 +3,7 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::{
-    layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size,
-};
+use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 
 /// RenderObject that scales and positions its child_id according to BoxFit
 ///
@@ -168,7 +166,6 @@ impl Default for RenderFittedBox {
 // ===== RenderObject Implementation =====
 
 impl Render for RenderFittedBox {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -200,9 +197,8 @@ impl Render for RenderFittedBox {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -313,12 +309,12 @@ mod tests {
         assert_eq!(fitted.fit, BoxFit::Contain);
         assert_eq!(fitted.alignment, Alignment::CENTER);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

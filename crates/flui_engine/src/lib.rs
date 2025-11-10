@@ -58,46 +58,46 @@ pub mod text;
 
 // Re-export commonly used layer types
 pub use layer::{
-    // Core layer types
-    BoxedLayer,
-    Layer,
-
-    // Basic composition layers
-    ContainerLayer,
-    OffsetLayer,
-    OpacityLayer,
-    TransformLayer,
-    Transform,
-
-    // Drawing layer
-    PictureLayer,
-    DrawCommand,
-
-    // Clipping layers
-    ClipRectLayer,
-    ClipRRectLayer,
-    ClipOvalLayer,
-    ClipPathLayer,
-
-    // Effect layers
-    FilterLayer,
-    BlurLayer,
     BackdropFilterLayer,
-    ColorFilter,
-    ColorMatrix,
-    ImageFilter,
-
-    // Interaction
-    PointerListenerLayer,
-
-    // Pooled variants (for performance)
-    PooledContainerLayer,
-    PooledClipRectLayer,
-    PooledPictureLayer,
-
+    BlurLayer,
     // Re-exports from flui_types
     BlurMode,
     BlurQuality,
+    // Core layer types
+    BoxedLayer,
+    ClipOvalLayer,
+    ClipPathLayer,
+
+    ClipRRectLayer,
+    // Clipping layers
+    ClipRectLayer,
+    ColorFilter,
+    ColorMatrix,
+    // Basic composition layers
+    ContainerLayer,
+    DrawCommand,
+
+    // Effect layers
+    FilterLayer,
+    ImageFilter,
+
+    Layer,
+
+    OffsetLayer,
+    OpacityLayer,
+    // Drawing layer
+    PictureLayer,
+    // Interaction
+    PointerListenerLayer,
+
+    PooledClipRectLayer,
+    // Pooled variants (for performance)
+    PooledContainerLayer,
+    PooledPictureLayer,
+
+    Transform,
+
+    TransformLayer,
 };
 
 // Re-export painter types
@@ -118,10 +118,3 @@ pub use devtools::{
 
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
 pub use devtools::MemoryGraph;
-
-
-
-
-
-
-

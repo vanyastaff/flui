@@ -228,18 +228,14 @@ impl Render for RenderFlex {
             if let Some(element) = tree.get(child) {
                 if let Some(render_node_guard) = element.render_object() {
                     // Try to downcast to RenderFlexItem to access metadata
-                    if let Some(flex_item) =
-                        render_node_guard.as_any().downcast_ref::<super::flex_item::RenderFlexItem>()
+                    if let Some(flex_item) = render_node_guard
+                        .as_any()
+                        .downcast_ref::<super::flex_item::RenderFlexItem>()
                     {
                         let flex_meta = &flex_item.metadata;
                         if flex_meta.is_flexible() {
                             // Child is flexible
-                            flexible_children.push((
-                                index,
-                                child,
-                                flex_meta.flex,
-                                flex_meta.fit,
-                            ));
+                            flexible_children.push((index, child, flex_meta.flex, flex_meta.fit));
                             total_flex += flex_meta.flex;
                             continue;
                         }

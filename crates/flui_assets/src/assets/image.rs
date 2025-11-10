@@ -8,8 +8,8 @@ use tokio::fs;
 use image;
 
 use crate::core::{Asset, AssetMetadata};
-use crate::types::AssetKey;
 use crate::error::AssetError;
+use crate::types::AssetKey;
 
 /// Image asset for loading images from various sources.
 ///
@@ -81,10 +81,12 @@ impl Asset for ImageAsset {
             bytes.clone()
         } else {
             // Load from file
-            fs::read(&self.path).await.map_err(|e| AssetError::LoadFailed {
-                path: self.path.clone(),
-                reason: format!("Failed to read file: {}", e),
-            })?
+            fs::read(&self.path)
+                .await
+                .map_err(|e| AssetError::LoadFailed {
+                    path: self.path.clone(),
+                    reason: format!("Failed to read file: {}", e),
+                })?
         };
 
         #[cfg(feature = "images")]

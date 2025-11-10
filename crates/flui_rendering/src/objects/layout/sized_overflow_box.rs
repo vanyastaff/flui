@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::{BoxedLayer, TransformLayer};
-use flui_types::{Alignment, Offset, Size};
 use flui_types::constraints::BoxConstraints;
+use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject with fixed size that allows child_id to overflow
 ///
@@ -121,7 +121,6 @@ impl RenderSizedOverflowBox {
 // ===== RenderObject Implementation =====
 
 impl Render for RenderSizedOverflowBox {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -172,9 +171,8 @@ impl Render for RenderSizedOverflowBox {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -227,12 +225,12 @@ mod tests {
             RenderSizedOverflowBox::with_alignment(Some(50.0), Some(75.0), Alignment::TOP_LEFT);
         assert_eq!(sized_overflow.alignment, Alignment::TOP_LEFT);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

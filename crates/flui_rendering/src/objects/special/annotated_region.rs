@@ -70,7 +70,6 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 // ===== RenderObject Implementation =====
 
 impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> Render for RenderAnnotatedRegion<T> {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();

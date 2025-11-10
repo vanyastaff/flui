@@ -98,7 +98,6 @@ impl Default for RenderAlign {
 }
 
 impl Render for RenderAlign {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -173,9 +172,8 @@ impl Render for RenderAlign {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -219,12 +217,12 @@ mod tests {
         assert_eq!(align.width_factor, Some(2.0));
         assert_eq!(align.height_factor, Some(1.5));
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

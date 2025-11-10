@@ -5,8 +5,8 @@ use std::path::Path;
 use tokio::fs;
 
 use crate::core::{Asset, AssetMetadata};
-use crate::types::AssetKey;
 use crate::error::AssetError;
+use crate::types::AssetKey;
 
 /// Font asset for loading fonts from various sources.
 ///
@@ -79,10 +79,12 @@ impl Asset for FontAsset {
             bytes.clone()
         } else {
             // Load from file
-            fs::read(&self.path).await.map_err(|e| AssetError::LoadFailed {
-                path: self.path.clone(),
-                reason: format!("Failed to read file: {}", e),
-            })?
+            fs::read(&self.path)
+                .await
+                .map_err(|e| AssetError::LoadFailed {
+                    path: self.path.clone(),
+                    reason: format!("Failed to read file: {}", e),
+                })?
         };
 
         // Validate it's a valid font by checking magic bytes
@@ -100,7 +102,7 @@ impl Asset for FontAsset {
             [0x00, 0x01, 0x00, 0x00] | // TrueType 1.0
             [0x74, 0x72, 0x75, 0x65] | // TrueType with 'true' type
             b"OTTO" | // OpenType with CFF data
-            b"ttcf"   // TrueType Collection
+            b"ttcf" // TrueType Collection
         );
 
         if !is_valid {

@@ -3,13 +3,16 @@
 //! Converts vector paths (curves, lines, arcs) into triangle meshes
 //! suitable for GPU rendering.
 
-use crate::painter::{paint::{Paint, Stroke}, vertex::Vertex};
-use flui_types::{styling::Color, geometry::RRect, Point, Rect};
+use crate::painter::{
+    paint::{Paint, Stroke},
+    vertex::Vertex,
+};
+use flui_types::{geometry::RRect, styling::Color, Point, Rect};
+use lyon::path::Path;
 use lyon::tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, StrokeOptions, StrokeTessellator,
     StrokeVertex, VertexBuffers,
 };
-use lyon::path::Path;
 use thiserror::Error;
 
 /// Errors that can occur during tessellation
@@ -94,12 +97,15 @@ impl Tessellator {
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
-    pub fn tessellate_fill(&mut self, path: &Path, paint: &Paint) -> Result<(Vec<Vertex>, Vec<u32>)> {
+    pub fn tessellate_fill(
+        &mut self,
+        path: &Path,
+        paint: &Paint,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         self.geometry.vertices.clear();
         self.geometry.indices.clear();
 
-        let options = FillOptions::default()
-            .with_tolerance(0.1);
+        let options = FillOptions::default().with_tolerance(0.1);
 
         self.fill_tessellator
             .tessellate_path(
@@ -107,7 +113,9 @@ impl Tessellator {
                 &options,
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
-                    FillVertexConstructor { color: paint.get_color() },
+                    FillVertexConstructor {
+                        color: paint.get_color(),
+                    },
                 ),
             )
             .map_err(|e| TessellationError::FillFailed(e.to_string()))?;
@@ -158,7 +166,9 @@ impl Tessellator {
                 &options,
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
-                    StrokeVertexConstructor { color: paint.get_color() },
+                    StrokeVertexConstructor {
+                        color: paint.get_color(),
+                    },
                 ),
             )
             .map_err(|e| TessellationError::StrokeFailed(e.to_string()))?;
@@ -170,7 +180,11 @@ impl Tessellator {
     }
 
     /// Tessellate a rectangle (optimized path)
-    pub fn tessellate_rect(&mut self, rect: Rect, paint: &Paint) -> Result<(Vec<Vertex>, Vec<u32>)> {
+    pub fn tessellate_rect(
+        &mut self,
+        rect: Rect,
+        paint: &Paint,
+    ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
 
         path_builder.begin(lyon::geom::point(rect.left(), rect.top()));
@@ -196,7 +210,9 @@ impl Tessellator {
         let top = rect.top();
         let right = rect.right();
         let bottom = rect.bottom();
-        let radius = corner_radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+        let radius = corner_radius
+            .min(rect.width() / 2.0)
+            .min(rect.height() / 2.0);
 
         // Start at top-left, after the corner
         path_builder.begin(lyon::geom::point(left + radius, top));

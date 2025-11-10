@@ -46,18 +46,16 @@ pub async fn new_async(root_view: Box<dyn AnyView>, window: Arc<Window>) -> Flui
 
     // Request device and queue (async)
     let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
-                #[cfg(target_arch = "wasm32")]
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                #[cfg(not(target_arch = "wasm32"))]
-                required_limits: wgpu::Limits::default(),
-                label: None,
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: Default::default(),
-            },
-        )
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::empty(),
+            #[cfg(target_arch = "wasm32")]
+            required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+            #[cfg(not(target_arch = "wasm32"))]
+            required_limits: wgpu::Limits::default(),
+            label: None,
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: Default::default(),
+        })
         .await
         .expect("Failed to create device");
 
@@ -86,14 +84,7 @@ pub async fn new_async(root_view: Box<dyn AnyView>, window: Arc<Window>) -> Flui
     // Note: We're duplicating the initialization logic from FluiApp::new
     // This is necessary because FluiApp::new uses pollster::block_on which doesn't work in WASM
     crate::app::FluiApp::from_components(
-        root_view,
-        instance,
-        surface,
-        device,
-        queue,
-        config,
-        window,
-        painter,
+        root_view, instance, surface, device, queue, config, window, painter,
     )
 }
 
@@ -122,9 +113,10 @@ pub async fn run_in_browser_impl(root_view: Box<dyn AnyView>) {
         use tracing_subscriber::util::SubscriberInitExt;
 
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_writer(|| {
-                Box::new(std::io::stderr()) as Box<dyn std::io::Write>
-            }))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(|| Box::new(std::io::stderr()) as Box<dyn std::io::Write>),
+            )
             .init();
     }
 

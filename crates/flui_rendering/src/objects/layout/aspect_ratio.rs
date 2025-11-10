@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::Size;
 use flui_types::constraints::BoxConstraints;
+use flui_types::Size;
 
 /// RenderObject that maintains an aspect ratio
 ///
@@ -46,7 +46,6 @@ impl Default for RenderAspectRatio {
 }
 
 impl Render for RenderAspectRatio {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -95,9 +94,8 @@ impl Render for RenderAspectRatio {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -134,12 +132,12 @@ mod tests {
         aspect.set_aspect_ratio(4.0 / 3.0);
         assert!((aspect.aspect_ratio - 4.0 / 3.0).abs() < f32::EPSILON);
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }

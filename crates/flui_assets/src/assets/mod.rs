@@ -2,8 +2,8 @@
 //!
 //! TODO: Implement ImageAsset and FontAsset in next phase
 
-pub mod image;
 pub mod font;
+pub mod image;
 
-pub use image::ImageAsset;
 pub use font::FontAsset;
+pub use image::ImageAsset;

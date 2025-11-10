@@ -13,8 +13,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
 use flui_engine::BoxedLayer;
-use flui_types::{Offset, Size};
 use flui_types::constraints::BoxConstraints;
+use flui_types::{Offset, Size};
 
 /// Metadata for positioned children in Stack layout
 ///
@@ -263,7 +263,6 @@ impl RenderPositioned {
 }
 
 impl Render for RenderPositioned {
-
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -287,9 +286,8 @@ impl Render for RenderPositioned {
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable  // Default - update if needed
+        Arity::Variable // Default - update if needed
     }
-
 }
 
 #[cfg(test)]
@@ -389,12 +387,12 @@ mod tests {
         assert_eq!(positioned.metadata.right, Some(0.0));
         assert_eq!(positioned.metadata.bottom, Some(0.0));
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
+        fn arity(&self) -> Arity {
+            Arity::Exact(1)
+        }
     }
 }
