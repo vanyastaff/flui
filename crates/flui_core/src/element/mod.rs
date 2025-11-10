@@ -51,7 +51,8 @@ pub mod render;
 pub use component::ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
 pub use element::Element;
-pub use element_base::ElementBase;
+// ElementBase is internal - used by framework only
+pub(crate) use element_base::ElementBase;
 pub use element_tree::ElementTree; // Moved from pipeline to break circular dependency
 pub use hit_test::{ElementHitTestEntry, ElementHitTestResult};
 pub use lifecycle::ElementLifecycle;

@@ -104,12 +104,12 @@ impl TestHarness {
 
     /// Pump only the layout phase with given constraints
     pub fn pump_layout(&mut self, constraints: BoxConstraints) {
-        self.pipeline.flush_layout(constraints);
+        let _ = self.pipeline.flush_layout(constraints);
     }
 
     /// Pump only the paint phase
     pub fn pump_paint(&mut self) {
-        self.pipeline.flush_paint();
+        let _ = self.pipeline.flush_paint();
     }
 
     /// Check if a root element is mounted

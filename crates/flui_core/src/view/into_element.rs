@@ -11,12 +11,12 @@
 //! # Design
 //!
 //! ```text
-//! View ────────┐
-//!              ├──→ IntoElement ──→ Element
-//! RenderObject ┘
+//! View ─────────┐
+//!               ├──→ IntoElement ──→ Element
+//! Renderer ─────┘
 //! ```
 //!
-//! Both Views and RenderObjects implement `IntoElement`,
+//! Both Views and renderers (via tuples) implement `IntoElement`,
 //! allowing them to be used interchangeably in the widget tree.
 //!
 //! # Example
@@ -31,10 +31,10 @@
 //!     }
 //! }
 //!
-//! // RenderObjects use tuple syntax
+//! // Renderers use tuple syntax
 //! impl View for Padding {
 //!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         // Tuple: (render object, Option<child>)
+//!         // Tuple: (renderer, Option<child>)
 //!         (RenderPadding::new(self.padding), self.child)
 //!     }
 //! }
@@ -42,7 +42,42 @@
 
 use crate::element::Element;
 
+/// Sealed trait module - prevents external implementation of IntoElement
+pub(crate) mod sealed_into_element {
+    /// Sealed trait - only types in flui-core can implement IntoElement
+    pub trait Sealed {}
+
+    // Implement Sealed for all types that have IntoElement implementations
+
+    // All Views can be converted to elements
+    impl<V: crate::view::View> Sealed for V {}
+
+    // Type-erased views
+    impl Sealed for Box<dyn crate::view::AnyView> {}
+
+    // Optional elements
+    impl<T: Sealed> Sealed for Option<T> {}
+
+    // Any element wrapper and element types
+    impl Sealed for super::AnyElement {}
+    impl Sealed for crate::element::RenderElement {}
+    impl Sealed for crate::element::ComponentElement {}
+    impl Sealed for crate::element::ProviderElement {}
+
+    // Tuples with render objects and children
+    impl<R: crate::render::Render> Sealed for (R, ()) {}
+    impl<R: crate::render::Render> Sealed for (R, Option<super::AnyElement>) {}
+    impl<R: crate::render::Render> Sealed for (R, Option<Box<dyn crate::view::AnyView>>) {}
+    impl<R: crate::render::Render> Sealed for (R, Vec<Box<dyn crate::view::AnyView>>) {}
+    impl<R: crate::render::Render> Sealed for (R, Vec<super::AnyElement>) {}
+}
+
 /// IntoElement trait - converts types into Elements
+///
+/// **Internal trait** - Do NOT implement this trait directly.
+/// The trait is sealed - you cannot implement it outside of flui-core.
+///
+/// Instead, implement the `View` trait to create widgets.
 ///
 /// This is the core trait that enables the simplified View API.
 /// Any type that implements `IntoElement` can be used as a widget.
@@ -81,7 +116,7 @@ use crate::element::Element;
 /// Like GPUI's `IntoElement`, this trait is not object-safe due to
 /// `Sized` bound and `impl Trait` in methods. Use `Box<dyn IntoElement>`
 /// if you need dynamic dispatch (will be added separately).
-pub trait IntoElement: Sized + 'static {
+pub trait IntoElement: sealed_into_element::Sealed + Sized + 'static {
     /// Convert this type into an Element
     ///
     /// This method is called by the framework to build the element tree.
@@ -94,7 +129,7 @@ pub trait IntoElement: Sized + 'static {
     ///
     /// Most types don't implement this directly. Instead:
     /// - Views use the blanket impl (automatic)
-    /// - RenderObjects use tuple syntax: `(render, children)`
+    /// - Renderers use tuple syntax: `(render, children)`
     ///
     /// # Example
     ///

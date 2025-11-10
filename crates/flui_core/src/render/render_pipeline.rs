@@ -51,6 +51,9 @@ use crate::element::ElementTree;
 
 /// RenderPipeline - orchestrates the rendering pipeline
 ///
+/// **Internal API** - This type is used internally by the framework.
+/// Users should interact with the framework through the public View API.
+///
 /// Manages the layout → paint pipeline with dirty tracking for incremental updates.
 ///
 /// # Thread Safety
@@ -65,7 +68,7 @@ use crate::element::ElementTree;
 /// - `nodes_needing_paint` - Renders that need repaint
 /// - `flush_layout()` processes only dirty nodes, sorted by depth
 /// - `flush_paint()` processes only dirty nodes
-pub struct RenderPipeline {
+pub(crate) struct RenderPipeline {
     /// The element tree
     tree: ElementTree,
 

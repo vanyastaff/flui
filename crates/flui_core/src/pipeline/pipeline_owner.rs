@@ -759,6 +759,9 @@ impl Default for PipelineOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::element::{ComponentElement, Element};
+    use crate::testing::TestWidget;
+    use crate::view::AnyView;
 
     #[test]
     fn test_build_owner_creation() {
@@ -977,7 +980,9 @@ mod tests {
     #[test]
     fn test_set_root() {
         let mut owner = PipelineOwner::new();
-        let component = ComponentElement::new(TestWidget);
+        let view: Box<dyn AnyView> = Box::new(TestWidget);
+        let state: Box<dyn std::any::Any> = Box::new(());
+        let component = ComponentElement::new(view, state);
         let root = Element::Component(component);
 
         let root_id = owner.set_root(root);

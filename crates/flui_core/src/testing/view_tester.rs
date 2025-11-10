@@ -29,6 +29,7 @@ use super::test_harness::TestHarness;
 ///     assert!(result.is_mounted());
 /// }
 /// ```
+#[derive(Debug)]
 pub struct ViewTester {
     harness: TestHarness,
 }
@@ -69,6 +70,7 @@ impl Default for ViewTester {
 /// Result of a view test
 ///
 /// Provides access to the test harness and assertions about the built view.
+#[derive(Debug)]
 pub struct ViewTestResult {
     harness: TestHarness,
     root_id: ElementId,
@@ -111,7 +113,7 @@ impl ViewTestResult {
     }
 }
 
-/// Test utility for creating simple test views
+/// Test utility for creating simple test views with a name
 ///
 /// # Examples
 ///
@@ -124,6 +126,21 @@ impl ViewTestResult {
 pub struct TestView {
     name: String,
 }
+
+/// Simple test widget without any state
+///
+/// Use this for basic testing where you just need a simple view
+/// that terminates the tree.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_core::testing::TestWidget;
+///
+/// let widget = TestWidget;
+/// ```
+#[derive(Clone, Debug)]
+pub struct TestWidget;
 
 impl TestView {
     /// Create a new test view with a name
@@ -143,6 +160,16 @@ impl View for TestView {
         Option::<TestView>::None
     }
 }
+
+impl View for TestWidget {
+    fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
+        // Return None to terminate tree
+        Option::<TestWidget>::None
+    }
+}
+
+// Note: TestWidget automatically implements AnyView via blanket impl
+// because it implements View + Clone
 
 #[cfg(test)]
 mod tests {

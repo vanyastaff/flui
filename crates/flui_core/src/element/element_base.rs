@@ -29,8 +29,10 @@ use crate::foundation::{AtomicElementFlags, ElementFlags, Slot};
 
 /// ElementBase - Common fields for all element types
 ///
+/// **Internal API** - This type is used internally by the framework.
+/// Users should not need to interact with ElementBase directly.
+///
 /// Provides common lifecycle management for all element types.
-/// This type is used internally by the framework and typically not accessed directly.
 ///
 /// # Architecture (per FINAL_ARCHITECTURE_V2.md)
 ///
@@ -68,7 +70,7 @@ use crate::foundation::{AtomicElementFlags, ElementFlags, Slot};
 /// - `mark_dirty()` - Request rebuild (thread-safe!)
 /// - `parent()` - Get parent element ID
 #[derive(Debug)]
-pub struct ElementBase {
+pub(crate) struct ElementBase {
     /// Parent element ID (None for root)
     parent: Option<ElementId>,
 
@@ -337,7 +339,7 @@ mod tests {
     fn test_element_base_mount() {
         let mut base = ElementBase::new();
         let parent_id = 42;
-        let slot = Some(crate::foundation::Slot(1));
+        let slot = Some(crate::foundation::Slot::new(1));
 
         base.mount(Some(parent_id), slot);
 
@@ -352,7 +354,7 @@ mod tests {
         let mut base = ElementBase::new();
 
         // Mount
-        base.mount(Some(1), Some(crate::foundation::Slot(0)));
+        base.mount(Some(1), Some(crate::foundation::Slot::new(0)));
         assert_eq!(base.lifecycle(), ElementLifecycle::Active);
 
         // Deactivate

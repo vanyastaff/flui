@@ -475,6 +475,8 @@ pub fn use_signal<T: Clone + Send + 'static>(ctx: &BuildContext, initial: T) -> 
 mod tests {
     use super::*;
     use crate::hooks::hook_context::{ComponentId, HookContext};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     #[test]
     fn test_signal_get_set() {

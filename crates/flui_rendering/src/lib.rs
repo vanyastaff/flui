@@ -49,9 +49,10 @@ pub mod error;
 pub mod objects;
 
 // Re-export from flui_core - the unified Render trait architecture
+// Note: RenderPipeline is internal to flui_core and not re-exported
 pub use flui_core::render::{
     Arity, Children, LayoutContext, PaintContext, ParentData, ParentDataWithOffset, Render,
-    RenderFlags, RenderPipeline, RenderState,
+    RenderFlags, RenderState,
 };
 
 // Re-export from flui_engine for Layer types

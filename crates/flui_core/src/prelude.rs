@@ -51,7 +51,7 @@
 //!         let count = use_signal(ctx, 0);
 //!
 //!         // Use count, Size, Offset, etc. without additional imports
-//!         (MyRenderObject::new(), None)
+//!         (MyRenderer::new(), None)
 //!     }
 //! }
 //! ```

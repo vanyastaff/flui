@@ -251,6 +251,8 @@ impl ComponentElement {
 
     /// Rebuild with a new view
     ///
+    /// **Internal API** - Used by the build pipeline.
+    ///
     /// Uses View::rebuild() to efficiently diff and update the element.
     ///
     /// # Parameters
@@ -260,7 +262,7 @@ impl ComponentElement {
     /// # Returns
     ///
     /// ChangeFlags indicating what changed
-    pub fn rebuild_with_view(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags {
+    pub(crate) fn rebuild_with_view(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags {
         // Note: Current implementation replaces view and marks dirty.
         // View API no longer has rebuild() method - views are immutable and rebuilt via build().
         // The build pipeline handles efficient rebuilding through element tree comparison.

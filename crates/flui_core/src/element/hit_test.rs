@@ -1,7 +1,7 @@
 //! Hit testing for elements
 //!
 //! This module provides hit testing functionality for elements, following the
-//! Flutter pattern of RenderObject.hitTest().
+//! Flutter pattern of Render.hitTest().
 //!
 //! # Architecture
 //!

@@ -686,7 +686,7 @@ impl ElementTree {
 
         // Guards dropped here (_guard automatically)
 
-        // Note: Overflow indicators are now painted by each RenderObject itself
+        // Note: Overflow indicators are now painted by each renderer itself
         // (e.g., RenderFlex paints its own overflow indicators in debug mode).
         // This is more architecturally correct than wrapping at the ElementTree level.
 
@@ -697,7 +697,7 @@ impl ElementTree {
 
     /// Set overflow for the currently-being-laid-out element (debug only)
     ///
-    /// This allows RenderObjects to report overflow during layout without
+    /// This allows renderers to report overflow during layout without
     /// needing to know their own element_id. Uses the layout stack to determine
     /// which element is currently being laid out.
     ///
@@ -1071,7 +1071,7 @@ impl ElementTree {
     /// Returns ElementHitTestResult with all hit elements in depth-first order
     /// (children before parents).
     ///
-    /// Following Flutter's `RenderObject.hitTest()` pattern:
+    /// Following Flutter's `Render.hitTest()` pattern:
     /// 1. Check if position is within element bounds
     /// 2. Recursively test children (front to back)
     /// 3. Add self to result if hit

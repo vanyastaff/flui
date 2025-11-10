@@ -67,7 +67,7 @@ use std::any::Any;
 /// }
 /// ```
 ///
-/// ## Render Widget (Wraps RenderObject)
+/// ## Render Widget (Wraps Renderer)
 ///
 /// ```rust,ignore
 /// use flui_core::{View, IntoElement, BuildContext};
@@ -96,8 +96,8 @@ pub trait View: Clone + 'static {
     ///
     /// Returns anything that implements `IntoElement` - typically:
     /// - Other View implementations (composition)
-    /// - RenderBuilder from render objects (wrapping render objects)
-    /// - Tuples like `(RenderObject, child)` for single-child convenience
+    /// - Tuples of (Render impl, children) for wrapping renderers
+    /// - Example: `(RenderPadding::new(...), child)` for single-child convenience
     ///
     /// # State Management
     ///

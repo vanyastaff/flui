@@ -1,11 +1,11 @@
-//! Render trait - single trait for all render objects
+//! Render trait - single trait for all renderers
 //!
-//! This module provides the `Render` trait for implementing render objects
+//! This module provides the `Render` trait for implementing renderers
 //! with any number of children (0, 1, or multiple).
 //!
 //! # Architecture
 //!
-//! - **Single trait** for all render objects (regardless of child count)
+//! - **Single trait** for all renderers (regardless of child count)
 //! - **Children enum** to handle all child count patterns
 //! - **Context structs** (LayoutContext, PaintContext) for clean API
 //! - **Arity validation** at runtime via `arity()` method
@@ -129,7 +129,7 @@ use flui_engine::BoxedLayer;
 use flui_types::Size;
 use std::fmt::Debug;
 
-/// Render trait for all render objects
+/// Render trait for all renderers
 ///
 /// Single trait that handles all child count patterns (0, 1, or many)
 /// via the `Children` enum passed through context structs.
@@ -148,7 +148,7 @@ use std::fmt::Debug;
 ///
 /// # Thread Safety
 ///
-/// All render objects must be `Send + Sync + 'static` to enable
+/// All renderers must be `Send + Sync + 'static` to enable
 /// concurrent rendering across threads.
 ///
 /// # Examples
@@ -252,7 +252,7 @@ pub trait Render: Send + Sync + Debug + 'static {
     /// Compute layout with context
     ///
     /// This method is called during the layout phase to compute the size
-    /// of this render object given the constraints from its parent.
+    /// of this renderer given the constraints from its parent.
     ///
     /// # Parameters
     ///
@@ -292,7 +292,7 @@ pub trait Render: Send + Sync + Debug + 'static {
     /// Paint with context
     ///
     /// This method is called during the paint phase to generate the layer
-    /// tree for this render object and its children.
+    /// tree for this renderer and its children.
     ///
     /// # Parameters
     ///
@@ -331,7 +331,7 @@ pub trait Render: Send + Sync + Debug + 'static {
 
     /// Get arity (expected child count)
     ///
-    /// Returns the arity specification for this render object.
+    /// Returns the arity specification for this renderer.
     /// Used for runtime validation during element mounting.
     ///
     /// # Default Implementation
@@ -367,7 +367,7 @@ pub trait Render: Send + Sync + Debug + 'static {
 
     /// Optional: compute intrinsic width
     ///
-    /// Returns the intrinsic width of this render object given an optional height.
+    /// Returns the intrinsic width of this renderer given an optional height.
     /// Used by parent layouts to determine natural sizing.
     ///
     /// # Parameters
@@ -376,7 +376,7 @@ pub trait Render: Send + Sync + Debug + 'static {
     ///
     /// # Returns
     ///
-    /// - `Some(width)` if this render object has an intrinsic width
+    /// - `Some(width)` if this renderer has an intrinsic width
     /// - `None` if intrinsic width is undefined (default)
     ///
     /// # Default Implementation
@@ -388,7 +388,7 @@ pub trait Render: Send + Sync + Debug + 'static {
 
     /// Optional: compute intrinsic height
     ///
-    /// Returns the intrinsic height of this render object given an optional width.
+    /// Returns the intrinsic height of this renderer given an optional width.
     /// Used by parent layouts to determine natural sizing.
     ///
     /// # Parameters
@@ -397,7 +397,7 @@ pub trait Render: Send + Sync + Debug + 'static {
     ///
     /// # Returns
     ///
-    /// - `Some(height)` if this render object has an intrinsic height
+    /// - `Some(height)` if this renderer has an intrinsic height
     /// - `None` if intrinsic height is undefined (default)
     ///
     /// # Default Implementation
@@ -409,7 +409,7 @@ pub trait Render: Send + Sync + Debug + 'static {
 
     /// Downcast to Any for metadata access
     ///
-    /// Allows parent render objects to downcast children to access metadata.
+    /// Allows parent renderers to downcast children to access metadata.
     /// This is used by layouts like Flex and Stack to query child-specific metadata
     /// (e.g., FlexItemMetadata, PositionedMetadata).
     ///
@@ -478,6 +478,10 @@ mod tests {
         fn arity(&self) -> Arity {
             Arity::Exact(0)
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[derive(Debug)]
@@ -497,6 +501,10 @@ mod tests {
         fn arity(&self) -> Arity {
             Arity::Exact(1)
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[derive(Debug)]
@@ -513,6 +521,10 @@ mod tests {
 
         fn arity(&self) -> Arity {
             Arity::Variable
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 

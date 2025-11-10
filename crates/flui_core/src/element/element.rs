@@ -98,7 +98,7 @@ pub use crate::element::render::RenderElement as Render;
 /// # Variants (3 total - matches Flutter architecture)
 ///
 /// - **Component** - Component views with optional state → calls `build()` to produce child view tree
-/// - **Render** - Render views → owns RenderObject for layout and painting
+/// - **Render** - Render views → owns renderer (Render trait impl) for layout and painting
 /// - **Provider** - Provider views → propagates data down tree with dependency tracking
 ///
 /// # Why 3 variants?
@@ -182,7 +182,7 @@ pub enum Element {
     /// Render element - performs layout and paint
     ///
     /// Created by **Render Views**.
-    /// Owns RenderObject that does actual layout/paint work.
+    /// Owns a renderer (Render trait implementation) that does actual layout/paint work.
     /// This is the bridge between View tree and Render tree.
     ///
     /// # Lifecycle
@@ -194,9 +194,9 @@ pub enum Element {
     /// # Implementation
     ///
     /// RenderElement stores:
-    /// - `render_node: RenderNode` - Leaf/Single/Multi with RenderObject
+    /// - `render_object: Box<dyn Render>` - The renderer implementation
     /// - `size: Size, offset: Offset` - Layout results
-    /// - ParentData via RenderObject::Metadata GAT (not separate element)
+    /// - ParentData via Render::Metadata (metadata from parent)
     Render(RenderElement),
 
     /// Provider element - provides context/inherited data
@@ -308,7 +308,7 @@ impl Element {
         }
     }
 
-    // Note: as_parent_data() removed - ParentData now via RenderObject::Metadata GAT
+    // Note: as_parent_data() removed - ParentData now via Render::Metadata
     // Access parent data via render_object().metadata() instead
 
     // ========== Predicates ==========
@@ -526,7 +526,7 @@ impl Element {
 
     // Note: View access available via each element type
     // ComponentElement and InheritedElement store Box<dyn AnyView>
-    // RenderElement doesn't store view (created from RenderObject directly)
+    // RenderElement doesn't store view (created from renderer directly)
 
     /// Get render object if this is a render element
     ///

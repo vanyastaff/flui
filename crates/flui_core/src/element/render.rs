@@ -1,7 +1,6 @@
 //! RenderElement - Performs layout and paint
 //!
-//! RenderElement owns a RenderObject and manages layout/paint lifecycle.
-//! Per FINAL_ARCHITECTURE_V2.md, it does NOT store widget or view.
+//! RenderElement owns a renderer (Render trait implementation) and manages layout/paint lifecycle.
 
 use parking_lot::RwLock;
 
@@ -117,11 +116,11 @@ impl std::fmt::Debug for RenderElement {
 }
 
 impl RenderElement {
-    /// Create a new RenderElement from a render object
+    /// Create a new RenderElement from a renderer
     ///
     /// # Parameters
     ///
-    /// - `render_object` - The RenderObject for this element
+    /// - `render_object` - The renderer (Render trait implementation) for this element
     ///
     /// # Examples
     ///
