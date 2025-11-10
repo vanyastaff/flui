@@ -5,7 +5,6 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::layer::{BoxedLayer, ClipRectLayer};
 use flui_types::layout::Axis;
 use flui_types::{BoxConstraints, Offset, Rect, Size};
 

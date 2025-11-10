@@ -55,9 +55,6 @@ pub use flui_core::render::{
     RenderFlags, RenderState,
 };
 
-// Re-export from flui_engine for Layer types
-pub use flui_engine::BoxedLayer;
-
 // Re-export from flui_types for convenience
 pub use flui_types::layout::{FlexFit, StackFit};
 

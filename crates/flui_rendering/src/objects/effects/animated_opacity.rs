@@ -3,7 +3,6 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
 
-use flui_engine::OpacityLayer;
 use flui_types::Size;
 
 /// RenderObject that applies animated opacity to its child

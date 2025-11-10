@@ -3,7 +3,7 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
 use flui_types::constraints::BoxConstraints;
-use flui_types::{Alignment, Offset, Size};
+use flui_types::{Alignment, Size};
 
 /// RenderObject with fixed size that allows child_id to overflow
 ///

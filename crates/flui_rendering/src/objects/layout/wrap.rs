@@ -3,7 +3,6 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
 
-use flui_engine::{layer::pool, BoxedLayer};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 

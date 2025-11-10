@@ -12,7 +12,6 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::BoxedLayer;
 use flui_types::{layout::FlexFit, Size};
 
 /// Metadata for flexible children in Flex layout

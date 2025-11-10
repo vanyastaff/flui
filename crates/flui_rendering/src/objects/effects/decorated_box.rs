@@ -3,8 +3,7 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
-    styling::{BorderPosition, BoxDecoration, Radius},
-    Offset, Point, RRect, Rect, Size,
+    styling::{BorderPosition, BoxDecoration, Radius}, Point, RRect, Rect, Size,
 };
 
 /// Position of decoration relative to child

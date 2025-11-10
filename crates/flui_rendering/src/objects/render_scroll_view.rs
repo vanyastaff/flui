@@ -5,11 +5,8 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 
-use flui_engine::layer::{BoxedLayer, ClipRectLayer, ScrollableLayer};
-use flui_engine::PictureLayer;
-use flui_painting::{Canvas, Paint};
 use flui_types::layout::Axis;
-use flui_types::{BoxConstraints, Color, Offset, Rect, Size};
+use flui_types::{BoxConstraints, Offset, Rect, Size};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -151,97 +148,8 @@ impl RenderScrollView {
         })
     }
 
-    /// Paint scroll bar if needed
-    fn paint_scrollbar(&self, offset: Offset) -> Option<BoxedLayer> {
-        // Don't show scroll bar if content fits in viewport
-        let max_scroll = self.calculate_max_scroll();
-        if !self.show_scrollbar || max_scroll <= 0.0 {
-            return None;
-        }
-
-        let scroll_offset = self.get_scroll_offset();
-
-        // Calculate scroll bar dimensions based on direction
-        let (track_rect, thumb_rect) = match self.direction {
-            Axis::Vertical => {
-                // Vertical scroll bar on the right edge
-                let track_x = offset.dx + self.viewport_size.width - self.scrollbar_thickness;
-                let track = Rect::from_ltrb(
-                    track_x,
-                    offset.dy,
-                    track_x + self.scrollbar_thickness,
-                    offset.dy + self.viewport_size.height,
-                );
-
-                // Calculate thumb position and size
-                let thumb_ratio = self.viewport_size.height / self.content_size.height;
-                let thumb_height = (self.viewport_size.height * thumb_ratio).max(20.0); // Min 20px
-                let track_available = self.viewport_size.height - thumb_height;
-                let thumb_offset = if max_scroll > 0.0 {
-                    (scroll_offset / max_scroll) * track_available
-                } else {
-                    0.0
-                };
-
-                let thumb = Rect::from_ltrb(
-                    track_x + 2.0, // 2px padding
-                    offset.dy + thumb_offset + 2.0,
-                    track_x + self.scrollbar_thickness - 2.0,
-                    offset.dy + thumb_offset + thumb_height - 2.0,
-                );
-
-                (track, thumb)
-            }
-            Axis::Horizontal => {
-                // Horizontal scroll bar on the bottom edge
-                let track_y = offset.dy + self.viewport_size.height - self.scrollbar_thickness;
-                let track = Rect::from_ltrb(
-                    offset.dx,
-                    track_y,
-                    offset.dx + self.viewport_size.width,
-                    track_y + self.scrollbar_thickness,
-                );
-
-                // Calculate thumb position and size
-                let thumb_ratio = self.viewport_size.width / self.content_size.width;
-                let thumb_width = (self.viewport_size.width * thumb_ratio).max(20.0); // Min 20px
-                let track_available = self.viewport_size.width - thumb_width;
-                let thumb_offset = if max_scroll > 0.0 {
-                    (scroll_offset / max_scroll) * track_available
-                } else {
-                    0.0
-                };
-
-                let thumb = Rect::from_ltrb(
-                    offset.dx + thumb_offset + 2.0,
-                    track_y + 2.0, // 2px padding
-                    offset.dx + thumb_offset + thumb_width - 2.0,
-                    track_y + self.scrollbar_thickness - 2.0,
-                );
-
-                (track, thumb)
-            }
-        };
-
-        // Use Canvas API for scrollbar rendering
-        let mut canvas = Canvas::new();
-
-        // Draw track (light background)
-        let track_paint = Paint::fill(Color::rgba(0, 0, 0, 26)); // 10% opacity = 26/255
-        canvas.draw_rect(track_rect, &track_paint);
-
-        // Draw thumb (darker, semi-transparent)
-        let thumb_paint = Paint::fill(Color::rgba(0, 0, 0, 102)); // 40% opacity = 102/255
-        canvas.draw_rect(thumb_rect, &thumb_paint);
-
-        // Finish canvas and get DisplayList
-        let display_list = canvas.finish();
-
-        // Create PictureLayer from DisplayList
-        let picture = PictureLayer::from_display_list(display_list);
-
-        Some(Box::new(picture))
-    }
+    // TODO: Implement paint_scrollbar() using Canvas API when needed
+    // The scrollbar should be drawn directly to canvas using draw_rect()
 }
 
 impl Render for RenderScrollView {

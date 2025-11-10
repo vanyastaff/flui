@@ -1348,7 +1348,6 @@ dependencies = [
  "criterion",
  "downcast-rs 2.0.2",
  "flui_core",
- "flui_engine",
  "flui_painting",
  "flui_types",
  "parking_lot",

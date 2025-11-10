@@ -1,10 +1,33 @@
 //! RenderTransform - applies matrix transformation to child
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_engine::Transform;
 use flui_painting::Canvas;
 use flui_types::{Offset, Size};
+
+/// Transform operations
+#[derive(Debug, Clone, PartialEq)]
+pub enum Transform {
+    /// Translate by offset
+    Translate(Offset),
+    /// Rotate by angle (radians)
+    Rotate(f32),
+    /// Scale uniformly
+    Scale(f32),
+    /// Scale non-uniformly
+    ScaleXY {
+        /// X-axis scale factor
+        sx: f32,
+        /// Y-axis scale factor
+        sy: f32
+    },
+    /// Skew (shear) transform
+    Skew {
+        /// X-axis skew angle in radians
+        skew_x: f32,
+        /// Y-axis skew angle in radians
+        skew_y: f32
+    },
+}
 
 /// RenderObject that applies a transformation to its child
 ///
@@ -15,7 +38,7 @@ use flui_types::{Offset, Size};
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderTransform;
-/// use flui_engine::Transform;
+/// use flui_rendering::objects::Transform;
 ///
 /// let transform = RenderTransform::new(Transform::Rotate(std::f32::consts::PI / 4.0));
 /// ```

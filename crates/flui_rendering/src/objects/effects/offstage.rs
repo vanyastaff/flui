@@ -3,7 +3,6 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
 
-use flui_engine::{layer::pool};
 use flui_types::Size;
 
 /// RenderObject that hides its child from display
