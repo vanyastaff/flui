@@ -841,8 +841,9 @@ mod tests {
 
     #[test]
     fn test_schedule_build() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
-        let id = 42; // Arbitrary ElementId
+        let id = ElementId::new(42); // Arbitrary ElementId
 
         owner.schedule_build_for(id, 0);
         assert_eq!(owner.dirty_count(), 1);
@@ -867,8 +868,9 @@ mod tests {
 
     #[test]
     fn test_lock_state() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
-        let id = 42;
+        let id = ElementId::new(42);
 
         // Normal scheduling works
         owner.schedule_build_for(id, 0);
@@ -876,7 +878,7 @@ mod tests {
 
         owner.lock_state(|o| {
             // Scheduling while locked should be ignored
-            let id2 = 43;
+            let id2 = ElementId::new(43);
             o.schedule_build_for(id2, 0);
             assert_eq!(o.dirty_count(), 1); // Still 1, not 2
         });
@@ -884,11 +886,12 @@ mod tests {
 
     #[test]
     fn test_depth_sorting() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
 
-        let id1 = 1;
-        let id2 = 2;
-        let id3 = 3;
+        let id1 = ElementId::new(1);
+        let id2 = ElementId::new(2);
+        let id3 = ElementId::new(3);
 
         // Schedule in random order
         owner.schedule_build_for(id2, 2);
@@ -901,6 +904,7 @@ mod tests {
 
     #[test]
     fn test_on_build_scheduled_callback() {
+        use crate::ElementId;
         use std::sync::{Arc, Mutex};
 
         let mut owner = PipelineOwner::new();
@@ -911,7 +915,7 @@ mod tests {
             *called_clone.lock().unwrap() = true;
         });
 
-        let id = 42;
+        let id = ElementId::new(42);
         owner.schedule_build_for(id, 0);
 
         assert!(*called.lock().unwrap());
@@ -938,10 +942,11 @@ mod tests {
 
     #[test]
     fn test_batching_deduplicates() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(16));
 
-        let id = 42;
+        let id = ElementId::new(42);
 
         // Schedule same element 3 times
         owner.schedule_build_for(id, 0);
@@ -962,12 +967,13 @@ mod tests {
 
     #[test]
     fn test_batching_multiple_elements() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(16));
 
-        let id1 = 1;
-        let id2 = 2;
-        let id3 = 3;
+        let id1 = ElementId::new(1);
+        let id2 = ElementId::new(2);
+        let id3 = ElementId::new(3);
 
         owner.schedule_build_for(id1, 0);
         owner.schedule_build_for(id2, 1);
@@ -981,10 +987,11 @@ mod tests {
 
     #[test]
     fn test_should_flush_batch_timing() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(10));
 
-        let id = 42;
+        let id = ElementId::new(42);
         owner.schedule_build_for(id, 0);
 
         // Should not flush immediately
@@ -999,10 +1006,11 @@ mod tests {
 
     #[test]
     fn test_batching_without_enable() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         // Batching not enabled
 
-        let id = 42;
+        let id = ElementId::new(42);
         owner.schedule_build_for(id, 0);
 
         // Should add directly to dirty elements
@@ -1015,10 +1023,11 @@ mod tests {
 
     #[test]
     fn test_batching_stats() {
+        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(16));
 
-        let id = 42;
+        let id = ElementId::new(42);
 
         // Initial stats
         assert_eq!(owner.batching_stats(), (0, 0));
