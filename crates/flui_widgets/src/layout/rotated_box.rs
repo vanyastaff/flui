@@ -4,7 +4,7 @@
 //! Similar to Flutter's RotatedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderRotatedBox;
@@ -224,8 +224,7 @@ impl<S: State> RotatedBoxBuilder<S> {
 // Implement View trait - Simplified API
 impl View for RotatedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderRotatedBox::new(self.quarter_turns))
-            .maybe_child(self.child)
+        (RenderRotatedBox::new(self.quarter_turns), self.child)
     }
 }
 

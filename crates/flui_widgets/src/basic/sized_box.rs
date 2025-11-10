@@ -37,7 +37,7 @@
 //! sized_box!(child: widget, width: 100.0, height: 50.0)
 //! ```
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderConstrainedBox;
 use flui_types::BoxConstraints;
@@ -399,7 +399,6 @@ mod tests {
     use flui_core::ComponentElement;
 
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
@@ -407,8 +406,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]
@@ -645,8 +643,7 @@ mod tests {
 impl View for SizedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let constraints = BoxConstraints::tight_for(self.width, self.height);
-        RenderBuilder::new(RenderConstrainedBox::new(constraints))
-            .maybe_child(self.child)
+        (RenderConstrainedBox::new(constraints), self.child)
     }
 }
 

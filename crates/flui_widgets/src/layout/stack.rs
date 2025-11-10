@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
@@ -256,7 +256,7 @@ impl View for Stack {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
 
-        RenderBuilder::new(render_stack).children(self.children)
+        (render_stack, self.children)
     }
 }
 
@@ -345,7 +345,6 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -362,8 +361,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]

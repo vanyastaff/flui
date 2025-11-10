@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_rendering::RenderClipOval;
 use flui_types::painting::Clip;
 
@@ -165,8 +165,7 @@ impl Default for ClipOval {
 // Implement View for ClipOval - New architecture
 impl View for ClipOval {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderClipOval::with_clip(self.clip_behavior))
-            .maybe_child(self.child)
+        (RenderClipOval::with_clip(self.clip_behavior), self.child)
     }
 }
 
@@ -195,7 +194,6 @@ impl<S: State> ClipOvalBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -203,8 +201,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]

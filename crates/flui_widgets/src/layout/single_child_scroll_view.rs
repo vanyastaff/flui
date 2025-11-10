@@ -4,7 +4,7 @@
 //! widget that can exceed the viewport size.
 
 use super::scroll_controller::ScrollController;
-use flui_core::view::{AnyView, BuildContext, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, BuildContext, IntoElement, View};
 use flui_types::layout::Axis;
 
 /// A scrollable widget with a single child
@@ -266,6 +266,6 @@ impl View for SingleChildScrollView {
         render.set_show_scrollbar(self.show_scrollbar);
         render.set_scrollbar_thickness(self.scrollbar_thickness);
 
-        RenderBuilder::new(render).child(child)
+        (render, Some(child))
     }
 }

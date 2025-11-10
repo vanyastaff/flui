@@ -347,7 +347,7 @@ pub use element::{
 pub use view::BuildContext;
 
 // Re-export simplified API (View, IntoElement, tuple syntax)
-pub use view::{AnyElement, AnyView, IntoElement, RenderBuilder, RenderExt, View};
+pub use view::{AnyElement, AnyView, IntoElement, RenderExt, View};
 
 // Re-export pipeline types (moved in Phase 1)
 // Note: ElementTree moved to element module (Issue #21)

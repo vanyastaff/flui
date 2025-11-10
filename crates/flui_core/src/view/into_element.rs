@@ -270,58 +270,122 @@ pub trait RenderExt: crate::render::Render + Sized {
 // Blanket implementation for all Render types
 impl<T: crate::render::Render> RenderExt for T {}
 
-/// Implementation for Box<dyn Render> - direct render object usage
+/// Tuple implementation for (Render, ()) - leaf render case
 ///
-/// Allows using render objects directly without builder:
+/// Consistent syntax for leaf renders using tuple:
 /// ```rust,ignore
 /// impl View for Text {
 ///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         Box::new(RenderText::new(self.text)) as Box<dyn Render>
+///         (RenderParagraph::new(&self.text), ())
 ///     }
 /// }
 /// ```
-impl IntoElement for Box<dyn crate::render::Render> {
+impl<R: crate::render::Render> IntoElement for (R, ()) {
     fn into_element(self) -> Element {
-        Element::Render(crate::element::RenderElement::new(self))
+        Element::Render(crate::element::RenderElement::new(Box::new(self.0)))
     }
 }
 
-/// Implementation for (Render, Option<child>) - single-child tuple syntax
+/// Generic tuple implementation for (Render, Option<child>) - single-child syntax
 ///
-/// Allows convenient single-child syntax:
+/// Works with any Render type directly, no boxing needed:
 /// ```rust,ignore
 /// impl View for Padding {
 ///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         (RenderPadding::new(self.padding), self.child)
+///         (RenderPadding::new(self.padding), self.child)  // No .boxed()!
 ///     }
 /// }
 /// ```
-impl IntoElement for (Box<dyn crate::render::Render>, Option<AnyElement>) {
+impl<R: crate::render::Render> IntoElement for (R, Option<AnyElement>) {
     fn into_element(self) -> Element {
         let (render, child) = self;
         let children: Vec<Element> = child.into_iter().map(|c| c.into_element()).collect();
 
         let render_element = if children.is_empty() {
-            crate::element::RenderElement::new(render)
+            crate::element::RenderElement::new(Box::new(render))
         } else {
-            crate::element::RenderElement::new_with_children(render, children)
+            crate::element::RenderElement::new_with_children(Box::new(render), children)
         };
 
         Element::Render(render_element)
     }
 }
 
-/// Implementation for (Render, Vec<children>) - multi-child tuple syntax
+/// Convenience implementation for (Render, Option<Box<dyn AnyView>>) - widget child
 ///
-/// Allows convenient multi-child syntax:
+/// Allows passing Option<Box<dyn AnyView>> directly without conversion:
 /// ```rust,ignore
-/// impl View for Column {
+/// pub struct Padding {
+///     child: Option<Box<dyn AnyView>>,  // Common pattern
+/// }
+///
+/// impl View for Padding {
 ///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         (RenderColumn::new(), self.children)
+///         (RenderPadding::new(self.padding), self.child)  // Works directly!
 ///     }
 /// }
 /// ```
-impl IntoElement for (Box<dyn crate::render::Render>, Vec<AnyElement>) {
+impl<R: crate::render::Render> IntoElement for (R, Option<Box<dyn crate::view::AnyView>>) {
+    fn into_element(self) -> Element {
+        let (render, child) = self;
+        // Convert Option<Box<dyn AnyView>> to Option<AnyElement>
+        let child_element = child.map(AnyElement::new);
+        let children: Vec<Element> = child_element.into_iter().map(|c| c.into_element()).collect();
+
+        let render_element = if children.is_empty() {
+            crate::element::RenderElement::new(Box::new(render))
+        } else {
+            crate::element::RenderElement::new_with_children(Box::new(render), children)
+        };
+
+        Element::Render(render_element)
+    }
+}
+
+/// Convenience implementation for (Render, Vec<Box<dyn AnyView>>) - widget children
+///
+/// Allows passing Vec<Box<dyn AnyView>> directly without conversion:
+/// ```rust,ignore
+/// pub struct Column {
+///     children: Vec<Box<dyn AnyView>>,  // Common pattern
+/// }
+///
+/// impl View for Column {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         (RenderFlex::column(), self.children)  // Works directly!
+///     }
+/// }
+/// ```
+impl<R: crate::render::Render> IntoElement for (R, Vec<Box<dyn crate::view::AnyView>>) {
+    fn into_element(self) -> Element {
+        let (render, children) = self;
+        // Convert Vec<Box<dyn AnyView>> to Vec<AnyElement>
+        let child_elements: Vec<Element> = children
+            .into_iter()
+            .map(|c| AnyElement::new(c).into_element())
+            .collect();
+
+        let render_element = if child_elements.is_empty() {
+            crate::element::RenderElement::new(Box::new(render))
+        } else {
+            crate::element::RenderElement::new_with_children(Box::new(render), child_elements)
+        };
+
+        Element::Render(render_element)
+    }
+}
+
+/// Generic tuple implementation for (Render, Vec<children>) - multi-child syntax
+///
+/// Works with any Render type directly, no boxing needed:
+/// ```rust,ignore
+/// impl View for Column {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         (RenderFlex::column(), self.children)  // No .boxed()!
+///     }
+/// }
+/// ```
+impl<R: crate::render::Render> IntoElement for (R, Vec<AnyElement>) {
     fn into_element(self) -> Element {
         let (render, children) = self;
         let child_elements: Vec<Element> = children
@@ -330,9 +394,9 @@ impl IntoElement for (Box<dyn crate::render::Render>, Vec<AnyElement>) {
             .collect();
 
         let render_element = if child_elements.is_empty() {
-            crate::element::RenderElement::new(render)
+            crate::element::RenderElement::new(Box::new(render))
         } else {
-            crate::element::RenderElement::new_with_children(render, child_elements)
+            crate::element::RenderElement::new_with_children(Box::new(render), child_elements)
         };
 
         Element::Render(render_element)

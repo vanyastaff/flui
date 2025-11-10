@@ -16,7 +16,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderVisibility;
 
@@ -323,15 +323,14 @@ impl View for Visibility {
             self.child
         };
 
-        RenderBuilder::new(RenderVisibility::new(
+        (RenderVisibility::new(
             self.visible,
             self.maintain_size,
             self.maintain_state,
             self.maintain_animation,
             self.maintain_interactivity,
             self.maintain_semantics,
-        ))
-        .maybe_child(child)
+        ), child)
     }
 }
 

@@ -26,7 +26,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{IntoElement, RenderBuilder, View};
+use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -225,10 +225,9 @@ impl View for Spacer {
         // Build zero-sized SizedBox as child
         let sized_box = crate::SizedBox::builder().width(0.0).height(0.0).build();
 
-        RenderBuilder::new(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
+        (RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
             self.flex,
-        )))
-        .child(sized_box)
+        )), Some(Box::new(sized_box) as Box<dyn flui_core::view::AnyView>))
     }
 }
 

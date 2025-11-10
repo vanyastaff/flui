@@ -20,7 +20,7 @@
 
 use flui_app::*;
 use flui_core::render::LeafRender;
-use flui_core::view::{AnyView, BuildContext, IntoElement, LeafRenderBuilder};
+use flui_core::view::{AnyView, BuildContext, IntoElement};
 use flui_types::BoxConstraints;
 
 /// Simple app that demonstrates window event callbacks
@@ -50,7 +50,7 @@ impl flui_core::view::View for WindowEventsDemo {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Simple render object wrapped in LeafRenderBuilder
         // The interesting part is the event callbacks, not the UI
-        LeafRenderBuilder::new(SimpleRender)
+        Leaf(SimpleRender, ())
     }
 }
 

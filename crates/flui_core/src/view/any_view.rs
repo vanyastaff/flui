@@ -112,7 +112,7 @@ mod tests {
     impl View for MockView {
         fn build(self, _ctx: &super::BuildContext) -> impl IntoElement {
             // Return a mock element
-            crate::view::LeafRenderBuilder::new(MockRender)
+            crate::view::Leaf(MockRender, ())
         }
     }
 

@@ -4,7 +4,7 @@
 //! Similar to Flutter's IntrinsicWidth widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderIntrinsicWidth;
 
@@ -206,7 +206,7 @@ impl View for IntrinsicWidth {
             (None, None) => RenderIntrinsicWidth::new(),
         };
 
-        RenderBuilder::new(render).maybe_child(self.child)
+        (render, self.child)
     }
 }
 

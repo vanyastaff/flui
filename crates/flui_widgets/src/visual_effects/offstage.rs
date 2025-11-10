@@ -14,7 +14,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderOffstage;
 
@@ -165,7 +165,7 @@ impl<S: State> OffstageBuilder<S> {
 // Implement View trait
 impl View for Offstage {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderOffstage::new(self.offstage)).maybe_child(self.child)
+        (RenderOffstage::new(self.offstage), self.child)
     }
 }
 

@@ -4,7 +4,7 @@
 //! Similar to Flutter's ColoredBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderColoredBox;
 use flui_types::Color;
@@ -164,7 +164,7 @@ impl<S: State> ColoredBoxBuilder<S> {
 // Implement View for ColoredBox - New architecture
 impl View for ColoredBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderColoredBox::new(self.color)).maybe_child(self.child)
+        (RenderColoredBox::new(self.color), self.child)
     }
 }
 
@@ -173,7 +173,6 @@ impl View for ColoredBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
@@ -181,8 +180,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]

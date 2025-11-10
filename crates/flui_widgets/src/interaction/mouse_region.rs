@@ -16,7 +16,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::{MouseCallbacks, RenderMouseRegion};
 use flui_types::events::{PointerEvent, PointerEventHandler};
@@ -296,6 +296,6 @@ impl View for MouseRegion {
             on_hover: None,
         };
 
-        RenderBuilder::new(RenderMouseRegion::new(callbacks)).maybe_child(self.child)
+        (RenderMouseRegion::new(callbacks), self.child)
     }
 }

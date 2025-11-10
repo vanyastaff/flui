@@ -4,7 +4,7 @@
 //! repainting from its ancestors for performance optimization.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderRepaintBoundary;
 
@@ -138,7 +138,7 @@ impl<S: State> RepaintBoundaryBuilder<S> {
 // Implement View trait
 impl View for RepaintBoundary {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderRepaintBoundary::new()).maybe_child(self.child)
+        (RenderRepaintBoundary::new(), self.child)
     }
 }
 

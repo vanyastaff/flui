@@ -15,7 +15,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
@@ -217,7 +217,7 @@ impl View for SafeArea {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
         let insets = self.calculate_insets(ctx);
 
-        RenderBuilder::new(RenderPadding::new(insets)).maybe_child(self.child)
+        (RenderPadding::new(insets), self.child)
     }
 }
 

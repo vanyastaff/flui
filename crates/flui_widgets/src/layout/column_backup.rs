@@ -32,7 +32,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
@@ -282,7 +282,7 @@ impl View for Row {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        RenderBuilder::new(render_flex).children(self.children)
+        (render_flex, self.children)
     }
 }
 
@@ -312,7 +312,6 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -320,8 +319,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]

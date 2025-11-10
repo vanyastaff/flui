@@ -33,7 +33,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{PositionedMetadata, RenderPositioned};
@@ -414,7 +414,7 @@ impl View for Positioned {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let metadata = self.create_metadata();
 
-        RenderBuilder::new(RenderPositioned::new(metadata)).maybe_child(self.child)
+        (RenderPositioned::new(metadata), self.child)
     }
 }
 

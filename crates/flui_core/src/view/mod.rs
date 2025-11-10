@@ -29,7 +29,6 @@
 pub mod any_view;
 pub mod build_context;
 pub mod into_element;
-pub mod render_builder;
 pub mod sealed;
 #[allow(clippy::module_inception)] // view/view.rs is intentional for main View trait
 pub mod view;
@@ -45,8 +44,8 @@ pub use view::{ChangeFlags, View, ViewElement};
 
 // Simplified API exports (IntoElement, tuple syntax)
 pub use into_element::{AnyElement, IntoAnyElement, IntoElement, RenderExt};
-pub use render_builder::RenderBuilder;
 
 // TODO(2025-02): Add view tree management.
 // The ViewTree will track widget-to-element mappings and provide
 // efficient lookup during rebuild.
+

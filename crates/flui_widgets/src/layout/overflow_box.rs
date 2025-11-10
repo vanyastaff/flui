@@ -5,7 +5,7 @@
 //! Similar to Flutter's OverflowBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderOverflowBox;
@@ -284,7 +284,7 @@ impl View for OverflowBox {
             self.max_height,
         );
 
-        RenderBuilder::new(render).maybe_child(self.child)
+        (render, self.child)
     }
 }
 

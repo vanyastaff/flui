@@ -32,7 +32,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -289,11 +289,10 @@ impl Default for IndexedStack {
 // Implement View for IndexedStack - New architecture
 impl View for IndexedStack {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderIndexedStack::with_alignment(
+        (RenderIndexedStack::with_alignment(
             self.index,
             self.alignment,
-        ))
-        .children(self.children)
+        ), self.children)
     }
 }
 
@@ -369,7 +368,6 @@ macro_rules! indexed_stack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -386,8 +384,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]

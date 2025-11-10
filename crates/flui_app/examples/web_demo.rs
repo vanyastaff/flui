@@ -31,7 +31,7 @@
 //! - wasm-pack for building
 
 use flui_core::render::LeafRender;
-use flui_core::view::{AnyView, BuildContext, IntoElement, LeafRenderBuilder, View};
+use flui_core::view::{AnyView, BuildContext, IntoElement, LeafView};
 use flui_types::{BoxConstraints, Offset, Size};
 use wasm_bindgen::prelude::*;
 
@@ -60,7 +60,7 @@ impl LeafRender for WebDemoRender {
 
 impl View for WebDemo {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        LeafRenderBuilder::new(WebDemoRender)
+        Leaf(WebDemoRender, ())
     }
 }
 

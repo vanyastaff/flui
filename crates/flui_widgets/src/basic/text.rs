@@ -42,7 +42,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{IntoElement, RenderBuilder, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::{ParagraphData, RenderParagraph};
 use flui_types::{
@@ -316,9 +316,8 @@ impl View for Text {
         data.text_direction = self.text_direction;
         data.soft_wrap = self.soft_wrap;
 
-        // Create and return RenderParagraph via LeafRenderBuilder
-        RenderBuilder::new(RenderParagraph::new(data))
-    }
+        // Create and return RenderParagraph
+        (RenderParagraph::new(data), ())}
 }
 
 /// Declarative macro for creating Text widgets

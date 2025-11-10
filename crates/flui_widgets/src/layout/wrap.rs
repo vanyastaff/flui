@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
@@ -237,7 +237,7 @@ impl View for Wrap {
         render_wrap.run_spacing = self.run_spacing;
         render_wrap.cross_alignment = self.cross_alignment;
 
-        RenderBuilder::new(render_wrap).children(self.children)
+        (render_wrap, self.children)
     }
 }
 
@@ -266,7 +266,6 @@ impl<S: State> WrapBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive()]
@@ -274,8 +273,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]

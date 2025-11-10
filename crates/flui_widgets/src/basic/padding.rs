@@ -31,7 +31,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
@@ -243,7 +243,7 @@ impl Default for Padding {
 // Implement View for Padding - Simplified API
 impl View for Padding {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderPadding::new(self.padding)).maybe_child(self.child)
+        (RenderPadding::new(self.padding), self.child)
     }
 }
 
@@ -328,7 +328,6 @@ macro_rules! padding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::view::RenderBuilder;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
@@ -336,8 +335,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
-        }
+            (RenderPadding::new(EdgeInsets::ZERO), ())}
     }
 
     #[test]

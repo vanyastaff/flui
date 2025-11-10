@@ -26,7 +26,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -238,10 +238,9 @@ impl Expanded {
 // Implement View trait - Simplified API
 impl View for Expanded {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
+        (RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
             self.flex,
-        )))
-        .child(self.child)
+        )), Some(self.child))
     }
 }
 

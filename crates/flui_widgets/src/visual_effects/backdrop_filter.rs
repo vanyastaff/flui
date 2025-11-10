@@ -4,7 +4,7 @@
 //! behind it, creating effects like frosted glass.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderBackdropFilter;
 use flui_types::painting::{BlendMode, ImageFilter};
@@ -217,7 +217,7 @@ impl View for BackdropFilter {
         let mut render = RenderBackdropFilter::new(self.filter.clone());
         render.blend_mode = self.blend_mode;
 
-        RenderBuilder::new(render).maybe_child(self.child)
+        (render, self.child)
     }
 }
 

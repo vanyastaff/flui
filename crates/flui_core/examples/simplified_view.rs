@@ -3,7 +3,7 @@
 //! This example shows the new simplified View API with no GATs,
 //! automatic tree management, and hooks for state.
 
-use flui_core::{AnyView, BuildContext, IntoElement, LeafRenderBuilder, SingleRenderBuilder, View};
+use flui_core::{AnyView, BuildContext, IntoElement, LeafSingleView};
 
 // ============================================================================
 // Example 1: Simple Text Component
@@ -19,7 +19,7 @@ impl View for SimpleText {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // In real code, this would use RenderParagraph from flui_rendering
         // For now, we just demonstrate the API pattern
-        LeafRenderBuilder::new(MockTextRender { text: self.text })
+        Leaf(MockTextRender { text: self.text }, ())
     }
 }
 
@@ -35,14 +35,10 @@ struct SimplePadding {
 
 impl View for SimplePadding {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        // OPTION 1: Using builder (most explicit)
-        SingleRenderBuilder::new(MockPaddingRender {
+        // Using tuple syntax: (Render, Option<child>)
+        (MockPaddingRender {
             padding: self.padding,
-        })
-        .child(self.child)
-
-        // OPTION 2: Using tuple syntax (more concise)
-        // (MockPaddingRender { padding: self.padding }, self.child)
+        }, self.child)
     }
 }
 
@@ -163,7 +159,7 @@ fn main() {
     println!("NEW (Simplified View trait):");
     println!("  impl View for Padding {{");
     println!("      fn build(self, ctx: &BuildContext) -> impl IntoElement {{");
-    println!("          SingleRenderBuilder::new(RenderPadding::new(self.padding))");
+    println!("          Single(RenderPadding::new(self.padding, ()))");
     println!("              .child(self.child)");
     println!("      }}");
     println!("  }}");

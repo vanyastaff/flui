@@ -3,7 +3,7 @@
 //! A widget that renders Material Design elevation effects with shadows.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::{PhysicalShape, RenderPhysicalModel};
 use flui_types::Color;
@@ -242,7 +242,7 @@ impl View for PhysicalModel {
         render.border_radius = self.border_radius;
         render.shadow_color = self.shadow_color;
 
-        RenderBuilder::new(render).maybe_child(self.child)
+        (render, self.child)
     }
 }
 

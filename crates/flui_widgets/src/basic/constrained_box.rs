@@ -4,7 +4,7 @@
 //! Similar to Flutter's ConstrainedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderConstrainedBox;
 use flui_types::BoxConstraints;
@@ -149,8 +149,7 @@ impl<S: State> ConstrainedBoxBuilder<S> {
 impl View for ConstrainedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let constraints = self.constraints.unwrap_or(BoxConstraints::UNCONSTRAINED);
-        RenderBuilder::new(RenderConstrainedBox::new(constraints))
-            .maybe_child(self.child)
+        (RenderConstrainedBox::new(constraints), self.child)
     }
 }
 

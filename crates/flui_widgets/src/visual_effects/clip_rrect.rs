@@ -31,7 +31,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
+use flui_core::view::{AnyView, IntoElement, View};
 use flui_rendering::{RRectShape, RenderClipRRect};
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
@@ -324,11 +324,10 @@ impl Default for ClipRRect {
 // Implement View for ClipRRect - New architecture
 impl View for ClipRRect {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::new(RenderClipRRect::new(
+        (RenderClipRRect::new(
             RRectShape::new(self.border_radius),
             self.clip_behavior,
-        ))
-        .maybe_child(self.child)
+        ), self.child)
     }
 }
 
