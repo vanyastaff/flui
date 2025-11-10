@@ -5,7 +5,9 @@
 pub mod drag;
 pub mod long_press;
 pub mod recognizer;
+pub mod scale;
 pub mod tap;
+
 
 
 
@@ -15,6 +17,8 @@ pub use recognizer::{
 pub use tap::TapGestureRecognizer;
 pub use drag::DragGestureRecognizer;
 pub use long_press::LongPressGestureRecognizer;
+pub use scale::ScaleGestureRecognizer;
+
 
 
 
