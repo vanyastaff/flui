@@ -231,23 +231,25 @@ mod tests {
 
     #[test]
     fn test_mark_dirty() {
+        use crate::ElementId;
         let layout = LayoutPipeline::new();
 
         assert!(!layout.has_dirty());
 
-        layout.mark_dirty(1);
+        layout.mark_dirty(ElementId::new(1));
 
         assert!(layout.has_dirty());
-        assert!(layout.is_dirty(1));
-        assert!(!layout.is_dirty(2));
+        assert!(layout.is_dirty(ElementId::new(1)));
+        assert!(!layout.is_dirty(ElementId::new(2)));
     }
 
     #[test]
     fn test_dirty_count() {
+        use crate::ElementId;
         let layout = LayoutPipeline::new();
 
-        layout.mark_dirty(1);
-        layout.mark_dirty(2);
+        layout.mark_dirty(ElementId::new(1));
+        layout.mark_dirty(ElementId::new(2));
 
         assert_eq!(layout.dirty_count(), 2);
     }
@@ -268,7 +270,7 @@ mod tests {
     fn test_clear_dirty() {
         let mut layout = LayoutPipeline::new();
 
-        layout.mark_dirty(1);
+        layout.mark_dirty(ElementId::new(1));
         layout.clear_dirty();
 
         assert!(!layout.has_dirty());
