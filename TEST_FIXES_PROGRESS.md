@@ -3,8 +3,8 @@
 ## Summary
 
 **Started with:** 237 test compilation errors
-**Current status:** 145 test compilation errors
-**Progress:** 92 errors fixed (-39%)
+**Current status:** 122 test compilation errors
+**Progress:** 115 errors fixed (-49%)
 
 ## Completed Fixes
 
@@ -43,7 +43,17 @@
 - Fixed for loops: `for i in 1..=10` with `ElementId::new(i)` usage
 - All DependencyInfo and DependencyTracker tests now compile
 
-## Remaining Errors (145)
+### ✅ Small Test Files (12 errors fixed)
+- **resource.rs** (2 errors): Fixed ResourceHook Input to use tuple with signals
+- **diagnostics.rs** (3 errors): Fixed format_tree_structure calls with ElementId
+- **element_base.rs** (3 errors): Fixed mount() calls with ElementId
+- **recovery.rs** (4 errors): Fixed PipelineError constructors with ElementId
+
+### ✅ Render Cache Tests (11 errors fixed)
+- Fixed all LayoutCacheKey::new() calls to use ElementId
+- Updated 7 test functions: test_cache_key, test_cache_operations, test_cache_statistics, test_cache_reset_stats, test_cache_invalidate, test_cache_clear, test_cache_debug_format
+
+## Remaining Errors (122)
 
 ### Type Mismatches (133 errors) - E0308
 Most common issues by file:
