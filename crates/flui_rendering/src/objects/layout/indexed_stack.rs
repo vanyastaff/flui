@@ -168,12 +168,6 @@ mod tests {
         stack.set_alignment(Alignment::CENTER);
         assert_eq!(stack.alignment, Alignment::CENTER);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Variable
-        }
+        
     }
 }

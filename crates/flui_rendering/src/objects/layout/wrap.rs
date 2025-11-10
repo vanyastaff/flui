@@ -286,12 +286,6 @@ mod tests {
         wrap.set_spacing(8.0);
         assert_eq!(wrap.spacing, 8.0);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Variable
-        }
+        
     }
 }

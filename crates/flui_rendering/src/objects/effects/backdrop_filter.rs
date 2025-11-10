@@ -152,12 +152,6 @@ mod tests {
         let filter = RenderBackdropFilter::blur(10.0).with_blend_mode(BlendMode::Multiply);
         assert_eq!(filter.blend_mode(), BlendMode::Multiply);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

@@ -79,30 +79,43 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
-
 pub mod animation;
 pub mod animation_controller;
+pub mod compound_animation;
 pub mod curved_animation;
-pub mod listenable;
 pub mod proxy_animation;
+pub mod reverse_animation;
+pub mod tween_animation;
+
+
+
 
 // Re-exports for convenience
-pub use animation::Animation;
-pub use animation_controller::AnimationController;
+pub use animation::{Animation, AnimationDirection, DynAnimation, StatusCallback};
+pub use animation_controller::{AnimationController, AnimationError};
+pub use compound_animation::{AnimationOperator, CompoundAnimation};
 pub use curved_animation::CurvedAnimation;
-pub use listenable::{ChangeNotifier, Listenable, ListenerId};
 pub use proxy_animation::ProxyAnimation;
+pub use reverse_animation::ReverseAnimation;
+pub use tween_animation::{animate, TweenAnimation};
 
 // Re-export types from flui_types for convenience
 pub use flui_types::animation::{
-    AnimationStatus, Animatable, Curve, Curves, Tween, TweenSequence,
+    Animatable, AnimationStatus, Curve, Curves, Tween, TweenSequence,
 };
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::animation::Animation;
+    pub use crate::animation::{Animation, AnimationDirection};
     pub use crate::animation_controller::AnimationController;
+    pub use crate::compound_animation::{AnimationOperator, CompoundAnimation};
     pub use crate::curved_animation::CurvedAnimation;
-    pub use crate::listenable::{ChangeNotifier, Listenable};
-    pub use flui_types::animation::{AnimationStatus, Animatable, Curve, Curves, Tween};
+    pub use crate::proxy_animation::ProxyAnimation;
+    pub use crate::reverse_animation::ReverseAnimation;
+    pub use crate::tween_animation::TweenAnimation;
+    pub use flui_types::animation::{Animatable, AnimationStatus, Curve, Curves, Tween};
 }
+
+
+
+

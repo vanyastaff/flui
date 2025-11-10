@@ -226,12 +226,6 @@ mod tests {
         meta.set_behavior(HitTestBehavior::Translucent);
         assert_eq!(meta.behavior, HitTestBehavior::Translucent);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

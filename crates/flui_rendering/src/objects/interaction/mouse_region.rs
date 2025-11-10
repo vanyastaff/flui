@@ -107,12 +107,13 @@ impl Render for RenderMouseRegion {
         // 2. Track mouse enter/exit events
         // 3. Call appropriate callbacks when hover state changes
     }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable // Default - update if needed
+        Arity::Exact(1)
     }
 }
 
@@ -180,14 +181,5 @@ mod tests {
             on_hover: None,
         };
         let debug_str = format!("{:?}", callbacks);
-        assert!(debug_str.contains("MouseCallbacks"));
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
-    }
+        assert!(debug_str.contains("MouseCallbacks"));}
 }

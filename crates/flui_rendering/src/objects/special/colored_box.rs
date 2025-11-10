@@ -138,12 +138,6 @@ mod tests {
         colored.set_color(Color::GREEN);
         assert_eq!(colored.color, Color::GREEN);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

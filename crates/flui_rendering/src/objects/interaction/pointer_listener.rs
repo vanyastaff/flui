@@ -266,13 +266,5 @@ mod tests {
         assert!(callbacks.on_pointer_up.is_some());
         assert!(callbacks.on_pointer_move.is_some());
         assert!(callbacks.on_pointer_cancel.is_some());
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
     }
 }

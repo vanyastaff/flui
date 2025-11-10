@@ -1298,6 +1298,7 @@ dependencies = [
  "cosmic-text",
  "env_logger",
  "flui_devtools",
+ "flui_painting",
  "flui_types",
  "glam",
  "glyphon",
@@ -1332,7 +1333,6 @@ dependencies = [
 name = "flui_painting"
 version = "0.1.0"
 dependencies = [
- "flui_engine",
  "flui_types",
  "glam",
  "thiserror 2.0.17",

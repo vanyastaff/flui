@@ -101,12 +101,6 @@ mod tests {
         constrained.set_additional_constraints(constraints2);
         assert_eq!(constrained.additional_constraints, constraints2);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

@@ -132,12 +132,6 @@ mod tests {
         aspect.set_aspect_ratio(4.0 / 3.0);
         assert!((aspect.aspect_ratio - 4.0 / 3.0).abs() < f32::EPSILON);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

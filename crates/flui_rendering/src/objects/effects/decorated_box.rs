@@ -293,12 +293,13 @@ impl Render for RenderDecoratedBox {
             container_layer
         }
     }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable // Default - update if needed
+        Arity::Exact(1)
     }
 }
 
@@ -409,14 +410,5 @@ mod tests {
         let decorated =
             RenderDecoratedBox::with_position(decoration.clone(), DecorationPosition::Foreground);
         assert_eq!(decorated.decoration, decoration);
-        assert_eq!(decorated.position, DecorationPosition::Foreground);
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
-    }
+        assert_eq!(decorated.position, DecorationPosition::Foreground);}
 }

@@ -19,5 +19,6 @@ pub use render_viewport::RenderViewport;
 pub use special::*;
 pub use text::*;
 
-#[cfg(debug_assertions)]
-pub use debug::*;
+// Debug objects - currently TODO, will be re-enabled after Canvas API migration
+// #[cfg(debug_assertions)]
+// pub use debug::*;

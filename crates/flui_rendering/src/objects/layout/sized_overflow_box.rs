@@ -225,12 +225,6 @@ mod tests {
             RenderSizedOverflowBox::with_alignment(Some(50.0), Some(75.0), Alignment::TOP_LEFT);
         assert_eq!(sized_overflow.alignment, Alignment::TOP_LEFT);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

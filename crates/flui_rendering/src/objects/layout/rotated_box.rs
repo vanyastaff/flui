@@ -168,12 +168,6 @@ mod tests {
         let rotated_270 = RenderRotatedBox::rotate_270();
         assert_eq!(rotated_270.quarter_turns, QuarterTurns::Three);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

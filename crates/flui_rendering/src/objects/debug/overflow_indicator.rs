@@ -415,12 +415,6 @@ mod tests {
         assert_eq!(indicator.overflow_h, 0.0);
         assert_eq!(indicator.overflow_v, 0.0);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

@@ -258,12 +258,6 @@ mod tests {
         assert!(custom.painter.is_none());
         assert!(custom.foreground_painter.is_some());
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

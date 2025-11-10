@@ -182,12 +182,6 @@ mod tests {
         positioned.set_top(Some(25.0));
         assert_eq!(positioned.top, Some(25.0));
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

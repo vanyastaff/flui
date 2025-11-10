@@ -42,8 +42,8 @@ pub mod error;
 // Re-export Canvas API (primary interface)
 pub use canvas::Canvas;
 pub use display_list::{
-    BlendMode, DisplayList, DrawCommand, Paint, PaintBuilder, PaintStyle, Shader, StrokeCap,
-    StrokeJoin,
+    BlendMode, DisplayList, DrawCommand, Paint, PaintBuilder, PaintStyle, PointMode, Shader,
+    StrokeCap, StrokeJoin,
 };
 
 pub mod prelude {
@@ -51,7 +51,7 @@ pub mod prelude {
 
     pub use crate::canvas::Canvas;
     pub use crate::display_list::{
-        BlendMode, DisplayList, DrawCommand, Paint, PaintStyle, Shader,
+        BlendMode, DisplayList, DrawCommand, Paint, PaintStyle, PointMode, Shader,
     };
 }
 

@@ -309,12 +309,6 @@ mod tests {
         assert_eq!(fitted.fit, BoxFit::Contain);
         assert_eq!(fitted.alignment, Alignment::CENTER);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

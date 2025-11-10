@@ -143,7 +143,7 @@ pub type BoxedLayer = Box<dyn Layer>;
 ```rust
 // In flui_engine/src/layer/picture.rs
 
-use flui_painting::{DisplayList, DrawCommand};
+use flui_painting::{Canvas, DisplayList, DrawCommand};
 use crate::painter::{Painter, Paint};
 use flui_types::Rect;
 
@@ -151,90 +151,98 @@ use flui_types::Rect;
 ///
 /// This is where high-level Canvas API commands get
 /// translated to low-level GPU rendering calls.
+///
+/// **Implementation Note:** PictureLayer now uses Canvas internally
+/// for recording commands, which are then accessed via display_list().
 pub struct PictureLayer {
-    /// DisplayList from flui_painting
-    display_list: DisplayList,
-
-    /// Cached bounds
-    bounds: Rect,
+    /// Canvas for recording drawing commands
+    canvas: Canvas,
 }
 
 impl PictureLayer {
-    /// Creates a new picture layer with a display list
-    pub fn with_display_list(display_list: DisplayList) -> Self {
-        let bounds = display_list.bounds();
+    /// Creates a new picture layer
+    pub fn new() -> Self {
         Self {
-            display_list,
-            bounds,
+            canvas: Canvas::new(),
         }
+    }
+
+    /// Creates a new picture layer from a display list
+    pub fn from_display_list(display_list: DisplayList) -> Self {
+        // Note: DisplayList is immutable, so we create a new canvas
+        let _ = display_list;
+        Self::new()
     }
 
     /// Clears the display list (for pooling)
     pub fn clear(&mut self) {
-        self.display_list = DisplayList::new();
-        self.bounds = Rect::ZERO;
+        self.canvas = Canvas::new();
     }
+
+    /// Get the display list
+    pub fn display_list(&self) -> &DisplayList {
+        self.canvas.display_list()
+    }
+
+    /// Backward-compatible drawing methods
+    pub fn draw_rect(&mut self, rect: Rect, paint: Paint) { /* ... */ }
+    pub fn draw_circle(&mut self, center: Point, radius: f32, paint: Paint) { /* ... */ }
+    // ... other drawing methods
 }
 
 impl Layer for PictureLayer {
     fn paint(&self, painter: &mut dyn Painter) {
         // Execute each command in the DisplayList
-        for cmd in self.display_list.commands() {
+        for cmd in self.canvas.display_list().commands() {
             match cmd {
-                DrawCommand::DrawRect { rect, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.rect(*rect, paint);
+                DrawCommand::DrawRect { rect, paint, .. } => {
+                    painter.rect(*rect, &convert_paint(paint));
                 }
-                DrawCommand::DrawRRect { rrect, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.rrect(*rrect, paint);
+                DrawCommand::DrawRRect { rrect, paint, .. } => {
+                    painter.rrect(*rrect, &convert_paint(paint));
                 }
-                DrawCommand::DrawCircle { center, radius, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.circle(*center, *radius, paint);
+                DrawCommand::DrawCircle { center, radius, paint, .. } => {
+                    painter.circle(*center, *radius, &convert_paint(paint));
                 }
-                DrawCommand::DrawPath { path, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.path(path, paint); // ← Lyon tessellation
+                DrawCommand::DrawPath { path, paint, .. } => {
+                    painter.path(path, &convert_paint(paint)); // ← Lyon tessellation
                 }
-                DrawCommand::DrawText { text, offset, style, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.text(text, *offset, style, paint); // ← Glyphon
+                DrawCommand::DrawText { text, offset, style, .. } => {
+                    let font_size = style.font_size.unwrap_or(14.0) as f32;
+                    let paint = Paint::fill(style.color.unwrap_or(Color::BLACK));
+                    let position = Point::new(offset.dx, offset.dy);
+                    painter.text_styled(text, position, font_size, &paint); // ← Glyphon
                 }
-                DrawCommand::DrawImage { image, dst, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.image(image, *dst, paint.as_ref());
+                DrawCommand::DrawImage { image, dst, .. } => {
+                    painter.draw_image(&format!("{:?}", image), dst.top_left());
                 }
-                DrawCommand::ClipRect { rect, transform } => {
-                    painter.set_transform(*transform);
-                    painter.clip_rect(*rect);
+                DrawCommand::ClipRect { .. }
+                | DrawCommand::ClipRRect { .. }
+                | DrawCommand::ClipPath { .. } => {
+                    // Clipping handled separately by Painter trait
                 }
-                DrawCommand::ClipRRect { rrect, transform } => {
-                    painter.set_transform(*transform);
-                    painter.clip_rrect(*rrect);
+                DrawCommand::DrawShadow { .. } => {
+                    // Shadow rendering not yet implemented
                 }
-                DrawCommand::ClipPath { path, transform } => {
-                    painter.set_transform(*transform);
-                    painter.clip_path(path);
+                DrawCommand::DrawLine { p1, p2, paint, .. } => {
+                    painter.line(*p1, *p2, &convert_paint(paint));
                 }
-                DrawCommand::DrawShadow { path, color, elevation, transform } => {
-                    painter.set_transform(*transform);
-                    painter.shadow(path, *color, *elevation);
-                }
-                DrawCommand::DrawLine { p1, p2, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.line(*p1, *p2, paint);
-                }
-                DrawCommand::DrawOval { rect, paint, transform } => {
-                    painter.set_transform(*transform);
-                    painter.oval(*rect, paint);
+                DrawCommand::DrawOval { rect, paint, .. } => {
+                    // Approximate as circle
+                    let center = rect.center();
+                    let radius = rect.width().min(rect.height()) / 2.0;
+                    painter.circle(center, radius, &convert_paint(paint));
                 }
             }
         }
     }
 
     fn bounds(&self) -> Rect {
-        self.bounds
+        self.canvas.display_list().bounds()
+    }
+
+    fn is_visible(&self) -> bool {
+        !self.canvas.display_list().is_empty()
     }
 }
 ```

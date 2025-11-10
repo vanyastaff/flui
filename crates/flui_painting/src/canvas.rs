@@ -367,6 +367,143 @@ impl Canvas {
         });
     }
 
+    // ===== Advanced Drawing Methods =====
+
+    /// Draws an arc segment
+    ///
+    /// # Arguments
+    ///
+    /// * `rect` - Bounding rectangle for the ellipse
+    /// * `start_angle` - Start angle in radians
+    /// * `sweep_angle` - Sweep angle in radians
+    /// * `use_center` - Whether to draw from center (pie slice) or just the arc
+    /// * `paint` - Paint style
+    pub fn draw_arc(
+        &mut self,
+        rect: Rect,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: &Paint,
+    ) {
+        self.display_list.push(DrawCommand::DrawArc {
+            rect,
+            start_angle,
+            sweep_angle,
+            use_center,
+            paint: paint.clone(),
+            transform: self.transform,
+        });
+    }
+
+    /// Draws difference between two rounded rectangles (ring/border)
+    ///
+    /// # Arguments
+    ///
+    /// * `outer` - Outer rounded rectangle
+    /// * `inner` - Inner rounded rectangle
+    /// * `paint` - Paint style
+    pub fn draw_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint) {
+        self.display_list.push(DrawCommand::DrawDRRect {
+            outer,
+            inner,
+            paint: paint.clone(),
+            transform: self.transform,
+        });
+    }
+
+    /// Draws a sequence of points with the specified mode
+    ///
+    /// # Arguments
+    ///
+    /// * `mode` - Point drawing mode (points, lines, or polygon)
+    /// * `points` - Points to draw
+    /// * `paint` - Paint style
+    pub fn draw_points_mode(
+        &mut self,
+        mode: crate::display_list::PointMode,
+        points: Vec<Point>,
+        paint: &Paint,
+    ) {
+        self.display_list.push(DrawCommand::DrawPoints {
+            mode,
+            points,
+            paint: paint.clone(),
+            transform: self.transform,
+        });
+    }
+
+    /// Draws custom vertices with optional colors and texture coordinates
+    ///
+    /// # Arguments
+    ///
+    /// * `vertices` - Vertex positions
+    /// * `colors` - Optional vertex colors (must match vertices length)
+    /// * `tex_coords` - Optional texture coordinates (must match vertices length)
+    /// * `indices` - Triangle indices (groups of 3)
+    /// * `paint` - Paint style
+    pub fn draw_vertices(
+        &mut self,
+        vertices: Vec<Point>,
+        colors: Option<Vec<Color>>,
+        tex_coords: Option<Vec<Point>>,
+        indices: Vec<u16>,
+        paint: &Paint,
+    ) {
+        self.display_list.push(DrawCommand::DrawVertices {
+            vertices,
+            colors,
+            tex_coords,
+            indices,
+            paint: paint.clone(),
+            transform: self.transform,
+        });
+    }
+
+    /// Fills entire canvas with a color (respects clipping)
+    ///
+    /// # Arguments
+    ///
+    /// * `color` - Color to fill with
+    /// * `blend_mode` - Blend mode
+    pub fn draw_color(&mut self, color: Color, blend_mode: crate::display_list::BlendMode) {
+        self.display_list.push(DrawCommand::DrawColor {
+            color,
+            blend_mode,
+            transform: self.transform,
+        });
+    }
+
+    /// Draws multiple sprites from a texture atlas
+    ///
+    /// # Arguments
+    ///
+    /// * `image` - Source image (atlas texture)
+    /// * `sprites` - Source rectangles in atlas (sprite locations)
+    /// * `transforms` - Destination transforms for each sprite
+    /// * `colors` - Optional colors to blend with each sprite
+    /// * `blend_mode` - Blend mode
+    /// * `paint` - Optional paint for additional effects
+    pub fn draw_atlas(
+        &mut self,
+        image: Image,
+        sprites: Vec<Rect>,
+        transforms: Vec<Matrix4>,
+        colors: Option<Vec<Color>>,
+        blend_mode: crate::display_list::BlendMode,
+        paint: Option<&Paint>,
+    ) {
+        self.display_list.push(DrawCommand::DrawAtlas {
+            image,
+            sprites,
+            transforms,
+            colors,
+            blend_mode,
+            paint: paint.cloned(),
+            transform: self.transform,
+        });
+    }
+
     // ===== Convenience Methods =====
 
     /// Draws a point as a small circle

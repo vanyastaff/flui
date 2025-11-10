@@ -90,12 +90,6 @@ mod tests {
         opacity.set_opacity(0.8);
         assert_eq!(opacity.opacity, 0.8);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

@@ -387,12 +387,6 @@ mod tests {
         assert_eq!(positioned.metadata.right, Some(0.0));
         assert_eq!(positioned.metadata.bottom, Some(0.0));
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

@@ -509,17 +509,18 @@ impl Render for RenderFlex {
         }
 
         // Wrap container with overflow indicator layer if overflow detected (debug only)
-        #[cfg(debug_assertions)]
-        if self.overflow_pixels > 0.0 {
-            let (overflow_h, overflow_v) = self.get_overflow();
-            let indicator_layer = flui_engine::layer::OverflowIndicatorLayer::new(Box::new(
-                container,
-            ))
-            .with_overflow(overflow_h, overflow_v, self.container_size, offset);
-            return Box::new(indicator_layer);
-        }
+        // TODO: Re-enable when OverflowIndicatorLayer is migrated to Canvas API
+        // #[cfg(debug_assertions)]
+        // if self.overflow_pixels > 0.0 {
+        //     let (overflow_h, overflow_v) = self.get_overflow();
+        //     let indicator_layer = flui_engine::layer::OverflowIndicatorLayer::new(Box::new(
+        //         container,
+        //     ))
+        //     .with_overflow(overflow_h, overflow_v, self.container_size, offset);
+        //     return Box::new(indicator_layer);
+        // }
 
-        Box::new(container)
+        Box::new(flui_engine::PooledContainerLayer::new(container))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

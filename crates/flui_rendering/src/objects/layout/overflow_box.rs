@@ -201,12 +201,6 @@ mod tests {
         overflow.set_alignment(Alignment::BOTTOM_RIGHT);
         assert_eq!(overflow.alignment, Alignment::BOTTOM_RIGHT);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

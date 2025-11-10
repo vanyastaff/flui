@@ -172,12 +172,6 @@ mod tests {
         fractional.set_width_factor(Some(0.75));
         assert_eq!(fractional.width_factor, Some(0.75));
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

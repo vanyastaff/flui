@@ -11,7 +11,7 @@
 //! ```
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect},
+    geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
@@ -241,6 +241,91 @@ pub enum DrawCommand {
         /// Transform at recording time
         transform: Matrix4,
     },
+
+    // === Advanced Primitives ===
+    /// Draw an arc segment
+    DrawArc {
+        /// Bounding rectangle for the ellipse
+        rect: Rect,
+        /// Start angle in radians
+        start_angle: f32,
+        /// Sweep angle in radians
+        sweep_angle: f32,
+        /// Whether to draw from center (pie slice) or just the arc
+        use_center: bool,
+        /// Paint style
+        paint: Paint,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Draw difference between two rounded rectangles (ring/border)
+    DrawDRRect {
+        /// Outer rounded rectangle
+        outer: RRect,
+        /// Inner rounded rectangle
+        inner: RRect,
+        /// Paint style
+        paint: Paint,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Draw a sequence of points
+    DrawPoints {
+        /// Point drawing mode
+        mode: PointMode,
+        /// Points to draw
+        points: Vec<Point>,
+        /// Paint style
+        paint: Paint,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Draw custom vertices with optional colors and texture coordinates
+    DrawVertices {
+        /// Vertex positions
+        vertices: Vec<Point>,
+        /// Optional vertex colors (must match vertices length)
+        colors: Option<Vec<Color>>,
+        /// Optional texture coordinates (must match vertices length)
+        tex_coords: Option<Vec<Point>>,
+        /// Triangle indices (groups of 3)
+        indices: Vec<u16>,
+        /// Paint style
+        paint: Paint,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Fill entire canvas with a color (respects clipping)
+    DrawColor {
+        /// Color to fill with
+        color: Color,
+        /// Blend mode
+        blend_mode: BlendMode,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Draw multiple sprites from a texture atlas
+    DrawAtlas {
+        /// Source image (atlas texture)
+        image: Image,
+        /// Source rectangles in atlas (sprite locations)
+        sprites: Vec<Rect>,
+        /// Destination transforms for each sprite
+        transforms: Vec<Matrix4>,
+        /// Optional colors to blend with each sprite
+        colors: Option<Vec<Color>>,
+        /// Blend mode
+        blend_mode: BlendMode,
+        /// Optional paint for additional effects
+        paint: Option<Paint>,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
 }
 
 impl DrawCommand {
@@ -254,7 +339,7 @@ impl DrawCommand {
             DrawCommand::DrawCircle {
                 center, radius, ..
             } => {
-                let size = flui_types::geometry::Size::new(radius * 2.0, radius * 2.0);
+                let size = Size::new(radius * 2.0, radius * 2.0);
                 Some(Rect::from_center_size(*center, size))
             }
             DrawCommand::DrawOval { rect, .. } => Some(*rect),
@@ -276,6 +361,60 @@ impl DrawCommand {
             DrawCommand::DrawShadow { .. } => {
                 // Shadow bounds calculation requires path bounds
                 // We'll compute DisplayList bounds without Shadow bounds for now
+                None
+            }
+            DrawCommand::DrawArc { rect, .. } => Some(*rect),
+            DrawCommand::DrawDRRect { outer, .. } => Some(outer.bounding_rect()),
+            DrawCommand::DrawPoints { points, paint, .. } => {
+                if points.is_empty() {
+                    return None;
+                }
+                let stroke_half = paint.stroke_width * 0.5;
+                let mut min_x = points[0].x;
+                let mut min_y = points[0].y;
+                let mut max_x = points[0].x;
+                let mut max_y = points[0].y;
+
+                for point in points.iter().skip(1) {
+                    min_x = min_x.min(point.x);
+                    min_y = min_y.min(point.y);
+                    max_x = max_x.max(point.x);
+                    max_y = max_y.max(point.y);
+                }
+
+                Some(Rect::from_ltrb(
+                    min_x - stroke_half,
+                    min_y - stroke_half,
+                    max_x + stroke_half,
+                    max_y + stroke_half,
+                ))
+            }
+            DrawCommand::DrawVertices { vertices, .. } => {
+                if vertices.is_empty() {
+                    return None;
+                }
+                let mut min_x = vertices[0].x;
+                let mut min_y = vertices[0].y;
+                let mut max_x = vertices[0].x;
+                let mut max_y = vertices[0].y;
+
+                for vertex in vertices.iter().skip(1) {
+                    min_x = min_x.min(vertex.x);
+                    min_y = min_y.min(vertex.y);
+                    max_x = max_x.max(vertex.x);
+                    max_y = max_y.max(vertex.y);
+                }
+
+                Some(Rect::from_ltrb(min_x, min_y, max_x, max_y))
+            }
+            DrawCommand::DrawAtlas { .. } => {
+                // For atlas, we need to compute bounds of all transformed sprites
+                // This is complex and would require matrix math
+                // For now, return None - can be optimized later
+                None
+            }
+            DrawCommand::DrawColor { .. } => {
+                // DrawColor fills entire canvas, no specific bounds
                 None
             }
             // Clipping and text don't contribute to bounds directly
@@ -468,6 +607,17 @@ pub enum BlendMode {
     // ... more blend modes can be added
 }
 
+/// Point drawing mode for DrawPoints command
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointMode {
+    /// Draw each point as a separate dot
+    Points,
+    /// Draw lines between consecutive points
+    Lines,
+    /// Draw a closed polygon connecting all points
+    Polygon,
+}
+
 /// Shader (gradient, image pattern, etc.)
 #[derive(Debug, Clone)]
 pub enum Shader {
@@ -498,7 +648,6 @@ pub enum Shader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::Point;
 
     #[test]
     fn test_display_list_creation() {

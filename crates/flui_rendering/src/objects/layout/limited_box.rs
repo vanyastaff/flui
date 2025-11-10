@@ -130,12 +130,6 @@ mod tests {
         limited.set_max_height(250.0);
         assert_eq!(limited.max_height, 250.0);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

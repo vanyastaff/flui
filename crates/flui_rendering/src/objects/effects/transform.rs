@@ -107,12 +107,6 @@ mod tests {
         transform.set_transform(Transform::Rotate(1.5));
         assert!(matches!(transform.transform, Transform::Rotate(_)));
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

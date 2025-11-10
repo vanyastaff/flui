@@ -217,12 +217,6 @@ mod tests {
         assert_eq!(align.width_factor, Some(2.0));
         assert_eq!(align.height_factor, Some(1.5));
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

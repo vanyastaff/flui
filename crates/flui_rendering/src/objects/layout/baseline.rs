@@ -127,12 +127,6 @@ mod tests {
         baseline.set_baseline_type(TextBaseline::Ideographic);
         assert_eq!(baseline.baseline_type, TextBaseline::Ideographic);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

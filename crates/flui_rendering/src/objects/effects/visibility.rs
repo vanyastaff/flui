@@ -180,12 +180,6 @@ mod tests {
         assert!(visibility.maintain_size);
         assert!(visibility.maintain_state);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

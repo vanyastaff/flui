@@ -152,12 +152,13 @@ impl Render for RenderShaderMask {
 
         (tree.paint_child(child_id, offset)) as _
     }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     fn arity(&self) -> Arity {
-        Arity::Variable // Default - update if needed
+        Arity::Exact(1)
     }
 }
 
@@ -240,14 +241,5 @@ mod tests {
                 assert_eq!(*radius, 1.0);
             }
             _ => panic!("Expected radial gradient"),
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
-    }
+        }}
 }

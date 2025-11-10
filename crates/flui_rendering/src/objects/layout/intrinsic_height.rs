@@ -172,12 +172,6 @@ mod tests {
         intrinsic.set_step_height(Some(4.0));
         assert_eq!(intrinsic.step_height, Some(4.0));
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

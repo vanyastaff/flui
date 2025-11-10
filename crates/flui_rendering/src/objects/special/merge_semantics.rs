@@ -82,12 +82,6 @@ mod tests {
         let _merge = RenderMergeSemantics::default();
         // Just ensure it compiles
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }

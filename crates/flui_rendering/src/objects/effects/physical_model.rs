@@ -246,12 +246,6 @@ mod tests {
         model.set_color(Color::RED);
         assert_eq!(model.color, Color::RED);
 
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(1)
-        }
+        
     }
 }
