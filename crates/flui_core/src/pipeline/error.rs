@@ -648,10 +648,11 @@ mod tests {
 
     #[test]
     fn test_error_phase() {
-        let layout_error = PipelineError::layout_error(42, "Constraint violation").unwrap();
+        use crate::ElementId;
+        let layout_error = PipelineError::layout_error(ElementId::new(42), "Constraint violation").unwrap();
         assert_eq!(layout_error.phase(), PipelinePhase::Layout);
 
-        let paint_error = PipelineError::paint_error(42, "Layer creation failed").unwrap();
+        let paint_error = PipelineError::paint_error(ElementId::new(42), "Layer creation failed").unwrap();
         assert_eq!(paint_error.phase(), PipelinePhase::Paint);
     }
 
@@ -756,13 +757,14 @@ mod tests {
 
     #[test]
     fn test_layout_error_constructor_valid() {
-        let error = PipelineError::layout_error(42, "Constraint violation").unwrap();
+        use crate::ElementId;
+        let error = PipelineError::layout_error(ElementId::new(42), "Constraint violation").unwrap();
         match error {
             PipelineError::LayoutError {
                 element_id,
                 message,
             } => {
-                assert_eq!(element_id, 42);
+                assert_eq!(element_id, ElementId::new(42));
                 assert_eq!(message, "Constraint violation");
             }
             _ => panic!("Expected LayoutError variant"),
@@ -771,7 +773,8 @@ mod tests {
 
     #[test]
     fn test_layout_error_constructor_empty_message() {
-        let result = PipelineError::layout_error(42, "");
+        use crate::ElementId;
+        let result = PipelineError::layout_error(ElementId::new(42), "");
         assert!(result.is_err());
         match result.unwrap_err() {
             InvalidError::EmptyMessage => {}
@@ -781,13 +784,14 @@ mod tests {
 
     #[test]
     fn test_paint_error_constructor_valid() {
-        let error = PipelineError::paint_error(42, "Layer creation failed").unwrap();
+        use crate::ElementId;
+        let error = PipelineError::paint_error(ElementId::new(42), "Layer creation failed").unwrap();
         match error {
             PipelineError::PaintError {
                 element_id,
                 message,
             } => {
-                assert_eq!(element_id, 42);
+                assert_eq!(element_id, ElementId::new(42));
                 assert_eq!(message, "Layer creation failed");
             }
             _ => panic!("Expected PaintError variant"),
@@ -796,7 +800,8 @@ mod tests {
 
     #[test]
     fn test_paint_error_constructor_empty_message() {
-        let result = PipelineError::paint_error(42, "");
+        use crate::ElementId;
+        let result = PipelineError::paint_error(ElementId::new(42), "");
         assert!(result.is_err());
         match result.unwrap_err() {
             InvalidError::EmptyMessage => {}
@@ -806,13 +811,14 @@ mod tests {
 
     #[test]
     fn test_build_error_constructor_valid() {
-        let error = PipelineError::build_error(42, "Widget rebuild failed").unwrap();
+        use crate::ElementId;
+        let error = PipelineError::build_error(ElementId::new(42), "Widget rebuild failed").unwrap();
         match error {
             PipelineError::BuildError {
                 element_id,
                 message,
             } => {
-                assert_eq!(element_id, 42);
+                assert_eq!(element_id, ElementId::new(42));
                 assert_eq!(message, "Widget rebuild failed");
             }
             _ => panic!("Expected BuildError variant"),
@@ -821,7 +827,8 @@ mod tests {
 
     #[test]
     fn test_build_error_constructor_empty_message() {
-        let result = PipelineError::build_error(42, "");
+        use crate::ElementId;
+        let result = PipelineError::build_error(ElementId::new(42), "");
         assert!(result.is_err());
         match result.unwrap_err() {
             InvalidError::EmptyMessage => {}
@@ -887,7 +894,8 @@ mod tests {
 
     #[test]
     fn test_timeout_accessors_non_timeout_error() {
-        let error = PipelineError::layout_error(42, "Test").unwrap();
+        use crate::ElementId;
+        let error = PipelineError::layout_error(ElementId::new(42), "Test").unwrap();
 
         assert!(error.timeout_duration().is_none());
         assert_eq!(error.elapsed_ms(), None);

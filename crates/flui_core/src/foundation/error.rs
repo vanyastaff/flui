@@ -349,14 +349,16 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let id = 42;
+        use crate::ElementId;
+        let id = ElementId::new(42);
         let err = CoreError::element_not_found(id);
-        assert!(err.to_string().contains(&id.to_string()));
+        assert!(err.to_string().contains(&id.get().to_string()));
     }
 
     #[test]
     fn test_error_creation() {
-        let id = 1;
+        use crate::ElementId;
+        let id = ElementId::new(1);
 
         let _err1 = CoreError::element_not_found(id);
         let _err2 = CoreError::not_mounted(id);
@@ -372,8 +374,9 @@ mod tests {
 
     #[test]
     fn test_invalid_hierarchy() {
-        let parent = 1;
-        let child = 2;
+        use crate::ElementId;
+        let parent = ElementId::new(1);
+        let child = ElementId::new(2);
         let err = CoreError::invalid_hierarchy(parent, child);
 
         let msg = err.to_string();
@@ -382,7 +385,8 @@ mod tests {
 
     #[test]
     fn test_inherited_widget_not_found_error() {
-        let error = CoreError::inherited_widget_not_found("Theme", 5);
+        use crate::ElementId;
+        let error = CoreError::inherited_widget_not_found("Theme", ElementId::new(5));
         let msg = error.to_string();
         assert!(msg.contains("Theme"));
         assert!(msg.contains("Did you forget"));
@@ -390,8 +394,9 @@ mod tests {
 
     #[test]
     fn test_lifecycle_violation_error() {
+        use crate::ElementId;
         let error = CoreError::lifecycle_violation(
-            1,
+            ElementId::new(1),
             ElementLifecycle::Active,
             ElementLifecycle::Defunct,
             "update",
@@ -403,7 +408,8 @@ mod tests {
 
     #[test]
     fn test_cow_string_static() {
-        let err = CoreError::rebuild_failed(1, "static string");
+        use crate::ElementId;
+        let err = CoreError::rebuild_failed(ElementId::new(1), "static string");
         match err {
             CoreError::RebuildFailed { reason, .. } => {
                 // Static strings should not allocate
@@ -415,8 +421,9 @@ mod tests {
 
     #[test]
     fn test_cow_string_dynamic() {
+        use crate::ElementId;
         let dynamic = format!("dynamic {}", 42);
-        let err = CoreError::rebuild_failed(1, dynamic.clone());
+        let err = CoreError::rebuild_failed(ElementId::new(1), dynamic.clone());
         match err {
             CoreError::RebuildFailed { reason, .. } => {
                 assert_eq!(reason.as_ref(), &dynamic);
@@ -427,7 +434,8 @@ mod tests {
 
     #[test]
     fn test_layout_failed() {
-        let err = CoreError::layout_failed(1, "width constraint violated");
+        use crate::ElementId;
+        let err = CoreError::layout_failed(ElementId::new(1), "width constraint violated");
         let msg = err.to_string();
         assert!(msg.contains("Layout failed"));
         assert!(msg.contains("width constraint violated"));
@@ -435,7 +443,8 @@ mod tests {
 
     #[test]
     fn test_paint_failed() {
-        let err = CoreError::paint_failed(1, "shader compilation failed");
+        use crate::ElementId;
+        let err = CoreError::paint_failed(ElementId::new(1), "shader compilation failed");
         let msg = err.to_string();
         assert!(msg.contains("Paint failed"));
         assert!(msg.contains("shader compilation failed"));
