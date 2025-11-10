@@ -46,9 +46,8 @@ pub use display_list::{
     StrokeJoin,
 };
 
-/// Prelude module for convenient imports
 pub mod prelude {
-    //! Common painting types and utilities for FLUI applications.
+    //! Prelude module for convenient imports of common painting types and utilities.
 
     pub use crate::canvas::Canvas;
     pub use crate::display_list::{

@@ -360,7 +360,7 @@ impl Default for Paint {
 }
 
 /// Builder for Paint
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PaintBuilder {
     paint: Paint,
 }
@@ -420,13 +420,6 @@ impl PaintBuilder {
     }
 }
 
-impl Default for PaintBuilder {
-    fn default() -> Self {
-        Self {
-            paint: Paint::default(),
-        }
-    }
-}
 
 /// Paint style (fill or stroke)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

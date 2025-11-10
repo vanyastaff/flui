@@ -109,7 +109,7 @@ impl Canvas {
     /// ```
     pub fn translate(&mut self, dx: f32, dy: f32) {
         let translation = Matrix4::translation(dx, dy, 0.0);
-        self.transform = self.transform * translation;
+        self.transform *= translation;
     }
 
     /// Scales the coordinate system
@@ -121,7 +121,7 @@ impl Canvas {
     pub fn scale(&mut self, sx: f32, sy: Option<f32>) {
         let sy = sy.unwrap_or(sx);
         let scaling = Matrix4::scaling(sx, sy, 1.0);
-        self.transform = self.transform * scaling;
+        self.transform *= scaling;
     }
 
     /// Rotates the coordinate system
@@ -131,7 +131,7 @@ impl Canvas {
     /// * `radians` - Rotation angle in radians
     pub fn rotate(&mut self, radians: f32) {
         let rotation = Matrix4::rotation_z(radians);
-        self.transform = self.transform * rotation;
+        self.transform *= rotation;
     }
 
     /// Sets the transform matrix directly
@@ -209,7 +209,7 @@ impl Canvas {
 
     /// Clips to an arbitrary path
     pub fn clip_path(&mut self, path: &Path) {
-        self.clip_stack.push(ClipOp::Path(path.clone()));
+        self.clip_stack.push(ClipOp::Path(Box::new(path.clone())));
         self.display_list.push(DrawCommand::ClipPath {
             path: path.clone(),
             transform: self.transform,
@@ -449,7 +449,7 @@ struct CanvasState {
 enum ClipOp {
     Rect(Rect),
     RRect(RRect),
-    Path(Path),
+    Path(Box<Path>),
 }
 
 #[cfg(test)]
