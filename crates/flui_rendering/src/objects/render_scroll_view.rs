@@ -289,7 +289,7 @@ impl Render for RenderScrollView {
         self.viewport_size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
@@ -306,33 +306,26 @@ impl Render for RenderScrollView {
             self.content_size
         );
 
+        // Create canvas with clipping
+        let mut canvas = flui_painting::Canvas::new();
+
+        // Apply viewport clipping
+        let clip_rect = Rect::from_min_size(offset, self.viewport_size);
+        canvas.save();
+        canvas.clip_rect(clip_rect);
+
         // Paint child with scroll offset applied
-        let child_layer = tree.paint_child(child_id, child_offset);
+        let child_canvas = tree.paint_child(child_id, child_offset);
+        canvas.append_canvas(child_canvas);
 
-        // Wrap in ClipRectLayer for viewport clipping
-        // Note: clip_rect is in local coordinates (0,0) since child_layer is already painted at correct offset
-        let clip_rect = Rect::from_min_size(Offset::ZERO, self.viewport_size);
-        let mut clip_layer = ClipRectLayer::new(clip_rect);
+        canvas.restore();
 
-        // Create scrollable layer with event handler (bounds in world coordinates for hit testing)
-        let bounds = Rect::from_min_size(offset, self.viewport_size);
-        let on_scroll = self.create_scroll_handler();
-        clip_layer.add_child(Box::new(ScrollableLayer::new(
-            child_layer,
-            bounds,
-            on_scroll,
-        )));
+        // TODO: Integrate scrollbar painting via Canvas API
+        // TODO: Integrate ScrollableLayer event handling (needs event system refactor)
+        // For now, scrolling events will need to be handled differently
+        // The old ScrollableLayer approach doesn't work with Canvas-only architecture
 
-        // Add scroll bar if needed
-        if let Some(scrollbar_layer) = self.paint_scrollbar(offset) {
-            use flui_engine::layer::ContainerLayer;
-            let mut container = ContainerLayer::new();
-            container.add_child(Box::new(clip_layer));
-            container.add_child(scrollbar_layer);
-            Box::new(container)
-        } else {
-            Box::new(clip_layer)
-        }
+        canvas
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

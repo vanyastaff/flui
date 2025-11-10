@@ -1,10 +1,9 @@
 //! RenderRotatedBox - rotates child_id by quarter turns (90°, 180°, 270°)
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_engine::{BoxedLayer, TransformLayer};
+use flui_painting::Canvas;
 use flui_types::constraints::BoxConstraints;
-use flui_types::{geometry::QuarterTurns, Offset, Size};
+use flui_types::{geometry::QuarterTurns, Matrix4, Offset, Size};
 
 /// RenderObject that rotates its child_id by quarter turns
 ///
@@ -99,37 +98,41 @@ impl Render for RenderRotatedBox {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Calculate rotation offset based on quarter turns
-        // Note: For now, this is a simplified implementation
-        // TODO: Implement proper rotation transformation
-        let rotation_offset = match self.quarter_turns {
-            QuarterTurns::Zero => Offset::new(0.0, 0.0),
-            QuarterTurns::One => {
-                // 90° clockwise: child_id's top-left becomes our top-right
-                Offset::new(self.size.width, 0.0)
-            }
-            QuarterTurns::Two => {
-                // 180°: child_id's top-left becomes our bottom-right
-                Offset::new(self.size.width, self.size.height)
-            }
-            QuarterTurns::Three => {
-                // 270° clockwise: child_id's top-left becomes our bottom-left
-                Offset::new(0.0, self.size.height)
-            }
+
+        // If no rotation, just paint child directly
+        if self.quarter_turns == QuarterTurns::Zero {
+            return tree.paint_child(child_id, offset);
+        }
+
+        // Create canvas with rotation transform
+        let mut canvas = Canvas::new();
+
+        // Save canvas state
+        canvas.save();
+
+        // Move to rotation origin (our top-left)
+        canvas.translate(offset.dx, offset.dy);
+
+        // Apply rotation transform
+        let angle_radians = self.quarter_turns.radians();
+        canvas.rotate(angle_radians);
+
+        // Calculate child offset in rotated space
+        let child_offset = match self.quarter_turns {
+            QuarterTurns::Zero => Offset::ZERO,
+            QuarterTurns::One => Offset::new(0.0, -self.size.width),  // 90° CW
+            QuarterTurns::Two => Offset::new(-self.size.width, -self.size.height),  // 180°
+            QuarterTurns::Three => Offset::new(-self.size.height, 0.0),  // 270° CW
         };
 
-        // Combine parent offset with rotation offset
-        let combined_offset = offset + rotation_offset;
+        // Paint child with rotated offset
+        let child_canvas = tree.paint_child(child_id, child_offset);
+        canvas.append_canvas(child_canvas);
 
-        // Capture child_id layer and apply combined offset transform
-        // TODO: Add actual rotation transformation when available
-        let child_layer = tree.paint_child(child_id, combined_offset);
+        // Restore canvas state
+        canvas.restore();
 
-        if rotation_offset != Offset::ZERO {
-            Box::new(TransformLayer::translate(child_layer, combined_offset))
-        } else {
-            child_layer
-        }
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

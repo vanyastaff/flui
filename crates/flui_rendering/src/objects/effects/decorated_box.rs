@@ -1,6 +1,8 @@
 //! RenderDecoratedBox - paints decoration around a child
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
+use flui_engine::BoxedLayer;
 
 use flui_engine::{layer::pool, Paint};
 use flui_types::{

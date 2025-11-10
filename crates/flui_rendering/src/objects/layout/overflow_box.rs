@@ -1,8 +1,7 @@
 //! RenderOverflowBox - allows child_id to overflow constraints
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_engine::{BoxedLayer, TransformLayer};
+use flui_painting::Canvas;
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Offset, Size};
 
@@ -137,7 +136,6 @@ impl Render for RenderOverflowBox {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate aligned offset
         let available_width = self.container_size.width - self.child_size.width;
@@ -146,10 +144,10 @@ impl Render for RenderOverflowBox {
         let aligned_x = (available_width * (self.alignment.x + 1.0)) / 2.0;
         let aligned_y = (available_height * (self.alignment.y + 1.0)) / 2.0;
 
-        let offset = Offset::new(aligned_x, aligned_y);
+        let child_offset = offset + Offset::new(aligned_x, aligned_y);
 
-        // Use TransformLayer to position child_id at aligned offset
-        Box::new(TransformLayer::translate(child_layer, offset))
+        // Paint child at aligned offset
+        tree.paint_child(child_id, child_offset)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

@@ -1,6 +1,7 @@
 //! RenderOffstage - hides widget from display
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 
 use flui_engine::{layer::pool};
 use flui_types::Size;
@@ -71,8 +72,8 @@ impl Render for RenderOffstage {
         if !self.offstage {
             tree.paint_child(child_id, offset)
         } else {
-            // Return empty container layer when offstage
-            Box::new(pool::acquire_container())
+            // Return empty canvas when offstage
+            Canvas::new()
         }
     }
     fn as_any(&self) -> &dyn std::any::Any {

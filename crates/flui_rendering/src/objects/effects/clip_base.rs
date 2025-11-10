@@ -5,7 +5,7 @@
 //!
 //! # Design
 //!
-//! - `ClipShape` trait: defines how to create a clip layer for a specific shape
+//! - `ClipShape` trait: defines how to apply clipping to a canvas
 //! - `RenderClip<S>`: generic RenderObject that uses any ClipShape
 //! - Each clip type becomes a thin wrapper with a ClipShape implementation
 //!
@@ -17,11 +17,9 @@
 //! pub struct RectShape;
 //!
 //! impl ClipShape for RectShape {
-//!     fn create_clip_layer(&self, child_layer: BoxedLayer, size: Size) -> BoxedLayer {
+//!     fn apply_clip(&self, canvas: &mut Canvas, size: Size) {
 //!         let rect = Rect::from_origin_size(Offset::ZERO, size);
-//!         let mut clip_layer = ClipRectLayer::new(rect);
-//!         clip_layer.add_child(child_layer);
-//!         Box::new(clip_layer)
+//!         canvas.clip_rect(rect);
 //!     }
 //! }
 //!
@@ -35,20 +33,16 @@ use flui_types::{painting::Clip, Size};
 
 /// Trait for defining clip shapes
 ///
-/// Implement this trait to define how a specific shape creates its clip layer.
+/// Implement this trait to define how a specific shape applies clipping to a canvas.
 /// The generic `RenderClip<S>` handles all the common clipping logic.
 pub trait ClipShape: std::fmt::Debug + Send + Sync {
-    /// Create a clip layer for this shape
+    /// Apply clipping to the canvas for this shape
     ///
     /// # Parameters
     ///
-    /// - `child_layer`: The child_id layer to be clipped
+    /// - `canvas`: The canvas to apply clipping to
     /// - `size`: The size of the render object (from layout)
-    ///
-    /// # Returns
-    ///
-    /// A boxed layer that clips the child_id to this shape
-    fn create_clip_layer(&self, child_layer: BoxedLayer, size: Size) -> BoxedLayer;
+    fn apply_clip(&self, canvas: &mut Canvas, size: Size);
 }
 
 /// Generic clip RenderObject
@@ -135,21 +129,29 @@ impl<S: ClipShape + 'static> Render for RenderClip<S> {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // If no clipping needed, just return child_id layer
+
+        // If no clipping needed, just return child canvas directly
         if !self.clip_behavior.clips() {
             return tree.paint_child(child_id, offset);
         }
 
-        // Get child_id layer (already painted at correct offset)
-        let child_layer = tree.paint_child(child_id, offset);
+        // Create canvas and apply clipping
+        let mut canvas = Canvas::new();
 
-        // Use cached size from layout phase
-        // Note: Clip rect is at (0,0) in child's local coordinate space,
-        // since child_layer has already been painted at the correct offset
-        let size = self.size;
+        // Save canvas state before clipping
+        canvas.save();
 
-        // Let the shape create its specific clip layer
-        self.shape.create_clip_layer(child_layer, size)
+        // Let the shape apply its specific clipping
+        self.shape.apply_clip(&mut canvas, self.size);
+
+        // Paint child with clipping applied
+        let child_canvas = tree.paint_child(child_id, offset);
+        canvas.append_canvas(child_canvas);
+
+        // Restore canvas state
+        canvas.restore();
+
+        canvas
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -164,18 +166,17 @@ impl<S: ClipShape + 'static> Render for RenderClip<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_engine::ContainerLayer;
+    use flui_types::Rect;
 
     // Test shape implementation
     #[derive(Debug)]
     struct TestShape;
 
     impl ClipShape for TestShape {
-        fn create_clip_layer(&self, child_layer: BoxedLayer, _size: Size) -> BoxedLayer {
-            // Just wrap in a container for testing
-            let mut container = ContainerLayer::new();
-            container.add_child(child_layer);
-            Box::new(container)
+        fn apply_clip(&self, canvas: &mut Canvas, size: Size) {
+            // Apply a simple rectangular clip for testing
+            let rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+            canvas.clip_rect(rect);
         }
     }
 

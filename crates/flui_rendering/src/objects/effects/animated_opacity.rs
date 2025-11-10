@@ -1,8 +1,9 @@
 //! RenderAnimatedOpacity - animated opacity transitions
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 
-use flui_engine::{, OpacityLayer};
+use flui_engine::OpacityLayer;
 use flui_types::Size;
 
 /// RenderObject that applies animated opacity to its child
@@ -80,25 +81,23 @@ impl Render for RenderAnimatedOpacity {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
+
         // Skip painting if fully transparent
         if self.opacity <= 0.0 {
-            // Return empty layer - use pool for efficiency even in error case
-            return Box::new(OpacityLayer::new(
-                Box::new(flui_engine::layer::pool::acquire_container()),
-                0.0,
-            ));
+            return Canvas::new();
         }
 
-        // Capture child layer
-        let child_layer = tree.paint_child(child_id, offset);
+        // Paint child
+        let child_canvas = tree.paint_child(child_id, offset);
 
-        // Paint child directly if fully opaque
-        if self.opacity >= 1.0 {
-            return child_layer;
-        }
-
-        // Wrap in OpacityLayer for partial opacity
-        Box::new(OpacityLayer::new(child_layer, self.opacity))
+        // TODO: Implement Canvas opacity support
+        // For now, we just return the child canvas directly
+        // Proper implementation would apply opacity to all drawing commands
+        // This requires either:
+        // 1. Adding saveLayer() support to Canvas
+        // 2. Adding opacity field to DisplayList
+        // 3. Converting Canvas to PictureLayer and wrapping in OpacityLayer
+        child_canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

@@ -1,8 +1,9 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 
-use flui_engine::{, Paint, PictureLayer};
+use flui_engine::{Paint, PictureLayer};
 use flui_types::{Color, Size};
 
 /// Shape for physical model

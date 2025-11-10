@@ -1,8 +1,7 @@
 //! RenderBaseline - aligns child based on baseline
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_engine::{BoxedLayer, TransformLayer};
+use flui_painting::Canvas;
 use flui_types::{typography::TextBaseline, Offset, Size};
 
 /// RenderObject that positions child based on baseline
@@ -80,12 +79,10 @@ impl Render for RenderBaseline {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Capture child layer with baseline offset
-        let child_layer = tree.paint_child(child_id, offset);
 
-        // Apply baseline offset using TransformLayer
-        let offset = Offset::new(0.0, self.baseline);
-        Box::new(TransformLayer::translate(child_layer, offset))
+        // Apply baseline offset to child painting position
+        let child_offset = offset + Offset::new(0.0, self.baseline);
+        tree.paint_child(child_id, child_offset)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

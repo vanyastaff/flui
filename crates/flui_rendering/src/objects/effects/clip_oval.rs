@@ -1,7 +1,7 @@
 //! RenderClipOval - clips child to an oval shape
 
 use flui_painting::Canvas;
-use flui_types::{painting::Clip, Size};
+use flui_types::{painting::{Clip, Path}, Rect, Size};
 
 use super::clip_base::{ClipShape, RenderClip};
 
@@ -10,15 +10,12 @@ use super::clip_base::{ClipShape, RenderClip};
 pub struct OvalShape;
 
 impl ClipShape for OvalShape {
-    fn create_clip_layer(&self, child_layer: BoxedLayer, size: Size) -> BoxedLayer {
-        use flui_engine::ClipOvalLayer;
-        use flui_types::Rect;
-
-        // Create oval clip layer with bounding rect
+    fn apply_clip(&self, canvas: &mut Canvas, size: Size) {
+        // Create oval clip using a path
         let clip_rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
-        let mut clip_layer = ClipOvalLayer::new(clip_rect);
-        clip_layer.add_child(child_layer);
-        Box::new(clip_layer)
+        let mut path = Path::new();
+        path.add_oval(clip_rect);
+        canvas.clip_path(&path);
     }
 }
 

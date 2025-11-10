@@ -214,17 +214,19 @@ impl Render for RenderWrap {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
         let offset = ctx.offset;
-        let mut container = pool::acquire_container();
+
+        // Create canvas for all children
+        let mut canvas = Canvas::new();
 
         for (i, &child_id) in child_ids.iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
 
-            // Paint child with combined offset
-            let child_layer = tree.paint_child(child_id, offset + child_offset);
-            container.add_child(child_layer);
+            // Paint child and append to canvas
+            let child_canvas = tree.paint_child(child_id, offset + child_offset);
+            canvas.append_canvas(child_canvas);
         }
 
-        Box::new(container)
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

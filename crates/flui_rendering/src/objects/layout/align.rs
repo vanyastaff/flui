@@ -157,15 +157,9 @@ impl Render for RenderAlign {
 
         let local_child_offset = Offset::new(aligned_x, aligned_y);
 
-        // Paint child at aligned position
-        let child_layer = tree.paint_child(child_id, local_child_offset);
-
-        // Apply parent offset if non-zero
-        if offset != Offset::ZERO {
-            Box::new(flui_engine::TransformLayer::translate(child_layer, offset))
-        } else {
-            child_layer
-        }
+        // Paint child at aligned position (combine parent offset with local offset)
+        let child_offset = offset + local_child_offset;
+        tree.paint_child(child_id, child_offset)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

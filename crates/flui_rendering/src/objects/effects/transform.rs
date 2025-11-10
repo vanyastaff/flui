@@ -92,10 +92,14 @@ impl Render for RenderTransform {
                 canvas.scale(scale, None);
                 canvas.translate(-self.alignment.dx, -self.alignment.dy);
             }
-            Transform::ScaleXY(sx, sy) => {
+            Transform::ScaleXY { sx, sy } => {
                 canvas.translate(self.alignment.dx, self.alignment.dy);
                 canvas.scale(sx, Some(sy));
                 canvas.translate(-self.alignment.dx, -self.alignment.dy);
+            }
+            _ => {
+                // TODO: Handle other transform types (Skew, Matrix)
+                // For now, just pass through without transform
             }
         }
 

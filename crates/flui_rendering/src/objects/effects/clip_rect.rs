@@ -10,13 +10,9 @@ use super::clip_base::{ClipShape, RenderClip};
 pub struct RectShape;
 
 impl ClipShape for RectShape {
-    fn create_clip_layer(&self, child_layer: BoxedLayer, size: Size) -> BoxedLayer {
+    fn apply_clip(&self, canvas: &mut Canvas, size: Size) {
         let clip_rect = Rect::from_xywh(0.0, 0.0, size.width, size.height);
-        // Use pool for allocation efficiency
-        let mut clip_layer = flui_engine::layer::pool::acquire_clip_rect();
-        clip_layer.set_clip_shape(clip_rect);
-        clip_layer.add_child(child_layer);
-        Box::new(clip_layer)
+        canvas.clip_rect(clip_rect);
     }
 }
 

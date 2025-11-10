@@ -110,7 +110,7 @@ impl Render for RenderViewport {
         self.viewport_size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
@@ -126,18 +126,25 @@ impl Render for RenderViewport {
             child_offset
         );
 
-        // Paint child
-        let child_layer = tree.paint_child(child_id, child_offset);
+        // Create canvas and apply clipping if needed
+        let mut canvas = flui_painting::Canvas::new();
 
-        // Wrap in clip layer if clipping enabled
         if self.clip {
-            let clip_rect = Rect::from_min_size(Offset::ZERO, self.viewport_size);
-            let mut clip_layer = ClipRectLayer::new(clip_rect);
-            clip_layer.add_child(child_layer);
-            Box::new(clip_layer)
-        } else {
-            child_layer
+            // Apply clipping to viewport bounds
+            let clip_rect = Rect::from_min_size(offset, self.viewport_size);
+            canvas.save();
+            canvas.clip_rect(clip_rect);
         }
+
+        // Paint child
+        let child_canvas = tree.paint_child(child_id, child_offset);
+        canvas.append_canvas(child_canvas);
+
+        if self.clip {
+            canvas.restore();
+        }
+
+        canvas
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

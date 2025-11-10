@@ -4,8 +4,9 @@
 //! calling the appropriate callbacks when events occur.
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_painting::Canvas;
 
-use flui_engine::{, PointerListenerLayer};
+use flui_engine::PointerListenerLayer;
 use flui_types::events::{PointerEvent, PointerEventHandler};
 use flui_types::{Rect, Size};
 use std::sync::Arc;

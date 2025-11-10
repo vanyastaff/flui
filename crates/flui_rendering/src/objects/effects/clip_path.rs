@@ -54,19 +54,13 @@ impl PathShape {
 }
 
 impl ClipShape for PathShape {
-    fn create_clip_layer(&self, child_layer: BoxedLayer, size: Size) -> BoxedLayer {
-        use flui_engine::ClipPathLayer;
-
-        // Get clip path from clipper if available
+    fn apply_clip(&self, canvas: &mut Canvas, size: Size) {
+        // Apply clip path from clipper if available
         if let Some(clipper) = &self.clipper {
             let clip_path = clipper.get_clip(size);
-            let mut clip_layer = ClipPathLayer::new(clip_path);
-            clip_layer.add_child(child_layer);
-            Box::new(clip_layer)
-        } else {
-            // No clipper set - just return child layer without clipping
-            child_layer
+            canvas.clip_path(&clip_path);
         }
+        // If no clipper set, no clipping is applied
     }
 }
 

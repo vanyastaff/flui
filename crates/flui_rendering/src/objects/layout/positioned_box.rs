@@ -1,8 +1,7 @@
 //! RenderPositionedBox - positions child_id with explicit coordinates
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_engine::{BoxedLayer, TransformLayer};
+use flui_painting::Canvas;
 use flui_types::{Offset, Size};
 
 /// RenderObject that positions child_id with explicit coordinates
@@ -123,13 +122,13 @@ impl Render for RenderPositionedBox {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        let child_layer = tree.paint_child(child_id, offset);
 
         // Calculate paint offset based on positioning
-        let offset = Offset::new(self.left.unwrap_or(0.0), self.top.unwrap_or(0.0));
+        let position_offset = Offset::new(self.left.unwrap_or(0.0), self.top.unwrap_or(0.0));
+        let child_offset = offset + position_offset;
 
-        // Use TransformLayer to position child_id
-        Box::new(TransformLayer::translate(child_layer, offset))
+        // Paint child at positioned offset
+        tree.paint_child(child_id, child_offset)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

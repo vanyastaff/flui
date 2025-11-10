@@ -3,8 +3,7 @@
 //! More advanced than RenderOffstage, supports maintaining size, state, and other properties.
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_engine::{layer::pool};
+use flui_painting::Canvas;
 use flui_types::Size;
 
 /// RenderObject that controls visibility with fine-grained options
@@ -130,8 +129,8 @@ impl Render for RenderVisibility {
         if self.visible {
             tree.paint_child(child_id, offset)
         } else {
-            // Return empty container layer when not visible
-            Box::new(pool::acquire_container())
+            // Return empty canvas when not visible
+            Canvas::new()
         }
     }
 
