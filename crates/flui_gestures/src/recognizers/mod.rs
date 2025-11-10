@@ -3,8 +3,10 @@
 //! Recognizers analyze pointer event streams and detect specific gestures.
 
 pub mod drag;
+pub mod long_press;
 pub mod recognizer;
 pub mod tap;
+
 
 
 pub use recognizer::{
@@ -12,5 +14,7 @@ pub use recognizer::{
 };
 pub use tap::TapGestureRecognizer;
 pub use drag::DragGestureRecognizer;
+pub use long_press::LongPressGestureRecognizer;
+
 
 
