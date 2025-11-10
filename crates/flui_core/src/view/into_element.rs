@@ -1,12 +1,8 @@
-//! IntoElement trait - universal interface for element conversion
+//! Universal interface for element conversion.
 //!
-//! This module provides the `IntoElement` trait, which serves as the
-//! universal interface for converting any type into an `Element`.
+//! Provides the `IntoElement` trait for converting any type into an `Element`.
 //!
-//! # Philosophy
-//!
-//! Similar to GPUI's `IntoElement` and Xilem's element conversion,
-//! this trait unifies all widget types under a single interface.
+//! Similar to GPUI's `IntoElement` and Xilem's element conversion protocols.
 //!
 //! # Design
 //!
@@ -72,16 +68,14 @@ pub(crate) mod sealed_into_element {
     impl<R: crate::render::Render> Sealed for (R, Vec<super::AnyElement>) {}
 }
 
-/// IntoElement trait - converts types into Elements
+/// Universal interface for converting types into Elements.
 ///
-/// IntoElement is the universal interface for converting any type into an Element.
-/// This trait enables FLUI's flexible composition system where Views, RenderObjects,
-/// and various helper types can all be used interchangeably.
+/// Enables FLUI's flexible composition system where Views, RenderObjects,
+/// and various helper types can be used interchangeably.
 ///
 /// # Purpose
 ///
-/// IntoElement serves as the bridge between the **View tree** (immutable configuration)
-/// and the **Element tree** (mutable state). It enables:
+/// Bridges the View tree (immutable configuration) and Element tree (mutable state):
 ///
 /// 1. Automatic conversion: `View → Element`
 /// 2. Tuple syntax: `(RenderObject, children) → Element`
@@ -90,10 +84,9 @@ pub(crate) mod sealed_into_element {
 ///
 /// # Sealed Trait
 ///
-/// **You cannot implement this trait directly!** It is sealed - only flui-core
-/// can provide implementations.
+/// This trait is sealed. Only flui-core provides implementations.
 ///
-/// Instead:
+/// To use:
 /// - Implement `View` trait for composable widgets
 /// - Use tuple syntax for render objects: `(RenderObject, children)`
 /// - Framework provides `IntoElement` automatically
@@ -161,18 +154,15 @@ pub(crate) mod sealed_into_element {
 ///
 /// For dynamic dispatch, use `Box<dyn AnyView>` or `AnyElement` instead.
 pub trait IntoElement: sealed_into_element::Sealed + Sized + 'static {
-    /// Convert this type into an Element
+    /// Converts this type into an Element.
     ///
-    /// This method is called by the framework to build the element tree.
-    /// It should:
-    /// 1. Convert children recursively
-    /// 2. Insert into element tree if needed
-    /// 3. Return the final Element
+    /// Called by the framework to build the element tree. Converts children
+    /// recursively and returns the final Element.
     ///
-    /// # Implementation Note
+    /// # Implementation
     ///
-    /// Most types don't implement this directly. Instead:
-    /// - Views use the blanket impl (automatic)
+    /// Most types do not implement this directly:
+    /// - Views use the blanket implementation
     /// - Renderers use tuple syntax: `(render, children)`
     ///
     /// # Example
@@ -194,11 +184,10 @@ pub trait IntoElement: sealed_into_element::Sealed + Sized + 'static {
 // Automatic implementations
 // ============================================================================
 
-/// Blanket implementation for all Views
+/// Blanket implementation for all Views.
 ///
-/// This enables any View to be used as `impl IntoElement`.
-///
-/// Uses thread-local BuildContext to call View::build() and convert the result.
+/// Enables any View to be used as `impl IntoElement`. Uses thread-local
+/// BuildContext to call View::build() and convert the result.
 impl<V: crate::view::View> IntoElement for V {
     fn into_element(self) -> Element {
         use crate::view::build_context::current_build_context;
@@ -214,9 +203,10 @@ impl<V: crate::view::View> IntoElement for V {
     }
 }
 
-/// Implementation for Box<dyn AnyView>
+/// Implementation for type-erased views.
 ///
-/// Allows using type-erased views as children:
+/// Enables using `Box<dyn AnyView>` as children:
+///
 /// ```rust,ignore
 /// struct Padding {
 ///     child: Option<Box<dyn AnyView>>,
@@ -228,9 +218,10 @@ impl IntoElement for Box<dyn crate::view::AnyView> {
     }
 }
 
-/// Implementation for Option<T: IntoElement>
+/// Implementation for optional elements.
 ///
-/// Allows optional children:
+/// Enables optional children:
+///
 /// ```rust,ignore
 /// Container::new()
 ///     .child(self.child)  // child: Option<impl IntoElement>
@@ -249,9 +240,9 @@ impl<T: IntoElement> IntoElement for Option<T> {
     }
 }
 
-/// Empty render object - returns zero size and empty layer
+/// Empty render object.
 ///
-/// Used for Option::None and other cases where a placeholder element is needed.
+/// Returns zero size and empty layer. Used for Option::None and placeholder elements.
 #[derive(Debug)]
 struct EmptyRender;
 
@@ -277,10 +268,10 @@ impl crate::render::Render for EmptyRender {
 // Helper types
 // ============================================================================
 
-/// AnyElement - type-erased IntoElement for dynamic dispatch
+/// Type-erased IntoElement for dynamic dispatch.
 ///
-/// Since `IntoElement` is not object-safe, we provide this wrapper
-/// for cases where you need heterogeneous collections.
+/// Since `IntoElement` is not object-safe, this wrapper enables
+/// heterogeneous collections.
 ///
 /// # Example
 ///
@@ -299,14 +290,14 @@ pub struct AnyElement {
 }
 
 impl AnyElement {
-    /// Create from any IntoElement
+    /// Creates from any IntoElement.
     pub fn new(into_element: impl IntoElement) -> Self {
         Self {
             element: into_element.into_element(),
         }
     }
 
-    /// Unwrap into Element
+    /// Unwraps into Element.
     pub fn into_element_inner(self) -> Element {
         self.element
     }
@@ -318,9 +309,9 @@ impl IntoElement for AnyElement {
     }
 }
 
-/// Extension trait for convenient AnyElement creation
+/// Extension trait for convenient AnyElement creation.
 pub trait IntoAnyElement: IntoElement {
-    /// Convert to AnyElement for type erasure
+    /// Converts to AnyElement for type erasure.
     fn into_any(self) -> AnyElement {
         AnyElement::new(self)
     }

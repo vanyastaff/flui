@@ -475,8 +475,8 @@ mod tests {
     fn test_dirty_set_basic() {
         let set = LockFreeDirtySet::new(1000);
 
-        let id1: ElementId = 1;
-        let id2: ElementId = 100;
+        let id1 = ElementId::new(1);
+        let id2 = ElementId::new(100);
 
         // Initially not dirty
         assert!(!set.is_dirty(id1));
@@ -514,7 +514,7 @@ mod tests {
         let set = LockFreeDirtySet::new(100);
 
         // Should silently ignore
-        let id: ElementId = 200;
+        let id = ElementId::new(200);
         set.mark_dirty(id);
         assert!(!set.is_dirty(id));
     }
@@ -529,7 +529,7 @@ mod tests {
             let set = Arc::clone(&set);
             let handle = thread::spawn(move || {
                 for i in 0..1000 {
-                    let id: ElementId = thread_id * 1000 + i + 1;
+                    let id = ElementId::new(thread_id * 1000 + i + 1);
                     set.mark_dirty(id);
                 }
             });
@@ -551,7 +551,7 @@ mod tests {
         let set1 = Arc::clone(&set);
         let marker = thread::spawn(move || {
             for i in 0..100 {
-                let id: ElementId = i + 1;
+                let id = ElementId::new(i + 1);
                 set1.mark_dirty(id);
                 thread::yield_now();
             }
@@ -560,7 +560,7 @@ mod tests {
         let set2 = Arc::clone(&set);
         let clearer = thread::spawn(move || {
             for i in 0..100 {
-                let id: ElementId = i + 1;
+                let id = ElementId::new(i + 1);
                 set2.clear_dirty(id);
                 thread::yield_now();
             }
@@ -581,7 +581,7 @@ mod tests {
         let edges = [1, 64, 65, 128, 129];
 
         for &idx in &edges {
-            let id: ElementId = idx;
+            let id = ElementId::new(idx);
             set.mark_dirty(id);
             assert!(set.is_dirty(id));
         }
@@ -595,7 +595,7 @@ mod tests {
 
         // Mark in random order
         for &idx in &[50, 10, 100, 5, 200] {
-            set.mark_dirty(idx);
+            set.mark_dirty(ElementId::new(idx));
         }
 
         let dirty = set.collect_dirty();
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn test_rapid_mark_unmark() {
         let set = LockFreeDirtySet::new(100);
-        let id: ElementId = 50;
+        let id = ElementId::new(50);
 
         // Rapidly toggle
         for _ in 0..1000 {

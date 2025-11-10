@@ -384,6 +384,7 @@ mod tests {
 
     #[test]
     fn test_is_descendant() {
+        use crate::ElementId;
         let tree = create_test_tree();
         let tree_guard = tree.read();
 
@@ -391,11 +392,11 @@ mod tests {
         //       1 → 3 → 5
         // IDs: 0, 1, 2, 3, 4
 
-        let id1 = 0;
-        let id2 = 1;
-        let id3 = 3;
-        let id4 = 2;
-        let id5 = 4;
+        let id1 = ElementId::new(0);
+        let id2 = ElementId::new(1);
+        let id3 = ElementId::new(3);
+        let id4 = ElementId::new(2);
+        let id5 = ElementId::new(4);
 
         // id4 is descendant of id2 and id1
         assert!(is_descendant(&tree_guard, id4, id2));
@@ -414,10 +415,15 @@ mod tests {
 
     #[test]
     fn test_partition_subtrees_single() {
+        use crate::ElementId;
         let tree = create_test_tree();
 
         // All elements in one subtree (from root)
-        let dirty = vec![(0, 0), (1, 1), (2, 2)];
+        let dirty = vec![
+            (ElementId::new(0), 0),
+            (ElementId::new(1), 1),
+            (ElementId::new(2), 2),
+        ];
 
         let subtrees = partition_subtrees(&dirty, &tree);
 
@@ -427,10 +433,16 @@ mod tests {
 
     #[test]
     fn test_partition_subtrees_independent() {
+        use crate::ElementId;
         let tree = create_test_tree();
 
         // Two independent subtrees
-        let dirty = vec![(1, 1), (2, 2), (3, 1), (4, 2)];
+        let dirty = vec![
+            (ElementId::new(1), 1),
+            (ElementId::new(2), 2),
+            (ElementId::new(3), 1),
+            (ElementId::new(4), 2),
+        ];
 
         let subtrees = partition_subtrees(&dirty, &tree);
 
@@ -440,9 +452,14 @@ mod tests {
 
     #[test]
     fn test_rebuild_sequential() {
+        use crate::ElementId;
         let tree = create_test_tree();
 
-        let dirty = vec![(0, 0), (1, 1), (2, 2)];
+        let dirty = vec![
+            (ElementId::new(0), 0),
+            (ElementId::new(1), 1),
+            (ElementId::new(2), 2),
+        ];
 
         let count = rebuild_sequential(&tree, dirty);
 
