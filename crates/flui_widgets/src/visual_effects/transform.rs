@@ -320,7 +320,7 @@ impl View for Transform {
             ty: m[13],
         };
 
-        RenderBuilder::single(RenderTransform::new(transform)).with_optional_child(self.child)
+        RenderBuilder::new(RenderTransform::new(transform)).maybe_child(self.child)
     }
 }
 

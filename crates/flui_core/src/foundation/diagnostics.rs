@@ -951,7 +951,7 @@ mod tests {
         let mut child = DiagnosticsNode::new("Child");
         child.add_property(DiagnosticsProperty::new("name", "test"));
 
-        parent.add_child(child);
+        parent.child(child);
 
         assert_eq!(parent.children().len(), 1);
         assert!(parent.has_children());
@@ -990,7 +990,7 @@ mod tests {
 
         let mut child = DiagnosticsNode::new("Child");
         child.add_property(DiagnosticsProperty::new("name", "test"));
-        root.add_child(child);
+        root.child(child);
 
         let output = root.format_deep(0);
         assert!(output.contains("Root"));

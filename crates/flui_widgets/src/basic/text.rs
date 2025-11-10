@@ -317,7 +317,7 @@ impl View for Text {
         data.soft_wrap = self.soft_wrap;
 
         // Create and return RenderParagraph via LeafRenderBuilder
-        RenderBuilder::leaf(RenderParagraph::new(data))
+        RenderBuilder::new(RenderParagraph::new(data))
     }
 }
 

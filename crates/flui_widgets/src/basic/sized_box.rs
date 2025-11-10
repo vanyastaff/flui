@@ -39,8 +39,8 @@
 use bon::Builder;
 use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
-use flui_rendering::{RenderConstrainedBox, RenderPadding};
-use flui_types::{BoxConstraints, EdgeInsets};
+use flui_rendering::RenderConstrainedBox;
+use flui_types::BoxConstraints;
 
 /// A box with a specified size.
 ///
@@ -407,7 +407,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
@@ -645,8 +645,8 @@ mod tests {
 impl View for SizedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let constraints = BoxConstraints::tight_for(self.width, self.height);
-        RenderBuilder::single(RenderConstrainedBox::new(constraints))
-            .with_optional_child(self.child)
+        RenderBuilder::new(RenderConstrainedBox::new(constraints))
+            .maybe_child(self.child)
     }
 }
 

@@ -39,7 +39,7 @@ impl View for SimplePadding {
         SingleRenderBuilder::new(MockPaddingRender {
             padding: self.padding,
         })
-        .with_child(self.child)
+        .child(self.child)
 
         // OPTION 2: Using tuple syntax (more concise)
         // (MockPaddingRender { padding: self.padding }, self.child)
@@ -164,7 +164,7 @@ fn main() {
     println!("  impl View for Padding {{");
     println!("      fn build(self, ctx: &BuildContext) -> impl IntoElement {{");
     println!("          SingleRenderBuilder::new(RenderPadding::new(self.padding))");
-    println!("              .with_child(self.child)");
+    println!("              .child(self.child)");
     println!("      }}");
     println!("  }}");
     println!();

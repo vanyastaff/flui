@@ -634,7 +634,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

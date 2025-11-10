@@ -209,11 +209,11 @@ impl FractionallySizedBox {
 // Implement View for FractionallySizedBox - Simplified API
 impl View for FractionallySizedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderFractionallySizedBox::new(
+        RenderBuilder::new(RenderFractionallySizedBox::new(
             self.width_factor,
             self.height_factor,
         ))
-        .with_optional_child(self.child)
+        .maybe_child(self.child)
     }
 }
 
@@ -261,7 +261,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

@@ -414,7 +414,7 @@ impl View for Positioned {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let metadata = self.create_metadata();
 
-        RenderBuilder::single(RenderPositioned::new(metadata)).with_optional_child(self.child)
+        RenderBuilder::new(RenderPositioned::new(metadata)).maybe_child(self.child)
     }
 }
 

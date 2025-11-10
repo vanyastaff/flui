@@ -266,6 +266,6 @@ impl View for SingleChildScrollView {
         render.set_show_scrollbar(self.show_scrollbar);
         render.set_scrollbar_thickness(self.scrollbar_thickness);
 
-        RenderBuilder::single(render).with_child(child)
+        RenderBuilder::new(render).child(child)
     }
 }

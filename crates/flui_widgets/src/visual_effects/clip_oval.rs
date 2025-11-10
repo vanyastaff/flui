@@ -165,8 +165,8 @@ impl Default for ClipOval {
 // Implement View for ClipOval - New architecture
 impl View for ClipOval {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderClipOval::with_clip(self.clip_behavior))
-            .with_optional_child(self.child)
+        RenderBuilder::new(RenderClipOval::with_clip(self.clip_behavior))
+            .maybe_child(self.child)
     }
 }
 
@@ -203,7 +203,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

@@ -8,7 +8,7 @@
 //!
 //! ```rust,ignore
 //! let mut container = ContainerLayer::new();
-//! container.add_child(Box::new(some_content));
+//! container.child(Box::new(some_content));
 //!
 //! let offset_layer = OffsetLayer::new(Box::new(container))
 //!     .with_offset(Offset::new(100.0, 50.0));

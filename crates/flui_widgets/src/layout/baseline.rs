@@ -196,8 +196,8 @@ impl View for Baseline {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let baseline = self.baseline.unwrap_or(0.0);
 
-        RenderBuilder::single(RenderBaseline::new(baseline, self.baseline_type))
-            .with_optional_child(self.child)
+        RenderBuilder::new(RenderBaseline::new(baseline, self.baseline_type))
+            .maybe_child(self.child)
     }
 }
 
@@ -252,7 +252,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

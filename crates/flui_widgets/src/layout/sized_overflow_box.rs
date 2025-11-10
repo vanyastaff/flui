@@ -367,7 +367,7 @@ impl View for SizedOverflowBox {
         };
         render.alignment = self.alignment;
 
-        RenderBuilder::single(render).with_optional_child(self.child)
+        RenderBuilder::new(render).maybe_child(self.child)
     }
 }
 

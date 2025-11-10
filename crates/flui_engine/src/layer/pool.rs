@@ -24,7 +24,7 @@
 //!
 //! // Acquire from pool (or create new if pool empty)
 //! let mut container = pool::acquire_container();
-//! container.add_child(child_layer);
+//! container.child(child_layer);
 //!
 //! // Return to pool when done
 //! pool::release_container(container);

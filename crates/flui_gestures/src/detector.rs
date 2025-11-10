@@ -138,8 +138,8 @@ impl View for GestureDetector {
         // Return RenderPointerListener with child
         // The RenderPointerListener will create PointerListenerLayer
         // which registers hit test handlers with EventRouter
-        RenderBuilder::single(flui_rendering::objects::RenderPointerListener::new(callbacks))
-            .with_child(self.child)
+        RenderBuilder::new(flui_rendering::objects::RenderPointerListener::new(callbacks))
+            .child(self.child)
     }
 }
 

@@ -153,58 +153,6 @@ impl RenderBuilder {
         self.children = children.into_iter().map(AnyElement::new).collect();
         self
     }
-
-    // ============================================================================
-    // Backward compatibility aliases
-    // ============================================================================
-
-    /// Alias for `new()` - backward compatibility
-    #[deprecated(note = "Use RenderBuilder::new() instead")]
-    pub fn leaf(render: impl Render) -> Self {
-        Self::new(render)
-    }
-
-    /// Alias for `new()` - backward compatibility
-    #[deprecated(note = "Use RenderBuilder::new() instead")]
-    pub fn single(render: impl Render) -> Self {
-        Self::new(render)
-    }
-
-    /// Alias for `new()` - backward compatibility
-    #[deprecated(note = "Use RenderBuilder::new() instead")]
-    pub fn multi(render: impl Render) -> Self {
-        Self::new(render)
-    }
-
-    /// Alias for `child()` - backward compatibility
-    #[deprecated(note = "Use .child() instead")]
-    pub fn with_child(self, child: impl IntoElement) -> Self {
-        self.child(child)
-    }
-
-    /// Alias for `maybe_child()` - backward compatibility
-    #[deprecated(note = "Use .maybe_child() instead")]
-    pub fn with_optional_child(self, child: Option<impl IntoElement>) -> Self {
-        self.maybe_child(child)
-    }
-
-    /// Alias for `children()` - backward compatibility
-    #[deprecated(note = "Use .children() instead")]
-    pub fn with_children(self, children: Vec<impl IntoElement>) -> Self {
-        self.children(children)
-    }
-
-    /// Alias for `child()` - backward compatibility
-    #[deprecated(note = "Use .child() instead")]
-    pub fn add_child(self, child: impl IntoElement) -> Self {
-        self.child(child)
-    }
-
-    /// Alias for `maybe_child()` - backward compatibility
-    #[deprecated(note = "Use .maybe_child() instead")]
-    pub fn add_optional_child(self, child: Option<impl IntoElement>) -> Self {
-        self.maybe_child(child)
-    }
 }
 
 impl IntoElement for RenderBuilder {

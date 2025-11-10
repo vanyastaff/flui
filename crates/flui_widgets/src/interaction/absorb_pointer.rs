@@ -254,7 +254,7 @@ mod tests {
 // Implement View trait
 impl View for AbsorbPointer {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderAbsorbPointer::new(self.absorbing))
-            .with_optional_child(self.child)
+        RenderBuilder::new(RenderAbsorbPointer::new(self.absorbing))
+            .maybe_child(self.child)
     }
 }

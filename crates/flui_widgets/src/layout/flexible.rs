@@ -306,11 +306,11 @@ impl Default for Flexible {
 // Implement View trait - Simplified API
 impl View for Flexible {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderFlexItem::new(FlexItemMetadata {
+        RenderBuilder::new(RenderFlexItem::new(FlexItemMetadata {
             flex: self.flex,
             fit: self.fit,
         }))
-        .with_optional_child(self.child)
+        .maybe_child(self.child)
     }
 }
 

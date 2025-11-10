@@ -87,7 +87,7 @@ use std::any::Any;
 ///         // Or builder syntax:
 ///         // RenderPadding::new(self.padding)
 ///         //     .into_builder()
-///         //     .with_child(self.child)
+///         //     .child(self.child)
 ///     }
 /// }
 /// ```

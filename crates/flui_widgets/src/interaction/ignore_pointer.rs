@@ -254,7 +254,7 @@ mod tests {
 // Implement View trait
 impl View for IgnorePointer {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderIgnorePointer::new(self.ignoring))
-            .with_optional_child(self.child)
+        RenderBuilder::new(RenderIgnorePointer::new(self.ignoring))
+            .maybe_child(self.child)
     }
 }

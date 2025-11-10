@@ -165,7 +165,7 @@ impl<S: State> OffstageBuilder<S> {
 // Implement View trait
 impl View for Offstage {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderOffstage::new(self.offstage)).with_optional_child(self.child)
+        RenderBuilder::new(RenderOffstage::new(self.offstage)).maybe_child(self.child)
     }
 }
 

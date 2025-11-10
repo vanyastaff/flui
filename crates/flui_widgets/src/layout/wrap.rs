@@ -237,7 +237,7 @@ impl View for Wrap {
         render_wrap.run_spacing = self.run_spacing;
         render_wrap.cross_alignment = self.cross_alignment;
 
-        RenderBuilder::multi(render_wrap).with_children(self.children)
+        RenderBuilder::new(render_wrap).children(self.children)
     }
 }
 
@@ -274,7 +274,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
@@ -332,8 +332,8 @@ mod tests {
     #[test]
     fn test_wrap_add_child() {
         let mut wrap = Wrap::default();
-        wrap.add_child(MockView);
-        wrap.add_child(MockView);
+        wrap.child(MockView);
+        wrap.child(MockView);
         assert_eq!(wrap.children.len(), 2);
     }
 

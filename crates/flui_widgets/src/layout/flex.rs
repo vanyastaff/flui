@@ -389,7 +389,7 @@ impl View for Flex {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        RenderBuilder::multi(render_flex).with_children(self.children)
+        RenderBuilder::new(render_flex).children(self.children)
     }
 }
 

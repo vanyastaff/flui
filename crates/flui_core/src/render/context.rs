@@ -282,7 +282,7 @@ impl<'a> PaintContext<'a> {
     /// ```rust,ignore
     /// let child_layers = ctx.paint_all_children(&self.cached_offsets);
     /// for layer in child_layers {
-    ///     container.add_child(layer);
+    ///     container.child(layer);
     /// }
     /// ```
     pub fn paint_all_children(&self, offsets: &[Offset]) -> Vec<BoxedLayer> {

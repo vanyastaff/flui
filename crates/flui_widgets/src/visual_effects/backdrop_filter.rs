@@ -217,7 +217,7 @@ impl View for BackdropFilter {
         let mut render = RenderBackdropFilter::new(self.filter.clone());
         render.blend_mode = self.blend_mode;
 
-        RenderBuilder::single(render).with_optional_child(self.child)
+        RenderBuilder::new(render).maybe_child(self.child)
     }
 }
 

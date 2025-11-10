@@ -138,7 +138,7 @@ impl<S: State> RepaintBoundaryBuilder<S> {
 // Implement View trait
 impl View for RepaintBoundary {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderRepaintBoundary::new()).with_optional_child(self.child)
+        RenderBuilder::new(RenderRepaintBoundary::new()).maybe_child(self.child)
     }
 }
 

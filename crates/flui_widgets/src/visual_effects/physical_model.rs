@@ -242,7 +242,7 @@ impl View for PhysicalModel {
         render.border_radius = self.border_radius;
         render.shadow_color = self.shadow_color;
 
-        RenderBuilder::single(render).with_optional_child(self.child)
+        RenderBuilder::new(render).maybe_child(self.child)
     }
 }
 

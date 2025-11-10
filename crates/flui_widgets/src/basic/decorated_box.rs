@@ -302,11 +302,11 @@ impl View for DecoratedBox {
         let child = self
             .child
             .or_else(|| Some(Box::new(crate::SizedBox::new())));
-        RenderBuilder::single(RenderDecoratedBox::with_position(
+        RenderBuilder::new(RenderDecoratedBox::with_position(
             self.decoration.clone(),
             self.position,
         ))
-        .with_optional_child(child)
+        .maybe_child(child)
     }
 }
 
@@ -413,7 +413,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

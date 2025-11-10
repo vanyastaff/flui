@@ -217,7 +217,7 @@ impl View for SafeArea {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
         let insets = self.calculate_insets(ctx);
 
-        RenderBuilder::single(RenderPadding::new(insets)).with_optional_child(self.child)
+        RenderBuilder::new(RenderPadding::new(insets)).maybe_child(self.child)
     }
 }
 

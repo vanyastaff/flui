@@ -107,7 +107,7 @@ impl View for Viewport {
         let mut render = RenderViewport::new(self.axis, self.offset);
         render.set_clip(self.clip);
 
-        RenderBuilder::single(render).with_child(self.child)
+        RenderBuilder::new(render).child(self.child)
     }
 }
 

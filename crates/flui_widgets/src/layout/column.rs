@@ -282,7 +282,7 @@ impl View for Column {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        RenderBuilder::multi(render_flex).with_children(self.children)
+        RenderBuilder::new(render_flex).children(self.children)
     }
 }
 
@@ -359,7 +359,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
@@ -425,8 +425,8 @@ mod tests {
     #[allow(deprecated)]
     fn test_column_add_child() {
         let mut column = Column::new();
-        column.add_child(MockView);
-        column.add_child(MockView);
+        column.child(MockView);
+        column.child(MockView);
         assert_eq!(column.children.len(), 2);
     }
 

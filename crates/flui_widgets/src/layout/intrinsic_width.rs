@@ -206,7 +206,7 @@ impl View for IntrinsicWidth {
             (None, None) => RenderIntrinsicWidth::new(),
         };
 
-        RenderBuilder::single(render).with_optional_child(self.child)
+        RenderBuilder::new(render).maybe_child(self.child)
     }
 }
 

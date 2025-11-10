@@ -243,7 +243,7 @@ impl Default for Padding {
 // Implement View for Padding - Simplified API
 impl View for Padding {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderPadding::new(self.padding)).with_optional_child(self.child)
+        RenderBuilder::new(RenderPadding::new(self.padding)).maybe_child(self.child)
     }
 }
 
@@ -336,7 +336,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

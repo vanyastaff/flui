@@ -189,8 +189,8 @@ impl Default for FittedBox {
 // Implement View for FittedBox - New architecture
 impl View for FittedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderFittedBox::with_alignment(self.fit, self.alignment))
-            .with_optional_child(self.child)
+        RenderBuilder::new(RenderFittedBox::with_alignment(self.fit, self.alignment))
+            .maybe_child(self.child)
     }
 }
 
@@ -227,7 +227,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 

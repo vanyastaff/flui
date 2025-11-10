@@ -195,7 +195,7 @@ impl View for ListBody {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
 
-        RenderBuilder::multi(render).with_children(self.children)
+        RenderBuilder::new(render).children(self.children)
     }
 }
 

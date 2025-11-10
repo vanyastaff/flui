@@ -34,7 +34,7 @@
 //! impl View for Padding {
 //!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
 //!         RenderPadding::new(self.padding)  // ← Returns builder
-//!             .with_child(self.child)       // ← Builder impl IntoElement
+//!             .child(self.child)       // ← Builder impl IntoElement
 //!     }
 //! }
 //! ```

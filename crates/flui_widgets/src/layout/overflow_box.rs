@@ -284,7 +284,7 @@ impl View for OverflowBox {
             self.max_height,
         );
 
-        RenderBuilder::single(render).with_optional_child(self.child)
+        RenderBuilder::new(render).maybe_child(self.child)
     }
 }
 

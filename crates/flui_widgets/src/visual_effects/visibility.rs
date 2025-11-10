@@ -323,7 +323,7 @@ impl View for Visibility {
             self.child
         };
 
-        RenderBuilder::single(RenderVisibility::new(
+        RenderBuilder::new(RenderVisibility::new(
             self.visible,
             self.maintain_size,
             self.maintain_state,
@@ -331,7 +331,7 @@ impl View for Visibility {
             self.maintain_interactivity,
             self.maintain_semantics,
         ))
-        .with_optional_child(child)
+        .maybe_child(child)
     }
 }
 

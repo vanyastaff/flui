@@ -238,10 +238,10 @@ impl Expanded {
 // Implement View trait - Simplified API
 impl View for Expanded {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
+        RenderBuilder::new(RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(
             self.flex,
         )))
-        .with_child(self.child)
+        .child(self.child)
     }
 }
 

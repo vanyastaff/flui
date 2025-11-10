@@ -149,7 +149,7 @@ impl Default for Opacity {
 // Implement View for Opacity - New architecture
 impl View for Opacity {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderOpacity::new(self.opacity)).with_optional_child(self.child)
+        RenderBuilder::new(RenderOpacity::new(self.opacity)).maybe_child(self.child)
     }
 }
 

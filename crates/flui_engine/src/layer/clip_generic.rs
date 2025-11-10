@@ -372,7 +372,7 @@ mod tests {
         // Add a child
         let mut picture = PictureLayer::new();
         picture.draw_rect(rect, Paint::default());
-        layer.add_child(Box::new(picture));
+        layer.child(Box::new(picture));
 
         let mut result = HitTestResult::new();
 

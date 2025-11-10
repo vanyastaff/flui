@@ -256,7 +256,7 @@ impl View for Stack {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
 
-        RenderBuilder::multi(render_stack).with_children(self.children)
+        RenderBuilder::new(render_stack).children(self.children)
     }
 }
 
@@ -362,7 +362,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
@@ -386,8 +386,8 @@ mod tests {
     #[allow(deprecated)]
     fn test_stack_add_child() {
         let mut widget = Stack::new();
-        widget.add_child(MockView::new("child1"));
-        widget.add_child(MockView::new("child2"));
+        widget.child(MockView::new("child1"));
+        widget.child(MockView::new("child2"));
         assert_eq!(widget.children.len(), 2);
     }
 
@@ -514,7 +514,7 @@ mod tests {
     fn test_stack_many_children() {
         let mut widget = Stack::new();
         for i in 0..10 {
-            widget.add_child(MockView::new(&format!("child{}", i)));
+            widget.child(MockView::new(&format!("child{}", i)));
         }
         assert_eq!(widget.children.len(), 10);
     }

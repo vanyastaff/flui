@@ -236,7 +236,7 @@ use std::fmt::Debug;
 ///
 ///         for &child_id in ctx.children.as_slice() {
 ///             let offset = Offset::new(0.0, y);
-///             container.add_child(ctx.paint_child(child_id, ctx.offset + offset));
+///             container.child(ctx.paint_child(child_id, ctx.offset + offset));
 ///             y += child_size.height + self.spacing;
 ///         }
 ///
@@ -322,7 +322,7 @@ pub trait Render: Send + Sync + Debug + 'static {
     ///     let mut container = pool::acquire_container();
     ///     for (i, &child_id) in ctx.children.as_slice().iter().enumerate() {
     ///         let offset = ctx.offset + self.child_offsets[i];
-    ///         container.add_child(ctx.paint_child(child_id, offset));
+    ///         container.child(ctx.paint_child(child_id, offset));
     ///     }
     ///     Box::new(container)
     /// }

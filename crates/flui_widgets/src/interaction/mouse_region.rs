@@ -296,6 +296,6 @@ impl View for MouseRegion {
             on_hover: None,
         };
 
-        RenderBuilder::single(RenderMouseRegion::new(callbacks)).with_optional_child(self.child)
+        RenderBuilder::new(RenderMouseRegion::new(callbacks)).maybe_child(self.child)
     }
 }

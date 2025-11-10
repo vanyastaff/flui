@@ -35,7 +35,7 @@ use bon::Builder;
 use flui_core::view::{AnyView, IntoElement, RenderBuilder, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
-use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
 
 use crate::SizedBox;
 
@@ -282,7 +282,7 @@ impl View for Row {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        RenderBuilder::multi(render_flex).with_children(self.children)
+        RenderBuilder::new(render_flex).children(self.children)
     }
 }
 
@@ -357,7 +357,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
@@ -423,8 +423,8 @@ mod tests {
     #[allow(deprecated)]
     fn test_row_add_child() {
         let mut row = Row::new();
-        row.add_child(MockView);
-        row.add_child(MockView);
+        row.child(MockView);
+        row.child(MockView);
         assert_eq!(row.children.len(), 2);
     }
 

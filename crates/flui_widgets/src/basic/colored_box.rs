@@ -164,7 +164,7 @@ impl<S: State> ColoredBoxBuilder<S> {
 // Implement View for ColoredBox - New architecture
 impl View for ColoredBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderBuilder::single(RenderColoredBox::new(self.color)).with_optional_child(self.child)
+        RenderBuilder::new(RenderColoredBox::new(self.color)).maybe_child(self.child)
     }
 }
 
@@ -181,7 +181,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            RenderBuilder::leaf(RenderPadding::new(EdgeInsets::ZERO))
+            RenderBuilder::new(RenderPadding::new(EdgeInsets::ZERO))
         }
     }
 
