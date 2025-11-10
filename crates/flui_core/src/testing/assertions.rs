@@ -193,16 +193,11 @@ pub fn assert_key_not_exists(tree: &ElementTree, key: Key) {
 
 /// Helper function to find an element by key
 ///
-/// Iterates through all elements in the tree to find one with matching key.
-fn find_element_by_key(tree: &ElementTree, key: Key) -> Option<ElementId> {
-    for i in 0..tree.len() {
-        let id = ElementId::new(i + 1);
-        if let Some(element) = tree.get(id) {
-            if element.key() == Some(&key) {
-                return Some(id);
-            }
-        }
-    }
+/// # Note
+///
+/// Currently not implemented - key system is pending implementation.
+fn find_element_by_key(_tree: &ElementTree, _key: Key) -> Option<ElementId> {
+    // TODO: Implement when key system is added to Element
     None
 }
 

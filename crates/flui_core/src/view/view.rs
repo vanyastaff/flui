@@ -141,10 +141,28 @@ pub trait View: Clone + 'static {
     fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }
 
+/// Sealed trait marker - prevents external implementation
+///
+/// This module contains a sealed trait pattern to prevent users from
+/// implementing ViewElement outside of flui-core.
+pub(crate) mod sealed {
+    /// Sealed trait - only types in flui-core can implement this
+    pub trait Sealed {}
+
+    // Implementations for flui-core types
+    impl Sealed for crate::element::ComponentElement {}
+    impl Sealed for crate::element::RenderElement {}
+    impl Sealed for crate::element::ProviderElement {}
+    impl Sealed for crate::element::Element {}
+}
+
 /// ViewElement trait - bridge between View and Element
 ///
-/// This trait allows views to work with different element types.
-pub trait ViewElement: 'static {
+/// **Internal trait** - This trait is used internally by the framework
+/// to bridge between Views and Elements. Users should NOT implement this trait.
+///
+/// The trait is sealed - you cannot implement it outside of flui-core.
+pub trait ViewElement: sealed::Sealed + 'static {
     /// Convert this typed element into the Element enum
     fn into_element(self: Box<Self>) -> Element;
 
@@ -159,8 +177,11 @@ pub trait ViewElement: 'static {
 }
 
 /// Change flags indicating what changed during rebuild
+///
+/// **Internal API** - Used by framework to track changes during rebuild.
+/// Users should not need to interact with this type directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChangeFlags(u8);
+pub(crate) struct ChangeFlags(u8);
 
 impl ChangeFlags {
     /// No changes

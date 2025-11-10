@@ -39,7 +39,7 @@ pub use build_context::{
 
 // View trait and related types
 pub use any_view::AnyView;
-pub use view::{ChangeFlags, View, ViewElement};
+pub use view::{View, ViewElement};
 
 // Simplified API exports (IntoElement, tuple syntax)
 pub use into_element::{AnyElement, IntoAnyElement, IntoElement, RenderExt};

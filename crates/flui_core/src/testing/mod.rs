@@ -123,15 +123,13 @@
 //! }
 //! ```
 
-// Temporarily disabled pending API updates to new View system
-// TODO: Update testing utilities to work with new View API (no rebuild(), uses IntoElement)
-// pub mod assertions;
-// pub mod mock_render;
-// pub mod test_harness;
-// pub mod view_tester;
+pub mod assertions;
+pub mod mock_render;
+pub mod test_harness;
+pub mod view_tester;
 
 // Re-export main types for convenience
-// pub use assertions::*;
-// pub use mock_render::{MockRender, SpyRender};
-// pub use test_harness::TestHarness;
-// pub use view_tester::{TestView, ViewTestResult, ViewTester};
+pub use assertions::*;
+pub use mock_render::{MockRender, SpyRender};
+pub use test_harness::TestHarness;
+pub use view_tester::{TestView, ViewTestResult, ViewTester};

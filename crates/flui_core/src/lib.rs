@@ -258,16 +258,18 @@ pub use flui_engine::BoxedLayer;
 pub use flui_types::{Offset, Size};
 
 /// Debug flags, diagnostics, and validation
+pub mod context;
 pub mod debug;
 pub mod element;
 pub mod foundation;
-pub mod render;
-
-pub mod context;
 pub mod hooks;
 pub mod pipeline;
+pub mod prelude;
+pub mod render;
 pub mod testing;
 pub mod view;
+
+
 
 // Re-export debug types
 pub use debug::DebugFlags;
@@ -330,16 +332,8 @@ pub use render::{Arity, Children, LayoutContext, PaintContext, Render, RenderSta
 /// ```rust
 /// use flui_core::prelude::*;
 /// ```
-pub mod prelude {
-    pub use crate::foundation::{Key, KeyRef};
-
-    // Element and View system
-    pub use crate::element::Element;
-    pub use crate::view::{AnyView, BuildContext, ChangeFlags, View, ViewElement};
-
-    // Render system
-    pub use crate::render::{Arity, Children, LayoutContext, PaintContext, Render};
-}
+// Prelude module is now in separate file (src/prelude.rs)
+// See prelude module documentation for details
 
 /// FLUI version string
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -372,6 +366,12 @@ mod tests {
         // Test that all major types are available
         let _key: Option<Key> = None;
         let _element: Option<Element> = None;
-        let _signal: Option<Signal<i32>> = None;
+
+        // Test hooks are available
+        let _signal: Option<Signal<i32>> = None;  // Signal from prelude
+
+        // Test render types are available
+        let _arity = Arity::Variable;
     }
 }
+

@@ -3,7 +3,7 @@
 //! Provides mock implementations of render objects that can be used in tests
 //! to verify layout and paint behavior without actual rendering.
 
-use crate::render::{Arity, Children, LayoutContext, PaintContext, Render};
+use crate::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_engine::{BoxedLayer, ContainerLayer};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::sync::{Arc, Mutex};
@@ -119,7 +119,7 @@ impl Render for MockRender {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let mut state = self.state.lock().unwrap();
         state.layout_calls += 1;
-        state.last_constraints = Some(*ctx.constraints);
+        state.last_constraints = Some(ctx.constraints);
 
         // For single/multi child, constrain size
         if self.child_count > 0 {
@@ -225,7 +225,7 @@ impl<R: Render> Render for SpyRender<R> {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let mut state = self.state.lock().unwrap();
         state.layout_calls += 1;
-        state.last_constraints = Some(*ctx.constraints);
+        state.last_constraints = Some(ctx.constraints);
         drop(state);
 
         self.inner.layout(ctx)

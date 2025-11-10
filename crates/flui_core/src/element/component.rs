@@ -17,7 +17,8 @@ use std::any::Any;
 
 use super::{ElementBase, ElementLifecycle};
 use crate::foundation::Slot;
-use crate::view::{AnyView, ChangeFlags};
+use crate::view::AnyView;
+use crate::view::view::ChangeFlags;
 use crate::ElementId;
 
 // ============================================================================

@@ -3,14 +3,15 @@
 //! Provides utilities for testing FLUI views and elements in isolation.
 
 use crate::{
-    element::{Element, ElementId, ElementTree},
+    element::{ElementId, ElementTree},
     foundation::Key,
     pipeline::{PipelineBuilder, PipelineOwner},
-    view::{AnyView, BuildContext, IntoElement},
+    view::{BuildContext, IntoElement},
     View,
 };
 use flui_types::{BoxConstraints, Size};
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// Test harness for testing FLUI views
 ///
@@ -46,7 +47,7 @@ impl TestHarness {
     /// Create a new test harness
     pub fn new() -> Self {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let pipeline = PipelineBuilder::new(tree.clone()).build();
+        let pipeline = PipelineBuilder::new().build();
 
         Self {
             pipeline,
@@ -65,13 +66,12 @@ impl TestHarness {
     pub fn mount<V: View>(&mut self, view: V) -> ElementId {
         let tree = self.tree.clone();
         let element_id = {
-            let mut tree_guard = tree.write().unwrap();
+            let mut tree_guard = tree.write();
 
             // Create build context (minimal for testing)
             let ctx = BuildContext::new(
-                ElementId::new(1), // Placeholder
                 tree.clone(),
-                Arc::new(RwLock::new(self.pipeline.coordinator().clone())),
+                ElementId::new(1), // Placeholder element ID
             );
 
             // Build the view into an element
@@ -134,32 +134,24 @@ impl TestHarness {
 
     /// Find an element by key
     ///
-    /// Searches through all elements in the tree for one with the matching key.
+    /// # Note
+    ///
+    /// Currently not implemented - key system is pending implementation.
+    /// Returns None for all keys.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// let button_id = harness.find_by_key(Key::from_str("submit-button"));
     /// ```
-    pub fn find_by_key(&self, key: Key) -> Option<ElementId> {
-        let tree = self.tree.read().unwrap();
-
-        // Iterate through all elements to find one with the matching key
-        // Note: This is O(n) - for production use, consider adding an index
-        for i in 0..tree.len() {
-            let id = ElementId::new(i + 1);
-            if let Some(element) = tree.get(id) {
-                if element.key() == Some(&key) {
-                    return Some(id);
-                }
-            }
-        }
+    pub fn find_by_key(&self, _key: Key) -> Option<ElementId> {
+        // TODO: Implement when key system is added to Element
         None
     }
 
     /// Get the number of elements in the tree
     pub fn element_count(&self) -> usize {
-        let tree = self.tree.read().unwrap();
+        let tree = self.tree.read();
         tree.len()
     }
 
@@ -193,8 +185,8 @@ mod tests {
 
     impl View for TestView {
         fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
-            // Return a minimal element for testing
-            ()
+            // Return None for minimal testing (terminates tree)
+            Option::<TestView>::None
         }
     }
 

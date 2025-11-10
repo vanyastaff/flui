@@ -54,7 +54,7 @@ pub use flui_core::{
     foundation::{ElementId, Key, Slot},
 
     // View system (new API)
-    view::{AnyView, BuildContext, ChangeFlags, View, ViewElement},
+    view::{AnyView, BuildContext, View, ViewElement},
 };
 
 

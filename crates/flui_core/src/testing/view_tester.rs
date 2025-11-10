@@ -4,10 +4,9 @@
 
 use crate::{
     element::ElementId,
-    view::{AnyView, BuildContext},
+    view::BuildContext,
     View,
 };
-use std::sync::{Arc, RwLock};
 
 use super::test_harness::TestHarness;
 
@@ -140,8 +139,8 @@ impl TestView {
 
 impl View for TestView {
     fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
-        // Return unit for minimal testing
-        ()
+        // Return None for minimal testing (terminates tree)
+        Option::<TestView>::None
     }
 }
 
