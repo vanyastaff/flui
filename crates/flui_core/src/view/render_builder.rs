@@ -49,7 +49,7 @@
 
 use super::{AnyElement, IntoElement};
 use crate::element::{Element, RenderElement};
-use crate::render::{Children, Render, RenderNode};
+use crate::render::Render;
 
 /// Builder for creating render elements
 ///
@@ -119,8 +119,8 @@ impl RenderBuilder {
 
 /// Builder for leaf render objects (no children)
 ///
-/// Created via `RenderBuilder::leaf()`. Automatically creates a `RenderNode`
-/// with `Children::None`.
+/// Created via `RenderBuilder::leaf()`. Automatically creates a RenderElement
+/// with no children.
 ///
 /// # Examples
 ///
@@ -137,11 +137,8 @@ pub struct LeafRenderBuilder {
 
 impl IntoElement for LeafRenderBuilder {
     fn into_element(self) -> Element {
-        // Create RenderNode with no children
-        let render_node = RenderNode::new(self.render, Children::None);
-
-        // Wrap in RenderElement
-        let render_element = RenderElement::new(render_node);
+        // Wrap render object in RenderElement (no children)
+        let render_element = RenderElement::new(self.render);
 
         // Convert to Element enum
         Element::Render(render_element)
@@ -213,12 +210,8 @@ impl IntoElement for SingleRenderBuilder {
         // Convert child to element and get its ID
         let child_element = self.child.map(|c| c.into_element());
 
-        // For now, create with Children::None (will be updated during mounting)
-        // TODO: This needs to be handled by the element tree mounting logic
-        let render_node = RenderNode::new(self.render, Children::None);
-
-        // Wrap in RenderElement
-        let render_element = RenderElement::new(render_node);
+        // Create RenderElement with render object
+        let render_element = RenderElement::new(self.render);
 
         // If we have a child element, we need to handle it
         // This is a simplified version - full implementation would require
@@ -318,12 +311,9 @@ impl IntoElement for MultiRenderBuilder {
             .map(|c| c.into_element())
             .collect();
 
-        // For now, create with empty children (will be updated during mounting)
+        // Create RenderElement with render object (children will be set during mounting)
         // TODO: This needs to be handled by the element tree mounting logic
-        let render_node = RenderNode::new(self.render, Children::from_multi(Vec::new()));
-
-        // Wrap in RenderElement
-        let render_element = RenderElement::new(render_node);
+        let render_element = RenderElement::new(self.render);
 
         // Convert to Element enum
         Element::Render(render_element)

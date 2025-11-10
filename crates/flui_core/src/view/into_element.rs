@@ -160,10 +160,8 @@ impl<T: IntoElement> IntoElement for Option<T> {
             None => {
                 // Return empty render element with zero size
                 use crate::element::RenderElement;
-                use crate::render::RenderNode;
 
-                let render_node = RenderNode::leaf(Box::new(EmptyRender));
-                Element::Render(RenderElement::new(render_node))
+                Element::Render(RenderElement::new(Box::new(EmptyRender)))
             }
         }
     }

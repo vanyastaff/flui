@@ -361,7 +361,7 @@ pub use pipeline::{PipelineBuilder, PipelineOwner};
 // ============================================================================
 
 // Re-export render types
-pub use render::{Arity, Children, LayoutContext, PaintContext, Render, RenderNode, RenderState};
+pub use render::{Arity, Children, LayoutContext, PaintContext, Render, RenderState};
 
 // ============================================================================
 // Macros
@@ -388,7 +388,7 @@ pub mod prelude {
     pub use crate::view::{AnyView, BuildContext, ChangeFlags, View, ViewElement};
 
     // Render system
-    pub use crate::render::{Arity, Children, LayoutContext, PaintContext, Render, RenderNode};
+    pub use crate::render::{Arity, Children, LayoutContext, PaintContext, Render};
 }
 
 // ============================================================================

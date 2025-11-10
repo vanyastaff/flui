@@ -169,13 +169,9 @@ impl PaintPipeline {
             // Drop read guard before paint
             drop(render_state);
 
-            // Perform paint using unified RenderNode API
-            // With the new unified API, we don't need to match on variants
-            let _layer = {
-                let render_object = render_elem.render_object();
-                // RenderNode::paint() creates PaintContext internally and calls unified Render trait
-                render_object.paint(tree, offset)
-            };
+            // Perform paint using RenderElement wrapper
+            // RenderElement::paint_render() creates PaintContext internally and calls unified Render trait
+            let _layer = render_elem.paint_render(tree, offset);
 
             // TODO(future): Store layer for composition
             // For now, we just generate and discard layers

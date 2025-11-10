@@ -35,7 +35,6 @@ pub mod children;
 pub mod context;
 pub mod parent_data;
 pub mod render_flags;
-pub mod render_node;
 pub mod render_pipeline;
 pub mod render_state;
 pub mod render_unified;
@@ -60,9 +59,6 @@ pub use arity::Arity;
 pub use context::{LayoutContext, PaintContext};
 
 // Core types
-/// Unified render tree node enum
-pub use render_node::RenderNode;
-
 /// Parent data and metadata
 pub use parent_data::{
     BoxParentData, ContainerBoxParentData, ContainerParentData, ParentData, ParentDataWithOffset,

@@ -180,13 +180,9 @@ impl LayoutPipeline {
             // Drop read guard before acquiring write lock
             drop(render_state);
 
-            // Perform layout using unified RenderNode API
-            // With the new unified API, we don't need to match on variants
-            let computed_size = {
-                let mut render_object_mut = render_elem.render_object_mut();
-                // RenderNode::layout() creates LayoutContext internally and calls unified Render trait
-                render_object_mut.layout(tree, layout_constraints)
-            };
+            // Perform layout using RenderElement wrapper
+            // RenderElement::layout_render() creates LayoutContext internally and calls unified Render trait
+            let computed_size = render_elem.layout_render(tree, layout_constraints);
 
             // Store computed size in RenderState
             let render_state_lock = render_elem.render_state();

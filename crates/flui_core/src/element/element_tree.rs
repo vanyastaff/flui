@@ -538,7 +538,7 @@ impl ElementTree {
         let size = {
             let element = self.get(element_id)?;
             let render_element = element.as_render()?;
-            render_element.render_object_mut().layout(self, constraints)
+            render_element.layout_render(self, constraints)
         }; // Drop all borrows before guard cleanup (which happens automatically)
 
         // Decrement depth
@@ -602,13 +602,10 @@ impl ElementTree {
         let element = self.get(element_id)?;
         let render_element = element.as_render()?;
 
-        // Borrow the render object through RwLock - the guard must live until after the call
-        let render_object_guard = render_element.render_object();
+        // Call paint on render object
+        let layer = render_element.paint_render(self, offset);
 
-        // Call paint on RenderNode
-        let layer = render_object_guard.paint(self, offset);
-
-        // Guards dropped here (render_object_guard, then _guard automatically)
+        // Guards dropped here (_guard automatically)
 
         // Note: Overflow indicators are now painted by each RenderObject itself
         // (e.g., RenderFlex paints its own overflow indicators in debug mode).
@@ -832,7 +829,7 @@ impl ElementTree {
     /// ```
     pub fn visit_all_render_objects<F>(&self, mut visitor: F)
     where
-        F: FnMut(ElementId, &crate::RenderNode, parking_lot::RwLockReadGuard<RenderState>),
+        F: FnMut(ElementId, &Box<dyn crate::render::Render>, parking_lot::RwLockReadGuard<RenderState>),
     {
         for (element_id, node) in &self.nodes {
             // Only visit elements with Renders

@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 use super::{ElementBase, ElementLifecycle};
 use crate::element::{Element, ElementId};
 use crate::foundation::Slot;
-use crate::render::{RenderNode, RenderState};
+use crate::render::{Children, LayoutContext, PaintContext, Render, RenderState};
 use crate::view::IntoElement;
 
 /// Element for render objects (type-erased)
@@ -21,7 +21,7 @@ use crate::view::IntoElement;
 ///
 /// ```text
 /// RenderElement
-///   ├─ render_object: RenderNode (type-erased Render)
+///   ├─ render_object: RwLock<Box<dyn Render>> (type-erased Render)
 ///   ├─ render_state: RwLock<RenderState> (size, constraints, dirty flags)
 ///   ├─ parent_data: Option<Box<dyn ParentData>> (metadata from parent)
 ///   ├─ children: Vec<ElementId> (managed by Render arity)
@@ -32,8 +32,8 @@ use crate::view::IntoElement;
 ///
 /// This version uses type erasure for the render object:
 ///
-/// - **Render**: `RenderNode` (user-extensible, unbounded types)
-/// - **Arity**: Runtime information via RenderNode trait
+/// - **Render**: `Box<dyn Render>` (user-extensible, unbounded types)
+/// - **Arity**: Runtime information via Render trait
 ///
 /// # Performance
 ///
@@ -64,7 +64,7 @@ pub struct RenderElement {
     ///
     /// **Note**: When you have `&mut self`, prefer using `render_object_mut_direct()`
     /// to avoid lock contention during the build/mount phase.
-    render_object: RwLock<RenderNode>,
+    render_object: RwLock<Box<dyn Render>>,
 
     /// Render state (size, constraints, dirty flags)
     ///
@@ -99,7 +99,7 @@ impl std::fmt::Debug for RenderElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderElement")
             .field("base", &self.base)
-            .field("render_object", &"<RwLock<RenderNode>>")
+            .field("render_object", &"<RwLock<Box<dyn Render>>>")
             .field("render_state", &self.render_state)
             .field("offset", &self.offset)
             .field("parent_data", &self.parent_data.is_some())
@@ -118,10 +118,10 @@ impl RenderElement {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let render = RenderBox::new();
+    /// let render = Box::new(RenderPadding::new(EdgeInsets::all(10.0)));
     /// let element = RenderElement::new(render);
     /// ```
-    pub fn new(render_object: RenderNode) -> Self {
+    pub fn new(render_object: Box<dyn Render>) -> Self {
         Self {
             base: ElementBase::new(),
             render_object: RwLock::new(render_object),
@@ -140,7 +140,7 @@ impl RenderElement {
     /// Returns a read guard that allows multiple concurrent immutable borrows.
     /// This uses parking_lot::RwLock which is more flexible than RefCell.
     #[inline]
-    pub fn render_object(&self) -> parking_lot::RwLockReadGuard<'_, RenderNode> {
+    pub fn render_object(&self) -> parking_lot::RwLockReadGuard<'_, Box<dyn Render>> {
         self.render_object.read()
     }
 
@@ -149,7 +149,7 @@ impl RenderElement {
     /// Returns a write guard that allows exclusive mutable access.
     /// This blocks if there are any active read or write guards.
     #[inline]
-    pub fn render_object_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RenderNode> {
+    pub fn render_object_mut(&self) -> parking_lot::RwLockWriteGuard<'_, Box<dyn Render>> {
         self.render_object.write()
     }
 
@@ -164,7 +164,7 @@ impl RenderElement {
     /// This is safe because having `&mut self` guarantees exclusive access.
     #[inline]
     #[must_use]
-    fn render_object_mut_direct(&mut self) -> &mut RenderNode {
+    fn render_object_mut_direct(&mut self) -> &mut Box<dyn Render> {
         self.render_object.get_mut()
     }
 
@@ -231,6 +231,52 @@ impl RenderElement {
         self.parent_data = None;
     }
 
+    /// Perform layout on this render object
+    ///
+    /// Creates a LayoutContext and calls the render object's layout() method.
+    ///
+    /// # Parameters
+    ///
+    /// - `tree`: Reference to the element tree
+    /// - `constraints`: Layout constraints from parent
+    ///
+    /// # Returns
+    ///
+    /// The computed size
+    pub(crate) fn layout_render(
+        &self,
+        tree: &crate::element::ElementTree,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> flui_types::Size {
+        let mut render = self.render_object.write();
+        let children = Children::from_slice(&self.children);
+        let ctx = LayoutContext::new(tree, &children, constraints);
+        render.layout(&ctx)
+    }
+
+    /// Perform paint on this render object
+    ///
+    /// Creates a PaintContext and calls the render object's paint() method.
+    ///
+    /// # Parameters
+    ///
+    /// - `tree`: Reference to the element tree
+    /// - `offset`: Paint offset in parent's coordinate space
+    ///
+    /// # Returns
+    ///
+    /// A boxed layer containing the painted content
+    pub(crate) fn paint_render(
+        &self,
+        tree: &crate::element::ElementTree,
+        offset: flui_types::Offset,
+    ) -> flui_engine::BoxedLayer {
+        let render = self.render_object.read();
+        let children = Children::from_slice(&self.children);
+        let ctx = PaintContext::new(tree, &children, offset);
+        render.paint(&ctx)
+    }
+
     // Note: update() method removed - will be replaced with View-based update
     // TODO(Phase 5): Implement View::rebuild() integration
 
@@ -287,20 +333,6 @@ impl RenderElement {
     pub(crate) fn add_child(&mut self, child_id: ElementId) {
         // Add to children list
         self.children.push(child_id);
-
-        // Also update RenderNode's child/children field
-        // We MUST do this so the render object knows which children to layout/paint!
-
-        // Access render_object directly to allow simultaneous borrow of children
-        // (using the method would borrow all of &mut self)
-        let render = self.render_object.get_mut();
-
-        if matches!(render.arity(), crate::render::Arity::Exact(1)) {
-            render.set_children(crate::render::Children::from_single(child_id));
-        } else {
-            // Convert Vec to Children enum
-            render.set_children(crate::render::Children::from_slice(&self.children));
-        }
     }
 
     /// Remove a child by ID

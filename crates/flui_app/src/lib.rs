@@ -53,8 +53,6 @@ pub use flui_core::{
     // Foundation types
     foundation::{ElementId, Key, Slot},
 
-    // Render system
-    render::RenderNode,
     // View system (new API)
     view::{AnyView, BuildContext, ChangeFlags, View, ViewElement},
 };
