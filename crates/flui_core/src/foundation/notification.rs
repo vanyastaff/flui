@@ -455,7 +455,7 @@ mod tests {
         assert!(!scroll.is_at_end());
 
         // Should be cloneable
-        let cloned = scroll.clone();
+        let cloned = scroll; // ScrollNotification is Copy
         assert_eq!(cloned.delta, 10.0);
     }
 

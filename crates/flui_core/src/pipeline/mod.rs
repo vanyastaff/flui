@@ -72,7 +72,7 @@ pub mod cancellation;
 pub mod dirty_tracking;
 pub mod error;
 pub mod frame_coordinator;
-pub mod frame_coordinator_tests;
+// frame_coordinator_tests is included in frame_coordinator.rs via #[cfg(test)]
 pub mod frame_scheduler;
 pub mod layout_pipeline;
 pub mod metrics;

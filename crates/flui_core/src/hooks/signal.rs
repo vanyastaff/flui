@@ -509,7 +509,7 @@ mod tests {
         ctx.begin_component(ComponentId(1));
 
         let signal1 = ctx.use_hook::<SignalHook<i32>>(0);
-        let signal2 = signal1.clone();
+        let signal2 = signal1; // Signal is Copy
 
         signal1.set(42);
         assert_eq!(signal2.get(&mut ctx), 42);
@@ -674,7 +674,7 @@ mod tests {
 
         let last_value = Arc::new(Mutex::new(0));
         let last_value_clone = Arc::clone(&last_value);
-        let signal_clone = signal.clone();
+        let signal_clone = signal; // Signal is Copy
 
         let _id = signal.subscribe(move || {
             // Use get_untracked() in subscribers (no access to HookContext)

@@ -255,7 +255,7 @@ mod tests {
         harness.render(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
-            let count_clone = count.clone();
+            let count_clone = count; // Signal is Copy
             let doubled =
                 ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
                     count_clone.get(ctx) * 2
@@ -272,7 +272,7 @@ mod tests {
         harness.rerender(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
-            let count_clone = count.clone();
+            let count_clone = count; // Signal is Copy
             let doubled =
                 ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
                     count_clone.get(ctx) * 2

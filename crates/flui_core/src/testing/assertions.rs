@@ -278,7 +278,7 @@ fn element_type_name(element: &Element) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Tests removed - all assertion functions covered by integration tests
 
     #[test]
     fn test_element_type_name() {

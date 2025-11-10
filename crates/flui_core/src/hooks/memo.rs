@@ -378,7 +378,7 @@ where
 mod tests {
     use super::*;
     use crate::hooks::hook_context::{ComponentId, HookContext};
-    use crate::hooks::signal::{use_signal, SignalHook};
+    use crate::hooks::signal::SignalHook;
     use parking_lot::Mutex;
     use std::sync::Arc;
 
@@ -412,7 +412,7 @@ mod tests {
 
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = call_count.clone();
-        let signal_clone = signal.clone();
+        let signal_clone = signal; // Signal is Copy
         let memo =
             ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| -> i32 {
                 *call_count_clone.lock() += 1;

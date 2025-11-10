@@ -350,10 +350,11 @@ mod tests {
 
     #[test]
     fn test_version_constants() {
-        assert!(!VERSION.is_empty());
-        assert!(!VERSION_MAJOR.is_empty());
-        assert!(!VERSION_MINOR.is_empty());
-        assert!(!VERSION_PATCH.is_empty());
+        // Check version strings are defined (use len() for const strings)
+        assert_ne!(VERSION.len(), 0);
+        assert_ne!(VERSION_MAJOR.len(), 0);
+        assert_ne!(VERSION_MINOR.len(), 0);
+        assert_ne!(VERSION_PATCH.len(), 0);
     }
 
     #[test]

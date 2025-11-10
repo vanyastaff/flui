@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn test_skip_frame_policy() {
         use crate::ElementId;
-        let mut recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
+        let recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 
         let error = PipelineError::layout_error(ElementId::new(42), "test").unwrap();
 
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn test_show_error_policy() {
         use crate::ElementId;
-        let mut recovery = ErrorRecovery::new(RecoveryPolicy::ShowErrorWidget);
+        let recovery = ErrorRecovery::new(RecoveryPolicy::ShowErrorWidget);
 
         let error = PipelineError::paint_error(ElementId::new(42), "test").unwrap();
 
@@ -386,15 +386,16 @@ mod tests {
     #[should_panic(expected = "maximum pipeline errors")]
     fn test_max_errors() {
         use crate::ElementId;
-        let mut recovery = ErrorRecovery::with_max_errors(RecoveryPolicy::SkipFrame, 3);
+        let recovery = ErrorRecovery::with_max_errors(RecoveryPolicy::SkipFrame, 3);
 
         let error = PipelineError::layout_error(ElementId::new(42), "test").unwrap();
 
         // Should panic on 4th error
         for _ in 0..5 {
-            match recovery.handle_error(error.clone(), PipelinePhase::Layout) {
-                RecoveryAction::Panic(e) => panic!("{}", e),
-                _ => {}
+            if let RecoveryAction::Panic(e) =
+                recovery.handle_error(error.clone(), PipelinePhase::Layout)
+            {
+                panic!("{}", e)
             }
         }
     }

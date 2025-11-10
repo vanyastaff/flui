@@ -25,7 +25,7 @@ mod tests {
     use crate::render::{Arity, LayoutContext, PaintContext, Render};
     use crate::BoxedLayer;
     use flui_types::constraints::BoxConstraints;
-    use flui_types::{Offset, Size};
+    use flui_types::Size;
     use parking_lot::RwLock;
     use std::sync::Arc;
 
