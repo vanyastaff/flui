@@ -1,10 +1,8 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
-
-use flui_engine::{Paint, PictureLayer};
-use flui_types::{Color, Size};
+use flui_painting::{Canvas, Paint};
+use flui_types::{Color, Point, RRect, Rect, Size};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,54 +127,48 @@ impl Render for RenderPhysicalModel {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Use pool for allocation efficiency
-        let mut container = flui_engine::layer::pool::acquire_container();
 
-        // TODO: Add shadow layer when BoxShadow layer is implemented
+        let mut canvas = Canvas::new();
+        let size = self.size;
+
+        // TODO: Add shadow drawing when Canvas shadow support is added
         // For now, skip shadow painting
         // A full implementation would:
         // 1. Calculate shadow parameters from elevation
-        // 2. Create a BoxShadowLayer with appropriate blur and offset
-        // 3. Add it before the background shape
+        // 2. Use canvas.draw_shadow() to draw shadow
+        // 3. Draw it before the background shape
 
         // Paint background shape at the offset position
-        let mut picture = PictureLayer::new();
-        let size = self.size;
-
-        let paint = Paint::builder().color(self.color).build();
+        let paint = Paint::fill(self.color);
 
         match self.shape {
             PhysicalShape::Rectangle => {
-                picture.draw_rect(
-                    flui_types::Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
-                    paint,
-                );
+                let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                canvas.draw_rect(rect, &paint);
             }
             PhysicalShape::RoundedRectangle => {
                 let radius = flui_types::styling::Radius::circular(self.border_radius);
-                let rrect = flui_engine::painter::RRect::from_rect_and_radius(
-                    flui_types::Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
+                let rrect = RRect::from_rect_and_radius(
+                    Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
                     radius,
                 );
-                picture.draw_rrect(rrect, paint);
+                canvas.draw_rrect(rrect, &paint);
             }
             PhysicalShape::Circle => {
                 let radius = size.width.min(size.height) / 2.0;
-                let center = flui_types::Point::new(
+                let center = Point::new(
                     offset.dx + size.width / 2.0,
                     offset.dy + size.height / 2.0,
                 );
-                picture.draw_circle(center, radius, paint);
+                canvas.draw_circle(center, radius, &paint);
             }
         }
 
-        container.add_child(Box::new(picture));
+        // Paint child on top at same offset
+        let child_canvas = tree.paint_child(child_id, offset);
+        canvas.append_canvas(child_canvas);
 
-        // Paint child_id on top at same offset
-        let child_layer = tree.paint_child(child_id, offset);
-        container.add_child(child_layer);
-
-        Box::new(container)
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

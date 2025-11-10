@@ -1,18 +1,15 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_engine::BoxedLayer;
 use flui_painting::Canvas;
-
-use flui_engine::PictureLayer;
 use flui_types::Size;
 
 /// Custom painter trait
 ///
 /// Implement this trait to define custom painting logic.
 pub trait CustomPainter: std::fmt::Debug + Send + Sync {
-    /// Paint custom content into a PictureLayer
-    fn paint(&self, picture: &mut PictureLayer, size: Size);
+    /// Paint custom content into a Canvas
+    fn paint(&self, canvas: &mut Canvas, size: Size);
 
     /// Whether this painter should repaint when something changes
     fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
@@ -163,31 +160,24 @@ impl Render for RenderCustomPaint {
         let offset = ctx.offset;
         // Use the size from layout phase
         let size = self.laid_out_size;
-        let mut layers: Vec<BoxedLayer> = Vec::new();
 
-        // Paint background painter
+        let mut canvas = Canvas::new();
+
+        // Paint background painter (if any)
         if let Some(bg_painter) = &self.painter {
-            let mut picture = PictureLayer::new();
-            bg_painter.paint(&mut picture, size);
-            layers.push(Box::new(picture));
+            bg_painter.paint(&mut canvas, size);
         }
 
-        // Paint child_id - SingleArity always has exactly one child_id
-        layers.push(tree.paint_child(child_id, offset));
+        // Paint child
+        let child_canvas = tree.paint_child(child_id, offset);
+        canvas.append_canvas(child_canvas);
 
-        // Paint foreground painter (on top of child_id)
+        // Paint foreground painter on top (if any)
         if let Some(fg_painter) = &self.foreground_painter {
-            let mut picture = PictureLayer::new();
-            fg_painter.paint(&mut picture, size);
-            layers.push(Box::new(picture));
+            fg_painter.paint(&mut canvas, size);
         }
 
-        // Wrap all layers in a container - use pool for efficiency
-        let mut container = flui_engine::layer::pool::acquire_container();
-        for layer in layers {
-            container.add_child(layer);
-        }
-        Box::new(container)
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -207,7 +197,7 @@ mod tests {
     struct MockPainter;
 
     impl CustomPainter for MockPainter {
-        fn paint(&self, _picture: &mut PictureLayer, _size: Size) {
+        fn paint(&self, _canvas: &mut Canvas, _size: Size) {
             // Do nothing
         }
     }

@@ -187,17 +187,19 @@ impl Render for RenderPointerListener {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Paint child first
-        let child_layer = tree.paint_child(child_id, offset);
 
-        // Create bounds for hit testing
-        let bounds = Rect::from_min_size(offset, self.size);
+        // Paint child
+        let child_canvas = tree.paint_child(child_id, offset);
 
-        // Create unified event handler
-        let handler = self.create_handler();
+        // TODO: Integrate pointer event handling with Canvas architecture
+        // The old PointerListenerLayer approach doesn't work with Canvas-only system
+        // This needs to be refactored to use a different event handling mechanism,
+        // possibly through:
+        // 1. Hit-test metadata attached to RenderObjects
+        // 2. Event propagation through element tree
+        // 3. Separate event handling layer above the Canvas system
 
-        // Wrap in PointerListenerLayer for hit testing
-        Box::new(PointerListenerLayer::new(child_layer, handler, bounds))
+        child_canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

@@ -1,10 +1,7 @@
 //! RenderDecoratedBox - paints decoration around a child
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
-use flui_engine::BoxedLayer;
-
-use flui_engine::{layer::pool, Paint};
+use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::{BorderPosition, BoxDecoration, Radius},
     Offset, Point, RRect, Rect, Size,
@@ -91,33 +88,22 @@ impl RenderDecoratedBox {
         self.position = position;
     }
 
-    /// Paint decoration layers to container
+    /// Paint decoration to canvas
     ///
-    /// This creates appropriate layers for the decoration:
-    /// - GradientLayer for gradients
-    /// - PictureLayer for solid colors and borders
-    fn paint_decoration(&self, container: &mut flui_engine::ContainerLayer, rect: Rect) {
-        // use flui_engine::GradientLayer; // TODO: GradientLayer not implemented yet
-
+    /// This draws the decoration (background, borders) directly to the canvas
+    fn paint_decoration(&self, canvas: &mut Canvas, rect: Rect) {
         let decoration = &self.decoration;
 
-        // TODO: Paint box shadows when shadow support is added
-        // For now, we skip shadows. A full implementation would:
-        // 1. Extract shadow parameters from decoration.box_shadow
-        // 2. Create ShadowLayer
-        // 3. Add it to the container before the background
+        // TODO: Paint box shadows when shadow support is added to Canvas
+        // For now, we skip shadows. A full implementation would add:
+        // canvas.draw_shadow() method
 
         // Paint background (gradient or solid color)
         if let Some(ref _gradient) = decoration.gradient {
-            // TODO: GradientLayer not implemented yet in flui_engine
-            // When implemented, create GradientLayer here:
-            // let gradient_layer = GradientLayer::new(rect, gradient.clone());
-            // container.add_child(Box::new(gradient_layer));
+            // TODO: Gradient support not implemented yet in Canvas
+            // When implemented, use canvas.draw_gradient()
         } else if let Some(color) = decoration.color {
-            // Create pooled PictureLayer for solid color background
-            let mut picture = pool::acquire_picture();
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
-
             let paint = Paint::fill(color);
 
             if let Some(radius) = border_radius {
@@ -129,26 +115,22 @@ impl RenderDecoratedBox {
                     bottom_right: circular_radius,
                     bottom_left: circular_radius,
                 };
-                picture.draw_rrect(rrect, paint);
+                canvas.draw_rrect(rrect, &paint);
             } else {
-                picture.draw_rect(rect, paint);
+                canvas.draw_rect(rect, &paint);
             }
-
-            container.add_child(Box::new(flui_engine::PooledPictureLayer::new(picture)));
         }
 
         // Paint border (if gradient or color was present, border goes on top)
         if let Some(ref border) = decoration.border {
-            let mut picture = pool::acquire_picture();
             let border_radius = decoration.border_radius.map(|r| r.top_left.x);
-            Self::paint_border(&mut picture, rect, border, border_radius);
-            container.add_child(Box::new(flui_engine::PooledPictureLayer::new(picture)));
+            Self::paint_border(canvas, rect, border, border_radius);
         }
     }
 
-    /// Paint border on picture layer
+    /// Paint border on canvas
     fn paint_border(
-        picture: &mut flui_engine::PictureLayer,
+        canvas: &mut Canvas,
         rect: Rect,
         border: &flui_types::styling::Border,
         border_radius: Option<f32>,
@@ -156,14 +138,14 @@ impl RenderDecoratedBox {
         // Paint each side that exists
         if let Some(top) = border.top {
             if top.is_visible() {
-                Self::paint_border_side(picture, rect, &top, BorderPosition::Top, border_radius);
+                Self::paint_border_side(canvas, rect, &top, BorderPosition::Top, border_radius);
             }
         }
 
         if let Some(right) = border.right {
             if right.is_visible() {
                 Self::paint_border_side(
-                    picture,
+                    canvas,
                     rect,
                     &right,
                     BorderPosition::Right,
@@ -175,7 +157,7 @@ impl RenderDecoratedBox {
         if let Some(bottom) = border.bottom {
             if bottom.is_visible() {
                 Self::paint_border_side(
-                    picture,
+                    canvas,
                     rect,
                     &bottom,
                     BorderPosition::Bottom,
@@ -186,23 +168,20 @@ impl RenderDecoratedBox {
 
         if let Some(left) = border.left {
             if left.is_visible() {
-                Self::paint_border_side(picture, rect, &left, BorderPosition::Left, border_radius);
+                Self::paint_border_side(canvas, rect, &left, BorderPosition::Left, border_radius);
             }
         }
     }
 
     /// Paint a single border side
     fn paint_border_side(
-        picture: &mut flui_engine::PictureLayer,
+        canvas: &mut Canvas,
         rect: Rect,
         side: &flui_types::styling::BorderSide,
         position: BorderPosition,
         border_radius: Option<f32>,
     ) {
-        let paint = Paint::builder()
-            .color(side.color)
-            .stroke(flui_engine::Stroke::new(side.width))
-            .build();
+        let paint = Paint::stroke(side.color, side.width);
 
         // If we have rounded corners, draw using rounded rect
         if let Some(radius) = border_radius {
@@ -216,29 +195,29 @@ impl RenderDecoratedBox {
                 bottom_right: circular_radius,
                 bottom_left: circular_radius,
             };
-            picture.draw_rrect(rrect, paint);
+            canvas.draw_rrect(rrect, &paint);
         } else {
             // For straight borders, draw individual lines for each side
             match position {
                 BorderPosition::Top => {
                     let p1 = Point::new(rect.left(), rect.top() + side.width / 2.0);
                     let p2 = Point::new(rect.right(), rect.top() + side.width / 2.0);
-                    picture.draw_line(p1, p2, paint);
+                    canvas.draw_line(p1, p2, &paint);
                 }
                 BorderPosition::Right => {
                     let p1 = Point::new(rect.right() - side.width / 2.0, rect.top());
                     let p2 = Point::new(rect.right() - side.width / 2.0, rect.bottom());
-                    picture.draw_line(p1, p2, paint);
+                    canvas.draw_line(p1, p2, &paint);
                 }
                 BorderPosition::Bottom => {
                     let p1 = Point::new(rect.left(), rect.bottom() - side.width / 2.0);
                     let p2 = Point::new(rect.right(), rect.bottom() - side.width / 2.0);
-                    picture.draw_line(p1, p2, paint);
+                    canvas.draw_line(p1, p2, &paint);
                 }
                 BorderPosition::Left => {
                     let p1 = Point::new(rect.left() + side.width / 2.0, rect.top());
                     let p2 = Point::new(rect.left() + side.width / 2.0, rect.bottom());
-                    picture.draw_line(p1, p2, paint);
+                    canvas.draw_line(p1, p2, &paint);
                 }
             }
         }
@@ -265,35 +244,27 @@ impl Render for RenderDecoratedBox {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Use pooled container for automatic return to pool on drop
-        let mut container = pool::acquire_container();
-        // Paint decoration in LOCAL coordinates (0, 0)
-        let rect = Rect::from_xywh(0.0, 0.0, self.size.width, self.size.height);
+
+        let mut canvas = Canvas::new();
+
+        // Paint decoration in LOCAL coordinates at offset
+        let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
 
         // Paint decoration in background position
         if self.position == DecorationPosition::Background {
-            self.paint_decoration(&mut container, rect);
+            self.paint_decoration(&mut canvas, rect);
         }
 
-        // Paint child in LOCAL coordinates (child will be at 0,0 relative to this box)
-        let child_layer = tree.paint_child(child_id, Offset::ZERO);
-        container.add_child(child_layer);
+        // Paint child
+        let child_canvas = tree.paint_child(child_id, offset);
+        canvas.append_canvas(child_canvas);
 
         // Paint decoration in foreground position
         if self.position == DecorationPosition::Foreground {
-            self.paint_decoration(&mut container, rect);
+            self.paint_decoration(&mut canvas, rect);
         }
 
-        // Wrap entire container in TransformLayer to apply offset
-        let container_layer: BoxedLayer = Box::new(container);
-        if offset != Offset::ZERO {
-            Box::new(flui_engine::TransformLayer::translate(
-                container_layer,
-                offset,
-            ))
-        } else {
-            container_layer
-        }
+        canvas
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
