@@ -60,17 +60,14 @@ impl View for Counter {
         // Reactive state with hooks
         let count = use_signal(ctx, self.initial);
 
-        // Clone signal before moving into closure
-        let count_clone = count.clone();
-
-        // Return a tuple: (Renderer, Option<child>) or just another View
+        // No clone needed - Signal is Copy!
         Column {
             children: vec![
                 Box::new(Text::new(format!("Count: {}", count.get()))),
                 Box::new(Button {
                     label: "Increment".to_string(),
                     on_press: Some(Box::new(move || {
-                        count_clone.update(|c| *c += 1);
+                        count.update(|c| *c += 1);
                     })),
                 }),
             ],
@@ -185,11 +182,10 @@ struct Toggle {
 impl View for Toggle {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
         let enabled = use_signal(ctx, self.initial);
-        let enabled_clone = enabled.clone();
 
         Checkbox {
             value: enabled.get(),
-            on_change: Some(Box::new(move |val| enabled_clone.set(val))),
+            on_change: Some(Box::new(move |val| enabled.set(val))),
         }
     }
 }
@@ -415,47 +411,48 @@ pub trait View: 'static {
 - Thread-local BuildContext (no &mut needed)
 - Zero-cost abstractions with inline expansion
 
-### 🏗️ Builder Pattern
+### 🏗️ Tuple Syntax for Renderers
 
-Most built-in views in FLUI support the builder pattern for ergonomic construction:
+FLUI uses tuple syntax to connect views with custom renderers:
 
 ```rust
-// Simple text view:
-let text = Text::builder()
-    .data("Hello")
-    .size(24.0)
-    .color(Color::WHITE)
-    .build();
+// Leaf renderer (no children): (Renderer, ())
+impl View for MyLeaf {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        (MyLeafRenderer::new(), ())
+    }
+}
 
-// Complex nested composition:
-Container::builder()
-    .width(300.0)
-    .height(200.0)
-    .padding(EdgeInsets::all(20.0))
-    .decoration(BoxDecoration {
-        color: Some(Color::BLUE),
-        border_radius: Some(BorderRadius::circular(16.0)),
-        ..Default::default()
-    })
-    .child(
-        Text::builder()
-            .data("Nested content")
-            .build()
-    )
-    .build()
+// Single child: (Renderer, Option<child>)
+impl View for MyPadding {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        (MyPaddingRenderer::new(), self.child)
+    }
+}
+
+// Multiple children: (Renderer, Vec<child>)
+impl View for MyColumn {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        (MyColumnRenderer::new(), self.children)
+    }
+}
 ```
 
-The builder pattern provides a fluent, ergonomic API for view composition with compile-time type checking.
+The tuple syntax provides clear, type-safe connection between views and renderers.
 
 ### 🎯 Object-Safe Traits
 
-All traits are object-safe from the start - no need for wrapper traits:
+All traits are object-safe and work with dynamic dispatch:
 
 ```rust
-// ✅ Works directly!
-let render: Box<dyn LeafRender> = Box::new(RenderCircle { /* ... */ });
+// ✅ AnyView for heterogeneous view storage
+let views: Vec<Box<dyn AnyView>> = vec![
+    Box::new(Text::new("Hello")),
+    Box::new(Button { /* ... */ }),
+];
 
-// Old approach needed wrapper - not anymore!
+// ✅ Render trait is object-safe
+let renderer: Box<dyn Render> = Box::new(RenderCircle { /* ... */ });
 ```
 
 ### 🚀 Enum-Based Dispatch
@@ -478,42 +475,48 @@ match element {
 
 ### 🔧 Modern Hooks API
 
-FLUI provides a hooks-based API for reactive state management:
+FLUI provides React-like hooks for reactive state management:
 
 ```rust
-use flui_core::hooks::*;
+use flui_core::prelude::*;
 
 #[derive(Debug, Clone)]
 struct MyCounter;
 
-impl Component for MyCounter {
-    fn build(&self, ctx: &BuildContext) -> View {
+impl View for MyCounter {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
         // Reactive state
-        let count = use_signal(ctx, || 0);
+        let count = use_signal(ctx, 0);
 
-        // Side effects
-        use_effect(ctx, || {
+        // Side effects (Signal is Copy - no clone needed!)
+        use_effect(ctx, move || {
             println!("Count changed: {}", count.get());
-        }, &[count.get()]);
+            None  // No cleanup
+        });
 
-        // Memoized computation
-        let doubled = use_memo(ctx, || count.get() * 2, &[count.get()]);
+        // Memoized computation (Signal is Copy - no clone needed!)
+        let doubled = use_memo(ctx, move || count.get() * 2);
 
-        Column::builder()
-            .children(vec![
-                Text::builder()
-                    .data(format!("Count: {} (doubled: {})", count.get(), doubled))
-                    .build(),
-                Button::builder()
-                    .on_press(move || count.update(|c| *c += 1))
-                    .build(),
-            ])
-            .build()
+        // Signal is Copy - no clone needed!
+        Column {
+            children: vec![
+                Box::new(Text::new(format!("Count: {} (doubled: {})", count.get(), doubled))),
+                Box::new(Button {
+                    label: "Increment".to_string(),
+                    on_press: Some(Box::new(move || count.update(|c| *c += 1))),
+                }),
+            ],
+        }
     }
 }
 ```
 
-Hooks provide a clean, composable way to manage state without boilerplate.
+**Key features**:
+- **Signal is Copy** - No need to clone before moving into closures!
+- Thread-safe (uses thread-local signal runtime)
+- Automatic rebuild scheduling when signal changes
+- Composable and reusable
+- Must follow hook rules (same order, no conditionals)
 
 ### 📦 Slab-Based Element Tree
 
@@ -546,41 +549,32 @@ FLUI is designed for high performance:
 
 ## Examples
 
-See the [examples](../../examples/) directory for complete applications:
+See the [examples](examples/) directory for complete applications:
 
-- **[hello_world](../../examples/hello_world.rs)** - Basic Component view
-- **[counter_signal](../../examples/counter_signal.rs)** - Component with hooks (use_signal)
-- **[counter_set_state](../../examples/counter_set_state.rs)** - Component with State type parameter
-- **[theme](../../examples/theme.rs)** - Provider for data propagation
-- **[custom_render](../../examples/custom_render.rs)** - Custom Render view
-- **[layout](../../examples/layout.rs)** - Flex layout system
+- **[simplified_view](examples/simplified_view.rs)** - Modern View API demonstration
+- **[thread_safe_hooks](examples/thread_safe_hooks.rs)** - Thread-safe hooks example
 
 ### View Composition Example
 
 ```rust
 use flui_core::prelude::*;
-use flui_widgets::prelude::*;
 
-// Composing views with the builder pattern
-let my_ui = Column::builder()
-    .main_axis_alignment(MainAxisAlignment::Center)
-    .children(vec![
-        Text::builder()
-            .data("Title")
-            .size(32.0)
-            .color(Color::BLACK)
-            .build(),
-        Container::builder()
-            .padding(EdgeInsets::symmetric(10.0, 20.0))
-            .child(
-                Text::builder()
-                    .data("Subtitle")
-                    .size(16.0)
-                    .build()
-            )
-            .build(),
-    ])
-    .build();
+#[derive(Clone)]
+struct MyApp;
+
+impl View for MyApp {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        Column {
+            children: vec![
+                Box::new(Text::new("Title")),
+                Box::new(Padding {
+                    padding: 20.0,
+                    child: Some(Box::new(Text::new("Subtitle"))),
+                }),
+            ],
+        }
+    }
+}
 ```
 
 ## Testing
@@ -631,9 +625,14 @@ at your option.
 |---------|---------|------|
 | Language | Dart | Rust |
 | View tree | Runtime Widget tree | Enum-based compile-time |
-| State | StatefulWidget | Hooks or State<T> |
-| Rendering | Skia | Pluggable backends |
+| State | StatefulWidget | Hooks (use_signal, use_memo, use_effect) |
+| Rendering | Skia | wgpu (GPU-accelerated) |
 | Hot reload | ✅ Yes | 🚧 Planned |
+| Thread safety | Single-threaded | ✅ Thread-safe (Arc/Mutex) |
 | FFI | C/C++ | Native Rust |
 
-FLUI takes inspiration from Flutter's architecture but leverages Rust's type system for additional safety and performance. The view-based API provides a modern, reactive approach to UI development.
+FLUI takes inspiration from Flutter's three-tree architecture but leverages:
+- Rust's type system for compile-time safety
+- Modern hooks API inspired by React
+- Thread-safe state management with Arc/Mutex
+- wgpu for native GPU acceleration

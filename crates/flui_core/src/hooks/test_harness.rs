@@ -215,13 +215,13 @@ mod tests {
         let mut harness = HookTestHarness::<SignalHook<i32>>::new();
 
         let signal = harness.call(0);
-        assert_eq!(signal.get(), 0);
+        assert_eq!(signal.get(harness.context_mut()), 0);
         assert_eq!(harness.render_count(), 1);
 
         signal.set(42);
 
         let signal = harness.rerender(0);
-        assert_eq!(signal.get(), 42);
+        assert_eq!(signal.get(harness.context_mut()), 42);
         assert_eq!(harness.render_count(), 2);
     }
 
@@ -231,7 +231,7 @@ mod tests {
 
         harness.render(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(0);
-            assert_eq!(count.get(), 0);
+            assert_eq!(count.get(ctx), 0);
 
             count.set(10);
         });
@@ -240,7 +240,7 @@ mod tests {
 
         harness.rerender(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(0);
-            assert_eq!(count.get(), 10);
+            assert_eq!(count.get(ctx), 10);
         });
 
         assert_eq!(harness.render_count(), 2);
@@ -248,15 +248,20 @@ mod tests {
 
     #[test]
     fn test_multi_hooks_together() {
+        use std::sync::Arc;
+
         let mut harness = MultiHookTestHarness::new();
 
         harness.render(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
-            let doubled = ctx.use_hook::<MemoHook<i32, _>>(move || count.get() * 2);
+            let count_clone = count.clone();
+            let doubled = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
+                count_clone.get(ctx) * 2
+            }));
 
-            assert_eq!(count.get(), 5);
-            assert_eq!(doubled.get(), 10);
+            assert_eq!(count.get(ctx), 5);
+            assert_eq!(doubled.get(ctx), 10);
 
             count.set(10);
         });
@@ -264,10 +269,13 @@ mod tests {
         harness.rerender(|ctx| {
             let count = ctx.use_hook::<SignalHook<i32>>(5);
 
-            let doubled = ctx.use_hook::<MemoHook<i32, _>>(move || count.get() * 2);
+            let count_clone = count.clone();
+            let doubled = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| {
+                count_clone.get(ctx) * 2
+            }));
 
-            assert_eq!(count.get(), 10);
-            assert_eq!(doubled.get(), 20);
+            assert_eq!(count.get(ctx), 10);
+            assert_eq!(doubled.get(ctx), 20);
         });
     }
 }

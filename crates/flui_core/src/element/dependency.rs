@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_dependency_info_new() {
-        let id = 1;
+        let id = ElementId::new(1);
         let info = DependencyInfo::new(id, None);
         assert_eq!(info.dependent_id, id);
         assert!(!info.has_aspect());
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_dependency_info_simple() {
-        let id = 1;
+        let id = ElementId::new(1);
         let info = DependencyInfo::simple(id);
         assert_eq!(info.dependent_id, id);
         assert!(!info.has_aspect());
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_dependency_info_with_aspect() {
-        let id = 1;
+        let id = ElementId::new(1);
         let aspect: Box<dyn Any + Send + Sync> = Box::new(42);
         let info = DependencyInfo::new(id, Some(aspect));
         assert_eq!(info.dependent_id, id);
@@ -432,12 +432,12 @@ mod tests {
 
     #[test]
     fn test_dependency_info_equality() {
-        let id = 1;
+        let id = ElementId::new(1);
         let info1 = DependencyInfo::simple(id);
         let info2 = DependencyInfo::simple(id);
         assert_eq!(info1, info2);
 
-        let id2 = 2;
+        let id2 = ElementId::new(2);
         let info3 = DependencyInfo::simple(id2);
         assert_ne!(info1, info3);
     }
@@ -446,7 +446,7 @@ mod tests {
     fn test_dependency_info_hash() {
         use std::collections::HashSet;
 
-        let id = 1;
+        let id = ElementId::new(1);
         let info1 = DependencyInfo::simple(id);
         let info2 = DependencyInfo::simple(id);
 
@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_dependency_info_clone() {
-        let id = 1;
+        let id = ElementId::new(1);
         let info = DependencyInfo::simple(id);
         let cloned = info.clone();
         assert_eq!(info, cloned);
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn test_tracker_add_remove() {
         let mut tracker = DependencyTracker::new();
-        let id = 1;
+        let id = ElementId::new(1);
 
         tracker.add_dependent(id, None);
         assert_eq!(tracker.len(), 1);
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn test_tracker_duplicate_add() {
         let mut tracker = DependencyTracker::new();
-        let id = 1;
+        let id = ElementId::new(1);
 
         tracker.add_dependent(id, None);
         tracker.add_dependent(id, None); // Should replace
@@ -507,22 +507,22 @@ mod tests {
     fn test_tracker_multiple_dependents() {
         let mut tracker = DependencyTracker::new();
 
-        for id in 1..=10 {
-            tracker.add_dependent(id, None);
+        for i in 1..=10 {
+            tracker.add_dependent(ElementId::new(i), None);
         }
 
         assert_eq!(tracker.len(), 10);
 
-        for id in 1..=10 {
-            assert!(tracker.has_dependent(id));
+        for i in 1..=10 {
+            assert!(tracker.has_dependent(ElementId::new(i)));
         }
     }
 
     #[test]
     fn test_tracker_iteration() {
         let mut tracker = DependencyTracker::new();
-        let id1 = 1;
-        let id2 = 2;
+        let id1 = ElementId::new(1);
+        let id2 = ElementId::new(2);
 
         tracker.add_dependent(id1, None);
         tracker.add_dependent(id2, None);
@@ -536,9 +536,9 @@ mod tests {
     #[test]
     fn test_tracker_dependents_iter() {
         let mut tracker = DependencyTracker::new();
-        tracker.add_dependent(1, None);
-        tracker.add_dependent(2, None);
-        tracker.add_dependent(3, None);
+        tracker.add_dependent(ElementId::new(1), None);
+        tracker.add_dependent(ElementId::new(2), None);
+        tracker.add_dependent(ElementId::new(3), None);
 
         let count = tracker.dependents().count();
         assert_eq!(count, 3);
@@ -547,8 +547,8 @@ mod tests {
     #[test]
     fn test_tracker_clear() {
         let mut tracker = DependencyTracker::new();
-        tracker.add_dependent(1, None);
-        tracker.add_dependent(2, None);
+        tracker.add_dependent(ElementId::new(1), None);
+        tracker.add_dependent(ElementId::new(2), None);
 
         assert_eq!(tracker.len(), 2);
 
@@ -560,29 +560,29 @@ mod tests {
     #[test]
     fn test_tracker_remove_nonexistent() {
         let mut tracker = DependencyTracker::new();
-        assert!(!tracker.remove_dependent(999));
+        assert!(!tracker.remove_dependent(ElementId::new(999)));
     }
 
     #[test]
     fn test_tracker_equality() {
         let mut tracker1 = DependencyTracker::new();
         let mut tracker2 = DependencyTracker::new();
-        let id = 1;
+        let id = ElementId::new(1);
 
         tracker1.add_dependent(id, None);
         tracker2.add_dependent(id, None);
 
         assert_eq!(tracker1, tracker2);
 
-        tracker1.add_dependent(2, None);
+        tracker1.add_dependent(ElementId::new(2), None);
         assert_ne!(tracker1, tracker2);
     }
 
     #[test]
     fn test_tracker_clone() {
         let mut tracker = DependencyTracker::new();
-        tracker.add_dependent(1, None);
-        tracker.add_dependent(2, None);
+        tracker.add_dependent(ElementId::new(1), None);
+        tracker.add_dependent(ElementId::new(2), None);
 
         let cloned = tracker.clone();
         assert_eq!(tracker, cloned);
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn test_tracker_shrink_to_fit() {
         let mut tracker = DependencyTracker::with_capacity(100);
-        tracker.add_dependent(1, None);
+        tracker.add_dependent(ElementId::new(1), None);
         tracker.shrink_to_fit();
         // No panic, just ensuring it works
         assert_eq!(tracker.len(), 1);

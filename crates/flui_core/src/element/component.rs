@@ -18,7 +18,6 @@ use std::any::Any;
 use super::{ElementBase, ElementLifecycle};
 use crate::foundation::Slot;
 use crate::view::AnyView;
-use crate::view::view::ChangeFlags;
 use crate::ElementId;
 
 // ============================================================================
@@ -248,37 +247,6 @@ impl ComponentElement {
     }
 
     // ========== View Rebuild ==========
-
-    /// Rebuild with a new view
-    ///
-    /// **Internal API** - Used by the build pipeline.
-    ///
-    /// Uses View::rebuild() to efficiently diff and update the element.
-    ///
-    /// # Parameters
-    ///
-    /// - `new_view`: The new view to rebuild with
-    ///
-    /// # Returns
-    ///
-    /// ChangeFlags indicating what changed
-    pub(crate) fn rebuild_with_view(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags {
-        // Note: Current implementation replaces view and marks dirty.
-        // View API no longer has rebuild() method - views are immutable and rebuilt via build().
-        // The build pipeline handles efficient rebuilding through element tree comparison.
-
-        if !new_view.same_type(&*self.view) {
-            // Different view type - need full rebuild
-            self.view = new_view;
-            self.base.mark_dirty();
-            ChangeFlags::ALL
-        } else {
-            // Same type - mark for rebuild (build pipeline handles efficient update)
-            self.view = new_view;
-            self.base.mark_dirty();
-            ChangeFlags::NEEDS_BUILD
-        }
-    }
 
     /// Handle an event
     ///

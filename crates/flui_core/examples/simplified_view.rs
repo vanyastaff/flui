@@ -153,7 +153,7 @@ fn main() {
     println!("      fn build(self, ctx: &mut BuildContext) -> (Element, State) {{");
     println!("          // 20+ lines of boilerplate...");
     println!("      }}");
-    println!("      fn rebuild(...) -> ChangeFlags {{ ... }}");
+    println!("      fn rebuild(...) {{ ... }}");
     println!("  }}");
     println!();
     println!("NEW (Simplified View trait):");

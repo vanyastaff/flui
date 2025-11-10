@@ -21,6 +21,6 @@ pub fn test_hook_context() -> HookContext {
 /// Create a test HookContext with a custom component ID
 pub fn test_hook_context_with_id(id: usize) -> HookContext {
     let mut ctx = HookContext::new();
-    ctx.begin_component(ComponentId(id));
+    ctx.begin_component(ComponentId(id as u64));
     ctx
 }
