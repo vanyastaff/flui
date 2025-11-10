@@ -28,11 +28,15 @@
 //!     .build()
 //! ```
 
+pub mod arena;
 pub mod detector;
 pub mod recognizers;
 
+
 pub mod prelude {
     //! Commonly used types and traits
+    pub use crate::arena::*;
     pub use crate::detector::*;
     pub use crate::recognizers::tap::*;
 }
+
