@@ -242,10 +242,24 @@ mod tests {
 
     #[test]
     fn test_resource_initial_state() {
+        use crate::hooks::signal::SignalHook;
+        use std::sync::Arc;
+
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let resource = ctx.use_hook::<ResourceHook<i32, String, _, _>>(|| async { Ok(42) });
+        // Create signals manually
+        let loading = ctx.use_hook::<SignalHook<bool>>(true);
+        let data = ctx.use_hook::<SignalHook<Option<i32>>>(None);
+        let error = ctx.use_hook::<SignalHook<Option<String>>>(None);
+
+        let fetcher = || async { Ok(42) };
+        let resource = ctx.use_hook::<ResourceHook<i32, String, _, _>>((
+            Arc::new(fetcher),
+            loading,
+            data,
+            error,
+        ));
 
         // Initially loading with no data
         assert!(resource.is_loading());
@@ -255,10 +269,24 @@ mod tests {
 
     #[test]
     fn test_resource_clone() {
+        use crate::hooks::signal::SignalHook;
+        use std::sync::Arc;
+
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let resource1 = ctx.use_hook::<ResourceHook<i32, String, _, _>>(|| async { Ok(42) });
+        // Create signals manually
+        let loading = ctx.use_hook::<SignalHook<bool>>(true);
+        let data = ctx.use_hook::<SignalHook<Option<i32>>>(None);
+        let error = ctx.use_hook::<SignalHook<Option<String>>>(None);
+
+        let fetcher = || async { Ok(42) };
+        let resource1 = ctx.use_hook::<ResourceHook<i32, String, _, _>>((
+            Arc::new(fetcher),
+            loading,
+            data,
+            error,
+        ));
 
         let resource2 = resource1.clone();
 

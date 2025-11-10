@@ -337,9 +337,10 @@ mod tests {
 
     #[test]
     fn test_error_count() {
+        use crate::ElementId;
         let mut recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 
-        let error = PipelineError::layout_error(42, "test").unwrap();
+        let error = PipelineError::layout_error(ElementId::new(42), "test").unwrap();
 
         recovery.handle_error(error.clone(), PipelinePhase::Layout);
         assert_eq!(recovery.error_count(), 1);
@@ -353,9 +354,10 @@ mod tests {
 
     #[test]
     fn test_skip_frame_policy() {
+        use crate::ElementId;
         let mut recovery = ErrorRecovery::new(RecoveryPolicy::SkipFrame);
 
-        let error = PipelineError::layout_error(42, "test").unwrap();
+        let error = PipelineError::layout_error(ElementId::new(42), "test").unwrap();
 
         match recovery.handle_error(error, PipelinePhase::Layout) {
             RecoveryAction::SkipFrame => {
@@ -367,9 +369,10 @@ mod tests {
 
     #[test]
     fn test_show_error_policy() {
+        use crate::ElementId;
         let mut recovery = ErrorRecovery::new(RecoveryPolicy::ShowErrorWidget);
 
-        let error = PipelineError::paint_error(42, "test").unwrap();
+        let error = PipelineError::paint_error(ElementId::new(42), "test").unwrap();
 
         match recovery.handle_error(error.clone(), PipelinePhase::Paint) {
             RecoveryAction::ShowError(e) => {
@@ -382,9 +385,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "maximum pipeline errors")]
     fn test_max_errors() {
+        use crate::ElementId;
         let mut recovery = ErrorRecovery::with_max_errors(RecoveryPolicy::SkipFrame, 3);
 
-        let error = PipelineError::layout_error(42, "test").unwrap();
+        let error = PipelineError::layout_error(ElementId::new(42), "test").unwrap();
 
         // Should panic on 4th error
         for _ in 0..5 {

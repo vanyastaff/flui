@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn test_element_base_mount() {
         let mut base = ElementBase::new();
-        let parent_id = 42;
+        let parent_id = ElementId::new(42);
         let slot = Some(crate::foundation::Slot::new(1));
 
         base.mount(Some(parent_id), slot);
@@ -354,7 +354,7 @@ mod tests {
         let mut base = ElementBase::new();
 
         // Mount
-        base.mount(Some(1), Some(crate::foundation::Slot::new(0)));
+        base.mount(Some(ElementId::new(1)), Some(crate::foundation::Slot::new(0)));
         assert_eq!(base.lifecycle(), ElementLifecycle::Active);
 
         // Deactivate
