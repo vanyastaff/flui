@@ -591,8 +591,8 @@ mod tests {
         let data = BoxParentData::new();
         let boxed: Box<dyn ParentData> = Box::new(data);
 
-        assert!(boxed.is::<BoxParentData>());
-        let downcasted = boxed.downcast_ref::<BoxParentData>().unwrap();
+        assert!(boxed.as_any().is::<BoxParentData>());
+        let downcasted = boxed.as_any().downcast_ref::<BoxParentData>().unwrap();
         assert_eq!(downcasted.offset(), Offset::ZERO);
     }
 
@@ -637,6 +637,6 @@ mod tests {
     fn test_unit_parent_data() {
         let data = ();
         let boxed: Box<dyn ParentData> = Box::new(data);
-        assert!(boxed.is::<()>());
+        assert!(boxed.as_any().is::<()>());
     }
 }

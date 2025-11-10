@@ -389,7 +389,7 @@ mod tests {
 
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = call_count.clone();
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_ctx: &mut HookContext| -> i32 {
             *call_count_clone.lock() += 1;
             42
         }));
@@ -412,7 +412,7 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = call_count.clone();
         let signal_clone = signal.clone();
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| -> i32 {
             *call_count_clone.lock() += 1;
             signal_clone.get(ctx) * 2
         }));
@@ -435,7 +435,7 @@ mod tests {
 
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = call_count.clone();
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_ctx: &mut HookContext| -> i32 {
             *call_count_clone.lock() += 1;
             42
         }));
@@ -460,7 +460,7 @@ mod tests {
 
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = Arc::clone(&call_count);
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_ctx: &mut HookContext| -> i32 {
             let mut count = call_count_clone.lock();
             *count += 1;
             if *count == 1 {
@@ -488,7 +488,7 @@ mod tests {
 
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = Arc::clone(&call_count);
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_ctx: &mut HookContext| -> i32 {
             let mut count = call_count_clone.lock();
             *count += 1;
             if *count == 1 {
@@ -514,7 +514,7 @@ mod tests {
         let mut ctx = HookContext::new();
         ctx.begin_component(ComponentId(1));
 
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(|_| 42));
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(|_ctx: &mut HookContext| -> i32 { 42 }));
 
         // try_get should succeed without panicking
         let result = memo.try_get(&mut ctx);
@@ -536,7 +536,7 @@ mod tests {
         let memo_cell: Arc<Mutex<Option<Memo<i32>>>> = Arc::new(Mutex::new(None));
         let memo_cell_clone = Arc::clone(&memo_cell);
 
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| -> i32 {
             // Try to access memo recursively
             if let Some(m) = memo_cell_clone.lock().as_ref() {
                 let _ = m.get(ctx); // This should cause reentrancy error
@@ -560,7 +560,7 @@ mod tests {
         let memo_cell: Arc<Mutex<Option<Memo<i32>>>> = Arc::new(Mutex::new(None));
         let memo_cell_clone = Arc::clone(&memo_cell);
 
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |ctx: &mut HookContext| -> i32 {
             if let Some(m) = memo_cell_clone.lock().as_ref() {
                 m.get(ctx); // Should panic with reentrancy error
             }
@@ -584,7 +584,7 @@ mod tests {
 
         let call_count = Arc::new(Mutex::new(0));
         let call_count_clone = Arc::clone(&call_count);
-        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_| {
+        let memo = ctx.use_hook::<MemoHook<i32, _>>(Arc::new(move |_ctx: &mut HookContext| -> i32 {
             *call_count_clone.lock() += 1;
             panic!("Panic during compute");
         }));

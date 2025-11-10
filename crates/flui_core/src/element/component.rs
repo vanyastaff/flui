@@ -319,7 +319,8 @@ mod tests {
 
     #[test]
     fn test_child_sentinel() {
-        let view: Box<dyn AnyView> = Box::new(()); // Unit implements View
+        use crate::testing::TestWidget;
+        let view: Box<dyn AnyView> = Box::new(TestWidget);
         let state: Box<dyn Any> = Box::new(());
 
         let component = ComponentElement::new(view, state);

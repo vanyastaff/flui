@@ -315,11 +315,10 @@ mod tests {
 
         // Mark elements as dirty
         {
-            let tree_guard = fixture.tree.read();
             fixture
                 .coordinator
                 .build_mut()
-                .mark_dirty(fixture.root, &tree_guard);
+                .schedule(fixture.root, 0);
         }
 
         let initial_dirty = fixture.coordinator.build().dirty_count();
