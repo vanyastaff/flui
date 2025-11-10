@@ -307,7 +307,7 @@ pub use foundation::{
 
 // Re-export element types
 pub use element::{
-    ComponentElement, DependencyInfo, DependencyTracker, Element, ElementTree, InheritedElement,
+    ComponentElement, DependencyInfo, DependencyTracker, Element, ElementTree, ProviderElement,
     RenderElement,
 };
 

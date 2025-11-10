@@ -716,7 +716,7 @@ impl BuildPipeline {
         };
 
         // Phase 2: Notify all dependents
-        // For now, assume provider data changed (TODO: proper change detection)
+        // TODO: Implement proper change detection instead of assuming data changed
         if !dependents.is_empty() {
             #[cfg(debug_assertions)]
             tracing::debug!(

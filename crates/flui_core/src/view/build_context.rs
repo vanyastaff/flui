@@ -393,8 +393,8 @@ impl BuildContext {
                 Do not rely on it until notification bubbling is fully implemented."
     )]
     pub fn dispatch_notification(&self, _notification: &dyn crate::foundation::DynNotification) {
-        // Stub: This method does nothing until notification system is implemented
-        // FIXME: Implement notification bubbling - walk up tree calling handlers
+        // TODO: Implement notification bubbling by walking up tree and calling handlers
+        unimplemented!("Notification bubbling is not yet implemented")
     }
 
     // ========== Utility Methods ==========

@@ -41,13 +41,11 @@
 //!
 //! # Implementation Status
 //!
-//! This module is currently a stub. Context implementation is planned for
-//! Phase 5 (Week 5) of the refactoring.
+//! This module is currently a stub.
 //!
-//! TODO(2025-02): Implement context system.
-//! - Context<T> type-safe wrapper
-//! - Provider integration with ProviderElement
-//! - Consumer API in BuildContext
-//! - Context propagation through tree
-
-// Context implementation will be added in Phase 5
+//! ## Todo
+//!
+//! - Implement `Context<T>` type-safe wrapper
+//! - Integrate with `ProviderElement`
+//! - Add consumer API in `BuildContext`
+//! - Implement context propagation through tree

@@ -89,7 +89,7 @@ impl<T: Clone + Send + 'static, E: Clone + Send + 'static> Resource<T, E> {
 
     /// Refetch the resource.
     ///
-    /// TODO(2025-03): Implement refetch mechanism.
+    /// TODO: Implement refetch mechanism
     pub fn refetch(&self) {
         self.loading.set(true);
         self.error.set(None);
@@ -128,8 +128,7 @@ impl<T, E> std::fmt::Debug for ResourceState<T, E> {
 ///
 /// This hook manages async data fetching with loading and error states.
 ///
-/// TODO(2025-03): Implement actual async fetching.
-/// Current implementation provides the structure but requires async runtime integration.
+/// TODO: Implement actual async fetching - requires async runtime integration
 #[derive(Debug)]
 pub struct ResourceHook<T, E, F, Fut>(PhantomData<(T, E, F, Fut)>);
 
@@ -147,9 +146,7 @@ where
     fn create(input: (Arc<F>, Signal<bool>, Signal<Option<T>>, Signal<Option<E>>)) -> Self::State {
         let (_fetcher, loading, data, error) = input;
 
-        // TODO(2025-03): Start async fetch
-        // This requires integration with an async runtime (tokio, async-std, etc.)
-        // For now, just store the signals
+        // TODO: Start async fetch (requires integration with async runtime like tokio)
 
         ResourceState {
             loading,

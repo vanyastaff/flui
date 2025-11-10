@@ -1,6 +1,6 @@
 //! Render system - Unified architecture
 //!
-//! # Architecture (v0.1.0)
+//! # Architecture
 //!
 //! - `Render` trait: Unified trait for all render objects
 //! - `Children` enum: Unified child representation (None/Single/Multi)
@@ -44,9 +44,6 @@ pub mod render_state;
 
 
 
-// ========== Public API ==========
-
-// Unified API (v0.1.0+)
 /// Render trait - single unified trait for all render objects
 pub use render::Render;
 

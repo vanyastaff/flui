@@ -38,14 +38,12 @@
 //!
 //! # Implementation Status
 //!
-//! This module is currently a stub. Testing utilities will be implemented
-//! in Phase 7 (Week 7) of the refactoring.
+//! This module is currently a stub.
 //!
-//! TODO(2025-03): Implement testing utilities.
-//! - TestElement for element tree testing
-//! - TestWidget for widget testing
-//! - MockRenderObject for render testing
-//! - Custom assertions for common checks
-//! - Interaction simulation helpers
-
-// Testing implementation will be added in Phase 7
+//! ## Todo
+//!
+//! - Implement `TestElement` for element tree testing
+//! - Implement `TestWidget` for widget testing
+//! - Implement `MockRenderObject` for render testing
+//! - Add custom assertions for common checks
+//! - Add interaction simulation helpers

@@ -48,7 +48,7 @@ pub use window::run_app;
 // Re-export commonly used types from flui_core
 pub use flui_core::{
     // Element system
-    element::{ComponentElement, Element, InheritedElement, RenderElement},
+    element::{ComponentElement, Element, ProviderElement, RenderElement},
 
     // Foundation types
     foundation::{ElementId, Key, Slot},

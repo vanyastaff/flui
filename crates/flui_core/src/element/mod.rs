@@ -8,7 +8,7 @@
 //! # Element Types
 //!
 //! 1. **ComponentElement** - For component views (calls build())
-//! 2. **InheritedElement** - For provider views (data propagation + dependency tracking)
+//! 2. **ProviderElement** - For provider views (data propagation + dependency tracking)
 //! 3. **RenderElement** - For render objects (owns Render)
 //!
 //! # Architecture
@@ -17,7 +17,7 @@
 //! View → Element → Render (optional)
 //!
 //! Component View  → ComponentElement  → build() → child views
-//! Provider View   → InheritedElement  → (data + dependents) → child view
+//! Provider View   → ProviderElement   → (data + dependents) → child view
 //! Render Object   → RenderElement     → Render (type-erased)
 //! ```
 //!
@@ -55,7 +55,7 @@ pub use element_base::ElementBase;
 pub use element_tree::ElementTree; // Moved from pipeline to break circular dependency
 pub use hit_test::{ElementHitTestEntry, ElementHitTestResult};
 pub use lifecycle::ElementLifecycle;
-pub use provider::InheritedElement; // Re-exported with old name for compatibility
+pub use provider::ProviderElement;
 pub use render::RenderElement;
 
 // Moved to other modules (Phase 1):

@@ -12,7 +12,6 @@
 //!
 //! - [`BuildContext`]: Context provided to views during build (read-only, with hooks)
 //! - [`View`]: Simplified trait for reactive UI (no GATs, returns `impl IntoElement`)
-//! - View tree management (TODO(2025-02): Add ViewTree implementation)
 //!
 //! # Example
 //!
@@ -45,7 +44,6 @@ pub use view::{ChangeFlags, View, ViewElement};
 // Simplified API exports (IntoElement, tuple syntax)
 pub use into_element::{AnyElement, IntoAnyElement, IntoElement, RenderExt};
 
-// TODO(2025-02): Add view tree management.
-// The ViewTree will track widget-to-element mappings and provide
+// TODO: Add view tree management for tracking widget-to-element mappings and
 // efficient lookup during rebuild.
 

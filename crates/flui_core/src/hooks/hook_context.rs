@@ -4,6 +4,44 @@ use super::hook_trait::{DependencyId, Hook};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
+/// Format error message for hook ordering violations
+///
+/// Extracted to reduce code duplication and improve maintainability.
+fn format_hook_ordering_error(component: ComponentId, index: usize, type_name: &str) -> String {
+    format!("\n\
+        ╔════════════════════════════════════════════════════════════════╗\n\
+        ║          HOOK ORDERING VIOLATION DETECTED                      ║\n\
+        ╚════════════════════════════════════════════════════════════════╝\n\
+        \n\
+        Hook state type mismatch at:\n\
+        • Component: {:?}\n\
+        • Hook index: {}\n\
+        • Expected type: {}\n\
+        \n\
+        WHY THIS HAPPENED:\n\
+        You're calling hooks in a different order between renders.\n\
+        The hook system identifies hooks by their position (0, 1, 2...),\n\
+        so changing the order breaks the state tracking.\n\
+        \n\
+        COMMON CAUSES:\n\
+        ❌ Conditional hooks:     if x {{ use_signal(...) }}\n\
+        ❌ Early returns:         if !ready {{ return }}; use_signal(...)\n\
+        ❌ Variable loops:        for item in list {{ use_signal(...) }}\n\
+        ❌ Different code paths:  match {{ A => hook1(), B => hook2() }}\n\
+        \n\
+        HOW TO FIX:\n\
+        ✅ Call ALL hooks at the TOP LEVEL of your component's build() method\n\
+        ✅ Make sure EVERY render calls the SAME hooks in the SAME order\n\
+        ✅ Make VALUES conditional, not hook CALLS:\n\
+           let x = use_signal(ctx, 0);\n\
+           if condition {{ x.set(10); }}  // ← Correct\n\
+        \n\
+        📚 For detailed rules and examples, see:\n\
+        crates/flui_core/src/hooks/RULES.md\n\
+        \n\
+        ", component, index, type_name)
+}
+
 /// Unique identifier for a component instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentId(pub u64);
@@ -67,7 +105,8 @@ type CleanupFn = Box<dyn FnOnce(Box<dyn Any>) + Send>;
 pub struct HookState {
     state: Box<dyn Any + Send>,
     type_id: TypeId,
-    #[allow(dead_code)] // TODO: Implement update tracking in future
+    // TODO: Implement update tracking
+    #[allow(dead_code)]
     needs_update: bool,
     /// Explicit cleanup function called on unmount (Send + Sync for thread-safety)
     cleanup_fn: Option<CleanupFn>,
@@ -132,7 +171,8 @@ pub struct HookContext {
     current_hook_index: usize,
     hooks: HashMap<HookId, HookState>,
     effect_queue: Vec<HookId>,
-    #[allow(dead_code)] // TODO: Implement cleanup in future
+    // TODO: Implement cleanup
+    #[allow(dead_code)]
     cleanup_queue: Vec<HookId>,
     current_dependencies: Vec<DependencyId>,
     is_tracking: bool,
@@ -243,41 +283,12 @@ impl HookContext {
                          See hooks/RULES.md for detailed explanation and examples."
                     );
                     panic!(
-                        "\n\
-                            ╔════════════════════════════════════════════════════════════════╗\n\
-                            ║          HOOK ORDERING VIOLATION DETECTED                      ║\n\
-                            ╚════════════════════════════════════════════════════════════════╝\n\
-                            \n\
-                            Hook state type mismatch at:\n\
-                            • Component: {:?}\n\
-                            • Hook index: {}\n\
-                            • Expected type: {}\n\
-                            \n\
-                            WHY THIS HAPPENED:\n\
-                            You're calling hooks in a different order between renders.\n\
-                            The hook system identifies hooks by their position (0, 1, 2...),\n\
-                            so changing the order breaks the state tracking.\n\
-                            \n\
-                            COMMON CAUSES:\n\
-                            ❌ Conditional hooks:     if x {{ use_signal(...) }}\n\
-                            ❌ Early returns:         if !ready {{ return }}; use_signal(...)\n\
-                            ❌ Variable loops:        for item in list {{ use_signal(...) }}\n\
-                            ❌ Different code paths:  match {{ A => hook1(), B => hook2() }}\n\
-                            \n\
-                            HOW TO FIX:\n\
-                            ✅ Call ALL hooks at the TOP LEVEL of your component's build() method\n\
-                            ✅ Make sure EVERY render calls the SAME hooks in the SAME order\n\
-                            ✅ Make VALUES conditional, not hook CALLS:\n\
-                               let x = use_signal(ctx, 0);\n\
-                               if condition {{ x.set(10); }}  // ← Correct\n\
-                            \n\
-                            📚 For detailed rules and examples, see:\n\
-                            crates/flui_core/src/hooks/RULES.md\n\
-                            \n\
-                            ",
-                        hook_id.component,
-                        hook_id.index.0,
-                        std::any::type_name::<H::State>()
+                        "{}",
+                        format_hook_ordering_error(
+                            hook_id.component,
+                            hook_id.index.0,
+                            std::any::type_name::<H::State>()
+                        )
                     );
                 });
                 H::update(hook_state, input)
@@ -328,7 +339,7 @@ impl HookContext {
     /// Flush all pending effects
     pub fn flush_effects(&mut self) {
         for _hook_id in std::mem::take(&mut self.effect_queue) {
-            // TODO(2025-03): Run pending effects
+            // TODO: Run pending effects
         }
     }
 

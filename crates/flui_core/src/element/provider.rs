@@ -1,7 +1,6 @@
-//! ProviderElement (InheritedElement) - Provides context/inherited data
+//! ProviderElement - Provides context/inherited data
 //!
 //! Manages data propagation down the tree with efficient dependency tracking.
-//! Per FINAL_ARCHITECTURE_V2.md, renamed from InheritedElement to ProviderElement.
 
 use std::collections::HashSet;
 
@@ -15,10 +14,10 @@ use crate::ElementId;
 /// Stores view and tracks which descendant elements depend on it.
 /// When the view updates, only dependent elements are rebuilt.
 ///
-/// # Architecture (per FINAL_ARCHITECTURE_V2.md)
+/// # Architecture
 ///
 /// ```rust
-/// pub struct InheritedElement {
+/// pub struct ProviderElement {
 ///     base: ElementBase,           // Common fields
 ///     view: Box<dyn AnyView>,       // View that created this element
 ///     dependencies: HashSet<ElementId>,
@@ -37,7 +36,7 @@ use crate::ElementId;
 /// 1. **mount()** - Insert into tree
 /// 2. **rebuild()** - Check if dependents should be notified
 /// 3. **unmount()** - Remove from tree, clear dependencies
-pub struct InheritedElement {
+pub struct ProviderElement {
     /// Common element data (parent, slot, lifecycle, dirty)
     base: ElementBase,
 
@@ -54,9 +53,9 @@ pub struct InheritedElement {
     child: Option<ElementId>,
 }
 
-impl std::fmt::Debug for InheritedElement {
+impl std::fmt::Debug for ProviderElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InheritedElement")
+        f.debug_struct("ProviderElement")
             .field("base", &self.base)
             .field("view", &"<dyn AnyView>")
             .field("dependents", &self.dependents)
@@ -65,8 +64,8 @@ impl std::fmt::Debug for InheritedElement {
     }
 }
 
-impl InheritedElement {
-    /// Create a new ProviderElement (InheritedElement)
+impl ProviderElement {
+    /// Create a new ProviderElement
     ///
     /// # Parameters
     ///
@@ -260,7 +259,7 @@ impl InheritedElement {
 use crate::view::view::ViewElement;
 use std::any::Any;
 
-impl ViewElement for InheritedElement {
+impl ViewElement for ProviderElement {
     fn into_element(self: Box<Self>) -> crate::element::Element {
         crate::element::Element::Provider(*self)
     }

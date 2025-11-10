@@ -91,33 +91,6 @@ use std::any::Any;
 ///     }
 /// }
 /// ```
-///
-/// # Migration from Old View Trait
-///
-/// **Before (Old View with GATs):**
-/// ```rust,ignore
-/// impl View for Padding {
-///     type Element = Element;
-///     type State = Option<Box<dyn Any>>;
-///
-///     fn build(self, ctx: &mut BuildContext) -> (Self::Element, Self::State) {
-///         // 20+ lines of manual tree management...
-///     }
-///
-///     fn rebuild(...) -> ChangeFlags { ... }
-/// }
-/// ```
-///
-/// **After (Simplified View):**
-/// ```rust,ignore
-/// impl View for Padding {
-///     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-///         (RenderPadding::new(self.padding), self.child)
-///     }
-/// }
-/// ```
-///
-/// **75% less boilerplate!**
 pub trait View: Clone + 'static {
     /// Build this view into an element
     ///

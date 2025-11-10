@@ -1,6 +1,6 @@
-//! Example demonstrating the new simplified View API
+//! Example demonstrating the simplified View API
 //!
-//! This example shows the new simplified View API with no GATs,
+//! This example shows the simplified View API with no GATs,
 //! automatic tree management, and hooks for state.
 
 use flui_core::{AnyView, BuildContext, IntoElement, View};
@@ -9,7 +9,7 @@ use flui_core::{AnyView, BuildContext, IntoElement, View};
 // Example 1: Simple Text Component
 // ============================================================================
 
-/// Simple text view using the new API
+/// Simple text view
 #[derive(Clone)]
 struct SimpleText {
     text: String,
@@ -136,9 +136,9 @@ impl Render for MockPaddingRender {
 fn main() {
     println!("=== Simplified View API Example ===");
     println!();
-    println!("This example demonstrates the new simplified View API.");
+    println!("This example demonstrates the simplified View API.");
     println!();
-    println!("Key improvements:");
+    println!("Key features:");
     println!("  ✓ No GAT State/Element types");
     println!("  ✓ No manual tree management");
     println!("  ✓ No explicit rebuild() method");

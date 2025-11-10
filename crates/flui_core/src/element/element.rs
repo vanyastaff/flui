@@ -11,7 +11,7 @@
 //! View Type           → Element Variant
 //! ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //! Component View      → Element::Component(ComponentElement)
-//! Provider View       → Element::Provider(InheritedElement)
+//! Provider View       → Element::Provider(ProviderElement)
 //! Render Object       → Element::Render(RenderElement)
 //! ```
 //!
@@ -80,13 +80,13 @@
 use std::fmt;
 
 use crate::element::{
-    ComponentElement, ElementId, ElementLifecycle, InheritedElement, RenderElement,
+    ComponentElement, ElementId, ElementLifecycle, ProviderElement, RenderElement,
 };
 use crate::foundation::Slot;
 
 // Re-export element types for convenience
 pub use crate::element::component::ComponentElement as Component;
-pub use crate::element::provider::InheritedElement as Provider;
+pub use crate::element::provider::ProviderElement as Provider;
 pub use crate::element::render::RenderElement as Render;
 
 /// Element - Heterogeneous element storage via enum
@@ -213,15 +213,11 @@ pub enum Element {
     ///
     /// # Implementation
     ///
-    /// ProviderElement (InheritedElement) stores:
+    /// ProviderElement stores:
     /// - `provided: Box<dyn Any>` - The provided data
     /// - `dependents: Vec<ElementId>` - Widgets that depend on this data
     /// - `child: Option<ElementId>` - Single child
-    ///
-    /// # Migration Note
-    ///
-    /// Previously called `Inherited`, renamed to `Provider` to better reflect purpose.
-    Provider(InheritedElement),
+    Provider(ProviderElement),
 }
 
 impl Element {
@@ -271,13 +267,11 @@ impl Element {
 
     /// Try to get as ProviderElement (immutable)
     ///
-    /// Returns `Some(&InheritedElement)` if this is a Provider variant,
+    /// Returns `Some(&ProviderElement)` if this is a Provider variant,
     /// `None` otherwise.
-    ///
-    /// Note: InheritedElement is the implementation type for Provider.
     #[inline]
     #[must_use]
-    pub fn as_provider(&self) -> Option<&InheritedElement> {
+    pub fn as_provider(&self) -> Option<&ProviderElement> {
         match self {
             Self::Provider(p) => Some(p),
             _ => None,
@@ -287,7 +281,7 @@ impl Element {
     /// Try to get as ProviderElement (mutable)
     #[inline]
     #[must_use]
-    pub fn as_provider_mut(&mut self) -> Option<&mut InheritedElement> {
+    pub fn as_provider_mut(&mut self) -> Option<&mut ProviderElement> {
         match self {
             Self::Provider(p) => Some(p),
             _ => None,
@@ -630,8 +624,7 @@ impl Element {
         }
     }
 
-    // NOTE: rebuild() method temporarily removed
-    // TODO(Phase 5): Implement View-based rebuild:
+    // TODO: Implement View-based rebuild method:
     // pub fn rebuild(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags
     //
     // Each element type will call View::rebuild() to efficiently update:

@@ -260,8 +260,8 @@ impl ComponentElement {
     ///
     /// ChangeFlags indicating what changed
     pub fn rebuild_with_view(&mut self, new_view: Box<dyn AnyView>) -> ChangeFlags {
-        // TODO(Phase 5): Implement proper View::rebuild() call
-        // For now, just update view and mark dirty
+        // TODO: Implement proper View::rebuild() call instead of just updating view
+        // and marking dirty
 
         if !new_view.same_type(&*self.view) {
             // Different view type - need full rebuild
@@ -344,8 +344,9 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "TODO: Add test once we have a concrete View implementation"]
     fn test_component_element_creation() {
-        // TODO: Add test once we have a concrete View implementation
+        unimplemented!()
     }
 
     #[test]

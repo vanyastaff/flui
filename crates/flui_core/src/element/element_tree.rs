@@ -723,6 +723,44 @@ impl ElementTree {
         }
     }
 
+    // ========== Helper Methods ==========
+
+    /// Find the first RenderElement by walking down through ComponentElements
+    ///
+    /// This helper is used by both `layout_child` and `paint_child` to find
+    /// the actual RenderElement to operate on.
+    ///
+    /// # Arguments
+    /// * `start_id` - Starting element ID (may be Component or Render)
+    ///
+    /// # Returns
+    /// * `Some(ElementId)` - ID of the first RenderElement found
+    /// * `None` - If no RenderElement found or tree walk failed
+    fn find_render_element(&self, start_id: ElementId) -> Option<ElementId> {
+        let mut current_id = start_id;
+        loop {
+            if let Some(element) = self.get(current_id) {
+                match element {
+                    crate::element::Element::Render(_) => {
+                        return Some(current_id);
+                    }
+                    crate::element::Element::Component(comp) => {
+                        if let Some(comp_child_id) = comp.child() {
+                            current_id = comp_child_id;
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => {
+                        return None;
+                    }
+                }
+            } else {
+                return None;
+            }
+        }
+    }
+
     // ========== Convenience Aliases for Render Traits ==========
 
     /// Alias for `layout_render_object` - used by SingleRender/MultiRender traits
@@ -754,28 +792,7 @@ impl ElementTree {
         }
 
         // Walk down through ComponentElements to find the first RenderElement
-        let mut current_id = child_id;
-        let render_id = loop {
-            if let Some(element) = self.get(current_id) {
-                match element {
-                    crate::element::Element::Render(_) => {
-                        break Some(current_id);
-                    }
-                    crate::element::Element::Component(comp) => {
-                        if let Some(comp_child_id) = comp.child() {
-                            current_id = comp_child_id;
-                        } else {
-                            break None;
-                        }
-                    }
-                    _ => {
-                        break None;
-                    }
-                }
-            } else {
-                break None;
-            }
-        };
+        let render_id = self.find_render_element(child_id);
 
         if let Some(render_id) = render_id {
             match self.layout_render_object(render_id, constraints) {
@@ -805,37 +822,7 @@ impl ElementTree {
         tracing::debug!("paint_child: called with child_id={:?}", child_id);
 
         // Walk down through ComponentElements to find the first RenderElement
-        // (same logic as layout_child)
-        let mut current_id = child_id;
-        let render_id = loop {
-            if let Some(element) = self.get(current_id) {
-                match element {
-                    crate::element::Element::Render(_) => {
-                        #[cfg(debug_assertions)]
-                        tracing::debug!("paint_child: found RenderElement at {:?}", current_id);
-                        break Some(current_id);
-                    }
-                    crate::element::Element::Component(comp) => {
-                        if let Some(comp_child_id) = comp.child() {
-                            current_id = comp_child_id;
-                        } else {
-                            #[cfg(debug_assertions)]
-                            tracing::warn!("paint_child: ComponentElement has no child");
-                            break None;
-                        }
-                    }
-                    _ => {
-                        #[cfg(debug_assertions)]
-                        tracing::warn!("paint_child: unexpected element type");
-                        break None;
-                    }
-                }
-            } else {
-                #[cfg(debug_assertions)]
-                tracing::error!("paint_child: element {:?} not found in tree!", current_id);
-                break None;
-            }
-        };
+        let render_id = self.find_render_element(child_id);
 
         if let Some(render_id) = render_id {
             self.paint_render_object(render_id, offset)
