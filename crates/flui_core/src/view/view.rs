@@ -1,27 +1,20 @@
-//! View trait - Core abstraction for reactive UI
+//! Core abstraction for reactive UI components.
 //!
-//! The View trait is the simplified, unified API for building UI in Flui.
-//! It eliminates boilerplate while maintaining the proven three-tree architecture.
+//! Provides a simplified, unified API for building UI components while
+//! maintaining the three-tree architecture.
 
 use super::build_context::BuildContext;
 use super::IntoElement;
 use crate::element::Element;
 use std::any::Any;
 
-/// View trait - simplified API for reactive UI
+/// Core abstraction for building reactive UI components.
 ///
-/// The View trait is FLUI's core abstraction for building user interfaces.
-/// It represents a lightweight, immutable description of what the UI should look like.
+/// Represents a lightweight, immutable description of UI state. Views are
+/// configuration objects that the framework converts into Elements (mutable state)
+/// which manage RenderObjects (layout/paint).
 ///
-/// # What is a View?
-///
-/// A View is similar to:
-/// - **Flutter**: Widget (declarative UI description)
-/// - **React**: Component (returns JSX/elements)
-/// - **SwiftUI**: View protocol
-///
-/// Views are **configuration objects**, not widgets themselves. The framework converts
-/// Views into Elements (mutable state) which manage RenderObjects (layout/paint).
+/// Similar to Widget in Flutter, Component in React, or View in SwiftUI.
 ///
 /// # Three-Tree Architecture
 ///
@@ -35,18 +28,16 @@ use std::any::Any;
 /// Returns elements        Lifecycle mgmt       Render::paint()
 /// ```
 ///
-/// # Design Philosophy (v0.6.0+)
+/// # Design (v0.6.0+)
 ///
-/// The View API has been radically simplified:
+/// The View API design:
 ///
-/// - **No GAT State**: Use hooks (`use_signal`, `use_memo`) instead of generic state types
-/// - **No GAT Element**: Return `impl IntoElement` instead of associated Element types
-/// - **No rebuild()**: Framework handles efficient diffing automatically
-/// - **Clone Required**: Views must implement `Clone` for type erasure with `AnyView`
-/// - **'static Required**: Views must be `'static` to enable safe storage and lifecycle
-/// - **Composable**: Views compose via `IntoElement` trait
-///
-/// **Result:** 75% less boilerplate compared to the old API!
+/// - No GAT State: Use hooks (`use_signal`, `use_memo`) instead
+/// - No GAT Element: Return `impl IntoElement`
+/// - No rebuild(): Framework handles diffing automatically
+/// - Clone Required: Enables type erasure with `AnyView`
+/// - 'static Required: Enables safe storage and lifecycle management
+/// - Composable: Views compose via `IntoElement` trait
 ///
 /// # Examples
 ///
@@ -118,16 +109,15 @@ use std::any::Any;
 /// }
 /// ```
 pub trait View: Clone + 'static {
-    /// Build this view into an element
+    /// Builds this view into an element.
     ///
-    /// This is the only required method for the View trait. It describes what
-    /// the UI should look like based on the current view configuration.
+    /// Describes the UI structure based on the current view configuration.
     ///
     /// # Return Types
     ///
-    /// Returns anything that implements `IntoElement`:
+    /// Returns any type implementing `IntoElement`:
     ///
-    /// 1. **Other Views** (composition):
+    /// 1. Other Views (composition):
     ///    ```rust,ignore
     ///    fn build(self, ctx: &BuildContext) -> impl IntoElement {
     ///        Column::new()
@@ -136,16 +126,16 @@ pub trait View: Clone + 'static {
     ///    }
     ///    ```
     ///
-    /// 2. **Tuple of (RenderObject, children)** (wrapping renderers):
+    /// 2. Tuple of (RenderObject, children):
     ///    ```rust,ignore
     ///    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-    ///        // Leaf: (RenderObject, ())
+    ///        // Leaf
     ///        (RenderText::new(self.text), ())
     ///
-    ///        // Single child: (RenderObject, Option<child>)
+    ///        // Single child
     ///        (RenderPadding::new(self.padding), self.child)
     ///
-    ///        // Multiple children: (RenderObject, Vec<children>)
+    ///        // Multiple children
     ///        (RenderFlex::column(), self.children)
     ///    }
     ///    ```
@@ -175,23 +165,24 @@ pub trait View: Clone + 'static {
     /// }
     /// ```
     ///
-    /// # BuildContext Parameter
+    /// # BuildContext
     ///
-    /// The `ctx: &BuildContext` parameter provides:
-    /// - **Hooks API**: `use_signal(ctx, ...)`, `use_memo(ctx, ...)`, `use_effect(ctx, ...)`
-    /// - **Tree queries** (rarely needed): `ctx.parent()`, `ctx.size()`
-    /// - **Inherited data**: `ctx.depend_on::<Theme>()` (Provider pattern)
+    /// Provides access to:
+    /// - Hooks API: `use_signal`, `use_memo`, `use_effect`
+    /// - Tree queries: `ctx.parent()`, `ctx.size()`
+    /// - Inherited data: `ctx.depend_on::<Theme>()`
     ///
-    /// # Performance & Optimization
+    /// # Performance
     ///
-    /// The framework automatically handles rebuild optimization:
+    /// The framework handles rebuild optimization automatically:
     /// - Compares views by type ID at runtime
     /// - Only rebuilds when parent marks child as dirty
-    /// - No manual `rebuild()` method needed
+    /// - No manual `rebuild()` method required
     ///
-    /// For custom optimization, implement `PartialEq`:
+    /// Implement `PartialEq` for value-based optimization:
+    ///
     /// ```rust,ignore
-    /// #[derive(Clone, PartialEq)]  // ← Enables value-based comparison
+    /// #[derive(Clone, PartialEq)]
     /// struct MyView {
     ///     text: String,
     /// }
@@ -200,24 +191,21 @@ pub trait View: Clone + 'static {
     ///
     /// # Lifecycle
     ///
-    /// Views are **immutable** and **ephemeral**:
-    /// - Created fresh every rebuild
-    /// - Consumed by `build()` (takes `self` by value)
-    /// - Framework manages Element lifecycle (mount, unmount, dirty tracking)
+    /// Views are immutable and ephemeral:
+    /// - Created fresh on each rebuild
+    /// - Consumed by `build()` (takes ownership)
+    /// - Framework manages Element lifecycle
     ///
-    /// # Thread-Local BuildContext
-    ///
-    /// BuildContext is accessed via thread-local storage for ergonomics.
-    /// The framework sets up the context before calling `build()` using RAII guards.
+    /// BuildContext is accessed via thread-local storage. The framework
+    /// sets up the context before calling `build()` using RAII guards.
     fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }
 
-/// Sealed trait marker - prevents external implementation
+/// Sealed trait marker.
 ///
-/// This module contains a sealed trait pattern to prevent users from
-/// implementing ViewElement outside of flui-core.
+/// Prevents external implementation of ViewElement outside flui-core.
 pub(crate) mod sealed {
-    /// Sealed trait - only types in flui-core can implement this
+    /// Sealed trait. Only types in flui-core can implement this.
     pub trait Sealed {}
 
     // Implementations for flui-core types
@@ -227,22 +215,20 @@ pub(crate) mod sealed {
     impl Sealed for crate::element::Element {}
 }
 
-/// ViewElement trait - bridge between View and Element
+/// Internal bridge between View and Element.
 ///
-/// **Internal trait** - This trait is used internally by the framework
-/// to bridge between Views and Elements. Users should NOT implement this trait.
-///
-/// The trait is sealed - you cannot implement it outside of flui-core.
+/// This trait is sealed and cannot be implemented outside flui-core.
+/// Used internally by the framework to convert Views into Elements.
 pub trait ViewElement: sealed::Sealed + 'static {
-    /// Convert this typed element into the Element enum
+    /// Converts this typed element into the Element enum.
     fn into_element(self: Box<Self>) -> Element;
 
-    /// Mark this element as needing rebuild
+    /// Marks this element as needing rebuild.
     fn mark_dirty(&mut self);
 
-    /// Get as Any for downcasting
+    /// Returns reference as Any for downcasting.
     fn as_any(&self) -> &dyn Any;
 
-    /// Get as Any mut for downcasting
+    /// Returns mutable reference as Any for downcasting.
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }

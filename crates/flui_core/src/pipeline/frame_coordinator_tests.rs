@@ -294,7 +294,7 @@ mod tests {
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 
         // Use non-existent root ID
-        let invalid_root = 9999;
+        let invalid_root = ElementId::new(9999);
         let result =
             fixture
                 .coordinator

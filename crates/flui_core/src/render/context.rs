@@ -350,8 +350,9 @@ mod tests {
 
     #[test]
     fn test_paint_context_creation() {
+        use crate::ElementId;
         let tree = ElementTree::new();
-        let children = Children::Single(1);
+        let children = Children::Single(ElementId::new(1));
         let offset = Offset::new(10.0, 20.0);
 
         let ctx = PaintContext::new(&tree, &children, offset);
