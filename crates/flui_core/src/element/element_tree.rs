@@ -886,7 +886,7 @@ impl ElementTree {
 
         if let Some(render_id) = render_id {
             self.paint_render_object(render_id, offset)
-                .unwrap_or_else(|| flui_painting::Canvas::new())
+                .unwrap_or_default()
         } else {
             #[cfg(debug_assertions)]
             tracing::warn!("paint_child: returning empty Canvas (no render_id)");

@@ -179,7 +179,8 @@ impl FrameCoordinator {
 
                     // Convert Canvas → PictureLayer → BoxedLayer
                     let canvas = render_elem.paint_render(tree_guard, offset);
-                    Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas)) as crate::BoxedLayer)
+                    Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas))
+                        as crate::BoxedLayer)
                 } else {
                     // Root is ComponentElement or ProviderElement - return empty container
                     Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
@@ -270,7 +271,10 @@ impl FrameCoordinator {
 
             #[cfg(debug_assertions)]
             if !laid_out_ids.is_empty() {
-                tracing::debug!("build_frame: Layout phase computed {} layouts", laid_out_ids.len());
+                tracing::debug!(
+                    "build_frame: Layout phase computed {} layouts",
+                    laid_out_ids.len()
+                );
             }
 
             // Mark all laid out elements for paint
@@ -364,7 +368,10 @@ impl FrameCoordinator {
 
         #[cfg(debug_assertions)]
         if !laid_out_ids.is_empty() {
-            tracing::debug!("flush_layout: Laid out {} render objects", laid_out_ids.len());
+            tracing::debug!(
+                "flush_layout: Laid out {} render objects",
+                laid_out_ids.len()
+            );
         }
 
         // Mark all laid out elements for paint
@@ -492,7 +499,8 @@ impl FrameCoordinator {
 
                         // Convert Canvas → PictureLayer → BoxedLayer
                         let canvas = render_elem.paint_render(&tree_guard, offset);
-                        Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas)) as crate::BoxedLayer)
+                        Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas))
+                            as crate::BoxedLayer)
                     }
                     Some(crate::element::Element::Component(comp)) => {
                         // Root is ComponentElement - paint its child
@@ -510,7 +518,10 @@ impl FrameCoordinator {
 
                                         // Convert Canvas → PictureLayer → BoxedLayer
                                         let canvas = child_render.paint_render(&tree_guard, offset);
-                                        Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas)) as crate::BoxedLayer)
+                                        Some(Box::new(flui_engine::PictureLayer::from_canvas(
+                                            canvas,
+                                        ))
+                                            as crate::BoxedLayer)
                                     }
                                     _ => {
                                         #[cfg(debug_assertions)]

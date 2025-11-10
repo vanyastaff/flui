@@ -10,42 +10,32 @@ use std::sync::Arc;
 ///
 /// Controls the quality and performance trade-off for blur rendering.
 /// Higher quality produces smoother blur but requires more computation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BlurQuality {
     /// Fast box blur approximation (single pass)
     Low,
 
     /// Multi-pass box blur (approximates gaussian, 3 passes)
+    #[default]
     Medium,
 
     /// High-quality gaussian blur (5+ passes)
     High,
 }
 
-impl Default for BlurQuality {
-    fn default() -> Self {
-        Self::Medium
-    }
-}
-
 /// Blur mode determines how blur is applied.
 ///
 /// Similar to CSS filter vs backdrop-filter distinction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BlurMode {
     /// Blur the content itself (like CSS filter: blur())
+    #[default]
     Content,
 
     /// Blur the backdrop behind the content (like CSS backdrop-filter: blur())
     Backdrop,
-}
-
-impl Default for BlurMode {
-    fn default() -> Self {
-        Self::Content
-    }
 }
 
 /// Color filter types for image and content manipulation.

@@ -14,10 +14,11 @@
 /// assert!(orientation.is_portrait());
 /// assert!(!orientation.is_landscape());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DeviceOrientation {
     /// Portrait orientation with the top of the device up
+    #[default]
     PortraitUp,
 
     /// Portrait orientation with the top of the device down (upside down)
@@ -254,12 +255,6 @@ impl DeviceOrientation {
             Self::LandscapeLeft => "landscape_left",
             Self::LandscapeRight => "landscape_right",
         }
-    }
-}
-
-impl Default for DeviceOrientation {
-    fn default() -> Self {
-        Self::PortraitUp
     }
 }
 

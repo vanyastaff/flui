@@ -24,10 +24,11 @@ use crate::styling::Color;
 /// assert!(brightness.is_dark());
 /// assert!(!brightness.is_light());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Brightness {
     /// Light theme (dark text on light background)
+    #[default]
     Light,
 
     /// Dark theme (light text on dark background)
@@ -217,12 +218,6 @@ impl Brightness {
             Self::Light => "light",
             Self::Dark => "dark",
         }
-    }
-}
-
-impl Default for Brightness {
-    fn default() -> Self {
-        Self::Light
     }
 }
 

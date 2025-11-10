@@ -211,7 +211,10 @@ impl LayoutPipeline {
         }
 
         #[cfg(debug_assertions)]
-        tracing::debug!("compute_layout: Complete ({} objects processed)", laid_out_ids.len());
+        tracing::debug!(
+            "compute_layout: Complete ({} objects processed)",
+            laid_out_ids.len()
+        );
 
         Ok(laid_out_ids)
     }

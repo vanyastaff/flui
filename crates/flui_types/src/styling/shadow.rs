@@ -350,23 +350,18 @@ impl Default for BoxShadow {
 ///
 /// Used by shadow rendering systems to control blur quality and performance.
 /// Higher quality levels produce smoother shadows but require more computation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ShadowQuality {
     /// Low quality - single pass blur approximation
     Low,
 
     /// Medium quality - multi-pass blur (3 passes)
+    #[default]
     Medium,
 
     /// High quality - high-quality gaussian blur (5+ passes)
     High,
-}
-
-impl Default for ShadowQuality {
-    fn default() -> Self {
-        Self::Medium
-    }
 }
 
 #[cfg(test)]

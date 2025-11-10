@@ -12,13 +12,14 @@
 /// let alphabetic = TextBaseline::Alphabetic;
 /// let ideographic = TextBaseline::Ideographic;
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TextBaseline {
     /// Alphabetic baseline (most common for Latin scripts).
     ///
     /// This is the baseline used for most Western scripts including Latin,
     /// Greek, and Cyrillic alphabets.
+    #[default]
     Alphabetic,
 
     /// Ideographic baseline (used for CJK scripts).
@@ -26,12 +27,6 @@ pub enum TextBaseline {
     /// This is the baseline used for Chinese, Japanese, and Korean scripts.
     /// In these scripts, the baseline is typically at the bottom of the character box.
     Ideographic,
-}
-
-impl Default for TextBaseline {
-    fn default() -> Self {
-        Self::Alphabetic
-    }
 }
 
 impl TextBaseline {

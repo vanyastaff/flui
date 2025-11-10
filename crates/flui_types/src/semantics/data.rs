@@ -15,7 +15,7 @@ use crate::Rect;
 /// let role = SemanticsRole::Button;
 /// assert!(role.is_interactive());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SemanticsRole {
     /// A button that can be tapped
@@ -79,6 +79,7 @@ pub enum SemanticsRole {
     Group,
 
     /// No specific role
+    #[default]
     None,
 }
 
@@ -204,12 +205,6 @@ impl SemanticsRole {
             Self::Group => "group",
             Self::None => "none",
         }
-    }
-}
-
-impl Default for SemanticsRole {
-    fn default() -> Self {
-        Self::None
     }
 }
 

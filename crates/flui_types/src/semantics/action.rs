@@ -13,10 +13,11 @@
 /// let action = SemanticsAction::Tap;
 /// assert_eq!(action, SemanticsAction::Tap);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SemanticsAction {
     /// Tap on the node
+    #[default]
     Tap,
 
     /// Long press on the node
@@ -223,12 +224,6 @@ impl SemanticsAction {
             Self::DidLoseAccessibilityFocus => "did_lose_focus",
             Self::CustomAction => "custom_action",
         }
-    }
-}
-
-impl Default for SemanticsAction {
-    fn default() -> Self {
-        Self::Tap
     }
 }
 

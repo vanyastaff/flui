@@ -501,9 +501,10 @@ impl ScrollEventData {
 }
 
 /// System theme
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Theme {
     /// Light theme
+    #[default]
     Light,
     /// Dark theme
     Dark,
@@ -518,12 +519,6 @@ impl Theme {
     /// Check if this is the light theme
     pub fn is_light(&self) -> bool {
         matches!(self, Theme::Light)
-    }
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Theme::Light
     }
 }
 
