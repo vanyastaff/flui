@@ -3,8 +3,8 @@
 ## Summary
 
 **Started with:** 237 test compilation errors
-**Current status:** 194 test compilation errors
-**Progress:** 43 errors fixed (-18%)
+**Current status:** 145 test compilation errors
+**Progress:** 92 errors fixed (-39%)
 
 ## Completed Fixes
 
@@ -31,40 +31,50 @@
 - Exported `TestWidget` for reusable test views
 - Fixed testing module compilation
 
-## Remaining Errors (194)
+### ✅ Test Harness Hook Tests (10 errors fixed)
+- Fixed `signal.get()` to pass `&mut ctx` or `harness.context_mut()`
+- Fixed `memo.get()` to pass `&mut ctx`
+- Updated memo tests to use Arc pattern for closures
+- Pattern: `Arc::new(move |ctx: &mut HookContext| { ... })`
 
-### Type Mismatches (165 errors)
-Most common issues:
-- Old API signatures vs new View API
-- ElementId vs usize conversions
-- Missing type annotations in closures
-- BuildContext method signatures
+### ✅ Dependency Tests (36 errors fixed)
+- Fixed all dependency.rs tests to use `ElementId::new()`
+- Changed `let id = 1` to `let id = ElementId::new(1)`
+- Fixed for loops: `for i in 1..=10` with `ElementId::new(i)` usage
+- All DependencyInfo and DependencyTracker tests now compile
 
-### Missing Arguments (10 errors)
-Methods still needing HookContext:
-- Various hook methods in remaining test files
-- Some signal/memo operations in integration tests
+## Remaining Errors (145)
 
-### Incorrect Arguments (7 errors)
-Functions with changed signatures:
-- BuildPipeline methods
-- Element constructors
-- Context creation
+### Type Mismatches (133 errors) - E0308
+Most common issues by file:
+- `pipeline_owner.rs` (18) - Old test setup patterns
+- `build_pipeline.rs` (18) - Pipeline API changes
+- `foundation/error.rs` (17) - Error type conversions
+- `pipeline/error.rs` (12) - Error handling changes
+- `render/cache.rs` (11) - Cache API updates
+- `foundation/notification.rs` (10) - Notification system changes
+- `pipeline/parallel_build.rs` (9) - Parallel processing updates
+- `pipeline/dirty_tracking.rs` (9) - Dirty tracking changes
+- `pipeline/paint_pipeline.rs` (6) - Paint API updates
+- `pipeline/layout_pipeline.rs` (6) - Layout API updates
+- Smaller files: `recovery.rs` (4), `effect.rs` (3), `element_base.rs` (3), `diagnostics.rs` (3), `resource.rs` (2)
 
-### ParentData Downcasting (2 errors)
-- Need to implement proper downcast methods for ParentData trait
-- Currently `Box<dyn ParentData>` doesn't have `downcast_ref()`
+### Method Not Found (4 errors) - E0599
+- Some methods renamed or removed in refactoring
 
-### Moved Value Errors (2 errors)
+### Moved Value Errors (2 errors) - E0382
 - Some tests use values after move
 - Need Arc cloning or restructuring
 
-### Miscellaneous (8 errors)
-- 1 mark_dirty method not found
-- 1 AnyView trait bound
-- 2 type annotation errors
-- 2 type annotation inference errors
-- 1 multiple applicable items
+### Type Annotation Needed (4 errors) - E0282, E0283
+- 2 errors: cannot infer type
+- 2 errors: multiple implementations (need explicit type)
+
+### Trait Bound Not Satisfied (1 error) - E0277
+- Some type doesn't implement required trait
+
+### Multiple Applicable Items (1 error) - E0034
+- Ambiguous method call needs disambiguation
 
 ## Key API Changes Documented
 
@@ -105,27 +115,52 @@ assert_eq!(id, ElementId::new(42));
 
 ## Next Steps
 
-1. **Fix remaining argument errors** (10 files)
-   - Update signal/memo tests in remaining hook files
-   - Add HookContext parameters
+### Priority Order (by impact/difficulty ratio)
 
-2. **Fix type mismatches** (priority by file)
-   - `element/` tests - Element constructors
-   - `pipeline/` tests - BuildPipeline API
-   - `render/` tests - Render trait changes
+1. **Fix smaller test files first** (< 10 errors each)
+   - `recovery.rs` (4 errors)
+   - `effect.rs` (3 errors)
+   - `element_base.rs` (3 errors)
+   - `diagnostics.rs` (3 errors)
+   - `resource.rs` (2 errors)
+   - **Total: ~17 quick wins**
 
-3. **Fix ParentData downcasting**
-   - Implement `downcast_ref()` for `Box<dyn ParentData>`
-   - Or change API to not require downcasting
+2. **Fix render cache tests** (11 errors)
+   - Cache API updates
+   - Likely similar patterns to fix
 
-4. **Fix moved value errors**
-   - Refactor tests to clone before move
-   - Use Arc where needed
+3. **Fix notification tests** (10 errors)
+   - Notification system changes
 
-5. **Run test suite**
-   - Once compilation passes
-   - Fix any runtime failures
-   - Ensure all tests pass
+4. **Fix pipeline dirty tracking** (9 errors)
+   - Dirty tracking API updates
+
+5. **Fix parallel build tests** (9 errors)
+   - Parallel processing updates
+
+6. **Fix pipeline tests** (6+6 = 12 errors)
+   - `paint_pipeline.rs` (6)
+   - `layout_pipeline.rs` (6)
+
+7. **Fix error handling tests** (17+12 = 29 errors)
+   - `foundation/error.rs` (17)
+   - `pipeline/error.rs` (12)
+
+8. **Fix large pipeline tests** (18+18 = 36 errors)
+   - `build_pipeline.rs` (18)
+   - `pipeline_owner.rs` (18)
+
+9. **Fix edge cases** (8 errors)
+   - Method not found (4)
+   - Type annotations (4)
+   - Moved values (2)
+   - Trait bounds (1)
+   - Ambiguous calls (1)
+
+10. **Run test suite**
+    - Once compilation passes
+    - Fix any runtime failures
+    - Ensure all tests pass
 
 ## Commands
 
