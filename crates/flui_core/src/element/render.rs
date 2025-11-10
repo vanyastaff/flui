@@ -297,7 +297,7 @@ impl RenderElement {
         &self,
         tree: &crate::element::ElementTree,
         offset: flui_types::Offset,
-    ) -> flui_engine::BoxedLayer {
+    ) -> flui_painting::Canvas {
         let render = self.render_object.read();
         let children = Children::from_slice(&self.children);
         let ctx = PaintContext::new(tree, &children, offset);

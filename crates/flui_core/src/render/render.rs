@@ -125,7 +125,7 @@
 //! ```
 
 use crate::render::{Arity, LayoutContext, PaintContext};
-use flui_engine::BoxedLayer;
+use flui_painting::Canvas;
 use flui_types::Size;
 use std::fmt::Debug;
 
@@ -329,8 +329,8 @@ pub trait Render: Send + Sync + Debug + 'static {
 
     /// Paint with context
     ///
-    /// This method is called during the paint phase to generate the layer
-    /// tree for this renderer and its children.
+    /// This method is called during the paint phase to generate a Canvas
+    /// with recorded drawing commands for this renderer and its children.
     ///
     /// # Parameters
     ///
@@ -341,31 +341,33 @@ pub trait Render: Send + Sync + Debug + 'static {
     ///
     /// # Returns
     ///
-    /// A boxed layer containing the painted content.
+    /// A Canvas containing recorded drawing commands.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    /// fn paint(&self, ctx: &PaintContext) -> Canvas {
     ///     // For leaf nodes: paint self
-    ///     let mut layer = pool::acquire_picture();
-    ///     layer.draw_text(self.text, ctx.offset, self.color);
-    ///     Box::new(layer)
+    ///     let mut canvas = Canvas::new();
+    ///     canvas.translate(ctx.offset.dx, ctx.offset.dy);
+    ///     canvas.draw_text(self.text, Offset::ZERO, &style, &paint);
+    ///     canvas
     ///
     ///     // For single child: paint child with offset
     ///     let child_id = ctx.children.single();
     ///     ctx.paint_child(child_id, ctx.offset + padding_offset)
     ///
-    ///     // For multiple children: paint all into container
-    ///     let mut container = pool::acquire_container();
+    ///     // For multiple children: paint all into canvas
+    ///     let mut canvas = Canvas::new();
     ///     for (i, &child_id) in ctx.children.as_slice().iter().enumerate() {
     ///         let offset = ctx.offset + self.child_offsets[i];
-    ///         container.child(ctx.paint_child(child_id, offset));
+    ///         let child_canvas = ctx.paint_child(child_id, offset);
+    ///         canvas.draw_canvas(&child_canvas, offset);
     ///     }
-    ///     Box::new(container)
+    ///     canvas
     /// }
     /// ```
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer;
+    fn paint(&self, ctx: &PaintContext) -> Canvas;
 
     /// Get arity (expected child count)
     ///
@@ -496,7 +498,6 @@ pub trait Render: Send + Sync + Debug + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_engine::ContainerLayer;
 
     #[derive(Debug)]
     struct TestLeafRender;
@@ -506,8 +507,8 @@ mod tests {
             ctx.constraints.constrain(Size::new(100.0, 100.0))
         }
 
-        fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
+        fn paint(&self, _ctx: &PaintContext) -> Canvas {
+            Canvas::new()
         }
 
         fn arity(&self) -> Arity {
@@ -528,7 +529,7 @@ mod tests {
             ctx.layout_child(child_id, ctx.constraints)
         }
 
-        fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+        fn paint(&self, ctx: &PaintContext) -> Canvas {
             let child_id = ctx.children.single();
             ctx.paint_child(child_id, ctx.offset)
         }
@@ -550,8 +551,8 @@ mod tests {
             ctx.constraints.biggest()
         }
 
-        fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
+        fn paint(&self, _ctx: &PaintContext) -> Canvas {
+            Canvas::new()
         }
 
         fn arity(&self) -> Arity {

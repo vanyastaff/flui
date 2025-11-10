@@ -6,7 +6,7 @@
 
 use crate::element::{ElementId, ElementTree};
 use crate::render::Children;
-use flui_engine::BoxedLayer;
+use flui_painting::Canvas;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 // ============================================================================
@@ -244,15 +244,15 @@ impl<'a> PaintContext<'a> {
     ///
     /// # Returns
     ///
-    /// A boxed layer containing the child's painted content.
+    /// A Canvas containing the child's drawing commands.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let child_layer = ctx.paint_child(child_id, ctx.offset + Offset::new(10.0, 20.0));
+    /// let child_canvas = ctx.paint_child(child_id, ctx.offset + Offset::new(10.0, 20.0));
     /// ```
     #[inline]
-    pub fn paint_child(&self, child_id: ElementId, offset: Offset) -> BoxedLayer {
+    pub fn paint_child(&self, child_id: ElementId, offset: Offset) -> Canvas {
         self.tree.paint_child(child_id, offset)
     }
 
@@ -267,7 +267,7 @@ impl<'a> PaintContext<'a> {
     ///
     /// # Returns
     ///
-    /// Vector of child layers in the same order as the children.
+    /// Vector of child canvases in the same order as the children.
     ///
     /// # Panics
     ///
@@ -276,12 +276,12 @@ impl<'a> PaintContext<'a> {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let child_layers = ctx.paint_all_children(&self.cached_offsets);
-    /// for layer in child_layers {
-    ///     container.child(layer);
+    /// let child_canvases = ctx.paint_all_children(&self.cached_offsets);
+    /// for child_canvas in child_canvases {
+    ///     canvas.draw_canvas(&child_canvas, offset);
     /// }
     /// ```
-    pub fn paint_all_children(&self, offsets: &[Offset]) -> Vec<BoxedLayer> {
+    pub fn paint_all_children(&self, offsets: &[Offset]) -> Vec<Canvas> {
         let child_ids = self.children.as_slice();
 
         assert_eq!(
@@ -310,15 +310,15 @@ impl<'a> PaintContext<'a> {
     ///
     /// # Returns
     ///
-    /// Vector of child layers in the same order as the children.
+    /// Vector of child canvases in the same order as the children.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// // Stack layout - all children at same position
-    /// let child_layers = ctx.paint_all_children_at(Offset::ZERO);
+    /// let child_canvases = ctx.paint_all_children_at(Offset::ZERO);
     /// ```
-    pub fn paint_all_children_at(&self, offset: Offset) -> Vec<BoxedLayer> {
+    pub fn paint_all_children_at(&self, offset: Offset) -> Vec<Canvas> {
         self.children
             .as_slice()
             .iter()

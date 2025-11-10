@@ -720,7 +720,7 @@ impl ElementTree {
         &self,
         element_id: ElementId,
         offset: crate::Offset,
-    ) -> Option<crate::BoxedLayer> {
+    ) -> Option<flui_painting::Canvas> {
         // Check for re-entrant paint (element trying to paint itself)
         let is_reentrant = Self::PAINT_STACK.with(|stack| stack.borrow().contains(&element_id));
 
@@ -742,7 +742,7 @@ impl ElementTree {
         let render_element = element.as_render()?;
 
         // Call paint on render object
-        let layer = render_element.paint_render(self, offset);
+        let canvas = render_element.paint_render(self, offset);
 
         // Guards dropped here (_guard automatically)
 
@@ -750,7 +750,7 @@ impl ElementTree {
         // (e.g., RenderFlex paints its own overflow indicators in debug mode).
         // This is more architecturally correct than wrapping at the ElementTree level.
 
-        Some(layer)
+        Some(canvas)
     }
 
     // ========== Debug-Only Overflow Reporting ==========
@@ -877,7 +877,7 @@ impl ElementTree {
 
     /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
     #[inline]
-    pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> crate::BoxedLayer {
+    pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> flui_painting::Canvas {
         #[cfg(debug_assertions)]
         tracing::debug!("paint_child: called with child_id={:?}", child_id);
 
@@ -886,11 +886,11 @@ impl ElementTree {
 
         if let Some(render_id) = render_id {
             self.paint_render_object(render_id, offset)
-                .unwrap_or_else(|| Box::new(flui_engine::ContainerLayer::new()))
+                .unwrap_or_else(|| flui_painting::Canvas::new())
         } else {
             #[cfg(debug_assertions)]
-            tracing::warn!("paint_child: returning empty ContainerLayer (no render_id)");
-            Box::new(flui_engine::ContainerLayer::new())
+            tracing::warn!("paint_child: returning empty Canvas (no render_id)");
+            flui_painting::Canvas::new()
         }
     }
 

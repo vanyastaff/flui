@@ -1244,6 +1244,7 @@ dependencies = [
  "downcast-rs 2.0.2",
  "flui_derive",
  "flui_engine",
+ "flui_painting",
  "flui_types",
  "moka",
  "parking_lot",

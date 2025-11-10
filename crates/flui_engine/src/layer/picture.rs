@@ -34,6 +34,15 @@ impl PictureLayer {
         Self::default()
     }
 
+    /// Create a picture layer from a Canvas
+    ///
+    /// This is the primary way to create a PictureLayer from RenderObjects.
+    /// RenderObjects create a Canvas, record drawing commands, and return it.
+    /// The pipeline then converts Canvas → PictureLayer for GPU rendering.
+    pub fn from_canvas(canvas: Canvas) -> Self {
+        Self { canvas }
+    }
+
     /// Create a picture layer from a display list
     pub fn from_display_list(display_list: DisplayList) -> Self {
         // Can't convert DisplayList back to Canvas (DisplayList is immutable)

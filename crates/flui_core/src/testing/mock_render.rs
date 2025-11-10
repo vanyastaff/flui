@@ -4,7 +4,7 @@
 //! to verify layout and paint behavior without actual rendering.
 
 use crate::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_engine::{BoxedLayer, ContainerLayer};
+// Removed unused imports: BoxedLayer, ContainerLayer (now using Canvas)
 use flui_types::{BoxConstraints, Offset, Size};
 use std::sync::{Arc, Mutex};
 
@@ -129,12 +129,12 @@ impl Render for MockRender {
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let mut state = self.state.lock().unwrap();
         state.paint_calls += 1;
         state.last_offset = Some(ctx.offset);
 
-        Box::new(ContainerLayer::new())
+        flui_painting::Canvas::new()
     }
 
     fn arity(&self) -> Arity {
@@ -231,7 +231,7 @@ impl<R: Render> Render for SpyRender<R> {
         self.inner.layout(ctx)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
         let mut state = self.state.lock().unwrap();
         state.paint_calls += 1;
         state.last_offset = Some(ctx.offset);

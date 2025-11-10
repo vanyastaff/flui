@@ -251,8 +251,8 @@ impl crate::render::Render for EmptyRender {
         flui_types::Size::ZERO
     }
 
-    fn paint(&self, _ctx: &crate::render::PaintContext) -> flui_engine::BoxedLayer {
-        Box::new(flui_engine::ContainerLayer::new())
+    fn paint(&self, _ctx: &crate::render::PaintContext) -> flui_painting::Canvas {
+        flui_painting::Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

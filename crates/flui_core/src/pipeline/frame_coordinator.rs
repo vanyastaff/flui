@@ -177,7 +177,9 @@ impl FrameCoordinator {
                     let offset = render_state.offset();
                     drop(render_state);
 
-                    Some(render_elem.paint_render(tree_guard, offset))
+                    // Convert Canvas → PictureLayer → BoxedLayer
+                    let canvas = render_elem.paint_render(tree_guard, offset);
+                    Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas)) as crate::BoxedLayer)
                 } else {
                     // Root is ComponentElement or ProviderElement - return empty container
                     Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
@@ -478,7 +480,9 @@ impl FrameCoordinator {
                         let offset = render_state.offset();
                         drop(render_state);
 
-                        Some(render_elem.paint_render(&tree_guard, offset))
+                        // Convert Canvas → PictureLayer → BoxedLayer
+                        let canvas = render_elem.paint_render(&tree_guard, offset);
+                        Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas)) as crate::BoxedLayer)
                     }
                     Some(crate::element::Element::Component(comp)) => {
                         // Root is ComponentElement - paint its child
@@ -494,7 +498,9 @@ impl FrameCoordinator {
                                         let offset = render_state.offset();
                                         drop(render_state);
 
-                                        Some(child_render.paint_render(&tree_guard, offset))
+                                        // Convert Canvas → PictureLayer → BoxedLayer
+                                        let canvas = child_render.paint_render(&tree_guard, offset);
+                                        Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas)) as crate::BoxedLayer)
                                     }
                                     _ => {
                                         #[cfg(debug_assertions)]
