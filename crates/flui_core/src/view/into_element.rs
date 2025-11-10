@@ -359,7 +359,7 @@ impl<R: crate::render::Render> IntoElement for (R, ()) {
     }
 }
 
-/// Generic tuple implementation for (Render, Option<child>) - single-child syntax
+/// Generic tuple implementation for (Render, `Option<child>`) - single-child syntax
 ///
 /// Works with any Render type directly, no boxing needed:
 /// ```rust,ignore
@@ -384,9 +384,9 @@ impl<R: crate::render::Render> IntoElement for (R, Option<AnyElement>) {
     }
 }
 
-/// Convenience implementation for (Render, Option<Box<dyn AnyView>>) - widget child
+/// Convenience implementation for (Render, `Option<Box<dyn AnyView>>`) - widget child
 ///
-/// Allows passing Option<Box<dyn AnyView>> directly without conversion:
+/// Allows passing `Option<Box<dyn AnyView>>` directly without conversion:
 /// ```rust,ignore
 /// pub struct Padding {
 ///     child: Option<Box<dyn AnyView>>,  // Common pattern
@@ -418,9 +418,9 @@ impl<R: crate::render::Render> IntoElement for (R, Option<Box<dyn crate::view::A
     }
 }
 
-/// Convenience implementation for (Render, Vec<Box<dyn AnyView>>) - widget children
+/// Convenience implementation for (Render, `Vec<Box<dyn AnyView>>`) - widget children
 ///
-/// Allows passing Vec<Box<dyn AnyView>> directly without conversion:
+/// Allows passing `Vec<Box<dyn AnyView>>` directly without conversion:
 /// ```rust,ignore
 /// pub struct Column {
 ///     children: Vec<Box<dyn AnyView>>,  // Common pattern
@@ -451,7 +451,7 @@ impl<R: crate::render::Render> IntoElement for (R, Vec<Box<dyn crate::view::AnyV
     }
 }
 
-/// Generic tuple implementation for (Render, Vec<children>) - multi-child syntax
+/// Generic tuple implementation for (Render, `Vec<children>`) - multi-child syntax
 ///
 /// Works with any Render type directly, no boxing needed:
 /// ```rust,ignore

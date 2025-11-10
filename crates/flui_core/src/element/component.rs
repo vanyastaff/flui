@@ -67,7 +67,7 @@ pub struct ComponentElement {
     /// State for rebuilding (can be (), HookState, or CustomState)
     state: Box<dyn Any>,
 
-    /// Child element (Option<ElementId> is niche-optimized to same size as ElementId)
+    /// Child element (`Option<ElementId>` is niche-optimized to same size as ElementId)
     child: Option<ElementId>,
 }
 

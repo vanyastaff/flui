@@ -5,7 +5,7 @@
 //!
 //! # New in 0.7.0: Copy-Based Signals
 //!
-//! Signal<T> is now Copy! This eliminates the need for explicit `.clone()` calls.
+//! `Signal<T>` is now Copy! This eliminates the need for explicit `.clone()` calls.
 //! Signals are just lightweight IDs that reference data in a thread-local runtime.
 
 use super::hook_context::HookContext;
@@ -116,7 +116,7 @@ impl<T> std::fmt::Debug for Subscription<T> {
 ///
 /// # New in 0.7.0: Copy-Based Signals
 ///
-/// Signal<T> is now **Copy**! This means:
+/// `Signal<T>` is now **Copy**! This means:
 /// - No need to `.clone()` before moving into closures
 /// - Copying is implicit and free (just an 8-byte ID)
 /// - All copies refer to the same underlying value

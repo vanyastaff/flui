@@ -158,7 +158,7 @@ pub enum Element {
     /// Created by **Component views**.
     /// Handles components with optional state:
     /// - Pure components: build() function with no state
-    /// - Stateful components: Uses hooks (use_signal, etc.) or State<T> type parameter
+    /// - Stateful components: Uses hooks (use_signal, etc.) or `State<T>` type parameter
     ///
     /// # Lifecycle
     ///
@@ -167,7 +167,7 @@ pub enum Element {
     /// mount() → view.build() → child view → rebuild on update
     /// ```
     ///
-    /// **Stateful component (with hooks or State<T>):**
+    /// **Stateful component (with hooks or `State<T>`):**
     /// ```text
     /// mount() → build with state → rebuild on state changes
     /// ```
@@ -175,7 +175,7 @@ pub enum Element {
     /// # Implementation
     ///
     /// ComponentElement stores:
-    /// - `state: Box<dyn Any>` - () for stateless, Box<dyn DynState> for stateful
+    /// - `state: Box<dyn Any>` - () for stateless, `Box<dyn DynState>` for stateful
     /// - `child: Option<ElementId>` - Single child from build()
     Component(ComponentElement),
 

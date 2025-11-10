@@ -72,7 +72,7 @@ impl LayoutPipeline {
 
     /// Marks a render object as needing relayout.
     ///
-    /// The render object will be laid out on the next call to [`compute_layout`].
+    /// The render object will be laid out on the next call to [`LayoutPipeline::compute_layout`].
     pub fn mark_dirty(&self, id: ElementId) {
         self.dirty.mark_dirty(id);
     }

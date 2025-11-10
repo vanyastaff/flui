@@ -49,7 +49,7 @@ pub struct ProviderElement {
     /// if `View::rebuild()` indicates changes.
     dependents: HashSet<ElementId>,
 
-    /// The single child element (Option<ElementId> is niche-optimized)
+    /// The single child element (`Option<ElementId>` is niche-optimized)
     child: Option<ElementId>,
 }
 

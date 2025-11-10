@@ -36,7 +36,7 @@ use crate::view::IntoElement;
 ///
 /// # Performance
 ///
-/// Render is Box<dyn>, but this is acceptable because:
+/// Render is `Box<dyn>`, but this is acceptable because:
 /// - Layout/paint operations use interior mutability (RwLock)
 /// - Hot path (layout) uses trait methods, not enum dispatch
 /// - Element enum provides fast dispatch for element operations

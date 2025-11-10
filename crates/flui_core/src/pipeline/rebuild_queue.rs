@@ -15,7 +15,7 @@ use std::sync::Arc;
 ///
 /// # Thread-Safety
 ///
-/// Uses Arc<Mutex<HashSet>> for thread-safe access from multiple threads.
+/// Uses `Arc<Mutex<HashSet>>` for thread-safe access from multiple threads.
 /// Multiple signals can schedule rebuilds concurrently.
 ///
 /// # Example

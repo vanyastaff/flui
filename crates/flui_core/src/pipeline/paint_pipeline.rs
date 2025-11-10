@@ -66,7 +66,7 @@ impl PaintPipeline {
 
     /// Marks a render object as needing repaint.
     ///
-    /// The render object will be painted on the next call to [`generate_layers`].
+    /// The render object will be painted on the next call to [`PaintPipeline::generate_layers`].
     pub fn mark_dirty(&self, id: ElementId) {
         self.dirty.mark_dirty(id);
     }
