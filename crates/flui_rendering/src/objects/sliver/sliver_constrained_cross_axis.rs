@@ -242,8 +242,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry() {
         let constrained = RenderSliverConstrainedCrossAxis::new(600.0);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -273,7 +271,7 @@ mod tests {
             max_scroll_obsolescence: 0.0,
         };
 
-        let geometry = constrained.calculate_sliver_geometry(&constraints, &tree, &children, child_geometry);
+        let geometry = constrained.calculate_sliver_geometry(&constraints, child_geometry);
 
         // Cross-axis should be constrained
         assert_eq!(geometry.cross_axis_extent, 600.0);
@@ -285,8 +283,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_no_constraint() {
         let constrained = RenderSliverConstrainedCrossAxis::new(f32::INFINITY);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -316,7 +312,7 @@ mod tests {
             max_scroll_obsolescence: 0.0,
         };
 
-        let geometry = constrained.calculate_sliver_geometry(&constraints, &tree, &children, child_geometry);
+        let geometry = constrained.calculate_sliver_geometry(&constraints, child_geometry);
 
         // Cross-axis should pass through unchanged
         assert_eq!(geometry.cross_axis_extent, 1000.0);

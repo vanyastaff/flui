@@ -212,8 +212,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_not_scrolled() {
         let header = RenderSliverPersistentHeader::new(50.0, false);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -227,7 +225,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = header.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = header.calculate_sliver_geometry(&constraints);
 
         // Full header visible
         assert_eq!(geometry.scroll_extent, 50.0);
@@ -238,8 +236,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_partially_scrolled() {
         let header = RenderSliverPersistentHeader::new(50.0, false);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -253,7 +249,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = header.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = header.calculate_sliver_geometry(&constraints);
 
         // Half visible
         assert_eq!(geometry.scroll_extent, 50.0);
@@ -264,8 +260,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_scrolled_past_not_pinned() {
         let header = RenderSliverPersistentHeader::new(50.0, false);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -279,7 +273,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = header.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = header.calculate_sliver_geometry(&constraints);
 
         // Not visible when not pinned
         assert_eq!(geometry.scroll_extent, 50.0);
@@ -290,8 +284,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_scrolled_past_pinned() {
         let header = RenderSliverPersistentHeader::new(50.0, true);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -305,7 +297,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = header.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = header.calculate_sliver_geometry(&constraints);
 
         // Still visible when pinned!
         assert_eq!(geometry.scroll_extent, 50.0);
@@ -316,8 +308,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_pinned_before_reached() {
         let header = RenderSliverPersistentHeader::new(50.0, true);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -331,7 +321,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = header.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = header.calculate_sliver_geometry(&constraints);
 
         // Partially visible, not yet pinned
         assert_eq!(geometry.scroll_extent, 50.0);

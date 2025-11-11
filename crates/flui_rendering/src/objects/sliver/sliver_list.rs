@@ -1,7 +1,7 @@
 //! RenderSliverList - Scrollable list with lazy loading
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -198,23 +198,20 @@ impl Default for RenderSliverList {
     }
 }
 
-impl Render for RenderSliverList {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        // Slivers don't use BoxConstraints directly
-        // They receive SliverConstraints from their viewport parent
-        // For now, we return a size based on constraints
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverList {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
         // Store cross axis extent
-        self.cross_axis_extent = constraints.max_width;
+        self.cross_axis_extent = constraints.cross_axis_extent;
 
-        // Return a size that represents the visible area
-        // The actual sliver geometry will be calculated separately
-        Size::new(constraints.max_width, constraints.max_height)
+        // Calculate and cache sliver geometry
+        let children_slice = ctx.children.as_slice();
+        self.sliver_geometry = self.calculate_sliver_geometry(constraints, ctx.tree, children_slice);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
         let canvas = Canvas::new();
 
         // Slivers paint their visible children based on scroll offset

@@ -5,7 +5,7 @@ use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::layout::{Axis, AxisDirection};
-use flui_types::{SliverConstraints, SliverGeometry};
+use flui_types::{BoxConstraints, SliverConstraints, SliverGeometry};
 
 /// RenderObject that provides a viewport for sliver content
 ///
@@ -201,7 +201,7 @@ impl Default for RenderViewport {
 
 impl Render for RenderViewport {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
+        let constraints = &ctx.constraints;
 
         // Viewport takes up the space given by box constraints
         let width = constraints.max_width;

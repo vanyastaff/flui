@@ -255,8 +255,6 @@ mod tests {
     fn test_calculate_sliver_geometry_not_scrolled() {
         let insets = EdgeInsets::new(0.0, 40.0, 0.0, 20.0);
         let safe_area = RenderSliverSafeArea::new(insets);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -270,7 +268,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = safe_area.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = safe_area.calculate_sliver_geometry(&constraints);
 
         // Total padding: 40 + 20 = 60
         assert_eq!(geometry.scroll_extent, 60.0);
@@ -282,8 +280,6 @@ mod tests {
     fn test_calculate_sliver_geometry_partially_scrolled() {
         let insets = EdgeInsets::new(0.0, 40.0, 0.0, 20.0);
         let safe_area = RenderSliverSafeArea::new(insets);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -297,7 +293,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = safe_area.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = safe_area.calculate_sliver_geometry(&constraints);
 
         // Leading visible: 40 - 30 = 10
         // Paint extent: 10 (leading) + 600 (remaining) = 610, but capped at total_padding (60)
@@ -310,8 +306,6 @@ mod tests {
     fn test_calculate_sliver_geometry_scrolled_past_leading() {
         let insets = EdgeInsets::new(0.0, 40.0, 0.0, 20.0);
         let safe_area = RenderSliverSafeArea::new(insets);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -325,7 +319,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = safe_area.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = safe_area.calculate_sliver_geometry(&constraints);
 
         // Leading visible: 40 - 50 = 0 (capped at 0)
         // Paint extent: 0 + 600 = 600, but capped at total_padding (60)

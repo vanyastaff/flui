@@ -1,7 +1,7 @@
 //! RenderSliverGrid - Scrollable grid with lazy loading
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -214,19 +214,20 @@ impl RenderSliverGrid {
     }
 }
 
-impl Render for RenderSliverGrid {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverGrid {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
         // Store cross axis extent
-        self.cross_axis_extent = constraints.max_width;
+        self.cross_axis_extent = constraints.cross_axis_extent;
 
-        // Return a size that represents the visible area
-        Size::new(constraints.max_width, constraints.max_height)
+        // Calculate and cache sliver geometry
+        let children_slice = ctx.children.as_slice();
+        self.sliver_geometry = self.calculate_sliver_geometry(constraints, ctx.tree, children_slice);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
         let canvas = Canvas::new();
 
         // Grid painting happens in viewport

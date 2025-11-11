@@ -1,7 +1,7 @@
 //! RenderSliverPrototypeExtentList - List with prototype-based item sizing
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -147,19 +147,45 @@ impl Default for RenderSliverPrototypeExtentList {
     }
 }
 
-impl Render for RenderSliverPrototypeExtentList {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverPrototypeExtentList {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
         // TODO: Measure prototype if not yet measured
         // TODO: Layout visible children using prototype extent
 
-        // Return a size representing the visible area
-        Size::new(constraints.max_width, constraints.max_height)
+        // For now, use fixed extent for all children
+        let prototype_extent = self.prototype_extent.unwrap_or(50.0);
+        let child_count = ctx.children.as_slice().len();
+        let total_extent = prototype_extent * child_count as f32;
+
+        let scroll_offset = constraints.scroll_offset;
+        let remaining_extent = constraints.remaining_paint_extent;
+
+        let paint_extent = (total_extent - scroll_offset).max(0.0).min(remaining_extent);
+
+        SliverGeometry {
+            scroll_extent: total_extent,
+            paint_extent,
+            paint_origin: 0.0,
+            layout_extent: paint_extent,
+            max_paint_extent: total_extent,
+            max_scroll_obsolescence: 0.0,
+            visible_fraction: if total_extent > 0.0 {
+                (paint_extent / total_extent).min(1.0)
+            } else {
+                0.0
+            },
+            cross_axis_extent: constraints.cross_axis_extent,
+            cache_extent: paint_extent,
+            visible: paint_extent > 0.0,
+            has_visual_overflow: total_extent > paint_extent,
+            hit_test_extent: Some(paint_extent),
+            scroll_offset_correction: None,
+        }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
         let canvas = Canvas::new();
 
         // Children are painted by viewport at their calculated positions

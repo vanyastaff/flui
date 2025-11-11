@@ -278,8 +278,6 @@ mod tests {
     fn test_calculate_sliver_geometry() {
         let padding = EdgeInsets::new(0.0, 40.0, 0.0, 20.0);
         let sliver = RenderSliverEdgeInsetsPadding::new(padding);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -310,7 +308,7 @@ mod tests {
             max_scroll_obsolescence: 0.0,
         };
 
-        let geometry = sliver.calculate_sliver_geometry(&constraints, &tree, &children, child_geometry);
+        let geometry = sliver.calculate_sliver_geometry(&constraints, child_geometry);
 
         // Scroll extent includes padding
         assert_eq!(geometry.scroll_extent, 260.0); // 200 + 40 + 20
