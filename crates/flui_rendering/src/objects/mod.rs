@@ -2,26 +2,29 @@
 
 /// Basic render objects (primitives, shapes)
 pub mod basic;
-/// Debug render objects and utilities
 pub mod debug;
-/// Effect render objects (opacity, transforms, clips)
 pub mod effects;
-/// Interaction render objects (pointer listeners, gesture detection)
 pub mod interaction;
-/// Layout render objects (flex, padding, align, etc.)
 pub mod layout;
-/// Scrollable viewport render object
+pub mod media;
 pub mod render_scroll_view;
-/// Viewport render object for clipping and scrolling
 pub mod render_viewport;
-/// Special render objects (custom paint, etc.)
 pub mod special;
-/// Text rendering objects
 pub mod text;
+/// Debug render objects and utilities
+/// Effect render objects (opacity, transforms, clips)
+/// Interaction render objects (pointer listeners, gesture detection)
+/// Layout render objects (flex, padding, align, etc.)
+/// Scrollable viewport render object
+/// Viewport render object for clipping and scrolling
+/// Special render objects (custom paint, etc.)
+/// Text rendering objects
+
 
 pub use effects::*;
 pub use interaction::*;
 pub use layout::*;
+pub use media::*;
 pub use render_scroll_view::RenderScrollView;
 pub use render_viewport::RenderViewport;
 pub use special::*;
@@ -30,3 +33,4 @@ pub use text::*;
 // Debug objects - currently TODO, will be re-enabled after Canvas API migration
 // #[cfg(debug_assertions)]
 // pub use debug::*;
+
