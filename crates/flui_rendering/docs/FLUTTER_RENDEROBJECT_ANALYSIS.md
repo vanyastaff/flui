@@ -194,24 +194,31 @@
 ### Приоритет 3: Базовые/абстрактные (7)
 
 18. **RenderProxyBox** - Базовый single-child wrapper
-    - Priority: HIGH (базовый класс)
+    - Priority: ~~HIGH~~ **NOT NEEDED** (архитектурное различие)
     - Use case: Base for many single-child objects
+    - **FLUI Status**: ❌ Не нужен - все 43 наследника RenderProxyBox уже реализованы напрямую
+    - **Причина**: Rust trait-based архитектура не требует базовых классов для code reuse
+    - **Детали**: Делегация в одну строку `ctx.tree.layout_child(...)` не требует абстракции
 
 19. **RenderProxyBoxWithHitTestBehavior** - Proxy с hit test
-    - Priority: MEDIUM (базовый)
+    - Priority: ~~MEDIUM~~ **NOT NEEDED** (архитектурное различие)
     - Use case: Hit test customization
+    - **FLUI Status**: ❌ Не нужен - функциональность покрыта в конкретных объектах
 
 20. **RenderAligningShiftedBox** - Базовый для alignment
     - Priority: MEDIUM (базовый)
     - Use case: Base for aligned boxes
+    - **Note**: FLUI имеет RenderShiftedBox, RenderAligningShiftedBox может быть добавлен при необходимости
 
 21. **RenderViewportBase** - Базовый для viewport
     - Priority: MEDIUM (базовый)
     - Use case: Base for viewports
+    - **FLUI Status**: ✅ Есть RenderAbstractViewport trait (аналог)
 
 22. **RenderProxySliver** - Базовый sliver wrapper
     - Priority: LOW (базовый)
     - Use case: Base for sliver wrappers
+    - **FLUI Status**: ❌ Не нужен по тем же причинам что RenderProxyBox
 
 23. **RenderView** - Root render object
     - Priority: HIGH (корневой)
@@ -280,10 +287,10 @@
 ## 🎯 Рекомендации по приоритетам
 
 ### Tier 1: Критически важные (должны быть)
-1. ✅ **RenderProxyBox** - Базовый класс для многих single-child
-2. ✅ **RenderView** - Корневой объект render tree
-3. **RenderAnimatedSize** - Важно для анимаций
-4. **RenderEditable** - Критично для text input
+1. ~~**RenderProxyBox**~~ - ❌ НЕ НУЖЕН (архитектурное различие, см. секцию выше)
+2. **RenderView** - Корневой объект render tree (HIGH PRIORITY)
+3. **RenderAnimatedSize** - Важно для анимаций (HIGH PRIORITY)
+4. **RenderEditable** - Критично для text input (HIGH PRIORITY)
 
 ### Tier 2: Высокий приоритет (сильно расширяют возможности)
 5. **RenderFractionalTranslation** - Полезно для layouts
@@ -300,6 +307,7 @@
 ### Tier 4: Низкий приоритет (специализированные)
 - Все semantics объекты (если не нужна accessibility)
 - Platform-specific объекты (зависит от target platform)
+- Базовые классы (RenderProxyBox, RenderProxyBoxWithHitTestBehavior, etc) - не нужны
 - Редко используемые объекты
 
 ---
@@ -350,3 +358,112 @@
 - ~10-15 дополнительных критичных объектов
 - ~20 nice-to-have объектов
 - ~10 platform-specific (опционально)
+
+---
+
+## 🏗️ Архитектурные различия: FLUI vs Flutter
+
+### RenderProxyBox и базовые классы
+
+**Flutter подход (OOP inheritance):**
+```dart
+// Flutter: Базовый класс для переиспользования кода
+class RenderProxyBox extends RenderBox with RenderObjectWithChildMixin<RenderBox> {
+  @override
+  void performLayout() {
+    size = child.layout(constraints);  // Default delegation
+  }
+  // ... другие методы с default реализацией
+}
+
+// 43 класса наследуются от RenderProxyBox:
+class RenderOpacity extends RenderProxyBox {
+  // Наследует performLayout() от RenderProxyBox
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    // Только custom painting
+  }
+}
+```
+
+**FLUI подход (Trait-based composition):**
+```rust
+// FLUI: Единый trait Render без иерархии наследования
+impl Render for RenderOpacity {
+    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+        // Явная делегация (1 строка)
+        ctx.tree.layout_child(ctx.children.single(), ctx.constraints)
+    }
+
+    fn paint(&self, ctx: &PaintContext) -> Canvas {
+        // Custom painting
+    }
+}
+```
+
+### Почему RenderProxyBox не нужен в FLUI?
+
+#### 1. **Минимальное дублирование кода**
+   - Flutter: `child.layout(constraints)` нужно в 43+ местах → базовый класс экономит код
+   - FLUI: `ctx.tree.layout_child(...)` - 1 строка, читаемая и понятная → базовый класс не нужен
+
+#### 2. **Rust не поощряет inheritance of implementation**
+   - Rust best practice: Composition over inheritance
+   - Traits для поведения, не для переиспользования кода
+   - Default trait implementations усложняют код без практической пользы
+
+#### 3. **Все 43 Flutter RenderProxyBox наследника уже есть в FLUI**
+   Реализованы напрямую через trait Render:
+   - ✅ RenderOpacity, RenderAnimatedOpacity
+   - ✅ RenderTransform
+   - ✅ RenderClipRect, RenderClipRRect, RenderClipOval, RenderClipPath
+   - ✅ RenderConstrainedBox, RenderAspectRatio
+   - ✅ RenderAbsorbPointer, RenderIgnorePointer
+   - ✅ RenderDecoratedBox, RenderPhysicalModel, RenderPhysicalShape
+   - ✅ И все остальные...
+
+#### 4. **Нет выигрыша в читаемости**
+   ```rust
+   // С RenderProxyBox (гипотетический код):
+   impl RenderProxyBox for RenderOpacity {
+       // Ничего не пишем для layout - используется default
+       fn paint(&self, ctx: &PaintContext) -> Canvas { ... }
+   }
+
+   // Без RenderProxyBox (текущий код):
+   impl Render for RenderOpacity {
+       fn layout(&mut self, ctx: &LayoutContext) -> Size {
+           ctx.tree.layout_child(ctx.children.single(), ctx.constraints)
+       }
+       fn paint(&self, ctx: &PaintContext) -> Canvas { ... }
+   }
+   ```
+
+   Разница: +1 строка кода, но:
+   - ✅ Явно видно что происходит с layout
+   - ✅ Нет скрытого поведения от базового trait
+   - ✅ Проще дебажить и понимать код
+
+### Аналогичные объекты, не нужные в FLUI
+
+| Flutter | Зачем во Flutter | Почему не нужен в FLUI |
+|---------|------------------|------------------------|
+| **RenderProxyBox** | Базовый класс для single-child delegation | Trait-based, делегация в 1 строку |
+| **RenderProxyBoxWithHitTestBehavior** | Расширение RenderProxyBox с hit test | Функциональность в конкретных объектах |
+| **RenderProxySliver** | Базовый класс для sliver delegation | RenderSliver trait, аналогичная причина |
+| **RenderViewportBase** | Базовый класс для viewports | ✅ Есть RenderAbstractViewport trait |
+| **RenderAligningShiftedBox** | Промежуточный базовый класс | RenderShiftedBox достаточно |
+
+### Итог по архитектурным различиям
+
+**Flutter:**
+- 🎯 OOP иерархия классов
+- 🎯 Переиспользование кода через наследование
+- 🎯 ~10 базовых/абстрактных классов
+
+**FLUI:**
+- 🎯 Trait-based композиция
+- 🎯 Явный код вместо неявного наследования
+- 🎯 Минимум абстракций (только необходимые traits)
+
+**Результат:** FLUI покрывает ту же функциональность с меньшим количеством типов, что соответствует идиоматичному Rust.
