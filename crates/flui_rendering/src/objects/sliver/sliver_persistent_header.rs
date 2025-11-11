@@ -1,7 +1,6 @@
 //! RenderSliverPersistentHeader - Sticky header that stays visible during scroll
 
-use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -42,7 +41,6 @@ pub struct RenderSliverPersistentHeader {
     pub floating: bool,
 
     // Layout cache
-    child_size: Size,
     sliver_geometry: SliverGeometry,
 }
 
@@ -57,7 +55,6 @@ impl RenderSliverPersistentHeader {
             extent,
             pinned,
             floating: false,
-            child_size: Size::ZERO,
             sliver_geometry: SliverGeometry::default(),
         }
     }
@@ -87,8 +84,6 @@ impl RenderSliverPersistentHeader {
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        _children: &[flui_core::element::ElementId],
     ) -> SliverGeometry {
         let scroll_offset = constraints.scroll_offset;
         let remaining_extent = constraints.remaining_paint_extent;
@@ -140,27 +135,22 @@ impl RenderSliverPersistentHeader {
     }
 }
 
-impl Render for RenderSliverPersistentHeader {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
-
-        // Header takes full width, fixed height
-        self.child_size = Size::new(
-            constraints.max_width,
-            self.extent,
-        );
-
-        self.child_size
+impl RenderSliver for RenderSliverPersistentHeader {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Calculate and cache sliver geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Paint child if present and visible
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
 
-        // TODO: Paint header content
-        // TODO: Apply elevation/shadow when pinned
-
-        canvas
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
