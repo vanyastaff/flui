@@ -7,7 +7,7 @@
 //! - Distance between pointers changes
 //! - Calculates scale factor and focal point (center)
 
-use super::recognizer::{constants, GestureRecognizer, GestureRecognizerState};
+use super::recognizer::{GestureRecognizer, GestureRecognizerState};
 use crate::arena::{GestureArenaMember, PointerId};
 use flui_types::{events::PointerEvent, Offset};
 use parking_lot::Mutex;
@@ -470,7 +470,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                     self.handle_pointer_move(pointer, data.position);
                 }
             }
-            PointerEvent::Up(data) => {
+            PointerEvent::Up(_data) => {
                 if let Some(pointer) = self.state.primary_pointer() {
                     self.handle_pointer_up(pointer);
                 }

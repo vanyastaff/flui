@@ -180,8 +180,9 @@ impl SafeArea {
 
         let top_inset: f32 = if self.top { 44.0 } else { 0.0 }; // Status bar height
         let bottom_inset: f32 = if self.bottom { 34.0 } else { 0.0 }; // Home indicator
-        let left_inset: f32 = if self.left { 0.0 } else { 0.0 }; // Usually 0 unless curved display
-        let right_inset: f32 = if self.right { 0.0 } else { 0.0 };
+        // Usually 0 unless curved display
+        let left_inset: f32 = 0.0;
+        let right_inset: f32 = 0.0;
 
         EdgeInsets {
             left: left_inset.max(self.minimum.left),

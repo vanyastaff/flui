@@ -43,7 +43,9 @@ pub use recognizers::{
 
 pub mod prelude {
     //! Commonly used types and traits
+    #[allow(ambiguous_glob_reexports)]
     pub use crate::arena::*;
+    #[allow(ambiguous_glob_reexports)]
     pub use crate::detector::*;
     pub use crate::recognizers::{
         double_tap::*, drag::*, long_press::*, multi_tap::*, scale::*, tap::*,

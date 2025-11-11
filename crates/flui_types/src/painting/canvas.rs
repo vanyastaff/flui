@@ -286,6 +286,76 @@ pub enum VertexMode {
     TriangleFan,
 }
 
+/// Point drawing mode for DrawPoints command
+///
+/// Defines how a sequence of points should be interpreted when drawing.
+/// Similar to Flutter's `PointMode`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_types::painting::PointMode;
+///
+/// let mode = PointMode::Points;
+/// assert!(mode.is_points());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PointMode {
+    /// Draw each point as a separate dot
+    ///
+    /// Each point in the list is rendered as an individual dot with the
+    /// stroke width determining the dot size.
+    #[default]
+    Points,
+
+    /// Draw lines between consecutive points
+    ///
+    /// Points are connected pairwise: [p0, p1], [p2, p3], etc.
+    /// If there's an odd number of points, the last point is ignored.
+    Lines,
+
+    /// Draw a closed polygon connecting all points
+    ///
+    /// All points are connected sequentially, and the last point is
+    /// connected back to the first point to close the polygon.
+    Polygon,
+}
+
+impl PointMode {
+    /// Returns true if this mode draws individual points
+    #[inline]
+    #[must_use]
+    pub const fn is_points(&self) -> bool {
+        matches!(self, PointMode::Points)
+    }
+
+    /// Returns true if this mode draws lines
+    #[inline]
+    #[must_use]
+    pub const fn is_lines(&self) -> bool {
+        matches!(self, PointMode::Lines)
+    }
+
+    /// Returns true if this mode draws a polygon
+    #[inline]
+    #[must_use]
+    pub const fn is_polygon(&self) -> bool {
+        matches!(self, PointMode::Polygon)
+    }
+
+    /// Returns the minimum number of points required for this mode
+    #[inline]
+    #[must_use]
+    pub const fn min_points(&self) -> usize {
+        match self {
+            PointMode::Points => 1,
+            PointMode::Lines => 2,
+            PointMode::Polygon => 3,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,5 +451,35 @@ mod tests {
     fn test_vertex_mode_variants() {
         assert_ne!(VertexMode::Triangles, VertexMode::TriangleStrip);
         assert_ne!(VertexMode::TriangleStrip, VertexMode::TriangleFan);
+    }
+
+    #[test]
+    fn test_point_mode_default() {
+        assert_eq!(PointMode::default(), PointMode::Points);
+    }
+
+    #[test]
+    fn test_point_mode_is_methods() {
+        let points = PointMode::Points;
+        assert!(points.is_points());
+        assert!(!points.is_lines());
+        assert!(!points.is_polygon());
+
+        let lines = PointMode::Lines;
+        assert!(!lines.is_points());
+        assert!(lines.is_lines());
+        assert!(!lines.is_polygon());
+
+        let polygon = PointMode::Polygon;
+        assert!(!polygon.is_points());
+        assert!(!polygon.is_lines());
+        assert!(polygon.is_polygon());
+    }
+
+    #[test]
+    fn test_point_mode_min_points() {
+        assert_eq!(PointMode::Points.min_points(), 1);
+        assert_eq!(PointMode::Lines.min_points(), 2);
+        assert_eq!(PointMode::Polygon.min_points(), 3);
     }
 }

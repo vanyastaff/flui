@@ -248,7 +248,7 @@ fn create_filter_from_detail(config: &LogConfig) -> EnvFilter {
     // Otherwise use detail level
     let detail_filter = match config.detail {
         Some(LogDetail::Minimal) => "flui=warn,flui_app::app=info",
-        Some(LogDetail::Standard) => "flui_app=info,flui_core::pipeline=info,flui_core::element=info,flui_rendering=info,flui_engine=warn",
+        Some(LogDetail::Standard) => "flui_app=info,flui_core::pipeline=info,flui_core::element=info,flui_rendering=info,flui_engine=info",
         Some(LogDetail::Verbose) => "flui=debug",
         Some(LogDetail::Trace) => "flui=trace",
         None => "flui_app=info,flui_core::pipeline=info",

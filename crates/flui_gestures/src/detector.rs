@@ -90,7 +90,8 @@ impl View for GestureDetector {
         }
 
         // on_tap and on_tap_up callback
-        if let (on_tap, on_tap_up) = (self.on_tap.clone(), self.on_tap_up.clone()) {
+        let (on_tap, on_tap_up) = (self.on_tap.clone(), self.on_tap_up.clone());
+        if on_tap.is_some() || on_tap_up.is_some() {
             let pointer_down_clone = pointer_down.clone();
             callbacks = callbacks.with_on_pointer_up(move |event: &PointerEvent| {
                 if pointer_down_clone.load(std::sync::atomic::Ordering::SeqCst) {

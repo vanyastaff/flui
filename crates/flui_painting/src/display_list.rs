@@ -17,6 +17,9 @@ use flui_types::{
     typography::TextStyle,
 };
 
+// Re-export types that are part of the public API
+pub use flui_types::painting::{BlendMode, Paint, PointMode, Shader};
+
 /// A recorded sequence of drawing commands
 ///
 /// DisplayList is immutable after recording and can be replayed multiple times
@@ -24,11 +27,14 @@ use flui_types::{
 ///
 /// # Examples
 ///
+/// ## Basic Usage
+///
 /// ```rust,ignore
-/// use flui_painting::{Canvas, DisplayList};
+/// use flui_painting::{Canvas, DisplayList, Paint};
+/// use flui_types::{Rect, Color};
 ///
 /// let mut canvas = Canvas::new();
-/// canvas.draw_rect(rect, &paint);
+/// canvas.draw_rect(rect, &Paint::fill(Color::RED));
 /// let display_list: DisplayList = canvas.finish();
 ///
 /// // Later, in engine:
@@ -40,6 +46,30 @@ use flui_types::{
 ///         // ... other commands
 ///     }
 /// }
+/// ```
+///
+/// ## Using Transform API
+///
+/// ```rust,ignore
+/// use flui_painting::Canvas;
+/// use flui_types::geometry::Transform;
+/// use std::f32::consts::PI;
+///
+/// let mut canvas = Canvas::new();
+///
+/// // Apply Transform (high-level API)
+/// canvas.transform(Transform::translate(50.0, 50.0));
+/// canvas.transform(Transform::rotate(PI / 4.0));
+/// canvas.draw_rect(rect, &paint);
+///
+/// // Or compose transforms fluently
+/// let composed = Transform::translate(50.0, 50.0)
+///     .then(Transform::rotate(PI / 4.0))
+///     .then(Transform::scale(2.0));
+/// canvas.set_transform(composed);
+///
+/// let display_list = canvas.finish();
+/// // DrawCommands now contain the transformed Matrix4
 /// ```
 #[derive(Debug, Clone)]
 pub struct DisplayList {
@@ -147,6 +177,31 @@ impl Default for DisplayList {
 ///
 /// Each variant contains all information needed to execute the command
 /// later, including the transform matrix at the time of recording.
+///
+/// # Transform Field
+///
+/// Every command stores the active `Matrix4` transform when it was recorded.
+/// This transform is captured from Canvas's transform stack via:
+/// - `canvas.transform(Transform::rotate(...))` - Apply Transform (high-level)
+/// - `canvas.set_transform(matrix)` - Set Matrix4 directly
+/// - `canvas.save()` / `canvas.restore()` - Save/restore transform state
+///
+/// The GPU backend applies this transform when executing the command.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_painting::Canvas;
+/// use flui_types::geometry::Transform;
+///
+/// let mut canvas = Canvas::new();
+///
+/// // Commands recorded with Transform API
+/// canvas.save();
+/// canvas.transform(Transform::rotate(PI / 4.0));
+/// canvas.draw_rect(rect, &paint);  // ← DrawCommand stores rotated Matrix4
+/// canvas.restore();
+/// ```
 #[derive(Debug, Clone)]
 pub enum DrawCommand {
     // === Clipping Commands ===
@@ -370,24 +425,50 @@ impl DrawCommand {
     /// Returns the bounding rectangle of this command (if applicable)
     ///
     /// Used to calculate the DisplayList's overall bounds.
+    /// This returns transformed screen-space bounds (local bounds transformed by the command's matrix).
     fn bounds(&self) -> Option<Rect> {
         match self {
-            DrawCommand::DrawRect { rect, .. } => Some(*rect),
-            DrawCommand::DrawRRect { rrect, .. } => Some(rrect.bounding_rect()),
-            DrawCommand::DrawCircle { center, radius, .. } => {
-                let size = Size::new(radius * 2.0, radius * 2.0);
-                Some(Rect::from_center_size(*center, size))
+            DrawCommand::DrawRect { rect, paint, transform } => {
+                // Account for stroke width if stroking
+                let outset = paint.effective_stroke_width() * 0.5;
+                let local_bounds = rect.expand(outset);
+                Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawOval { rect, .. } => Some(*rect),
-            DrawCommand::DrawImage { dst, .. } => Some(*dst),
-            DrawCommand::DrawLine { p1, p2, paint, .. } => {
+            DrawCommand::DrawRRect { rrect, paint, transform } => {
+                let outset = paint.effective_stroke_width() * 0.5;
+                let local_bounds = rrect.bounding_rect().expand(outset);
+                Some(transform.transform_rect(&local_bounds))
+            }
+            DrawCommand::DrawCircle {
+                center,
+                radius,
+                paint,
+                transform,
+            } => {
+                // Circle radius + stroke outset
+                let stroke_outset = paint.effective_stroke_width() * 0.5;
+                let effective_radius = radius + stroke_outset;
+                let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
+                let local_bounds = Rect::from_center_size(*center, size);
+                Some(transform.transform_rect(&local_bounds))
+            }
+            DrawCommand::DrawOval { rect, paint, transform } => {
+                let outset = paint.effective_stroke_width() * 0.5;
+                let local_bounds = rect.expand(outset);
+                Some(transform.transform_rect(&local_bounds))
+            }
+            DrawCommand::DrawImage { dst, transform, .. } => {
+                Some(transform.transform_rect(dst))
+            }
+            DrawCommand::DrawLine { p1, p2, paint, transform } => {
                 // Account for stroke width
-                let stroke_half = paint.stroke_width * 0.5;
+                let stroke_half = paint.effective_stroke_width() * 0.5;
                 let min_x = p1.x.min(p2.x) - stroke_half;
                 let min_y = p1.y.min(p2.y) - stroke_half;
                 let max_x = p1.x.max(p2.x) + stroke_half;
                 let max_y = p1.y.max(p2.y) + stroke_half;
-                Some(Rect::from_ltrb(min_x, min_y, max_x, max_y))
+                let local_bounds = Rect::from_ltrb(min_x, min_y, max_x, max_y);
+                Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawPath { .. } => {
                 // Path bounds calculation requires mutable access
@@ -395,17 +476,29 @@ impl DrawCommand {
                 None
             }
             DrawCommand::DrawShadow { .. } => {
-                // Shadow bounds calculation requires path bounds
-                // We'll compute DisplayList bounds without Shadow bounds for now
+                // Shadow bounds calculation requires path.bounds() which needs &mut Path
+                // (for caching), but we only have &Path in this method.
+                // Could be solved by:
+                // 1. Pre-computing and storing bounds in DrawCommand
+                // 2. Using interior mutability (Cell/RefCell) in Path
+                // 3. Making bounds() work with &self (recompute each time)
                 None
             }
-            DrawCommand::DrawArc { rect, .. } => Some(*rect),
-            DrawCommand::DrawDRRect { outer, .. } => Some(outer.bounding_rect()),
-            DrawCommand::DrawPoints { points, paint, .. } => {
+            DrawCommand::DrawArc { rect, paint, transform, .. } => {
+                let outset = paint.effective_stroke_width() * 0.5;
+                let local_bounds = rect.expand(outset);
+                Some(transform.transform_rect(&local_bounds))
+            }
+            DrawCommand::DrawDRRect { outer, paint, transform, .. } => {
+                let outset = paint.effective_stroke_width() * 0.5;
+                let local_bounds = outer.bounding_rect().expand(outset);
+                Some(transform.transform_rect(&local_bounds))
+            }
+            DrawCommand::DrawPoints { points, paint, transform, .. } => {
                 if points.is_empty() {
                     return None;
                 }
-                let stroke_half = paint.stroke_width * 0.5;
+                let stroke_half = paint.effective_stroke_width() * 0.5;
                 let mut min_x = points[0].x;
                 let mut min_y = points[0].y;
                 let mut max_x = points[0].x;
@@ -418,14 +511,15 @@ impl DrawCommand {
                     max_y = max_y.max(point.y);
                 }
 
-                Some(Rect::from_ltrb(
+                let local_bounds = Rect::from_ltrb(
                     min_x - stroke_half,
                     min_y - stroke_half,
                     max_x + stroke_half,
                     max_y + stroke_half,
-                ))
+                );
+                Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawVertices { vertices, .. } => {
+            DrawCommand::DrawVertices { vertices, transform, .. } => {
                 if vertices.is_empty() {
                     return None;
                 }
@@ -441,13 +535,42 @@ impl DrawCommand {
                     max_y = max_y.max(vertex.y);
                 }
 
-                Some(Rect::from_ltrb(min_x, min_y, max_x, max_y))
+                let local_bounds = Rect::from_ltrb(min_x, min_y, max_x, max_y);
+                Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawAtlas { .. } => {
-                // For atlas, we need to compute bounds of all transformed sprites
-                // This is complex and would require matrix math
-                // For now, return None - can be optimized later
-                None
+            DrawCommand::DrawAtlas {
+                sprites,
+                transforms: sprite_transforms,
+                transform,
+                ..
+            } => {
+                // Compute bounds of all transformed sprites
+                if sprites.is_empty() || sprite_transforms.is_empty() {
+                    return None;
+                }
+
+                // Each sprite has:
+                // 1. Source rect in atlas (sprites[i])
+                // 2. Destination transform (sprite_transforms[i])
+                // 3. Overall command transform (transform)
+
+                let mut combined_bounds: Option<Rect> = None;
+
+                for (sprite_rect, sprite_transform) in sprites.iter().zip(sprite_transforms.iter()) {
+                    // Transform sprite rect by its local transform
+                    let local_transformed = sprite_transform.transform_rect(sprite_rect);
+
+                    // Then apply the overall command transform
+                    let screen_bounds = transform.transform_rect(&local_transformed);
+
+                    // Union with existing bounds
+                    combined_bounds = match combined_bounds {
+                        Some(existing) => Some(existing.union(&screen_bounds)),
+                        None => Some(screen_bounds),
+                    };
+                }
+
+                combined_bounds
             }
             DrawCommand::DrawColor { .. } => {
                 // DrawColor fills entire canvas, no specific bounds
@@ -460,224 +583,6 @@ impl DrawCommand {
             | DrawCommand::DrawText { .. } => None,
         }
     }
-}
-
-/// Description of how to paint on a canvas
-///
-/// Contains color, style (fill/stroke), stroke width, blend mode, etc.
-/// This is the painting equivalent of CSS styles.
-#[derive(Debug, Clone)]
-pub struct Paint {
-    /// Paint style (fill or stroke)
-    pub style: PaintStyle,
-
-    /// Color (RGBA)
-    pub color: Color,
-
-    /// Stroke width (only used for stroke style)
-    pub stroke_width: f32,
-
-    /// Stroke cap style
-    pub stroke_cap: StrokeCap,
-
-    /// Stroke join style
-    pub stroke_join: StrokeJoin,
-
-    /// Blend mode
-    pub blend_mode: BlendMode,
-
-    /// Anti-aliasing enabled
-    pub anti_alias: bool,
-
-    /// Optional shader (gradient, image pattern, etc.)
-    pub shader: Option<Shader>,
-}
-
-impl Paint {
-    /// Creates a fill paint with the given color
-    pub fn fill(color: Color) -> Self {
-        Self {
-            style: PaintStyle::Fill,
-            color,
-            stroke_width: 0.0,
-            stroke_cap: StrokeCap::Butt,
-            stroke_join: StrokeJoin::Miter,
-            blend_mode: BlendMode::SrcOver,
-            anti_alias: true,
-            shader: None,
-        }
-    }
-
-    /// Creates a stroke paint with the given color and width
-    pub fn stroke(color: Color, width: f32) -> Self {
-        Self {
-            style: PaintStyle::Stroke,
-            color,
-            stroke_width: width,
-            stroke_cap: StrokeCap::Butt,
-            stroke_join: StrokeJoin::Miter,
-            blend_mode: BlendMode::SrcOver,
-            anti_alias: true,
-            shader: None,
-        }
-    }
-
-    /// Builder for Paint
-    pub fn builder() -> PaintBuilder {
-        PaintBuilder::default()
-    }
-}
-
-impl Default for Paint {
-    fn default() -> Self {
-        Self::fill(Color::BLACK)
-    }
-}
-
-/// Builder for Paint
-#[derive(Debug, Clone, Default)]
-pub struct PaintBuilder {
-    paint: Paint,
-}
-
-impl PaintBuilder {
-    /// Sets the paint style
-    pub fn style(mut self, style: PaintStyle) -> Self {
-        self.paint.style = style;
-        self
-    }
-
-    /// Sets the color
-    pub fn color(mut self, color: Color) -> Self {
-        self.paint.color = color;
-        self
-    }
-
-    /// Sets the stroke width
-    pub fn stroke_width(mut self, width: f32) -> Self {
-        self.paint.stroke_width = width;
-        self
-    }
-
-    /// Sets the stroke cap
-    pub fn stroke_cap(mut self, cap: StrokeCap) -> Self {
-        self.paint.stroke_cap = cap;
-        self
-    }
-
-    /// Sets the stroke join
-    pub fn stroke_join(mut self, join: StrokeJoin) -> Self {
-        self.paint.stroke_join = join;
-        self
-    }
-
-    /// Sets the blend mode
-    pub fn blend_mode(mut self, blend_mode: BlendMode) -> Self {
-        self.paint.blend_mode = blend_mode;
-        self
-    }
-
-    /// Sets anti-aliasing
-    pub fn anti_alias(mut self, aa: bool) -> Self {
-        self.paint.anti_alias = aa;
-        self
-    }
-
-    /// Sets the shader
-    pub fn shader(mut self, shader: Shader) -> Self {
-        self.paint.shader = Some(shader);
-        self
-    }
-
-    /// Builds the Paint
-    pub fn build(self) -> Paint {
-        self.paint
-    }
-}
-
-/// Paint style (fill or stroke)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaintStyle {
-    /// Fill the shape
-    Fill,
-    /// Stroke the outline
-    Stroke,
-}
-
-/// Stroke cap style
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StrokeCap {
-    /// Flat edge
-    Butt,
-    /// Rounded cap
-    Round,
-    /// Square cap
-    Square,
-}
-
-/// Stroke join style
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StrokeJoin {
-    /// Sharp corner
-    Miter,
-    /// Rounded corner
-    Round,
-    /// Beveled corner
-    Bevel,
-}
-
-/// Blend mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlendMode {
-    /// Source over destination (normal blending)
-    SrcOver,
-    /// Add source to destination
-    Plus,
-    /// Multiply source and destination
-    Multiply,
-    /// Screen blend
-    Screen,
-    /// Overlay blend
-    Overlay,
-    // ... more blend modes can be added
-}
-
-/// Point drawing mode for DrawPoints command
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointMode {
-    /// Draw each point as a separate dot
-    Points,
-    /// Draw lines between consecutive points
-    Lines,
-    /// Draw a closed polygon connecting all points
-    Polygon,
-}
-
-/// Shader (gradient, image pattern, etc.)
-#[derive(Debug, Clone)]
-pub enum Shader {
-    /// Linear gradient
-    LinearGradient {
-        /// Start point
-        start: Point,
-        /// End point
-        end: Point,
-        /// Colors
-        colors: Vec<Color>,
-        /// Color stops (optional, defaults to evenly spaced)
-        stops: Option<Vec<f32>>,
-    },
-    /// Radial gradient
-    RadialGradient {
-        /// Center point
-        center: Point,
-        /// Radius
-        radius: f32,
-        /// Colors
-        colors: Vec<Color>,
-        /// Color stops (optional)
-        stops: Option<Vec<f32>>,
-    },
 }
 
 #[cfg(test)]
@@ -724,35 +629,7 @@ mod tests {
         assert_eq!(display_list.bounds(), Rect::ZERO);
     }
 
-    #[test]
-    fn test_paint_fill() {
-        let paint = Paint::fill(Color::RED);
-        assert_eq!(paint.style, PaintStyle::Fill);
-        assert_eq!(paint.color, Color::RED);
-    }
-
-    #[test]
-    fn test_paint_stroke() {
-        let paint = Paint::stroke(Color::BLUE, 2.0);
-        assert_eq!(paint.style, PaintStyle::Stroke);
-        assert_eq!(paint.color, Color::BLUE);
-        assert_eq!(paint.stroke_width, 2.0);
-    }
-
-    #[test]
-    fn test_paint_builder() {
-        let paint = Paint::builder()
-            .color(Color::GREEN)
-            .style(PaintStyle::Stroke)
-            .stroke_width(3.0)
-            .stroke_cap(StrokeCap::Round)
-            .build();
-
-        assert_eq!(paint.color, Color::GREEN);
-        assert_eq!(paint.style, PaintStyle::Stroke);
-        assert_eq!(paint.stroke_width, 3.0);
-        assert_eq!(paint.stroke_cap, StrokeCap::Round);
-    }
+    // Paint tests are now in flui_types
 }
 
 // ===== Command Pattern Implementation (Visitor Pattern) =====

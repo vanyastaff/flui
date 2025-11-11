@@ -107,8 +107,7 @@ impl Builder {
 impl View for Builder {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
         // Call the builder function with the context
-        let child = (self.builder)(ctx);
-        child
+        (self.builder)(ctx)
     }
 }
 

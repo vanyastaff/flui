@@ -157,6 +157,10 @@ impl LayoutPipeline {
         // Track which elements were successfully laid out
         let mut laid_out_ids = Vec::with_capacity(count);
 
+        // Cache statistics tracking
+        let mut cache_hits = 0usize;
+        let mut cache_misses = 0usize;
+
         // Process each dirty render object
         // Note: Parallel layout disabled for now - will be enabled in future update
         for id in dirty_ids {
@@ -183,8 +187,12 @@ impl LayoutPipeline {
             if !render_state.needs_layout() {
                 #[cfg(debug_assertions)]
                 tracing::trace!("Element {:?} already laid out, skipping", id);
+                cache_hits += 1;
                 continue;
             }
+
+            // Cache miss - element needs relayout
+            cache_misses += 1;
 
             #[cfg(debug_assertions)]
             tracing::trace!("Layout: Processing render object {:?}", id);
@@ -216,6 +224,23 @@ impl LayoutPipeline {
 
             // Add to list of successfully laid out elements
             laid_out_ids.push(id);
+        }
+
+        // Log cache statistics if there were cache hits or misses
+        if cache_hits > 0 || cache_misses > 0 {
+            let total = cache_hits + cache_misses;
+            let hit_rate = if total > 0 {
+                (cache_hits as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            tracing::info!(
+                cache_hits,
+                cache_misses,
+                total,
+                cache_hit_rate = format!("{:.0}%", hit_rate),
+                "Layout cache"
+            );
         }
 
         Ok(laid_out_ids)

@@ -70,6 +70,7 @@ impl CanvasLayer {
 
 impl CanvasLayer {
     #[deprecated(note = "Use WgpuRenderer::with_transform instead. This is legacy compatibility.")]
+    #[allow(dead_code)]
     fn legacy_with_transform<F>(
         painter: &mut dyn crate::painter::Painter,
         transform: &flui_types::geometry::Matrix4,

@@ -40,6 +40,7 @@ use std::sync::Arc;
 ///
 /// LayoutManager is NOT Send/Sync because it operates within PipelineOwner context
 /// which is single-threaded (runs on main thread only). This is intentional.
+#[derive(Debug)]
 pub struct LayoutManager {
     coordinator: Arc<RwLock<FrameCoordinator>>,
     tree: Arc<RwLock<ElementTree>>,
@@ -98,7 +99,7 @@ impl LayoutManager {
         // Flag 2: Set RenderState needs_layout + clear constraints
         let tree = self.tree.read();
         if let Some(Element::Render(render_elem)) = tree.get(element_id) {
-            let mut render_state = render_elem.render_state().write();
+            let render_state = render_elem.render_state().write();
             render_state.mark_needs_layout();
             render_state.clear_constraints();
         }
@@ -123,7 +124,7 @@ impl LayoutManager {
         let tree = self.tree.read();
         for element_id in tree.all_element_ids() {
             if let Some(Element::Render(render_elem)) = tree.get(element_id) {
-                let mut render_state = render_elem.render_state().write();
+                let render_state = render_elem.render_state().write();
                 render_state.mark_needs_layout();
                 render_state.clear_constraints();
             }

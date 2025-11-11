@@ -313,18 +313,115 @@ impl FrameCoordinator {
         };
 
         // Finish frame and update metrics
-        let frame_time = self.scheduler.finish_frame();
+        self.scheduler.finish_frame();
 
         // Log frame completion with timing info
         #[cfg(debug_assertions)]
-        if layer.is_some() {
-            if self.scheduler.is_deadline_missed() {
+        if layer.is_some() && self.scheduler.is_deadline_missed() {
+            tracing::warn!(
+                consecutive_misses = self.scheduler.consecutive_misses(),
+                "Frame deadline missed"
+            );
+        }
+
+        Ok(layer)
+    }
+
+    /// Build a complete frame without creating frame span (for custom logging)
+    ///
+    /// This variant doesn't create a frame span, allowing the caller to manage spans.
+    /// Useful when you want to add render phase to the same span.
+    pub fn build_frame_no_span(
+        &mut self,
+        tree: &Arc<RwLock<ElementTree>>,
+        root_id: Option<ElementId>,
+        constraints: BoxConstraints,
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+        // Start frame and get budget
+        let _frame_budget = self.scheduler.start_frame();
+
+        // Phase 1: Build (rebuild dirty widgets)
+        let build_count = self.build.dirty_count();
+
+        if build_count > 0 {
+            let build_span = tracing::info_span!("build");
+            let _build_guard = build_span.enter();
+
+            // Use parallel build (automatically falls back to sequential if appropriate)
+            self.build.rebuild_dirty_parallel(tree);
+
+            tracing::info!(count = build_count, "Build complete");
+        }
+
+        // Check if we're approaching deadline after build phase
+        #[cfg(debug_assertions)]
+        if self.scheduler.is_deadline_near() {
+            if let Some(remaining) = self.scheduler.remaining() {
                 tracing::warn!(
-                    frame_time = ?frame_time,
-                    consecutive_misses = self.scheduler.consecutive_misses(),
-                    "Frame deadline missed"
+                    "Approaching deadline after build, remaining {:?}",
+                    remaining
                 );
             }
+        }
+
+        // Phase 2: Layout (compute sizes and positions)
+        let _root_size = {
+            let layout_span = tracing::info_span!("layout");
+            let _layout_guard = layout_span.enter();
+
+            let mut tree_guard = tree.write();
+            let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
+
+            // Mark all laid out elements for paint
+            for id in &laid_out_ids {
+                self.paint.mark_dirty(*id);
+            }
+
+            if !laid_out_ids.is_empty() {
+                tracing::info!(count = laid_out_ids.len(), "Layout complete");
+            }
+
+            // Get root element's computed size
+            Self::extract_root_size(&tree_guard, root_id)
+        };
+
+        // Check if we're approaching deadline after layout phase
+        #[cfg(debug_assertions)]
+        if self.scheduler.is_deadline_near() {
+            if let Some(remaining) = self.scheduler.remaining() {
+                tracing::warn!(
+                    "Approaching deadline after layout, remaining {:?}",
+                    remaining
+                );
+            }
+        }
+
+        // Phase 3: Paint (generate layer tree)
+        let layer = {
+            let paint_span = tracing::info_span!("paint");
+            let _paint_guard = paint_span.enter();
+
+            let mut tree_guard = tree.write();
+            let count = self.paint.generate_layers(&mut tree_guard)?;
+
+            if count > 0 {
+                tracing::info!(count, "Paint complete");
+            }
+
+            // Get root element's layer
+            Self::extract_root_layer(&tree_guard, root_id)
+        };
+
+        // Finish frame and update metrics
+        self.scheduler.finish_frame();
+
+        // Log frame completion with timing info
+        #[cfg(debug_assertions)]
+        if layer.is_some() && self.scheduler.is_deadline_missed() {
+            tracing::warn!(
+                consecutive_misses = self.scheduler.consecutive_misses(),
+                "Frame deadline missed"
+            );
         }
 
         Ok(layer)

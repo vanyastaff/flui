@@ -40,7 +40,6 @@ use bon::Builder;
 use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::objects::RenderSizedBox;
-use flui_types::BoxConstraints;
 
 /// A box with a specified size.
 ///

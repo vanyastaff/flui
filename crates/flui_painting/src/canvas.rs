@@ -183,8 +183,20 @@ impl Canvas {
     }
 
     /// Sets the transform matrix directly
-    pub fn set_transform(&mut self, transform: Matrix4) {
-        self.transform = transform;
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_types::geometry::Transform;
+    ///
+    /// // With Transform
+    /// canvas.set_transform(Transform::rotate(PI / 4.0));
+    ///
+    /// // With Matrix4
+    /// canvas.set_transform(Matrix4::identity());
+    /// ```
+    pub fn set_transform<T: Into<Matrix4>>(&mut self, transform: T) {
+        self.transform = transform.into();
     }
 
     /// Gets the current transform matrix
@@ -262,6 +274,87 @@ impl Canvas {
             path: path.clone(),
             transform: self.transform,
         });
+    }
+
+    // ===== Clip Query Methods =====
+
+    /// Returns the local-space bounds of the current clip, if available.
+    ///
+    /// This returns the bounds of the most recent clip operation, without
+    /// applying transformations. Returns `None` if:
+    /// - No clip is active (clip stack is empty)
+    /// - The current clip is a Path (bounds require mutable access)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut canvas = Canvas::new();
+    /// canvas.clip_rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+    /// assert_eq!(canvas.get_local_clip_bounds(), Some(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0)));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn get_local_clip_bounds(&self) -> Option<Rect> {
+        self.clip_stack.last().and_then(|clip| match clip {
+            ClipOp::Rect(rect) => Some(*rect),
+            ClipOp::RRect(rrect) => Some(rrect.bounding_rect()),
+            ClipOp::Path(_) => None, // Path bounds require &mut Path
+        })
+    }
+
+    /// Returns the device-space (transformed) bounds of the current clip, if available.
+    ///
+    /// This applies the current transformation matrix to the clip bounds.
+    /// Returns `None` if:
+    /// - No clip is active (clip stack is empty)
+    /// - The current clip is a Path (bounds require mutable access)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut canvas = Canvas::new();
+    /// canvas.translate(10.0, 20.0);
+    /// canvas.clip_rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+    /// // Returns transformed bounds: (10, 20, 110, 120)
+    /// let bounds = canvas.get_device_clip_bounds();
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn get_device_clip_bounds(&self) -> Option<Rect> {
+        self.get_local_clip_bounds()
+            .map(|local_bounds| self.transform.transform_rect(&local_bounds))
+    }
+
+    /// Returns true if the given rectangle is completely outside the current clip bounds.
+    ///
+    /// This can be used for culling optimizations - if this returns `true`, you can
+    /// skip drawing operations that would be completely clipped anyway.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(true)` - The rect is definitely outside the clip (can skip drawing)
+    /// - `Some(false)` - The rect may be visible (should draw)
+    /// - `None` - Cannot determine (no clip active or clip is a Path)
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut canvas = Canvas::new();
+    /// canvas.clip_rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+    ///
+    /// // This rect is outside the clip
+    /// let outside_rect = Rect::from_ltrb(200.0, 200.0, 300.0, 300.0);
+    /// assert_eq!(canvas.is_rect_outside_clip(&outside_rect), Some(true));
+    ///
+    /// // This rect overlaps the clip
+    /// let inside_rect = Rect::from_ltrb(50.0, 50.0, 150.0, 150.0);
+    /// assert_eq!(canvas.is_rect_outside_clip(&inside_rect), Some(false));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn is_rect_outside_clip(&self, rect: &Rect) -> Option<bool> {
+        self.get_local_clip_bounds()
+            .map(|clip_bounds| !clip_bounds.intersects(rect))
     }
 
     // ===== Drawing Primitives =====
@@ -656,12 +749,17 @@ struct CanvasState {
     clip_depth: usize,
 }
 
-/// Clip operation (for clip stack tracking)
+/// Clip operation stored in the clip stack.
 ///
-/// NOTE: Fields are stored for future use (query clip bounds, optimize rendering)
-/// but not currently read. This is intentional for now.
+/// Currently used for tracking clip depth in save/restore operations.
+/// The clip geometry (Rect/RRect/Path) is stored for future optimizations:
+/// - Culling: Skip drawing commands outside the clip bounds
+/// - Clip bounds queries: `canvas.get_local_clip_bounds()`
+/// - Render optimization: Merge adjacent clips
+///
+/// TODO: Add methods to query clip bounds and use for culling optimization
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Fields stored for future optimization features
 enum ClipOp {
     Rect(Rect),
     RRect(RRect),

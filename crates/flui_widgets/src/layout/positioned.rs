@@ -491,7 +491,8 @@ macro_rules! positioned {
     };
 }
 
-#[cfg(disabled_test)] // TODO: Update tests to new Widget API
+#[cfg(test)]
+#[cfg(feature = "disabled_tests")] // TODO: Update tests to new Widget API
 mod tests {
     use super::*;
 

@@ -97,7 +97,7 @@
 use std::fmt;
 use std::ops::{Index, IndexMut, Mul, MulAssign};
 
-use crate::geometry::Point;
+use crate::geometry::{Point, Rect};
 
 /// 4x4 transformation matrix stored in column-major order.
 ///
@@ -513,6 +513,53 @@ impl Matrix4 {
         {
             self.transform_points_scalar(points)
         }
+    }
+
+    /// Transforms a rectangle by this matrix and returns the axis-aligned bounding box.
+    ///
+    /// This method transforms all four corners of the rectangle and computes
+    /// the minimal axis-aligned bounding rectangle that contains all transformed corners.
+    ///
+    /// # Important
+    ///
+    /// - Rotations and skews will expand the bounding box to remain axis-aligned
+    /// - The returned rectangle is always axis-aligned (min/max in x and y)
+    /// - This is NOT a geometric rectangle transformation (that would preserve shape)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_types::{Matrix4, Rect};
+    /// use std::f32::consts::PI;
+    ///
+    /// // Translation - rectangle moves, size unchanged
+    /// let translate = Matrix4::translation(10.0, 20.0, 0.0);
+    /// let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    /// let transformed = translate.transform_rect(&rect);
+    /// assert_eq!(transformed, Rect::from_ltrb(10.0, 20.0, 20.0, 30.0));
+    ///
+    /// // Rotation - bounding box expands to remain axis-aligned
+    /// let rotate = Matrix4::rotation_z(PI / 4.0); // 45 degrees
+    /// let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+    /// let transformed = rotate.transform_rect(&rect);
+    /// // Bounding box is larger due to rotation
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn transform_rect(&self, rect: &Rect) -> Rect {
+        // Transform all four corners
+        let (x0, y0) = self.transform_point(rect.min.x, rect.min.y); // Top-left
+        let (x1, y1) = self.transform_point(rect.max.x, rect.min.y); // Top-right
+        let (x2, y2) = self.transform_point(rect.min.x, rect.max.y); // Bottom-left
+        let (x3, y3) = self.transform_point(rect.max.x, rect.max.y); // Bottom-right
+
+        // Find min/max of all transformed corners
+        let min_x = x0.min(x1).min(x2).min(x3);
+        let min_y = y0.min(y1).min(y2).min(y3);
+        let max_x = x0.max(x1).max(x2).max(x3);
+        let max_y = y0.max(y1).max(y2).max(y3);
+
+        Rect::from_ltrb(min_x, min_y, max_x, max_y)
     }
 
     /// Converts to column-major array (egui format).
@@ -1455,5 +1502,57 @@ mod tests {
         let m2 = Matrix4::identity();
 
         assert_eq!(m1, m2);
+    }
+
+    #[test]
+    fn test_transform_rect_identity() {
+        let identity = Matrix4::identity();
+        let rect = Rect::from_ltrb(10.0, 20.0, 30.0, 40.0);
+        let transformed = identity.transform_rect(&rect);
+        assert_eq!(transformed, rect);
+    }
+
+    #[test]
+    fn test_transform_rect_translation() {
+        let translate = Matrix4::translation(5.0, 10.0, 0.0);
+        let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+        let transformed = translate.transform_rect(&rect);
+        assert_eq!(transformed, Rect::from_ltrb(5.0, 10.0, 15.0, 20.0));
+    }
+
+    #[test]
+    fn test_transform_rect_scale() {
+        let scale = Matrix4::scaling(2.0, 3.0, 1.0);
+        let rect = Rect::from_ltrb(1.0, 1.0, 3.0, 3.0);
+        let transformed = scale.transform_rect(&rect);
+        assert_eq!(transformed, Rect::from_ltrb(2.0, 3.0, 6.0, 9.0));
+    }
+
+    #[test]
+    fn test_transform_rect_rotation() {
+        use std::f32::consts::PI;
+
+        // 90 degree rotation
+        let rotate = Matrix4::rotation_z(PI / 2.0);
+        let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+        let transformed = rotate.transform_rect(&rect);
+
+        // After 90° rotation, bounding box expands
+        // Original corners: (0,0), (10,0), (0,10), (10,10)
+        // Rotated corners: (0,0), (0,10), (-10,0), (-10,10)
+        // Bounding box: min(-10, 0), min(0, 10) to max(0, 0), max(0, 10)
+        assert!((transformed.min.x - (-10.0)).abs() < 0.01);
+        assert!((transformed.min.y - 0.0).abs() < 0.01);
+        assert!((transformed.max.x - 0.0).abs() < 0.01);
+        assert!((transformed.max.y - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_transform_rect_combined() {
+        let combined = Matrix4::translation(10.0, 20.0, 0.0) * Matrix4::scaling(2.0, 2.0, 1.0);
+        let rect = Rect::from_ltrb(0.0, 0.0, 5.0, 5.0);
+        let transformed = combined.transform_rect(&rect);
+        // Scale first: (0,0,10,10), then translate: (10,20,20,30)
+        assert_eq!(transformed, Rect::from_ltrb(10.0, 20.0, 20.0, 30.0));
     }
 }

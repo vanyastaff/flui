@@ -62,6 +62,7 @@ pub struct PipelineBuilder {
     enable_cancellation: bool,
 
     /// Optional frame buffer
+    #[allow(clippy::redundant_allocation)]
     frame_buffer_initial: Option<Arc<Box<flui_engine::CanvasLayer>>>,
 
     /// Optional build callback

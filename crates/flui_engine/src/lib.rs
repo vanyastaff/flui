@@ -5,7 +5,6 @@
 //! - **WgpuPainter**: GPU-accelerated 2D rendering (wgpu + lyon + glyphon)
 //! - **CanvasLayer**: Modern compositor layer with CommandRenderer
 //! - **CommandRenderer**: Clean architecture command execution (visitor pattern)
-//! - **WindowStateTracker**: Window state tracking (focus, visibility)
 //!
 //! # Architecture
 //!
@@ -46,7 +45,6 @@ pub mod layer;
 pub mod painter;
 pub mod renderer;
 pub mod text;
-pub mod window_state;
 
 // Re-export GPU renderer (high-level abstraction)
 pub use gpu_renderer::{GpuRenderer, RenderError};
@@ -66,9 +64,6 @@ pub use renderer::{CommandRenderer, RenderBackend, WgpuRenderer};
 #[cfg(debug_assertions)]
 pub use renderer::DebugRenderer;
 
-// Re-export window state tracker
-pub use window_state::WindowStateTracker;
-
 // Re-export devtools integration (when feature enabled)
 #[cfg(feature = "devtools")]
 pub use devtools::{
@@ -78,3 +73,4 @@ pub use devtools::{
 
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
 pub use devtools::MemoryGraph;
+

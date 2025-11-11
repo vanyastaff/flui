@@ -669,12 +669,20 @@ impl WgpuPainter {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<(), String> {
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "WgpuPainter::render: vertices={}, indices={}, text_count={}",
-            self.vertices.len(),
-            self.indices.len(),
-            self.text_renderer.text_count()
+        // Log rendering stats
+        let text_count = self.text_renderer.text_count();
+        let rect_count = self.rect_batch.len();
+        let circle_count = self.circle_batch.len();
+        let buffer_stats = self.buffer_pool.stats();
+
+        tracing::info!(
+            vertices = self.vertices.len(),
+            indices = self.indices.len(),
+            text_count,
+            rects = rect_count,
+            circles = circle_count,
+            cache_hit_rate = format!("{:.0}%", buffer_stats.reuse_rate * 100.0),
+            "Drawing commands"
         );
 
         // ===== Render Shapes =====
@@ -702,9 +710,6 @@ impl WgpuPainter {
             let pipeline_key = self
                 .current_pipeline_key
                 .unwrap_or(PipelineKey::alpha_blend());
-
-            #[cfg(debug_assertions)]
-            tracing::debug!("WgpuPainter::render: Using pipeline {:?}", pipeline_key);
 
             let pipeline = self
                 .pipeline_cache
@@ -764,9 +769,6 @@ impl WgpuPainter {
     ///
     /// Call this when the window is resized.
     pub fn resize(&mut self, width: u32, height: u32) {
-        #[cfg(debug_assertions)]
-        tracing::debug!("WgpuPainter::resize: ({}, {})", width, height);
-
         self.size = (width, height);
 
         // Update viewport uniform buffer for instanced rendering

@@ -32,8 +32,8 @@
 //!
 //! Basic example:
 //! ```rust,no_run
-//! use flui::prelude::*;
-//!
+//! # use flui::prelude::*;
+//! #
 //! #[derive(Clone)]
 //! struct MyApp;
 //!
@@ -43,9 +43,9 @@
 //!     }
 //! }
 //!
-//! fn main() {
-//!     run_app("My App", MyApp);
-//! }
+//! # fn main() {
+//! run_app("My App", MyApp);
+//! # }
 //! ```
 //!
 //! ## Using Different Backends

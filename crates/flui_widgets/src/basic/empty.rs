@@ -1,6 +1,6 @@
 //! Empty widget - a placeholder that renders nothing
 
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, View};
 use flui_rendering::objects::RenderEmpty;
 
 /// A widget that renders nothing but takes up space

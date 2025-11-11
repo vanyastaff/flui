@@ -87,6 +87,7 @@ impl ScrollController {
     }
 
     /// Internal: Update max offset (called by RenderScrollView during layout)
+    #[allow(dead_code)]
     pub(crate) fn update_max_offset(&self, max: f32) {
         *self.max_offset.lock() = max.max(0.0);
 

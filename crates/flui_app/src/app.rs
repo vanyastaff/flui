@@ -7,10 +7,12 @@ use flui_core::foundation::ElementId;
 use flui_core::pipeline::PipelineOwner;
 use flui_core::view::{AnyView, BuildContext};
 use flui_core::Size;
-use flui_engine::{CanvasLayer, GpuRenderer, WindowStateTracker};
+use flui_engine::{CanvasLayer, GpuRenderer};
 use flui_types::{BoxConstraints, Offset};
 use std::sync::Arc;
 use winit::window::Window;
+
+use crate::window_state::WindowStateTracker;
 
 /// Performance statistics for debugging and optimization
 #[derive(Debug, Default)]
@@ -359,15 +361,25 @@ impl FluiApp {
         // Build complete frame using FrameCoordinator
         // This creates proper build→layout→paint hierarchy with automatic timing
         let constraints = BoxConstraints::tight(size);
-        match self.pipeline.build_frame(constraints) {
+
+        // Create frame span at app level to include render
+        let frame_span = tracing::info_span!("frame", ?constraints);
+        let _frame_guard = frame_span.enter();
+
+        match self.pipeline.build_frame_no_span(constraints) {
             Ok(Some(layer)) => {
                 // Update statistics
                 self.stats.rebuild_count += 1;
                 self.stats.layout_count += 1;
                 self.stats.paint_count += 1;
 
-                // Render to surface
-                self.render(layer);
+                // Render to surface (inside frame span!)
+                {
+                    let render_span = tracing::info_span!("render");
+                    let _render_guard = render_span.enter();
+                    self.render(&layer);
+                    tracing::info!("Render complete");
+                }
             }
             Ok(None) => {
                 // No frame generated (no root element)
@@ -415,9 +427,9 @@ impl FluiApp {
     /// Render a layer tree to the GPU surface
     ///
     /// Delegates rendering to GpuRenderer which handles all GPU details.
-    fn render(&mut self, layer: Box<CanvasLayer>) {
+    fn render(&mut self, layer: &CanvasLayer) {
         // Clean delegation - ALL GPU logic is in GpuRenderer!
-        match self.renderer.render(&layer) {
+        match self.renderer.render(layer) {
             Ok(()) => {
                 tracing::debug!("Frame rendered successfully");
             }

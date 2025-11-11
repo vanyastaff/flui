@@ -41,16 +41,20 @@ pub mod error;
 
 // Re-export Canvas API (primary interface)
 pub use canvas::Canvas;
-pub use display_list::{
-    BlendMode, DisplayList, DrawCommand, Paint, PaintBuilder, PaintStyle, PointMode,
-    Shader, StrokeCap, StrokeJoin,
+pub use display_list::{DisplayList, DrawCommand};
+
+// Re-export types from flui_types for convenience
+// These are the fundamental painting types that users need
+pub use flui_types::painting::{
+    BlendMode, Paint, PaintBuilder, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
 };
 
 pub mod prelude {
     //! Prelude module for convenient imports of common painting types and utilities.
 
     pub use crate::canvas::Canvas;
-    pub use crate::display_list::{
-        BlendMode, DisplayList, DrawCommand, Paint, PaintStyle, PointMode, Shader,
+    pub use crate::display_list::{DisplayList, DrawCommand};
+    pub use flui_types::painting::{
+        BlendMode, Paint, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
     };
 }

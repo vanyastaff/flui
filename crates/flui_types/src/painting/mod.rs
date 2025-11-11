@@ -8,14 +8,16 @@ pub mod canvas;
 pub mod clipping;
 pub mod effects;
 pub mod image;
+pub mod paint;
 pub mod path;
 pub mod shader;
+
 
 // Re-exports for convenience
 pub use blend_mode::BlendMode;
 pub use canvas::{
-    BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, StrokeCap, StrokeJoin,
-    TileMode, VertexMode,
+    BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, PointMode, StrokeCap,
+    StrokeJoin, TileMode, VertexMode,
 };
 pub use clipping::{
     AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape,
@@ -30,5 +32,7 @@ pub use effects::{
     StrokeOptions,
 };
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
+pub use paint::{Paint, PaintBuilder, PaintStyle};
 pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};
+

@@ -99,6 +99,7 @@ struct PointerInfo {
     /// Current position
     current_position: Offset,
     /// Time when pointer went down
+    #[allow(dead_code)]
     down_time: Instant,
     /// Whether pointer is still down
     is_down: bool,

@@ -3,8 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
-use flui_painting::{Canvas, Paint};
-use flui_types::{BoxConstraints, Offset, Point, Size};
+use flui_painting::Canvas;
+use flui_types::{Offset, Size};
 use std::fmt::Debug;
 use std::sync::Arc;
 

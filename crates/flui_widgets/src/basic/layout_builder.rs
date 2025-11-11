@@ -123,8 +123,7 @@ impl View for LayoutBuilder {
         // In a simplified implementation, we call the builder with unconstrained constraints
         // A full implementation would need a special RenderObject that rebuilds during layout
         let constraints = BoxConstraints::UNCONSTRAINED;
-        let child = (self.builder)(ctx, constraints);
-        child
+        (self.builder)(ctx, constraints)
     }
 }
 

@@ -45,6 +45,7 @@ struct PooledBuffer {
     buffer: Buffer,
     size: usize,
     in_use: bool,
+    #[allow(dead_code)]
     usage: BufferUsages,
 }
 
@@ -143,6 +144,7 @@ impl BufferPool {
     }
 
     /// Internal: Get or create a buffer from specific pool
+    #[allow(clippy::too_many_arguments)]
     fn get_buffer_internal<'a>(
         device: &Device,
         queue: &wgpu::Queue,

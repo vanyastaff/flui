@@ -45,10 +45,12 @@ pub struct WindowEventCallbacks {
 
     /// Called when window scale factor (DPI) changes
     /// Parameters: (new_scale_factor, new_inner_size)
+    #[allow(clippy::type_complexity)]
     pub(crate) on_scale_changed: Option<Box<dyn FnMut(f64, (u32, u32)) + Send>>,
 
     /// Called when system theme changes
     /// Parameter: "dark" or "light"
+    #[allow(clippy::type_complexity)]
     pub(crate) on_theme_changed: Option<Box<dyn FnMut(&str) + Send>>,
 
     /// Called when window is moved

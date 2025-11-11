@@ -32,15 +32,18 @@
 
 pub mod app;
 pub mod event_callbacks;
-pub mod window;
-
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
+pub mod window;
+pub mod window_state;
+
+
 
 // Re-exports
 pub use app::FluiApp;
 pub use event_callbacks::WindowEventCallbacks;
 pub use window::run_app;
+pub use window_state::WindowStateTracker;
 
 // Re-export commonly used types from flui_core
 pub use flui_core::{
@@ -53,3 +56,4 @@ pub use flui_core::{
     // View system (new API)
     view::{AnyView, BuildContext, View, ViewElement},
 };
+

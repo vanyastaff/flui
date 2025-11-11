@@ -178,6 +178,7 @@ pub struct PipelineOwner {
     cancellation: Option<super::CancellationToken>,
 
     /// Triple buffer for lock-free frame exchange (optional)
+    #[allow(clippy::redundant_allocation)]
     frame_buffer: Option<super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>>,
 
     /// Hit test result cache (optional)
@@ -502,6 +503,21 @@ impl PipelineOwner {
             .build_frame(&self.tree, self.root_mgr.root_id(), constraints)
     }
 
+    /// Build a complete frame without creating a frame span (for custom logging)
+    ///
+    /// This variant doesn't create its own frame span, allowing the caller to manage spans.
+    pub fn build_frame_no_span(
+        &mut self,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
+        // Process pending rebuilds from signals
+        self.flush_rebuild_queue();
+
+        // Delegate to coordinator without frame span
+        self.coordinator
+            .build_frame_no_span(&self.tree, self.root_mgr.root_id(), constraints)
+    }
+
     // =========================================================================
     // Hot Reload Support
     // =========================================================================
@@ -787,16 +803,16 @@ impl PipelineOwner {
         crate::trace_hot_path!("dispatch_event: {:?}", event);
 
         // Visit all elements and dispatch the event
-        tree.visit_all_elements_mut(|element_id, element| {
+        tree.visit_all_elements_mut(|_element_id, element| {
             // Call handle_event on each element
             // Most will return false (not handled), but specialized elements
             // can return true and trigger updates
-            let handled = element.handle_event(event);
+            let _handled = element.handle_event(event);
 
             crate::trace_hot_path!(
                 "element {:?} handled={} event={:?}",
-                element_id,
-                handled,
+                _element_id,
+                _handled,
                 event
             );
         });
@@ -861,12 +877,12 @@ impl PipelineOwner {
         let mut tree = self.tree.write();
         for entry in hit_result.iter() {
             if let Some(element) = tree.get_mut(entry.element_id) {
-                let handled = element.handle_event(event);
+                let _handled = element.handle_event(event);
 
                 crate::trace_hot_path!(
                     "element {:?} handled={} at local pos={:?}",
                     entry.element_id,
-                    handled,
+                    _handled,
                     entry.local_position
                 );
             }
