@@ -210,7 +210,12 @@ struct PaintGuard {
 impl PaintGuard {
     fn new(element_id: ElementId) -> Self {
         ElementTree::PAINT_STACK.with(|stack| {
-            stack.borrow_mut().push(element_id);
+            let inserted = stack.borrow_mut().insert(element_id);
+            debug_assert!(
+                inserted,
+                "PaintGuard::new called twice for same element {:?}",
+                element_id
+            );
         });
         Self { element_id }
     }
@@ -219,13 +224,11 @@ impl PaintGuard {
 impl Drop for PaintGuard {
     fn drop(&mut self) {
         ElementTree::PAINT_STACK.with(|stack| {
-            let popped = stack.borrow_mut().pop();
-            debug_assert_eq!(
-                popped,
-                Some(self.element_id),
-                "Paint stack corruption: expected {:?}, got {:?}",
-                self.element_id,
-                popped
+            let removed = stack.borrow_mut().remove(&self.element_id);
+            debug_assert!(
+                removed,
+                "Paint stack corruption: element {:?} not in stack",
+                self.element_id
             );
         });
     }
@@ -514,12 +517,18 @@ impl ElementTree {
 
     // ========== RenderState Access ==========
 
-    // Track which elements are currently being laid out (to prevent re-entrant layout)
+    // Track which elements are currently being laid out/painted (to prevent re-entrant operations)
     //
-    // This is stored in thread-local storage since layout is single-threaded.
+    // This is stored in thread-local storage since layout/paint is single-threaded per-tree.
+    //
+    // Performance:
+    // - LAYOUT_STACK: Vec (needs .last() for debug overflow tracking, O(N) contains but infrequent)
+    // - PAINT_STACK: HashSet (O(1) lookups, paint is more frequent than layout)
     thread_local! {
-        static LAYOUT_STACK: std::cell::RefCell<Vec<ElementId>> = const { std::cell::RefCell::new(Vec::new()) };
-        static PAINT_STACK: std::cell::RefCell<Vec<ElementId>> = const { std::cell::RefCell::new(Vec::new()) };
+        static LAYOUT_STACK: std::cell::RefCell<Vec<ElementId>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static PAINT_STACK: std::cell::RefCell<std::collections::HashSet<ElementId>> =
+            std::cell::RefCell::new(std::collections::HashSet::new());
     }
 
     /// Get a read guard to the RenderState for an element

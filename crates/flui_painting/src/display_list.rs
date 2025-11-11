@@ -97,6 +97,44 @@ impl DisplayList {
         self.commands.clear();
         self.bounds = Rect::ZERO;
     }
+
+    /// Appends all commands from another DisplayList (zero-copy move)
+    ///
+    /// This is much more efficient than cloning commands individually.
+    /// Takes ownership of `other` and moves its commands into self.
+    ///
+    /// # Performance
+    ///
+    /// - O(1) if self is empty (just swap vectors)
+    /// - O(N) otherwise where N = other.len() (but no cloning, just move)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut parent = DisplayList::new();
+    /// parent.push(DrawCommand::DrawRect { ... });
+    ///
+    /// let mut child = DisplayList::new();
+    /// child.push(DrawCommand::DrawCircle { ... });
+    ///
+    /// parent.append(child);  // Zero-copy move
+    /// ```
+    pub(crate) fn append(&mut self, mut other: DisplayList) {
+        if self.commands.is_empty() {
+            // Fast path: just swap the vectors (zero-cost)
+            std::mem::swap(&mut self.commands, &mut other.commands);
+            self.bounds = other.bounds;
+        } else if !other.commands.is_empty() {
+            // Slow path: append commands (still no cloning, just moves)
+            self.commands.append(&mut other.commands);
+
+            // Update bounds
+            if !other.bounds.is_empty() {
+                self.bounds = self.bounds.union(&other.bounds);
+            }
+        }
+        // other.commands is now empty (moved), will be dropped
+    }
 }
 
 impl Default for DisplayList {

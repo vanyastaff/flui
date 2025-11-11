@@ -17,6 +17,18 @@
 //! 3. **Flutter-compatible API**: Same methods as Flutter's Canvas
 //! 4. **Transform tracking**: Maintains current transform matrix
 //! 5. **Save/restore stack**: Supports save() and restore() for state management
+//! 6. **Thread-safe**: Canvas and DisplayList are Send (can be sent across threads)
+//!
+//! # Thread Safety
+//!
+//! Canvas is designed for **single-threaded recording** but **multi-threaded execution**:
+//!
+//! - Each RenderObject creates its own Canvas during `paint()`
+//! - Canvases are composed via `append_canvas()` (zero-copy move)
+//! - Final DisplayList can be sent to GPU thread for execution
+//! - All types are `Send` but not `Sync` (no shared mutable state)
+//!
+//! This design enables efficient parallel painting in FLUI's parallel build pipeline.
 
 use crate::display_list::{DisplayList, DrawCommand, Paint};
 use flui_types::{
@@ -536,6 +548,16 @@ impl Canvas {
     /// This is useful for parent RenderObjects that need to draw their own content
     /// and then draw their children on top.
     ///
+    /// # Performance
+    ///
+    /// This method uses **zero-copy move semantics**:
+    /// - Commands are moved, not cloned (O(N) pointer moves, not O(N) deep copies)
+    /// - If parent canvas is empty, this is O(1) (vector swap)
+    /// - No allocations if capacity is sufficient
+    ///
+    /// This is **much faster** than cloning commands individually, especially
+    /// for complex scenes with many children.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
@@ -543,14 +565,11 @@ impl Canvas {
     /// parent_canvas.draw_rect(background_rect, &background_paint);
     ///
     /// let child_canvas = child.paint(ctx);
-    /// parent_canvas.append_canvas(child_canvas);
+    /// parent_canvas.append_canvas(child_canvas);  // Zero-copy move
     /// ```
     pub fn append_canvas(&mut self, other: Canvas) {
-        // Take ownership of other canvas and append its commands
-        let other_display_list = other.display_list;
-        for command in other_display_list.commands() {
-            self.display_list.push(command.clone());
-        }
+        // Zero-copy move of commands via DisplayList::append
+        self.display_list.append(other.display_list);
     }
 
     // ===== Finalization =====
