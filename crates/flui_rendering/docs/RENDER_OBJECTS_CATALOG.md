@@ -23,8 +23,8 @@
 | 2 | **RenderEditableLine** | Text | Редактируемая строка текста | ✅ Реализовано |
 | 3 | **RenderImage** | Media | Растровое изображение | ✅ Реализовано |
 | 4 | **RenderTexture** | Media | GPU текстура | ✅ Реализовано |
-| 5 | **RenderErrorBox** | Debug | Красный бокс с ошибкой | ⏳ Планируется |
-| 6 | **RenderPlaceholder** | Debug | Placeholder прямоугольник | ⏳ Планируется |
+| 5 | **RenderErrorBox** | Debug | Красный бокс с ошибкой | ✅ Реализовано |
+| 6 | **RenderPlaceholder** | Debug | Placeholder прямоугольник | ✅ Реализовано |
 | 7 | **RenderPerformanceOverlay** | Debug | Performance метрики | ❌ Низкий приоритет |
 | 8 | **RenderFittedBox** | Special | Масштабирует child по BoxFit | ✅ Реализовано |
 | 9 | **RenderColoredBox** | Visual | Простой цветной прямоугольник | ✅ Реализовано |
@@ -172,7 +172,7 @@
 
 | Приоритет | Описание | Количество |
 |-----------|----------|-----------|
-| ✅ **Реализовано** | Готово и протестировано | **51** (62%) |
+| ✅ **Реализовано** | Готово и протестировано | **53** (65%) |
 | 🔄 **В процессе** | Активная разработка | **0** (0%) |
 | ⏳ **High Priority** | Layout + Visual + Text | **0** (0%) |
 | ⏳ **Medium Priority** | Media + Advanced Layout | **0** (0%) |
@@ -230,14 +230,14 @@
 - [x] RenderPhysicalShape (custom shape elevation)
 - [x] RenderShiftedBox (base class for shift operations)
 
-### Phase 3: Advanced (⏳ 71% Complete)
+### Phase 3: Advanced (✅ 100% Complete)
 - [x] RenderTable (table layout)
 - [x] RenderGrid (CSS grid layout)
 - [x] RenderFlow (custom layout delegate)
 - [x] RenderEditableLine (editable text)
 - [x] RenderTexture (GPU texture)
-- [ ] RenderErrorBox (debug error box)
-- [ ] RenderPlaceholder (debug placeholder)
+- [x] RenderErrorBox (debug error box)
+- [x] RenderPlaceholder (debug placeholder)
 
 ### Phase 4: Sliver (⏳ Future)
 - [ ] RenderSliver базовый trait
