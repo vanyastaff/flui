@@ -8,6 +8,7 @@ pub mod empty;
 pub mod flex;
 pub mod flex_item;
 pub mod fractionally_sized_box;
+pub mod grid;
 pub mod indexed_stack;
 pub mod intrinsic_height;
 pub mod intrinsic_width;
@@ -27,6 +28,7 @@ pub mod wrap;
 
 
 
+
 // Re-exports
 pub use align::RenderAlign;
 pub use aspect_ratio::RenderAspectRatio;
@@ -36,6 +38,7 @@ pub use empty::RenderEmpty;
 pub use flex::RenderFlex;
 pub use flex_item::{FlexItemMetadata, RenderFlexItem};
 pub use fractionally_sized_box::RenderFractionallySizedBox;
+pub use grid::{GridPlacement, GridTrackSize, RenderGrid};
 pub use indexed_stack::RenderIndexedStack;
 pub use intrinsic_height::RenderIntrinsicHeight;
 pub use intrinsic_width::RenderIntrinsicWidth;
@@ -52,5 +55,6 @@ pub use sized_overflow_box::RenderSizedOverflowBox;
 pub use stack::RenderStack;
 pub use table::{RenderTable, TableCellVerticalAlignment, TableColumnWidth};
 pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+
 
 
