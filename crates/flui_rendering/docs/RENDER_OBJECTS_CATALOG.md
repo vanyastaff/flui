@@ -113,9 +113,9 @@
 | 6 | **RenderTable** | Табличный layout | Table algorithm | ✅ Реализовано |
 | 7 | **RenderListBody** | Простой scrollable список | Linear list | ✅ Реализовано |
 | 8 | **RenderGrid** | Grid layout (CSS Grid) | Grid algorithm | ✅ Реализовано |
-| 9 | **RenderListWheelViewport** | 3D wheel picker | Wheel positioning | ⏳ Планируется |
+| 9 | **RenderListWheelViewport** | 3D wheel picker | Wheel positioning | ✅ Реализовано |
 | 10 | **RenderCupertinoContextMenu** | iOS context menu | Stack-based | ⏳ Планируется |
-| 11 | **RenderCustomMultiChildLayoutBox** | Custom multi-child layout | Custom delegate | ⏳ Планируется |
+| 11 | **RenderCustomMultiChildLayoutBox** | Custom multi-child layout | Custom delegate | ✅ Реализовано |
 | 12 | **RenderTwoDimensionalViewport** | 2D scrolling (table/grid) | 2D viewport | ⏳ Планируется |
 
 ### Sliver Container (26)
@@ -135,9 +135,9 @@
 | 21 | **RenderSliverFillRemaining** | Заполняет остаток | ✅ Реализовано |
 | 22 | **RenderSliverAppBar** | Floating/pinned app bar | ✅ Реализовано |
 | 23 | **RenderSliverPersistentHeader** | Sticky header | ✅ Реализовано |
-| 24 | **RenderSliverFloatingPersistentHeader** | Floating header | ⏳ Планируется |
+| 24 | **RenderSliverFloatingPersistentHeader** | Floating header | ✅ Реализовано |
 | 25 | **RenderSliverPinnedPersistentHeader** | Pinned header | ⏳ Планируется |
-| 26 | **RenderSliverAnimatedOpacity** | Анимир. прозрачность | ⏳ Планируется |
+| 26 | **RenderSliverAnimatedOpacity** | Анимир. прозрачность | ✅ Реализовано |
 | 27 | **RenderSliverIgnorePointer** | Ignore pointer | ✅ Реализовано |
 | 28 | **RenderSliverOffstage** | Скрывает sliver | ✅ Реализовано |
 | 29 | **RenderSliverOpacity** | Прозрачность sliver | ✅ Реализовано |
@@ -315,6 +315,20 @@ Leaf RenderObject'ы могут быть оптимизированы:
 
 ---
 
-**Последнее обновление:** Октябрь 2024
+## 📈 Прогресс реализации
+
+**Всего типов:** 82 RenderObject
+**Реализовано:** 72 (87.8%)
+**В планах:** 10 (12.2%)
+
+### Последние реализации (текущая сессия)
+
+1. **RenderListWheelViewport** - 3D cylindrical viewport для iOS-style пикеров
+2. **RenderCustomMultiChildLayoutBox** - Кастомный layout с delegate pattern
+3. **RenderSliverFloatingPersistentHeader** - Floating header для slivers
+4. **RenderSliverAnimatedOpacity** - Анимированная прозрачность для slivers
+
+---
+
+**Последнее обновление:** Ноябрь 2024
 **Источник:** Flutter rendering library + анализ документации
-**Всего типов:** 81 RenderObject
