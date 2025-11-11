@@ -4,8 +4,11 @@
 //! a specialized constraint/sizing protocol. Unlike boxes which use
 //! BoxConstraints, slivers use SliverConstraints and SliverGeometry.
 
+pub mod sliver_grid;
 pub mod sliver_list;
 pub mod sliver_padding;
 
+pub use sliver_grid::{RenderSliverGrid, SliverGridDelegate, SliverGridDelegateFixedCrossAxisCount};
 pub use sliver_list::RenderSliverList;
 pub use sliver_padding::RenderSliverPadding;
+
