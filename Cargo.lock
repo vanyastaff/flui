@@ -1189,14 +1189,12 @@ dependencies = [
 name = "flui_app"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
  "console_error_panic_hook",
  "flui_core",
  "flui_engine",
  "flui_rendering",
  "flui_types",
  "flui_widgets",
- "glyphon",
  "parking_lot",
  "pollster",
  "tracing",
@@ -1204,7 +1202,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "wgpu",
  "winit",
 ]
 
@@ -1256,6 +1253,8 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.17",
  "tracing",
+ "tracing-subscriber",
+ "tracing-tree",
 ]
 
 [[package]]
@@ -4760,6 +4759,18 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "tracy-client",
+]
+
+[[package]]
+name = "tracing-tree"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac87aa03b6a4d5a7e4810d1a80c19601dbe0f8a837e9177f23af721c7ba7beec"
+dependencies = [
+ "nu-ansi-term",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
 ]
 
 [[package]]

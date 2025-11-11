@@ -101,7 +101,15 @@ impl CommandRenderer for WgpuRenderer {
         });
     }
 
-    fn render_arc(&mut self, rect: Rect, start_angle: f32, sweep_angle: f32, use_center: bool, paint: &Paint, transform: &Matrix4) {
+    fn render_arc(
+        &mut self,
+        rect: Rect,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.draw_arc(rect, start_angle, sweep_angle, use_center, paint);
         });
@@ -113,35 +121,46 @@ impl CommandRenderer for WgpuRenderer {
         });
     }
 
-    fn render_points(&mut self, mode: PointMode, points: &[Point], paint: &Paint, transform: &Matrix4) {
-        self.with_transform(transform, |painter| {
-            match mode {
-                PointMode::Points => {
-                    let radius = paint.stroke_width / 2.0;
-                    for point in points {
-                        painter.circle(*point, radius, paint);
-                    }
+    fn render_points(
+        &mut self,
+        mode: PointMode,
+        points: &[Point],
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| match mode {
+            PointMode::Points => {
+                let radius = paint.stroke_width / 2.0;
+                for point in points {
+                    painter.circle(*point, radius, paint);
                 }
-                PointMode::Lines => {
-                    for i in (0..points.len()).step_by(2) {
-                        if i + 1 < points.len() {
-                            painter.line(points[i], points[i + 1], paint);
-                        }
-                    }
-                }
-                PointMode::Polygon => {
-                    for i in 0..points.len().saturating_sub(1) {
+            }
+            PointMode::Lines => {
+                for i in (0..points.len()).step_by(2) {
+                    if i + 1 < points.len() {
                         painter.line(points[i], points[i + 1], paint);
                     }
-                    if points.len() > 2 {
-                        painter.line(points[points.len() - 1], points[0], paint);
-                    }
+                }
+            }
+            PointMode::Polygon => {
+                for i in 0..points.len().saturating_sub(1) {
+                    painter.line(points[i], points[i + 1], paint);
+                }
+                if points.len() > 2 {
+                    painter.line(points[points.len() - 1], points[0], paint);
                 }
             }
         });
     }
 
-    fn render_text(&mut self, text: &str, offset: Offset, style: &TextStyle, _paint: &Paint, transform: &Matrix4) {
+    fn render_text(
+        &mut self,
+        text: &str,
+        offset: Offset,
+        style: &TextStyle,
+        _paint: &Paint,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             let font_size = style.font_size.unwrap_or(14.0) as f32;
             let color = style.color.unwrap_or(Color::BLACK);
@@ -151,13 +170,28 @@ impl CommandRenderer for WgpuRenderer {
         });
     }
 
-    fn render_image(&mut self, image: &Image, dst: Rect, _paint: Option<&Paint>, transform: &Matrix4) {
+    fn render_image(
+        &mut self,
+        image: &Image,
+        dst: Rect,
+        _paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.draw_image(image, dst);
         });
     }
 
-    fn render_atlas(&mut self, image: &Image, sprites: &[Rect], transforms: &[Matrix4], colors: Option<&[Color]>, _blend_mode: BlendMode, _paint: Option<&Paint>, transform: &Matrix4) {
+    fn render_atlas(
+        &mut self,
+        image: &Image,
+        sprites: &[Rect],
+        transforms: &[Matrix4],
+        colors: Option<&[Color]>,
+        _blend_mode: BlendMode,
+        _paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.draw_atlas(image, sprites, transforms, colors);
         });
@@ -177,7 +211,15 @@ impl CommandRenderer for WgpuRenderer {
         });
     }
 
-    fn render_vertices(&mut self, vertices: &[Point], colors: Option<&[Color]>, tex_coords: Option<&[Point]>, indices: &[u16], paint: &Paint, transform: &Matrix4) {
+    fn render_vertices(
+        &mut self,
+        vertices: &[Point],
+        colors: Option<&[Color]>,
+        tex_coords: Option<&[Point]>,
+        indices: &[u16],
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
         self.with_transform(transform, |painter| {
             painter.draw_vertices(vertices, colors, tex_coords, indices, paint);
         });

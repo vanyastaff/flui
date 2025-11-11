@@ -127,13 +127,7 @@ pub trait CommandRenderer {
     // ===== Effects =====
 
     /// Render a shadow for a path
-    fn render_shadow(
-        &mut self,
-        path: &Path,
-        color: Color,
-        elevation: f32,
-        transform: &Matrix4,
-    );
+    fn render_shadow(&mut self, path: &Path, color: Color, elevation: f32, transform: &Matrix4);
 
     /// Fill entire viewport with color
     fn render_color(&mut self, color: Color, blend_mode: BlendMode, transform: &Matrix4);

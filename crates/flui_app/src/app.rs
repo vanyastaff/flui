@@ -7,9 +7,7 @@ use flui_core::foundation::ElementId;
 use flui_core::pipeline::PipelineOwner;
 use flui_core::view::{AnyView, BuildContext};
 use flui_core::Size;
-use flui_engine::layer::CanvasLayer;
-use flui_engine::renderer::WgpuRenderer;
-use flui_engine::WindowStateTracker;
+use flui_engine::{CanvasLayer, GpuRenderer, WindowStateTracker};
 use flui_types::{BoxConstraints, Offset};
 use std::sync::Arc;
 use winit::window::Window;
@@ -45,7 +43,7 @@ struct EventCoalescer {
 impl FrameStats {
     /// Log statistics to console
     pub fn log(&self) {
-        if self.frame_count % 60 == 0 && self.frame_count > 0 {
+        if self.frame_count.is_multiple_of(60) && self.frame_count > 0 {
             tracing::info!(
                 "Performance: {} frames | Rebuilds: {} ({:.1}%) | Layouts: {} ({:.1}%) | Paints: {} ({:.1}%)",
                 self.frame_count,
@@ -112,23 +110,10 @@ pub struct FluiApp {
     #[allow(dead_code)]
     event_coalescer: EventCoalescer,
 
-    // ===== GPU Resources (created once, reused every frame) =====
-
-    /// wgpu surface
-    surface: wgpu::Surface<'static>,
-
-    /// wgpu device
-    device: wgpu::Device,
-
-    /// wgpu queue
-    queue: wgpu::Queue,
-
-    /// wgpu surface configuration
-    config: wgpu::SurfaceConfiguration,
-
-    /// GPU painter (persistent, created once)
-    /// Wrapped in Option to allow temporary ownership transfer without allocation
-    painter: Option<flui_engine::painter::WgpuPainter>,
+    // ===== GPU Rendering (encapsulated in single abstraction) =====
+    /// GPU renderer - encapsulates all wgpu resources (device, queue, surface, painter)
+    /// This is the only GPU-related field - clean separation of concerns!
+    renderer: GpuRenderer,
 
     /// Cleanup callback called on app shutdown
     /// Use this to clean up resources, stop background tasks, etc.
@@ -145,16 +130,31 @@ impl FluiApp {
     /// This is used internally by platform-specific initialization code (e.g., WASM).
     /// Most users should use `new()` instead.
     #[doc(hidden)]
-    pub fn from_components(
-        root_view: Box<dyn AnyView>,
-        _instance: wgpu::Instance,
-        surface: wgpu::Surface<'static>,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        config: wgpu::SurfaceConfiguration,
-        _window: Arc<Window>,
-        painter: flui_engine::painter::WgpuPainter,
-    ) -> Self {
+    #[deprecated(note = "Use FluiApp::new() instead. WASM support is now integrated directly.")]
+    pub fn from_components(root_view: Box<dyn AnyView>, window: Arc<Window>) -> Self {
+        // Simplified - just delegate to new()
+        Self::new(root_view, window)
+    }
+
+    /// Create a new Flui application (async version for WASM)
+    ///
+    /// # Arguments
+    ///
+    /// * `root_view` - The root view of the application (type-erased)
+    /// * `window` - The window to render to
+    ///
+    /// # Returns
+    ///
+    /// A new `FluiApp` instance with GPU renderer initialized asynchronously
+    ///
+    /// # Note
+    ///
+    /// Use this method on WebAssembly where `pollster::block_on` doesn't work.
+    /// For native platforms, use `new()` instead.
+    pub async fn new_async(root_view: Box<dyn AnyView>, window: Arc<Window>) -> Self {
+        // Create GPU renderer - encapsulates ALL wgpu initialization (async)!
+        let renderer = GpuRenderer::new_async(window).await;
+
         Self {
             pipeline: PipelineOwner::new(),
             root_view,
@@ -164,11 +164,7 @@ impl FluiApp {
             root_built: false,
             window_state: WindowStateTracker::new(),
             event_coalescer: EventCoalescer::default(),
-            surface,
-            device,
-            queue,
-            config,
-            painter: Some(painter),
+            renderer,
             on_cleanup: None,
             event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
         }
@@ -183,59 +179,10 @@ impl FluiApp {
     ///
     /// # Returns
     ///
-    /// A new `FluiApp` instance with wgpu initialized
+    /// A new `FluiApp` instance with GPU renderer initialized
     pub fn new(root_view: Box<dyn AnyView>, window: Arc<Window>) -> Self {
-        // Create wgpu instance
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
-
-        // Create surface
-        let surface = instance
-            .create_surface(Arc::clone(&window))
-            .expect("Failed to create surface");
-
-        // Request adapter
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .expect("Failed to find adapter");
-
-        // Request device and queue
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            label: None,
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: Default::default(),
-        }))
-        .expect("Failed to create device");
-
-        // Get window size
-        let size = window.inner_size();
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface.get_capabilities(&adapter).formats[0],
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
-
-        // Create GPU painter once (not every frame!)
-        // This is the only heavy resource - reused across all frames
-        let painter = flui_engine::painter::WgpuPainter::new(
-            device.clone(),
-            queue.clone(),
-            config.format,
-            (config.width, config.height),
-        );
+        // Create GPU renderer - encapsulates ALL wgpu initialization!
+        let renderer = GpuRenderer::new(window);
 
         Self {
             pipeline: PipelineOwner::new(),
@@ -246,11 +193,7 @@ impl FluiApp {
             root_built: false,
             window_state: WindowStateTracker::new(),
             event_coalescer: EventCoalescer::default(),
-            surface,
-            device,
-            queue,
-            config,
-            painter: Some(painter),
+            renderer,
             on_cleanup: None,
             event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
         }
@@ -376,27 +319,17 @@ impl FluiApp {
 
     /// Handle window resize
     pub fn resize(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
+        // Delegate to GPU renderer - it handles all GPU-related resize logic
+        self.renderer.resize(width, height);
 
-            // Update painter viewport (critical for correct rendering!)
-            if let Some(painter) = &mut self.painter {
-                painter.resize(width, height);
-            }
+        // Mark size changed for relayout
+        self.last_size = None;
 
-            // Mark size changed for relayout
-            self.last_size = None;
-
-            // CRITICAL: Request layout immediately on resize to prevent visual glitches
-            // Without this, the UI continues rendering with old layout until next update()
-            if let Some(root_id) = self.root_id {
-                self.pipeline.request_layout(root_id);
-                tracing::debug!("Requested layout after resize to {}x{}", width, height);
-            }
-
-            tracing::info!("Window resized to {}x{}", width, height);
+        // CRITICAL: Request layout immediately on resize to prevent visual glitches
+        // Without this, the UI continues rendering with old layout until next update()
+        if let Some(root_id) = self.root_id {
+            self.pipeline.request_layout(root_id);
+            tracing::debug!("Requested layout after resize to {}x{}", width, height);
         }
     }
 
@@ -405,7 +338,8 @@ impl FluiApp {
     /// Returns `true` if another redraw is needed (e.g., for animations or pending work),
     /// `false` if the frame is stable and no redraw is needed.
     pub fn update(&mut self) -> bool {
-        let size = Size::new(self.config.width as f32, self.config.height as f32);
+        let (width, height) = self.renderer.size();
+        let size = Size::new(width as f32, height as f32);
 
         // Build phase - create/update element tree
         if !self.root_built {
@@ -420,7 +354,7 @@ impl FluiApp {
         }
 
         // Check if size changed
-        let size_changed = self.last_size.map_or(true, |last| last != size);
+        let size_changed = self.last_size != Some(size);
         if size_changed {
             self.last_size = Some(size);
             tracing::debug!("Window size changed to {:?}", size);
@@ -503,95 +437,26 @@ impl FluiApp {
         tracing::info!("Root view built with ID: {:?}", root_id);
     }
 
-    /// Render a layer tree to the wgpu surface
+    /// Render a layer tree to the GPU surface
+    ///
+    /// Delegates rendering to GpuRenderer which handles all GPU details.
     fn render(&mut self, layer: Box<CanvasLayer>) {
-        // Get current frame
-        let frame = match self.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                // Surface is outdated or lost - reconfigure and retry next frame
-                tracing::warn!("Surface outdated/lost, reconfiguring...");
-                self.surface.configure(&self.device, &self.config);
-                return;
+        // Clean delegation - ALL GPU logic is in GpuRenderer!
+        match self.renderer.render(&layer) {
+            Ok(()) => {
+                tracing::debug!("Frame rendered successfully");
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                tracing::error!("Out of GPU memory!");
-                return;
-            }
-            Err(wgpu::SurfaceError::Timeout) => {
-                tracing::warn!("Surface timeout, skipping frame");
-                return;
+            Err(
+                flui_engine::RenderError::SurfaceLost | flui_engine::RenderError::SurfaceOutdated,
+            ) => {
+                // Surface was lost/outdated - GpuRenderer already reconfigured it
+                // Will retry next frame automatically
+                tracing::debug!("Surface lost/outdated, will retry next frame");
             }
             Err(e) => {
-                tracing::error!("Unknown surface error: {:?}", e);
-                return;
+                tracing::error!("Render error: {:?}", e);
             }
-        };
-
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Create command encoder
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
-        // Clear screen
-        {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
         }
-
-        // CRITICAL: Zero-allocation rendering via painter reuse!
-        // Painter is the ONLY heavy GPU resource - created once, reused every frame.
-        // WgpuRenderer is a lightweight wrapper (single pointer) recreated each frame.
-
-        tracing::debug!("Rendering layer tree");
-
-        // Take ownership of painter temporarily (field becomes None, zero allocation)
-        let painter = self.painter.take().expect("Painter should always exist during render");
-
-        // Create renderer wrapper (stack allocation, just one pointer field)
-        let mut renderer = WgpuRenderer::new(painter);
-
-        // Dispatch all draw commands via visitor pattern
-        layer.render(&mut renderer);
-
-        // Extract painter and render accumulated commands to GPU
-        let mut painter = renderer.into_painter();
-        if let Err(e) = painter.render(&view, &mut encoder) {
-            tracing::error!("Failed to render frame: {:?}", e);
-            // Put painter back even on error
-            self.painter = Some(painter);
-            return;
-        }
-
-        // Put painter back (zero allocation, just moves Option)
-        self.painter = Some(painter);
-
-        // Submit commands
-        self.queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
     }
 }
 

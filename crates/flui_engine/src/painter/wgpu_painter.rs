@@ -995,16 +995,15 @@ impl WgpuPainter {
             );
 
             // Create/update bind group
-            self.gradient_bind_group = Some(self.device.create_bind_group(
-                &wgpu::BindGroupDescriptor {
+            self.gradient_bind_group =
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("Gradient Stops Bind Group"),
                     layout: &self.gradient_bind_group_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: self.gradient_stops_buffer.as_entire_binding(),
                     }],
-                },
-            ));
+                }));
         }
 
         // Calculate buffer sizes
@@ -1348,9 +1347,7 @@ impl Painter for WgpuPainter {
         } else {
             // Stroked rect - use tessellator (less common, fallback path)
             // Paint already contains stroke information (stroke_width, stroke_cap, stroke_join)
-            if let Ok((vertices, indices)) =
-                self.tessellator.tessellate_rect_stroke(rect, paint)
-            {
+            if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
                 self.add_tessellated(vertices, indices);
             }
         }
@@ -1387,8 +1384,7 @@ impl Painter for WgpuPainter {
 
         if paint.style == PaintStyle::Fill {
             // Use GPU instancing for filled circles (100x faster!)
-            let instance =
-                super::instancing::CircleInstance::new(center, radius, paint.color);
+            let instance = super::instancing::CircleInstance::new(center, radius, paint.color);
             self.circle_batch.add(instance);
             // Note: Auto-flush happens in render() - no need to flush here
         } else {
@@ -1585,8 +1581,7 @@ impl Painter for WgpuPainter {
         let result = if paint.style == PaintStyle::Fill {
             self.tessellator.tessellate_flui_path_fill(path, paint)
         } else {
-            self.tessellator
-                .tessellate_flui_path_stroke(path, paint)
+            self.tessellator.tessellate_flui_path_stroke(path, paint)
         };
 
         match result {
@@ -1933,7 +1928,8 @@ impl Painter for WgpuPainter {
 
         // Transform rect corners
         let top_left = transform.transform_point3(glam::Vec3::new(rect.left(), rect.top(), 0.0));
-        let bottom_right = transform.transform_point3(glam::Vec3::new(rect.right(), rect.bottom(), 0.0));
+        let bottom_right =
+            transform.transform_point3(glam::Vec3::new(rect.right(), rect.bottom(), 0.0));
 
         // Calculate scissor rect in physical pixels
         let x = top_left.x.max(0.0) as u32;
@@ -1965,7 +1961,11 @@ impl Painter for WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::debug!(
             "WgpuPainter::clip_rect: rect={:?} → scissor=({}, {}, {}, {})",
-            rect, scissor.0, scissor.1, scissor.2, scissor.3
+            rect,
+            scissor.0,
+            scissor.1,
+            scissor.2,
+            scissor.3
         );
     }
 
@@ -2033,7 +2033,8 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        self.current_gradient_stops.extend_from_slice(&stops[..stop_count]);
+        self.current_gradient_stops
+            .extend_from_slice(&stops[..stop_count]);
 
         let instance = LinearGradientInstance::new(
             [bounds.left(), bounds.top(), bounds.width(), bounds.height()],
@@ -2083,7 +2084,8 @@ impl WgpuPainter {
 
         // Append gradient stops to global buffer (max 8 per gradient)
         let stop_count = stops.len().min(8);
-        self.current_gradient_stops.extend_from_slice(&stops[..stop_count]);
+        self.current_gradient_stops
+            .extend_from_slice(&stops[..stop_count]);
 
         let instance = RadialGradientInstance::new(
             [bounds.left(), bounds.top(), bounds.width(), bounds.height()],

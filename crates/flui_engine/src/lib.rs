@@ -41,12 +41,15 @@
 //! ```
 
 pub mod devtools;
+pub mod gpu_renderer;
 pub mod layer;
 pub mod painter;
 pub mod renderer;
 pub mod text;
 pub mod window_state;
 
+// Re-export GPU renderer (high-level abstraction)
+pub use gpu_renderer::{GpuRenderer, RenderError};
 
 // Re-export modern layer type
 pub use layer::CanvasLayer;
@@ -75,5 +78,3 @@ pub use devtools::{
 
 #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
 pub use devtools::MemoryGraph;
-
-

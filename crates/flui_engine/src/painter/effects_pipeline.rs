@@ -48,9 +48,7 @@ pub fn create_linear_gradient_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Linear Gradient Shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("shaders/gradients/linear.wgsl").into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/linear.wgsl").into()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -116,9 +114,7 @@ pub fn create_radial_gradient_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Radial Gradient Shader"),
-        source: wgpu::ShaderSource::Wgsl(
-            include_str!("shaders/gradients/radial.wgsl").into(),
-        ),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/gradients/radial.wgsl").into()),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

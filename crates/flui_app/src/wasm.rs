@@ -20,72 +20,9 @@ pub fn init_panic_hook() {
 /// In WebAssembly, we can't use pollster::block_on because the browser's
 /// event loop doesn't support blocking. Instead, we use async/await.
 pub async fn new_async(root_view: Box<dyn AnyView>, window: Arc<Window>) -> FluiApp {
-    // Create wgpu instance
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        #[cfg(target_arch = "wasm32")]
-        backends: wgpu::Backends::GL | wgpu::Backends::BROWSER_WEBGPU,
-        #[cfg(not(target_arch = "wasm32"))]
-        backends: wgpu::Backends::all(),
-        ..Default::default()
-    });
-
-    // Create surface
-    let surface = instance
-        .create_surface(Arc::clone(&window))
-        .expect("Failed to create surface");
-
-    // Request adapter (async)
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        })
-        .await
-        .expect("Failed to find adapter");
-
-    // Request device and queue (async)
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::empty(),
-            #[cfg(target_arch = "wasm32")]
-            required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-            #[cfg(not(target_arch = "wasm32"))]
-            required_limits: wgpu::Limits::default(),
-            label: None,
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: Default::default(),
-        })
-        .await
-        .expect("Failed to create device");
-
-    // Get window size
-    let size = window.inner_size();
-    let config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        format: surface.get_capabilities(&adapter).formats[0],
-        width: size.width,
-        height: size.height,
-        present_mode: wgpu::PresentMode::Fifo,
-        alpha_mode: wgpu::CompositeAlphaMode::Auto,
-        view_formats: vec![],
-        desired_maximum_frame_latency: 2,
-    };
-    surface.configure(&device, &config);
-
-    // Create GPU painter
-    let painter = flui_engine::painter::WgpuPainter::new(
-        device.clone(),
-        queue.clone(),
-        config.format,
-        (config.width, config.height),
-    );
-
-    // Note: We're duplicating the initialization logic from FluiApp::new
-    // This is necessary because FluiApp::new uses pollster::block_on which doesn't work in WASM
-    crate::app::FluiApp::from_components(
-        root_view, instance, surface, device, queue, config, window, painter,
-    )
+    // Delegate to FluiApp::new_async which uses GpuRenderer::new_async internally
+    // This eliminates ALL GPU initialization code duplication!
+    FluiApp::new_async(root_view, window).await
 }
 
 /// Run a Flui app in the browser

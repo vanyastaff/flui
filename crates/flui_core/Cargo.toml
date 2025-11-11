@@ -18,6 +18,8 @@ flui_derive = { path = "../flui_derive" }
 parking_lot.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-tree.workspace = true
 smallvec.workspace = true
 bitflags.workspace = true
 downcast-rs.workspace = true
@@ -51,6 +53,10 @@ profiling = ["dep:puffin"]
 # === Performance ===
 # Multi-threaded parallel build pipeline
 parallel = ["dep:rayon"]
+
+# === Debug Features ===
+# Enable tracing for hot paths (very frequent operations)
+trace-hot-paths = []
 
 [lib]
 name = "flui_core"

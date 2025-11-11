@@ -26,8 +26,6 @@ pub mod debug_renderer;
 pub mod dispatcher;
 pub mod wgpu_renderer;
 
-
-
 pub use command_renderer::CommandRenderer;
 pub use dispatcher::{dispatch_command, dispatch_commands};
 pub use wgpu_renderer::WgpuRenderer;
@@ -62,4 +60,3 @@ impl RenderBackend {
         }
     }
 }
-

@@ -32,11 +32,6 @@ flui_engine = { path = "../flui_engine" }
 # Window management
 winit.workspace = true
 
-# GPU rendering
-wgpu.workspace = true
-glyphon.workspace = true
-bytemuck = { version = "1.14", features = ["derive"] }
-
 # Utilities
 tracing.workspace = true
 tracing-subscriber = "0.3"

@@ -102,9 +102,7 @@ impl Tessellator {
                 &options,
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
-                    FillVertexConstructor {
-                        color: paint.color,
-                    },
+                    FillVertexConstructor { color: paint.color },
                 ),
             )
             .map_err(|e| TessellationError::FillFailed(e.to_string()))?;
@@ -153,9 +151,7 @@ impl Tessellator {
                 &options,
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
-                    StrokeVertexConstructor {
-                        color: paint.color,
-                    },
+                    StrokeVertexConstructor { color: paint.color },
                 ),
             )
             .map_err(|e| TessellationError::StrokeFailed(e.to_string()))?;

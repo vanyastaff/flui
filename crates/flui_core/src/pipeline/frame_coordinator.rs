@@ -230,26 +230,27 @@ impl FrameCoordinator {
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+        // Create frame span for hierarchical logging
+        let frame_span = tracing::info_span!(
+            "frame",
+            ?constraints
+        );
+        let _frame_guard = frame_span.enter();
+
         // Start frame and get budget
         let _frame_budget = self.scheduler.start_frame();
 
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "build_frame: Starting frame with constraints {:?}, budget {:?}",
-            constraints,
-            _frame_budget
-        );
-
         // Phase 1: Build (rebuild dirty widgets)
-        #[cfg(debug_assertions)]
         let build_count = self.build.dirty_count();
 
-        // Use parallel build (automatically falls back to sequential if appropriate)
-        self.build.rebuild_dirty_parallel(tree);
-
-        #[cfg(debug_assertions)]
         if build_count > 0 {
-            tracing::debug!("build_frame: Build phase rebuilt {} widgets", build_count);
+            let build_span = tracing::debug_span!("build", dirty_count = build_count);
+            let _build_guard = build_span.enter();
+
+            // Use parallel build (automatically falls back to sequential if appropriate)
+            self.build.rebuild_dirty_parallel(tree);
+
+            tracing::debug!("Rebuilt {} widgets", build_count);
         }
 
         // Check if we're approaching deadline after build phase
@@ -257,7 +258,7 @@ impl FrameCoordinator {
         if self.scheduler.is_deadline_near() {
             if let Some(remaining) = self.scheduler.remaining() {
                 tracing::warn!(
-                    "build_frame: Approaching deadline after build, remaining {:?}",
+                    "Approaching deadline after build, remaining {:?}",
                     remaining
                 );
             }
@@ -265,15 +266,14 @@ impl FrameCoordinator {
 
         // Phase 2: Layout (compute sizes and positions)
         let _root_size = {
+            let layout_span = tracing::debug_span!("layout");
+            let _layout_guard = layout_span.enter();
+
             let mut tree_guard = tree.write();
             let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
 
-            #[cfg(debug_assertions)]
             if !laid_out_ids.is_empty() {
-                tracing::debug!(
-                    "build_frame: Layout phase computed {} layouts",
-                    laid_out_ids.len()
-                );
+                tracing::debug!("Computed {} layouts", laid_out_ids.len());
             }
 
             // Mark all laid out elements for paint
@@ -287,7 +287,7 @@ impl FrameCoordinator {
 
         #[cfg(debug_assertions)]
         if let Some(size) = _root_size {
-            tracing::debug!("build_frame: Root size {:?}", size);
+            tracing::debug!(root_size = ?size, "Root layout complete");
         }
 
         // Check if we're approaching deadline after layout phase
@@ -295,7 +295,7 @@ impl FrameCoordinator {
         if self.scheduler.is_deadline_near() {
             if let Some(remaining) = self.scheduler.remaining() {
                 tracing::warn!(
-                    "build_frame: Approaching deadline after layout, remaining {:?}",
+                    "Approaching deadline after layout, remaining {:?}",
                     remaining
                 );
             }
@@ -303,12 +303,14 @@ impl FrameCoordinator {
 
         // Phase 3: Paint (generate layer tree)
         let layer = {
-            let mut tree_guard = tree.write();
-            let _count = self.paint.generate_layers(&mut tree_guard)?;
+            let paint_span = tracing::debug_span!("paint");
+            let _paint_guard = paint_span.enter();
 
-            #[cfg(debug_assertions)]
-            if _count > 0 {
-                tracing::debug!("build_frame: Paint phase generated {} layers", _count);
+            let mut tree_guard = tree.write();
+            let count = self.paint.generate_layers(&mut tree_guard)?;
+
+            if count > 0 {
+                tracing::debug!("Generated {} layers", count);
             }
 
             // Get root element's layer
@@ -316,16 +318,18 @@ impl FrameCoordinator {
         };
 
         // Finish frame and update metrics
-        self.scheduler.finish_frame();
+        let frame_time = self.scheduler.finish_frame();
 
-        #[cfg(debug_assertions)]
+        // Log frame completion with timing info
         if layer.is_some() {
-            tracing::debug!("build_frame: Frame complete");
             if self.scheduler.is_deadline_missed() {
                 tracing::warn!(
-                    "build_frame: Frame deadline missed (consecutive misses: {})",
-                    self.scheduler.consecutive_misses()
+                    frame_time = ?frame_time,
+                    consecutive_misses = self.scheduler.consecutive_misses(),
+                    "Frame deadline missed"
                 );
+            } else {
+                tracing::info!(frame_time = ?frame_time, "Frame complete");
             }
         }
 

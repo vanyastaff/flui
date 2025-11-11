@@ -625,8 +625,7 @@ impl BuildPipeline {
         element_id: ElementId,
         _depth: usize,
     ) -> bool {
-        #[cfg(debug_assertions)]
-        tracing::debug!("Rebuilding component element {:?}", element_id);
+        crate::trace_hot_path!("Rebuilding component", ?element_id);
 
         // Stage 1: Extract component data (minimize lock time)
         let (view, old_child_id, hook_context) = {
@@ -695,8 +694,7 @@ impl BuildPipeline {
         element_id: ElementId,
         _depth: usize,
     ) -> bool {
-        #[cfg(debug_assertions)]
-        tracing::debug!("Rebuilding provider element {:?}", element_id);
+        crate::trace_hot_path!("Rebuilding provider", ?element_id);
 
         // Phase 1: Get dependents list (read-only)
         let dependents = {

@@ -262,11 +262,13 @@ pub mod debug;
 pub mod element;
 pub mod foundation;
 pub mod hooks;
+pub mod logging;
 pub mod pipeline;
 pub mod prelude;
 pub mod render;
 pub mod testing;
 pub mod view;
+
 
 // Re-export debug types
 pub use debug::DebugFlags;
@@ -371,3 +373,4 @@ mod tests {
         let _arity = Arity::Variable;
     }
 }
+

@@ -25,7 +25,8 @@
       "mcp__ide__getDiagnostics",
       "Bash(mkdir:*)",
       "Bash(cargo doc:*)",
-      "Bash(cargo fmt:*)"
+      "Bash(cargo fmt:*)",
+      "Bash(cargo tree:*)"
     ],
     "deny": [],
     "ask": []

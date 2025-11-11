@@ -1,4 +1,5 @@
 pub mod hello_world_view;
+pub mod logging_demo;
 pub mod profile_card;
 pub mod profile_card_fixed;
 pub mod profile_card_simple;
@@ -11,6 +12,8 @@ pub mod test_simple_row;
 pub mod test_skew;
 pub mod transform_demo;
 pub mod wave_connection;
+
+
 
 
 

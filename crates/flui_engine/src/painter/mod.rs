@@ -66,8 +66,6 @@ pub mod texture_cache;
 mod vertex;
 pub mod wgpu_painter;
 
-
-
 // ===== Public API =====
 
 // Main painter
@@ -84,6 +82,3 @@ pub use tessellator::Tessellator;
 
 // Re-export RRect from flui_types
 pub use flui_types::geometry::RRect;
-
-
-

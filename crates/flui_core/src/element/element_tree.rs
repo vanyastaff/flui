@@ -916,8 +916,7 @@ impl ElementTree {
     /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
     #[inline]
     pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> flui_painting::Canvas {
-        #[cfg(debug_assertions)]
-        tracing::debug!("paint_child: called with child_id={:?}", child_id);
+        crate::trace_hot_path!("paint_child", ?child_id);
 
         // Walk down through ComponentElements to find the first RenderElement
         let render_id = self.find_render_element(child_id);

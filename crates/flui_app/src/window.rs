@@ -43,10 +43,10 @@ use winit::{
 /// }
 /// ```
 pub fn run_app(root_view: Box<dyn AnyView>) -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing for logging
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
+    // Initialize hierarchical logging for development
+    flui_core::logging::init_logging(
+        flui_core::logging::LogConfig::new(flui_core::logging::LogMode::Development)
+    );
 
     // Create event loop
     let event_loop = EventLoop::new()?;

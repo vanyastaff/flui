@@ -68,7 +68,6 @@ impl CanvasLayer {
     }
 }
 
-
 impl CanvasLayer {
     #[deprecated(note = "Use WgpuRenderer::with_transform instead. This is legacy compatibility.")]
     fn legacy_with_transform<F>(

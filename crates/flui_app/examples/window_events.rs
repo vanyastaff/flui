@@ -56,9 +56,10 @@ impl flui_core::view::View for WindowEventsDemo {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging to see event callbacks in action
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    flui_core::logging::init_logging(
+        flui_core::logging::LogConfig::new(flui_core::logging::LogMode::Development)
+            .with_filter("flui_app=info,flui_core=info,flui_engine=warn")
+    );
 
     println!("=== Window Events Demo ===");
     println!("Interact with the window to see various events!");

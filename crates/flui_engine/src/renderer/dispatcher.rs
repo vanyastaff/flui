@@ -73,43 +73,116 @@ use flui_painting::DrawCommand;
 pub fn dispatch_command(command: &DrawCommand, renderer: &mut dyn CommandRenderer) {
     match command {
         // === Drawing Commands ===
-        DrawCommand::DrawRect { rect, paint, transform } => {
+        DrawCommand::DrawRect {
+            rect,
+            paint,
+            transform,
+        } => {
             renderer.render_rect(*rect, paint, transform);
         }
-        DrawCommand::DrawRRect { rrect, paint, transform } => {
+        DrawCommand::DrawRRect {
+            rrect,
+            paint,
+            transform,
+        } => {
             renderer.render_rrect(*rrect, paint, transform);
         }
-        DrawCommand::DrawCircle { center, radius, paint, transform } => {
+        DrawCommand::DrawCircle {
+            center,
+            radius,
+            paint,
+            transform,
+        } => {
             renderer.render_circle(*center, *radius, paint, transform);
         }
-        DrawCommand::DrawLine { p1, p2, paint, transform } => {
+        DrawCommand::DrawLine {
+            p1,
+            p2,
+            paint,
+            transform,
+        } => {
             renderer.render_line(*p1, *p2, paint, transform);
         }
-        DrawCommand::DrawOval { rect, paint, transform } => {
+        DrawCommand::DrawOval {
+            rect,
+            paint,
+            transform,
+        } => {
             renderer.render_oval(*rect, paint, transform);
         }
-        DrawCommand::DrawPath { path, paint, transform } => {
+        DrawCommand::DrawPath {
+            path,
+            paint,
+            transform,
+        } => {
             renderer.render_path(path, paint, transform);
         }
-        DrawCommand::DrawText { text, offset, style, paint, transform } => {
+        DrawCommand::DrawText {
+            text,
+            offset,
+            style,
+            paint,
+            transform,
+        } => {
             renderer.render_text(text, *offset, style, paint, transform);
         }
-        DrawCommand::DrawImage { image, dst, paint, transform } => {
+        DrawCommand::DrawImage {
+            image,
+            dst,
+            paint,
+            transform,
+        } => {
             renderer.render_image(image, *dst, paint.as_ref(), transform);
         }
-        DrawCommand::DrawShadow { path, color, elevation, transform } => {
+        DrawCommand::DrawShadow {
+            path,
+            color,
+            elevation,
+            transform,
+        } => {
             renderer.render_shadow(path, *color, *elevation, transform);
         }
-        DrawCommand::DrawArc { rect, start_angle, sweep_angle, use_center, paint, transform } => {
-            renderer.render_arc(*rect, *start_angle, *sweep_angle, *use_center, paint, transform);
+        DrawCommand::DrawArc {
+            rect,
+            start_angle,
+            sweep_angle,
+            use_center,
+            paint,
+            transform,
+        } => {
+            renderer.render_arc(
+                *rect,
+                *start_angle,
+                *sweep_angle,
+                *use_center,
+                paint,
+                transform,
+            );
         }
-        DrawCommand::DrawDRRect { outer, inner, paint, transform } => {
+        DrawCommand::DrawDRRect {
+            outer,
+            inner,
+            paint,
+            transform,
+        } => {
             renderer.render_drrect(*outer, *inner, paint, transform);
         }
-        DrawCommand::DrawPoints { mode, points, paint, transform } => {
+        DrawCommand::DrawPoints {
+            mode,
+            points,
+            paint,
+            transform,
+        } => {
             renderer.render_points(*mode, points, paint, transform);
         }
-        DrawCommand::DrawVertices { vertices, colors, tex_coords, indices, paint, transform } => {
+        DrawCommand::DrawVertices {
+            vertices,
+            colors,
+            tex_coords,
+            indices,
+            paint,
+            transform,
+        } => {
             renderer.render_vertices(
                 vertices,
                 colors.as_deref(),
@@ -119,10 +192,22 @@ pub fn dispatch_command(command: &DrawCommand, renderer: &mut dyn CommandRendere
                 transform,
             );
         }
-        DrawCommand::DrawColor { color, blend_mode, transform } => {
+        DrawCommand::DrawColor {
+            color,
+            blend_mode,
+            transform,
+        } => {
             renderer.render_color(*color, *blend_mode, transform);
         }
-        DrawCommand::DrawAtlas { image, sprites, transforms, colors, blend_mode, paint, transform } => {
+        DrawCommand::DrawAtlas {
+            image,
+            sprites,
+            transforms,
+            colors,
+            blend_mode,
+            paint,
+            transform,
+        } => {
             renderer.render_atlas(
                 image,
                 sprites,

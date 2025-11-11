@@ -170,7 +170,12 @@ impl RadialGradientInstance {
     }
 
     /// Create a radial gradient centered in the rectangle
-    pub fn centered(bounds: [f32; 4], radius: f32, corner_radii: [f32; 4], stop_count: u32) -> Self {
+    pub fn centered(
+        bounds: [f32; 4],
+        radius: f32,
+        corner_radii: [f32; 4],
+        stop_count: u32,
+    ) -> Self {
         let width = bounds[2];
         let height = bounds[3];
         let center = Vec2::new(width * 0.5, height * 0.5);
