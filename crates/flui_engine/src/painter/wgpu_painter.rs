@@ -155,6 +155,14 @@ pub struct WgpuPainter {
 
     /// Current active transform
     current_transform: glam::Mat4,
+
+    // ===== Clipping =====
+    /// Stack of scissor rectangles for axis-aligned clipping
+    /// Each element is (x, y, width, height) in physical pixels
+    scissor_stack: Vec<(u32, u32, u32, u32)>,
+
+    /// Current active scissor rect (None = no clipping)
+    current_scissor: Option<(u32, u32, u32, u32)>,
 }
 
 impl WgpuPainter {
@@ -644,6 +652,8 @@ impl WgpuPainter {
             text_renderer,
             transform_stack,
             current_transform,
+            scissor_stack: Vec::new(),
+            current_scissor: None,
         }
     }
 
@@ -719,6 +729,12 @@ impl WgpuPainter {
             render_pass.set_pipeline(pipeline);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            // Apply scissor rect if active
+            if let Some((x, y, width, height)) = self.current_scissor {
+                render_pass.set_scissor_rect(x, y, width, height);
+            }
+
             render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
         }
 
@@ -884,6 +900,11 @@ impl WgpuPainter {
             self.unit_quad_index_buffer.slice(..),
             wgpu::IndexFormat::Uint16,
         );
+
+        // Apply scissor rect if active
+        if let Some((x, y, width, height)) = self.current_scissor {
+            render_pass.set_scissor_rect(x, y, width, height);
+        }
 
         // ===== Draw Shadows FIRST (if any) =====
         // Shadows render behind shapes for correct z-ordering (background → foreground)
@@ -1846,12 +1867,27 @@ impl Painter for WgpuPainter {
             self.transform_stack.len()
         );
 
+        // Save both transform and scissor state
         self.transform_stack.push(self.current_transform);
+
+        // Save current scissor (if any) by pushing to stack
+        if let Some(scissor) = self.current_scissor {
+            self.scissor_stack.push(scissor);
+        }
     }
 
     fn restore(&mut self) {
         if let Some(transform) = self.transform_stack.pop() {
             self.current_transform = transform;
+
+            // Restore scissor state
+            // Pop from scissor stack if there was a saved scissor
+            if !self.scissor_stack.is_empty() {
+                self.current_scissor = self.scissor_stack.pop();
+            } else {
+                // No scissor was saved, clear current
+                self.current_scissor = None;
+            }
 
             #[cfg(debug_assertions)]
             tracing::debug!(
@@ -1888,18 +1924,66 @@ impl Painter for WgpuPainter {
         self.current_transform *= scaling;
     }
 
-    // ===== Clipping (TODO) =====
+    // ===== Clipping =====
 
-    fn clip_rect(&mut self, _rect: Rect) {
+    fn clip_rect(&mut self, rect: Rect) {
+        // Convert logical coordinates to physical pixels
+        // Apply current transform to get screen-space coordinates
+        let transform = self.current_transform;
+
+        // Transform rect corners
+        let top_left = transform.transform_point3(glam::Vec3::new(rect.left(), rect.top(), 0.0));
+        let bottom_right = transform.transform_point3(glam::Vec3::new(rect.right(), rect.bottom(), 0.0));
+
+        // Calculate scissor rect in physical pixels
+        let x = top_left.x.max(0.0) as u32;
+        let y = top_left.y.max(0.0) as u32;
+        let right = bottom_right.x.min(self.size.0 as f32) as u32;
+        let bottom = bottom_right.y.min(self.size.1 as f32) as u32;
+
+        let width = right.saturating_sub(x);
+        let height = bottom.saturating_sub(y);
+
+        // Intersect with current scissor if any
+        let scissor = if let Some((cur_x, cur_y, cur_w, cur_h)) = self.current_scissor {
+            // Compute intersection
+            let intersect_x = x.max(cur_x);
+            let intersect_y = y.max(cur_y);
+            let intersect_right = (x + width).min(cur_x + cur_w);
+            let intersect_bottom = (y + height).min(cur_y + cur_h);
+
+            let intersect_width = intersect_right.saturating_sub(intersect_x);
+            let intersect_height = intersect_bottom.saturating_sub(intersect_y);
+
+            (intersect_x, intersect_y, intersect_width, intersect_height)
+        } else {
+            (x, y, width, height)
+        };
+
+        self.current_scissor = Some(scissor);
+
         #[cfg(debug_assertions)]
-        tracing::warn!("WgpuPainter::clip_rect: not yet implemented");
-        // TODO: Implement using scissor rect or stencil buffer
+        tracing::debug!(
+            "WgpuPainter::clip_rect: rect={:?} → scissor=({}, {}, {}, {})",
+            rect, scissor.0, scissor.1, scissor.2, scissor.3
+        );
     }
 
-    fn clip_rrect(&mut self, _rrect: RRect) {
+    fn clip_rrect(&mut self, rrect: RRect) {
+        // Rounded rectangle clipping requires stencil buffer
+        // This is a more complex feature that needs:
+        // 1. Stencil buffer configuration in render pass
+        // 2. Render clip mask to stencil
+        // 3. Enable stencil test for subsequent draws
+        // 4. Stack management for nested clips
+        //
+        // For now, fall back to bounding box clipping
+        self.clip_rect(rrect.rect);
+
         #[cfg(debug_assertions)]
-        tracing::warn!("WgpuPainter::clip_rrect: not yet implemented");
-        // TODO: Implement using stencil buffer
+        tracing::warn!(
+            "WgpuPainter::clip_rrect: using bounding box fallback (rounded corners not supported yet)"
+        );
     }
 
     // ===== Viewport Information =====
