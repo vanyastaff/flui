@@ -33,17 +33,17 @@ fn render_frame(num: u32) {
 #[tracing::instrument]
 fn build_phase() {
     thread::sleep(Duration::from_millis(5));
-    tracing::debug!(count = 1, "Build complete");
+    tracing::info!(count = 1, "Build complete");
 }
 
 #[tracing::instrument]
 fn layout_phase() {
     thread::sleep(Duration::from_millis(3));
-    tracing::debug!(count = 1, "Layout complete");
+    tracing::info!(count = 1, "Layout complete");
 }
 
 #[tracing::instrument]
 fn paint_phase() {
     thread::sleep(Duration::from_millis(2));
-    tracing::debug!(count = 1, "Paint complete");
+    tracing::info!(count = 1, "Paint complete");
 }

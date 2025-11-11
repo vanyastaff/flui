@@ -244,13 +244,13 @@ impl FrameCoordinator {
         let build_count = self.build.dirty_count();
 
         if build_count > 0 {
-            let build_span = tracing::debug_span!("build");
+            let build_span = tracing::info_span!("build");
             let _build_guard = build_span.enter();
 
             // Use parallel build (automatically falls back to sequential if appropriate)
             self.build.rebuild_dirty_parallel(tree);
 
-            tracing::debug!(count = build_count, "Build complete");
+            tracing::info!(count = build_count, "Build complete");
         }
 
         // Check if we're approaching deadline after build phase
@@ -266,7 +266,7 @@ impl FrameCoordinator {
 
         // Phase 2: Layout (compute sizes and positions)
         let _root_size = {
-            let layout_span = tracing::debug_span!("layout");
+            let layout_span = tracing::info_span!("layout");
             let _layout_guard = layout_span.enter();
 
             let mut tree_guard = tree.write();
@@ -278,7 +278,7 @@ impl FrameCoordinator {
             }
 
             if !laid_out_ids.is_empty() {
-                tracing::debug!(count = laid_out_ids.len(), "Layout complete");
+                tracing::info!(count = laid_out_ids.len(), "Layout complete");
             }
 
             // Get root element's computed size
@@ -298,14 +298,14 @@ impl FrameCoordinator {
 
         // Phase 3: Paint (generate layer tree)
         let layer = {
-            let paint_span = tracing::debug_span!("paint");
+            let paint_span = tracing::info_span!("paint");
             let _paint_guard = paint_span.enter();
 
             let mut tree_guard = tree.write();
             let count = self.paint.generate_layers(&mut tree_guard)?;
 
             if count > 0 {
-                tracing::debug!(count, "Paint complete");
+                tracing::info!(count, "Paint complete");
             }
 
             // Get root element's layer
