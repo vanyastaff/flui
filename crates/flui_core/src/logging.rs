@@ -21,7 +21,7 @@ pub enum LogMode {
     /// Minimal overhead for profiling.
     Performance,
 
-    /// Production mode with compact JSON output.
+    /// Production mode with compact output.
     /// Suitable for production deployments.
     Production,
 
@@ -30,13 +30,36 @@ pub enum LogMode {
     Silent,
 }
 
+/// Predefined log detail levels for common use cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogDetail {
+    /// Minimal - Only warnings and frame stats (production).
+    /// Filter: "flui=warn,flui_app::app=info"
+    Minimal,
+
+    /// Standard - Frame timing and major phase completion (default development).
+    /// Filter: "flui_app=info,flui_core::pipeline=debug"
+    Standard,
+
+    /// Verbose - All debug logs including element operations.
+    /// Filter: "flui=debug"
+    Verbose,
+
+    /// Trace - Everything including hot paths (for debugging specific issues).
+    /// Filter: "flui=trace"
+    Trace,
+}
+
 /// Configuration for FLUI logging system.
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     /// Logging mode (development, performance, production, silent).
     pub mode: LogMode,
 
-    /// Custom filter directives (overrides defaults).
+    /// Detail level (minimal, standard, verbose, trace).
+    pub detail: Option<LogDetail>,
+
+    /// Custom filter directives (overrides defaults and detail level).
     /// Example: "flui_core=debug,flui_rendering=info"
     pub filter: Option<String>,
 
@@ -54,6 +77,7 @@ impl Default for LogConfig {
     fn default() -> Self {
         Self {
             mode: LogMode::Development,
+            detail: Some(LogDetail::Standard),
             filter: None,
             colors: None,
             show_location: None,
@@ -71,7 +95,13 @@ impl LogConfig {
         }
     }
 
-    /// Set custom filter directives.
+    /// Set detail level (minimal, standard, verbose, trace).
+    pub fn with_detail(mut self, detail: LogDetail) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+
+    /// Set custom filter directives (overrides detail level).
     pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
         self.filter = Some(filter.into());
         self
@@ -130,18 +160,19 @@ pub fn init_logging(config: LogConfig) {
 
 /// Initialize development logging with hierarchical output.
 fn init_dev_logging(config: LogConfig) {
-    let filter = create_filter(&config, "flui_core=debug,flui_rendering=debug,flui_engine=debug");
+    let filter = create_filter_from_detail(&config);
 
     let colors = config.colors.unwrap_or(true);
     let show_threads = config.show_threads.unwrap_or(false);
 
     // Use tracing-tree for hierarchical output
     let layer = tracing_tree::HierarchicalLayer::new(2)
-        .with_targets(true)
+        .with_targets(false) // Hide targets for cleaner output
         .with_bracketed_fields(true)
         .with_ansi(colors)
         .with_indent_lines(true)
         .with_thread_ids(show_threads)
+        .with_span_retrace(true) // Show span context for long operations
         .with_filter(filter);
 
     tracing_subscriber::registry().with(layer).init();
@@ -185,6 +216,27 @@ fn init_prod_logging(config: LogConfig) {
         .with_filter(filter);
 
     tracing_subscriber::registry().with(layer).init();
+}
+
+/// Create an environment filter based on detail level.
+fn create_filter_from_detail(config: &LogConfig) -> EnvFilter {
+    // If custom filter provided, use it
+    if let Some(custom) = &config.filter {
+        return EnvFilter::try_from_default_env()
+            .or_else(|_| EnvFilter::try_new(custom))
+            .unwrap_or_else(|_| EnvFilter::new("flui=info"));
+    }
+
+    // Otherwise use detail level
+    let detail_filter = match config.detail {
+        Some(LogDetail::Minimal) => "flui=warn,flui_app::app=info",
+        Some(LogDetail::Standard) => "flui_app=info,flui_core::pipeline=debug,flui_core::element=info,flui_rendering=info,flui_engine=warn",
+        Some(LogDetail::Verbose) => "flui=debug",
+        Some(LogDetail::Trace) => "flui=trace",
+        None => "flui_app=info,flui_core::pipeline=debug",
+    };
+
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(detail_filter))
 }
 
 /// Create an environment filter with custom directives.

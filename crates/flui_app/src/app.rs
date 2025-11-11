@@ -338,14 +338,26 @@ impl FluiApp {
     /// Returns `true` if another redraw is needed (e.g., for animations or pending work),
     /// `false` if the frame is stable and no redraw is needed.
     pub fn update(&mut self) -> bool {
-        // Create frame span for hierarchical logging
-        let frame_span = tracing::info_span!("frame", num = self.stats.frame_count);
+        use std::time::Instant;
+
+        // Create frame span with timing fields
+        let frame_span = tracing::info_span!(
+            "frame",
+            num = self.stats.frame_count,
+            build_ms = tracing::field::Empty,
+            layout_ms = tracing::field::Empty,
+            paint_ms = tracing::field::Empty,
+            total_ms = tracing::field::Empty,
+        );
         let _frame_guard = frame_span.enter();
+
+        let frame_start = Instant::now();
 
         let (width, height) = self.renderer.size();
         let size = Size::new(width as f32, height as f32);
 
         // Build phase - create/update element tree
+        let build_start = Instant::now();
         if !self.root_built {
             let _build_span = tracing::debug_span!("build_root").entered();
             self.build_root();
@@ -356,30 +368,34 @@ impl FluiApp {
         // Check if there are pending rebuilds (from signals, etc.)
         let has_pending_rebuilds = self.pipeline.rebuild_queue().has_pending();
         if has_pending_rebuilds {
-            let _build_span = tracing::debug_span!("rebuild").entered();
-            tracing::debug!("Processing {} pending rebuilds", self.pipeline.dirty_count());
+            let dirty_count = self.pipeline.dirty_count();
+            let _build_span = tracing::debug_span!("rebuild", dirty = dirty_count).entered();
+            tracing::debug!("Processing");
+        }
+
+        let build_elapsed = build_start.elapsed().as_secs_f64() * 1000.0;
+        if build_elapsed > 0.01 {
+            tracing::Span::current().record("build_ms", format!("{:.2}", build_elapsed));
         }
 
         // Check if size changed
         let size_changed = self.last_size != Some(size);
         if size_changed {
             self.last_size = Some(size);
-            tracing::debug!(?size, "Window size changed");
+            tracing::debug!(w = size.width, h = size.height, "Window resized");
         }
 
         // Layout phase - always run but pipeline will skip if no dirty elements
+        let layout_start = Instant::now();
         if self.root_id.is_some() {
-            let layout_span = tracing::debug_span!("layout", ?size);
-            let _layout_guard = layout_span.enter();
-
             let constraints = BoxConstraints::tight(size);
             match self.pipeline.flush_layout(constraints) {
                 Ok(Some(layout_size)) => {
                     self.stats.layout_count += 1;
-                    tracing::debug!(?layout_size, "Layout complete");
+                    tracing::debug!(w = layout_size.width, h = layout_size.height, "Layout complete");
                 }
                 Ok(None) => {
-                    tracing::debug!("No dirty elements");
+                    tracing::trace!("Layout skipped");
                 }
                 Err(e) => {
                     tracing::error!(?e, "Layout failed");
@@ -387,11 +403,14 @@ impl FluiApp {
             }
         }
 
-        // Paint phase - only if layout ran or paint is dirty
-        if let Some(_root_id) = self.root_id {
-            let paint_span = tracing::debug_span!("paint");
-            let _paint_guard = paint_span.enter();
+        let layout_elapsed = layout_start.elapsed().as_secs_f64() * 1000.0;
+        if layout_elapsed > 0.01 {
+            tracing::Span::current().record("layout_ms", format!("{:.2}", layout_elapsed));
+        }
 
+        // Paint phase - only if layout ran or paint is dirty
+        let paint_start = Instant::now();
+        if let Some(_root_id) = self.root_id {
             match self.pipeline.flush_paint() {
                 Ok(Some(root_layer)) => {
                     self.stats.paint_count += 1;
@@ -401,12 +420,38 @@ impl FluiApp {
                     tracing::debug!("Paint complete");
                 }
                 Ok(None) => {
-                    tracing::debug!("No dirty elements");
+                    tracing::trace!("Paint skipped");
                 }
                 Err(e) => {
                     tracing::error!(?e, "Paint failed");
                 }
             }
+        }
+
+        let paint_elapsed = paint_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Record total frame time and log frame completion
+        let total_elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Log frame timing summary
+        tracing::info!(
+            total_ms = format!("{:.2}", total_elapsed),
+            build_ms = if build_elapsed > 0.01 { format!("{:.2}", build_elapsed) } else { "-".to_string() },
+            layout_ms = if layout_elapsed > 0.01 { format!("{:.2}", layout_elapsed) } else { "-".to_string() },
+            paint_ms = if paint_elapsed > 0.01 { format!("{:.2}", paint_elapsed) } else { "-".to_string() },
+            "Frame complete"
+        );
+
+        // Warn if frame budget exceeded (60 FPS = 16.67ms)
+        const FRAME_BUDGET_MS: f64 = 16.67;
+        if total_elapsed > FRAME_BUDGET_MS {
+            let overage_pct = (total_elapsed / FRAME_BUDGET_MS - 1.0) * 100.0;
+            tracing::warn!(
+                total_ms = format!("{:.2}", total_elapsed),
+                budget_ms = FRAME_BUDGET_MS,
+                overage = format!("{:.1}%", overage_pct),
+                "Frame budget exceeded"
+            );
         }
 
         self.stats.frame_count += 1;
