@@ -1,7 +1,6 @@
 //! RenderSliverEdgeInsetsPadding - EdgeInsets-based padding for slivers
 
-use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -45,7 +44,6 @@ pub struct RenderSliverEdgeInsetsPadding {
     pub padding: EdgeInsets,
 
     // Layout cache
-    child_size: Size,
     sliver_geometry: SliverGeometry,
 }
 
@@ -57,7 +55,6 @@ impl RenderSliverEdgeInsetsPadding {
     pub fn new(padding: EdgeInsets) -> Self {
         Self {
             padding,
-            child_size: Size::ZERO,
             sliver_geometry: SliverGeometry::default(),
         }
     }
@@ -106,12 +103,10 @@ impl RenderSliverEdgeInsetsPadding {
         }
     }
 
-    /// Calculate sliver geometry
+    /// Calculate sliver geometry from child
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        _children: &[flui_core::element::ElementId],
         child_geometry: SliverGeometry,
     ) -> SliverGeometry {
         let (leading_padding, trailing_padding) = self.main_axis_padding(constraints.axis_direction.axis());
@@ -144,27 +139,36 @@ impl Default for RenderSliverEdgeInsetsPadding {
     }
 }
 
-impl Render for RenderSliverEdgeInsetsPadding {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverEdgeInsetsPadding {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
-        // Reduce available space by padding
-        self.child_size = Size::new(
-            (constraints.max_width - self.padding.horizontal_total()).max(0.0),
-            (constraints.max_height - self.padding.vertical_total()).max(0.0),
-        );
+        // Adjust constraints for child
+        let child_constraints = self.child_constraints(constraints);
 
-        self.child_size
+        // Layout child
+        let child_geometry = if let Some(child_id) = ctx.children.try_single() {
+            ctx.tree.layout_sliver_child(child_id, child_constraints)
+        } else {
+            SliverGeometry::default()
+        };
+
+        // Calculate and cache geometry with padding
+        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_geometry);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Paint child if present and visible
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                // Paint child with padding offset
+                let padding_offset = Offset::new(self.padding.left, self.padding.top);
+                return ctx.tree.paint_child(child_id, ctx.offset + padding_offset);
+            }
+        }
 
-        // Child is painted with offset by padding
-        // TODO: Offset child by padding.left and padding.top
-
-        canvas
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
