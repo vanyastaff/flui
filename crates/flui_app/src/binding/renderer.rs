@@ -64,87 +64,77 @@ pub struct RendererBinding {
 }
 
 impl RendererBinding {
-    /// Create a new RendererBinding
-    pub fn new() -> Self {
-        Self {
-            pipeline_owner: Arc::new(RwLock::new(PipelineOwner::new())),
-        }
+    /// Create a new RendererBinding with a shared PipelineOwner
+    ///
+    /// The PipelineOwner must be the same instance used by WidgetsBinding
+    /// to ensure coordinated tree management.
+    pub fn new(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
+        Self { pipeline_owner }
     }
 
-    /// Draw frame - flush pipeline and generate scene
+    /// Draw frame - execute complete rendering pipeline
     ///
-    /// Executes all rendering pipeline phases in order:
+    /// Executes all three rendering phases in order:
     ///
-    /// 1. Flush build (rebuild dirty widgets)
-    /// 2. Flush layout (compute sizes)
-    /// 3. Flush paint (generate canvases)
-    /// 4. Create scene
+    /// 1. **Build**: Rebuild dirty widgets (flush_build)
+    /// 2. **Layout**: Compute sizes and positions (flush_layout)
+    /// 3. **Paint**: Generate CanvasLayer (flush_paint)
+    ///
+    /// Uses PipelineOwner::build_frame() which handles all phases atomically.
     ///
     /// # Parameters
     ///
-    /// - `constraints`: Root layout constraints (viewport size)
+    /// - `constraints`: Root layout constraints (typically tight constraints matching window size)
     ///
     /// # Returns
     ///
-    /// Scene containing all painted canvases ready for GPU rendering
+    /// Scene containing the CanvasLayer ready for GPU rendering.
+    /// Returns an empty scene if the pipeline is empty or errors occurred.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-    /// let scene = binding.draw_frame(constraints);
-    /// // Render scene to wgpu...
+    /// let scene = renderer.draw_frame(constraints);
+    /// if let Some(layer) = scene.layer() {
+    ///     wgpu_renderer.render(layer, &view, &mut encoder)?;
+    /// }
     /// ```
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Scene {
         let mut pipeline = self.pipeline_owner.write();
 
         tracing::trace!("Starting draw frame");
 
-        // 1. Flush build (rebuild dirty widgets)
-        pipeline.flush_build();
+        // Execute complete pipeline: rebuild queue → build → layout → paint
+        // PipelineOwner::build_frame handles all phases atomically
+        let layer = match pipeline.build_frame(constraints) {
+            Ok(layer_opt) => {
+                if layer_opt.is_none() {
+                    tracing::warn!("Pipeline returned None (empty tree or no root)");
+                }
+                layer_opt
+            }
+            Err(e) => {
+                tracing::error!(error = ?e, "Pipeline build_frame failed");
+                None
+            }
+        };
 
-        // 2. Flush layout (compute sizes)
+        // Extract size from pipeline or use constraints as fallback
         let size = pipeline
-            .flush_layout(constraints)
-            .ok()
-            .flatten()
+            .root_element_id()
+            .and_then(|root_id| {
+                let tree = pipeline.tree().read();
+                tree.render_state(root_id).and_then(|state| state.size())
+            })
             .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
 
-        tracing::trace!(size = ?size, "Layout complete");
-
-        // 3. Flush paint (generate canvases)
-        let layer = pipeline.flush_paint().ok().flatten();
-
-        // 4. Create scene
+        // Create scene
         let mut scene = Scene::new(size);
         scene.add_canvas_layer(layer);
 
-        tracing::trace!("Draw frame complete");
+        tracing::trace!(size = ?size, has_layer = scene.layer().is_some(), "Draw frame complete");
         scene
-    }
-
-    /// Request layout for a specific render object
-    ///
-    /// Marks the render object as needing layout in the next frame.
-    ///
-    /// # Parameters
-    ///
-    /// - `render_id`: ID of the render object to mark dirty
-    pub fn request_layout(&self, render_id: flui_core::foundation::ElementId) {
-        let mut pipeline = self.pipeline_owner.write();
-        pipeline.request_layout(render_id);
-    }
-
-    /// Request paint for a specific render object
-    ///
-    /// Marks the render object as needing repaint in the next frame.
-    ///
-    /// # Parameters
-    ///
-    /// - `render_id`: ID of the render object to mark dirty
-    pub fn request_paint(&self, render_id: flui_core::foundation::ElementId) {
-        let mut pipeline = self.pipeline_owner.write();
-        pipeline.request_paint(render_id);
     }
 
     /// Get shared reference to the pipeline owner
@@ -153,12 +143,6 @@ impl RendererBinding {
     #[must_use]
     pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
         self.pipeline_owner.clone()
-    }
-}
-
-impl Default for RendererBinding {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -174,21 +158,24 @@ mod tests {
 
     #[test]
     fn test_renderer_binding_creation() {
-        let binding = RendererBinding::new();
+        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let binding = RendererBinding::new(pipeline);
         let _pipeline = binding.pipeline_owner();
         // Should not panic
     }
 
     #[test]
     fn test_renderer_binding_init() {
-        let mut binding = RendererBinding::new();
+        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let mut binding = RendererBinding::new(pipeline);
         binding.init();
         // Should not panic
     }
 
     #[test]
     fn test_draw_frame_empty() {
-        let binding = RendererBinding::new();
+        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let binding = RendererBinding::new(pipeline);
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 
         // Should not panic even with empty pipeline

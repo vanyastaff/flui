@@ -9,6 +9,8 @@
 //! It provides a global singleton accessed via `ensure_initialized()`.
 
 use super::{BindingBase, GestureBinding, RendererBinding, SchedulerBinding, WidgetsBinding};
+use flui_core::pipeline::PipelineOwner;
+use parking_lot::RwLock;
 use std::sync::{Arc, OnceLock};
 
 /// Combined Flutter-style binding
@@ -77,11 +79,14 @@ impl WidgetsFlutterBinding {
             .get_or_init(|| {
                 tracing::info!("Initializing WidgetsFlutterBinding");
 
+                // Create shared pipeline_owner
+                let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+
                 let mut binding = Self {
                     gesture: GestureBinding::new(),
                     scheduler: SchedulerBinding::new(),
-                    renderer: RendererBinding::new(),
-                    widgets: WidgetsBinding::new(),
+                    renderer: RendererBinding::new(pipeline_owner.clone()),
+                    widgets: WidgetsBinding::new(pipeline_owner),
                 };
 
                 // Initialize all bindings

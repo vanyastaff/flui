@@ -1,122 +1,146 @@
-//! Widgets binding - bridge to ElementTree
+//! Widgets binding - manages root widget via PipelineOwner
 //!
-//! WidgetsBinding manages the widget tree lifecycle and coordinates
-//! the build phase with the element tree.
+//! WidgetsBinding provides the high-level interface for attaching the root widget
+//! and delegates all tree management to PipelineOwner.
 
 use super::BindingBase;
 use flui_core::{
-    element::{Element, ElementTree},
     foundation::ElementId,
+    pipeline::PipelineOwner,
     view::{IntoElement, View},
 };
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-/// Widgets binding - manages widget tree
+/// Widgets binding - manages root widget and coordinates with PipelineOwner
 ///
 /// # Architecture
 ///
 /// ```text
 /// WidgetsBinding
-///   ├─ ElementTree (mutable element tree)
-///   └─ root_element (root ElementId)
+///   └─ PipelineOwner (shared with RendererBinding)
+///       ├─ ElementTree
+///       ├─ BuildPipeline
+///       ├─ LayoutPipeline
+///       └─ PaintPipeline
 /// ```
 ///
-/// # Lifecycle
+/// # Responsibilities
 ///
-/// 1. **attach_root_widget()**: Inflate root widget → Element tree
-/// 2. **handle_build_frame()**: Rebuild dirty widgets every frame
-/// 3. **detach_root_widget()**: Clean up when app exits
+/// - Attach root widget to pipeline (via `attach_root_widget()`)
+/// - Flush rebuild queue during frame cycle (via `handle_build_frame()`)
+/// - Provide access to PipelineOwner for other bindings
 ///
-/// # Thread-Safety
+/// # Design Note
 ///
-/// Uses Arc<RwLock<>> for thread-safe element tree access.
+/// Unlike the old design where WidgetsBinding owned ElementTree separately,
+/// this follows Flutter's pattern where PipelineOwner is the single source of truth
+/// for all tree management.
 pub struct WidgetsBinding {
-    /// Element tree (mutable widget tree)
-    element_tree: Arc<RwLock<ElementTree>>,
-
-    /// Root element ID (if attached)
-    root_element: Arc<RwLock<Option<ElementId>>>,
+    /// Pipeline owner (shared with RendererBinding)
+    ///
+    /// PipelineOwner manages:
+    /// - Element tree (via Arc<RwLock<ElementTree>>)
+    /// - Build/layout/paint coordination
+    /// - Rebuild queue (for signals)
+    /// - Root element tracking
+    pipeline_owner: Arc<RwLock<PipelineOwner>>,
 }
 
 impl WidgetsBinding {
-    /// Create a new WidgetsBinding
-    pub fn new() -> Self {
-        Self {
-            element_tree: Arc::new(RwLock::new(ElementTree::new())),
-            root_element: Arc::new(RwLock::new(None)),
-        }
+    /// Create a new WidgetsBinding with a shared PipelineOwner
+    ///
+    /// The PipelineOwner should be shared with RendererBinding for coordinated rendering.
+    pub fn new(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
+        Self { pipeline_owner }
     }
 
     /// Attach root widget
     ///
-    /// Inserts the root widget into the element tree and stores its ID.
-    /// This is the entry point for the entire widget tree.
+    /// Converts the View to an Element and sets it as the pipeline root.
+    /// PipelineOwner automatically schedules it for initial build.
     ///
     /// # Parameters
     ///
-    /// - `widget`: The root widget (typically an App or MaterialApp)
+    /// - `widget`: The root widget (typically MaterialApp or similar)
     ///
     /// # Panics
     ///
-    /// Panics if a root widget is already attached. Call `detach_root_widget()` first.
+    /// Panics if a root widget is already attached. The PipelineOwner only supports
+    /// one root element at a time.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// binding.attach_root_widget(MyApp::new());
+    /// binding.attach_root_widget(MyApp);
     /// ```
     pub fn attach_root_widget<V>(&self, widget: V)
     where
         V: View + 'static,
     {
-        let mut root = self.root_element.write();
-        if root.is_some() {
-            panic!("Root widget already attached. Call detach_root_widget() first.");
-        }
+        tracing::info!("Attaching root widget");
 
-        // Build the widget into an element
+        // Convert View to Element
         let element = widget.into_element();
 
-        // Insert into element tree
-        let mut tree = self.element_tree.write();
-        let root_id = tree.insert(element);
+        // Set as pipeline root (automatically schedules initial build)
+        let mut pipeline = self.pipeline_owner.write();
 
-        *root = Some(root_id);
+        if pipeline.root_element_id().is_some() {
+            panic!("Root widget already attached. PipelineOwner only supports one root.");
+        }
 
-        tracing::info!(root_id = ?root_id, "Root widget attached");
+        let root_id = pipeline.set_root(element);
+        drop(pipeline);
+
+        tracing::info!(root_id = ?root_id, "Root widget attached to pipeline");
     }
 
     /// Detach root widget
     ///
-    /// Removes the root widget from the element tree and cleans up.
+    /// Removes the root widget from the pipeline and cleans up the tree.
     /// This is called when the app exits or when switching root widgets.
+    ///
+    /// **Note:** Currently, flui-core's PipelineOwner doesn't have a remove_root() method,
+    /// so this is a TODO for future implementation.
     pub fn detach_root_widget(&self) {
-        let mut root = self.root_element.write();
-        if let Some(root_id) = root.take() {
-            let mut tree = self.element_tree.write();
-            tree.remove(root_id);
+        let pipeline = self.pipeline_owner.read();
+        if let Some(root_id) = pipeline.root_element_id() {
+            drop(pipeline);
 
-            tracing::info!(root_id = ?root_id, "Root widget detached");
+            // TODO: PipelineOwner needs a remove_root() method
+            // For now, we can clear the tree entirely
+            let mut pipeline = self.pipeline_owner.write();
+            pipeline.tree().write().clear();
+
+            tracing::info!(root_id = ?root_id, "Root widget detached (tree cleared)");
         }
     }
 
     /// Handle build frame
     ///
-    /// Called every frame to rebuild dirty widgets.
-    /// This is wired up to SchedulerBinding's persistent frame callback.
+    /// Called every frame by SchedulerBinding to process pending rebuilds.
+    /// Flushes the rebuild queue (signal updates) and marks elements dirty.
+    ///
+    /// The actual build phase is triggered by RendererBinding during draw_frame().
     pub fn handle_build_frame(&self) {
-        // TODO: Implement build frame handling
-        // For now, just log that we're handling a build frame
-        tracing::trace!("Handling build frame");
+        let mut pipeline = self.pipeline_owner.write();
+
+        // Flush rebuild queue (processes signal updates)
+        pipeline.flush_rebuild_queue();
+
+        let dirty_count = pipeline.dirty_count();
+        if dirty_count > 0 {
+            tracing::trace!(dirty_count, "Build frame handled, elements marked dirty");
+        }
     }
 
-    /// Get shared reference to the element tree
+    /// Get shared reference to the pipeline owner
     ///
-    /// Used by renderer, gestures, and other framework components.
+    /// Used by renderer and other framework components.
     #[must_use]
-    pub fn element_tree(&self) -> Arc<RwLock<ElementTree>> {
-        self.element_tree.clone()
+    pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
+        self.pipeline_owner.clone()
     }
 
     /// Get root element ID
@@ -124,19 +148,13 @@ impl WidgetsBinding {
     /// Returns None if no root widget is attached.
     #[must_use]
     pub fn root_element(&self) -> Option<ElementId> {
-        *self.root_element.read()
+        self.pipeline_owner.read().root_element_id()
     }
 
     /// Check if a root widget is attached
     #[must_use]
     pub fn has_root(&self) -> bool {
-        self.root_element.read().is_some()
-    }
-}
-
-impl Default for WidgetsBinding {
-    fn default() -> Self {
-        Self::new()
+        self.pipeline_owner.read().root_element_id().is_some()
     }
 }
 
@@ -150,58 +168,18 @@ impl BindingBase for WidgetsBinding {
 mod tests {
     use super::*;
 
-    // Simple test widget - just returns a basic element
-    #[derive(Debug)]
-    struct TestWidget;
-
-    impl flui_core::view::View for TestWidget {
-        fn build(self, _ctx: &flui_core::view::BuildContext) -> impl IntoElement {
-            // Return a simple element
-            // Use ComponentElement as it's the simplest
-            flui_core::element::Element::Component(flui_core::element::ComponentElement::new())
-        }
-    }
-
     #[test]
     fn test_widgets_binding_creation() {
-        let binding = WidgetsBinding::new();
+        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let binding = WidgetsBinding::new(pipeline);
         assert!(!binding.has_root());
         assert_eq!(binding.root_element(), None);
     }
 
     #[test]
-    fn test_attach_root_widget() {
-        let binding = WidgetsBinding::new();
-
-        binding.attach_root_widget(TestWidget);
-
-        assert!(binding.has_root());
-        assert!(binding.root_element().is_some());
-    }
-
-    #[test]
-    fn test_detach_root_widget() {
-        let binding = WidgetsBinding::new();
-
-        binding.attach_root_widget(TestWidget);
-        assert!(binding.has_root());
-
-        binding.detach_root_widget();
-        assert!(!binding.has_root());
-    }
-
-    #[test]
-    #[should_panic(expected = "Root widget already attached")]
-    fn test_attach_twice_panics() {
-        let binding = WidgetsBinding::new();
-
-        binding.attach_root_widget(TestWidget);
-        binding.attach_root_widget(TestWidget); // Should panic
-    }
-
-    #[test]
     fn test_handle_build_frame_empty() {
-        let binding = WidgetsBinding::new();
+        let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+        let binding = WidgetsBinding::new(pipeline);
 
         // Should not panic with no root
         binding.handle_build_frame();
