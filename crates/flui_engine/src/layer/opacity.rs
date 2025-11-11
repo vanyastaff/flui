@@ -78,6 +78,7 @@ impl Layer for OpacityLayer {
 
         // Apply opacity and paint child
         painter.save();
+        #[allow(deprecated)]
         painter.set_opacity(self.opacity);
         child.paint(painter);
         painter.restore();

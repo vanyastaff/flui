@@ -286,6 +286,7 @@ impl ClipStrategy for OvalStrategy {
     }
 
     fn apply_clip(&self, shape: &Rect, painter: &mut dyn Painter) {
+        #[allow(deprecated)]
         painter.clip_oval(*shape);
     }
 
@@ -314,6 +315,7 @@ impl ClipStrategy for PathStrategy {
         // For now, we just log a warning
         #[cfg(debug_assertions)]
         tracing::warn!("PathStrategy::apply_clip: path clipping not yet fully implemented");
+        #[allow(deprecated)]
         painter.clip_path("");
     }
 

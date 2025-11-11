@@ -183,6 +183,7 @@ impl BlurLayer {
 
             // Apply the image filter to the layer
             // Note: apply_image_filter is stubbed in compat layer - filter effects not yet implemented
+            #[allow(deprecated)]
             painter.apply_image_filter(&format!("{:?}", self.filter));
 
             // Render child content into the filtered layer

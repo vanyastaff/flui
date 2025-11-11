@@ -140,6 +140,7 @@ impl RenderPointerListener {
     }
 
     /// Create the unified event handler from individual callbacks
+    #[allow(dead_code)]
     fn create_handler(&self) -> PointerEventHandler {
         let callbacks = self.callbacks.clone();
         Arc::new(move |event: &PointerEvent| match event {
@@ -188,8 +189,6 @@ impl Render for RenderPointerListener {
         let offset = ctx.offset;
 
         // Paint child
-        let child_canvas = tree.paint_child(child_id, offset);
-
         // TODO: Integrate pointer event handling with Canvas architecture
         // The old PointerListenerLayer approach doesn't work with Canvas-only system
         // This needs to be refactored to use a different event handling mechanism,
@@ -197,8 +196,7 @@ impl Render for RenderPointerListener {
         // 1. Hit-test metadata attached to RenderObjects
         // 2. Event propagation through element tree
         // 3. Separate event handling layer above the Canvas system
-
-        child_canvas
+        tree.paint_child(child_id, offset)
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

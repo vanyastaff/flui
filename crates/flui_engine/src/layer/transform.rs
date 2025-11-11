@@ -219,6 +219,7 @@ impl Layer for TransformLayer {
                 painter.scale(sx, sy);
             }
             Transform::Skew { skew_x, skew_y } => {
+                #[allow(deprecated)]
                 painter.skew(skew_x, skew_y);
             }
             Transform::Matrix { a, b, c, d, tx, ty } => {
@@ -227,13 +228,14 @@ impl Layer for TransformLayer {
                 // [b  d  0  ty]
                 // [0  0  1  0 ]
                 // [0  0  0  1 ]
-                let matrix: [f32; 16] = [
+                let matrix = flui_types::Matrix4::new(
                     a, b, 0.0, 0.0, // Column 0
                     c, d, 0.0, 0.0, // Column 1
                     0.0, 0.0, 1.0, 0.0, // Column 2
                     tx, ty, 0.0, 1.0, // Column 3
-                ];
-                painter.transform_matrix(&matrix);
+                );
+                #[allow(deprecated)]
+                painter.transform_matrix(&matrix.m);
             }
             Transform::Trapezoid { .. } => {
                 // Trapezoid is a non-affine transform (non-linear gradient scaling)

@@ -126,6 +126,7 @@ impl RenderScrollView {
     }
 
     /// Create scroll event handler callback
+    #[allow(dead_code)]
     fn create_scroll_handler(&self) -> Arc<dyn Fn(f32, f32) + Send + Sync> {
         let offset = Arc::clone(&self.scroll_offset);
         let max_offset = Arc::clone(&self.max_scroll_offset);
