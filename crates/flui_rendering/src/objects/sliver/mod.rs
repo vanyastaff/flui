@@ -16,8 +16,10 @@ pub mod sliver_opacity;
 pub mod sliver_padding;
 pub mod sliver_persistent_header;
 pub mod sliver_prototype_extent_list;
+pub mod sliver_safe_area;
 pub mod sliver_to_box_adapter;
 pub mod viewport;
+
 
 
 
@@ -42,8 +44,10 @@ pub use sliver_opacity::RenderSliverOpacity;
 pub use sliver_padding::RenderSliverPadding;
 pub use sliver_persistent_header::RenderSliverPersistentHeader;
 pub use sliver_prototype_extent_list::RenderSliverPrototypeExtentList;
+pub use sliver_safe_area::RenderSliverSafeArea;
 pub use sliver_to_box_adapter::RenderSliverToBoxAdapter;
 pub use viewport::{ClipBehavior, RenderViewport};
+
 
 
 
