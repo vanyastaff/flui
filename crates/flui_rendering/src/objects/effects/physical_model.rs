@@ -2,7 +2,10 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::{Canvas, Paint};
-use flui_types::{Color, Point, RRect, Rect, Size};
+use flui_types::{
+    painting::Path,
+    Color, Point, RRect, Rect, Size,
+};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,12 +134,29 @@ impl Render for RenderPhysicalModel {
         let mut canvas = Canvas::new();
         let size = self.size;
 
-        // TODO: Add shadow drawing when Canvas shadow support is added
-        // For now, skip shadow painting
-        // A full implementation would:
-        // 1. Calculate shadow parameters from elevation
-        // 2. Use canvas.draw_shadow() to draw shadow
-        // 3. Draw it before the background shape
+        // Draw shadow if elevation > 0
+        // Note: For proper shadow rendering, we would need to use a more sophisticated
+        // shadow algorithm. For now, we use Canvas::draw_shadow which provides basic support.
+        if self.elevation > 0.0 {
+            let shadow_path = match self.shape {
+                PhysicalShape::Rectangle => {
+                    let mut path = Path::new();
+                    let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                    path.add_rect(rect);
+                    path
+                }
+                PhysicalShape::RoundedRectangle | PhysicalShape::Circle => {
+                    // For rounded shapes, approximate with a simple rect for shadow
+                    // A full implementation would use Path::add_rrect() when available
+                    let mut path = Path::new();
+                    let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
+                    path.add_rect(rect);
+                    path
+                }
+            };
+
+            canvas.draw_shadow(&shadow_path, self.shadow_color, self.elevation);
+        }
 
         // Paint background shape at the offset position
         let paint = Paint::fill(self.color);

@@ -86,15 +86,18 @@ impl Render for RenderAnimatedOpacity {
             return Canvas::new();
         }
 
-        // Paint child
-        // TODO: Implement Canvas opacity support
-        // For now, we just return the child canvas directly
-        // Proper implementation would apply opacity to all drawing commands
-        // This requires either:
-        // 1. Adding saveLayer() support to Canvas
-        // 2. Adding opacity field to DisplayList
-        // 3. Converting Canvas to PictureLayer and wrapping in OpacityLayer
-        tree.paint_child(child_id, offset)
+        // Get child canvas
+        let child_canvas = tree.paint_child(child_id, offset);
+
+        // If fully opaque, return child canvas directly (zero-copy)
+        if self.opacity >= 1.0 {
+            return child_canvas;
+        }
+
+        // Apply opacity to all child drawing commands
+        let mut canvas = Canvas::new();
+        canvas.append_canvas_with_opacity(child_canvas, self.opacity);
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
