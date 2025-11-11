@@ -129,9 +129,6 @@ impl PaintPipeline {
             return Ok(0);
         }
 
-        #[cfg(debug_assertions)]
-        tracing::debug!("generate_layers: Processing {} dirty render objects", count);
-
         // Process each dirty render object
         for id in dirty_ids {
             // Get element from tree
@@ -194,9 +191,6 @@ impl PaintPipeline {
             #[cfg(debug_assertions)]
             tracing::trace!("Paint: Layer optimization enabled (not yet implemented)");
         }
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("generate_layers: Complete ({} objects painted)", count);
 
         Ok(count)
     }

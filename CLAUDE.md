@@ -249,19 +249,41 @@ Located in: `crates/flui_core/src/hooks/`
 
 **IMPORTANT:** Always use `tracing` for logging, NEVER use `println!` or `eprintln!`.
 
+FLUI uses **tracing-forest** for hierarchical logging with automatic timing:
+
 ```rust
-// Initialize at program start
-tracing_subscriber::fmt()
-    .with_max_level(tracing::Level::DEBUG)
-    .init();
+// Initialize at program start (Development mode)
+use flui_core::logging::{init_logging, LogConfig, LogMode};
 
-// Use throughout code
-#[cfg(debug_assertions)]
-tracing::debug!("RenderParagraph::paint: text='{}', size={:?}", text, size);
+init_logging(LogConfig::new(LogMode::Development));
 
-#[cfg(debug_assertions)]
+// Use throughout code with #[instrument] for automatic timing
+#[tracing::instrument]
+fn render_frame(num: u32) {
+    tracing::info!("Starting frame");
+    // Spans automatically show [ duration | percentage ]
+}
+
+// Or use manual logging
+tracing::debug!(count = 1, "Layout complete");
 tracing::warn!("Layout phase skipped: needs_layout() returned false");
 ```
+
+**Output example:**
+```
+INFO    render_frame [ 11.2ms | 100.00% ] num: 0
+INFO    ┝━ build_phase [ 5.18ms | 46.26% ]
+DEBUG   │  ┕━ Build complete count: 1
+INFO    ┝━ layout_phase [ 3.49ms | 31.16% ]
+DEBUG   │  ┕━ Layout complete count: 1
+INFO    ┕━ paint_phase [ 2.51ms | 22.40% ]
+```
+
+**Why tracing-forest over tracing-tree:**
+- ✅ Automatic timing: `[ duration | percentage ]` out of the box
+- ✅ Context-preserving: async operations stay grouped
+- ✅ Percentage distribution: see where time is spent
+- ✅ Future-proof: ready for async (animations, hot reload, resource loading)
 
 ### Debugging Text Rendering Issues
 

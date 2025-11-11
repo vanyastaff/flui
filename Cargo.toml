@@ -50,7 +50,7 @@ thiserror = "2.0"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
-tracing-tree = "0.4"
+tracing-forest = { version = "0.1", features = ["ansi", "smallvec"] }
 
 # MATH & GEOMETRY - Core rendering math
 glam = { version = "0.30", features = ["serde", "bytemuck"] }
@@ -122,6 +122,7 @@ tokio.workspace = true
 serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-forest.workspace = true
 
 # Optional profiling dependencies
 puffin = { version = "0.19", optional = true }

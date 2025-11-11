@@ -7,14 +7,16 @@ use tracing_subscriber::{
     fmt::{self},
     layer::SubscriberExt,
     util::SubscriberInitExt,
-    EnvFilter, Layer,
+    EnvFilter, Layer, Registry,
 };
+use tracing_forest::ForestLayer;
 
 /// Logging configuration for FLUI applications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogMode {
-    /// Development mode with hierarchical, colored output.
-    /// Shows all debug information with proper indentation.
+    /// Development mode with hierarchical, colored output and automatic timing.
+    /// Uses tracing-forest for context-preserving logs with [ duration | percentage ] display.
+    /// Perfect for debugging async operations and complex frame rendering.
     Development,
 
     /// Performance mode - only logs frame times and performance metrics.
@@ -130,12 +132,24 @@ impl LogConfig {
 ///
 /// This should be called once at application startup.
 ///
+/// # Features
+///
+/// **Development Mode:**
+/// - Hierarchical output with tracing-forest
+/// - Automatic timing: `[ 2.1ms | 100% ]` for each span
+/// - Context-preserving logs (async-safe)
+/// - Color-coded by log level
+///
+/// **Performance Mode:**
+/// - Minimal overhead, only critical logs
+/// - Frame timing and pipeline metrics
+///
 /// # Examples
 ///
 /// ```no_run
 /// use flui_core::logging::{init_logging, LogConfig, LogMode};
 ///
-/// // Development mode with hierarchical output
+/// // Development mode with hierarchical output + automatic timing
 /// init_logging(LogConfig::new(LogMode::Development));
 ///
 /// // Performance mode (minimal logging)
@@ -146,6 +160,19 @@ impl LogConfig {
 ///     LogConfig::new(LogMode::Development)
 ///         .with_filter("flui_core=debug,flui_rendering=info")
 /// );
+/// ```
+///
+/// # Expected Output (Development Mode)
+///
+/// ```text
+/// INFO frame [ 2.1ms | 100.00% ] constraints: BoxConstraints { ... }
+/// INFO ┝━ build [ 0.8ms | 38.10% ]
+/// INFO │  ┕━ Build complete count: 1
+/// INFO ┝━ layout [ 0.5ms | 23.81% ]
+/// INFO │  ┕━ Layout complete count: 1
+/// INFO ┝━ paint [ 0.3ms | 14.29% ]
+/// INFO │  ┕━ Paint complete count: 1
+/// INFO ┕━ Frame complete
 /// ```
 pub fn init_logging(config: LogConfig) {
     match config.mode {
@@ -162,20 +189,11 @@ pub fn init_logging(config: LogConfig) {
 fn init_dev_logging(config: LogConfig) {
     let filter = create_filter_from_detail(&config);
 
-    let colors = config.colors.unwrap_or(true);
-    let show_threads = config.show_threads.unwrap_or(false);
+    // Use tracing-forest for hierarchical output with automatic timing
+    // Note: tracing-forest always uses ANSI colors in default mode
+    let forest_layer = ForestLayer::default().with_filter(filter);
 
-    // Use tracing-tree for hierarchical output
-    let layer = tracing_tree::HierarchicalLayer::new(2)
-        .with_targets(false) // Hide targets for cleaner output
-        .with_bracketed_fields(true)
-        .with_ansi(colors)
-        .with_indent_lines(true)
-        .with_thread_ids(show_threads)
-        .with_span_retrace(true) // Show span context for long operations
-        .with_filter(filter);
-
-    tracing_subscriber::registry().with(layer).init();
+    Registry::default().with(forest_layer).init();
 }
 
 /// Initialize performance logging (minimal overhead).

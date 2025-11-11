@@ -154,9 +154,6 @@ impl LayoutPipeline {
             return Ok(Vec::new());
         }
 
-        #[cfg(debug_assertions)]
-        tracing::debug!("compute_layout: Processing {} dirty render objects", count);
-
         // Track which elements were successfully laid out
         let mut laid_out_ids = Vec::with_capacity(count);
 
@@ -211,25 +208,15 @@ impl LayoutPipeline {
             // After layout completes, mark for paint
             render_state.mark_needs_paint();
 
-            #[cfg(debug_assertions)]
-            tracing::debug!(
+            crate::trace_hot_path!(
                 "Layout: Stored size {:?} for element {:?}, marked for paint",
                 computed_size,
                 id
             );
 
-            #[cfg(debug_assertions)]
-            tracing::trace!("Layout: Element {:?} computed size {:?}", id, computed_size);
-
             // Add to list of successfully laid out elements
             laid_out_ids.push(id);
         }
-
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "compute_layout: Complete ({} objects processed)",
-            laid_out_ids.len()
-        );
 
         Ok(laid_out_ids)
     }

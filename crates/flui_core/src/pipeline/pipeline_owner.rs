@@ -401,8 +401,7 @@ impl PipelineOwner {
 
     /// Request layout for a Render
     pub fn request_layout(&mut self, node_id: ElementId) {
-        #[cfg(debug_assertions)]
-        tracing::debug!("[REQUEST_LAYOUT] Called for element {:?}", node_id);
+        crate::trace_hot_path!("request_layout: element {:?}", node_id);
 
         // Mark in dirty set
         self.coordinator.layout_mut().mark_dirty(node_id);
@@ -417,15 +416,6 @@ impl PipelineOwner {
             // IMPORTANT: Clear cached constraints so layout_pipeline uses fresh constraints
             // This is critical for window resize - otherwise old constraints are used!
             render_state.clear_constraints();
-
-            #[cfg(debug_assertions)]
-            tracing::debug!("[REQUEST_LAYOUT] Set needs_layout flag and cleared constraints for RenderElement {:?}", node_id);
-        } else {
-            #[cfg(debug_assertions)]
-            tracing::warn!(
-                "[REQUEST_LAYOUT] Element {:?} is not a RenderElement!",
-                node_id
-            );
         }
     }
 
@@ -478,21 +468,10 @@ impl PipelineOwner {
             return;
         }
 
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "[REBUILD_QUEUE] Processing {} pending rebuilds",
-            rebuilds.len()
-        );
+        crate::trace_hot_path!("flush_rebuild_queue: {} pending", rebuilds.len());
 
         // Mark each element dirty for rebuild
         for (element_id, depth) in rebuilds {
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "[REBUILD_QUEUE] Scheduling rebuild for element {:?} at depth {}",
-                element_id,
-                depth
-            );
-
             // Mark element dirty via build pipeline
             self.coordinator.build_mut().schedule(element_id, depth);
         }
@@ -515,12 +494,6 @@ impl PipelineOwner {
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "build_frame: Starting frame with constraints {:?}",
-            constraints
-        );
-
         // Process pending rebuilds from signals
         self.flush_rebuild_queue();
 
@@ -811,24 +784,21 @@ impl PipelineOwner {
     pub fn dispatch_event(&mut self, event: &flui_types::Event) {
         let mut tree = self.tree.write();
 
-        #[cfg(debug_assertions)]
-        tracing::debug!("dispatch_event: {:?}", event);
+        crate::trace_hot_path!("dispatch_event: {:?}", event);
 
         // Visit all elements and dispatch the event
-        tree.visit_all_elements_mut(|_element_id, element| {
+        tree.visit_all_elements_mut(|element_id, element| {
             // Call handle_event on each element
             // Most will return false (not handled), but specialized elements
             // can return true and trigger updates
-            let _handled = element.handle_event(event);
+            let handled = element.handle_event(event);
 
-            #[cfg(debug_assertions)]
-            if _handled {
-                tracing::debug!(
-                    "dispatch_event: element {:?} handled event {:?}",
-                    _element_id,
-                    event
-                );
-            }
+            crate::trace_hot_path!(
+                "element {:?} handled={} event={:?}",
+                element_id,
+                handled,
+                event
+            );
         });
     }
 
@@ -872,18 +842,12 @@ impl PipelineOwner {
         let root_id = match self.root_mgr.root_id() {
             Some(id) => id,
             None => {
-                #[cfg(debug_assertions)]
-                tracing::warn!("dispatch_pointer_event: no root element");
+                crate::trace_hot_path!("dispatch_pointer_event: no root element");
                 return;
             }
         };
 
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "dispatch_pointer_event: position={:?}, event={:?}",
-            position,
-            event
-        );
+        crate::trace_hot_path!("dispatch_pointer_event: pos={:?} event={:?}", position, event);
 
         // Perform hit testing
         let hit_result = {
@@ -891,11 +855,7 @@ impl PipelineOwner {
             tree.hit_test(root_id, position)
         };
 
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "dispatch_pointer_event: hit {} elements",
-            hit_result.entries().len()
-        );
+        crate::trace_hot_path!("dispatch_pointer_event: hit {} elements", hit_result.entries().len());
 
         // Dispatch event to hit elements
         let mut tree = self.tree.write();
@@ -903,14 +863,12 @@ impl PipelineOwner {
             if let Some(element) = tree.get_mut(entry.element_id) {
                 let handled = element.handle_event(event);
 
-                #[cfg(debug_assertions)]
-                if handled {
-                    tracing::debug!(
-                        "dispatch_pointer_event: element {:?} handled event at local position {:?}",
-                        entry.element_id,
-                        entry.local_position
-                    );
-                }
+                crate::trace_hot_path!(
+                    "element {:?} handled={} at local pos={:?}",
+                    entry.element_id,
+                    handled,
+                    entry.local_position
+                );
             }
         }
     }

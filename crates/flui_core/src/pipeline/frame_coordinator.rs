@@ -244,13 +244,13 @@ impl FrameCoordinator {
         let build_count = self.build.dirty_count();
 
         if build_count > 0 {
-            let build_span = tracing::debug_span!("build", dirty_count = build_count);
+            let build_span = tracing::debug_span!("build");
             let _build_guard = build_span.enter();
 
             // Use parallel build (automatically falls back to sequential if appropriate)
             self.build.rebuild_dirty_parallel(tree);
 
-            tracing::debug!("Rebuilt {} widgets", build_count);
+            tracing::debug!(count = build_count, "Build complete");
         }
 
         // Check if we're approaching deadline after build phase
@@ -272,23 +272,18 @@ impl FrameCoordinator {
             let mut tree_guard = tree.write();
             let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
 
-            if !laid_out_ids.is_empty() {
-                tracing::debug!("Computed {} layouts", laid_out_ids.len());
+            // Mark all laid out elements for paint
+            for id in &laid_out_ids {
+                self.paint.mark_dirty(*id);
             }
 
-            // Mark all laid out elements for paint
-            for id in laid_out_ids {
-                self.paint.mark_dirty(id);
+            if !laid_out_ids.is_empty() {
+                tracing::debug!(count = laid_out_ids.len(), "Layout complete");
             }
 
             // Get root element's computed size
             Self::extract_root_size(&tree_guard, root_id)
         };
-
-        #[cfg(debug_assertions)]
-        if let Some(size) = _root_size {
-            tracing::debug!(root_size = ?size, "Root layout complete");
-        }
 
         // Check if we're approaching deadline after layout phase
         #[cfg(debug_assertions)]
@@ -310,7 +305,7 @@ impl FrameCoordinator {
             let count = self.paint.generate_layers(&mut tree_guard)?;
 
             if count > 0 {
-                tracing::debug!("Generated {} layers", count);
+                tracing::debug!(count, "Paint complete");
             }
 
             // Get root element's layer
@@ -321,6 +316,7 @@ impl FrameCoordinator {
         let frame_time = self.scheduler.finish_frame();
 
         // Log frame completion with timing info
+        #[cfg(debug_assertions)]
         if layer.is_some() {
             if self.scheduler.is_deadline_missed() {
                 tracing::warn!(
@@ -328,8 +324,6 @@ impl FrameCoordinator {
                     consecutive_misses = self.scheduler.consecutive_misses(),
                     "Frame deadline missed"
                 );
-            } else {
-                tracing::info!(frame_time = ?frame_time, "Frame complete");
             }
         }
 
@@ -368,14 +362,6 @@ impl FrameCoordinator {
 
         // Process all dirty render objects
         let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
-
-        #[cfg(debug_assertions)]
-        if !laid_out_ids.is_empty() {
-            tracing::debug!(
-                "flush_layout: Laid out {} render objects",
-                laid_out_ids.len()
-            );
-        }
 
         // Mark all laid out elements for paint
         for id in laid_out_ids {
@@ -461,11 +447,6 @@ impl FrameCoordinator {
 
         // Process all dirty render objects
         let _count = self.paint.generate_layers(&mut tree_guard)?;
-
-        #[cfg(debug_assertions)]
-        if _count > 0 {
-            tracing::debug!("flush_paint: Painted {} render objects", _count);
-        }
 
         // Get root element's layer
         let layer = match root_id {
