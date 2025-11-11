@@ -1,6 +1,7 @@
 //! Effect RenderObjects (opacity, transforms, clips, decorations)
 
 pub mod animated_opacity;
+pub mod animated_size;
 pub mod backdrop_filter;
 pub mod clip_base;
 pub mod clip_oval;
@@ -21,6 +22,7 @@ pub mod visibility;
 
 // Re-exports
 pub use animated_opacity::RenderAnimatedOpacity;
+pub use animated_size::{RenderAnimatedSize, SizeAlignment};
 pub use backdrop_filter::RenderBackdropFilter;
 pub use clip_oval::RenderClipOval;
 pub use clip_path::{PathClipper, RenderClipPath};
