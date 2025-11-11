@@ -109,7 +109,7 @@
 | 2 | **RenderStack** | Positioned слои | Absolute positioning | ✅ Реализовано |
 | 3 | **RenderIndexedStack** | Показывает child по index | Index selection | ✅ Реализовано |
 | 4 | **RenderWrap** | Wrap с переносом строк | Flow with wrapping | ✅ Реализовано |
-| 5 | **RenderFlow** | Custom layout delegate | Custom delegate | ⏳ Планируется |
+| 5 | **RenderFlow** | Custom layout delegate | Custom delegate | ✅ Реализовано |
 | 6 | **RenderTable** | Табличный layout | Table algorithm | ✅ Реализовано |
 | 7 | **RenderListBody** | Простой scrollable список | Linear list | ✅ Реализовано |
 | 8 | **RenderGrid** | Grid layout (CSS Grid) | Grid algorithm | ✅ Реализовано |
@@ -172,10 +172,10 @@
 
 | Приоритет | Описание | Количество |
 |-----------|----------|-----------|
-| ✅ **Реализовано** | Готово и протестировано | **48** (59%) |
+| ✅ **Реализовано** | Готово и протестировано | **49** (60%) |
 | 🔄 **В процессе** | Активная разработка | **0** (0%) |
 | ⏳ **High Priority** | Layout + Visual + Text | **0** (0%) |
-| ⏳ **Medium Priority** | Media + Advanced Layout | **2** (2%) |
+| ⏳ **Medium Priority** | Media + Advanced Layout | **1** (1%) |
 | ⏳ **Low Priority** | Sliver + Debug + Special | **31** (39%) |
 
 ---
@@ -230,10 +230,10 @@
 - [x] RenderPhysicalShape (custom shape elevation)
 - [x] RenderShiftedBox (base class for shift operations)
 
-### Phase 3: Advanced (⏳ 29% Complete)
+### Phase 3: Advanced (⏳ 43% Complete)
 - [x] RenderTable (table layout)
 - [x] RenderGrid (CSS grid layout)
-- [ ] RenderFlow (custom layout delegate)
+- [x] RenderFlow (custom layout delegate)
 - [ ] RenderEditableLine (editable text)
 - [ ] RenderTexture (GPU texture)
 - [ ] RenderErrorBox (debug error box)
