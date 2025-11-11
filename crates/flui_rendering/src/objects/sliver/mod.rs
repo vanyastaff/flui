@@ -9,8 +9,10 @@ pub mod sliver_fill_viewport;
 pub mod sliver_fixed_extent_list;
 pub mod sliver_grid;
 pub mod sliver_list;
+pub mod sliver_opacity;
 pub mod sliver_padding;
 pub mod sliver_to_box_adapter;
+
 
 
 
@@ -23,6 +25,7 @@ pub use sliver_grid::{RenderSliverGrid, SliverGridDelegate, SliverGridDelegateFi
 pub use sliver_list::RenderSliverList;
 pub use sliver_padding::RenderSliverPadding;
 pub use sliver_to_box_adapter::RenderSliverToBoxAdapter;
+
 
 
 
