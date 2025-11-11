@@ -133,23 +133,24 @@
 | 19 | **RenderSliverPadding** | Padding для sliver | ✅ Реализовано |
 | 20 | **RenderSliverFillViewport** | Заполняет viewport | ✅ Реализовано |
 | 21 | **RenderSliverFillRemaining** | Заполняет остаток | ✅ Реализовано |
-| 22 | **RenderSliverPersistentHeader** | Sticky header | ⏳ Планируется |
-| 23 | **RenderSliverFloatingPersistentHeader** | Floating header | ⏳ Планируется |
-| 24 | **RenderSliverPinnedPersistentHeader** | Pinned header | ⏳ Планируется |
-| 25 | **RenderSliverAnimatedOpacity** | Анимир. прозрачность | ⏳ Планируется |
-| 26 | **RenderSliverIgnorePointer** | Ignore pointer | ✅ Реализовано |
-| 27 | **RenderSliverOffstage** | Скрывает sliver | ✅ Реализовано |
-| 28 | **RenderSliverOpacity** | Прозрачность sliver | ✅ Реализовано |
-| 29 | **RenderSliverCrossAxisGroup** | Cross-axis группировка | ⏳ Планируется |
-| 30 | **RenderSliverMainAxisGroup** | Main-axis группировка | ⏳ Планируется |
-| 31 | **RenderViewport** | Viewport для slivers | ✅ Реализовано |
-| 32 | **RenderShrinkWrappingViewport** | Shrink-wrap viewport | ⏳ Планируется |
-| 33 | **RenderAbstractViewport** | Абстрактный viewport | ⏳ Планируется |
-| 34 | **RenderSliverMultiBoxAdaptor** | Базовый для списков | ⏳ Планируется |
-| 35 | **RenderSliverEdgeInsetsPadding** | EdgeInsets padding | ⏳ Планируется |
-| 36 | **RenderSliverCrossAxisPositioned** | Cross-axis позиционир. | ⏳ Планируется |
-| 37 | **RenderSliverConstrainedCrossAxis** | Cross-axis constraints | ⏳ Планируется |
-| 38 | **RenderSliverOverlapAbsorber** | Absorb overlap | ⏳ Планируется |
+| 22 | **RenderSliverAppBar** | Floating/pinned app bar | ✅ Реализовано |
+| 23 | **RenderSliverPersistentHeader** | Sticky header | ✅ Реализовано |
+| 24 | **RenderSliverFloatingPersistentHeader** | Floating header | ⏳ Планируется |
+| 25 | **RenderSliverPinnedPersistentHeader** | Pinned header | ⏳ Планируется |
+| 26 | **RenderSliverAnimatedOpacity** | Анимир. прозрачность | ⏳ Планируется |
+| 27 | **RenderSliverIgnorePointer** | Ignore pointer | ✅ Реализовано |
+| 28 | **RenderSliverOffstage** | Скрывает sliver | ✅ Реализовано |
+| 29 | **RenderSliverOpacity** | Прозрачность sliver | ✅ Реализовано |
+| 30 | **RenderSliverCrossAxisGroup** | Cross-axis группировка | ⏳ Планируется |
+| 31 | **RenderSliverMainAxisGroup** | Main-axis группировка | ⏳ Планируется |
+| 32 | **RenderViewport** | Viewport для slivers | ✅ Реализовано |
+| 33 | **RenderShrinkWrappingViewport** | Shrink-wrap viewport | ⏳ Планируется |
+| 34 | **RenderAbstractViewport** | Абстрактный viewport | ⏳ Планируется |
+| 35 | **RenderSliverMultiBoxAdaptor** | Базовый для списков | ⏳ Планируется |
+| 36 | **RenderSliverEdgeInsetsPadding** | EdgeInsets padding | ⏳ Планируется |
+| 37 | **RenderSliverCrossAxisPositioned** | Cross-axis позиционир. | ⏳ Планируется |
+| 38 | **RenderSliverConstrainedCrossAxis** | Cross-axis constraints | ⏳ Планируется |
+| 39 | **RenderSliverOverlapAbsorber** | Absorb overlap | ⏳ Планируется |
 
 ---
 
@@ -172,11 +173,11 @@
 
 | Приоритет | Описание | Количество |
 |-----------|----------|-----------|
-| ✅ **Реализовано** | Готово и протестировано | **56** (68%) |
+| ✅ **Реализовано** | Готово и протестировано | **58** (71%) |
 | 🔄 **В процессе** | Активная разработка | **0** (0%) |
 | ⏳ **High Priority** | Layout + Visual + Text | **0** (0%) |
 | ⏳ **Medium Priority** | Media + Advanced Layout | **0** (0%) |
-| ⏳ **Low Priority** | Sliver + Debug + Special | **26** (32%) |
+| ⏳ **Low Priority** | Sliver + Debug + Special | **24** (29%) |
 
 ---
 
@@ -239,7 +240,7 @@
 - [x] RenderErrorBox (debug error box)
 - [x] RenderPlaceholder (debug placeholder)
 
-### Phase 4: Sliver (⏳ 46% Complete - 12/26 objects)
+### Phase 4: Sliver (⏳ 54% Complete - 14/26 objects)
 - [x] RenderSliverList (scrollable lazy-loading list)
 - [x] RenderSliverPadding (sliver padding wrapper)
 - [x] RenderSliverGrid (scrollable 2D grid layout)
@@ -252,9 +253,9 @@
 - [x] RenderSliverOffstage (sliver visibility toggle)
 - [x] RenderViewport (sliver container with scrolling)
 - [x] RenderSliverPrototypeExtentList (prototype-based sizing)
+- [x] RenderSliverAppBar (floating/pinned app bar)
+- [x] RenderSliverPersistentHeader (sticky header)
 - [ ] RenderSliver базовый trait
-- [ ] RenderSliverAppBar (floating app bar)
-- [ ] RenderSliverPersistentHeader (sticky header)
 - [ ] RenderSliverOverlapAbsorber (overlap management)
 - [ ] RenderSliverOverlapInjector (inject overlap)
 - [ ] RenderSliverAnimatedList (animated list)
@@ -272,8 +273,8 @@
 
 | Статус | Layout | Visual | Interaction | Text | Media | Sliver | Special | Всего |
 |--------|--------|--------|-------------|------|-------|--------|---------|-------|
-| ✅ Готово | 16 | 14 | 4 | 1 | 1 | 12 | 8 | **56** |
-| ⏳ Планируется | 9 | 1 | 0 | 1 | 1 | 14 | 0 | **26** |
+| ✅ Готово | 16 | 14 | 4 | 1 | 1 | 14 | 8 | **58** |
+| ⏳ Планируется | 9 | 1 | 0 | 1 | 1 | 12 | 0 | **24** |
 | **Всего** | **25** | **15** | **4** | **2** | **2** | **26** | **8** | **82** |
 
 ---
