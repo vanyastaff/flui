@@ -132,6 +132,9 @@ pub struct WgpuPainter {
     /// Current gradient stops bind group (recreated when stops change)
     gradient_bind_group: Option<wgpu::BindGroup>,
 
+    /// Accumulated gradient stops for current frame (cleared each frame)
+    current_gradient_stops: Vec<super::effects::GradientStop>,
+
     /// Default texture sampler (linear filtering with repeat)
     default_sampler: wgpu::Sampler,
 
@@ -597,6 +600,9 @@ impl WgpuPainter {
         // No bind group yet (created on first gradient use)
         let gradient_bind_group = None;
 
+        // Initialize gradient stops accumulator
+        let current_gradient_stops = Vec::new();
+
         // Create texture cache (uses Arc for safe sharing)
         let texture_cache = super::texture_cache::TextureCache::new(device.clone(), queue.clone());
 
@@ -631,6 +637,7 @@ impl WgpuPainter {
             gradient_stops_buffer,
             gradient_bind_group_layout,
             gradient_bind_group,
+            current_gradient_stops,
             default_sampler,
             texture_cache,
             tessellator,
@@ -720,6 +727,9 @@ impl WgpuPainter {
         // This is 2-3x faster than individual flush calls.
         self.flush_all_instanced_batches(encoder, view);
 
+        // ===== Render Gradients (Linear + Radial) =====
+        self.flush_gradient_batches(encoder, view);
+
         // ===== Render Text =====
         self.text_renderer
             .render(&self.device, &self.queue, view, encoder, self.size)?;
@@ -791,17 +801,19 @@ impl WgpuPainter {
         let has_rects = !self.rect_batch.is_empty();
         let has_circles = !self.circle_batch.is_empty();
         let has_arcs = !self.arc_batch.is_empty();
+        let has_shadows = !self.shadow_batch.is_empty();
 
-        if !has_rects && !has_circles && !has_arcs {
+        if !has_rects && !has_circles && !has_arcs && !has_shadows {
             return;
         }
 
         #[cfg(debug_assertions)]
         tracing::debug!(
-            "WgpuPainter::flush_all_instanced_batches (single pass): rects={}, circles={}, arcs={}",
+            "WgpuPainter::flush_all_instanced_batches (single pass): rects={}, circles={}, arcs={}, shadows={}",
             self.rect_batch.len(),
             self.circle_batch.len(),
-            self.arc_batch.len()
+            self.arc_batch.len(),
+            self.shadow_batch.len()
         );
 
         // Calculate total buffer size and offsets
@@ -810,9 +822,12 @@ impl WgpuPainter {
         let circle_size =
             self.circle_batch.len() * std::mem::size_of::<super::instancing::CircleInstance>();
         let arc_size = self.arc_batch.len() * std::mem::size_of::<super::instancing::ArcInstance>();
+        let shadow_size =
+            self.shadow_batch.len() * std::mem::size_of::<super::instancing::ShadowInstance>();
 
         // Build combined instance buffer
-        let mut combined_buffer = Vec::with_capacity(rect_size + circle_size + arc_size);
+        let mut combined_buffer =
+            Vec::with_capacity(rect_size + circle_size + arc_size + shadow_size);
 
         // Append all instance data
         let rect_offset = 0;
@@ -828,6 +843,11 @@ impl WgpuPainter {
         let arc_offset = combined_buffer.len();
         if has_arcs {
             combined_buffer.extend_from_slice(self.arc_batch.as_bytes());
+        }
+
+        let shadow_offset = combined_buffer.len();
+        if has_shadows {
+            combined_buffer.extend_from_slice(self.shadow_batch.as_bytes());
         }
 
         // Upload combined buffer (using buffer pool)
@@ -895,6 +915,19 @@ impl WgpuPainter {
             render_pass.draw_indexed(0..6, 0, 0..self.arc_batch.len() as u32);
         }
 
+        // ===== Draw Shadows (if any) =====
+        // Shadows should be drawn FIRST (before shapes) for correct layering
+        // TODO: Consider moving shadow rendering to beginning of render() for proper z-ordering
+        if has_shadows {
+            render_pass.set_pipeline(&self.shadow_pipeline);
+
+            let shadow_start = shadow_offset as u64;
+            let shadow_end = shadow_start + shadow_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(shadow_start..shadow_end));
+
+            render_pass.draw_indexed(0..6, 0, 0..self.shadow_batch.len() as u32);
+        }
+
         // Drop render pass (explicit for clarity)
         drop(render_pass);
 
@@ -902,6 +935,137 @@ impl WgpuPainter {
         self.rect_batch.clear();
         self.circle_batch.clear();
         self.arc_batch.clear();
+        self.shadow_batch.clear();
+    }
+
+    /// Flush gradient batches (linear and radial)
+    ///
+    /// Uploads gradient stops buffer and renders all gradient rectangles.
+    /// Called automatically from render().
+    fn flush_gradient_batches(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        // Check if we have any gradients to render
+        let has_linear = !self.linear_gradient_batch.is_empty();
+        let has_radial = !self.radial_gradient_batch.is_empty();
+
+        if !has_linear && !has_radial {
+            return;
+        }
+
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::flush_gradient_batches: linear={}, radial={}, stops={}",
+            self.linear_gradient_batch.len(),
+            self.radial_gradient_batch.len(),
+            self.current_gradient_stops.len()
+        );
+
+        // ===== Upload Gradient Stops to GPU =====
+        if !self.current_gradient_stops.is_empty() {
+            self.queue.write_buffer(
+                &self.gradient_stops_buffer,
+                0,
+                bytemuck::cast_slice(&self.current_gradient_stops),
+            );
+
+            // Create/update bind group
+            self.gradient_bind_group = Some(self.device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    label: Some("Gradient Stops Bind Group"),
+                    layout: &self.gradient_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.gradient_stops_buffer.as_entire_binding(),
+                    }],
+                },
+            ));
+        }
+
+        // Calculate buffer sizes
+        let linear_size = self.linear_gradient_batch.len()
+            * std::mem::size_of::<super::instancing::LinearGradientInstance>();
+        let radial_size = self.radial_gradient_batch.len()
+            * std::mem::size_of::<super::instancing::RadialGradientInstance>();
+
+        // Build combined instance buffer
+        let mut combined_buffer = Vec::with_capacity(linear_size + radial_size);
+
+        let linear_offset = 0;
+        if has_linear {
+            combined_buffer.extend_from_slice(self.linear_gradient_batch.as_bytes());
+        }
+
+        let radial_offset = combined_buffer.len();
+        if has_radial {
+            combined_buffer.extend_from_slice(self.radial_gradient_batch.as_bytes());
+        }
+
+        // Upload combined buffer
+        let instance_buffer = self.buffer_pool.get_vertex_buffer(
+            &self.device,
+            "Gradient Instance Buffer",
+            &combined_buffer,
+        );
+
+        // ===== SINGLE RENDER PASS FOR ALL GRADIENTS =====
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Gradient Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        // Set shared resources
+        render_pass.set_bind_group(0, &self.viewport_bind_group, &[]);
+        if let Some(ref gradient_bind_group) = self.gradient_bind_group {
+            render_pass.set_bind_group(1, gradient_bind_group, &[]);
+        }
+        render_pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+        render_pass.set_index_buffer(
+            self.unit_quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+
+        // ===== Draw Linear Gradients (if any) =====
+        if has_linear {
+            render_pass.set_pipeline(&self.linear_gradient_pipeline);
+
+            let linear_start = linear_offset as u64;
+            let linear_end = linear_start + linear_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(linear_start..linear_end));
+
+            render_pass.draw_indexed(0..6, 0, 0..self.linear_gradient_batch.len() as u32);
+        }
+
+        // ===== Draw Radial Gradients (if any) =====
+        if has_radial {
+            render_pass.set_pipeline(&self.radial_gradient_pipeline);
+
+            let radial_start = radial_offset as u64;
+            let radial_end = radial_start + radial_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(radial_start..radial_end));
+
+            render_pass.draw_indexed(0..6, 0, 0..self.radial_gradient_batch.len() as u32);
+        }
+
+        // Drop render pass
+        drop(render_pass);
+
+        // Clear batches for next frame
+        self.linear_gradient_batch.clear();
+        self.radial_gradient_batch.clear();
+        self.current_gradient_stops.clear();
     }
 
     /// Flush texture instance batch with given texture
@@ -1779,15 +1943,17 @@ impl WgpuPainter {
     ) {
         use super::instancing::LinearGradientInstance;
 
+        // Append gradient stops to global buffer (max 8 per gradient)
+        let stop_count = stops.len().min(8);
+        self.current_gradient_stops.extend_from_slice(&stops[..stop_count]);
+
         let instance = LinearGradientInstance::new(
             [bounds.left(), bounds.top(), bounds.width(), bounds.height()],
             gradient_start,
             gradient_end,
             [corner_radius; 4],
-            stops.len() as u32,
+            stop_count as u32,
         );
-
-        // TODO: Upload gradient stops to buffer
 
         if self.linear_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
@@ -1827,15 +1993,17 @@ impl WgpuPainter {
     ) {
         use super::instancing::RadialGradientInstance;
 
+        // Append gradient stops to global buffer (max 8 per gradient)
+        let stop_count = stops.len().min(8);
+        self.current_gradient_stops.extend_from_slice(&stops[..stop_count]);
+
         let instance = RadialGradientInstance::new(
             [bounds.left(), bounds.top(), bounds.width(), bounds.height()],
             center,
             radius,
             [corner_radius; 4],
-            stops.len() as u32,
+            stop_count as u32,
         );
-
-        // TODO: Upload gradient stops to buffer
 
         if self.radial_gradient_batch.add(instance) {
             // Batch full, flush will happen in render()
