@@ -125,23 +125,23 @@
 
 ---
 
-## 📋 Что НЕ реализовано (34 объекта, из них ~4 не нужны)
+## 📋 Что НЕ реализовано (32 объекта, из них ~4 не нужны)
 
-### Приоритет 1: Полезные для general UI (7)
+### Приоритет 1: Полезные для general UI (5 осталось, 3 реализовано)
 
 1. ~~**RenderAnimatedSize**~~ - ✅ РЕАЛИЗОВАНО (упрощенная версия с линейной интерполяцией)
 
-2. **RenderEditable** - Редактируемый текст (TextField)
-   - Priority: HIGH
-   - Use case: Text input widgets
-
-3. ~~**RenderFractionalTranslation**~~ ✅ - Перемещение на долю размера (IMPLEMENTED)
+2. ~~**RenderFractionalTranslation**~~ ✅ - Перемещение на долю размера (IMPLEMENTED)
    - Priority: MEDIUM
    - Use case: Subtle animations, offsets
 
-4. ~~**RenderCustomSingleChildLayoutBox**~~ ✅ - Custom single layout (IMPLEMENTED)
+3. ~~**RenderCustomSingleChildLayoutBox**~~ ✅ - Custom single layout (IMPLEMENTED)
    - Priority: MEDIUM
    - Use case: Custom layout delegates
+
+4. **RenderEditable** - Редактируемый текст (TextField)
+   - Priority: HIGH
+   - Use case: Text input widgets
 
 5. **RenderConstrainedOverflowBox** - Overflow с constraints
    - Priority: MEDIUM
@@ -159,132 +159,124 @@
    - Priority: LOW
    - Use case: Baseline manipulation
 
-9. **RenderClipRSuperellipse** - Суперэллипс clipping
-   - Priority: LOW
-   - Use case: iOS-style rounded corners
-
 ### Приоритет 2: Advanced features (8)
 
-10. **RenderFollowerLayer** - Leader/Follower pattern
-    - Priority: MEDIUM
-    - Use case: Tooltips, popovers
+9. **RenderFollowerLayer** - Leader/Follower pattern
+   - Priority: MEDIUM
+   - Use case: Tooltips, popovers
 
-11. **RenderLeaderLayer** - Leader в Leader/Follower
+10. **RenderLeaderLayer** - Leader в Leader/Follower
     - Priority: MEDIUM
     - Use case: Coordinated positioning
 
-12. **RenderSliverVariedExtentList** - Variable extent list
+11. **RenderSliverVariedExtentList** - Variable extent list
     - Priority: MEDIUM
     - Use case: Lists with different item sizes
 
-13. **RenderSliverFixedExtentBoxAdaptor** - Fixed extent adaptor
+12. **RenderSliverFixedExtentBoxAdaptor** - Fixed extent adaptor
     - Priority: MEDIUM
     - Use case: Base for fixed extent lists
 
-14. **RenderSliverFloatingPinnedPersistentHeader** - Floating+Pinned
+13. **RenderSliverFloatingPinnedPersistentHeader** - Floating+Pinned
     - Priority: MEDIUM
     - Use case: Complex header behavior
 
-15. **RenderSliverScrollingPersistentHeader** - Scrolling header
+14. **RenderSliverScrollingPersistentHeader** - Scrolling header
     - Priority: LOW
     - Use case: Headers that scroll partially
 
-16. **RenderSliverFillRemainingAndOverscroll** - Fill + overscroll
+15. **RenderSliverFillRemainingAndOverscroll** - Fill + overscroll
     - Priority: LOW
     - Use case: Overscroll effects
 
-17. **RenderSliverFillRemainingWithScrollable** - Fill + scrollable
+16. **RenderSliverFillRemainingWithScrollable** - Fill + scrollable
     - Priority: LOW
     - Use case: Nested scrollables
 
 ### Приоритет 3: Базовые/абстрактные (7)
 
-18. **RenderProxyBox** - Базовый single-child wrapper
+17. **RenderProxyBox** - Базовый single-child wrapper
     - Priority: ~~HIGH~~ **NOT NEEDED** (архитектурное различие)
     - Use case: Base for many single-child objects
     - **FLUI Status**: ❌ Не нужен - все 43 наследника RenderProxyBox уже реализованы напрямую
     - **Причина**: Rust trait-based архитектура не требует базовых классов для code reuse
     - **Детали**: Делегация в одну строку `ctx.tree.layout_child(...)` не требует абстракции
 
-19. **RenderProxyBoxWithHitTestBehavior** - Proxy с hit test
+18. **RenderProxyBoxWithHitTestBehavior** - Proxy с hit test
     - Priority: ~~MEDIUM~~ **NOT NEEDED** (архитектурное различие)
     - Use case: Hit test customization
     - **FLUI Status**: ❌ Не нужен - функциональность покрыта в конкретных объектах
 
-20. **RenderAligningShiftedBox** - Базовый для alignment
+19. **RenderAligningShiftedBox** - Базовый для alignment
     - Priority: MEDIUM (базовый)
     - Use case: Base for aligned boxes
     - **Note**: FLUI имеет RenderShiftedBox, RenderAligningShiftedBox может быть добавлен при необходимости
 
-21. **RenderViewportBase** - Базовый для viewport
+20. **RenderViewportBase** - Базовый для viewport
     - Priority: MEDIUM (базовый)
     - Use case: Base for viewports
     - **FLUI Status**: ✅ Есть RenderAbstractViewport trait (аналог)
 
-22. **RenderProxySliver** - Базовый sliver wrapper
+21. **RenderProxySliver** - Базовый sliver wrapper
     - Priority: LOW (базовый)
     - Use case: Base for sliver wrappers
     - **FLUI Status**: ❌ Не нужен по тем же причинам что RenderProxyBox
 
-23. **RenderView** - Root render object
-    - Priority: HIGH (корневой)
-    - Use case: Root of render tree
-
-24. **RenderTreeSliver** - Tree-based sliver
+22. **RenderTreeSliver** - Tree-based sliver
     - Priority: LOW
     - Use case: Hierarchical slivers
 
 ### Приоритет 4: Semantics (4)
 
-25. **RenderIndexedSemantics** - Индексированная семантика
+23. **RenderIndexedSemantics** - Индексированная семантика
     - Priority: LOW
     - Use case: Accessibility
 
-26. **RenderSemanticsAnnotations** - Аннотации семантики
+24. **RenderSemanticsAnnotations** - Аннотации семантики
     - Priority: LOW
     - Use case: Accessibility metadata
 
-27. **RenderSemanticsGestureHandler** - Gesture семантика
+25. **RenderSemanticsGestureHandler** - Gesture семантика
     - Priority: LOW
     - Use case: Accessibility gestures
 
-28. **RenderSliverSemanticsAnnotations** - Sliver семантика
+26. **RenderSliverSemanticsAnnotations** - Sliver семантика
     - Priority: LOW
     - Use case: Sliver accessibility
 
 ### Приоритет 5: Platform-specific (5)
 
-29. **RenderUiKitView** - iOS UIKit view
+27. **RenderUiKitView** - iOS UIKit view
     - Priority: VERY LOW (platform-specific)
     - Use case: iOS native views
 
-30. **RenderAndroidView** - Android view
+28. **RenderAndroidView** - Android view
     - Priority: VERY LOW (platform-specific)
     - Use case: Android native views
 
-31. **RenderAppKitView** - macOS AppKit view
+29. **RenderAppKitView** - macOS AppKit view
     - Priority: VERY LOW (platform-specific)
     - Use case: macOS native views
 
-32. **RenderDarwinPlatformView** - Darwin platform view
+30. **RenderDarwinPlatformView** - Darwin platform view
     - Priority: VERY LOW (platform-specific)
     - Use case: iOS/macOS platform views
 
-33. **PlatformViewRenderBox** - Platform view base
+31. **PlatformViewRenderBox** - Platform view base
     - Priority: VERY LOW (platform-specific)
     - Use case: Base for platform views
 
 ### Приоритет 6: Специализированные (3)
 
-34. **RenderTwoDimensionalViewport** - 2D scrolling viewport
+32. **RenderTwoDimensionalViewport** - 2D scrolling viewport
     - Priority: MEDIUM
     - Use case: Tables, grids with 2D scroll
 
-35. **RenderSliverSingleBoxAdapter** - Single box в sliver
+33. **RenderSliverSingleBoxAdapter** - Single box в sliver
     - Priority: LOW
     - Use case: Adapter pattern
 
-36. **RenderCupertinoContextMenu** - iOS context menu
+34. **RenderCupertinoContextMenu** - iOS context menu
     - Priority: VERY LOW (iOS-specific)
     - Use case: iOS context menus
 
@@ -329,44 +321,45 @@
 - **Text и Image rendering**
 
 ### Что можно добавить для полноты:
-1. **RenderProxyBox** - базовый wrapper (CRITICAL)
+1. ~~**RenderProxyBox**~~ - ❌ НЕ НУЖЕН (архитектурное различие)
 2. ✅ **RenderView** - root object (CRITICAL) - IMPLEMENTED
 3. ✅ **RenderAnimatedSize** - size animations (HIGH) - IMPLEMENTED
-4. **RenderEditable** - text input (HIGH)
-5. ✅ **RenderFractionalTranslation** - translation (MEDIUM) - IMPLEMENTED
-6. **Leader/Follower** - coordinated positioning (MEDIUM)
+4. ✅ **RenderFractionalTranslation** - translation (MEDIUM) - IMPLEMENTED
+5. ✅ **RenderCustomSingleChildLayoutBox** - custom layout (MEDIUM) - IMPLEMENTED
+6. **RenderEditable** - text input (HIGH)
+7. **Leader/Follower** - coordinated positioning (MEDIUM)
 
 ---
 
 ## 🎉 Выводы
 
-**FLUI уже покрывает ~74% функциональности Flutter rendering layer** (с учетом архитектурных различий), включая:
+**FLUI уже покрывает ~75% функциональности Flutter rendering layer** (с учетом архитектурных различий), включая:
 - ✅ Все основные layout алгоритмы
 - ✅ Все визуальные эффекты
 - ✅ Полную sliver систему (26/26)
 - ✅ Viewport и scrolling infrastructure
 - ✅ Interaction и hit testing
 
-**Оставшиеся 26%** это в основном:
+**Оставшиеся 25%** это в основном:
 - ~~Базовые/абстрактные классы (RenderProxyBox)~~ ❌ Не нужны (архитектурные различия)
-- ~~RenderView, RenderAnimatedSize~~ ✅ Реализовано
-- Специализированные features (Editable, FractionalTranslation, Leader/Follower)
+- ~~RenderView, RenderAnimatedSize, RenderFractionalTranslation, RenderCustomSingleChildLayoutBox~~ ✅ Реализовано
+- Специализированные features (RenderEditable для text input, Leader/Follower для tooltips)
 - Platform-specific объекты (iOS/Android views)
 - Semantics для accessibility
 - Редко используемые объекты
 
-**Текущая реализация (84 объекта) уже достаточна для:**
+**Текущая реализация (86 объектов) уже достаточна для:**
 - ✅ Production-ready UI applications
 - ✅ Сложные layouts и scrolling
 - ✅ Анимации и effects
 - ✅ Multi-threaded UI
 
 **Для максимального покрытия потребуется:**
-- ~1-2 критичных объекта (RenderEditable для text input)
-- ~15-20 nice-to-have объектов (FractionalTranslation, Leader/Follower, advanced layouts)
+- ~1 критичный объект (RenderEditable для text input)
+- ~13-15 nice-to-have объектов (Leader/Follower, advanced layouts, overflow handling)
 - ~10 platform-specific (опционально, зависит от целевых платформ)
 - ~~4 базовых класса~~ - ❌ Не нужны благодаря trait-based архитектуре
-- ~~RenderView, RenderAnimatedSize~~ - ✅ Уже реализовано
+- ~~RenderView, RenderAnimatedSize, RenderFractionalTranslation, RenderCustomSingleChildLayoutBox~~ - ✅ Уже реализовано
 
 ---
 
