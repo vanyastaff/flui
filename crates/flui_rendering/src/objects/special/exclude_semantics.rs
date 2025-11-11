@@ -93,7 +93,5 @@ mod tests {
 
         exclude.set_excluding(true);
         assert!(exclude.excluding);
-
-        
     }
 }

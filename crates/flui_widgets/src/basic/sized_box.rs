@@ -647,7 +647,9 @@ impl View for SizedBox {
 
         // Use RenderSizedBox (requires exactly one child)
         // If no child provided, use Empty as a placeholder
-        let child = self.child.or_else(|| Some(Box::new(Empty) as Box<dyn AnyView>));
+        let child = self
+            .child
+            .or_else(|| Some(Box::new(Empty) as Box<dyn AnyView>));
 
         (RenderSizedBox::new(self.width, self.height), child)
     }

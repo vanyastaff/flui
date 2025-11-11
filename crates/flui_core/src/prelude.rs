@@ -36,7 +36,6 @@
 //!
 //! ## External Re-exports (convenience)
 //! - [`Size`], [`Offset`] from flui_types
-//! - [`BoxedLayer`] from flui_engine
 //!
 //! # Example
 //!
@@ -136,5 +135,4 @@ pub use flui_types::Size;
 /// 2D offset (dx, dy)
 pub use flui_types::Offset;
 
-/// Boxed layer for rendering
-pub use flui_engine::BoxedLayer;
+// BoxedLayer removed - use Box<flui_engine::PictureLayer> directly

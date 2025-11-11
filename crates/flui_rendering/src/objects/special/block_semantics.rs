@@ -94,7 +94,5 @@ mod tests {
 
         block.set_blocking(true);
         assert!(block.blocking);
-
-        
     }
 }

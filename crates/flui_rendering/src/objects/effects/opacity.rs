@@ -102,7 +102,5 @@ mod tests {
         let mut opacity = RenderOpacity::new(0.5);
         opacity.set_opacity(0.8);
         assert_eq!(opacity.opacity, 0.8);
-
-        
     }
 }

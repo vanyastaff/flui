@@ -374,9 +374,7 @@ impl DrawCommand {
         match self {
             DrawCommand::DrawRect { rect, .. } => Some(*rect),
             DrawCommand::DrawRRect { rrect, .. } => Some(rrect.bounding_rect()),
-            DrawCommand::DrawCircle {
-                center, radius, ..
-            } => {
+            DrawCommand::DrawCircle { center, radius, .. } => {
                 let size = Size::new(radius * 2.0, radius * 2.0);
                 Some(Rect::from_center_size(*center, size))
             }
@@ -597,7 +595,6 @@ impl PaintBuilder {
     }
 }
 
-
 /// Paint style (fill or stroke)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaintStyle {
@@ -757,3 +754,6 @@ mod tests {
         assert_eq!(paint.stroke_cap, StrokeCap::Round);
     }
 }
+
+// ===== Command Pattern Implementation (Visitor Pattern) =====
+

@@ -308,7 +308,5 @@ mod tests {
         let fitted = RenderFittedBox::default();
         assert_eq!(fitted.fit, BoxFit::Contain);
         assert_eq!(fitted.alignment, Alignment::CENTER);
-
-        
     }
 }

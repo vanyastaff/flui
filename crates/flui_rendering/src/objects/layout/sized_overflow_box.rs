@@ -218,7 +218,5 @@ mod tests {
         let sized_overflow =
             RenderSizedOverflowBox::with_alignment(Some(50.0), Some(75.0), Alignment::TOP_LEFT);
         assert_eq!(sized_overflow.alignment, Alignment::TOP_LEFT);
-
-        
     }
 }

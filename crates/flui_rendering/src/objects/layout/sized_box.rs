@@ -92,16 +92,34 @@ impl Render for RenderSizedBox {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
-        // Calculate our size based on explicit width/height
-        // If not specified, use constraint's max (fill available space)
-        let width = self.width.unwrap_or(constraints.max_width);
-        let height = self.height.unwrap_or(constraints.max_height);
 
+        // Layout child first if we need its size
+        let child_size = if self.width.is_none() || self.height.is_none() {
+            // Need child's intrinsic size for unspecified dimensions
+            // Give child loose constraints for dimensions we don't control
+            let child_constraints = BoxConstraints::new(
+                0.0,
+                self.width.unwrap_or(constraints.max_width),
+                0.0,
+                self.height.unwrap_or(constraints.max_height),
+            );
+            tree.layout_child(child_id, child_constraints)
+        } else {
+            // Both dimensions specified, we don't need child size yet
+            Size::ZERO
+        };
+
+        // Calculate final size
+        let width = self.width.unwrap_or(child_size.width);
+        let height = self.height.unwrap_or(child_size.height);
         let size = Size::new(width, height);
 
-        // Force child to be exactly this size with tight constraints
-        let child_constraints = BoxConstraints::tight(size);
-        tree.layout_child(child_id, child_constraints);
+        // If we already laid out child with correct constraints, we're done
+        // Otherwise, force child to match our size
+        if self.width.is_some() && self.height.is_some() {
+            let child_constraints = BoxConstraints::tight(size);
+            tree.layout_child(child_id, child_constraints);
+        }
 
         size
     }
@@ -173,7 +191,5 @@ mod tests {
         let mut sized = RenderSizedBox::height(50.0);
         sized.set_height(Some(100.0));
         assert_eq!(sized.height, Some(100.0));
-
-        
     }
 }

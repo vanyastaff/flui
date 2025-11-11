@@ -123,7 +123,5 @@ mod tests {
 
         baseline.set_baseline_type(TextBaseline::Ideographic);
         assert_eq!(baseline.baseline_type, TextBaseline::Ideographic);
-
-        
     }
 }

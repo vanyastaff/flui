@@ -151,7 +151,5 @@ mod tests {
     fn test_render_backdrop_filter_with_blend_mode() {
         let filter = RenderBackdropFilter::blur(10.0).with_blend_mode(BlendMode::Multiply);
         assert_eq!(filter.blend_mode(), BlendMode::Multiply);
-
-        
     }
 }

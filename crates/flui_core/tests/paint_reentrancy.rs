@@ -33,7 +33,10 @@ mod tests {
         assert!(removed, "Remove should return true for present element");
 
         let removed_again = set.remove(&42);
-        assert!(!removed_again, "Remove should return false for absent element");
+        assert!(
+            !removed_again,
+            "Remove should return false for absent element"
+        );
     }
 
     #[test]

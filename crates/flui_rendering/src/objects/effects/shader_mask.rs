@@ -211,8 +211,7 @@ mod tests {
 
     #[test]
     fn test_render_shader_mask_with_blend_mode() {
-        let mask =
-            RenderShaderMask::solid(Color32::WHITE).with_blend_mode(BlendMode::Multiply);
+        let mask = RenderShaderMask::solid(Color32::WHITE).with_blend_mode(BlendMode::Multiply);
         assert_eq!(mask.blend_mode(), BlendMode::Multiply);
     }
 
@@ -241,5 +240,6 @@ mod tests {
                 assert_eq!(*radius, 1.0);
             }
             _ => panic!("Expected radial gradient"),
-        }}
+        }
+    }
 }

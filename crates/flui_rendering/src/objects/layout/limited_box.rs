@@ -129,7 +129,5 @@ mod tests {
         let mut limited = RenderLimitedBox::new(100.0, 200.0);
         limited.set_max_height(250.0);
         assert_eq!(limited.max_height, 250.0);
-
-        
     }
 }

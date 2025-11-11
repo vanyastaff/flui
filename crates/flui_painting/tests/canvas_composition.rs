@@ -59,12 +59,7 @@ fn test_append_canvas_multiple_children() {
 
     for i in 0..10 {
         let mut child = Canvas::new();
-        let rect = Rect::from_ltrb(
-            i as f32 * 10.0,
-            0.0,
-            (i + 1) as f32 * 10.0,
-            50.0,
-        );
+        let rect = Rect::from_ltrb(i as f32 * 10.0, 0.0, (i + 1) as f32 * 10.0, 50.0);
         let paint = Paint::fill(Color::RED);
         child.draw_rect(rect, &paint);
 
@@ -183,11 +178,17 @@ fn test_display_list_append_directly() {
 
     // Create canvases and get their display lists
     let mut canvas1 = Canvas::new();
-    canvas1.draw_rect(Rect::from_ltrb(0.0, 0.0, 50.0, 50.0), &Paint::fill(Color::RED));
+    canvas1.draw_rect(
+        Rect::from_ltrb(0.0, 0.0, 50.0, 50.0),
+        &Paint::fill(Color::RED),
+    );
     let dl1 = canvas1.finish();
 
     let mut canvas2 = Canvas::new();
-    canvas2.draw_rect(Rect::from_ltrb(50.0, 50.0, 100.0, 100.0), &Paint::fill(Color::BLUE));
+    canvas2.draw_rect(
+        Rect::from_ltrb(50.0, 50.0, 100.0, 100.0),
+        &Paint::fill(Color::BLUE),
+    );
     let dl2 = canvas2.finish();
 
     // Verify both have commands
@@ -205,12 +206,7 @@ fn test_large_composition_performance() {
 
         // Each child has multiple commands
         for j in 0..10 {
-            let rect = Rect::from_ltrb(
-                (i * 10 + j) as f32,
-                0.0,
-                (i * 10 + j + 1) as f32,
-                50.0,
-            );
+            let rect = Rect::from_ltrb((i * 10 + j) as f32, 0.0, (i * 10 + j + 1) as f32, 50.0);
             let paint = Paint::fill(Color::RED);
             child.draw_rect(rect, &paint);
         }

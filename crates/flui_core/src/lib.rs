@@ -101,7 +101,6 @@
 //! ```rust,ignore
 //! use flui_core::render::{Render, Arity, LayoutContext, PaintContext};
 //! use flui_types::Size;
-//! use flui_engine::BoxedLayer;
 //!
 //! #[derive(Debug)]
 //! struct CustomBox {
@@ -114,9 +113,9 @@
 //!         Size::new(self.width, self.height)
 //!     }
 //!
-//!     fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
+//!     fn paint(&self, ctx: &PaintContext) -> Box<flui_engine::PictureLayer> {
 //!         // Custom painting code
-//!         Box::new(flui_engine::ContainerLayer::new())
+//!         Box::new(flui_engine::PictureLayer::new())
 //!     }
 //!
 //!     fn as_any(&self) -> &dyn std::any::Any {
@@ -254,7 +253,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 // Re-export external types
-pub use flui_engine::BoxedLayer;
+// BoxedLayer removed - use Box<flui_engine::PictureLayer> directly
 pub use flui_types::{Offset, Size};
 
 /// Debug flags, diagnostics, and validation

@@ -84,25 +84,37 @@ impl TapGestureRecognizer {
     }
 
     /// Set the tap down callback
-    pub fn with_on_tap_down(self: Arc<Self>, callback: impl Fn(TapDetails) + Send + Sync + 'static) -> Arc<Self> {
+    pub fn with_on_tap_down(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
         self.callbacks.lock().on_tap_down = Some(Arc::new(callback));
         self
     }
 
     /// Set the tap up callback
-    pub fn with_on_tap_up(self: Arc<Self>, callback: impl Fn(TapDetails) + Send + Sync + 'static) -> Arc<Self> {
+    pub fn with_on_tap_up(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
         self.callbacks.lock().on_tap_up = Some(Arc::new(callback));
         self
     }
 
     /// Set the tap callback (called on successful tap)
-    pub fn with_on_tap(self: Arc<Self>, callback: impl Fn(TapDetails) + Send + Sync + 'static) -> Arc<Self> {
+    pub fn with_on_tap(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
         self.callbacks.lock().on_tap = Some(Arc::new(callback));
         self
     }
 
     /// Set the tap cancel callback
-    pub fn with_on_tap_cancel(self: Arc<Self>, callback: impl Fn(TapDetails) + Send + Sync + 'static) -> Arc<Self> {
+    pub fn with_on_tap_cancel(
+        self: Arc<Self>,
+        callback: impl Fn(TapDetails) + Send + Sync + 'static,
+    ) -> Arc<Self> {
         self.callbacks.lock().on_tap_cancel = Some(Arc::new(callback));
         self
     }
@@ -278,10 +290,9 @@ mod tests {
         let tapped = Arc::new(Mutex::new(false));
         let tapped_clone = tapped.clone();
 
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap(move |_details| {
-                *tapped_clone.lock() = true;
-            });
+        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_details| {
+            *tapped_clone.lock() = true;
+        });
 
         let pointer = PointerId::new(1);
         let position = Offset::new(100.0, 100.0);
@@ -342,10 +353,9 @@ mod tests {
         let tapped = Arc::new(Mutex::new(false));
         let tapped_clone = tapped.clone();
 
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap(move |_details| {
-                *tapped_clone.lock() = true;
-            });
+        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_details| {
+            *tapped_clone.lock() = true;
+        });
 
         let pointer = PointerId::new(1);
         let start_pos = Offset::new(100.0, 100.0);

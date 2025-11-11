@@ -108,7 +108,5 @@ mod tests {
 
         absorb.set_absorbing(true);
         assert!(absorb.absorbing());
-
-        
     }
 }

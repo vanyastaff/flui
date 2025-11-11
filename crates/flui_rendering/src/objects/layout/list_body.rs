@@ -230,7 +230,5 @@ mod tests {
         let mut list = RenderListBody::default();
         list.set_spacing(8.0);
         assert_eq!(list.spacing, 8.0);
-
-        
     }
 }

@@ -386,7 +386,5 @@ mod tests {
         assert_eq!(positioned.metadata.top, Some(0.0));
         assert_eq!(positioned.metadata.right, Some(0.0));
         assert_eq!(positioned.metadata.bottom, Some(0.0));
-
-        
     }
 }

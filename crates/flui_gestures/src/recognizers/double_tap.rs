@@ -395,11 +395,10 @@ mod tests {
         let tapped = Arc::new(Mutex::new(false));
         let tapped_clone = tapped.clone();
 
-        let recognizer = DoubleTapGestureRecognizer::new(arena).with_on_double_tap(
-            move |_details| {
+        let recognizer =
+            DoubleTapGestureRecognizer::new(arena).with_on_double_tap(move |_details| {
                 *tapped_clone.lock() = true;
-            },
-        );
+            });
 
         let pointer = PointerId::new(1);
         let position = Offset::new(100.0, 100.0);
@@ -437,11 +436,10 @@ mod tests {
         let tapped = Arc::new(Mutex::new(false));
         let tapped_clone = tapped.clone();
 
-        let recognizer = DoubleTapGestureRecognizer::new(arena).with_on_double_tap(
-            move |_details| {
+        let recognizer =
+            DoubleTapGestureRecognizer::new(arena).with_on_double_tap(move |_details| {
                 *tapped_clone.lock() = true;
-            },
-        );
+            });
 
         let pointer = PointerId::new(1);
         let first_pos = Offset::new(100.0, 100.0);

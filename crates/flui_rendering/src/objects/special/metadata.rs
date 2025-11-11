@@ -225,7 +225,5 @@ mod tests {
 
         meta.set_behavior(HitTestBehavior::Translucent);
         assert_eq!(meta.behavior, HitTestBehavior::Translucent);
-
-        
     }
 }

@@ -178,7 +178,5 @@ mod tests {
         assert!(!visibility.visible);
         assert!(visibility.maintain_size);
         assert!(visibility.maintain_state);
-
-        
     }
 }

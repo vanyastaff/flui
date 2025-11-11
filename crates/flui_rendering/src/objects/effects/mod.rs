@@ -31,5 +31,5 @@ pub use opacity::RenderOpacity;
 pub use physical_model::{PhysicalShape, RenderPhysicalModel};
 pub use repaint_boundary::RenderRepaintBoundary;
 pub use shader_mask::{RenderShaderMask, ShaderSpec};
-pub use transform::{RenderTransform, Transform};
+pub use transform::RenderTransform;
 pub use visibility::RenderVisibility;

@@ -41,7 +41,6 @@ pub use recognizers::{
     TapGestureRecognizer,
 };
 
-
 pub mod prelude {
     //! Commonly used types and traits
     pub use crate::arena::*;
@@ -52,4 +51,3 @@ pub mod prelude {
         MultiTapGestureRecognizer, ScaleGestureRecognizer, TapGestureRecognizer,
     };
 }
-

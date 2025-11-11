@@ -2,7 +2,10 @@
 
 use flui_painting::Canvas;
 use flui_types::{
-    geometry::RRect, painting::Clip, styling::{BorderRadius, Radius}, Rect, Size,
+    geometry::RRect,
+    painting::Clip,
+    styling::{BorderRadius, Radius},
+    Rect, Size,
 };
 
 use super::clip_base::{ClipShape, RenderClip};

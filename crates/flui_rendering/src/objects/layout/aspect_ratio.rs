@@ -131,7 +131,5 @@ mod tests {
         let mut aspect = RenderAspectRatio::new(16.0 / 9.0);
         aspect.set_aspect_ratio(4.0 / 3.0);
         assert!((aspect.aspect_ratio - 4.0 / 3.0).abs() < f32::EPSILON);
-
-        
     }
 }

@@ -286,7 +286,11 @@ impl AnimationController {
     }
 
     /// Animate to a specific value.
-    pub fn animate_to(&self, target: f32, duration: Option<Duration>) -> Result<(), AnimationError> {
+    pub fn animate_to(
+        &self,
+        target: f32,
+        duration: Option<Duration>,
+    ) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         self.check_disposed(&inner)?;
 
@@ -449,7 +453,9 @@ impl Animation<f32> for AnimationController {
 
     fn remove_status_listener(&self, id: ListenerId) {
         let mut inner = self.inner.lock();
-        inner.status_listeners.retain(|(listener_id, _)| *listener_id != id);
+        inner
+            .status_listeners
+            .retain(|(listener_id, _)| *listener_id != id);
     }
 }
 
@@ -533,8 +539,12 @@ mod tests {
     #[test]
     fn test_animation_controller_bounds() {
         let ticker_provider = Arc::new(SimpleTickerProvider);
-        let controller =
-            AnimationController::with_bounds(Duration::from_millis(100), ticker_provider, 10.0, 20.0);
+        let controller = AnimationController::with_bounds(
+            Duration::from_millis(100),
+            ticker_provider,
+            10.0,
+            20.0,
+        );
 
         assert_eq!(controller.value(), 10.0);
 

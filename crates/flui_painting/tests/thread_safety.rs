@@ -56,12 +56,7 @@ fn test_parallel_canvas_creation() {
             let mut canvas = Canvas::new();
 
             for j in 0..10 {
-                let rect = Rect::from_ltrb(
-                    (i * 10 + j) as f32,
-                    0.0,
-                    (i * 10 + j + 1) as f32,
-                    50.0,
-                );
+                let rect = Rect::from_ltrb((i * 10 + j) as f32, 0.0, (i * 10 + j + 1) as f32, 50.0);
                 let paint = Paint::fill(Color::RED);
                 canvas.draw_rect(rect, &paint);
             }
@@ -153,12 +148,7 @@ fn test_parallel_build_then_compose() {
         let handle = thread::spawn(move || {
             let mut child_canvas = Canvas::new();
 
-            let rect = Rect::from_ltrb(
-                (i * 10) as f32,
-                0.0,
-                (i * 10 + 10) as f32,
-                50.0,
-            );
+            let rect = Rect::from_ltrb((i * 10) as f32, 0.0, (i * 10 + 10) as f32, 50.0);
             let paint = Paint::fill(Color::RED);
             child_canvas.draw_rect(rect, &paint);
 
@@ -199,12 +189,8 @@ fn test_no_data_races() {
             let mut canvas = Canvas::new();
 
             for j in 0..100 {
-                let rect = Rect::from_ltrb(
-                    (i * 100 + j) as f32,
-                    0.0,
-                    (i * 100 + j + 1) as f32,
-                    50.0,
-                );
+                let rect =
+                    Rect::from_ltrb((i * 100 + j) as f32, 0.0, (i * 100 + j + 1) as f32, 50.0);
                 let paint = Paint::fill(Color::RED);
                 canvas.draw_rect(rect, &paint);
             }

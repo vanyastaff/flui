@@ -278,7 +278,10 @@ impl DragGestureRecognizer {
     }
 
     /// Set the drag cancel callback
-    pub fn with_on_cancel(self: Arc<Self>, callback: impl Fn() + Send + Sync + 'static) -> Arc<Self> {
+    pub fn with_on_cancel(
+        self: Arc<Self>,
+        callback: impl Fn() + Send + Sync + 'static,
+    ) -> Arc<Self> {
         self.callbacks.lock().on_cancel = Some(Arc::new(callback));
         self
     }

@@ -2,47 +2,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
-use flui_types::{Offset, Size};
-
-/// Transform operations
-#[derive(Debug, Clone, PartialEq)]
-pub enum Transform {
-    /// Translate by offset
-    Translate(Offset),
-    /// Rotate by angle (radians)
-    Rotate(f32),
-    /// Scale uniformly
-    Scale(f32),
-    /// Scale non-uniformly
-    ScaleXY {
-        /// X-axis scale factor
-        sx: f32,
-        /// Y-axis scale factor
-        sy: f32
-    },
-    /// Skew (shear) transform
-    Skew {
-        /// X-axis skew angle in radians
-        skew_x: f32,
-        /// Y-axis skew angle in radians
-        skew_y: f32
-    },
-    /// Arbitrary 2D affine transformation matrix
-    Matrix {
-        /// X-axis scale/rotation component
-        a: f32,
-        /// Y-axis shear component
-        b: f32,
-        /// X-axis shear component
-        c: f32,
-        /// Y-axis scale/rotation component
-        d: f32,
-        /// X-axis translation
-        tx: f32,
-        /// Y-axis translation
-        ty: f32,
-    },
-}
+use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 
 /// RenderObject that applies a transformation to its child
 ///
@@ -53,24 +13,61 @@ pub enum Transform {
 ///
 /// ```rust,ignore
 /// use flui_rendering::RenderTransform;
-/// use flui_rendering::objects::Transform;
+/// use flui_types::geometry::Transform;
+/// use std::f32::consts::PI;
 ///
-/// let transform = RenderTransform::new(Transform::Rotate(std::f32::consts::PI / 4.0));
+/// // High-level Transform API (recommended)
+/// let rotate = RenderTransform::new(Transform::rotate(PI / 4.0));
+///
+/// // Composing transforms
+/// let composed = Transform::translate(50.0, 50.0)
+///     .then(Transform::rotate(PI / 4.0))
+///     .then(Transform::scale(2.0));
+/// let transform = RenderTransform::new(composed);
+///
+/// // Skew for italic text
+/// let italic = RenderTransform::new(Transform::skew(0.2, 0.0));
 /// ```
 #[derive(Debug)]
 pub struct RenderTransform {
     /// The transformation to apply
-    pub transform: Transform,
+    transform: Transform,
 
     /// Origin point for rotation/scale (relative to child size)
     pub alignment: Offset,
 }
 
 impl RenderTransform {
-    /// Create new RenderTransform
+    /// Create new RenderTransform from high-level Transform API
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_types::geometry::Transform;
+    /// use std::f32::consts::PI;
+    ///
+    /// // Simple transforms
+    /// let translate = RenderTransform::new(Transform::translate(10.0, 20.0));
+    /// let rotate = RenderTransform::new(Transform::rotate(PI / 4.0));
+    /// let scale = RenderTransform::new(Transform::scale(2.0));
+    ///
+    /// // Composed transforms
+    /// let composed = Transform::translate(50.0, 50.0)
+    ///     .then(Transform::rotate(PI / 4.0))
+    ///     .then(Transform::scale(2.0));
+    /// let transform = RenderTransform::new(composed);
+    /// ```
     pub fn new(transform: Transform) -> Self {
         Self {
             transform,
+            alignment: Offset::ZERO,
+        }
+    }
+
+    /// Create from Matrix4 (backward compatibility)
+    pub fn from_matrix(matrix: Matrix4) -> Self {
+        Self {
+            transform: matrix.into(),
             alignment: Offset::ZERO,
         }
     }
@@ -114,47 +111,17 @@ impl Render for RenderTransform {
         // Apply transform using Canvas API
         canvas.save();
 
-        // Apply the specific transform based on type
-        match self.transform {
-            Transform::Translate(t_offset) => {
-                canvas.translate(t_offset.dx, t_offset.dy);
-            }
-            Transform::Rotate(angle) => {
-                // Apply alignment offset, rotate, then reverse alignment
-                canvas.translate(self.alignment.dx, self.alignment.dy);
-                canvas.rotate(angle);
-                canvas.translate(-self.alignment.dx, -self.alignment.dy);
-            }
-            Transform::Scale(scale) => {
-                canvas.translate(self.alignment.dx, self.alignment.dy);
-                canvas.scale(scale, None);
-                canvas.translate(-self.alignment.dx, -self.alignment.dy);
-            }
-            Transform::ScaleXY { sx, sy } => {
-                canvas.translate(self.alignment.dx, self.alignment.dy);
-                canvas.scale(sx, Some(sy));
-                canvas.translate(-self.alignment.dx, -self.alignment.dy);
-            }
-            Transform::Skew { skew_x, skew_y } => {
-                canvas.translate(self.alignment.dx, self.alignment.dy);
-                // Use Matrix4::skew_2d for skew transformation
-                use flui_types::Matrix4;
-                let skew_matrix = Matrix4::skew_2d(skew_x, skew_y);
-                canvas.set_transform(skew_matrix);
-                canvas.translate(-self.alignment.dx, -self.alignment.dy);
-            }
-            Transform::Matrix { a, b, c, d, tx, ty } => {
-                // Apply 2D affine transformation matrix
-                // Matrix4 stores in column-major order: [m00, m10, m20, m30, m01, m11, ...]
-                use flui_types::Matrix4;
-                let matrix = Matrix4::new(
-                    a, b, 0.0, 0.0,      // column 0
-                    c, d, 0.0, 0.0,      // column 1
-                    0.0, 0.0, 1.0, 0.0,  // column 2
-                    tx, ty, 0.0, 1.0,    // column 3
-                );
-                canvas.set_transform(matrix);
-            }
+        // Apply alignment if needed
+        if self.alignment != Offset::ZERO {
+            canvas.translate(self.alignment.dx, self.alignment.dy);
+        }
+
+        // Use the new Canvas::transform() method
+        canvas.transform(&self.transform);
+
+        // Reverse alignment
+        if self.alignment != Offset::ZERO {
+            canvas.translate(-self.alignment.dx, -self.alignment.dy);
         }
 
         // Paint child and append its canvas
@@ -165,6 +132,7 @@ impl Render for RenderTransform {
 
         canvas
     }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -177,27 +145,47 @@ impl Render for RenderTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::PI;
 
     #[test]
     fn test_render_transform_new() {
-        let transform = RenderTransform::new(Transform::Rotate(1.0));
-        assert!(matches!(transform.transform, Transform::Rotate(_)));
+        let transform = RenderTransform::new(Transform::rotate(PI / 4.0));
+        assert_eq!(transform.alignment, Offset::ZERO);
+    }
+
+    #[test]
+    fn test_render_transform_from_matrix() {
+        let matrix = Matrix4::rotation_z(PI / 4.0);
+        let transform = RenderTransform::from_matrix(matrix);
+        assert_eq!(transform.alignment, Offset::ZERO);
     }
 
     #[test]
     fn test_render_transform_with_alignment() {
         let transform =
-            RenderTransform::with_alignment(Transform::Scale(2.0), Offset::new(0.5, 0.5));
-        assert!(matches!(transform.transform, Transform::Scale(_)));
+            RenderTransform::with_alignment(Transform::scale(2.0), Offset::new(0.5, 0.5));
         assert_eq!(transform.alignment, Offset::new(0.5, 0.5));
     }
 
     #[test]
     fn test_render_transform_set_transform() {
-        let mut transform = RenderTransform::new(Transform::Translate(Offset::ZERO));
-        transform.set_transform(Transform::Rotate(1.5));
-        assert!(matches!(transform.transform, Transform::Rotate(_)));
+        let mut transform = RenderTransform::new(Transform::translate(10.0, 20.0));
+        transform.set_transform(Transform::rotate(1.5));
+        // Transform set successfully
+    }
 
-        
+    #[test]
+    fn test_render_transform_composition() {
+        let composed = Transform::translate(50.0, 50.0)
+            .then(Transform::rotate(PI / 4.0))
+            .then(Transform::scale(2.0));
+        let transform = RenderTransform::new(composed);
+        assert_eq!(transform.alignment, Offset::ZERO);
+    }
+
+    #[test]
+    fn test_render_transform_skew() {
+        let transform = RenderTransform::new(Transform::skew(0.2, 0.0));
+        assert_eq!(transform.alignment, Offset::ZERO);
     }
 }

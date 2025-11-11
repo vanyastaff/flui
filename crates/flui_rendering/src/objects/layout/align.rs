@@ -210,7 +210,5 @@ mod tests {
         align.set_height_factor(Some(1.5));
         assert_eq!(align.width_factor, Some(2.0));
         assert_eq!(align.height_factor, Some(1.5));
-
-        
     }
 }

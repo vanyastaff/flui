@@ -81,7 +81,5 @@ mod tests {
     fn test_render_merge_semantics_default() {
         let _merge = RenderMergeSemantics::default();
         // Just ensure it compiles
-
-        
     }
 }

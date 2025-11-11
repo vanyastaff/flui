@@ -162,7 +162,12 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer down
-    fn handle_pointer_down(&self, pointer: PointerId, position: Offset, kind: flui_types::events::PointerDeviceKind) {
+    fn handle_pointer_down(
+        &self,
+        pointer: PointerId,
+        position: Offset,
+        kind: flui_types::events::PointerDeviceKind,
+    ) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -302,7 +307,9 @@ impl MultiTapGestureRecognizer {
             };
 
             let count = positions.len();
-            let kind = state.device_kind.unwrap_or(flui_types::events::PointerDeviceKind::Touch);
+            let kind = state
+                .device_kind
+                .unwrap_or(flui_types::events::PointerDeviceKind::Touch);
 
             drop(state);
 
@@ -370,7 +377,11 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
             self.state.start_tracking(pointer, position, &recognizer);
         }
 
-        self.handle_pointer_down(pointer, position, flui_types::events::PointerDeviceKind::Touch);
+        self.handle_pointer_down(
+            pointer,
+            position,
+            flui_types::events::PointerDeviceKind::Touch,
+        );
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -449,12 +460,11 @@ mod tests {
         let tapped_clone = tapped.clone();
         let count_clone = tap_count.clone();
 
-        let recognizer = MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap(
-            move |details| {
+        let recognizer =
+            MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap(move |details| {
                 *tapped_clone.lock() = true;
                 *count_clone.lock() = details.pointer_count;
-            },
-        );
+            });
 
         let pointer1 = PointerId::new(1);
         let pointer2 = PointerId::new(2);
@@ -487,12 +497,11 @@ mod tests {
         let tapped_clone = tapped.clone();
         let count_clone = tap_count.clone();
 
-        let recognizer = MultiTapGestureRecognizer::new(arena, 3).with_on_multi_tap(
-            move |details| {
+        let recognizer =
+            MultiTapGestureRecognizer::new(arena, 3).with_on_multi_tap(move |details| {
                 *tapped_clone.lock() = true;
                 *count_clone.lock() = details.pointer_count;
-            },
-        );
+            });
 
         // Add three pointers
         recognizer.add_pointer(PointerId::new(1), Offset::new(100.0, 100.0));
@@ -506,9 +515,18 @@ mod tests {
         drop(state);
 
         // Release all pointers
-        recognizer.handle_pointer_up(PointerId::new(1), flui_types::events::PointerDeviceKind::Touch);
-        recognizer.handle_pointer_up(PointerId::new(2), flui_types::events::PointerDeviceKind::Touch);
-        recognizer.handle_pointer_up(PointerId::new(3), flui_types::events::PointerDeviceKind::Touch);
+        recognizer.handle_pointer_up(
+            PointerId::new(1),
+            flui_types::events::PointerDeviceKind::Touch,
+        );
+        recognizer.handle_pointer_up(
+            PointerId::new(2),
+            flui_types::events::PointerDeviceKind::Touch,
+        );
+        recognizer.handle_pointer_up(
+            PointerId::new(3),
+            flui_types::events::PointerDeviceKind::Touch,
+        );
 
         // Should have called callback
         assert!(*tapped.lock());
@@ -521,19 +539,24 @@ mod tests {
         let center_pos = Arc::new(Mutex::new(Offset::ZERO));
         let center_clone = center_pos.clone();
 
-        let recognizer = MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap(
-            move |details| {
+        let recognizer =
+            MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap(move |details| {
                 *center_clone.lock() = details.center;
-            },
-        );
+            });
 
         // Add two pointers at (0, 0) and (100, 0)
         recognizer.add_pointer(PointerId::new(1), Offset::new(0.0, 0.0));
         recognizer.add_pointer(PointerId::new(2), Offset::new(100.0, 0.0));
 
         // Release both
-        recognizer.handle_pointer_up(PointerId::new(1), flui_types::events::PointerDeviceKind::Touch);
-        recognizer.handle_pointer_up(PointerId::new(2), flui_types::events::PointerDeviceKind::Touch);
+        recognizer.handle_pointer_up(
+            PointerId::new(1),
+            flui_types::events::PointerDeviceKind::Touch,
+        );
+        recognizer.handle_pointer_up(
+            PointerId::new(2),
+            flui_types::events::PointerDeviceKind::Touch,
+        );
 
         // Center should be at (50, 0)
         let center = *center_pos.lock();
@@ -547,8 +570,8 @@ mod tests {
         let cancelled = Arc::new(Mutex::new(false));
         let cancelled_clone = cancelled.clone();
 
-        let recognizer = MultiTapGestureRecognizer::new(arena, 2)
-            .with_on_multi_tap_cancel(move |_details| {
+        let recognizer =
+            MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap_cancel(move |_details| {
                 *cancelled_clone.lock() = true;
             });
 

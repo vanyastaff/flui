@@ -126,7 +126,5 @@ mod tests {
         let mut colored = RenderColoredBox::new(Color::RED);
         colored.set_color(Color::GREEN);
         assert_eq!(colored.color, Color::GREEN);
-
-        
     }
 }

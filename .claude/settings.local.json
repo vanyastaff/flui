@@ -24,7 +24,8 @@
       "mcp__context7__get-library-docs",
       "mcp__ide__getDiagnostics",
       "Bash(mkdir:*)",
-      "Bash(cargo doc:*)"
+      "Bash(cargo doc:*)",
+      "Bash(cargo fmt:*)"
     ],
     "deny": [],
     "ask": []

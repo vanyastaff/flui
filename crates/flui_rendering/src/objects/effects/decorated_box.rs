@@ -3,7 +3,8 @@
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
-    styling::{BorderPosition, BoxDecoration, Radius}, Point, RRect, Rect, Size,
+    styling::{BorderPosition, BoxDecoration, Radius},
+    Color, Point, RRect, Rect, Size,
 };
 
 /// Position of decoration relative to child
@@ -93,9 +94,14 @@ impl RenderDecoratedBox {
     fn paint_decoration(&self, canvas: &mut Canvas, rect: Rect) {
         let decoration = &self.decoration;
 
-        // TODO: Paint box shadows when shadow support is added to Canvas
-        // For now, we skip shadows. A full implementation would add:
-        // canvas.draw_shadow() method
+        // Paint box shadows first (they go behind the box)
+        if let Some(ref shadows) = decoration.box_shadow {
+            for shadow in shadows {
+                if !shadow.inset {
+                    Self::paint_box_shadow(canvas, rect, shadow, decoration.border_radius);
+                }
+            }
+        }
 
         // Paint background (gradient or solid color)
         if let Some(ref _gradient) = decoration.gradient {
@@ -143,13 +149,7 @@ impl RenderDecoratedBox {
 
         if let Some(right) = border.right {
             if right.is_visible() {
-                Self::paint_border_side(
-                    canvas,
-                    rect,
-                    &right,
-                    BorderPosition::Right,
-                    border_radius,
-                );
+                Self::paint_border_side(canvas, rect, &right, BorderPosition::Right, border_radius);
             }
         }
 
@@ -218,6 +218,56 @@ impl RenderDecoratedBox {
                     let p2 = Point::new(rect.left() + side.width / 2.0, rect.bottom());
                     canvas.draw_line(p1, p2, &paint);
                 }
+            }
+        }
+    }
+
+    /// Paint a box shadow
+    fn paint_box_shadow(
+        canvas: &mut Canvas,
+        rect: Rect,
+        shadow: &flui_types::styling::BoxShadow,
+        border_radius: Option<flui_types::styling::BorderRadius>,
+    ) {
+        // Calculate shadow rect with offset and spread
+        let shadow_rect = Rect::from_xywh(
+            rect.left() + shadow.offset.dx - shadow.spread_radius,
+            rect.top() + shadow.offset.dy - shadow.spread_radius,
+            rect.width() + shadow.spread_radius * 2.0,
+            rect.height() + shadow.spread_radius * 2.0,
+        );
+
+        // For simplicity, we'll render the shadow as a semi-transparent rectangle with blur effect
+        // This is a simplified implementation - a full implementation would use proper blur
+        let blur_steps = (shadow.blur_radius / 2.0).max(1.0) as usize;
+        let alpha_step = shadow.color.a as f32 / (blur_steps as f32);
+
+        for i in 0..blur_steps {
+            let step_radius = (i as f32) * 2.0;
+            let step_rect = Rect::from_xywh(
+                shadow_rect.left() - step_radius,
+                shadow_rect.top() - step_radius,
+                shadow_rect.width() + step_radius * 2.0,
+                shadow_rect.height() + step_radius * 2.0,
+            );
+
+            let step_alpha = ((blur_steps - i) as f32 * alpha_step) as u8;
+            let step_color =
+                Color::rgba(shadow.color.r, shadow.color.g, shadow.color.b, step_alpha);
+            let paint = Paint::fill(step_color);
+
+            if let Some(radius) = border_radius.map(|r| r.top_left.x + step_radius) {
+                let circular_radius = Radius::circular(radius);
+                let rrect = RRect {
+                    rect: step_rect,
+                    top_left: circular_radius,
+                    top_right: circular_radius,
+                    bottom_right: circular_radius,
+                    bottom_left: circular_radius,
+                };
+                canvas.draw_rrect(rrect, &paint);
+            } else {
+                canvas.draw_rect(step_rect, &paint);
             }
         }
     }
@@ -382,5 +432,6 @@ mod tests {
         let decorated =
             RenderDecoratedBox::with_position(decoration.clone(), DecorationPosition::Foreground);
         assert_eq!(decorated.decoration, decoration);
-        assert_eq!(decorated.position, DecorationPosition::Foreground);}
+        assert_eq!(decorated.position, DecorationPosition::Foreground);
+    }
 }

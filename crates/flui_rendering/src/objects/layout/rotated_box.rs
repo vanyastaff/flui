@@ -120,9 +120,9 @@ impl Render for RenderRotatedBox {
         // Calculate child offset in rotated space
         let child_offset = match self.quarter_turns {
             QuarterTurns::Zero => Offset::ZERO,
-            QuarterTurns::One => Offset::new(0.0, -self.size.width),  // 90° CW
-            QuarterTurns::Two => Offset::new(-self.size.width, -self.size.height),  // 180°
-            QuarterTurns::Three => Offset::new(-self.size.height, 0.0),  // 270° CW
+            QuarterTurns::One => Offset::new(0.0, -self.size.width), // 90° CW
+            QuarterTurns::Two => Offset::new(-self.size.width, -self.size.height), // 180°
+            QuarterTurns::Three => Offset::new(-self.size.height, 0.0), // 270° CW
         };
 
         // Paint child with rotated offset
@@ -170,7 +170,5 @@ mod tests {
 
         let rotated_270 = RenderRotatedBox::rotate_270();
         assert_eq!(rotated_270.quarter_turns, QuarterTurns::Three);
-
-        
     }
 }

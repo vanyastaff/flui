@@ -17,6 +17,7 @@ pub mod center;
 pub mod colored_box;
 pub mod constrained_box;
 pub mod container;
+pub mod custom_paint;
 pub mod decorated_box;
 pub mod divider;
 pub mod empty;
@@ -29,7 +30,6 @@ pub mod sized_box;
 pub mod text;
 pub mod vertical_divider;
 
-
 // Re-exports
 pub use align::Align;
 pub use app_bar::AppBar;
@@ -41,6 +41,7 @@ pub use center::Center;
 pub use colored_box::ColoredBox;
 pub use constrained_box::ConstrainedBox;
 pub use container::Container;
+pub use custom_paint::CustomPaint;
 pub use decorated_box::DecoratedBox;
 pub use divider::Divider;
 pub use empty::Empty;
@@ -52,4 +53,3 @@ pub use safe_area::SafeArea;
 pub use sized_box::SizedBox;
 pub use text::Text;
 pub use vertical_divider::VerticalDivider;
-

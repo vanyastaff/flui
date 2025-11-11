@@ -116,7 +116,5 @@ mod tests {
         let mut boundary = RenderRepaintBoundary::new();
         boundary.set_is_repaint_boundary(false);
         assert!(!boundary.is_repaint_boundary);
-
-        
     }
 }

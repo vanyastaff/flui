@@ -181,5 +181,6 @@ mod tests {
             on_hover: None,
         };
         let debug_str = format!("{:?}", callbacks);
-        assert!(debug_str.contains("MouseCallbacks"));}
+        assert!(debug_str.contains("MouseCallbacks"));
+    }
 }

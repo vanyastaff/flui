@@ -287,7 +287,5 @@ mod tests {
         let mut wrap = RenderWrap::default();
         wrap.set_spacing(8.0);
         assert_eq!(wrap.spacing, 8.0);
-
-        
     }
 }

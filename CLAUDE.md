@@ -410,6 +410,91 @@ impl View for Counter {
 }
 ```
 
+### Using Transform API for 2D Transformations
+
+**IMPORTANT:** Use the high-level `Transform` enum instead of raw `Matrix4` for 2D transformations to improve code readability and reduce errors.
+
+The Transform API is located in `flui_types::geometry::Transform` and provides type-safe, zero-cost abstractions for common 2D transformations.
+
+```rust
+use flui_types::geometry::Transform;
+use std::f32::consts::PI;
+
+// Basic transforms
+let translate = Transform::translate(50.0, 100.0);
+let rotate = Transform::rotate(PI / 4.0);  // 45 degrees
+let scale = Transform::scale(2.0);  // Uniform scale
+let scale_xy = Transform::scale_xy(2.0, 3.0);  // Non-uniform
+
+// Skew transforms (for italic text, perspective effects)
+let italic = Transform::skew(0.2, 0.0);  // Horizontal shear ~11.3°
+let perspective = Transform::skew(0.3, 0.3);  // Both axes
+
+// Pivot point transforms
+let rotate_around_center = Transform::rotate_around(
+    PI / 2.0,  // 90 degrees
+    button_center_x,
+    button_center_y,
+);
+
+// Fluent composition API
+let composed = Transform::translate(50.0, 50.0)
+    .then(Transform::rotate(PI / 4.0))
+    .then(Transform::scale(2.0));
+
+// Convert to Matrix4 (idiomatic Rust)
+let matrix: Matrix4 = transform.into();
+
+// Query transform properties
+if transform.has_rotation() {
+    // ...
+}
+
+// Inverse transforms (for hit testing, animations)
+let inverse = transform.inverse().unwrap();
+```
+
+**Key Benefits:**
+- ✅ Type-safe and self-documenting code
+- ✅ Automatic composition flattening and identity optimization
+- ✅ First-class skew support for italic text and perspective
+- ✅ Built-in pivot point transforms
+- ✅ Zero-cost abstraction (compiles to same code as Matrix4)
+- ✅ Idiomatic From/Into trait conversions
+
+**When to use Transform vs Matrix4:**
+- ✅ Use `Transform` for: UI layouts, animations, simple 2D effects, composing transforms
+- ⚠️ Use `Matrix4` for: 3D transformations, GPU shader inputs, arbitrary affine matrices
+
+**Common Patterns:**
+
+```rust
+// Pattern 1: UI Container with zoom
+let container = Transform::translate(100.0, 100.0)
+    .then(Transform::scale(1.5));
+
+// Pattern 2: Button rotation animation
+let angle = lerp(0.0, PI * 2.0, animation_t);
+let rotation = Transform::rotate_around(angle, center_x, center_y);
+
+// Pattern 3: Italic text rendering
+let italic = Transform::skew(0.2, 0.0);
+canvas.save();
+canvas.transform(italic);
+canvas.draw_text("Italic Text", position, style);
+canvas.restore();
+
+// Pattern 4: Card flip with perspective
+let card_flip = Transform::rotate(PI)
+    .then(Transform::skew(0.2, 0.0))
+    .then(Transform::translate(0.0, 10.0));
+```
+
+**See also:**
+- Full API documentation: `cargo doc -p flui_types --open`
+- Usage examples: `examples/transform_demo.rs`
+- OpenSpec proposal: `openspec/changes/add-transform-api/`
+
 ## Important Codebase Conventions
 
 ### BuildContext is Read-Only

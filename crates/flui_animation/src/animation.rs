@@ -120,10 +120,7 @@ where
 ///
 /// let animations: Vec<Arc<dyn DynAnimation<f32>>> = vec![];
 /// ```
-pub trait DynAnimation<T: Clone + Send + Sync + 'static>:
-    Animation<T> + Listenable
-{
-}
+pub trait DynAnimation<T: Clone + Send + Sync + 'static>: Animation<T> + Listenable {}
 
 // Blanket implementation for all types that implement Animation
 impl<T, A> DynAnimation<T> for A

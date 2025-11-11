@@ -51,9 +51,24 @@ impl Render for RenderConstrainedBox {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
+
         // Enforce additional constraints by intersecting with incoming constraints
         let child_constraints = constraints.enforce(self.additional_constraints);
-        tree.layout_child(child_id, child_constraints)
+
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "RenderConstrainedBox::layout: incoming={:?}, additional={:?}, child_constraints={:?}",
+            constraints,
+            self.additional_constraints,
+            child_constraints
+        );
+
+        let size = tree.layout_child(child_id, child_constraints);
+
+        #[cfg(debug_assertions)]
+        tracing::debug!("RenderConstrainedBox::layout: result size={:?}", size);
+
+        size
     }
 
     fn paint(&self, ctx: &PaintContext) -> Canvas {
@@ -100,7 +115,5 @@ mod tests {
         let constraints2 = BoxConstraints::tight(Size::new(200.0, 200.0));
         constrained.set_additional_constraints(constraints2);
         assert_eq!(constrained.additional_constraints, constraints2);
-
-        
     }
 }

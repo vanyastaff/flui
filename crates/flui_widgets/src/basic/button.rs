@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use flui_core::view::{AnyView, IntoElement, View};
 use flui_core::BuildContext;
-use flui_types::styling::{BorderRadius, BoxDecoration};
+use flui_types::styling::{BorderRadius, BoxDecoration, BoxShadow};
 use flui_types::{Color, EdgeInsets};
 
 use crate::{Container, GestureDetector};
@@ -44,6 +44,9 @@ pub struct Button {
     /// Border radius
     pub border_radius: BorderRadius,
 
+    /// Box shadow
+    pub box_shadow: Option<Vec<BoxShadow>>,
+
     /// Minimum width
     pub min_width: Option<f32>,
 
@@ -60,6 +63,7 @@ impl Button {
             color: Color::rgb(33, 150, 243), // Material Blue
             padding: EdgeInsets::symmetric(16.0, 8.0),
             border_radius: BorderRadius::circular(4.0),
+            box_shadow: None,
             min_width: Some(88.0),
             min_height: Some(36.0),
         }
@@ -73,6 +77,16 @@ impl Button {
 
 impl View for Button {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        // Calculate intrinsic size based on text + padding
+        // Text width is approximately char_count * font_size * 0.6
+        let text_width = (self.label.len() as f32) * 14.0 * 0.6;
+        let text_height = 14.0 * 1.2; // line height
+
+        let button_width =
+            (text_width + self.padding.horizontal_total()).max(self.min_width.unwrap_or(0.0));
+        let button_height =
+            (text_height + self.padding.vertical_total()).max(self.min_height.unwrap_or(0.0));
+
         // Create text widget for the label
         let text = crate::Text::builder()
             .data(self.label)
@@ -80,17 +94,23 @@ impl View for Button {
             .color(Color::WHITE)
             .build();
 
-        // Create the visual container with text as child
+        // Wrap text in Center to center it within the button
+        let centered_text = crate::Center::builder().child(text).build();
+
+        // Create the visual container with EXPLICIT width/height to prevent expansion
         let mut container = Container::builder()
+            .width(button_width)
+            .height(button_height)
             .padding(self.padding)
             .decoration(BoxDecoration {
                 color: Some(self.color),
                 border_radius: Some(self.border_radius),
+                box_shadow: self.box_shadow,
                 ..Default::default()
             })
             .build();
 
-        container.child = Some(Box::new(text));
+        container.child = Some(Box::new(centered_text));
 
         // Wrap in GestureDetector for tap handling
         if let Some(on_tap) = self.on_tap {
@@ -125,6 +145,7 @@ pub struct ButtonBuilder {
     color: Color,
     padding: EdgeInsets,
     border_radius: BorderRadius,
+    box_shadow: Option<Vec<BoxShadow>>,
     min_width: Option<f32>,
     min_height: Option<f32>,
 }
@@ -138,6 +159,7 @@ impl ButtonBuilder {
             color: Color::rgb(33, 150, 243),
             padding: EdgeInsets::symmetric(16.0, 8.0),
             border_radius: BorderRadius::circular(4.0),
+            box_shadow: None,
             min_width: Some(88.0),
             min_height: Some(36.0),
         }
@@ -170,6 +192,12 @@ impl ButtonBuilder {
         self
     }
 
+    /// Set the box shadow
+    pub fn box_shadow(mut self, box_shadow: Vec<BoxShadow>) -> Self {
+        self.box_shadow = Some(box_shadow);
+        self
+    }
+
     /// Set the minimum width
     pub fn min_width(mut self, width: f32) -> Self {
         self.min_width = Some(width);
@@ -190,6 +218,7 @@ impl ButtonBuilder {
             color: self.color,
             padding: self.padding,
             border_radius: self.border_radius,
+            box_shadow: self.box_shadow,
             min_width: self.min_width,
             min_height: self.min_height,
         }

@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use wgpu::{
     AddressMode, Device, Extent3d, FilterMode, Origin3d, Queue, Sampler, SamplerDescriptor,
     TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureDescriptor, TextureDimension,
@@ -149,19 +150,19 @@ pub struct TextureCache {
     /// Statistics
     cache_hits: usize,
     cache_misses: usize,
-    /// Device reference (for creating textures)
-    device: *const Device,
-    /// Queue reference (for uploading data)
-    queue: *const Queue,
+    /// Device reference (for creating textures) - Arc for safe shared ownership
+    device: Arc<Device>,
+    /// Queue reference (for uploading data) - Arc for safe shared ownership
+    queue: Arc<Queue>,
 }
 
 impl TextureCache {
     /// Create a new texture cache
     ///
     /// # Arguments
-    /// * `device` - WGPU device for creating textures
-    /// * `queue` - WGPU queue for uploading texture data
-    pub fn new(device: &Device, queue: &Queue) -> Self {
+    /// * `device` - WGPU device for creating textures (Arc for safe sharing)
+    /// * `queue` - WGPU queue for uploading texture data (Arc for safe sharing)
+    pub fn new(device: Arc<Device>, queue: Arc<Queue>) -> Self {
         let default_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("TextureCache Default Sampler"),
             address_mode_u: AddressMode::Repeat,
@@ -178,8 +179,8 @@ impl TextureCache {
             default_sampler,
             cache_hits: 0,
             cache_misses: 0,
-            device: device as *const Device,
-            queue: queue as *const Queue,
+            device,
+            queue,
         }
     }
 
@@ -203,11 +204,15 @@ impl TextureCache {
         // Check cache first
         if self.textures.contains_key(&id) {
             self.cache_hits += 1;
-            let cached = self.textures.get_mut(&id)
+            let cached = self
+                .textures
+                .get_mut(&id)
                 .expect("Key must exist: just checked with contains_key");
             cached.record_use();
             // Return immutable reference to avoid lifetime issues
-            return Ok(self.textures.get(&id)
+            return Ok(self
+                .textures
+                .get(&id)
                 .expect("Key must exist: just checked with contains_key"));
         }
 
@@ -269,8 +274,8 @@ impl TextureCache {
                 // Cache miss - create texture
                 self.cache_misses += 1;
 
-                let device = unsafe { &*self.device };
-                let queue = unsafe { &*self.queue };
+                let device = &self.device;
+                let queue = &self.queue;
 
                 let texture = device.create_texture(&TextureDescriptor {
                     label: Some("Cached Texture"),
@@ -334,8 +339,8 @@ impl TextureCache {
         let data = rgba.into_raw();
 
         // Create GPU texture
-        let device = unsafe { &*self.device };
-        let queue = unsafe { &*self.queue };
+        let device = &self.device;
+        let queue = &self.queue;
 
         let texture = device.create_texture(&TextureDescriptor {
             label: Some(&format!("Texture: {}", path)),

@@ -169,7 +169,5 @@ mod tests {
         let mut stack = RenderIndexedStack::new(Some(0));
         stack.set_alignment(Alignment::CENTER);
         assert_eq!(stack.alignment, Alignment::CENTER);
-
-        
     }
 }

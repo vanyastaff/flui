@@ -156,10 +156,8 @@ impl Render for RenderPhysicalModel {
             }
             PhysicalShape::Circle => {
                 let radius = size.width.min(size.height) / 2.0;
-                let center = Point::new(
-                    offset.dx + size.width / 2.0,
-                    offset.dy + size.height / 2.0,
-                );
+                let center =
+                    Point::new(offset.dx + size.width / 2.0, offset.dy + size.height / 2.0);
                 canvas.draw_circle(center, radius, &paint);
             }
         }
@@ -238,7 +236,5 @@ mod tests {
         let mut model = RenderPhysicalModel::rectangle(4.0, Color::WHITE);
         model.set_color(Color::RED);
         assert_eq!(model.color, Color::RED);
-
-        
     }
 }

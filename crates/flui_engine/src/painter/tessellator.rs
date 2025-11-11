@@ -3,10 +3,8 @@
 //! Converts vector paths (curves, lines, arcs) into triangle meshes
 //! suitable for GPU rendering.
 
-use crate::painter::{
-    paint::{Paint, Stroke},
-    vertex::Vertex,
-};
+use crate::painter::vertex::Vertex;
+use flui_painting::{Paint, StrokeCap, StrokeJoin};
 use flui_types::{geometry::RRect, styling::Color, Point, Rect};
 use lyon::path::Path;
 use lyon::tessellation::{
@@ -105,7 +103,7 @@ impl Tessellator {
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
                     FillVertexConstructor {
-                        color: paint.get_color(),
+                        color: paint.color,
                     },
                 ),
             )
@@ -121,8 +119,7 @@ impl Tessellator {
     ///
     /// # Arguments
     /// * `path` - Lyon path to tessellate
-    /// * `paint` - Paint style (color)
-    /// * `stroke` - Stroke parameters
+    /// * `paint` - Paint style (contains stroke information)
     ///
     /// # Returns
     /// Tuple of (vertices, indices) ready for GPU upload
@@ -130,26 +127,25 @@ impl Tessellator {
         &mut self,
         path: &Path,
         paint: &Paint,
-        stroke: &Stroke,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         self.geometry.vertices.clear();
         self.geometry.indices.clear();
 
-        // Convert Stroke to lyon StrokeOptions
+        // Extract stroke info from Paint
         use lyon::tessellation::{LineCap, LineJoin};
         let options = StrokeOptions::default()
-            .with_line_width(stroke.width())
-            .with_line_cap(match stroke.cap() {
-                flui_types::painting::StrokeCap::Butt => LineCap::Butt,
-                flui_types::painting::StrokeCap::Round => LineCap::Round,
-                flui_types::painting::StrokeCap::Square => LineCap::Square,
+            .with_line_width(paint.stroke_width)
+            .with_line_cap(match paint.stroke_cap {
+                StrokeCap::Butt => LineCap::Butt,
+                StrokeCap::Round => LineCap::Round,
+                StrokeCap::Square => LineCap::Square,
             })
-            .with_line_join(match stroke.join() {
-                flui_types::painting::StrokeJoin::Miter => LineJoin::Miter,
-                flui_types::painting::StrokeJoin::Round => LineJoin::Round,
-                flui_types::painting::StrokeJoin::Bevel => LineJoin::Bevel,
+            .with_line_join(match paint.stroke_join {
+                StrokeJoin::Miter => LineJoin::Miter,
+                StrokeJoin::Round => LineJoin::Round,
+                StrokeJoin::Bevel => LineJoin::Bevel,
             })
-            .with_miter_limit(stroke.miter_limit());
+            .with_miter_limit(4.0);
 
         self.stroke_tessellator
             .tessellate_path(
@@ -158,7 +154,7 @@ impl Tessellator {
                 &mut BuffersBuilder::new(
                     &mut self.geometry,
                     StrokeVertexConstructor {
-                        color: paint.get_color(),
+                        color: paint.color,
                     },
                 ),
             )
@@ -310,7 +306,9 @@ impl Tessellator {
         let mut path_builder = Path::builder();
 
         // Helper to add an RRect to the path builder with specified winding
-        let add_rrect = |builder: &mut lyon::path::path::Builder, rrect: &RRect, winding: lyon::path::Winding| {
+        let add_rrect = |builder: &mut lyon::path::path::Builder,
+                         rrect: &RRect,
+                         winding: lyon::path::Winding| {
             let rect = rrect.rect;
             let left = rect.left();
             let top = rect.top();
@@ -475,7 +473,6 @@ impl Tessellator {
         &mut self,
         rect: Rect,
         paint: &Paint,
-        stroke: &Stroke,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let mut path_builder = Path::builder();
 
@@ -486,7 +483,7 @@ impl Tessellator {
         path_builder.close();
 
         let path = path_builder.build();
-        self.tessellate_stroke(&path, paint, stroke)
+        self.tessellate_stroke(&path, paint)
     }
 
     /// Tessellate a line
@@ -495,11 +492,30 @@ impl Tessellator {
         p1: Point,
         p2: Point,
         paint: &Paint,
-        stroke: &Stroke,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "Tessellator::tessellate_line: p1={:?}, p2={:?}, stroke_width={}",
+            p1,
+            p2,
+            paint.stroke_width
+        );
+
         let points = vec![p1, p2];
         let path = Self::create_polyline_path(&points, false);
-        self.tessellate_stroke(&path, paint, stroke)
+        let result = self.tessellate_stroke(&path, paint);
+
+        #[cfg(debug_assertions)]
+        match &result {
+            Ok((verts, inds)) => tracing::debug!(
+                "Tessellator::tessellate_line: SUCCESS - {} vertices, {} indices",
+                verts.len(),
+                inds.len()
+            ),
+            Err(e) => tracing::error!("Tessellator::tessellate_line: FAILED - {}", e),
+        }
+
+        result
     }
 
     /// Tessellate a FLUI Path (filled)
@@ -517,10 +533,9 @@ impl Tessellator {
         &mut self,
         flui_path: &flui_types::painting::path::Path,
         paint: &Paint,
-        stroke: &Stroke,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let lyon_path = flui_path.to_lyon_path();
-        self.tessellate_stroke(&lyon_path, paint, stroke)
+        self.tessellate_stroke(&lyon_path, paint)
     }
 }
 
@@ -640,7 +655,8 @@ impl IntoLyonPath for flui_types::painting::path::Path {
 
                     // Approximate arc with line segments
                     // Use more segments for larger sweep angles
-                    let num_segments = ((sweep_angle.abs() / (std::f32::consts::PI / 6.0)).ceil() as i32).max(4);
+                    let num_segments =
+                        ((sweep_angle.abs() / (std::f32::consts::PI / 6.0)).ceil() as i32).max(4);
                     let angle_step = sweep_angle / num_segments as f32;
 
                     let start_x = center.x + radii.x * start_angle.cos();

@@ -249,7 +249,5 @@ mod tests {
         assert_eq!(custom.size(), Size::new(50.0, 75.0));
         assert!(custom.painter.is_none());
         assert!(custom.foreground_painter.is_some());
-
-        
     }
 }

@@ -108,7 +108,5 @@ mod tests {
         let mut offstage = RenderOffstage::new(true);
         offstage.set_offstage(false);
         assert!(!offstage.offstage);
-
-        
     }
 }

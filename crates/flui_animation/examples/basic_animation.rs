@@ -45,7 +45,10 @@ fn main() {
     // 3. TweenAnimation
     println!("\n3. TweenAnimation (0.0 → 100.0):");
     let tween = FloatTween::new(0.0, 100.0);
-    let tween_anim = TweenAnimation::new(tween, Arc::new(controller.clone()) as Arc<dyn Animation<f32>>);
+    let tween_anim = TweenAnimation::new(
+        tween,
+        Arc::new(controller.clone()) as Arc<dyn Animation<f32>>,
+    );
 
     controller.set_value(0.0);
     println!("   t=0.0 → {:.1}", tween_anim.value());

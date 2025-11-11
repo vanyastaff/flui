@@ -1,7 +1,10 @@
 //! RenderClipOval - clips child to an oval shape
 
 use flui_painting::Canvas;
-use flui_types::{painting::{Clip, Path}, Rect, Size};
+use flui_types::{
+    painting::{Clip, Path},
+    Rect, Size,
+};
 
 use super::clip_base::{ClipShape, RenderClip};
 

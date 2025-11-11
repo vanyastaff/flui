@@ -274,7 +274,22 @@ impl Render for RenderFlex {
                 ),
             };
 
+            #[cfg(debug_assertions)]
+            tracing::debug!(
+                "RenderFlex::layout inflexible child #{}: constraints={:?}",
+                index,
+                child_constraints
+            );
+
             let child_size = tree.layout_child(*child, child_constraints);
+
+            #[cfg(debug_assertions)]
+            tracing::debug!(
+                "RenderFlex::layout inflexible child #{}: returned size={:?}",
+                index,
+                child_size
+            );
+
             *size_slot = child_size;
             child_data.push((*index, child_size));
 
@@ -372,10 +387,20 @@ impl Render for RenderFlex {
                 } else {
                     total_main_size.min(constraints.max_width)
                 };
-                Size::new(
+                let final_size = Size::new(
                     width,
                     max_cross_size.clamp(constraints.min_height, constraints.max_height),
-                )
+                );
+
+                #[cfg(debug_assertions)]
+                tracing::debug!(
+                    "RenderFlex::layout (Row): total_main={}, max_cross={}, final_size={:?}",
+                    total_main_size,
+                    max_cross_size,
+                    final_size
+                );
+
+                final_size
             }
             Axis::Vertical => {
                 let height = if main_axis_size.is_max() {
@@ -383,10 +408,20 @@ impl Render for RenderFlex {
                 } else {
                     total_main_size.min(constraints.max_height)
                 };
-                Size::new(
+                let final_size = Size::new(
                     max_cross_size.clamp(constraints.min_width, constraints.max_width),
                     height,
-                )
+                );
+
+                #[cfg(debug_assertions)]
+                tracing::debug!(
+                    "RenderFlex::layout (Column): total_main={}, max_cross={}, final_size={:?}",
+                    total_main_size,
+                    max_cross_size,
+                    final_size
+                );
+
+                final_size
             }
         };
 

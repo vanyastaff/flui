@@ -107,7 +107,5 @@ mod tests {
 
         ignore.set_ignoring(true);
         assert!(ignore.ignoring());
-
-        
     }
 }

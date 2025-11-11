@@ -279,9 +279,11 @@ impl ScaleGestureRecognizer {
             }
             ScalePhase::Started => {
                 // Update scale
-                if let (Some(initial_span), Some(initial_h_span), Some(initial_v_span)) =
-                    (state.initial_span, state.initial_horizontal_span, state.initial_vertical_span)
-                {
+                if let (Some(initial_span), Some(initial_h_span), Some(initial_v_span)) = (
+                    state.initial_span,
+                    state.initial_horizontal_span,
+                    state.initial_vertical_span,
+                ) {
                     let scale = current_span / initial_span;
                     let h_scale = current_h_span / initial_h_span;
                     let v_scale = current_v_span / initial_v_span;
@@ -589,6 +591,10 @@ mod tests {
 
         // Calculate scale manually
         let scale = current_span / state.initial_span.unwrap();
-        assert!((scale - 2.0).abs() < 0.01, "Scale was {}, expected 2.0", scale);
+        assert!(
+            (scale - 2.0).abs() < 0.01,
+            "Scale was {}, expected 2.0",
+            scale
+        );
     }
 }

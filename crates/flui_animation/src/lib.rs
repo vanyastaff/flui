@@ -87,9 +87,6 @@ pub mod proxy_animation;
 pub mod reverse_animation;
 pub mod tween_animation;
 
-
-
-
 // Re-exports for convenience
 pub use animation::{Animation, AnimationDirection, DynAnimation, StatusCallback};
 pub use animation_controller::{AnimationController, AnimationError};
@@ -100,9 +97,7 @@ pub use reverse_animation::ReverseAnimation;
 pub use tween_animation::{animate, TweenAnimation};
 
 // Re-export types from flui_types for convenience
-pub use flui_types::animation::{
-    Animatable, AnimationStatus, Curve, Curves, Tween, TweenSequence,
-};
+pub use flui_types::animation::{Animatable, AnimationStatus, Curve, Curves, Tween, TweenSequence};
 
 /// Prelude module for convenient imports
 pub mod prelude {
@@ -115,7 +110,3 @@ pub mod prelude {
     pub use crate::tween_animation::TweenAnimation;
     pub use flui_types::animation::{Animatable, AnimationStatus, Curve, Curves, Tween};
 }
-
-
-
-

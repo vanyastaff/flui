@@ -198,7 +198,5 @@ mod tests {
         let mut overflow = RenderOverflowBox::new();
         overflow.set_alignment(Alignment::BOTTOM_RIGHT);
         assert_eq!(overflow.alignment, Alignment::BOTTOM_RIGHT);
-
-        
     }
 }

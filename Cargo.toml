@@ -104,6 +104,7 @@ keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 # Flui crates - all included in workspace
 flui_types = { path = "crates/flui_types" }
 flui_core = { path = "crates/flui_core" }
+flui_painting = { path = "crates/flui_painting" }
 flui_engine = { path = "crates/flui_engine" }
 flui_rendering = { path = "crates/flui_rendering" }
 flui_app = { path = "crates/flui_app" }

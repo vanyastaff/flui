@@ -308,19 +308,8 @@ impl Default for Transform {
 // Implement View for Transform - New architecture
 impl View for Transform {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        // Convert Matrix4 to rendering::Transform::Matrix variant
-        use flui_rendering::objects::Transform as RenderingTransform;
-        let m = &self.transform.m;
-        let transform = RenderingTransform::Matrix {
-            a: m[0],
-            b: m[1],
-            c: m[4],
-            d: m[5],
-            tx: m[12],
-            ty: m[13],
-        };
-
-        (RenderTransform::new(transform), self.child)
+        // Use from_matrix for backward compatibility
+        (RenderTransform::from_matrix(self.transform), self.child)
     }
 }
 

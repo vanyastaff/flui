@@ -280,7 +280,5 @@ mod tests {
 
         item.flex_metadata_mut().flex = 3;
         assert_eq!(item.flex_metadata().flex, 3);
-
-        
     }
 }

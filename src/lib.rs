@@ -103,7 +103,7 @@ pub mod prelude {
     pub use flui_core::prelude::*;
 
     // Engine types
-    pub use flui_engine::BoxedLayer;
+    // BoxedLayer removed - use Box<flui_engine::PictureLayer> directly
 
     // Widgets - always available
     pub use flui_widgets::prelude::*;

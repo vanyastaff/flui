@@ -430,11 +430,10 @@ mod tests {
         let pressed = Arc::new(Mutex::new(false));
         let pressed_clone = pressed.clone();
 
-        let recognizer = LongPressGestureRecognizer::new(arena).with_on_long_press_start(
-            move |_details| {
+        let recognizer =
+            LongPressGestureRecognizer::new(arena).with_on_long_press_start(move |_details| {
                 *pressed_clone.lock() = true;
-            },
-        );
+            });
 
         let pointer = PointerId::new(1);
         let position = Offset::new(100.0, 100.0);

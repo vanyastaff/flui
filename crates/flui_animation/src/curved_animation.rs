@@ -143,7 +143,10 @@ mod tests {
             ticker_provider,
         ));
 
-        let curved = CurvedAnimation::new(controller.clone() as Arc<dyn Animation<f32>>, Curves::EaseIn);
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Curves::EaseIn,
+        );
 
         controller.set_value(0.5);
         let curved_value = curved.value();
@@ -162,7 +165,10 @@ mod tests {
             ticker_provider,
         ));
 
-        let curved = CurvedAnimation::new(controller.clone() as Arc<dyn Animation<f32>>, Curves::Linear);
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Curves::Linear,
+        );
 
         assert_eq!(curved.status(), AnimationStatus::Dismissed);
 

@@ -47,6 +47,7 @@ struct VertexOutput {
     @location(4) shadow_offset: vec2<f32>,
     @location(5) blur_sigma: f32,
     @location(6) shadow_color: vec4<f32>,
+    @location(7) bounds: vec4<f32>,
 }
 
 // Uniforms
@@ -158,6 +159,7 @@ fn vs_main(
     out.shadow_offset = instance.shadow_offset;
     out.blur_sigma = instance.blur_sigma;
     out.shadow_color = instance.shadow_color;
+    out.bounds = instance.bounds;
 
     return out;
 }

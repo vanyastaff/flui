@@ -73,6 +73,7 @@ pub mod dirty_tracking;
 pub mod error;
 pub mod frame_coordinator;
 pub mod frame_scheduler;
+pub mod hit_test_cache;
 pub mod layout_manager;
 pub mod layout_pipeline;
 pub mod metrics;
@@ -84,6 +85,7 @@ pub mod rebuild_queue;
 pub mod recovery;
 pub mod root_manager;
 pub mod triple_buffer;
+
 // frame_coordinator_tests is included in frame_coordinator.rs via #[cfg(test)]
 
 
@@ -95,6 +97,7 @@ pub use crate::element::ElementTree;
 pub use error::{InvalidDuration, InvalidError, PipelineError, PipelinePhase, TimeoutDuration};
 pub use frame_coordinator::FrameCoordinator;
 pub use frame_scheduler::{FrameScheduler, FrameSkipPolicy};
+pub use hit_test_cache::HitTestCache;
 pub use layout_manager::LayoutManager;
 pub use layout_pipeline::LayoutPipeline;
 pub use metrics::PipelineMetrics;
@@ -105,4 +108,5 @@ pub use rebuild_queue::RebuildQueue;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use root_manager::RootManager;
 pub use triple_buffer::TripleBuffer;
+
 

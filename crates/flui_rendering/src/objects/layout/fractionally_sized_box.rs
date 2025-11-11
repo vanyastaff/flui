@@ -171,7 +171,5 @@ mod tests {
         let mut fractional = RenderFractionallySizedBox::both(0.5);
         fractional.set_width_factor(Some(0.75));
         assert_eq!(fractional.width_factor, Some(0.75));
-
-        
     }
 }

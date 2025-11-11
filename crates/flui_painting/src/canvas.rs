@@ -146,6 +146,42 @@ impl Canvas {
         self.transform *= rotation;
     }
 
+    /// Applies a transform to the current coordinate system
+    ///
+    /// This method accepts both `Transform` and `Matrix4` types via the `Into` trait,
+    /// allowing for idiomatic Rust usage with the high-level Transform API.
+    ///
+    /// # Arguments
+    ///
+    /// * `transform` - A Transform or Matrix4 to apply
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_painting::Canvas;
+    /// use flui_types::geometry::Transform;
+    /// use std::f32::consts::PI;
+    ///
+    /// let mut canvas = Canvas::new();
+    ///
+    /// // Using Transform (high-level API)
+    /// canvas.transform(Transform::rotate(PI / 4.0));
+    ///
+    /// // Using Matrix4 (low-level API)
+    /// let matrix = Matrix4::rotation_z(PI / 4.0);
+    /// canvas.transform(matrix);
+    ///
+    /// // Composing transforms
+    /// let composed = Transform::translate(50.0, 50.0)
+    ///     .then(Transform::rotate(PI / 4.0))
+    ///     .then(Transform::scale(2.0));
+    /// canvas.transform(composed);
+    /// ```
+    pub fn transform<T: Into<Matrix4>>(&mut self, transform: T) {
+        let matrix = transform.into();
+        self.transform *= matrix;
+    }
+
     /// Sets the transform matrix directly
     pub fn set_transform(&mut self, transform: Matrix4) {
         self.transform = transform;

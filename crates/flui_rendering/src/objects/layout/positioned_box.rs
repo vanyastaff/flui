@@ -180,7 +180,5 @@ mod tests {
         let mut positioned = RenderPositionedBox::new();
         positioned.set_top(Some(25.0));
         assert_eq!(positioned.top, Some(25.0));
-
-        
     }
 }

@@ -126,7 +126,8 @@ pub struct FluiApp {
     window: Arc<Window>,
 
     /// GPU painter (persistent, created once)
-    painter: flui_engine::painter::WgpuPainter,
+    /// Wrapped in Option to allow temporary ownership transfer without allocation
+    painter: Option<flui_engine::painter::WgpuPainter>,
 
     /// Cleanup callback called on app shutdown
     /// Use this to clean up resources, stop background tasks, etc.
@@ -168,7 +169,7 @@ impl FluiApp {
             queue,
             config,
             window,
-            painter,
+            painter: Some(painter),
             on_cleanup: None,
             event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
         }
@@ -251,7 +252,7 @@ impl FluiApp {
             queue,
             config,
             window,
-            painter,
+            painter: Some(painter),
             on_cleanup: None,
             event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
         }
@@ -383,7 +384,9 @@ impl FluiApp {
             self.surface.configure(&self.device, &self.config);
 
             // Update painter viewport (critical for correct rendering!)
-            self.painter.resize(width, height);
+            if let Some(painter) = &mut self.painter {
+                painter.resize(width, height);
+            }
 
             // Mark size changed for relayout
             self.last_size = None;
@@ -566,25 +569,25 @@ impl FluiApp {
 
         // Use modern rendering path: CanvasLayer::render() with WgpuRenderer
         // This supports all commands including text via the command dispatcher!
-        // Temporarily take ownership of painter, then put it back after rendering
-        let painter = std::mem::replace(
-            &mut self.painter,
-            flui_engine::painter::WgpuPainter::new(
-                self.device.clone(),
-                self.queue.clone(),
-                self.config.format,
-                (self.config.width, self.config.height),
-            ),
-        );
+        // CRITICAL: Reuse existing painter by taking/putting back - ZERO allocations!
+        // Take ownership temporarily (painter field becomes None, no allocation needed)
+        let painter = self.painter.take().expect("Painter should always exist during render");
+
+        // Create renderer with the real painter
         let mut renderer = WgpuRenderer::new(painter);
         layer.render(&mut renderer);
 
-        // Get painter back and render to GPU
-        self.painter = renderer.into_painter();
-        if let Err(e) = self.painter.render(&view, &mut encoder) {
+        // Put painter back and render to GPU
+        let mut painter = renderer.into_painter();
+        if let Err(e) = painter.render(&view, &mut encoder) {
             tracing::error!("Failed to render frame: {:?}", e);
+            // Put painter back even on error
+            self.painter = Some(painter);
             return;
         }
+
+        // Put painter back
+        self.painter = Some(painter);
 
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));

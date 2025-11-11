@@ -171,7 +171,5 @@ mod tests {
         let mut intrinsic = RenderIntrinsicWidth::new();
         intrinsic.set_step_height(Some(4.0));
         assert_eq!(intrinsic.step_height, Some(4.0));
-
-        
     }
 }
