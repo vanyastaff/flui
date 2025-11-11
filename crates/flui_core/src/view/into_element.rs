@@ -66,6 +66,13 @@ pub(crate) mod sealed_into_element {
     impl<R: crate::render::Render> Sealed for (R, Option<Box<dyn crate::view::AnyView>>) {}
     impl<R: crate::render::Render> Sealed for (R, Vec<Box<dyn crate::view::AnyView>>) {}
     impl<R: crate::render::Render> Sealed for (R, Vec<super::AnyElement>) {}
+
+    // Sliver wrappers for explicit element creation
+    impl<S: crate::render::RenderSliver> Sealed for super::SliverWrapper<S, ()> {}
+    impl<S: crate::render::RenderSliver> Sealed for super::SliverWrapper<S, Option<super::AnyElement>> {}
+    impl<S: crate::render::RenderSliver> Sealed for super::SliverWrapper<S, Option<Box<dyn crate::view::AnyView>>> {}
+    impl<S: crate::render::RenderSliver> Sealed for super::SliverWrapper<S, Vec<Box<dyn crate::view::AnyView>>> {}
+    impl<S: crate::render::RenderSliver> Sealed for super::SliverWrapper<S, Vec<super::AnyElement>> {}
 }
 
 /// Universal interface for converting types into Elements.
@@ -473,5 +480,130 @@ impl<R: crate::render::Render> IntoElement for (R, Vec<AnyElement>) {
         };
 
         Element::Render(render_element)
+    }
+}
+
+// ============================================================================
+// Sliver Wrapper for Explicit Element Creation
+// ============================================================================
+
+/// Wrapper for RenderSliver objects to avoid trait overlap with Render
+///
+/// Since Rust doesn't support negative trait bounds, we can't have both
+/// `impl IntoElement for (R: Render, ())` and `impl IntoElement for (S: RenderSliver, ())`
+/// without overlap. This wrapper makes sliver creation explicit.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// impl View for SliverPadding {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         sliver(RenderSliverPadding::new(self.padding), self.sliver)
+///     }
+/// }
+/// ```
+#[derive(Debug)]
+pub struct SliverWrapper<S, C> {
+    /// The render sliver object
+    pub render: S,
+    /// The children (can be (), Option<child>, or Vec<children>)
+    pub children: C,
+}
+
+/// Helper function to create SliverWrapper with ergonomic syntax
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// // Leaf sliver
+/// sliver(RenderSliverToBoxAdapter::new(), ())
+///
+/// // Single child
+/// sliver(RenderSliverPadding::new(padding), Some(child))
+///
+/// // Multiple children
+/// sliver(RenderSliverList::new(), vec![child1, child2])
+/// ```
+pub fn sliver<S, C>(render: S, children: C) -> SliverWrapper<S, C> {
+    SliverWrapper { render, children }
+}
+
+// ============================================================================
+// IntoElement Implementations for SliverWrapper
+// ============================================================================
+
+/// Implementation for SliverWrapper<S, ()> - leaf sliver case
+impl<S: crate::render::RenderSliver> IntoElement for SliverWrapper<S, ()> {
+    fn into_element(self) -> Element {
+        Element::Sliver(crate::element::SliverElement::new(Box::new(self.render)))
+    }
+}
+
+/// Implementation for SliverWrapper<S, Option<AnyElement>> - single-child syntax
+impl<S: crate::render::RenderSliver> IntoElement for SliverWrapper<S, Option<AnyElement>> {
+    fn into_element(self) -> Element {
+        let children: Vec<Element> = self.children.into_iter().map(|c| c.into_element()).collect();
+
+        let sliver_element = if children.is_empty() {
+            crate::element::SliverElement::new(Box::new(self.render))
+        } else {
+            crate::element::SliverElement::new_with_children(Box::new(self.render), children)
+        };
+
+        Element::Sliver(sliver_element)
+    }
+}
+
+/// Implementation for SliverWrapper<S, Option<Box<dyn AnyView>>> - widget child convenience
+impl<S: crate::render::RenderSliver> IntoElement for SliverWrapper<S, Option<Box<dyn crate::view::AnyView>>> {
+    fn into_element(self) -> Element {
+        // Convert Option<Box<dyn AnyView>> to Option<AnyElement>
+        let child_element = self.children.map(AnyElement::new);
+        let children: Vec<Element> = child_element
+            .into_iter()
+            .map(|c| c.into_element())
+            .collect();
+
+        let sliver_element = if children.is_empty() {
+            crate::element::SliverElement::new(Box::new(self.render))
+        } else {
+            crate::element::SliverElement::new_with_children(Box::new(self.render), children)
+        };
+
+        Element::Sliver(sliver_element)
+    }
+}
+
+/// Implementation for SliverWrapper<S, Vec<Box<dyn AnyView>>> - widget children convenience
+impl<S: crate::render::RenderSliver> IntoElement for SliverWrapper<S, Vec<Box<dyn crate::view::AnyView>>> {
+    fn into_element(self) -> Element {
+        // Convert Vec<Box<dyn AnyView>> to Vec<AnyElement>
+        let child_elements: Vec<Element> = self.children
+            .into_iter()
+            .map(|c| AnyElement::new(c).into_element())
+            .collect();
+
+        let sliver_element = if child_elements.is_empty() {
+            crate::element::SliverElement::new(Box::new(self.render))
+        } else {
+            crate::element::SliverElement::new_with_children(Box::new(self.render), child_elements)
+        };
+
+        Element::Sliver(sliver_element)
+    }
+}
+
+/// Implementation for SliverWrapper<S, Vec<AnyElement>> - multi-child syntax
+impl<S: crate::render::RenderSliver> IntoElement for SliverWrapper<S, Vec<AnyElement>> {
+    fn into_element(self) -> Element {
+        let child_elements: Vec<Element> = self.children.into_iter().map(|c| c.into_element()).collect();
+
+        let sliver_element = if child_elements.is_empty() {
+            crate::element::SliverElement::new(Box::new(self.render))
+        } else {
+            crate::element::SliverElement::new_with_children(Box::new(self.render), child_elements)
+        };
+
+        Element::Sliver(sliver_element)
     }
 }

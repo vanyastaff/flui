@@ -4,7 +4,7 @@
 //! Uses SliverGeometry and SliverConstraints instead of Size and BoxConstraints.
 
 use flui_types::constraints::SliverConstraints;
-use flui_types::{Offset, SliverGeometry};
+use flui_types::SliverGeometry;
 use parking_lot::RwLock;
 
 use super::render_flags::{AtomicRenderFlags, RenderFlags};
@@ -47,12 +47,6 @@ pub struct RenderSliverState {
     ///
     /// Used for cache validation and relayout decisions.
     pub constraints: RwLock<Option<SliverConstraints>>,
-
-    /// Offset in viewport's coordinate space
-    ///
-    /// Set during viewport's layout phase.
-    /// This represents the scroll offset for this sliver.
-    pub offset: RwLock<Offset>,
 }
 
 impl RenderSliverState {
@@ -62,7 +56,6 @@ impl RenderSliverState {
             flags: AtomicRenderFlags::empty(),
             geometry: RwLock::new(None),
             constraints: RwLock::new(None),
-            offset: RwLock::new(Offset::ZERO),
         }
     }
 
@@ -72,7 +65,6 @@ impl RenderSliverState {
             flags: AtomicRenderFlags::new(flags),
             geometry: RwLock::new(None),
             constraints: RwLock::new(None),
-            offset: RwLock::new(Offset::ZERO),
         }
     }
 
@@ -208,19 +200,6 @@ impl RenderSliverState {
         *self.constraints.write() = None;
     }
 
-    // ========== Offset ==========
-
-    /// Get offset (scroll position in viewport)
-    #[inline]
-    pub fn offset(&self) -> Offset {
-        *self.offset.read()
-    }
-
-    /// Set offset (scroll position in viewport)
-    pub fn set_offset(&self, offset: Offset) {
-        *self.offset.write() = offset;
-    }
-
     // ========== Lifecycle ==========
 
     /// Check if detached from tree
@@ -246,7 +225,6 @@ impl RenderSliverState {
         self.flags.clear();
         *self.geometry.write() = None;
         *self.constraints.write() = None;
-        *self.offset.write() = Offset::ZERO;
     }
 }
 
@@ -262,7 +240,6 @@ impl Clone for RenderSliverState {
             flags: self.flags.clone(),
             geometry: RwLock::new(*self.geometry.read()),
             constraints: RwLock::new(*self.constraints.read()),
-            offset: RwLock::new(*self.offset.read()),
         }
     }
 }

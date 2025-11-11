@@ -348,8 +348,36 @@ impl SliverElement {
     /// ComponentElements should not be added as children to SliverElements.
     /// The element tree building should ensure that SliverElements only have
     /// SliverElement children (by walking down through ComponentElements).
+    ///
+    /// # Panics
+    ///
+    /// Panics if adding this child would violate arity constraints.
     #[allow(dead_code)]
     pub(crate) fn add_child(&mut self, child_id: ElementId) {
+        // Validate arity before adding
+        let render = self.render_object.read();
+        let arity = render.arity();
+
+        match arity {
+            crate::render::Arity::Exact(n) if self.children.len() >= n => {
+                panic!(
+                    "Cannot add child to {} (arity={}): already have {} children",
+                    render.debug_name(),
+                    n,
+                    self.children.len()
+                );
+            }
+            crate::render::Arity::Exact(0) => {
+                panic!(
+                    "Cannot add child to leaf sliver {} (arity=0)",
+                    render.debug_name()
+                );
+            }
+            _ => {}
+        }
+
+        drop(render);  // Release lock before modifying children
+
         // Add to children list
         self.children.push(child_id);
     }
@@ -407,6 +435,10 @@ impl SliverElement {
     /// The children will be unmounted by ElementTree separately.
     pub fn unmount(&mut self) {
         self.base.unmount();
+
+        // Clear render state to prevent stale cache reuse if element is remounted
+        self.render_state.write().reset();
+
         // Children will be unmounted by ElementTree
         self.children.clear();
     }

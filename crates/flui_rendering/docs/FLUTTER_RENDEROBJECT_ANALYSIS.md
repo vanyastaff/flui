@@ -14,15 +14,15 @@
 
 | Категория | Flutter | FLUI | Процент |
 |-----------|---------|------|---------|
-| **Реализовано в FLUI** | - | 84 | - |
+| **Реализовано в FLUI** | - | 85 | - |
 | **Всего в Flutter** | ~118 | - | - |
 | **Не нужны (архит. различия)** | - | ~4 | - |
-| **Покрытие основных** | - | - | **~71%** |
-| **Покрытие с учетом архитектуры** | - | - | **~74%** |
+| **Покрытие основных** | - | - | **~72%** |
+| **Покрытие с учетом архитектуры** | - | - | **~75%** |
 
 ---
 
-## ✅ Что реализовано в FLUI (84 объекта)
+## ✅ Что реализовано в FLUI (85 объектов)
 
 ### Leaf RenderObjects (9)
 - ✅ RenderParagraph
@@ -39,12 +39,13 @@
 - ✅ RenderView (root render object)
 - ✅ RenderAnimatedSize (simplified version - linear interpolation)
 
-### Single-child RenderObjects (34)
+### Single-child RenderObjects (35)
 - ✅ RenderPadding
 - ✅ RenderConstrainedBox
 - ✅ RenderLimitedBox
 - ✅ RenderAspectRatio
 - ✅ RenderFractionallySizedBox
+- ✅ RenderFractionalTranslation
 - ✅ RenderPositionedBox
 - ✅ RenderIntrinsicWidth
 - ✅ RenderIntrinsicHeight
@@ -133,7 +134,7 @@
    - Priority: HIGH
    - Use case: Text input widgets
 
-3. **RenderFractionalTranslation** - Перемещение на долю размера
+3. ~~**RenderFractionalTranslation**~~ ✅ - Перемещение на долю размера (IMPLEMENTED)
    - Priority: MEDIUM
    - Use case: Subtle animations, offsets
 
@@ -297,7 +298,7 @@
 4. **RenderEditable** - Критично для text input (HIGH PRIORITY - сложный)
 
 ### Tier 2: Высокий приоритет (сильно расширяют возможности)
-5. **RenderFractionalTranslation** - Полезно для layouts
+5. ~~**RenderFractionalTranslation**~~ ✅ - Полезно для layouts (IMPLEMENTED)
 6. **RenderCustomSingleChildLayoutBox** - Flexibility
 7. **RenderFollowerLayer / RenderLeaderLayer** - Tooltips, popovers
 8. **RenderSliverVariedExtentList** - Better list support
@@ -328,10 +329,10 @@
 
 ### Что можно добавить для полноты:
 1. **RenderProxyBox** - базовый wrapper (CRITICAL)
-2. **RenderView** - root object (CRITICAL)
-3. **RenderAnimatedSize** - size animations (HIGH)
+2. ✅ **RenderView** - root object (CRITICAL) - IMPLEMENTED
+3. ✅ **RenderAnimatedSize** - size animations (HIGH) - IMPLEMENTED
 4. **RenderEditable** - text input (HIGH)
-5. **RenderFractionalTranslation** - translation (MEDIUM)
+5. ✅ **RenderFractionalTranslation** - translation (MEDIUM) - IMPLEMENTED
 6. **Leader/Follower** - coordinated positioning (MEDIUM)
 
 ---

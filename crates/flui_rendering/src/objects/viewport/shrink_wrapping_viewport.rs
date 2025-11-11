@@ -124,7 +124,7 @@ impl Render for RenderShrinkWrappingViewport {
     }
 
     fn arity(&self) -> Arity {
-        Arity::AtLeast(0) // Multiple sliver children
+        Arity::Variable // Multiple sliver children
     }
 }
 

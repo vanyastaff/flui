@@ -42,6 +42,7 @@ pub mod element;
 pub mod element_base;
 pub mod element_tree;
 pub mod hit_test;
+pub mod hit_test_entry;
 pub mod lifecycle;
 pub mod provider;
 pub mod render;

@@ -441,7 +441,9 @@ impl ElementTree {
     /// ```
     #[inline]
     pub fn contains(&self, element_id: ElementId) -> bool {
-        self.nodes.contains(element_id.get())
+        // CRITICAL: Apply -1 offset because Slab uses 0-based indexing
+        // but ElementId uses 1-based indexing (NonZeroUsize)
+        self.nodes.contains(element_id.get() - 1)
     }
 
     /// Returns a reference to an element.
@@ -836,6 +838,46 @@ impl ElementTree {
 
     // ========== Helper Methods ==========
 
+    /// Generic helper to walk down through ComponentElements to find an element matching a predicate
+    ///
+    /// This unified helper eliminates code duplication between `find_render_element`
+    /// and `find_sliver_element` by using a predicate function to check element types.
+    ///
+    /// # Arguments
+    /// * `start_id` - Starting element ID (may be Component or target type)
+    /// * `predicate` - Function to check if element matches desired type
+    ///
+    /// # Returns
+    /// * `Some(ElementId)` - ID of the first matching element found
+    /// * `None` - If no matching element found or tree walk failed
+    fn find_element_matching<F>(&self, start_id: ElementId, predicate: F) -> Option<ElementId>
+    where
+        F: Fn(&crate::element::Element) -> bool,
+    {
+        let mut current_id = start_id;
+        loop {
+            if let Some(element) = self.get(current_id) {
+                // Check if this element matches the predicate
+                if predicate(element) {
+                    return Some(current_id);
+                }
+
+                // If it's a ComponentElement, walk down to its child
+                if let crate::element::Element::Component(comp) = element {
+                    if let Some(comp_child_id) = comp.child() {
+                        current_id = comp_child_id;
+                        continue;
+                    }
+                }
+
+                // Not a match and not a Component with child -> dead end
+                return None;
+            } else {
+                return None;
+            }
+        }
+    }
+
     /// Find the first RenderElement by walking down through ComponentElements
     ///
     /// This helper is used by both `layout_child` and `paint_child` to find
@@ -848,28 +890,7 @@ impl ElementTree {
     /// * `Some(ElementId)` - ID of the first RenderElement found
     /// * `None` - If no RenderElement found or tree walk failed
     fn find_render_element(&self, start_id: ElementId) -> Option<ElementId> {
-        let mut current_id = start_id;
-        loop {
-            if let Some(element) = self.get(current_id) {
-                match element {
-                    crate::element::Element::Render(_) => {
-                        return Some(current_id);
-                    }
-                    crate::element::Element::Component(comp) => {
-                        if let Some(comp_child_id) = comp.child() {
-                            current_id = comp_child_id;
-                        } else {
-                            return None;
-                        }
-                    }
-                    _ => {
-                        return None;
-                    }
-                }
-            } else {
-                return None;
-            }
-        }
+        self.find_element_matching(start_id, |e| e.is_render())
     }
 
     /// Walk down through ComponentElements to find the first SliverElement
@@ -884,28 +905,7 @@ impl ElementTree {
     /// * `Some(ElementId)` - ID of the first SliverElement found
     /// * `None` - If no SliverElement found or tree walk failed
     fn find_sliver_element(&self, start_id: ElementId) -> Option<ElementId> {
-        let mut current_id = start_id;
-        loop {
-            if let Some(element) = self.get(current_id) {
-                match element {
-                    crate::element::Element::Sliver(_) => {
-                        return Some(current_id);
-                    }
-                    crate::element::Element::Component(comp) => {
-                        if let Some(comp_child_id) = comp.child() {
-                            current_id = comp_child_id;
-                        } else {
-                            return None;
-                        }
-                    }
-                    _ => {
-                        return None;
-                    }
-                }
-            } else {
-                return None;
-            }
-        }
+        self.find_element_matching(start_id, |e| e.is_sliver())
     }
 
     // ========== Convenience Aliases for Render Traits ==========
@@ -1029,9 +1029,12 @@ impl ElementTree {
                 // Call layout_sliver on the element
                 let geometry = sliver_elem.layout_sliver(self, constraints);
 
-                // Store geometry in render state
-                sliver_elem.render_state().write().set_geometry(geometry);
-                sliver_elem.render_state().write().clear_needs_layout();
+                // Store geometry in render state (combined write guard for efficiency)
+                {
+                    let state = sliver_elem.render_state().write();
+                    state.set_geometry(geometry);
+                    state.clear_needs_layout();
+                }
 
                 geometry
             } else {

@@ -6,7 +6,7 @@
 
 use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
-use flui_types::{Alignment, BoxConstraints, Offset, Size};
+use flui_types::{Alignment, Size};
 use std::time::{Duration, Instant};
 
 /// Alignment for positioning the child during size animation
@@ -232,12 +232,9 @@ impl Render for RenderAnimatedSize {
         // Calculate child offset based on alignment
         let child_offset = if let Some(last_child_size) = self.last_child_size {
             let alignment = self.alignment.to_alignment();
-            let container_rect =
-                flui_types::Rect::from_ltwh(0.0, 0.0, self.current_size.width, self.current_size.height);
-            let child_size_as_size = last_child_size;
 
-            // Calculate aligned position
-            let aligned_offset = alignment.align_size_within_rect(child_size_as_size, container_rect);
+            // Calculate aligned position within the animated container
+            let aligned_offset = alignment.calculate_offset(last_child_size, self.current_size);
             ctx.offset + aligned_offset
         } else {
             ctx.offset

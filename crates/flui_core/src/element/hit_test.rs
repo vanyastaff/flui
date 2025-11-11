@@ -19,7 +19,8 @@
 //! ```
 
 use crate::ElementId;
-use flui_types::Offset;
+use flui_types::{Matrix4, Offset};
+use super::hit_test_entry::{HitTestEntryTrait, BoxHitTestEntry, SliverHitTestEntry};
 
 /// Hit test result entry for an element
 ///
@@ -125,3 +126,117 @@ impl ElementHitTestResult {
         self.entries.iter().rev()
     }
 }
+
+// ========== Generic Hit Test Result ==========
+
+/// Generic hit test result with transform tracking
+///
+/// This provides a unified hit testing system that works for both box-based
+/// rendering (BoxConstraints → Size) and sliver-based rendering
+/// (SliverConstraints → SliverGeometry).
+///
+/// # Type Parameter
+///
+/// - `E`: Hit test entry type implementing `HitTestEntryTrait`
+#[derive(Debug, Clone)]
+pub struct GenericHitTestResult<E: HitTestEntryTrait> {
+    /// Stack of hit entries with element IDs (front to back: deepest child → root)
+    entries: Vec<(ElementId, E)>,
+
+    /// Transform matrices for coordinate conversion
+    ///
+    /// Parallel to entries vector. Used for transforming hit positions
+    /// through the element hierarchy (e.g., for RenderTransform).
+    transforms: Vec<Matrix4>,
+}
+
+impl<E: HitTestEntryTrait> GenericHitTestResult<E> {
+    /// Create a new empty hit test result
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            transforms: Vec::new(),
+        }
+    }
+
+    /// Add entry with element ID
+    pub fn add(&mut self, element_id: ElementId, entry: E) {
+        self.entries.push((element_id, entry));
+    }
+
+    /// Add entry with transform
+    ///
+    /// Use this when the element has a transform (e.g., RenderTransform)
+    /// that needs to be applied for correct coordinate conversion.
+    pub fn add_with_transform(&mut self, element_id: ElementId, entry: E, transform: Matrix4) {
+        self.entries.push((element_id, entry));
+        self.transforms.push(transform);
+    }
+
+    /// Get all entries
+    pub fn entries(&self) -> &[(ElementId, E)] {
+        &self.entries
+    }
+
+    /// Check if any element was hit
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Check if any element was hit (opposite of is_empty)
+    pub fn is_hit(&self) -> bool {
+        !self.entries.is_empty()
+    }
+
+    /// Get the top-most (deepest child) entry
+    pub fn front(&self) -> Option<&(ElementId, E)> {
+        self.entries.first()
+    }
+
+    /// Get the back-most (root or shallowest parent) entry
+    pub fn back(&self) -> Option<&(ElementId, E)> {
+        self.entries.last()
+    }
+
+    /// Get transforms
+    pub fn transforms(&self) -> &[Matrix4] {
+        &self.transforms
+    }
+
+    /// Filter out invalid hits (outside bounds or not visible)
+    ///
+    /// Uses the `is_valid_hit()` method from `HitTestEntryTrait` to
+    /// remove entries that are outside bounds or scrolled off-screen.
+    pub fn filter_valid(&mut self) {
+        self.entries.retain(|(_, entry)| entry.is_valid_hit());
+    }
+
+    /// Clear all entries and transforms
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.transforms.clear();
+    }
+
+    /// Get iterator over entries (front to back)
+    pub fn iter(&self) -> impl Iterator<Item = &(ElementId, E)> {
+        self.entries.iter()
+    }
+
+    /// Get iterator over entries (back to front - root to child)
+    pub fn iter_reverse(&self) -> impl Iterator<Item = &(ElementId, E)> {
+        self.entries.iter().rev()
+    }
+}
+
+impl<E: HitTestEntryTrait> Default for GenericHitTestResult<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Type aliases for convenience
+/// Hit test result for box rendering
+pub type BoxHitTestResult = GenericHitTestResult<BoxHitTestEntry>;
+
+/// Hit test result for sliver rendering
+pub type SliverHitTestResult = GenericHitTestResult<SliverHitTestEntry>;
