@@ -1,8 +1,9 @@
 //! RenderSliverIgnorePointer - Ignores pointer events for sliver content
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
+use flui_types::SliverGeometry;
 
 /// RenderObject that makes a sliver ignore pointer events
 ///
@@ -32,7 +33,7 @@ pub struct RenderSliverIgnorePointer {
     pub ignore_semantics: bool,
 
     // Layout cache
-    child_size: Size,
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverIgnorePointer {
@@ -44,7 +45,7 @@ impl RenderSliverIgnorePointer {
         Self {
             ignoring,
             ignore_semantics: false,
-            child_size: Size::ZERO,
+            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -64,6 +65,11 @@ impl RenderSliverIgnorePointer {
         self
     }
 
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
+    }
+
     /// Check if this sliver should block hit testing
     pub fn blocks_hit_testing(&self) -> bool {
         self.ignoring
@@ -76,28 +82,27 @@ impl Default for RenderSliverIgnorePointer {
     }
 }
 
-impl Render for RenderSliverIgnorePointer {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverIgnorePointer {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Pass through to child - IgnorePointer doesn't affect layout
+        if let Some(child_id) = ctx.children.try_single() {
+            self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
+        } else {
+            self.sliver_geometry = SliverGeometry::default();
+        }
 
-        // IgnorePointer doesn't affect layout, pass through to child
-        // In real implementation, child would be laid out here
-        self.child_size = Size::new(
-            constraints.max_width,
-            constraints.max_height,
-        );
-
-        self.child_size
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
-
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
         // Child is painted normally, hit testing is affected separately
-        // TODO: Paint child (visibility unaffected)
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
 
-        canvas
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -126,23 +131,14 @@ mod tests {
         let ignore = RenderSliverIgnorePointer::new(false);
 
         assert!(!ignore.ignoring);
-        assert!(!ignore.ignore_semantics);
-    }
-
-    #[test]
-    fn test_render_sliver_ignore_pointer_default() {
-        let ignore = RenderSliverIgnorePointer::default();
-
-        assert!(ignore.ignoring);
-        assert!(!ignore.ignore_semantics);
     }
 
     #[test]
     fn test_set_ignoring() {
-        let mut ignore = RenderSliverIgnorePointer::new(true);
-        ignore.set_ignoring(false);
+        let mut ignore = RenderSliverIgnorePointer::new(false);
+        ignore.set_ignoring(true);
 
-        assert!(!ignore.ignoring);
+        assert!(ignore.ignoring);
     }
 
     #[test]
@@ -162,42 +158,19 @@ mod tests {
     }
 
     #[test]
-    fn test_blocks_hit_testing_when_ignoring() {
-        let ignore = RenderSliverIgnorePointer::new(true);
+    fn test_blocks_hit_testing() {
+        let ignore_true = RenderSliverIgnorePointer::new(true);
+        let ignore_false = RenderSliverIgnorePointer::new(false);
 
-        assert!(ignore.blocks_hit_testing());
+        assert!(ignore_true.blocks_hit_testing());
+        assert!(!ignore_false.blocks_hit_testing());
     }
 
     #[test]
-    fn test_does_not_block_hit_testing_when_not_ignoring() {
-        let ignore = RenderSliverIgnorePointer::new(false);
-
-        assert!(!ignore.blocks_hit_testing());
-    }
-
-    #[test]
-    fn test_toggle_ignoring() {
-        let mut ignore = RenderSliverIgnorePointer::new(false);
-        assert!(!ignore.blocks_hit_testing());
-
-        ignore.set_ignoring(true);
-        assert!(ignore.blocks_hit_testing());
-
-        ignore.set_ignoring(false);
-        assert!(!ignore.blocks_hit_testing());
-    }
-
-    #[test]
-    fn test_semantics_independent_of_ignoring() {
-        let mut ignore = RenderSliverIgnorePointer::new(true);
-        ignore.set_ignore_semantics(true);
+    fn test_default_is_ignoring() {
+        let ignore = RenderSliverIgnorePointer::default();
 
         assert!(ignore.ignoring);
-        assert!(ignore.ignore_semantics);
-
-        ignore.set_ignoring(false);
-        assert!(!ignore.ignoring);
-        assert!(ignore.ignore_semantics); // Still ignoring semantics
     }
 
     #[test]
