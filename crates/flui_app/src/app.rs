@@ -338,60 +338,73 @@ impl FluiApp {
     /// Returns `true` if another redraw is needed (e.g., for animations or pending work),
     /// `false` if the frame is stable and no redraw is needed.
     pub fn update(&mut self) -> bool {
+        // Create frame span for hierarchical logging
+        let frame_span = tracing::info_span!("frame", num = self.stats.frame_count);
+        let _frame_guard = frame_span.enter();
+
         let (width, height) = self.renderer.size();
         let size = Size::new(width as f32, height as f32);
 
         // Build phase - create/update element tree
         if !self.root_built {
+            let _build_span = tracing::debug_span!("build_root").entered();
             self.build_root();
             self.root_built = true;
+            tracing::debug!("Root built");
         }
 
         // Check if there are pending rebuilds (from signals, etc.)
         let has_pending_rebuilds = self.pipeline.rebuild_queue().has_pending();
         if has_pending_rebuilds {
-            tracing::debug!("Processing pending rebuilds");
+            let _build_span = tracing::debug_span!("rebuild").entered();
+            tracing::debug!("Processing {} pending rebuilds", self.pipeline.dirty_count());
         }
 
         // Check if size changed
         let size_changed = self.last_size != Some(size);
         if size_changed {
             self.last_size = Some(size);
-            tracing::debug!("Window size changed to {:?}", size);
+            tracing::debug!(?size, "Window size changed");
         }
 
         // Layout phase - always run but pipeline will skip if no dirty elements
         if self.root_id.is_some() {
+            let layout_span = tracing::debug_span!("layout", ?size);
+            let _layout_guard = layout_span.enter();
+
             let constraints = BoxConstraints::tight(size);
             match self.pipeline.flush_layout(constraints) {
-                Ok(Some(_size)) => {
+                Ok(Some(layout_size)) => {
                     self.stats.layout_count += 1;
-                    tracing::debug!("Layout complete for size {:?}", size);
+                    tracing::debug!(?layout_size, "Layout complete");
                 }
                 Ok(None) => {
-                    // No layout happened (no dirty elements or no root)
-                    tracing::debug!("Layout skipped - no changes");
+                    tracing::debug!("No dirty elements");
                 }
                 Err(e) => {
-                    tracing::error!("Layout failed: {:?}", e);
+                    tracing::error!(?e, "Layout failed");
                 }
             }
         }
 
         // Paint phase - only if layout ran or paint is dirty
         if let Some(_root_id) = self.root_id {
+            let paint_span = tracing::debug_span!("paint");
+            let _paint_guard = paint_span.enter();
+
             match self.pipeline.flush_paint() {
                 Ok(Some(root_layer)) => {
                     self.stats.paint_count += 1;
 
                     // Render to surface
                     self.render(root_layer);
+                    tracing::debug!("Paint complete");
                 }
                 Ok(None) => {
-                    tracing::debug!("Paint phase skipped - no dirty elements");
+                    tracing::debug!("No dirty elements");
                 }
                 Err(e) => {
-                    tracing::error!("Paint phase failed: {:?}", e);
+                    tracing::error!(?e, "Paint failed");
                 }
             }
         }
