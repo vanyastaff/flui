@@ -373,59 +373,25 @@ impl FrameCoordinator {
             Some(id) => {
                 // Try direct size from RenderElement
                 if let Some(size_opt) = Self::extract_root_size(&tree_guard, root_id) {
-                    #[cfg(debug_assertions)]
-                    tracing::debug!(
-                        "flush_layout: Root (ID: {:?}) RenderState size: {:?}",
-                        id,
-                        size_opt
-                    );
                     Some(size_opt)
                 } else if let Some(crate::element::Element::Component(comp)) = tree_guard.get(id) {
                     // Root is ComponentElement - use its child's size
-                    #[cfg(debug_assertions)]
-                    tracing::debug!("flush_layout: Root is ComponentElement, using child for size");
-
                     match comp.child() {
                         Some(child_id) => match tree_guard.get(child_id) {
                             Some(crate::element::Element::Render(child_render)) => {
                                 let render_state_lock = child_render.render_state();
                                 let render_state = render_state_lock.read();
-                                let size_opt = render_state.size();
-                                #[cfg(debug_assertions)]
-                                tracing::debug!(
-                                    "flush_layout: ComponentElement child (ID: {:?}) size: {:?}",
-                                    child_id,
-                                    size_opt
-                                );
-                                size_opt
+                                render_state.size()
                             }
-                            _ => {
-                                #[cfg(debug_assertions)]
-                                tracing::warn!(
-                                    "flush_layout: ComponentElement child is not RenderElement"
-                                );
-                                None
-                            }
+                            _ => None,
                         },
-                        None => {
-                            #[cfg(debug_assertions)]
-                            tracing::warn!("flush_layout: ComponentElement has no child");
-                            None
-                        }
+                        None => None,
                     }
                 } else {
-                    #[cfg(debug_assertions)]
-                    tracing::warn!(
-                        "flush_layout: Root element type not supported for size extraction"
-                    );
                     None
                 }
             }
-            None => {
-                #[cfg(debug_assertions)]
-                tracing::warn!("flush_layout: No root_id provided!");
-                None
-            }
+            None => None,
         };
 
         Ok(size)
@@ -453,27 +419,6 @@ impl FrameCoordinator {
             Some(id) => {
                 let element_opt = tree_guard.get(id);
 
-                #[cfg(debug_assertions)]
-                if let Some(elem) = &element_opt {
-                    match elem {
-                        crate::element::Element::Component(_) => {
-                            tracing::debug!(
-                                "flush_paint: Root is ComponentElement - will handle below"
-                            );
-                        }
-                        crate::element::Element::Provider(_) => {
-                            tracing::warn!("flush_paint: Root is ProviderElement - returning empty ContainerLayer");
-                        }
-                        crate::element::Element::Render(_) => {
-                            tracing::debug!(
-                                "flush_paint: Root is RenderElement - will paint normally"
-                            );
-                        }
-                    }
-                } else {
-                    tracing::error!("flush_paint: Root element not found in tree!");
-                }
-
                 match element_opt {
                     Some(crate::element::Element::Render(render_elem)) => {
                         let render_state_lock = render_elem.render_state();
@@ -487,36 +432,21 @@ impl FrameCoordinator {
                     }
                     Some(crate::element::Element::Component(comp)) => {
                         // Root is ComponentElement - paint its child
-                        #[cfg(debug_assertions)]
-                        tracing::debug!("flush_paint: Root is ComponentElement, painting child");
-
                         match comp.child() {
-                            Some(child_id) => {
-                                match tree_guard.get(child_id) {
-                                    Some(crate::element::Element::Render(child_render)) => {
-                                        let render_state_lock = child_render.render_state();
-                                        let render_state = render_state_lock.read();
-                                        let offset = render_state.offset();
-                                        drop(render_state);
+                            Some(child_id) => match tree_guard.get(child_id) {
+                                Some(crate::element::Element::Render(child_render)) => {
+                                    let render_state_lock = child_render.render_state();
+                                    let render_state = render_state_lock.read();
+                                    let offset = render_state.offset();
+                                    drop(render_state);
 
-                                        // Convert Canvas → CanvasLayer
-                                        let canvas = child_render.paint_render(&tree_guard, offset);
-                                        Some(Box::new(flui_engine::CanvasLayer::from_canvas(
-                                            canvas,
-                                        )))
-                                    }
-                                    _ => {
-                                        #[cfg(debug_assertions)]
-                                        tracing::warn!("flush_paint: ComponentElement child is not RenderElement");
-                                        Some(Box::new(flui_engine::CanvasLayer::new()))
-                                    }
+                                    // Convert Canvas → CanvasLayer
+                                    let canvas = child_render.paint_render(&tree_guard, offset);
+                                    Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
                                 }
-                            }
-                            None => {
-                                #[cfg(debug_assertions)]
-                                tracing::warn!("flush_paint: ComponentElement has no child");
-                                Some(Box::new(flui_engine::CanvasLayer::new()))
-                            }
+                                _ => Some(Box::new(flui_engine::CanvasLayer::new())),
+                            },
+                            None => Some(Box::new(flui_engine::CanvasLayer::new())),
                         }
                     }
                     _ => {

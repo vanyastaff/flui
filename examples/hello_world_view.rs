@@ -47,11 +47,5 @@ impl View for HelloWorldContent {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Note: run_app() initializes tracing internally
-    println!("=== Flui Hello World - NEW View Architecture ===");
-    println!("✅ flui_app - Migrated to View API");
-    println!("✅ flui_widgets - Migrated to View API");
-    println!();
-
     run_app(Box::new(HelloWorldApp))
 }

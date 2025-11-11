@@ -338,72 +338,42 @@ impl FluiApp {
     /// Returns `true` if another redraw is needed (e.g., for animations or pending work),
     /// `false` if the frame is stable and no redraw is needed.
     pub fn update(&mut self) -> bool {
-        // Create frame span - tracing-forest will automatically track timing
-        let frame_span = tracing::info_span!(
-            "frame",
-            num = self.stats.frame_count,
-        );
-        let _frame_guard = frame_span.enter();
-
         let (width, height) = self.renderer.size();
         let size = Size::new(width as f32, height as f32);
 
-        // Build phase - create/update element tree
+        // Initial build - create root element
         if !self.root_built {
-            let _build_span = tracing::debug_span!("build_root").entered();
             self.build_root();
             self.root_built = true;
-            tracing::debug!("Root built");
         }
 
-        // Check if there are pending rebuilds (from signals, etc.)
-        let has_pending_rebuilds = self.pipeline.rebuild_queue().has_pending();
-        if has_pending_rebuilds {
-            let dirty_count = self.pipeline.dirty_count();
-            let _build_span = tracing::debug_span!("rebuild", dirty = dirty_count).entered();
-            tracing::debug!("Processing");
-        }
-
-        // Check if size changed
+        // Check if size changed and request layout
         let size_changed = self.last_size != Some(size);
         if size_changed {
             self.last_size = Some(size);
-            tracing::debug!(w = size.width, h = size.height, "Window resized");
-        }
-
-        // Layout phase - always run but pipeline will skip if no dirty elements
-        if self.root_id.is_some() {
-            let constraints = BoxConstraints::tight(size);
-            match self.pipeline.flush_layout(constraints) {
-                Ok(Some(layout_size)) => {
-                    self.stats.layout_count += 1;
-                    tracing::debug!(w = layout_size.width, h = layout_size.height, "Layout complete");
-                }
-                Ok(None) => {
-                    tracing::trace!("Layout skipped");
-                }
-                Err(e) => {
-                    tracing::error!(?e, "Layout failed");
-                }
+            if let Some(root_id) = self.root_id {
+                self.pipeline.request_layout(root_id);
             }
         }
 
-        // Paint phase - only if layout ran or paint is dirty
-        if let Some(_root_id) = self.root_id {
-            match self.pipeline.flush_paint() {
-                Ok(Some(root_layer)) => {
-                    self.stats.paint_count += 1;
+        // Build complete frame using FrameCoordinator
+        // This creates proper build→layout→paint hierarchy with automatic timing
+        let constraints = BoxConstraints::tight(size);
+        match self.pipeline.build_frame(constraints) {
+            Ok(Some(layer)) => {
+                // Update statistics
+                self.stats.rebuild_count += 1;
+                self.stats.layout_count += 1;
+                self.stats.paint_count += 1;
 
-                    // Render to surface
-                    self.render(root_layer);
-                    tracing::debug!("Paint complete");
-                }
-                Ok(None) => {
-                    tracing::trace!("Paint skipped");
-                }
-                Err(e) => {
-                    tracing::error!(?e, "Paint failed");
-                }
+                // Render to surface
+                self.render(layer);
+            }
+            Ok(None) => {
+                // No frame generated (no root element)
+            }
+            Err(e) => {
+                tracing::error!(?e, "Frame build failed");
             }
         }
 
@@ -411,16 +381,10 @@ impl FluiApp {
         self.stats.log();
 
         // Only request redraw if there's more work to do
-        // Check if there are still pending rebuilds or dirty elements
         let has_more_work = self.pipeline.rebuild_queue().has_pending()
             || self.pipeline.has_dirty_layout()
             || self.pipeline.has_dirty_paint();
 
-        // Return false to prevent continuous redraw loop
-        // The window will request redraw when:
-        // 1. User resizes (resize event triggers request_redraw)
-        // 2. State changes via signals (signals trigger request_redraw)
-        // 3. Animations (when implemented)
         has_more_work
     }
 
