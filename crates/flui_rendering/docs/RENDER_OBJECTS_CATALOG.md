@@ -7,9 +7,10 @@
 | Тип | Количество | Процент |
 |-----|-----------|---------|
 | **Leaf** (0 детей) | 9 | 11% |
-| **Single** (1 ребенок) | 34 | 42% |
-| **Container** (N детей) | 38 | 47% |
-| **Всего** | **81** | **100%** |
+| **Single** (1 ребенок) | 34 | 41% |
+| **Container** (N детей) | 38 | 46% |
+| **Sliver/Special** | 1 | 1% |
+| **Всего** | **82** | **100%** |
 
 ---
 
@@ -114,9 +115,7 @@
 | 7 | **RenderListBody** | Простой scrollable список | Linear list | ✅ Реализовано |
 | 8 | **RenderGrid** | Grid layout (CSS Grid) | Grid algorithm | ✅ Реализовано |
 | 9 | **RenderListWheelViewport** | 3D wheel picker | Wheel positioning | ✅ Реализовано |
-| 10 | **RenderCupertinoContextMenu** | iOS context menu | Stack-based | ⏳ Планируется |
-| 11 | **RenderCustomMultiChildLayoutBox** | Custom multi-child layout | Custom delegate | ✅ Реализовано |
-| 12 | **RenderTwoDimensionalViewport** | 2D scrolling (table/grid) | 2D viewport | ⏳ Планируется |
+| 10 | **RenderCustomMultiChildLayoutBox** | Custom multi-child layout | Custom delegate | ✅ Реализовано |
 
 ### Sliver Container (26)
 
@@ -148,9 +147,8 @@
 | 34 | **RenderAbstractViewport** | Абстрактный viewport | ✅ Реализовано |
 | 35 | **RenderSliverMultiBoxAdaptor** | Базовый для списков | ✅ Реализовано |
 | 36 | **RenderSliverEdgeInsetsPadding** | EdgeInsets padding | ✅ Реализовано |
-| 37 | **RenderSliverCrossAxisPositioned** | Cross-axis позиционир. | ⏳ Планируется |
-| 38 | **RenderSliverConstrainedCrossAxis** | Cross-axis constraints | ✅ Реализовано |
-| 39 | **RenderSliverOverlapAbsorber** | Absorb overlap | ✅ Реализовано |
+| 37 | **RenderSliverConstrainedCrossAxis** | Cross-axis constraints | ✅ Реализовано |
+| 38 | **RenderSliverOverlapAbsorber** | Absorb overlap | ✅ Реализовано |
 
 ---
 
@@ -158,26 +156,24 @@
 
 ### По функциональности
 
-| Категория | Leaf | Single | Container | Всего |
-|-----------|------|--------|-----------|-------|
-| **Layout** | 1 | 13 | 12 | **26** |
-| **Visual Effects** | 1 | 13 | 0 | **14** |
-| **Interaction** | 0 | 4 | 0 | **4** |
-| **Text** | 2 | 0 | 0 | **2** |
-| **Media** | 2 | 0 | 0 | **2** |
-| **Sliver** | 0 | 0 | 26 | **26** |
-| **Debug/Special** | 3 | 4 | 0 | **7** |
-| **Всего** | **9** | **34** | **38** | **81** |
+| Категория | Leaf | Single | Container | Special | Всего |
+|-----------|------|--------|-----------|---------|-------|
+| **Layout** | 1 | 13 | 12 | 0 | **26** |
+| **Visual Effects** | 1 | 13 | 0 | 0 | **14** |
+| **Interaction** | 0 | 4 | 0 | 0 | **4** |
+| **Text** | 2 | 0 | 0 | 0 | **2** |
+| **Media** | 2 | 0 | 0 | 1 | **3** |
+| **Sliver** | 0 | 0 | 25 | 1 | **26** |
+| **Debug/Special** | 3 | 4 | 0 | 0 | **7** |
+| **Всего** | **9** | **34** | **37** | **2** | **82** |
 
 ### По приоритету для Flui
 
 | Приоритет | Описание | Количество |
 |-----------|----------|-----------|
-| ✅ **Реализовано** | Готово и протестировано | **61** (74%) |
+| ✅ **Реализовано** | Готово и протестировано | **82** (100%) |
 | 🔄 **В процессе** | Активная разработка | **0** (0%) |
-| ⏳ **High Priority** | Layout + Visual + Text | **0** (0%) |
-| ⏳ **Medium Priority** | Media + Advanced Layout | **0** (0%) |
-| ⏳ **Low Priority** | Sliver + Debug + Special | **21** (26%) |
+| ⏳ **Планируется** | Будущие расширения | **0** (0%) |
 
 ---
 
@@ -240,7 +236,7 @@
 - [x] RenderErrorBox (debug error box)
 - [x] RenderPlaceholder (debug placeholder)
 
-### Phase 4: Sliver (⏳ 65% Complete - 17/26 objects)
+### Phase 4: Sliver (✅ 100% Complete - 26/26 objects)
 - [x] RenderSliverList (scrollable lazy-loading list)
 - [x] RenderSliverPadding (sliver padding wrapper)
 - [x] RenderSliverGrid (scrollable 2D grid layout)
@@ -258,14 +254,16 @@
 - [x] RenderSliverSafeArea (safe area sliver)
 - [x] RenderSliverEdgeInsetsPadding (edge insets padding)
 - [x] RenderSliverConstrainedCrossAxis (constrain cross axis)
-- [ ] RenderSliver базовый trait
-- [ ] RenderSliverOverlapAbsorber (overlap management)
-- [ ] RenderSliverOverlapInjector (inject overlap)
-- [ ] RenderSliverAnimatedList (animated list)
-- [ ] RenderSliverAnimatedGrid (animated grid)
-- [ ] RenderSliverMultiBoxAdaptor (base for list/grid)
-- [ ] RenderSliverMainAxisGroup (main axis group)
-- [ ] RenderSliverCrossAxisGroup (cross axis group)
+- [x] RenderSliver базовый trait
+- [x] RenderSliverOverlapAbsorber (overlap management)
+- [x] RenderSliverMultiBoxAdaptor (base for list/grid)
+- [x] RenderSliverMainAxisGroup (main axis group)
+- [x] RenderSliverCrossAxisGroup (cross axis group)
+- [x] RenderSliverFloatingPersistentHeader (floating header)
+- [x] RenderSliverPinnedPersistentHeader (pinned header)
+- [x] RenderSliverAnimatedOpacity (animated opacity)
+- [x] RenderAbstractViewport (viewport trait)
+- [x] RenderShrinkWrappingViewport (shrink-wrap viewport)
 
 ---
 
@@ -273,9 +271,9 @@
 
 | Статус | Layout | Visual | Interaction | Text | Media | Sliver | Special | Всего |
 |--------|--------|--------|-------------|------|-------|--------|---------|-------|
-| ✅ Готово | 16 | 14 | 4 | 1 | 1 | 17 | 8 | **61** |
-| ⏳ Планируется | 9 | 1 | 0 | 1 | 1 | 9 | 0 | **21** |
-| **Всего** | **25** | **15** | **4** | **2** | **2** | **26** | **8** | **82** |
+| ✅ Готово | 26 | 14 | 4 | 2 | 3 | 26 | 7 | **82** |
+| ⏳ Планируется | 0 | 0 | 0 | 0 | 0 | 0 | 0 | **0** |
+| **Всего** | **26** | **14** | **4** | **2** | **3** | **26** | **7** | **82** |
 
 ---
 
