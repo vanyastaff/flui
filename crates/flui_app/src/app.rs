@@ -10,7 +10,7 @@ use flui_core::Size;
 use flui_engine::layer::CanvasLayer;
 use flui_engine::renderer::WgpuRenderer;
 use flui_engine::WindowStateTracker;
-use flui_types::BoxConstraints;
+use flui_types::{BoxConstraints, Offset};
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -25,6 +25,18 @@ pub(crate) struct FrameStats {
     pub layout_count: u64,
     /// Number of frames where paint happened
     pub paint_count: u64,
+}
+
+/// Event coalescing buffer for high-frequency events
+///
+/// Reduces CPU overhead by batching consecutive Move events.
+/// Only the last Move event per frame is processed.
+#[derive(Debug, Default)]
+struct EventCoalescer {
+    /// Last coalesced mouse move position (if any this frame)
+    last_mouse_move: Option<Offset>,
+    /// Number of events coalesced
+    coalesced_count: u64,
 }
 
 impl FrameStats {
@@ -92,6 +104,9 @@ pub struct FluiApp {
     /// Window state tracker for focus and visibility
     window_state: WindowStateTracker,
 
+    /// Event coalescing buffer (batches high-frequency mouse moves)
+    event_coalescer: EventCoalescer,
+
     /// wgpu instance
     instance: wgpu::Instance,
 
@@ -146,6 +161,7 @@ impl FluiApp {
             last_size: None,
             root_built: false,
             window_state: WindowStateTracker::new(),
+            event_coalescer: EventCoalescer::default(),
             instance,
             surface,
             device,
@@ -228,6 +244,7 @@ impl FluiApp {
             last_size: None,
             root_built: false,
             window_state: WindowStateTracker::new(),
+            event_coalescer: EventCoalescer::default(),
             instance,
             surface,
             device,
@@ -388,27 +405,24 @@ impl FluiApp {
     /// `false` if the frame is stable and no redraw is needed.
     pub fn update(&mut self) -> bool {
         let size = Size::new(self.config.width as f32, self.config.height as f32);
-        let mut needs_redraw = false;
 
         // Build phase - create/update element tree
         if !self.root_built {
             self.build_root();
             self.root_built = true;
-            needs_redraw = true; // Initial build always needs redraw
         }
 
         // Check if there are pending rebuilds (from signals, etc.)
         let has_pending_rebuilds = self.pipeline.rebuild_queue().has_pending();
         if has_pending_rebuilds {
             tracing::debug!("Processing pending rebuilds");
-            needs_redraw = true;
         }
 
         // Check if size changed
         let size_changed = self.last_size.map_or(true, |last| last != size);
         if size_changed {
             self.last_size = Some(size);
-            needs_redraw = true;
+            tracing::debug!("Window size changed to {:?}", size);
         }
 
         // Layout phase - always run but pipeline will skip if no dirty elements
@@ -418,7 +432,6 @@ impl FluiApp {
                 Ok(Some(_size)) => {
                     self.stats.layout_count += 1;
                     tracing::debug!("Layout complete for size {:?}", size);
-                    needs_redraw = true;
                 }
                 Ok(None) => {
                     // No layout happened (no dirty elements or no root)
@@ -438,7 +451,6 @@ impl FluiApp {
 
                     // Render to surface
                     self.render(root_layer);
-                    needs_redraw = false; // Frame rendered, no immediate redraw needed
                 }
                 Ok(None) => {
                     tracing::debug!("Paint phase skipped - no dirty elements");
@@ -452,7 +464,18 @@ impl FluiApp {
         self.stats.frame_count += 1;
         self.stats.log();
 
-        needs_redraw
+        // Only request redraw if there's more work to do
+        // Check if there are still pending rebuilds or dirty elements
+        let has_more_work = self.pipeline.rebuild_queue().has_pending()
+            || self.pipeline.has_dirty_layout()
+            || self.pipeline.has_dirty_paint();
+
+        // Return false to prevent continuous redraw loop
+        // The window will request redraw when:
+        // 1. User resizes (resize event triggers request_redraw)
+        // 2. State changes via signals (signals trigger request_redraw)
+        // 3. Animations (when implemented)
+        has_more_work
     }
 
     /// Build the root view
