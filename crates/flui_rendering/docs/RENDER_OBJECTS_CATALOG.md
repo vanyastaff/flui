@@ -136,7 +136,7 @@
 | 22 | **RenderSliverAppBar** | Floating/pinned app bar | ✅ Реализовано |
 | 23 | **RenderSliverPersistentHeader** | Sticky header | ✅ Реализовано |
 | 24 | **RenderSliverFloatingPersistentHeader** | Floating header | ✅ Реализовано |
-| 25 | **RenderSliverPinnedPersistentHeader** | Pinned header | ⏳ Планируется |
+| 25 | **RenderSliverPinnedPersistentHeader** | Pinned header | ✅ Реализовано |
 | 26 | **RenderSliverAnimatedOpacity** | Анимир. прозрачность | ✅ Реализовано |
 | 27 | **RenderSliverIgnorePointer** | Ignore pointer | ✅ Реализовано |
 | 28 | **RenderSliverOffstage** | Скрывает sliver | ✅ Реализовано |
@@ -147,9 +147,9 @@
 | 33 | **RenderShrinkWrappingViewport** | Shrink-wrap viewport | ⏳ Планируется |
 | 34 | **RenderAbstractViewport** | Абстрактный viewport | ⏳ Планируется |
 | 35 | **RenderSliverMultiBoxAdaptor** | Базовый для списков | ⏳ Планируется |
-| 36 | **RenderSliverEdgeInsetsPadding** | EdgeInsets padding | ⏳ Планируется |
+| 36 | **RenderSliverEdgeInsetsPadding** | EdgeInsets padding | ✅ Реализовано |
 | 37 | **RenderSliverCrossAxisPositioned** | Cross-axis позиционир. | ⏳ Планируется |
-| 38 | **RenderSliverConstrainedCrossAxis** | Cross-axis constraints | ⏳ Планируется |
+| 38 | **RenderSliverConstrainedCrossAxis** | Cross-axis constraints | ✅ Реализовано |
 | 39 | **RenderSliverOverlapAbsorber** | Absorb overlap | ⏳ Планируется |
 
 ---
@@ -318,8 +318,8 @@ Leaf RenderObject'ы могут быть оптимизированы:
 ## 📈 Прогресс реализации
 
 **Всего типов:** 82 RenderObject
-**Реализовано:** 72 (87.8%)
-**В планах:** 10 (12.2%)
+**Реализовано:** 75 (91.5%)
+**В планах:** 7 (8.5%)
 
 ### Последние реализации (текущая сессия)
 
@@ -327,6 +327,7 @@ Leaf RenderObject'ы могут быть оптимизированы:
 2. **RenderCustomMultiChildLayoutBox** - Кастомный layout с delegate pattern
 3. **RenderSliverFloatingPersistentHeader** - Floating header для slivers
 4. **RenderSliverAnimatedOpacity** - Анимированная прозрачность для slivers
+5. **RenderSliverPinnedPersistentHeader** - Pinned header для slivers
 
 ---
 
