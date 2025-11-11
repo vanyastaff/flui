@@ -19,15 +19,15 @@
 
 | # | RenderObject | Категория | Описание | Статус Flui |
 |---|--------------|-----------|----------|-------------|
-| 1 | **RenderParagraph** | Text | Многострочный текст | ⏳ Планируется |
+| 1 | **RenderParagraph** | Text | Многострочный текст | ✅ Реализовано |
 | 2 | **RenderEditableLine** | Text | Редактируемая строка текста | ⏳ Планируется |
 | 3 | **RenderImage** | Media | Растровое изображение | ⏳ Планируется |
 | 4 | **RenderTexture** | Media | GPU текстура | ⏳ Планируется |
 | 5 | **RenderErrorBox** | Debug | Красный бокс с ошибкой | ⏳ Планируется |
 | 6 | **RenderPlaceholder** | Debug | Placeholder прямоугольник | ⏳ Планируется |
 | 7 | **RenderPerformanceOverlay** | Debug | Performance метрики | ❌ Низкий приоритет |
-| 8 | **RenderFittedBox** | Layout | Масштабирует child по BoxFit | 🔄 Single? |
-| 9 | **RenderColoredBox** | Visual | Простой цветной прямоугольник | ⏳ Планируется |
+| 8 | **RenderFittedBox** | Special | Масштабирует child по BoxFit | ✅ Реализовано |
+| 9 | **RenderColoredBox** | Visual | Простой цветной прямоугольник | ✅ Реализовано |
 
 **Примечание:** RenderFittedBox технически может быть Single-child, но часто используется как Leaf с одним виртуальным ребенком.
 
@@ -47,32 +47,33 @@
 | 4 | **RenderAspectRatio** | Фиксированное соотношение сторон | perform_layout | ✅ Реализовано |
 | 5 | **RenderFractionallySizedBox** | Размер как доля родителя | perform_layout | ✅ Реализовано |
 | 6 | **RenderPositionedBox** | Align/Center внутри родителя | perform_layout | ✅ Реализовано |
-| 7 | **RenderIntrinsicWidth** | Ширина = intrinsic width | perform_layout | ⏳ Планируется |
-| 8 | **RenderIntrinsicHeight** | Высота = intrinsic height | perform_layout | ⏳ Планируется |
-| 9 | **RenderBaseline** | Выравнивание по baseline | perform_layout | ⏳ Планируется |
+| 7 | **RenderIntrinsicWidth** | Ширина = intrinsic width | perform_layout | ✅ Реализовано |
+| 8 | **RenderIntrinsicHeight** | Высота = intrinsic height | perform_layout | ✅ Реализовано |
+| 9 | **RenderBaseline** | Выравнивание по baseline | perform_layout | ✅ Реализовано |
 | 10 | **RenderShiftedBox** | Базовый класс для shift | perform_layout | ⏳ Планируется |
-| 11 | **RenderRotatedBox** | Поворот на 90°/180°/270° | perform_layout | ⏳ Планируется |
-| 12 | **RenderSizedBox** | Фиксированный размер | perform_layout | ⏳ Планируется |
-| 13 | **RenderSizedOverflowBox** | Размер != child размер | perform_layout | ⏳ Планируется |
+| 11 | **RenderRotatedBox** | Поворот на 90°/180°/270° | perform_layout | ✅ Реализовано |
+| 12 | **RenderSizedBox** | Фиксированный размер | perform_layout | ✅ Реализовано |
+| 13 | **RenderSizedOverflowBox** | Размер != child размер | perform_layout | ✅ Реализовано |
 
 ### Visual Effects Single-child (13)
 
 | # | RenderObject | Описание | Override | Статус Flui |
 |---|--------------|----------|----------|-------------|
 | 14 | **RenderOpacity** | Прозрачность (0.0-1.0) | paint_with_child | ✅ Реализовано |
-| 15 | **RenderAnimatedOpacity** | Анимированная прозрачность | paint_with_child | ⏳ Планируется |
+| 15 | **RenderAnimatedOpacity** | Анимированная прозрачность | paint_with_child | ✅ Реализовано |
 | 16 | **RenderTransform** | Матричные трансформации | paint_with_child | ✅ Реализовано |
 | 17 | **RenderClipRect** | Обрезка прямоугольником | paint_with_child | ✅ Реализовано |
 | 18 | **RenderClipRRect** | Обрезка скругл. прямоуг. | paint_with_child | ✅ Реализовано |
-| 19 | **RenderClipOval** | Обрезка овалом | paint_with_child | ⏳ Планируется |
-| 20 | **RenderClipPath** | Обрезка произвольным путем | paint_with_child | ⏳ Планируется |
+| 19 | **RenderClipOval** | Обрезка овалом | paint_with_child | ✅ Реализовано |
+| 20 | **RenderClipPath** | Обрезка произвольным путем | paint_with_child | ✅ Реализовано |
 | 21 | **RenderDecoratedBox** | Background/Border/Shadow | paint_with_child | ✅ Реализовано |
-| 22 | **RenderPhysicalModel** | Material elevation/shadow | paint_with_child | ⏳ Планируется |
+| 22 | **RenderPhysicalModel** | Material elevation/shadow | paint_with_child | ✅ Реализовано |
 | 23 | **RenderPhysicalShape** | Custom shape elevation | paint_with_child | ⏳ Планируется |
-| 24 | **RenderBackdropFilter** | Blur фон за виджетом | paint_with_child | ⏳ Планируется |
-| 25 | **RenderShaderMask** | Shader маска | paint_with_child | ⏳ Планируется |
-| 26 | **RenderRepaintBoundary** | Отдельный paint layer | paint_with_child | ⏳ Планируется |
+| 24 | **RenderBackdropFilter** | Blur фон за виджетом | paint_with_child | ✅ Реализовано |
+| 25 | **RenderShaderMask** | Shader маска | paint_with_child | ✅ Реализовано |
+| 26 | **RenderRepaintBoundary** | Отдельный paint layer | paint_with_child | ✅ Реализовано |
 | 27 | **RenderOffstage** | Скрывает child (не рисует) | paint_with_child | ✅ Реализовано |
+| 28 | **RenderVisibility** | Показывает/скрывает child | paint_with_child | ✅ Реализовано |
 
 ### Interaction Single-child (4)
 
@@ -87,9 +88,12 @@
 
 | # | RenderObject | Описание | Override | Статус Flui |
 |---|--------------|----------|----------|-------------|
-| 32 | **RenderCustomPaint** | Кастомная отрисовка | paint | ⏳ Планируется |
-| 33 | **RenderMetaData** | Метаданные для родителя | - | ⏳ Планируется |
-| 34 | **RenderAnnotatedRegion** | Metadata для system UI | - | ⏳ Планируется |
+| 32 | **RenderCustomPaint** | Кастомная отрисовка | paint | ✅ Реализовано |
+| 33 | **RenderMetaData** | Метаданные для родителя | - | ✅ Реализовано |
+| 34 | **RenderAnnotatedRegion** | Metadata для system UI | - | ✅ Реализовано |
+| 35 | **RenderBlockSemantics** | Блокирует семантику | - | ✅ Реализовано |
+| 36 | **RenderExcludeSemantics** | Исключает семантику | - | ✅ Реализовано |
+| 37 | **RenderMergeSemantics** | Объединяет семантику | - | ✅ Реализовано |
 
 ---
 
@@ -104,10 +108,10 @@
 | 1 | **RenderFlex** | Row/Column (linear + flex) | Linear flex layout | ✅ Реализовано |
 | 2 | **RenderStack** | Positioned слои | Absolute positioning | ✅ Реализовано |
 | 3 | **RenderIndexedStack** | Показывает child по index | Index selection | ✅ Реализовано |
-| 4 | **RenderWrap** | Wrap с переносом строк | Flow with wrapping | ⏳ Планируется |
+| 4 | **RenderWrap** | Wrap с переносом строк | Flow with wrapping | ✅ Реализовано |
 | 5 | **RenderFlow** | Custom layout delegate | Custom delegate | ⏳ Планируется |
 | 6 | **RenderTable** | Табличный layout | Table algorithm | ⏳ Планируется |
-| 7 | **RenderListBody** | Простой scrollable список | Linear list | ⏳ Планируется |
+| 7 | **RenderListBody** | Простой scrollable список | Linear list | ✅ Реализовано |
 | 8 | **RenderGrid** | Grid layout (CSS Grid) | Grid algorithm | ⏳ Планируется |
 | 9 | **RenderListWheelViewport** | 3D wheel picker | Wheel positioning | ⏳ Планируется |
 | 10 | **RenderCupertinoContextMenu** | iOS context menu | Stack-based | ⏳ Планируется |
@@ -168,22 +172,22 @@
 
 | Приоритет | Описание | Количество |
 |-----------|----------|-----------|
-| ✅ **Реализовано** | Готово и протестировано | **19** (23%) |
+| ✅ **Реализовано** | Готово и протестировано | **43** (53%) |
 | 🔄 **В процессе** | Активная разработка | **0** (0%) |
-| ⏳ **High Priority** | Layout + Visual + Text | **15** (19%) |
-| ⏳ **Medium Priority** | Media + Advanced Layout | **10** (12%) |
-| ⏳ **Low Priority** | Sliver + Debug + Special | **37** (46%) |
+| ⏳ **High Priority** | Layout + Visual + Text | **2** (2%) |
+| ⏳ **Medium Priority** | Media + Advanced Layout | **5** (6%) |
+| ⏳ **Low Priority** | Sliver + Debug + Special | **31** (39%) |
 
 ---
 
 
 ## 🚀 Roadmap для Flui
 
-### Phase 1: Core (✅ 90% Complete)
+### Phase 1: Core (✅ 100% Complete)
 - [x] RenderPadding
 - [x] RenderOpacity
 - [x] RenderTransform
-- [x] RenderClipRect/RRect
+- [x] RenderClipRect/RRect/Oval/Path
 - [x] RenderDecoratedBox
 - [x] RenderConstrainedBox
 - [x] RenderAspectRatio
@@ -198,25 +202,42 @@
 - [x] RenderIgnorePointer
 - [x] RenderAbsorbPointer
 - [x] RenderMouseRegion
-- [ ] RenderParagraph (в процессе)
+- [x] RenderParagraph
+- [x] RenderBaseline
+- [x] RenderIntrinsicWidth/Height
+- [x] RenderRotatedBox
+- [x] RenderSizedBox
+- [x] RenderSizedOverflowBox
+- [x] RenderAnimatedOpacity
+- [x] RenderPhysicalModel
+- [x] RenderBackdropFilter
+- [x] RenderShaderMask
+- [x] RenderRepaintBoundary
+- [x] RenderVisibility
+- [x] RenderWrap
+- [x] RenderListBody
+- [x] RenderCustomPaint
+- [x] RenderMetaData
+- [x] RenderAnnotatedRegion
+- [x] RenderFittedBox
+- [x] RenderColoredBox
+- [x] RenderBlockSemantics
+- [x] RenderExcludeSemantics
+- [x] RenderMergeSemantics
 
 ### Phase 2: Essential (⏳ Next)
 - [ ] RenderImage
-- [ ] RenderColoredBox
-- [ ] RenderSizedBox
-- [ ] RenderRotatedBox
-- [ ] RenderWrap
-- [ ] RenderIntrinsicWidth/Height
-- [ ] RenderClipOval/Path
-- [ ] RenderPhysicalModel
-- [ ] RenderCustomPaint
+- [ ] RenderPhysicalShape (custom shape elevation)
+- [ ] RenderShiftedBox (base class for shift operations)
 
 ### Phase 3: Advanced (⏳ Future)
 - [ ] RenderTable
 - [ ] RenderGrid
 - [ ] RenderFlow
-- [ ] RenderRepaintBoundary
-- [ ] RenderBackdropFilter
+- [ ] RenderEditableLine (editable text)
+- [ ] RenderTexture (GPU texture)
+- [ ] RenderErrorBox (debug error box)
+- [ ] RenderPlaceholder (debug placeholder)
 
 ### Phase 4: Sliver (⏳ Future)
 - [ ] RenderSliver базовый trait
@@ -231,9 +252,9 @@
 
 | Статус | Layout | Visual | Interaction | Text | Media | Sliver | Special | Всего |
 |--------|--------|--------|-------------|------|-------|--------|---------|-------|
-| ✅ Готово | 9 | 6 | 4 | 0 | 0 | 0 | 0 | **19** |
-| ⏳ Планируется | 16 | 8 | 0 | 2 | 2 | 26 | 7 | **62** |
-| **Всего** | **25** | **14** | **4** | **2** | **2** | **26** | **7** | **81** |
+| ✅ Готово | 16 | 14 | 4 | 1 | 0 | 0 | 8 | **43** |
+| ⏳ Планируется | 9 | 1 | 0 | 1 | 2 | 26 | 0 | **38** |
+| **Всего** | **25** | **15** | **4** | **2** | **2** | **26** | **8** | **82** |
 
 ---
 
