@@ -50,7 +50,7 @@
 | 7 | **RenderIntrinsicWidth** | Ширина = intrinsic width | perform_layout | ✅ Реализовано |
 | 8 | **RenderIntrinsicHeight** | Высота = intrinsic height | perform_layout | ✅ Реализовано |
 | 9 | **RenderBaseline** | Выравнивание по baseline | perform_layout | ✅ Реализовано |
-| 10 | **RenderShiftedBox** | Базовый класс для shift | perform_layout | ⏳ Планируется |
+| 10 | **RenderShiftedBox** | Базовый класс для shift | perform_layout | ✅ Реализовано |
 | 11 | **RenderRotatedBox** | Поворот на 90°/180°/270° | perform_layout | ✅ Реализовано |
 | 12 | **RenderSizedBox** | Фиксированный размер | perform_layout | ✅ Реализовано |
 | 13 | **RenderSizedOverflowBox** | Размер != child размер | perform_layout | ✅ Реализовано |
@@ -172,9 +172,9 @@
 
 | Приоритет | Описание | Количество |
 |-----------|----------|-----------|
-| ✅ **Реализовано** | Готово и протестировано | **45** (55%) |
+| ✅ **Реализовано** | Готово и протестировано | **46** (56%) |
 | 🔄 **В процессе** | Активная разработка | **0** (0%) |
-| ⏳ **High Priority** | Layout + Visual + Text | **1** (1%) |
+| ⏳ **High Priority** | Layout + Visual + Text | **0** (0%) |
 | ⏳ **Medium Priority** | Media + Advanced Layout | **4** (5%) |
 | ⏳ **Low Priority** | Sliver + Debug + Special | **31** (39%) |
 
@@ -225,10 +225,10 @@
 - [x] RenderExcludeSemantics
 - [x] RenderMergeSemantics
 
-### Phase 2: Essential (⏳ 67% Complete)
+### Phase 2: Essential (✅ 100% Complete)
 - [x] RenderImage
 - [x] RenderPhysicalShape (custom shape elevation)
-- [ ] RenderShiftedBox (base class for shift operations)
+- [x] RenderShiftedBox (base class for shift operations)
 
 ### Phase 3: Advanced (⏳ Future)
 - [ ] RenderTable

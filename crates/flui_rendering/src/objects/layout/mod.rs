@@ -18,10 +18,12 @@ pub mod padding;
 pub mod positioned;
 pub mod positioned_box;
 pub mod rotated_box;
+pub mod shifted_box;
 pub mod sized_box;
 pub mod sized_overflow_box;
 pub mod stack;
 pub mod wrap;
+
 
 // Re-exports
 pub use align::RenderAlign;
@@ -42,7 +44,9 @@ pub use padding::RenderPadding;
 pub use positioned::{PositionedMetadata, RenderPositioned};
 pub use positioned_box::RenderPositionedBox;
 pub use rotated_box::RenderRotatedBox;
+pub use shifted_box::RenderShiftedBox;
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
 pub use stack::RenderStack;
 pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+
