@@ -22,7 +22,9 @@ pub mod shifted_box;
 pub mod sized_box;
 pub mod sized_overflow_box;
 pub mod stack;
+pub mod table;
 pub mod wrap;
+
 
 
 // Re-exports
@@ -48,5 +50,7 @@ pub use shifted_box::RenderShiftedBox;
 pub use sized_box::RenderSizedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
 pub use stack::RenderStack;
+pub use table::{RenderTable, TableCellVerticalAlignment, TableColumnWidth};
 pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+
 
