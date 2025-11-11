@@ -59,15 +59,15 @@ impl Render for RenderOpacity {
         // Get child canvas
         let child_canvas = tree.paint_child(child_id, offset);
 
-        // If fully opaque, return child canvas directly
+        // If fully opaque, return child canvas directly (zero-copy)
         if self.opacity >= 1.0 {
             return child_canvas;
         }
 
-        // For partial opacity, we need Canvas-level opacity support
-        // TODO: Add Canvas::set_opacity() method or opacity parameter to append_canvas
-        // For now, just return child canvas (opacity will need to be handled at layer level)
-        child_canvas
+        // Apply opacity to all child drawing commands
+        let mut canvas = Canvas::new();
+        canvas.append_canvas_with_opacity(child_canvas, self.opacity);
+        canvas
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self

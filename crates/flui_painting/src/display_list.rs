@@ -165,6 +165,42 @@ impl DisplayList {
         }
         // other.commands is now empty (moved), will be dropped
     }
+
+    /// Apply opacity to all commands in this DisplayList
+    ///
+    /// Creates a new DisplayList where all Paint objects have their opacity
+    /// multiplied by the given value. This is used for implementing opacity
+    /// effects without needing a separate layer.
+    ///
+    /// # Arguments
+    ///
+    /// * `opacity` - Value between 0.0 (fully transparent) and 1.0 (fully opaque)
+    ///
+    /// # Performance
+    ///
+    /// This method clones all commands and modifies their Paint objects.
+    /// It's O(N) where N is the number of commands.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let display_list = canvas.finish();
+    /// let semi_transparent = display_list.with_opacity(0.5);
+    /// ```
+    pub fn with_opacity(&self, opacity: f32) -> Self {
+        let opacity = opacity.clamp(0.0, 1.0);
+
+        let commands = self
+            .commands
+            .iter()
+            .map(|cmd| cmd.with_opacity(opacity))
+            .collect();
+
+        Self {
+            commands,
+            bounds: self.bounds, // Bounds don't change with opacity
+        }
+    }
 }
 
 impl Default for DisplayList {
@@ -422,6 +458,127 @@ pub enum DrawCommand {
 }
 
 impl DrawCommand {
+    /// Apply opacity to the Paint in this command
+    ///
+    /// Creates a new DrawCommand with the Paint's opacity multiplied by the given value.
+    /// This is used by DisplayList::with_opacity() to implement opacity effects.
+    ///
+    /// # Arguments
+    ///
+    /// * `opacity` - Value between 0.0 and 1.0
+    ///
+    /// # Returns
+    ///
+    /// A new DrawCommand with modified Paint opacity.
+    /// Clipping commands and commands without Paint are returned unchanged.
+    pub fn with_opacity(&self, opacity: f32) -> Self {
+        match self {
+            DrawCommand::DrawRect { rect, paint, transform } => DrawCommand::DrawRect {
+                rect: *rect,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawRRect { rrect, paint, transform } => DrawCommand::DrawRRect {
+                rrect: *rrect,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawCircle { center, radius, paint, transform } => DrawCommand::DrawCircle {
+                center: *center,
+                radius: *radius,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawOval { rect, paint, transform } => DrawCommand::DrawOval {
+                rect: *rect,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawLine { p1, p2, paint, transform } => DrawCommand::DrawLine {
+                p1: *p1,
+                p2: *p2,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawPath { path, paint, transform } => DrawCommand::DrawPath {
+                path: path.clone(),
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawText { text, offset, style, paint, transform } => DrawCommand::DrawText {
+                text: text.clone(),
+                offset: *offset,
+                style: style.clone(),
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawShadow { path, color, elevation, transform } => DrawCommand::DrawShadow {
+                path: path.clone(),
+                color: color.with_opacity(opacity),
+                elevation: *elevation,
+                transform: *transform,
+            },
+            DrawCommand::DrawArc { rect, start_angle, sweep_angle, use_center, paint, transform } => {
+                DrawCommand::DrawArc {
+                    rect: *rect,
+                    start_angle: *start_angle,
+                    sweep_angle: *sweep_angle,
+                    use_center: *use_center,
+                    paint: paint.clone().with_opacity(opacity),
+                    transform: *transform,
+                }
+            }
+            DrawCommand::DrawDRRect { outer, inner, paint, transform } => DrawCommand::DrawDRRect {
+                outer: *outer,
+                inner: *inner,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawPoints { mode, points, paint, transform } => DrawCommand::DrawPoints {
+                mode: *mode,
+                points: points.clone(),
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawVertices { vertices, colors, tex_coords, indices, paint, transform } => {
+                DrawCommand::DrawVertices {
+                    vertices: vertices.clone(),
+                    colors: colors.clone(),
+                    tex_coords: tex_coords.clone(),
+                    indices: indices.clone(),
+                    paint: paint.clone().with_opacity(opacity),
+                    transform: *transform,
+                }
+            }
+            DrawCommand::DrawColor { color, blend_mode, transform } => DrawCommand::DrawColor {
+                color: color.with_opacity(opacity),
+                blend_mode: *blend_mode,
+                transform: *transform,
+            },
+            DrawCommand::DrawImage { image, dst, paint, transform } => DrawCommand::DrawImage {
+                image: image.clone(),
+                dst: *dst,
+                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                transform: *transform,
+            },
+            DrawCommand::DrawAtlas { image, sprites, transforms, colors, blend_mode, paint, transform } => {
+                DrawCommand::DrawAtlas {
+                    image: image.clone(),
+                    sprites: sprites.clone(),
+                    transforms: transforms.clone(),
+                    colors: colors.clone(),
+                    blend_mode: *blend_mode,
+                    paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                    transform: *transform,
+                }
+            }
+            // Clipping commands don't have paint, return unchanged
+            DrawCommand::ClipRect { .. } | DrawCommand::ClipRRect { .. } | DrawCommand::ClipPath { .. } => {
+                self.clone()
+            }
+        }
+    }
+
     /// Returns the bounding rectangle of this command (if applicable)
     ///
     /// Used to calculate the DisplayList's overall bounds.

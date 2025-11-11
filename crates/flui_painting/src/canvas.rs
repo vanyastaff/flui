@@ -701,6 +701,43 @@ impl Canvas {
         self.display_list.append(other.display_list);
     }
 
+    /// Appends all drawing commands from another canvas with opacity applied
+    ///
+    /// This is useful for implementing opacity effects on entire subtrees of rendering.
+    /// All drawing commands from the child canvas will have the specified opacity
+    /// multiplied with their existing paint opacity.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Child canvas to append
+    /// * `opacity` - Opacity to apply (0.0 = fully transparent, 1.0 = fully opaque)
+    ///
+    /// # Performance
+    ///
+    /// This method creates a new DisplayList with modified Paint objects, which
+    /// involves cloning commands. For opacity of 1.0, prefer using `append_canvas()`
+    /// directly which uses zero-copy move semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut parent_canvas = Canvas::new();
+    /// parent_canvas.draw_rect(background_rect, &background_paint);
+    ///
+    /// let child_canvas = child.paint(ctx);
+    /// parent_canvas.append_canvas_with_opacity(child_canvas, 0.5);  // 50% transparent
+    /// ```
+    pub fn append_canvas_with_opacity(&mut self, other: Canvas, opacity: f32) {
+        if opacity >= 1.0 {
+            // Fast path: no opacity change needed
+            self.append_canvas(other);
+        } else {
+            // Apply opacity to all commands
+            let modified_display_list = other.display_list.with_opacity(opacity);
+            self.display_list.append(modified_display_list);
+        }
+    }
+
     // ===== Finalization =====
 
     /// Finishes recording and returns the display list
