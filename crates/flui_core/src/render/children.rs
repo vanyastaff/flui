@@ -461,6 +461,290 @@ impl Children {
             Children::None => vec![],
         }
     }
+
+    // ============================================================================
+    // Arity-Specific Helper Methods
+    // ============================================================================
+
+    /// Get optional single child (for Arity::Optional)
+    ///
+    /// Returns `Some(id)` if single child present, `None` if no children.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on Multi variant with 2+ children.
+    /// Use with `Arity::Optional` only (0 or 1 child).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // For Optional arity (like SizedBox)
+    /// impl Render for RenderSizedBox {
+    ///     fn arity(&self) -> Arity { Arity::Optional }
+    ///
+    ///     fn layout(&mut self, ctx: &LayoutContext) -> Size {
+    ///         let size = self.compute_size(ctx.constraints);
+    ///
+    ///         // Safe - Optional guarantees 0 or 1
+    ///         if let Some(child) = ctx.children.single_opt() {
+    ///             ctx.layout_child(child, BoxConstraints::tight(size));
+    ///         }
+    ///
+    ///         size
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn single_opt(&self) -> Option<ElementId> {
+        match self {
+            Children::None => None,
+            Children::Single(id) => Some(*id),
+            Children::Multi(vec) => match vec.len() {
+                0 => None,
+                1 => Some(vec[0]),
+                n => panic!(
+                    "single_opt() called on Multi with {} children (expected 0 or 1)",
+                    n
+                ),
+            },
+        }
+    }
+
+    /// Get first child (for AtLeast arities)
+    ///
+    /// Returns the first child ID.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no children. Use with `Arity::AtLeast(1+)` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // For AtLeast(1) arity (like Table with header)
+    /// impl Render for RenderTable {
+    ///     fn arity(&self) -> Arity { Arity::AtLeast(1) }
+    ///
+    ///     fn layout(&mut self, ctx: &LayoutContext) -> Size {
+    ///         let header = ctx.children.first_child();
+    ///         let data_rows = ctx.children.rest();
+    ///
+    ///         // Layout header
+    ///         let header_size = ctx.layout_child(header, ctx.constraints);
+    ///
+    ///         // Layout data rows
+    ///         for &row in data_rows {
+    ///             ctx.layout_child(row, ctx.constraints);
+    ///         }
+    ///
+    ///         Size::ZERO
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn first_child(&self) -> ElementId {
+        match self {
+            Children::None => panic!("first_child() called on empty children (use with AtLeast(1+))"),
+            Children::Single(id) => *id,
+            Children::Multi(vec) => {
+                vec.first().copied()
+                    .expect("first_child() called on empty Multi (use with AtLeast(1+))")
+            }
+        }
+    }
+
+    /// Get all children except the first (for AtLeast arities)
+    ///
+    /// Returns slice of remaining children after the first.
+    /// Useful for patterns like "header + data rows" or "first + rest".
+    ///
+    /// # Panics
+    ///
+    /// Panics if no children. Use with `Arity::AtLeast(1+)` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Table with header + data rows
+    /// let header = ctx.children.first_child();
+    /// let data_rows = ctx.children.rest();
+    ///
+    /// // header is ElementId
+    /// // data_rows is &[ElementId] (can be empty)
+    /// ```
+    #[inline]
+    pub fn rest(&self) -> &[ElementId] {
+        match self {
+            Children::None => panic!("rest() called on empty children (use with AtLeast(1+))"),
+            Children::Single(_) => &[],
+            Children::Multi(vec) => {
+                if vec.is_empty() {
+                    panic!("rest() called on empty Multi (use with AtLeast(1+))");
+                }
+                &vec[1..]
+            }
+        }
+    }
+
+    /// Split first child from rest (for AtLeast arities)
+    ///
+    /// Returns `(first, rest)` tuple where:
+    /// - `first` is the first child ID
+    /// - `rest` is slice of remaining children (can be empty)
+    ///
+    /// # Panics
+    ///
+    /// Panics if no children. Use with `Arity::AtLeast(1+)` only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// impl Render for RenderTable {
+    ///     fn layout(&mut self, ctx: &LayoutContext) -> Size {
+    ///         let (header, data_rows) = ctx.children.split_first_child();
+    ///
+    ///         // header: ElementId
+    ///         // data_rows: &[ElementId]
+    ///
+    ///         let header_size = ctx.layout_child(header, ctx.constraints);
+    ///
+    ///         let mut y = header_size.height;
+    ///         for &row in data_rows {
+    ///             let row_size = ctx.layout_child(row, ctx.constraints);
+    ///             y += row_size.height;
+    ///         }
+    ///
+    ///         Size::new(header_size.width, y)
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn split_first_child(&self) -> (ElementId, &[ElementId]) {
+        (self.first_child(), self.rest())
+    }
+
+    /// Check if has at least n children (for AtLeast/Range validation)
+    ///
+    /// Returns `true` if child count >= n.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Runtime check for minimum children
+    /// if !ctx.children.has_at_least(2) {
+    ///     panic!("Comparison needs at least 2 children");
+    /// }
+    /// ```
+    #[inline]
+    pub fn has_at_least(&self, n: usize) -> bool {
+        self.len() >= n
+    }
+
+    /// Check if has at most n children (for Range validation)
+    ///
+    /// Returns `true` if child count <= n.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Runtime check for maximum children
+    /// if !ctx.children.has_at_most(5) {
+    ///     panic!("Dialog supports at most 5 children");
+    /// }
+    /// ```
+    #[inline]
+    pub fn has_at_most(&self, n: usize) -> bool {
+        self.len() <= n
+    }
+
+    /// Check if has exactly one child (for Optional arity)
+    ///
+    /// Returns `true` if exactly one child present.
+    /// Useful for Optional arity checks.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if ctx.children.has_single() {
+    ///     // SizedBox has child - layout it
+    /// } else {
+    ///     // SizedBox is empty - just return size
+    /// }
+    /// ```
+    #[inline]
+    pub fn has_single(&self) -> bool {
+        matches!(self, Children::Single(_))
+    }
+
+    /// Check if child count is in range (for Range arity)
+    ///
+    /// Returns `true` if min <= count <= max.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Check range constraint
+    /// if !ctx.children.in_range(3, 5) {
+    ///     panic!("Dialog needs 3-5 children");
+    /// }
+    /// ```
+    #[inline]
+    pub fn in_range(&self, min: usize, max: usize) -> bool {
+        let len = self.len();
+        len >= min && len <= max
+    }
+
+    /// Get child at specific index, panic if out of bounds
+    ///
+    /// # Panics
+    ///
+    /// Panics if index >= len(). Use `get()` for safe access.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // For Range(3, 5) - Dialog with title, content, 1-3 actions
+    /// let title = ctx.children.at(0);
+    /// let content = ctx.children.at(1);
+    /// let actions = ctx.children.slice_from(2);  // 1-3 actions
+    /// ```
+    #[inline]
+    pub fn at(&self, index: usize) -> ElementId {
+        self.get(index)
+            .unwrap_or_else(|| panic!("Child index {} out of bounds (len: {})", index, self.len()))
+    }
+
+    /// Get slice from index to end
+    ///
+    /// Returns slice starting at index. Panics if index > len.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Dialog: title, content, actions...
+    /// let title = ctx.children.at(0);
+    /// let content = ctx.children.at(1);
+    /// let actions = ctx.children.slice_from(2);  // All remaining
+    /// ```
+    #[inline]
+    pub fn slice_from(&self, index: usize) -> &[ElementId] {
+        &self.as_slice()[index..]
+    }
+
+    /// Get slice range
+    ///
+    /// Returns slice [start..end]. Panics if range invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Get middle children
+    /// let middle = ctx.children.slice_range(1, 3);  // [1..3]
+    /// ```
+    #[inline]
+    pub fn slice_range(&self, start: usize, end: usize) -> &[ElementId] {
+        &self.as_slice()[start..end]
+    }
 }
 
 // Default is now derived with #[default] annotation above
@@ -727,5 +1011,193 @@ mod tests {
         let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
         let multi = Children::Multi(ids.clone());
         assert_eq!(multi.into_vec(), ids);
+    }
+
+    // Arity-specific helper method tests
+
+    #[test]
+    fn test_single_opt() {
+        let none = Children::None;
+        assert_eq!(none.single_opt(), None);
+
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.single_opt(), Some(id));
+
+        let empty_multi = Children::Multi(vec![]);
+        assert_eq!(empty_multi.single_opt(), None);
+
+        let one_multi = Children::Multi(vec![id]);
+        assert_eq!(one_multi.single_opt(), Some(id));
+    }
+
+    #[test]
+    #[should_panic(expected = "single_opt() called on Multi with 2 children")]
+    fn test_single_opt_panic_multi() {
+        let multi = Children::Multi(vec![ElementId::new(1), ElementId::new(2)]);
+        multi.single_opt();
+    }
+
+    #[test]
+    fn test_first_child() {
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.first_child(), id);
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.first_child(), ids[0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "first_child() called on empty children")]
+    fn test_first_child_panic_none() {
+        let none = Children::None;
+        none.first_child();
+    }
+
+    #[test]
+    #[should_panic(expected = "first_child() called on empty Multi")]
+    fn test_first_child_panic_empty_multi() {
+        let empty = Children::Multi(vec![]);
+        empty.first_child();
+    }
+
+    #[test]
+    fn test_rest() {
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.rest(), &[]);
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.rest(), &ids[1..]);
+    }
+
+    #[test]
+    #[should_panic(expected = "rest() called on empty children")]
+    fn test_rest_panic_none() {
+        let none = Children::None;
+        none.rest();
+    }
+
+    #[test]
+    fn test_split_first_child() {
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        let (first, rest) = single.split_first_child();
+        assert_eq!(first, id);
+        assert_eq!(rest, &[]);
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        let (first, rest) = multi.split_first_child();
+        assert_eq!(first, ids[0]);
+        assert_eq!(rest, &ids[1..]);
+    }
+
+    #[test]
+    fn test_has_at_least() {
+        let none = Children::None;
+        assert!(none.has_at_least(0));
+        assert!(!none.has_at_least(1));
+
+        let single = Children::Single(ElementId::new(1));
+        assert!(single.has_at_least(0));
+        assert!(single.has_at_least(1));
+        assert!(!single.has_at_least(2));
+
+        let multi = Children::Multi(vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)]);
+        assert!(multi.has_at_least(0));
+        assert!(multi.has_at_least(1));
+        assert!(multi.has_at_least(3));
+        assert!(!multi.has_at_least(4));
+    }
+
+    #[test]
+    fn test_has_at_most() {
+        let none = Children::None;
+        assert!(none.has_at_most(0));
+        assert!(none.has_at_most(1));
+
+        let single = Children::Single(ElementId::new(1));
+        assert!(!single.has_at_most(0));
+        assert!(single.has_at_most(1));
+        assert!(single.has_at_most(2));
+
+        let multi = Children::Multi(vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)]);
+        assert!(!multi.has_at_most(2));
+        assert!(multi.has_at_most(3));
+        assert!(multi.has_at_most(4));
+    }
+
+    #[test]
+    fn test_has_single() {
+        let none = Children::None;
+        assert!(!none.has_single());
+
+        let single = Children::Single(ElementId::new(1));
+        assert!(single.has_single());
+
+        let multi = Children::Multi(vec![ElementId::new(1)]);
+        assert!(!multi.has_single());
+    }
+
+    #[test]
+    fn test_in_range() {
+        let none = Children::None;
+        assert!(none.in_range(0, 2));
+        assert!(!none.in_range(1, 2));
+
+        let single = Children::Single(ElementId::new(1));
+        assert!(single.in_range(0, 2));
+        assert!(single.in_range(1, 1));
+        assert!(!single.in_range(2, 3));
+
+        let multi = Children::Multi(vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)]);
+        assert!(multi.in_range(1, 5));
+        assert!(multi.in_range(3, 3));
+        assert!(!multi.in_range(4, 5));
+        assert!(!multi.in_range(0, 2));
+    }
+
+    #[test]
+    fn test_at() {
+        let single = Children::Single(ElementId::new(42));
+        assert_eq!(single.at(0), ElementId::new(42));
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.at(0), ids[0]);
+        assert_eq!(multi.at(1), ids[1]);
+        assert_eq!(multi.at(2), ids[2]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Child index 1 out of bounds")]
+    fn test_at_panic() {
+        let single = Children::Single(ElementId::new(42));
+        single.at(1);
+    }
+
+    #[test]
+    fn test_slice_from() {
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+
+        assert_eq!(multi.slice_from(0), &ids[..]);
+        assert_eq!(multi.slice_from(1), &ids[1..]);
+        assert_eq!(multi.slice_from(2), &ids[2..]);
+        assert_eq!(multi.slice_from(3), &[]);
+    }
+
+    #[test]
+    fn test_slice_range() {
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3), ElementId::new(4)];
+        let multi = Children::Multi(ids.clone());
+
+        assert_eq!(multi.slice_range(0, 2), &ids[0..2]);
+        assert_eq!(multi.slice_range(1, 3), &ids[1..3]);
+        assert_eq!(multi.slice_range(2, 4), &ids[2..4]);
     }
 }
