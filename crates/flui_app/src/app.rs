@@ -31,11 +31,14 @@ pub(crate) struct FrameStats {
 ///
 /// Reduces CPU overhead by batching consecutive Move events.
 /// Only the last Move event per frame is processed.
+///
+/// **Note**: Currently unused but reserved for future mouse event optimization.
 #[derive(Debug, Default)]
+#[allow(dead_code)]
 struct EventCoalescer {
     /// Last coalesced mouse move position (if any this frame)
-    last_mouse_move: Option<Offset>,
-    /// Number of events coalesced
+    last_move: Option<Offset>,
+    /// Number of events coalesced this session
     coalesced_count: u64,
 }
 
@@ -105,10 +108,11 @@ pub struct FluiApp {
     window_state: WindowStateTracker,
 
     /// Event coalescing buffer (batches high-frequency mouse moves)
+    /// Currently unused but reserved for future optimization
+    #[allow(dead_code)]
     event_coalescer: EventCoalescer,
 
-    /// wgpu instance
-    instance: wgpu::Instance,
+    // ===== GPU Resources (created once, reused every frame) =====
 
     /// wgpu surface
     surface: wgpu::Surface<'static>,
@@ -121,9 +125,6 @@ pub struct FluiApp {
 
     /// wgpu surface configuration
     config: wgpu::SurfaceConfiguration,
-
-    /// Window reference
-    window: Arc<Window>,
 
     /// GPU painter (persistent, created once)
     /// Wrapped in Option to allow temporary ownership transfer without allocation
@@ -146,12 +147,12 @@ impl FluiApp {
     #[doc(hidden)]
     pub fn from_components(
         root_view: Box<dyn AnyView>,
-        instance: wgpu::Instance,
+        _instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
         device: wgpu::Device,
         queue: wgpu::Queue,
         config: wgpu::SurfaceConfiguration,
-        window: Arc<Window>,
+        _window: Arc<Window>,
         painter: flui_engine::painter::WgpuPainter,
     ) -> Self {
         Self {
@@ -163,12 +164,10 @@ impl FluiApp {
             root_built: false,
             window_state: WindowStateTracker::new(),
             event_coalescer: EventCoalescer::default(),
-            instance,
             surface,
             device,
             queue,
             config,
-            window,
             painter: Some(painter),
             on_cleanup: None,
             event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
@@ -230,6 +229,7 @@ impl FluiApp {
         surface.configure(&device, &config);
 
         // Create GPU painter once (not every frame!)
+        // This is the only heavy resource - reused across all frames
         let painter = flui_engine::painter::WgpuPainter::new(
             device.clone(),
             queue.clone(),
@@ -246,12 +246,10 @@ impl FluiApp {
             root_built: false,
             window_state: WindowStateTracker::new(),
             event_coalescer: EventCoalescer::default(),
-            instance,
             surface,
             device,
             queue,
             config,
-            window,
             painter: Some(painter),
             on_cleanup: None,
             event_callbacks: crate::event_callbacks::WindowEventCallbacks::new(),
@@ -564,20 +562,22 @@ impl FluiApp {
             });
         }
 
-        // Use the persistent painter (created once, not every frame!)
-        tracing::debug!("Painting layer tree");
+        // CRITICAL: Zero-allocation rendering via painter reuse!
+        // Painter is the ONLY heavy GPU resource - created once, reused every frame.
+        // WgpuRenderer is a lightweight wrapper (single pointer) recreated each frame.
 
-        // Use modern rendering path: CanvasLayer::render() with WgpuRenderer
-        // This supports all commands including text via the command dispatcher!
-        // CRITICAL: Reuse existing painter by taking/putting back - ZERO allocations!
-        // Take ownership temporarily (painter field becomes None, no allocation needed)
+        tracing::debug!("Rendering layer tree");
+
+        // Take ownership of painter temporarily (field becomes None, zero allocation)
         let painter = self.painter.take().expect("Painter should always exist during render");
 
-        // Create renderer with the real painter
+        // Create renderer wrapper (stack allocation, just one pointer field)
         let mut renderer = WgpuRenderer::new(painter);
+
+        // Dispatch all draw commands via visitor pattern
         layer.render(&mut renderer);
 
-        // Put painter back and render to GPU
+        // Extract painter and render accumulated commands to GPU
         let mut painter = renderer.into_painter();
         if let Err(e) = painter.render(&view, &mut encoder) {
             tracing::error!("Failed to render frame: {:?}", e);
@@ -586,7 +586,7 @@ impl FluiApp {
             return;
         }
 
-        // Put painter back
+        // Put painter back (zero allocation, just moves Option)
         self.painter = Some(painter);
 
         // Submit commands
