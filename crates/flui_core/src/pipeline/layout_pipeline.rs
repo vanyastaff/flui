@@ -97,6 +97,21 @@ impl LayoutPipeline {
         self.parallel_enabled
     }
 
+    /// Returns a reference to the dirty set.
+    ///
+    /// Used by LayoutManager to query pending layouts.
+    pub fn dirty_set(&self) -> &LockFreeDirtySet {
+        &self.dirty
+    }
+
+    /// Marks all elements as dirty (for resize, theme change, etc.).
+    ///
+    /// This is expensive (O(n) where n is dirty set capacity) but rare.
+    /// Only used when the entire UI needs re-layout.
+    pub fn mark_all_dirty(&self) {
+        self.dirty.mark_all_dirty();
+    }
+
     /// Computes layout for all dirty render objects.
     ///
     /// Processes render objects top-down, computing sizes and positions.

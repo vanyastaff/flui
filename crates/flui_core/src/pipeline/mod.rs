@@ -72,8 +72,8 @@ pub mod cancellation;
 pub mod dirty_tracking;
 pub mod error;
 pub mod frame_coordinator;
-// frame_coordinator_tests is included in frame_coordinator.rs via #[cfg(test)]
 pub mod frame_scheduler;
+pub mod layout_manager;
 pub mod layout_pipeline;
 pub mod metrics;
 pub mod paint_pipeline;
@@ -84,6 +84,8 @@ pub mod rebuild_queue;
 pub mod recovery;
 pub mod root_manager;
 pub mod triple_buffer;
+// frame_coordinator_tests is included in frame_coordinator.rs via #[cfg(test)]
+
 
 pub use build_pipeline::BuildPipeline;
 pub use cancellation::CancellationToken;
@@ -93,6 +95,7 @@ pub use crate::element::ElementTree;
 pub use error::{InvalidDuration, InvalidError, PipelineError, PipelinePhase, TimeoutDuration};
 pub use frame_coordinator::FrameCoordinator;
 pub use frame_scheduler::{FrameScheduler, FrameSkipPolicy};
+pub use layout_manager::LayoutManager;
 pub use layout_pipeline::LayoutPipeline;
 pub use metrics::PipelineMetrics;
 pub use paint_pipeline::PaintPipeline;
@@ -102,3 +105,4 @@ pub use rebuild_queue::RebuildQueue;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use root_manager::RootManager;
 pub use triple_buffer::TripleBuffer;
+

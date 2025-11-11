@@ -62,7 +62,7 @@ pub struct PipelineBuilder {
     enable_cancellation: bool,
 
     /// Optional frame buffer
-    frame_buffer_initial: Option<Arc<crate::BoxedLayer>>,
+    frame_buffer_initial: Option<Arc<Box<flui_engine::CanvasLayer>>>,
 
     /// Optional build callback
     on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
@@ -231,7 +231,7 @@ impl PipelineBuilder {
     ///     .build();
     /// ```
     #[must_use]
-    pub fn with_frame_buffer(mut self, initial: Arc<crate::BoxedLayer>) -> Self {
+    pub fn with_frame_buffer(mut self, initial: Arc<Box<flui_engine::CanvasLayer>>) -> Self {
         self.frame_buffer_initial = Some(initial);
         self
     }

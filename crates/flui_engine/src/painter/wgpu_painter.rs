@@ -826,11 +826,18 @@ impl WgpuPainter {
             self.shadow_batch.len() * std::mem::size_of::<super::instancing::ShadowInstance>();
 
         // Build combined instance buffer
+        // IMPORTANT: Shadows FIRST for correct z-ordering (background → foreground)
         let mut combined_buffer =
-            Vec::with_capacity(rect_size + circle_size + arc_size + shadow_size);
+            Vec::with_capacity(shadow_size + rect_size + circle_size + arc_size);
 
-        // Append all instance data
-        let rect_offset = 0;
+        // Append shadows first (render behind shapes)
+        let shadow_offset = 0;
+        if has_shadows {
+            combined_buffer.extend_from_slice(self.shadow_batch.as_bytes());
+        }
+
+        // Then append shapes (render on top of shadows)
+        let rect_offset = combined_buffer.len();
         if has_rects {
             combined_buffer.extend_from_slice(self.rect_batch.as_bytes());
         }
@@ -845,14 +852,10 @@ impl WgpuPainter {
             combined_buffer.extend_from_slice(self.arc_batch.as_bytes());
         }
 
-        let shadow_offset = combined_buffer.len();
-        if has_shadows {
-            combined_buffer.extend_from_slice(self.shadow_batch.as_bytes());
-        }
-
-        // Upload combined buffer (using buffer pool)
+        // Upload combined buffer (using buffer pool with zero-copy)
         let instance_buffer = self.buffer_pool.get_vertex_buffer(
             &self.device,
+            &self.queue,
             "Combined Instance Buffer",
             &combined_buffer,
         );
@@ -881,6 +884,18 @@ impl WgpuPainter {
             self.unit_quad_index_buffer.slice(..),
             wgpu::IndexFormat::Uint16,
         );
+
+        // ===== Draw Shadows FIRST (if any) =====
+        // Shadows render behind shapes for correct z-ordering (background → foreground)
+        if has_shadows {
+            render_pass.set_pipeline(&self.shadow_pipeline);
+
+            let shadow_start = shadow_offset as u64;
+            let shadow_end = shadow_start + shadow_size as u64;
+            render_pass.set_vertex_buffer(1, instance_buffer.slice(shadow_start..shadow_end));
+
+            render_pass.draw_indexed(0..6, 0, 0..self.shadow_batch.len() as u32);
+        }
 
         // ===== Draw Rectangles (if any) =====
         if has_rects {
@@ -913,19 +928,6 @@ impl WgpuPainter {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(arc_start..arc_end));
 
             render_pass.draw_indexed(0..6, 0, 0..self.arc_batch.len() as u32);
-        }
-
-        // ===== Draw Shadows (if any) =====
-        // Shadows should be drawn FIRST (before shapes) for correct layering
-        // TODO: Consider moving shadow rendering to beginning of render() for proper z-ordering
-        if has_shadows {
-            render_pass.set_pipeline(&self.shadow_pipeline);
-
-            let shadow_start = shadow_offset as u64;
-            let shadow_end = shadow_start + shadow_size as u64;
-            render_pass.set_vertex_buffer(1, instance_buffer.slice(shadow_start..shadow_end));
-
-            render_pass.draw_indexed(0..6, 0, 0..self.shadow_batch.len() as u32);
         }
 
         // Drop render pass (explicit for clarity)
@@ -1003,9 +1005,10 @@ impl WgpuPainter {
             combined_buffer.extend_from_slice(self.radial_gradient_batch.as_bytes());
         }
 
-        // Upload combined buffer
+        // Upload combined buffer (zero-copy via queue.write_buffer)
         let instance_buffer = self.buffer_pool.get_vertex_buffer(
             &self.device,
+            &self.queue,
             "Gradient Instance Buffer",
             &combined_buffer,
         );
@@ -1109,9 +1112,10 @@ impl WgpuPainter {
             ],
         });
 
-        // Upload instance buffer (using buffer pool for efficient reuse)
+        // Upload instance buffer (using buffer pool for efficient zero-copy reuse)
         let instance_buffer = self.buffer_pool.get_vertex_buffer(
             &self.device,
+            &self.queue,
             "Texture Instance Buffer",
             self.texture_batch.as_bytes(),
         );

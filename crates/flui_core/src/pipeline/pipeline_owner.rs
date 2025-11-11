@@ -178,7 +178,7 @@ pub struct PipelineOwner {
     cancellation: Option<super::CancellationToken>,
 
     /// Triple buffer for lock-free frame exchange (optional)
-    frame_buffer: Option<super::TripleBuffer<Arc<crate::BoxedLayer>>>,
+    frame_buffer: Option<super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>>,
 }
 
 impl std::fmt::Debug for PipelineOwner {
@@ -442,7 +442,7 @@ impl PipelineOwner {
     /// Flush the paint phase
     ///
     /// Delegates to FrameCoordinator.
-    pub fn flush_paint(&mut self) -> Result<Option<crate::BoxedLayer>, super::PipelineError> {
+    pub fn flush_paint(&mut self) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
         self.coordinator
             .flush_paint(&self.tree, self.root_mgr.root_id())
     }
@@ -484,7 +484,7 @@ impl PipelineOwner {
     pub fn build_frame(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
-    ) -> Result<Option<crate::BoxedLayer>, super::PipelineError> {
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
         #[cfg(debug_assertions)]
         tracing::debug!(
             "build_frame: Starting frame with constraints {:?}",
@@ -647,7 +647,7 @@ impl PipelineOwner {
     }
 
     /// Enable triple buffer for lock-free frame exchange
-    pub fn enable_frame_buffer(&mut self, initial: Arc<crate::BoxedLayer>) {
+    pub fn enable_frame_buffer(&mut self, initial: Arc<Box<flui_engine::CanvasLayer>>) {
         self.frame_buffer = Some(super::TripleBuffer::new(initial));
     }
 
@@ -657,17 +657,17 @@ impl PipelineOwner {
     }
 
     /// Get reference to frame buffer (if enabled)
-    pub fn frame_buffer(&self) -> Option<&super::TripleBuffer<Arc<crate::BoxedLayer>>> {
+    pub fn frame_buffer(&self) -> Option<&super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
         self.frame_buffer.as_ref()
     }
 
     /// Get mutable reference to frame buffer (if enabled)
-    pub fn frame_buffer_mut(&mut self) -> Option<&mut super::TripleBuffer<Arc<crate::BoxedLayer>>> {
+    pub fn frame_buffer_mut(&mut self) -> Option<&mut super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
         self.frame_buffer.as_mut()
     }
 
     /// Publish a frame to the triple buffer (convenience method)
-    pub fn publish_frame(&mut self, layer: crate::BoxedLayer) {
+    pub fn publish_frame(&mut self, layer: Box<flui_engine::CanvasLayer>) {
         if let Some(buffer) = self.frame_buffer.as_mut() {
             let write_buf = buffer.write();
             let mut write_guard = write_buf.write();

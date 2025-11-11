@@ -299,6 +299,32 @@ impl LockFreeDirtySet {
         }
     }
 
+    /// Mark all elements as dirty
+    ///
+    /// Sets all bits in the bitmap. Used for global invalidation (resize, theme change).
+    ///
+    /// # Complexity
+    ///
+    /// O(bitmap.len()) which is O(capacity/64)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::pipeline::LockFreeDirtySet;
+    ///
+    /// let dirty_set = LockFreeDirtySet::new(1000);
+    ///
+    /// // Mark all elements dirty (e.g., window resize)
+    /// dirty_set.mark_all_dirty();
+    ///
+    /// assert_eq!(dirty_set.dirty_count(), 1000);
+    /// ```
+    pub fn mark_all_dirty(&self) {
+        for word in &self.bitmap {
+            word.store(u64::MAX, Ordering::Release);
+        }
+    }
+
     /// Get current dirty count (approximate, may race)
     ///
     /// Counts the number of set bits across all words.

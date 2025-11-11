@@ -508,6 +508,35 @@ impl ElementTree {
             .unwrap_or(0)
     }
 
+    /// Returns all element IDs in the tree.
+    ///
+    /// This iterates over all elements currently in the slab (including vacant slots are skipped).
+    ///
+    /// # Complexity
+    ///
+    /// O(n) where n is the number of elements in the tree.
+    ///
+    /// # Use Cases
+    ///
+    /// - LayoutManager::mark_all_dirty() - mark all elements for re-layout
+    /// - Debugging - iterate all elements for validation
+    /// - Metrics - count total elements
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// for element_id in tree.all_element_ids() {
+    ///     if let Some(element) = tree.get(element_id) {
+    ///         // Process element...
+    ///     }
+    /// }
+    /// ```
+    pub fn all_element_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+        // Slab::iter() returns (index, &value) where index is 0-based
+        // Convert to 1-based ElementId by adding 1
+        self.nodes.iter().map(|(index, _)| ElementId::new(index + 1))
+    }
+
     // ========== Render Access ==========
 
     // Note: render_object() and render_object_mut() methods removed

@@ -45,6 +45,7 @@ struct PooledBuffer {
     buffer: Buffer,
     size: usize,
     in_use: bool,
+    usage: BufferUsages,
 }
 
 /// GPU buffer pool for efficient buffer reuse
@@ -76,17 +77,25 @@ impl BufferPool {
     ///
     /// # Arguments
     /// * `device` - WGPU device
+    /// * `queue` - WGPU queue (for zero-copy buffer updates)
     /// * `label` - Debug label for the buffer
     /// * `contents` - Buffer data
     ///
     /// # Returns
     /// Reference to buffer (valid until next reset())
-    pub fn get_vertex_buffer(&mut self, device: &Device, label: &str, contents: &[u8]) -> &Buffer {
+    pub fn get_vertex_buffer(
+        &mut self,
+        device: &Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        contents: &[u8],
+    ) -> &Buffer {
         Self::get_buffer_internal(
             device,
+            queue,
             label,
             contents,
-            BufferUsages::VERTEX,
+            BufferUsages::VERTEX | BufferUsages::COPY_DST,
             &mut self.vertex_buffers,
             &mut self.allocations,
             &mut self.reuses,
@@ -94,12 +103,19 @@ impl BufferPool {
     }
 
     /// Get or create an index buffer
-    pub fn get_index_buffer(&mut self, device: &Device, label: &str, contents: &[u8]) -> &Buffer {
+    pub fn get_index_buffer(
+        &mut self,
+        device: &Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        contents: &[u8],
+    ) -> &Buffer {
         Self::get_buffer_internal(
             device,
+            queue,
             label,
             contents,
-            BufferUsages::INDEX,
+            BufferUsages::INDEX | BufferUsages::COPY_DST,
             &mut self.index_buffers,
             &mut self.allocations,
             &mut self.reuses,
@@ -107,9 +123,16 @@ impl BufferPool {
     }
 
     /// Get or create a uniform buffer
-    pub fn get_uniform_buffer(&mut self, device: &Device, label: &str, contents: &[u8]) -> &Buffer {
+    pub fn get_uniform_buffer(
+        &mut self,
+        device: &Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        contents: &[u8],
+    ) -> &Buffer {
         Self::get_buffer_internal(
             device,
+            queue,
             label,
             contents,
             BufferUsages::UNIFORM | BufferUsages::COPY_DST,
@@ -122,6 +145,7 @@ impl BufferPool {
     /// Internal: Get or create a buffer from specific pool
     fn get_buffer_internal<'a>(
         device: &Device,
+        queue: &wgpu::Queue,
         label: &str,
         contents: &[u8],
         usage: BufferUsages,
@@ -137,7 +161,7 @@ impl BufferPool {
             .position(|entry| !entry.in_use && entry.size == size);
 
         if let Some(index) = reuse_index {
-            // Reuse buffer
+            // Reuse buffer with zero-copy update
             let entry = &mut pool[index];
             entry.in_use = true;
             *reuses += 1;
@@ -151,26 +175,19 @@ impl BufferPool {
                     *reuses as f32 / total as f32
                 };
                 tracing::trace!(
-                    "BufferPool: Reusing buffer (size={}, reuse_rate={:.1}%)",
+                    "BufferPool: Reusing buffer with zero-copy (size={}, reuse_rate={:.1}%)",
                     size,
                     reuse_rate * 100.0
                 );
             }
 
-            // Upload new data
-            // Note: We create a new buffer here because wgpu doesn't provide
-            // a way to update buffer contents after creation without queue.write_buffer.
-            // For true pooling, we'd need to use queue.write_buffer, but that requires
-            // access to the queue and may have sync issues.
-            //
-            // For now, this pool prevents allocation overhead by reusing buffer objects,
-            // but we still recreate the GPU buffer. This is still faster than creating
-            // new buffer objects from scratch.
-            entry.buffer = device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(label),
-                contents,
-                usage,
-            });
+            // Zero-copy buffer update via queue.write_buffer
+            // This is MUCH faster than recreating the buffer!
+            // Benefits:
+            // - No GPU buffer allocation overhead
+            // - No driver synchronization overhead
+            // - Direct DMA transfer to existing GPU memory
+            queue.write_buffer(&entry.buffer, 0, contents);
 
             return &pool[index].buffer;
         }
@@ -206,6 +223,7 @@ impl BufferPool {
             buffer,
             size,
             in_use: true,
+            usage,
         });
 
         // Safe: We just pushed, so pool[index] exists
@@ -280,7 +298,6 @@ impl BufferPool {
         }
     }
 }
-
 
 /// Buffer pool statistics
 #[derive(Debug, Clone, Copy)]

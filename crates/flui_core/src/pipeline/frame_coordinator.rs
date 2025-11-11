@@ -164,11 +164,11 @@ impl FrameCoordinator {
     /// Extract root element's layer after paint
     ///
     /// Helper method to retrieve the painted layer from a RenderElement.
-    /// Returns empty ContainerLayer if root is a ComponentElement.
+    /// Returns empty CanvasLayer if root is a ComponentElement.
     fn extract_root_layer(
         tree_guard: &ElementTree,
         root_id: Option<ElementId>,
-    ) -> Option<crate::BoxedLayer> {
+    ) -> Option<Box<flui_engine::CanvasLayer>> {
         match root_id {
             Some(id) => {
                 if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
@@ -177,13 +177,12 @@ impl FrameCoordinator {
                     let offset = render_state.offset();
                     drop(render_state);
 
-                    // Convert Canvas → PictureLayer → BoxedLayer
+                    // Convert Canvas → CanvasLayer
                     let canvas = render_elem.paint_render(tree_guard, offset);
-                    Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas))
-                        as crate::BoxedLayer)
+                    Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
                 } else {
-                    // Root is ComponentElement or ProviderElement - return empty container
-                    Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
+                    // Root is ComponentElement or ProviderElement - return empty picture
+                    Some(Box::new(flui_engine::CanvasLayer::new()))
                 }
             }
             None => None,
@@ -230,7 +229,7 @@ impl FrameCoordinator {
         tree: &Arc<RwLock<ElementTree>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
-    ) -> Result<Option<crate::BoxedLayer>, PipelineError> {
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
         // Start frame and get budget
         let _frame_budget = self.scheduler.start_frame();
 
@@ -453,7 +452,7 @@ impl FrameCoordinator {
         &mut self,
         tree: &Arc<RwLock<ElementTree>>,
         root_id: Option<ElementId>,
-    ) -> Result<Option<crate::BoxedLayer>, PipelineError> {
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
         let mut tree_guard = tree.write();
 
         // Process all dirty render objects
@@ -497,10 +496,9 @@ impl FrameCoordinator {
                         let offset = render_state.offset();
                         drop(render_state);
 
-                        // Convert Canvas → PictureLayer → BoxedLayer
+                        // Convert Canvas → CanvasLayer
                         let canvas = render_elem.paint_render(&tree_guard, offset);
-                        Some(Box::new(flui_engine::PictureLayer::from_canvas(canvas))
-                            as crate::BoxedLayer)
+                        Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
                     }
                     Some(crate::element::Element::Component(comp)) => {
                         // Root is ComponentElement - paint its child
@@ -516,32 +514,29 @@ impl FrameCoordinator {
                                         let offset = render_state.offset();
                                         drop(render_state);
 
-                                        // Convert Canvas → PictureLayer → BoxedLayer
+                                        // Convert Canvas → CanvasLayer
                                         let canvas = child_render.paint_render(&tree_guard, offset);
-                                        Some(Box::new(flui_engine::PictureLayer::from_canvas(
+                                        Some(Box::new(flui_engine::CanvasLayer::from_canvas(
                                             canvas,
-                                        ))
-                                            as crate::BoxedLayer)
+                                        )))
                                     }
                                     _ => {
                                         #[cfg(debug_assertions)]
                                         tracing::warn!("flush_paint: ComponentElement child is not RenderElement");
-                                        Some(Box::new(flui_engine::ContainerLayer::new())
-                                            as crate::BoxedLayer)
+                                        Some(Box::new(flui_engine::CanvasLayer::new()))
                                     }
                                 }
                             }
                             None => {
                                 #[cfg(debug_assertions)]
                                 tracing::warn!("flush_paint: ComponentElement has no child");
-                                Some(Box::new(flui_engine::ContainerLayer::new())
-                                    as crate::BoxedLayer)
+                                Some(Box::new(flui_engine::CanvasLayer::new()))
                             }
                         }
                     }
                     _ => {
                         // Root is ProviderElement or other type
-                        Some(Box::new(flui_engine::ContainerLayer::new()) as crate::BoxedLayer)
+                        Some(Box::new(flui_engine::CanvasLayer::new()))
                     }
                 }
             }

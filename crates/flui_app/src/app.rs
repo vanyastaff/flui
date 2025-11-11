@@ -6,8 +6,10 @@
 use flui_core::foundation::ElementId;
 use flui_core::pipeline::PipelineOwner;
 use flui_core::view::{AnyView, BuildContext};
-use flui_core::{BoxedLayer, Size};
-use flui_engine::EventRouter;
+use flui_core::Size;
+use flui_engine::layer::CanvasLayer;
+use flui_engine::renderer::WgpuRenderer;
+use flui_engine::WindowStateTracker;
 use flui_types::BoxConstraints;
 use std::sync::Arc;
 use winit::window::Window;
@@ -87,8 +89,8 @@ pub struct FluiApp {
     /// Whether the root has been initially built
     root_built: bool,
 
-    /// Event router for gesture and pointer events
-    event_router: EventRouter,
+    /// Window state tracker for focus and visibility
+    window_state: WindowStateTracker,
 
     /// wgpu instance
     instance: wgpu::Instance,
@@ -143,7 +145,7 @@ impl FluiApp {
             stats: FrameStats::default(),
             last_size: None,
             root_built: false,
-            event_router: EventRouter::new(),
+            window_state: WindowStateTracker::new(),
             instance,
             surface,
             device,
@@ -225,7 +227,7 @@ impl FluiApp {
             stats: FrameStats::default(),
             last_size: None,
             root_built: false,
-            event_router: EventRouter::new(),
+            window_state: WindowStateTracker::new(),
             instance,
             surface,
             device,
@@ -284,9 +286,9 @@ impl FluiApp {
     ///
     /// # Note
     ///
-    /// Focus and visibility events are automatically integrated with EventRouter
+    /// Focus and visibility events are automatically integrated with WindowStateTracker
     /// to ensure proper event handling state management. Your custom callbacks
-    /// will be called in addition to the internal EventRouter updates.
+    /// will be called in addition to the internal WindowStateTracker updates.
     ///
     /// # Example
     ///
@@ -313,42 +315,42 @@ impl FluiApp {
         &mut self.event_callbacks
     }
 
-    /// Get mutable reference to event router
+    /// Get mutable reference to window state tracker
     ///
-    /// The event router is automatically synchronized with window events
+    /// The window state tracker is automatically synchronized with window events
     /// (focus, visibility), but you can access it directly if needed.
-    pub fn event_router_mut(&mut self) -> &mut EventRouter {
-        &mut self.event_router
+    pub fn window_state_mut(&mut self) -> &mut WindowStateTracker {
+        &mut self.window_state
     }
 
     /// Handle a window event
     ///
     /// This dispatches the event to registered callbacks AND synchronizes
-    /// the EventRouter state with window events.
+    /// the WindowStateTracker state with window events.
     ///
     /// You typically don't need to call this manually - it's called
     /// automatically by the event loop.
     ///
-    /// # Integration with EventRouter
+    /// # Integration with WindowStateTracker
     ///
-    /// The EventRouter is automatically updated based on window events:
+    /// The WindowStateTracker is automatically updated based on window events:
     /// - Focus changes → reset pointer state when focus lost
     /// - Minimization → skip event processing when minimized
     /// - This prevents stuck button states and improves efficiency
     pub fn handle_window_event(&mut self, event: &winit::event::WindowEvent) {
-        // IMPORTANT: Update EventRouter BEFORE user callbacks
-        // This ensures EventRouter state is correct before any user code runs
+        // IMPORTANT: Update WindowStateTracker BEFORE user callbacks
+        // This ensures WindowStateTracker state is correct before any user code runs
         match event {
             winit::event::WindowEvent::Focused(focused) => {
-                self.event_router.on_focus_changed(*focused);
+                self.window_state.on_focus_changed(*focused);
             }
             winit::event::WindowEvent::Occluded(occluded) => {
                 // Occluded = true means window is NOT visible (minimized/covered)
                 // So we need to invert it for is_visible
-                self.event_router.on_visibility_changed(!occluded);
+                self.window_state.on_visibility_changed(!occluded);
             }
             _ => {
-                // Other events don't affect EventRouter state
+                // Other events don't affect WindowStateTracker state
             }
         }
 
@@ -478,7 +480,7 @@ impl FluiApp {
     }
 
     /// Render a layer tree to the wgpu surface
-    fn render(&mut self, layer: BoxedLayer) {
+    fn render(&mut self, layer: Box<CanvasLayer>) {
         // Get current frame
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -539,10 +541,23 @@ impl FluiApp {
         // Use the persistent painter (created once, not every frame!)
         tracing::debug!("Painting layer tree");
 
-        // Collect all paint commands into the painter
-        layer.paint(&mut self.painter);
+        // Use modern rendering path: CanvasLayer::render() with WgpuRenderer
+        // This supports all commands including text via the command dispatcher!
+        // Temporarily take ownership of painter, then put it back after rendering
+        let painter = std::mem::replace(
+            &mut self.painter,
+            flui_engine::painter::WgpuPainter::new(
+                self.device.clone(),
+                self.queue.clone(),
+                self.config.format,
+                (self.config.width, self.config.height),
+            ),
+        );
+        let mut renderer = WgpuRenderer::new(painter);
+        layer.render(&mut renderer);
 
-        // Actually render to GPU
+        // Get painter back and render to GPU
+        self.painter = renderer.into_painter();
         if let Err(e) = self.painter.render(&view, &mut encoder) {
             tracing::error!("Failed to render frame: {:?}", e);
             return;

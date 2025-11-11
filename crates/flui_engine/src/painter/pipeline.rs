@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use wgpu::RenderPipeline;
 
+use flui_painting::Paint;
+
 /// Pipeline key identifying a specific pipeline variant
 ///
 /// Uses bitflags for compact representation and fast hashing.
@@ -87,12 +89,12 @@ impl PipelineKey {
     }
 
     /// Check if pipeline requires alpha blending
-    pub fn has_alpha_blend(&self) -> bool {
+    pub fn is_alpha_blended(&self) -> bool {
         self.bits & Self::ALPHA_BLEND != 0
     }
 
     /// Check if pipeline uses textures
-    pub fn has_textured(&self) -> bool {
+    pub fn is_textured(&self) -> bool {
         self.bits & Self::TEXTURED != 0
     }
 
@@ -171,7 +173,7 @@ impl PipelineCache {
         });
 
         // Configure blend state based on key
-        let blend_state = if key.has_alpha_blend() {
+        let blend_state = if key.is_alpha_blended() {
             Some(wgpu::BlendState::ALPHA_BLENDING)
         } else {
             None // Opaque - no blending (faster!)
@@ -232,8 +234,8 @@ impl PipelineCache {
 }
 
 /// Helper to determine pipeline key from paint properties
-pub fn pipeline_key_from_paint(paint: &super::paint::Paint) -> PipelineKey {
-    let color = paint.get_color();
+pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
+    let color = paint.color;
 
     // Check if we need alpha blending
     if color.a < 255 {
@@ -250,16 +252,16 @@ mod tests {
     #[test]
     fn test_pipeline_key_opaque() {
         let key = PipelineKey::opaque();
-        assert!(!key.has_alpha_blend());
-        assert!(!key.has_textured());
+        assert!(!key.is_alpha_blended());
+        assert!(!key.is_textured());
         assert_eq!(key.msaa_samples(), 1);
     }
 
     #[test]
     fn test_pipeline_key_alpha_blend() {
         let key = PipelineKey::alpha_blend();
-        assert!(key.has_alpha_blend());
-        assert!(!key.has_textured());
+        assert!(key.is_alpha_blended());
+        assert!(!key.is_textured());
         assert_eq!(key.msaa_samples(), 1);
     }
 
@@ -267,7 +269,7 @@ mod tests {
     fn test_pipeline_key_builder() {
         let key = PipelineKey::opaque().with_alpha_blend().with_msaa_4x();
 
-        assert!(key.has_alpha_blend());
+        assert!(key.is_alpha_blended());
         assert_eq!(key.msaa_samples(), 4);
     }
 
