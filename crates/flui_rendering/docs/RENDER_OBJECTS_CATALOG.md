@@ -150,7 +150,7 @@
 | 36 | **RenderSliverEdgeInsetsPadding** | EdgeInsets padding | ✅ Реализовано |
 | 37 | **RenderSliverCrossAxisPositioned** | Cross-axis позиционир. | ⏳ Планируется |
 | 38 | **RenderSliverConstrainedCrossAxis** | Cross-axis constraints | ✅ Реализовано |
-| 39 | **RenderSliverOverlapAbsorber** | Absorb overlap | ⏳ Планируется |
+| 39 | **RenderSliverOverlapAbsorber** | Absorb overlap | ✅ Реализовано |
 
 ---
 
@@ -318,8 +318,8 @@ Leaf RenderObject'ы могут быть оптимизированы:
 ## 📈 Прогресс реализации
 
 **Всего типов:** 82 RenderObject
-**Реализовано:** 76 (92.7%)
-**В планах:** 6 (7.3%)
+**Реализовано:** 77 (93.9%)
+**В планах:** 5 (6.1%)
 
 ### Последние реализации (текущая сессия)
 
@@ -328,6 +328,7 @@ Leaf RenderObject'ы могут быть оптимизированы:
 3. **RenderSliverFloatingPersistentHeader** - Floating header для slivers
 4. **RenderSliverAnimatedOpacity** - Анимированная прозрачность для slivers
 5. **RenderSliverPinnedPersistentHeader** - Pinned header для slivers
+6. **RenderSliverOverlapAbsorber** - Absorbs overlap для nested scroll views
 
 ---
 
