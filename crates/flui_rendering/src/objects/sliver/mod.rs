@@ -10,6 +10,7 @@ pub mod sliver_edge_insets_padding;
 pub mod sliver_fill_remaining;
 pub mod sliver_fill_viewport;
 pub mod sliver_fixed_extent_list;
+pub mod sliver_floating_persistent_header;
 pub mod sliver_grid;
 pub mod sliver_ignore_pointer;
 pub mod sliver_list;
@@ -36,12 +37,14 @@ pub mod viewport;
 
 
 
+
 pub use sliver_app_bar::RenderSliverAppBar;
 pub use sliver_constrained_cross_axis::RenderSliverConstrainedCrossAxis;
 pub use sliver_edge_insets_padding::RenderSliverEdgeInsetsPadding;
 pub use sliver_fill_remaining::RenderSliverFillRemaining;
 pub use sliver_fill_viewport::RenderSliverFillViewport;
 pub use sliver_fixed_extent_list::RenderSliverFixedExtentList;
+pub use sliver_floating_persistent_header::RenderSliverFloatingPersistentHeader;
 pub use sliver_grid::{RenderSliverGrid, SliverGridDelegate, SliverGridDelegateFixedCrossAxisCount};
 pub use sliver_ignore_pointer::RenderSliverIgnorePointer;
 pub use sliver_list::RenderSliverList;
@@ -53,6 +56,7 @@ pub use sliver_prototype_extent_list::RenderSliverPrototypeExtentList;
 pub use sliver_safe_area::RenderSliverSafeArea;
 pub use sliver_to_box_adapter::RenderSliverToBoxAdapter;
 pub use viewport::{ClipBehavior, RenderViewport};
+
 
 
 
