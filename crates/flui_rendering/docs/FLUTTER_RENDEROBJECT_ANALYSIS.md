@@ -14,15 +14,15 @@
 
 | Категория | Flutter | FLUI | Процент |
 |-----------|---------|------|---------|
-| **Реализовано в FLUI** | - | 86 | - |
+| **Реализовано в FLUI** | - | 88 | - |
 | **Всего в Flutter** | ~118 | - | - |
 | **Не нужны (архит. различия)** | - | ~4 | - |
-| **Покрытие основных** | - | - | **~73%** |
-| **Покрытие с учетом архитектуры** | - | - | **~75%** |
+| **Покрытие основных** | - | - | **~75%** |
+| **Покрытие с учетом архитектуры** | - | - | **~77%** |
 
 ---
 
-## ✅ Что реализовано в FLUI (86 объектов)
+## ✅ Что реализовано в FLUI (88 объектов)
 
 ### Leaf RenderObjects (9)
 - ✅ RenderParagraph
@@ -39,9 +39,11 @@
 - ✅ RenderView (root render object)
 - ✅ RenderAnimatedSize (simplified version - linear interpolation)
 
-### Single-child RenderObjects (36)
+### Single-child RenderObjects (38)
 - ✅ RenderPadding
 - ✅ RenderConstrainedBox
+- ✅ RenderConstrainedOverflowBox
+- ✅ RenderConstraintsTransformBox
 - ✅ RenderCustomSingleChildLayoutBox
 - ✅ RenderLimitedBox
 - ✅ RenderAspectRatio
@@ -143,11 +145,11 @@
    - Priority: HIGH
    - Use case: Text input widgets
 
-5. **RenderConstrainedOverflowBox** - Overflow с constraints
+5. ~~**RenderConstrainedOverflowBox**~~ ✅ - Overflow с constraints (IMPLEMENTED)
    - Priority: MEDIUM
    - Use case: Complex overflow handling
 
-6. **RenderConstraintsTransformBox** - Transform constraints
+6. ~~**RenderConstraintsTransformBox**~~ ✅ - Transform constraints (IMPLEMENTED)
    - Priority: MEDIUM
    - Use case: Advanced constraint manipulation
 
@@ -297,8 +299,8 @@
 8. **RenderSliverVariedExtentList** - Better list support
 
 ### Tier 3: Средний приоритет (nice to have)
-9. **RenderConstrainedOverflowBox**
-10. **RenderConstraintsTransformBox**
+9. ~~**RenderConstrainedOverflowBox**~~ ✅ (IMPLEMENTED)
+10. ~~**RenderConstraintsTransformBox**~~ ✅ (IMPLEMENTED)
 11. **RenderSliverFixedExtentBoxAdaptor**
 12. **RenderSliverFloatingPinnedPersistentHeader**
 
@@ -333,33 +335,35 @@
 
 ## 🎉 Выводы
 
-**FLUI уже покрывает ~75% функциональности Flutter rendering layer** (с учетом архитектурных различий), включая:
+**FLUI уже покрывает ~77% функциональности Flutter rendering layer** (с учетом архитектурных различий), включая:
 - ✅ Все основные layout алгоритмы
 - ✅ Все визуальные эффекты
 - ✅ Полную sliver систему (26/26)
 - ✅ Viewport и scrolling infrastructure
 - ✅ Interaction и hit testing
 
-**Оставшиеся 25%** это в основном:
+**Оставшиеся 23%** это в основном:
 - ~~Базовые/абстрактные классы (RenderProxyBox)~~ ❌ Не нужны (архитектурные различия)
 - ~~RenderView, RenderAnimatedSize, RenderFractionalTranslation, RenderCustomSingleChildLayoutBox~~ ✅ Реализовано
+- ~~RenderConstrainedOverflowBox, RenderConstraintsTransformBox~~ ✅ Реализовано
 - Специализированные features (RenderEditable для text input, Leader/Follower для tooltips)
 - Platform-specific объекты (iOS/Android views)
 - Semantics для accessibility
 - Редко используемые объекты
 
-**Текущая реализация (86 объектов) уже достаточна для:**
+**Текущая реализация (88 объектов) уже достаточна для:**
 - ✅ Production-ready UI applications
 - ✅ Сложные layouts и scrolling
+- ✅ Advanced constraint manipulation
 - ✅ Анимации и effects
 - ✅ Multi-threaded UI
 
 **Для максимального покрытия потребуется:**
 - ~1 критичный объект (RenderEditable для text input)
-- ~13-15 nice-to-have объектов (Leader/Follower, advanced layouts, overflow handling)
+- ~11-13 nice-to-have объектов (Leader/Follower, advanced layouts)
 - ~10 platform-specific (опционально, зависит от целевых платформ)
 - ~~4 базовых класса~~ - ❌ Не нужны благодаря trait-based архитектуре
-- ~~RenderView, RenderAnimatedSize, RenderFractionalTranslation, RenderCustomSingleChildLayoutBox~~ - ✅ Уже реализовано
+- ~~RenderView, RenderAnimatedSize, RenderFractionalTranslation, RenderCustomSingleChildLayoutBox, RenderConstrainedOverflowBox, RenderConstraintsTransformBox~~ - ✅ Уже реализовано
 
 ---
 

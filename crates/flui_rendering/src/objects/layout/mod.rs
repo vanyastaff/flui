@@ -4,6 +4,8 @@ pub mod align;
 pub mod aspect_ratio;
 pub mod baseline;
 pub mod constrained_box;
+pub mod constrained_overflow_box;
+pub mod constraints_transform_box;
 pub mod custom_multi_child_layout_box;
 pub mod custom_single_child_layout_box;
 pub mod editable_line;
@@ -46,6 +48,8 @@ pub use align::RenderAlign;
 pub use aspect_ratio::RenderAspectRatio;
 pub use baseline::RenderBaseline;
 pub use constrained_box::RenderConstrainedBox;
+pub use constrained_overflow_box::RenderConstrainedOverflowBox;
+pub use constraints_transform_box::{BoxConstraintsTransform, RenderConstraintsTransformBox};
 pub use custom_multi_child_layout_box::{
     MultiChildLayoutContext, MultiChildLayoutDelegate, RenderCustomMultiChildLayoutBox,
     SimpleGridDelegate,
