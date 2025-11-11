@@ -1,7 +1,6 @@
 //! RenderSliverAppBar - Floating and pinned app bar for scrollable content
 
-use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -49,7 +48,6 @@ pub struct RenderSliverAppBar {
     pub stretch: bool,
 
     // Layout cache
-    child_size: Size,
     sliver_geometry: SliverGeometry,
 }
 
@@ -66,7 +64,6 @@ impl RenderSliverAppBar {
             floating: false,
             snap: false,
             stretch: false,
-            child_size: Size::ZERO,
             sliver_geometry: SliverGeometry::default(),
         }
     }
@@ -145,8 +142,6 @@ impl RenderSliverAppBar {
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        _children: &[flui_core::element::ElementId],
     ) -> SliverGeometry {
         let scroll_offset = constraints.scroll_offset;
         let remaining_extent = constraints.remaining_paint_extent;
@@ -205,28 +200,22 @@ impl Default for RenderSliverAppBar {
     }
 }
 
-impl Render for RenderSliverAppBar {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
-
-        // App bar takes full width
-        self.child_size = Size::new(
-            constraints.max_width,
-            self.expanded_height,
-        );
-
-        self.child_size
+impl RenderSliver for RenderSliverAppBar {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Calculate and cache sliver geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Paint child if present and visible
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
 
-        // TODO: Paint app bar with appropriate height based on scroll position
-        // TODO: Apply elevation shadow
-        // TODO: Paint title and actions
-
-        canvas
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -335,8 +324,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_not_scrolled() {
         let app_bar = RenderSliverAppBar::new(200.0);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -350,7 +337,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = app_bar.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = app_bar.calculate_sliver_geometry(&constraints);
 
         // Full app bar visible
         assert_eq!(geometry.scroll_extent, 200.0);
@@ -361,8 +348,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_partially_scrolled() {
         let app_bar = RenderSliverAppBar::new(200.0);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -376,7 +361,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = app_bar.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = app_bar.calculate_sliver_geometry(&constraints);
 
         // Half visible (200 - 100 = 100px)
         assert_eq!(geometry.scroll_extent, 200.0);
@@ -387,8 +372,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_scrolled_past() {
         let app_bar = RenderSliverAppBar::new(200.0);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -402,7 +385,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = app_bar.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = app_bar.calculate_sliver_geometry(&constraints);
 
         // Not visible
         assert_eq!(geometry.scroll_extent, 200.0);
@@ -413,8 +396,6 @@ mod tests {
     #[test]
     fn test_calculate_sliver_geometry_pinned() {
         let app_bar = RenderSliverAppBar::new(200.0).with_pinned(true);
-        let tree = ElementTree::new();
-        let children = vec![];
 
         let constraints = SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -428,7 +409,7 @@ mod tests {
             cache_origin: 0.0,
         };
 
-        let geometry = app_bar.calculate_sliver_geometry(&constraints, &tree, &children);
+        let geometry = app_bar.calculate_sliver_geometry(&constraints);
 
         // Still visible at collapsed height when pinned
         assert_eq!(geometry.scroll_extent, 144.0); // 200 - 56

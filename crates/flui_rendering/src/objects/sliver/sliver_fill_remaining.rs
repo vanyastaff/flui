@@ -1,6 +1,6 @@
 //! RenderSliverFillRemaining - Fills remaining viewport space
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -33,7 +33,6 @@ pub struct RenderSliverFillRemaining {
     pub fill_overscroll: bool,
 
     // Layout cache
-    child_size: Size,
     sliver_geometry: SliverGeometry,
 }
 
@@ -43,7 +42,6 @@ impl RenderSliverFillRemaining {
         Self {
             has_scrolled_body: false,
             fill_overscroll: false,
-            child_size: Size::ZERO,
             sliver_geometry: SliverGeometry::default(),
         }
     }
@@ -146,29 +144,38 @@ impl Default for RenderSliverFillRemaining {
     }
 }
 
-impl Render for RenderSliverFillRemaining {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverFillRemaining {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
-        // For now, use the remaining extent as the size
-        // In real implementation, child would be laid out with these constraints
-        self.child_size = Size::new(
-            constraints.max_width,
-            constraints.max_height,
-        );
+        // Layout child with box constraints based on remaining viewport space
+        let child_size = if let Some(child_id) = ctx.children.try_single() {
+            let remaining_extent = constraints.remaining_paint_extent;
+            let box_constraints = BoxConstraints::new(
+                0.0,
+                constraints.cross_axis_extent,
+                0.0,
+                remaining_extent,
+            );
+            ctx.tree.layout_child(child_id, box_constraints)
+        } else {
+            Size::ZERO
+        };
 
-        self.child_size
+        // Calculate and cache sliver geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(constraints, child_size);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Paint child if present and visible
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
 
-        // Child painting happens here with the calculated size
-
-        // TODO: Paint child filling the remaining space
-
-        canvas
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
