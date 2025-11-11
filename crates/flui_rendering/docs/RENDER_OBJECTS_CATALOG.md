@@ -239,14 +239,14 @@
 - [x] RenderErrorBox (debug error box)
 - [x] RenderPlaceholder (debug placeholder)
 
-### Phase 4: Sliver (⏳ 12% Complete - 3/26 objects)
+### Phase 4: Sliver (⏳ 19% Complete - 5/26 objects)
 - [x] RenderSliverList (scrollable lazy-loading list)
 - [x] RenderSliverPadding (sliver padding wrapper)
 - [x] RenderSliverGrid (scrollable 2D grid layout)
+- [x] RenderSliverToBoxAdapter (box to sliver adapter)
+- [x] RenderSliverFillViewport (viewport-filling children)
 - [ ] RenderSliver базовый trait
 - [ ] RenderViewport (sliver container)
-- [ ] RenderSliverToBoxAdapter (box to sliver adapter)
-- [ ] RenderSliverFillViewport (fill viewport sliver)
 - [ ] RenderSliverFixedExtentList (fixed-size items)
 - [ ] RenderSliverPrototypeExtentList (prototype extent)
 - [ ] RenderSliverAppBar (floating app bar)
@@ -272,8 +272,8 @@
 
 | Статус | Layout | Visual | Interaction | Text | Media | Sliver | Special | Всего |
 |--------|--------|--------|-------------|------|-------|--------|---------|-------|
-| ✅ Готово | 16 | 14 | 4 | 1 | 1 | 3 | 8 | **47** |
-| ⏳ Планируется | 9 | 1 | 0 | 1 | 1 | 23 | 0 | **35** |
+| ✅ Готово | 16 | 14 | 4 | 1 | 1 | 5 | 8 | **49** |
+| ⏳ Планируется | 9 | 1 | 0 | 1 | 1 | 21 | 0 | **33** |
 | **Всего** | **25** | **15** | **4** | **2** | **2** | **26** | **8** | **82** |
 
 ---
