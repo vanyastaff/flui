@@ -4,6 +4,7 @@
 //! a specialized constraint/sizing protocol. Unlike boxes which use
 //! BoxConstraints, slivers use SliverConstraints and SliverGeometry.
 
+pub mod sliver_app_bar;
 pub mod sliver_fill_remaining;
 pub mod sliver_fill_viewport;
 pub mod sliver_fixed_extent_list;
@@ -26,6 +27,8 @@ pub mod viewport;
 
 
 
+
+pub use sliver_app_bar::RenderSliverAppBar;
 pub use sliver_fill_remaining::RenderSliverFillRemaining;
 pub use sliver_fill_viewport::RenderSliverFillViewport;
 pub use sliver_fixed_extent_list::RenderSliverFixedExtentList;
@@ -38,6 +41,7 @@ pub use sliver_padding::RenderSliverPadding;
 pub use sliver_prototype_extent_list::RenderSliverPrototypeExtentList;
 pub use sliver_to_box_adapter::RenderSliverToBoxAdapter;
 pub use viewport::{ClipBehavior, RenderViewport};
+
 
 
 
