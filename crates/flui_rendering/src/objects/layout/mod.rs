@@ -5,6 +5,7 @@ pub mod aspect_ratio;
 pub mod baseline;
 pub mod constrained_box;
 pub mod custom_multi_child_layout_box;
+pub mod custom_single_child_layout_box;
 pub mod editable_line;
 pub mod empty;
 pub mod flex;
@@ -48,6 +49,10 @@ pub use constrained_box::RenderConstrainedBox;
 pub use custom_multi_child_layout_box::{
     MultiChildLayoutContext, MultiChildLayoutDelegate, RenderCustomMultiChildLayoutBox,
     SimpleGridDelegate,
+};
+pub use custom_single_child_layout_box::{
+    CenterDelegate, FixedSizeDelegate, RenderCustomSingleChildLayoutBox,
+    SingleChildLayoutDelegate,
 };
 pub use editable_line::{RenderEditableLine, TextSelection};
 pub use empty::RenderEmpty;

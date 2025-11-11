@@ -14,15 +14,15 @@
 
 | Категория | Flutter | FLUI | Процент |
 |-----------|---------|------|---------|
-| **Реализовано в FLUI** | - | 85 | - |
+| **Реализовано в FLUI** | - | 86 | - |
 | **Всего в Flutter** | ~118 | - | - |
 | **Не нужны (архит. различия)** | - | ~4 | - |
-| **Покрытие основных** | - | - | **~72%** |
+| **Покрытие основных** | - | - | **~73%** |
 | **Покрытие с учетом архитектуры** | - | - | **~75%** |
 
 ---
 
-## ✅ Что реализовано в FLUI (85 объектов)
+## ✅ Что реализовано в FLUI (86 объектов)
 
 ### Leaf RenderObjects (9)
 - ✅ RenderParagraph
@@ -39,9 +39,10 @@
 - ✅ RenderView (root render object)
 - ✅ RenderAnimatedSize (simplified version - linear interpolation)
 
-### Single-child RenderObjects (35)
+### Single-child RenderObjects (36)
 - ✅ RenderPadding
 - ✅ RenderConstrainedBox
+- ✅ RenderCustomSingleChildLayoutBox
 - ✅ RenderLimitedBox
 - ✅ RenderAspectRatio
 - ✅ RenderFractionallySizedBox
@@ -138,7 +139,7 @@
    - Priority: MEDIUM
    - Use case: Subtle animations, offsets
 
-4. **RenderCustomSingleChildLayoutBox** - Custom single layout
+4. ~~**RenderCustomSingleChildLayoutBox**~~ ✅ - Custom single layout (IMPLEMENTED)
    - Priority: MEDIUM
    - Use case: Custom layout delegates
 
@@ -299,7 +300,7 @@
 
 ### Tier 2: Высокий приоритет (сильно расширяют возможности)
 5. ~~**RenderFractionalTranslation**~~ ✅ - Полезно для layouts (IMPLEMENTED)
-6. **RenderCustomSingleChildLayoutBox** - Flexibility
+6. ~~**RenderCustomSingleChildLayoutBox**~~ ✅ - Flexibility (IMPLEMENTED)
 7. **RenderFollowerLayer / RenderLeaderLayer** - Tooltips, popovers
 8. **RenderSliverVariedExtentList** - Better list support
 
