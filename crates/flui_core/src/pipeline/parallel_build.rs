@@ -289,6 +289,15 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
             );
         }
 
+        crate::element::Element::Sliver(_sliver) => {
+            // SliverElements don't rebuild - they only relayout
+            #[cfg(debug_assertions)]
+            tracing::trace!(
+                "Sliver element {:?} skipped (rebuilds via layout)",
+                element_id
+            );
+        }
+
         crate::element::Element::Provider(_provider) => {
             // Provider rebuild - propagate changes to descendants
             #[cfg(debug_assertions)]

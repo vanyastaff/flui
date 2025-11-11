@@ -334,6 +334,19 @@ impl ElementTree {
                     None
                 }
             }
+            Element::Sliver(sliver_elem) => {
+                if let Some(unmounted) = sliver_elem.take_unmounted_children() {
+                    // Recursively insert each unmounted child
+                    let mut ids = Vec::with_capacity(unmounted.len());
+                    for child in unmounted {
+                        let child_id = self.insert(child); // Recursive call
+                        ids.push(child_id);
+                    }
+                    Some(ids)
+                } else {
+                    None
+                }
+            }
             Element::Component(_comp_elem) => {
                 // ComponentElement children are managed by build pipeline
                 None
@@ -859,6 +872,42 @@ impl ElementTree {
         }
     }
 
+    /// Walk down through ComponentElements to find the first SliverElement
+    ///
+    /// This helper is used by both `layout_sliver_child` and `paint_sliver_child` to find
+    /// the actual SliverElement to operate on.
+    ///
+    /// # Arguments
+    /// * `start_id` - Starting element ID (may be Component or Sliver)
+    ///
+    /// # Returns
+    /// * `Some(ElementId)` - ID of the first SliverElement found
+    /// * `None` - If no SliverElement found or tree walk failed
+    fn find_sliver_element(&self, start_id: ElementId) -> Option<ElementId> {
+        let mut current_id = start_id;
+        loop {
+            if let Some(element) = self.get(current_id) {
+                match element {
+                    crate::element::Element::Sliver(_) => {
+                        return Some(current_id);
+                    }
+                    crate::element::Element::Component(comp) => {
+                        if let Some(comp_child_id) = comp.child() {
+                            current_id = comp_child_id;
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => {
+                        return None;
+                    }
+                }
+            } else {
+                return None;
+            }
+        }
+    }
+
     // ========== Convenience Aliases for Render Traits ==========
 
     /// Alias for `layout_render_object` - used by SingleRender/MultiRender traits
@@ -944,24 +993,62 @@ impl ElementTree {
     /// # Returns
     ///
     /// The sliver geometry computed by the child's layout method.
-    ///
-    /// # Note
-    ///
-    /// This is currently a stub that returns default geometry.
-    /// Full implementation will be added when sliver rendering is complete.
     #[inline]
     pub fn layout_sliver_child(
         &self,
         child_id: ElementId,
-        _constraints: flui_types::SliverConstraints,
+        constraints: flui_types::SliverConstraints,
     ) -> flui_types::SliverGeometry {
-        // TODO: Implement full sliver layout logic
-        // For now, return default geometry
-        tracing::warn!(
-            ?child_id,
-            "layout_sliver_child called but sliver layout not yet fully implemented"
-        );
-        flui_types::SliverGeometry::default()
+        // Bounds checking: verify child_id exists in tree
+        if !self.contains(child_id) {
+            #[cfg(debug_assertions)]
+            {
+                tracing::error!(
+                    child_id = ?child_id,
+                    "layout_sliver_child called with invalid child_id - element not in tree"
+                );
+                panic!("Invalid child_id in layout_sliver_child: {:?}", child_id);
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                tracing::error!(
+                    child_id = ?child_id,
+                    "layout_sliver_child called with invalid child_id, returning default geometry"
+                );
+                return flui_types::SliverGeometry::default();
+            }
+        }
+
+        // Walk down through ComponentElements to find the first SliverElement
+        let sliver_id = self.find_sliver_element(child_id);
+
+        if let Some(sliver_id) = sliver_id {
+            // Get the SliverElement
+            if let Some(crate::element::Element::Sliver(sliver_elem)) = self.get(sliver_id) {
+                // Call layout_sliver on the element
+                let geometry = sliver_elem.layout_sliver(self, constraints);
+
+                // Store geometry in render state
+                sliver_elem.render_state().write().set_geometry(geometry);
+                sliver_elem.render_state().write().clear_needs_layout();
+
+                geometry
+            } else {
+                tracing::error!(
+                    child_id = ?child_id,
+                    sliver_id = ?sliver_id,
+                    "Found sliver_id but failed to get SliverElement. Returning default geometry."
+                );
+                flui_types::SliverGeometry::default()
+            }
+        } else {
+            tracing::warn!(
+                child_id = ?child_id,
+                "Could not find SliverElement for child. Element may be Component without child or other type. Returning default geometry."
+            );
+            flui_types::SliverGeometry::default()
+        }
     }
 
     /// Paint a sliver child at the given offset
@@ -977,24 +1064,32 @@ impl ElementTree {
     /// # Returns
     ///
     /// A Canvas containing the child's drawing commands.
-    ///
-    /// # Note
-    ///
-    /// This is currently a stub that returns an empty canvas.
-    /// Full implementation will be added when sliver rendering is complete.
     #[inline]
     pub fn paint_sliver_child(
         &self,
         child_id: ElementId,
-        _offset: crate::Offset,
+        offset: crate::Offset,
     ) -> flui_painting::Canvas {
-        // TODO: Implement full sliver paint logic
-        // For now, return empty canvas
-        tracing::warn!(
-            ?child_id,
-            "paint_sliver_child called but sliver painting not yet fully implemented"
-        );
-        flui_painting::Canvas::new()
+        crate::trace_hot_path!("paint_sliver_child", ?child_id);
+
+        // Walk down through ComponentElements to find the first SliverElement
+        let sliver_id = self.find_sliver_element(child_id);
+
+        if let Some(sliver_id) = sliver_id {
+            // Get the SliverElement
+            if let Some(crate::element::Element::Sliver(sliver_elem)) = self.get(sliver_id) {
+                // Call paint_sliver on the element
+                sliver_elem.paint_sliver(self, offset)
+            } else {
+                #[cfg(debug_assertions)]
+                tracing::warn!("paint_sliver_child: found sliver_id but failed to get SliverElement, returning empty Canvas");
+                flui_painting::Canvas::new()
+            }
+        } else {
+            #[cfg(debug_assertions)]
+            tracing::warn!("paint_sliver_child: returning empty Canvas (no sliver_id)");
+            flui_painting::Canvas::new()
+        }
     }
 
     // ========== Tree Information ==========
@@ -1291,6 +1386,9 @@ impl ElementTree {
             Element::Render(render_elem) => {
                 self.hit_test_render(element_id, render_elem, position, result)
             }
+            Element::Sliver(sliver_elem) => {
+                self.hit_test_sliver(element_id, sliver_elem, position, result)
+            }
             Element::Component(comp_elem) => {
                 // ComponentElement delegates to child
                 if let Some(child_id) = comp_elem.child() {
@@ -1353,6 +1451,53 @@ impl ElementTree {
 
         // Add self to result (even if child was hit)
         // This maintains depth-first order: children added before parents
+        result.add_element(element_id, local_position);
+
+        true
+    }
+
+    /// Hit test for SliverElement
+    ///
+    /// Checks if position is within sliver bounds and recursively tests children.
+    /// Slivers use geometry instead of size for bounds checking.
+    fn hit_test_sliver(
+        &self,
+        element_id: ElementId,
+        sliver_elem: &crate::element::SliverElement,
+        position: flui_types::Offset,
+        result: &mut crate::element::ElementHitTestResult,
+    ) -> bool {
+        // Get geometry from render state
+        let render_state = sliver_elem.render_state().read();
+        let geometry = match render_state.geometry() {
+            Some(g) => g,
+            None => return false, // No layout yet
+        };
+        drop(render_state);
+
+        // Get offset (position in viewport)
+        let offset = sliver_elem.offset();
+
+        // Transform position to local coordinates
+        let local_position = position - offset;
+
+        // For slivers, we need to check against paint_extent
+        // (the visible portion of the sliver)
+        // TODO: This is a simplified check - proper sliver hit testing
+        // should account for scroll direction and constraints
+        if local_position.dx < 0.0
+            || local_position.dy < 0.0
+            || local_position.dy > geometry.paint_extent
+        {
+            return false; // Outside visible bounds
+        }
+
+        // Test children first (front to back)
+        for &child_id in sliver_elem.children() {
+            self.hit_test_recursive(child_id, position, result);
+        }
+
+        // Add self to result
         result.add_element(element_id, local_position);
 
         true

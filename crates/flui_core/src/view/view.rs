@@ -212,6 +212,7 @@ pub(crate) mod sealed {
     impl Sealed for crate::element::ComponentElement {}
     impl Sealed for crate::element::RenderElement {}
     impl Sealed for crate::element::ProviderElement {}
+    impl Sealed for crate::element::SliverElement {}
     impl Sealed for crate::element::Element {}
 }
 

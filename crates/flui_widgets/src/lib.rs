@@ -59,6 +59,7 @@ pub mod error;
 pub mod gestures;
 pub mod interaction;
 pub mod layout;
+pub mod scrolling;
 pub mod style;
 pub mod visual_effects;
 
@@ -75,8 +76,9 @@ pub use layout::{
     Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
     IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
     RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
-    Stack, Viewport, Wrap,
+    Stack, Wrap,
 };
+pub use scrolling::{CustomScrollView, Scrollable, Viewport};
 pub use visual_effects::{
     BackdropFilter, ClipOval, ClipRRect, ClipRect, Material, Offstage, Opacity, PhysicalModel,
     RepaintBoundary, Transform, Visibility,
@@ -108,8 +110,9 @@ pub mod prelude {
         Baseline, Column, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
         IntrinsicHeight, IntrinsicWidth, ListBody, OverflowBox, Positioned, PositionedDirectional,
         RotatedBox, Row, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer, Stack,
-        Viewport, Wrap,
+        Wrap,
     };
+    pub use crate::scrolling::{CustomScrollView, Scrollable, Viewport};
     pub use crate::visual_effects::{
         BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
         RepaintBoundary, Transform, Visibility,

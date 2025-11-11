@@ -10,6 +10,8 @@ pub mod media;
 pub mod sliver;
 pub mod special;
 pub mod text;
+pub mod viewport;
+
 
 /// Debug render objects and utilities
 /// Effect render objects (opacity, transforms, clips)
@@ -28,9 +30,11 @@ pub use media::*;
 pub use sliver::*;
 pub use special::*;
 pub use text::*;
+pub use viewport::*;
 
 // Debug objects
 pub use debug::{RenderErrorBox, RenderPlaceholder};
+
 
 
 

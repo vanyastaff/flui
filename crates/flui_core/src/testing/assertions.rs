@@ -272,6 +272,7 @@ fn element_type_name(element: &Element) -> &'static str {
     match element {
         Element::Component(_) => "Component",
         Element::Render(_) => "Render",
+        Element::Sliver(_) => "Sliver",
         Element::Provider(_) => "Provider",
     }
 }

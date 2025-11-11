@@ -228,7 +228,7 @@ impl Render for RenderScrollView {
 
             // Composite child canvas onto our canvas
             canvas.translate(paint_offset.dx, paint_offset.dy);
-            canvas.concat(&child_canvas);
+            canvas.append_canvas(child_canvas);
 
             canvas.restore();
 
@@ -314,7 +314,7 @@ impl RenderScrollView {
                     viewport_width,
                     self.scrollbar_thickness,
                 );
-                canvas.draw_rect(track_rect, &Paint::color(Color::rgba(0, 0, 0, 25))); // ~0.1 alpha
+                canvas.draw_rect(track_rect, &Paint::fill(Color::rgba(0, 0, 0, 25))); // ~0.1 alpha
 
                 // Draw scrollbar handle
                 let handle_rect = Rect::from_xywh(
@@ -323,7 +323,7 @@ impl RenderScrollView {
                     handle_width,
                     self.scrollbar_thickness,
                 );
-                canvas.draw_rect(handle_rect, &Paint::color(Color::rgba(0, 0, 0, 128))); // ~0.5 alpha
+                canvas.draw_rect(handle_rect, &Paint::fill(Color::rgba(0, 0, 0, 128))); // ~0.5 alpha
             }
         }
     }

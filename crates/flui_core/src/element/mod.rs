@@ -45,6 +45,8 @@ pub mod hit_test;
 pub mod lifecycle;
 pub mod provider;
 pub mod render;
+pub mod sliver;
+
 
 // Re-exports
 pub use component::ComponentElement;
@@ -57,6 +59,7 @@ pub use hit_test::{ElementHitTestEntry, ElementHitTestResult};
 pub use lifecycle::ElementLifecycle;
 pub use provider::ProviderElement;
 pub use render::RenderElement;
+pub use sliver::SliverElement;
 
 // Moved to other modules (Phase 1):
 // - BuildContext moved to view::BuildContext
@@ -72,3 +75,4 @@ pub use render::RenderElement;
 // - pipeline depends on foundation + element (OK)
 // Previously: element → render → pipeline → element (CIRCULAR!)
 pub use crate::foundation::ElementId;
+

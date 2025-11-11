@@ -80,7 +80,7 @@
 use std::fmt;
 
 use crate::element::{
-    ComponentElement, ElementId, ElementLifecycle, ProviderElement, RenderElement,
+    ComponentElement, ElementId, ElementLifecycle, ProviderElement, RenderElement, SliverElement,
 };
 use crate::foundation::Slot;
 
@@ -88,6 +88,7 @@ use crate::foundation::Slot;
 pub use crate::element::component::ComponentElement as Component;
 pub use crate::element::provider::ProviderElement as Provider;
 pub use crate::element::render::RenderElement as Render;
+pub use crate::element::sliver::SliverElement as Sliver;
 
 /// Element - Heterogeneous element storage via enum
 ///
@@ -95,18 +96,19 @@ pub use crate::element::render::RenderElement as Render;
 /// User code does NOT extend this enum - new element types are a
 /// framework-level addition (major version bump).
 ///
-/// # Variants (3 total - matches Flutter architecture)
+/// # Variants (4 total - extends Flutter architecture)
 ///
 /// - **Component** - Component views with optional state → calls `build()` to produce child view tree
-/// - **Render** - Render views → owns renderer (Render trait impl) for layout and painting
+/// - **Render** - Render views → owns renderer (Render trait impl) for box layout and painting
+/// - **Sliver** - Sliver views → owns sliver renderer (RenderSliver trait impl) for scrollable layout
 /// - **Provider** - Provider views → propagates data down tree with dependency tracking
 ///
-/// # Why 3 variants?
+/// # Why 4 variants?
 ///
 /// 1. **Closed set** - Framework defines element types, not users
-/// 2. **Clear separation** - Component (build), Render (layout), Provider (context)
-/// 3. **Performance** - Smaller enum = better cache locality
-/// 4. **Matches Flutter** - Flutter has same 3 element types
+/// 2. **Clear separation** - Component (build), Render (box layout), Sliver (scroll layout), Provider (context)
+/// 3. **Performance** - Small enum = better cache locality
+/// 4. **Extends Flutter** - Flutter has 3 types; we add Sliver as separate variant for type safety
 ///
 /// # Design Rationale
 ///
@@ -218,6 +220,26 @@ pub enum Element {
     /// - `dependents: Vec<ElementId>` - Widgets that depend on this data
     /// - `child: Option<ElementId>` - Single child
     Provider(ProviderElement),
+
+    /// Sliver element - performs sliver layout and paint for scrollable content
+    ///
+    /// Created by **Sliver Views**.
+    /// Owns a sliver renderer (RenderSliver trait implementation) for scrollable content.
+    /// Uses SliverConstraints → SliverGeometry instead of BoxConstraints → Size.
+    ///
+    /// # Lifecycle
+    ///
+    /// ```text
+    /// mount() → create_render_object() → layout() → paint()
+    /// ```
+    ///
+    /// # Implementation
+    ///
+    /// SliverElement stores:
+    /// - `render_object: Box<dyn RenderSliver>` - The sliver renderer implementation
+    /// - `geometry: SliverGeometry, offset: Offset` - Layout results
+    /// - ParentData via RenderSliver for metadata from parent
+    Sliver(SliverElement),
 }
 
 impl Element {
@@ -308,6 +330,26 @@ impl Element {
         }
     }
 
+    /// Try to get as SliverElement (immutable)
+    #[inline]
+    #[must_use]
+    pub fn as_sliver(&self) -> Option<&SliverElement> {
+        match self {
+            Self::Sliver(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Try to get as SliverElement (mutable)
+    #[inline]
+    #[must_use]
+    pub fn as_sliver_mut(&mut self) -> Option<&mut SliverElement> {
+        match self {
+            Self::Sliver(s) => Some(s),
+            _ => None,
+        }
+    }
+
     // Note: as_parent_data() removed - ParentData now via Render::Metadata
     // Access parent data via render_object().metadata() instead
 
@@ -343,6 +385,15 @@ impl Element {
         matches!(self, Self::Provider(_))
     }
 
+    /// Check if this is a Sliver element
+    ///
+    /// Returns true for Sliver view elements.
+    #[inline]
+    #[must_use]
+    pub fn is_sliver(&self) -> bool {
+        matches!(self, Self::Sliver(_))
+    }
+
     // ========== Unified Interface (DynElement-like) ==========
     //
     // These methods provide a unified interface across all element types,
@@ -357,6 +408,7 @@ impl Element {
         match self {
             Self::Component(c) => c.parent(),
             Self::Render(r) => r.parent(),
+            Self::Sliver(s) => s.parent(),
             Self::Provider(p) => p.parent(),
         }
     }
@@ -376,6 +428,7 @@ impl Element {
             Self::Component(c) => c.children_iter(),
             Self::Provider(p) => p.children_iter(),
             Self::Render(r) => r.children_iter(),
+            Self::Sliver(s) => s.children_iter(),
         }
     }
 
@@ -389,6 +442,7 @@ impl Element {
             Self::Component(c) => c.lifecycle(),
             Self::Provider(p) => p.lifecycle(),
             Self::Render(r) => r.lifecycle(),
+            Self::Sliver(s) => s.lifecycle(),
         }
     }
 
@@ -407,6 +461,7 @@ impl Element {
             Self::Component(c) => c.mount(parent, slot),
             Self::Provider(p) => p.mount(parent, slot),
             Self::Render(r) => r.mount(parent, slot),
+            Self::Sliver(s) => s.mount(parent, slot),
         }
     }
 
@@ -420,6 +475,7 @@ impl Element {
             Self::Component(c) => c.unmount(),
             Self::Provider(p) => p.unmount(),
             Self::Render(r) => r.unmount(),
+            Self::Sliver(s) => s.unmount(),
         }
     }
 
@@ -466,6 +522,7 @@ impl Element {
             Self::Component(c) => c.handle_event(event),
             Self::Provider(p) => p.handle_event(event),
             Self::Render(r) => r.handle_event(event),
+            Self::Sliver(s) => s.handle_event(event),
         }
     }
 
@@ -483,6 +540,7 @@ impl Element {
             Self::Component(c) => c.deactivate(),
             Self::Provider(p) => p.deactivate(),
             Self::Render(r) => r.deactivate(),
+            Self::Sliver(s) => s.deactivate(),
         }
     }
 
@@ -496,6 +554,7 @@ impl Element {
             Self::Component(c) => c.activate(),
             Self::Provider(p) => p.activate(),
             Self::Render(r) => r.activate(),
+            Self::Sliver(s) => s.activate(),
         }
     }
 
@@ -509,6 +568,7 @@ impl Element {
             Self::Component(c) => c.is_dirty(),
             Self::Provider(p) => p.is_dirty(),
             Self::Render(r) => r.is_dirty(),
+            Self::Sliver(s) => s.is_dirty(),
         }
     }
 
@@ -521,6 +581,7 @@ impl Element {
             Self::Component(c) => c.mark_dirty(),
             Self::Provider(p) => p.mark_dirty(),
             Self::Render(r) => r.mark_dirty(),
+            Self::Sliver(s) => s.mark_dirty(),
         }
     }
 
@@ -558,6 +619,36 @@ impl Element {
         }
     }
 
+    /// Get sliver render object if this is a sliver element
+    ///
+    /// Returns a read guard to the sliver render object for Sliver elements, `None` otherwise.
+    /// The guard ensures safe access through RwLock's read locking.
+    #[inline]
+    #[must_use]
+    pub fn sliver_render_object(
+        &self,
+    ) -> Option<parking_lot::RwLockReadGuard<'_, Box<dyn crate::render::RenderSliver>>> {
+        match self {
+            Self::Sliver(s) => Some(s.render_object()),
+            _ => None,
+        }
+    }
+
+    /// Get mutable sliver render object if this is a sliver element
+    ///
+    /// Returns a write guard to the sliver render object for Sliver elements, `None` otherwise.
+    /// The guard ensures safe mutable access through RwLock's write locking.
+    #[inline]
+    #[must_use]
+    pub fn sliver_render_object_mut(
+        &self,
+    ) -> Option<parking_lot::RwLockWriteGuard<'_, Box<dyn crate::render::RenderSliver>>> {
+        match self {
+            Self::Sliver(s) => Some(s.render_object_mut()),
+            _ => None,
+        }
+    }
+
     /// Get element category name for debugging
     ///
     /// Returns a static string describing the element variant.
@@ -575,6 +666,7 @@ impl Element {
             Self::Component(_) => "Component",
             Self::Render(_) => "Render",
             Self::Provider(_) => "Provider",
+            Self::Sliver(_) => "Sliver",
         }
     }
 
@@ -598,6 +690,7 @@ impl Element {
     pub fn parent_data(&self) -> Option<&dyn crate::render::ParentData> {
         match self {
             Self::Render(r) => r.parent_data(),
+            Self::Sliver(s) => s.parent_data(),
             _ => None,
         }
     }
@@ -613,6 +706,7 @@ impl Element {
             Self::Component(c) => c.forget_child(child_id),
             Self::Provider(p) => p.forget_child(child_id),
             Self::Render(r) => r.forget_child(child_id),
+            Self::Sliver(s) => s.forget_child(child_id),
         }
     }
 
@@ -625,6 +719,7 @@ impl Element {
             Self::Component(c) => c.update_slot_for_child(child_id, new_slot),
             Self::Provider(p) => p.update_slot_for_child(child_id, new_slot),
             Self::Render(r) => r.update_slot_for_child(child_id, new_slot),
+            Self::Sliver(s) => s.update_slot_for_child(child_id, new_slot),
         }
     }
 
@@ -645,6 +740,24 @@ impl Element {
             _ => None,
         }
     }
+
+    /// Get raw pointer to RenderSliverState if this is a SliverElement
+    ///
+    /// Returns None for ComponentElement, RenderElement, etc.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure pointer is used safely and respects RwLock semantics.
+    #[inline]
+    #[must_use]
+    pub fn render_sliver_state_ptr(
+        &self,
+    ) -> Option<*const parking_lot::RwLock<crate::render::RenderSliverState>> {
+        match self {
+            Self::Sliver(s) => Some(s.render_state()),
+            _ => None,
+        }
+    }
 }
 
 // ========== Display Implementation ==========
@@ -655,6 +768,7 @@ impl fmt::Display for Element {
             Self::Component(c) => write!(f, "Component({:?})", c),
             Self::Render(r) => write!(f, "Render({:?})", r),
             Self::Provider(p) => write!(f, "Provider({:?})", p),
+            Self::Sliver(s) => write!(f, "Sliver({:?})", s),
         }
     }
 }

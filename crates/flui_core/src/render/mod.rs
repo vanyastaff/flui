@@ -38,7 +38,9 @@ pub mod parent_data;
 pub mod render;
 pub mod render_flags;
 pub mod render_sliver;
+pub mod render_sliver_state;
 pub mod render_state;
+
 
 
 /// Render trait - single unified trait for all render objects
@@ -66,4 +68,6 @@ pub use parent_data::{
 pub use cache::{LayoutCache, LayoutCacheKey, LayoutResult};
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
 pub use render_state::RenderState;
+pub use render_sliver_state::RenderSliverState;
+
 

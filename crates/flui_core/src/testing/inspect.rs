@@ -34,6 +34,7 @@ impl<'a> TreeInspector<'a> {
                 match element {
                     Element::Component(_) => summary.component_count += 1,
                     Element::Render(_) => summary.render_count += 1,
+                    Element::Sliver(_) => summary.render_count += 1, // Count slivers as render objects
                     Element::Provider(_) => summary.provider_count += 1,
                 }
 
@@ -112,7 +113,8 @@ impl<'a> TreeInspector<'a> {
             if let Some(element) = self.tree.get(id) {
                 let type_name = match element {
                     Element::Component(_) => "Component",
-                    Element::Render(_) => "Render   ",
+                    Element::Render(_) => "Render",
+                    Element::Sliver(_) => "Sliver",
                     Element::Provider(_) => "Provider ",
                 };
                 let dirty = if element.is_dirty() { " [DIRTY]" } else { "" };
