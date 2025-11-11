@@ -1,8 +1,9 @@
 //! RenderSliverOpacity - Applies opacity to sliver content
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
+use flui_types::SliverGeometry;
 
 /// RenderObject that applies opacity to a sliver child
 ///
@@ -31,7 +32,7 @@ pub struct RenderSliverOpacity {
     pub always_include_semantics: bool,
 
     // Layout cache
-    child_size: Size,
+    sliver_geometry: SliverGeometry,
 }
 
 impl RenderSliverOpacity {
@@ -43,7 +44,7 @@ impl RenderSliverOpacity {
         Self {
             opacity: opacity.clamp(0.0, 1.0),
             always_include_semantics: false,
-            child_size: Size::ZERO,
+            sliver_geometry: SliverGeometry::default(),
         }
     }
 
@@ -52,59 +53,61 @@ impl RenderSliverOpacity {
         self.opacity = opacity.clamp(0.0, 1.0);
     }
 
-    /// Set whether to always include semantics
+    /// Set always include semantics
     pub fn set_always_include_semantics(&mut self, always: bool) {
         self.always_include_semantics = always;
     }
 
-    /// Create with semantics always included
-    pub fn with_always_include_semantics(mut self) -> Self {
-        self.always_include_semantics = true;
-        self
+    /// Get the sliver geometry from last layout
+    pub fn geometry(&self) -> SliverGeometry {
+        self.sliver_geometry
     }
 
-    /// Check if the child should be painted
+    /// Check if child should be painted
     pub fn should_paint(&self) -> bool {
         self.opacity > 0.0
     }
 
-    /// Check if we need a compositing layer
+    /// Check if needs compositing layer
     pub fn needs_compositing(&self) -> bool {
         self.opacity > 0.0 && self.opacity < 1.0
     }
 }
 
-impl Render for RenderSliverOpacity {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
-
-        // Opacity doesn't affect layout, pass through to child
-        // In real implementation, child would be laid out here
-        self.child_size = Size::new(
-            constraints.max_width,
-            constraints.max_height,
-        );
-
-        self.child_size
+impl Default for RenderSliverOpacity {
+    fn default() -> Self {
+        Self::new(1.0)
     }
+}
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
-
-        // If fully transparent, skip painting (unless semantics required)
-        if !self.should_paint() && !self.always_include_semantics {
-            return canvas;
+impl RenderSliver for RenderSliverOpacity {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Pass through to child
+        if let Some(child_id) = ctx.children.try_single() {
+            self.sliver_geometry = ctx.tree.layout_sliver_child(child_id, ctx.constraints);
+        } else {
+            self.sliver_geometry = SliverGeometry::default();
         }
 
-        // TODO: Implement actual opacity painting
-        // If opacity == 1.0: paint child directly
-        // If 0.0 < opacity < 1.0: use compositing layer with alpha
-        // canvas.save_layer_alpha(self.opacity);
-        // canvas.paint_child(child);
-        // canvas.restore();
+        self.sliver_geometry
+    }
 
-        canvas
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // If fully transparent, skip painting (unless semantics required)
+        if !self.should_paint() && !self.always_include_semantics {
+            return Canvas::new();
+        }
+
+        // Paint child if present
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                // TODO: Apply opacity using save_layer_alpha when implemented
+                // For now, just paint child directly
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
+
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -165,79 +168,42 @@ mod tests {
     }
 
     #[test]
-    fn test_with_always_include_semantics() {
-        let opacity = RenderSliverOpacity::new(0.5).with_always_include_semantics();
+    fn test_should_paint() {
+        let opacity_visible = RenderSliverOpacity::new(0.5);
+        let opacity_invisible = RenderSliverOpacity::new(0.0);
 
-        assert!(opacity.always_include_semantics);
+        assert!(opacity_visible.should_paint());
+        assert!(!opacity_invisible.should_paint());
     }
 
     #[test]
-    fn test_should_paint_transparent() {
-        let opacity = RenderSliverOpacity::new(0.0);
+    fn test_needs_compositing() {
+        let opacity_full = RenderSliverOpacity::new(1.0);
+        let opacity_partial = RenderSliverOpacity::new(0.5);
+        let opacity_zero = RenderSliverOpacity::new(0.0);
 
-        assert!(!opacity.should_paint());
+        assert!(!opacity_full.needs_compositing());
+        assert!(opacity_partial.needs_compositing());
+        assert!(!opacity_zero.needs_compositing());
     }
 
     #[test]
-    fn test_should_paint_visible() {
-        let opacity = RenderSliverOpacity::new(0.5);
-
-        assert!(opacity.should_paint());
-    }
-
-    #[test]
-    fn test_should_paint_opaque() {
-        let opacity = RenderSliverOpacity::new(1.0);
-
-        assert!(opacity.should_paint());
-    }
-
-    #[test]
-    fn test_needs_compositing_transparent() {
-        let opacity = RenderSliverOpacity::new(0.0);
-
-        assert!(!opacity.needs_compositing());
-    }
-
-    #[test]
-    fn test_needs_compositing_partial() {
-        let opacity = RenderSliverOpacity::new(0.5);
-
-        assert!(opacity.needs_compositing());
-    }
-
-    #[test]
-    fn test_needs_compositing_opaque() {
-        let opacity = RenderSliverOpacity::new(1.0);
-
-        assert!(!opacity.needs_compositing());
-    }
-
-    #[test]
-    fn test_opacity_zero() {
-        let opacity = RenderSliverOpacity::new(0.0);
-
-        assert_eq!(opacity.opacity, 0.0);
-        assert!(!opacity.should_paint());
-        assert!(!opacity.needs_compositing());
-    }
-
-    #[test]
-    fn test_opacity_half() {
-        let opacity = RenderSliverOpacity::new(0.5);
-
-        assert_eq!(opacity.opacity, 0.5);
-        assert!(opacity.should_paint());
-        assert!(opacity.needs_compositing());
-    }
-
-    #[test]
-    fn test_opacity_one() {
-        let opacity = RenderSliverOpacity::new(1.0);
+    fn test_default_is_opaque() {
+        let opacity = RenderSliverOpacity::default();
 
         assert_eq!(opacity.opacity, 1.0);
-        assert!(opacity.should_paint());
-        assert!(!opacity.needs_compositing());
+    }
+
+    #[test]
+    fn test_opacity_range() {
+        // Test edge cases
+        let opacity_min = RenderSliverOpacity::new(0.0);
+        let opacity_max = RenderSliverOpacity::new(1.0);
+        let opacity_mid = RenderSliverOpacity::new(0.5);
+
+        assert_eq!(opacity_min.opacity, 0.0);
+        assert_eq!(opacity_max.opacity, 1.0);
+        assert_eq!(opacity_mid.opacity, 0.5);
     }
 
     #[test]

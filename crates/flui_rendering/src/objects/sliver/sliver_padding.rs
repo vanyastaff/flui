@@ -1,6 +1,6 @@
 //! RenderSliverPadding - Adds padding around sliver content
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -116,29 +116,33 @@ impl RenderSliverPadding {
     }
 }
 
-impl Render for RenderSliverPadding {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        // Slivers don't use BoxConstraints directly
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverPadding {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let child_id = ctx.children.single();
 
-        // For now, return a size that includes padding
-        let width = constraints.max_width;
-        let height = constraints.max_height;
+        // Adjust constraints for padding
+        let child_constraints = self.child_constraints(&ctx.constraints);
 
-        Size::new(width, height)
+        // Layout child
+        let child_geometry = ctx.layout_child(child_id, child_constraints);
+
+        // Add padding to geometry
+        let geometry = self.child_to_parent_geometry(child_geometry);
+
+        // Cache geometry
+        self.sliver_geometry = geometry;
+
+        geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        let child_id = ctx.children.single();
 
-        // Sliver painting happens in viewport
-        // The padding is applied through adjusted child constraints
+        // Paint child with padding offset
+        let padding_offset = Offset::new(self.padding.left, self.padding.top);
+        let child_offset = ctx.offset + padding_offset;
 
-        // TODO: Paint child with padding offset
-        // let child_offset = offset + self.padding.top_left_offset();
-
-        canvas
+        ctx.paint_child(child_id, child_offset)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

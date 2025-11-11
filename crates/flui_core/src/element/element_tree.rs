@@ -931,6 +931,72 @@ impl ElementTree {
         }
     }
 
+    /// Layout a sliver child with sliver constraints
+    ///
+    /// This is a convenience method for laying out sliver children from within
+    /// a RenderSliver implementation.
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The element ID of the sliver child to layout
+    /// - `constraints`: The sliver constraints to apply
+    ///
+    /// # Returns
+    ///
+    /// The sliver geometry computed by the child's layout method.
+    ///
+    /// # Note
+    ///
+    /// This is currently a stub that returns default geometry.
+    /// Full implementation will be added when sliver rendering is complete.
+    #[inline]
+    pub fn layout_sliver_child(
+        &self,
+        child_id: ElementId,
+        _constraints: flui_types::SliverConstraints,
+    ) -> flui_types::SliverGeometry {
+        // TODO: Implement full sliver layout logic
+        // For now, return default geometry
+        tracing::warn!(
+            ?child_id,
+            "layout_sliver_child called but sliver layout not yet fully implemented"
+        );
+        flui_types::SliverGeometry::default()
+    }
+
+    /// Paint a sliver child at the given offset
+    ///
+    /// This is a convenience method for painting sliver children from within
+    /// a RenderSliver implementation.
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The element ID of the sliver child to paint
+    /// - `offset`: The offset at which to paint the child
+    ///
+    /// # Returns
+    ///
+    /// A Canvas containing the child's drawing commands.
+    ///
+    /// # Note
+    ///
+    /// This is currently a stub that returns an empty canvas.
+    /// Full implementation will be added when sliver rendering is complete.
+    #[inline]
+    pub fn paint_sliver_child(
+        &self,
+        child_id: ElementId,
+        _offset: crate::Offset,
+    ) -> flui_painting::Canvas {
+        // TODO: Implement full sliver paint logic
+        // For now, return empty canvas
+        tracing::warn!(
+            ?child_id,
+            "paint_sliver_child called but sliver painting not yet fully implemented"
+        );
+        flui_painting::Canvas::new()
+    }
+
     // ========== Tree Information ==========
 
     /// Get the total number of elements in the tree

@@ -37,10 +37,15 @@ pub mod parent_data;
 #[allow(clippy::module_inception)] // render module contains Render trait
 pub mod render;
 pub mod render_flags;
+pub mod render_sliver;
 pub mod render_state;
+
 
 /// Render trait - single unified trait for all render objects
 pub use render::Render;
+
+/// RenderSliver trait - trait for sliver-based render objects
+pub use render_sliver::RenderSliver;
 
 /// Children enum - unified child representation
 pub use children::Children;
@@ -49,7 +54,7 @@ pub use children::Children;
 pub use arity::Arity;
 
 /// Context structs for layout and paint
-pub use context::{LayoutContext, PaintContext};
+pub use context::{LayoutContext, PaintContext, SliverLayoutContext, SliverPaintContext};
 
 // Core types
 /// Parent data and metadata
@@ -61,3 +66,4 @@ pub use parent_data::{
 pub use cache::{LayoutCache, LayoutCacheKey, LayoutResult};
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
 pub use render_state::RenderState;
+

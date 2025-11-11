@@ -1,6 +1,6 @@
 //! RenderSliverToBoxAdapter - Adapts box widget to sliver protocol
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -118,31 +118,36 @@ impl Default for RenderSliverToBoxAdapter {
     }
 }
 
-impl Render for RenderSliverToBoxAdapter {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        // For now, use box constraints
-        // In real implementation, this would receive SliverConstraints from viewport
-        let constraints = ctx.constraints;
+impl RenderSliver for RenderSliverToBoxAdapter {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        let constraints = &ctx.constraints;
 
-        // Store the size (would be from child in real impl)
-        self.child_size = Size::new(
-            constraints.max_width.min(constraints.min_width),
-            constraints.max_height.min(constraints.min_height),
-        );
+        // Convert sliver constraints to box constraints for child
+        let box_constraints = self.child_constraints(constraints);
 
-        self.child_size
+        // Layout child if present
+        if let Some(child_id) = ctx.children.try_single() {
+            // Layout the box child with box constraints
+            self.child_size = ctx.tree.layout_child(child_id, box_constraints);
+        } else {
+            self.child_size = Size::ZERO;
+        }
+
+        // Calculate and cache sliver geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(constraints, self.child_size);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
+    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+        // Paint child if present and visible
+        if let Some(child_id) = ctx.children.try_single() {
+            if self.sliver_geometry.visible {
+                // Paint child at current offset
+                return ctx.tree.paint_child(child_id, ctx.offset);
+            }
+        }
 
-        // Child painting happens here
-        // Would paint the box child with scroll offset applied
-
-        // TODO: Paint child at adjusted offset based on scroll position
-
-        canvas
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
