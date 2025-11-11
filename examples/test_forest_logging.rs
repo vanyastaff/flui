@@ -25,13 +25,9 @@ fn main() {
 
 #[tracing::instrument]
 fn render_frame(num: u32) {
-    tracing::info!("Starting frame");
-
     build_phase();
     layout_phase();
     paint_phase();
-
-    tracing::info!("Frame complete");
 }
 
 #[tracing::instrument]
