@@ -314,37 +314,9 @@ impl RenderElement {
         let render = self.render_object_mut_direct();
         let arity = render.arity();
 
-        match arity {
-            crate::render::Arity::Exact(0) => {
-                // Leaf render - no children allowed
-                if !children.is_empty() {
-                    panic!(
-                        "Leaf render object (arity=0) cannot have children, got {} children",
-                        children.len()
-                    );
-                }
-            }
-            crate::render::Arity::Exact(1) => {
-                // Single render - exactly one child required
-                if children.len() != 1 {
-                    panic!(
-                        "Single render object (arity=1) must have exactly 1 child, got {}",
-                        children.len()
-                    );
-                }
-            }
-            crate::render::Arity::Exact(n) => {
-                // Fixed arity > 1 - exactly n children required
-                if children.len() != n {
-                    panic!(
-                        "Fixed arity render object (arity={}) must have exactly {} children, got {}",
-                        n, n, children.len()
-                    );
-                }
-            }
-            crate::render::Arity::Variable => {
-                // Multi render - any number of children allowed
-            }
+        // Use Arity::validate() for consistent validation
+        if let Err(err) = arity.validate(children.len()) {
+            panic!("{}", err);
         }
 
         self.children = children;

@@ -242,6 +242,225 @@ impl Children {
             _ => Children::Multi(ids.to_vec()),
         }
     }
+
+    /// Check if this is the None variant
+    ///
+    /// Returns `true` only for `Children::None`.
+    ///
+    /// Note: `is_empty()` also returns true for empty Multi variant.
+    #[inline]
+    pub fn is_none(&self) -> bool {
+        matches!(self, Children::None)
+    }
+
+    /// Check if this is the Single variant
+    ///
+    /// Returns `true` only for `Children::Single(_)`.
+    #[inline]
+    pub fn is_single(&self) -> bool {
+        matches!(self, Children::Single(_))
+    }
+
+    /// Check if this is the Multi variant
+    ///
+    /// Returns `true` only for `Children::Multi(_)`, regardless of vec length.
+    #[inline]
+    pub fn is_multi(&self) -> bool {
+        matches!(self, Children::Multi(_))
+    }
+
+    /// Get first child ID
+    ///
+    /// Returns:
+    /// - `None` for `Children::None`
+    /// - `Some(id)` for `Children::Single(id)`
+    /// - `Some(ids[0])` for `Children::Multi(ids)` if not empty
+    /// - `None` for `Children::Multi(vec![])` (empty vec)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(first) = children.first() {
+    ///     ctx.layout_child(first, constraints);
+    /// }
+    /// ```
+    #[inline]
+    pub fn first(&self) -> Option<ElementId> {
+        match self {
+            Children::None => None,
+            Children::Single(id) => Some(*id),
+            Children::Multi(v) => v.first().copied(),
+        }
+    }
+
+    /// Get last child ID
+    ///
+    /// Returns:
+    /// - `None` for `Children::None`
+    /// - `Some(id)` for `Children::Single(id)`
+    /// - `Some(ids[n-1])` for `Children::Multi(ids)` if not empty
+    /// - `None` for `Children::Multi(vec![])` (empty vec)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(last) = children.last() {
+    ///     // Special handling for last child
+    /// }
+    /// ```
+    #[inline]
+    pub fn last(&self) -> Option<ElementId> {
+        match self {
+            Children::None => None,
+            Children::Single(id) => Some(*id),
+            Children::Multi(v) => v.last().copied(),
+        }
+    }
+
+    /// Get child at specific index
+    ///
+    /// Returns:
+    /// - `None` for `Children::None`
+    /// - `Some(id)` for `Children::Single(id)` if index == 0
+    /// - `Some(ids[index])` for `Children::Multi(ids)` if index < ids.len()
+    /// - `None` if index out of bounds
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if let Some(child) = children.get(2) {
+    ///     // Handle third child
+    /// }
+    /// ```
+    #[inline]
+    pub fn get(&self, index: usize) -> Option<ElementId> {
+        match self {
+            Children::None => None,
+            Children::Single(id) if index == 0 => Some(*id),
+            Children::Single(_) => None,
+            Children::Multi(v) => v.get(index).copied(),
+        }
+    }
+
+    /// Iterate over children
+    ///
+    /// Returns an iterator over all child IDs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// for child_id in children.iter() {
+    ///     ctx.layout_child(child_id, constraints);
+    /// }
+    /// ```
+    #[inline]
+    pub fn iter(&self) -> std::slice::Iter<'_, ElementId> {
+        self.as_slice().iter()
+    }
+
+    /// Check if contains specific child ID
+    ///
+    /// Returns `true` if the given ID is present in the children.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// if children.contains(&child_id) {
+    ///     // Child is present
+    /// }
+    /// ```
+    #[inline]
+    pub fn contains(&self, id: &ElementId) -> bool {
+        self.as_slice().contains(id)
+    }
+
+    /// Map over children with a function
+    ///
+    /// Applies a function to each child ID and collects results.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let sizes = children.map(|child_id| {
+    ///     ctx.get_child_size(child_id)
+    /// });
+    /// ```
+    #[inline]
+    pub fn map<F, T>(&self, f: F) -> Vec<T>
+    where
+        F: FnMut(&ElementId) -> T,
+    {
+        self.as_slice().iter().map(f).collect()
+    }
+
+    /// Filter children with a predicate
+    ///
+    /// Returns a vector of child IDs that match the predicate.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let visible_children = children.filter(|child_id| {
+    ///     ctx.is_child_visible(*child_id)
+    /// });
+    /// ```
+    #[inline]
+    pub fn filter<F>(&self, mut f: F) -> Vec<ElementId>
+    where
+        F: FnMut(&ElementId) -> bool,
+    {
+        self.as_slice().iter().filter(|id| f(id)).copied().collect()
+    }
+
+    /// Enumerate children with indices
+    ///
+    /// Returns an iterator of (index, child_id) pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// for (i, child_id) in children.enumerate() {
+    ///     println!("Child {} has ID {:?}", i, child_id);
+    /// }
+    /// ```
+    #[inline]
+    pub fn enumerate(&self) -> impl Iterator<Item = (usize, &ElementId)> {
+        self.as_slice().iter().enumerate()
+    }
+
+    /// Convert to Vec<ElementId>
+    ///
+    /// Returns a vector containing all child IDs.
+    /// Allocates a new Vec even for Single variant.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let vec = children.to_vec();
+    /// ```
+    #[inline]
+    pub fn to_vec(&self) -> Vec<ElementId> {
+        self.as_slice().to_vec()
+    }
+
+    /// Take ownership of Multi children (returns empty vec if not Multi)
+    ///
+    /// Consumes self and returns the Vec<ElementId> if Multi,
+    /// otherwise returns an empty vec.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let ids = children.into_vec();
+    /// ```
+    #[inline]
+    pub fn into_vec(self) -> Vec<ElementId> {
+        match self {
+            Children::Multi(v) => v,
+            Children::Single(id) => vec![id],
+            Children::None => vec![],
+        }
+    }
 }
 
 // Default is now derived with #[default] annotation above
@@ -344,5 +563,169 @@ mod tests {
         let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
         let children: Children = ids.as_slice().into();
         assert_eq!(children.multi(), ids.as_slice());
+    }
+
+    #[test]
+    fn test_is_variants() {
+        let none = Children::None;
+        assert!(none.is_none());
+        assert!(!none.is_single());
+        assert!(!none.is_multi());
+
+        let single = Children::Single(ElementId::new(1));
+        assert!(!single.is_none());
+        assert!(single.is_single());
+        assert!(!single.is_multi());
+
+        let multi = Children::Multi(vec![ElementId::new(1), ElementId::new(2)]);
+        assert!(!multi.is_none());
+        assert!(!multi.is_single());
+        assert!(multi.is_multi());
+    }
+
+    #[test]
+    fn test_first() {
+        let none = Children::None;
+        assert_eq!(none.first(), None);
+
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.first(), Some(id));
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.first(), Some(ids[0]));
+
+        let empty_multi = Children::Multi(vec![]);
+        assert_eq!(empty_multi.first(), None);
+    }
+
+    #[test]
+    fn test_last() {
+        let none = Children::None;
+        assert_eq!(none.last(), None);
+
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.last(), Some(id));
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.last(), Some(ids[2]));
+
+        let empty_multi = Children::Multi(vec![]);
+        assert_eq!(empty_multi.last(), None);
+    }
+
+    #[test]
+    fn test_get() {
+        let none = Children::None;
+        assert_eq!(none.get(0), None);
+        assert_eq!(none.get(1), None);
+
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.get(0), Some(id));
+        assert_eq!(single.get(1), None);
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.get(0), Some(ids[0]));
+        assert_eq!(multi.get(1), Some(ids[1]));
+        assert_eq!(multi.get(2), Some(ids[2]));
+        assert_eq!(multi.get(3), None);
+    }
+
+    #[test]
+    fn test_iter() {
+        let none = Children::None;
+        assert_eq!(none.iter().count(), 0);
+
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        let collected: Vec<_> = single.iter().copied().collect();
+        assert_eq!(collected, vec![id]);
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        let collected: Vec<_> = multi.iter().copied().collect();
+        assert_eq!(collected, ids);
+    }
+
+    #[test]
+    fn test_contains() {
+        let id1 = ElementId::new(1);
+        let id2 = ElementId::new(2);
+        let id3 = ElementId::new(3);
+
+        let none = Children::None;
+        assert!(!none.contains(&id1));
+
+        let single = Children::Single(id1);
+        assert!(single.contains(&id1));
+        assert!(!single.contains(&id2));
+
+        let multi = Children::Multi(vec![id1, id2]);
+        assert!(multi.contains(&id1));
+        assert!(multi.contains(&id2));
+        assert!(!multi.contains(&id3));
+    }
+
+    #[test]
+    fn test_map() {
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+
+        let doubled: Vec<_> = multi.map(|id| id.get() * 2);
+        assert_eq!(doubled, vec![2, 4, 6]);
+    }
+
+    #[test]
+    fn test_filter() {
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3), ElementId::new(4)];
+        let multi = Children::Multi(ids.clone());
+
+        let even: Vec<_> = multi.filter(|&id| id.get() % 2 == 0);
+        assert_eq!(even, vec![ElementId::new(2), ElementId::new(4)]);
+    }
+
+    #[test]
+    fn test_enumerate() {
+        let ids = vec![ElementId::new(10), ElementId::new(20), ElementId::new(30)];
+        let multi = Children::Multi(ids.clone());
+
+        let enumerated: Vec<_> = multi.enumerate().collect();
+        assert_eq!(enumerated.len(), 3);
+        assert_eq!(enumerated[0], (0, &ids[0]));
+        assert_eq!(enumerated[1], (1, &ids[1]));
+        assert_eq!(enumerated[2], (2, &ids[2]));
+    }
+
+    #[test]
+    fn test_to_vec() {
+        let none = Children::None;
+        assert_eq!(none.to_vec(), Vec::<ElementId>::new());
+
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.to_vec(), vec![id]);
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.to_vec(), ids);
+    }
+
+    #[test]
+    fn test_into_vec() {
+        let none = Children::None;
+        assert_eq!(none.into_vec(), Vec::<ElementId>::new());
+
+        let id = ElementId::new(42);
+        let single = Children::Single(id);
+        assert_eq!(single.into_vec(), vec![id]);
+
+        let ids = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        let multi = Children::Multi(ids.clone());
+        assert_eq!(multi.into_vec(), ids);
     }
 }
