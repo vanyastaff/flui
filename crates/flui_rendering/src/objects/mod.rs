@@ -7,10 +7,10 @@ pub mod effects;
 pub mod interaction;
 pub mod layout;
 pub mod media;
-pub mod render_scroll_view;
-pub mod render_viewport;
+pub mod sliver;
 pub mod special;
 pub mod text;
+
 /// Debug render objects and utilities
 /// Effect render objects (opacity, transforms, clips)
 /// Interaction render objects (pointer listeners, gesture detection)
@@ -25,11 +25,13 @@ pub use effects::*;
 pub use interaction::*;
 pub use layout::*;
 pub use media::*;
-pub use render_scroll_view::RenderScrollView;
-pub use render_viewport::RenderViewport;
+pub use sliver::*;
 pub use special::*;
 pub use text::*;
 
 // Debug objects
 pub use debug::{RenderErrorBox, RenderPlaceholder};
+
+
+
 
