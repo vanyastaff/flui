@@ -1,7 +1,6 @@
 //! RenderSliverSafeArea - Adds safe area insets to sliver content
 
-use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -44,7 +43,6 @@ pub struct RenderSliverSafeArea {
     pub maintain_bottom_view_padding: bool,
 
     // Layout cache
-    child_size: Size,
     sliver_geometry: SliverGeometry,
 }
 
@@ -58,7 +56,6 @@ impl RenderSliverSafeArea {
             insets,
             minimum: EdgeInsets::ZERO,
             maintain_bottom_view_padding: false,
-            child_size: Size::ZERO,
             sliver_geometry: SliverGeometry::default(),
         }
     }
@@ -107,8 +104,6 @@ impl RenderSliverSafeArea {
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        _tree: &ElementTree,
-        _children: &[flui_core::element::ElementId],
     ) -> SliverGeometry {
         let scroll_offset = constraints.scroll_offset;
         let remaining_extent = constraints.remaining_paint_extent;
@@ -153,29 +148,16 @@ impl Default for RenderSliverSafeArea {
     }
 }
 
-impl Render for RenderSliverSafeArea {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
-
-        let padding = self.effective_padding();
-
-        // Safe area reduces available space
-        self.child_size = Size::new(
-            (constraints.max_width - padding.horizontal_total()).max(0.0),
-            (constraints.max_height - padding.vertical_total()).max(0.0),
-        );
-
-        self.child_size
+impl RenderSliver for RenderSliverSafeArea {
+    fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
+        // Calculate and cache sliver geometry
+        self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
+        self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let _offset = ctx.offset;
-        let canvas = Canvas::new();
-
-        // Child is painted with offset by safe area insets
-        // TODO: Offset child by leading padding
-
-        canvas
+    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
+        // Safe area doesn't paint anything - it just adds spacing
+        Canvas::new()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
