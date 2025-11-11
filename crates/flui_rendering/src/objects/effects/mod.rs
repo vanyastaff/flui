@@ -12,10 +12,12 @@ pub mod decorated_box;
 pub mod offstage;
 pub mod opacity;
 pub mod physical_model;
+pub mod physical_shape;
 pub mod repaint_boundary;
 pub mod shader_mask;
 pub mod transform;
 pub mod visibility;
+
 
 // Re-exports
 pub use animated_opacity::RenderAnimatedOpacity;
@@ -29,7 +31,9 @@ pub use decorated_box::{DecorationPosition, RenderDecoratedBox};
 pub use offstage::RenderOffstage;
 pub use opacity::RenderOpacity;
 pub use physical_model::{PhysicalShape, RenderPhysicalModel};
+pub use physical_shape::{RenderPhysicalShape, ShapeClipper};
 pub use repaint_boundary::RenderRepaintBoundary;
 pub use shader_mask::{RenderShaderMask, ShaderSpec};
 pub use transform::RenderTransform;
 pub use visibility::RenderVisibility;
+
