@@ -7,6 +7,7 @@
 pub mod sliver_animated_opacity;
 pub mod sliver_app_bar;
 pub mod sliver_constrained_cross_axis;
+pub mod sliver_cross_axis_group;
 pub mod sliver_edge_insets_padding;
 pub mod sliver_fill_remaining;
 pub mod sliver_fill_viewport;
@@ -49,6 +50,7 @@ pub mod viewport;
 pub use sliver_animated_opacity::RenderSliverAnimatedOpacity;
 pub use sliver_app_bar::RenderSliverAppBar;
 pub use sliver_constrained_cross_axis::RenderSliverConstrainedCrossAxis;
+pub use sliver_cross_axis_group::RenderSliverCrossAxisGroup;
 pub use sliver_edge_insets_padding::RenderSliverEdgeInsetsPadding;
 pub use sliver_fill_remaining::RenderSliverFillRemaining;
 pub use sliver_fill_viewport::RenderSliverFillViewport;
