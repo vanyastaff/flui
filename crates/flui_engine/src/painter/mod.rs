@@ -55,9 +55,10 @@
 // ===== Core modules =====
 
 pub mod buffer_pool;
+pub mod effects;
+pub mod effects_pipeline;
 pub mod instancing;
 pub mod multi_draw;
-mod paint;
 pub mod pipeline;
 pub mod tessellator;
 mod text;
@@ -66,13 +67,14 @@ mod vertex;
 pub mod wgpu_painter;
 
 
+
 // ===== Public API =====
 
 // Main painter
 pub use wgpu_painter::{Painter, WgpuPainter};
 
-// Paint types
-pub use paint::{Gradient, GradientStop, GradientType, Paint, Shadow, Stroke};
+// Re-export Paint from flui_painting (Clean Architecture - no duplication)
+pub use flui_painting::Paint;
 
 // Vertex types
 pub use vertex::Vertex;
@@ -82,5 +84,6 @@ pub use tessellator::Tessellator;
 
 // Re-export RRect from flui_types
 pub use flui_types::geometry::RRect;
+
 
 

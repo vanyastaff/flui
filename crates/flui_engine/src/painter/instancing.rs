@@ -368,6 +368,111 @@ impl TextureInstance {
     }
 }
 
+// =============================================================================
+// Gradient Instances (from effects.rs for API consistency)
+// =============================================================================
+
+/// A single color stop in a gradient
+pub use super::effects::GradientStop;
+
+/// Linear gradient instance data for GPU instancing
+///
+/// See `crate::painter::effects::LinearGradientInstance` for full documentation.
+pub use super::effects::LinearGradientInstance;
+
+impl LinearGradientInstance {
+    /// Get wgpu vertex buffer layout for instance data
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+            // Bounds (location 2)
+            2 => Float32x4,
+            // Gradient start (location 3)
+            3 => Float32x2,
+            // Gradient end (location 4)
+            4 => Float32x2,
+            // Corner radii (location 5)
+            5 => Float32x4,
+            // Stop count (location 6) - using Uint32 for integer
+            6 => Uint32,
+        ];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LinearGradientInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRIBUTES,
+        }
+    }
+}
+
+/// Radial gradient instance data for GPU instancing
+pub use super::effects::RadialGradientInstance;
+
+impl RadialGradientInstance {
+    /// Get wgpu vertex buffer layout for instance data
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+            // Bounds (location 2)
+            2 => Float32x4,
+            // Center (location 3)
+            3 => Float32x2,
+            // Radius + padding (location 4)
+            4 => Float32x2,
+            // Corner radii (location 5)
+            5 => Float32x4,
+            // Stop count (location 6)
+            6 => Uint32,
+        ];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<RadialGradientInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRIBUTES,
+        }
+    }
+}
+
+// =============================================================================
+// Shadow Instances
+// =============================================================================
+
+/// Shadow parameters for Material Design elevation levels
+pub use super::effects::ShadowParams;
+
+/// Shadow instance data for GPU instancing
+pub use super::effects::ShadowInstance;
+
+impl ShadowInstance {
+    /// Get wgpu vertex buffer layout for instance data
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        const ATTRIBUTES: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+            // Shadow bounds (location 2)
+            2 => Float32x4,
+            // Rect pos (location 3)
+            3 => Float32x2,
+            // Rect size (location 4)
+            4 => Float32x2,
+            // Corner radius + padding (location 5)
+            5 => Float32x4,
+            // Shadow offset (location 6)
+            6 => Float32x2,
+            // Blur sigma + padding (location 7)
+            7 => Float32x2,
+            // Shadow color (location 8)
+            8 => Float32x4,
+        ];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<ShadowInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: ATTRIBUTES,
+        }
+    }
+}
+
+// =============================================================================
+// Generic Instance Batch
+// =============================================================================
+
 /// Batch of instances ready for rendering
 ///
 /// Groups instances by type for efficient rendering.
