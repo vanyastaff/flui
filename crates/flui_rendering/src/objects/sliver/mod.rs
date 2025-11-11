@@ -14,6 +14,8 @@ pub mod sliver_offstage;
 pub mod sliver_opacity;
 pub mod sliver_padding;
 pub mod sliver_to_box_adapter;
+pub mod viewport;
+
 
 
 
@@ -32,6 +34,8 @@ pub use sliver_offstage::RenderSliverOffstage;
 pub use sliver_opacity::RenderSliverOpacity;
 pub use sliver_padding::RenderSliverPadding;
 pub use sliver_to_box_adapter::RenderSliverToBoxAdapter;
+pub use viewport::{ClipBehavior, RenderViewport};
+
 
 
 
