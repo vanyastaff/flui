@@ -4,28 +4,10 @@
 //! and routes them through the EventRouter to the appropriate handlers.
 
 use super::BindingBase;
+use flui_interaction::EventRouter;
 use flui_types::Event;
 use parking_lot::RwLock;
 use std::sync::Arc;
-
-/// Event router (temporary stub until flui_engine EventRouter is implemented)
-///
-/// TODO: Replace with flui_engine::EventRouter when available
-#[derive(Debug)]
-pub struct EventRouter {
-    // Placeholder
-}
-
-impl EventRouter {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    pub fn dispatch_event(&self, _event: &Event) {
-        // TODO: Implement event routing
-        tracing::trace!("Event dispatched (stub)");
-    }
-}
 
 /// Gesture binding - bridges platform events to EventRouter
 ///
@@ -63,16 +45,17 @@ impl GestureBinding {
     /// # Parameters
     ///
     /// - `event`: The FLUI event to route (Pointer, Key, etc.)
+    /// - `root`: The root HitTestable object (typically a Layer)
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let pointer_event = Event::Pointer(PointerEvent::Down { ... });
-    /// binding.handle_event(pointer_event);
+    /// binding.handle_event(pointer_event, &mut root_layer);
     /// ```
-    pub fn handle_event(&self, event: Event) {
-        let router = self.event_router.read();
-        router.dispatch_event(&event);
+    pub fn handle_event(&self, event: Event, root: &mut dyn flui_interaction::hit_test::HitTestable) {
+        let mut router = self.event_router.write();
+        router.route_event(root, &event);
     }
 
     /// Get shared reference to the event router

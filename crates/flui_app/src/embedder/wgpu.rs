@@ -225,8 +225,11 @@ impl WgpuEmbedder {
                     PointerDeviceKind::Mouse,
                 );
 
-                let event = flui_types::Event::Pointer(flui_types::PointerEvent::Move(data));
-                self.binding.gesture.handle_event(event);
+                let _event = flui_types::Event::Pointer(flui_types::PointerEvent::Move(data));
+
+                // TODO: Get real root HitTestable from scene
+                // For now, just log the event
+                tracing::trace!("Pointer move event: {:?}", position);
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
@@ -237,7 +240,7 @@ impl WgpuEmbedder {
                 let data = PointerEventData::new(position, PointerDeviceKind::Mouse)
                     .with_button(convert_mouse_button(button));
 
-                let event = match state {
+                let _event = match state {
                     ElementState::Pressed => {
                         flui_types::Event::Pointer(flui_types::PointerEvent::Down(data))
                     }
@@ -246,7 +249,9 @@ impl WgpuEmbedder {
                     }
                 };
 
-                self.binding.gesture.handle_event(event);
+                // TODO: Get real root HitTestable from scene
+                // For now, just log the event
+                tracing::trace!("Mouse button event: {:?} {:?}", state, button);
             }
 
             _ => {
