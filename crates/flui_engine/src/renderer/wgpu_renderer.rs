@@ -237,10 +237,9 @@ impl CommandRenderer for WgpuRenderer {
         });
     }
 
-    fn clip_path(&mut self, _path: &Path, transform: &Matrix4) {
-        self.with_transform(transform, |_painter| {
-            #[cfg(debug_assertions)]
-            tracing::warn!("WgpuRenderer: clip_path not fully implemented");
+    fn clip_path(&mut self, path: &Path, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.clip_path(path);
         });
     }
 

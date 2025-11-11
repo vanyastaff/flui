@@ -17,7 +17,11 @@ use super::{
     vertex::Vertex,
 };
 use flui_painting::{Paint, PaintStyle};
-use flui_types::{geometry::RRect, Offset, Point, Rect};
+use flui_types::{
+    geometry::RRect,
+    painting::Path,
+    Offset, Point, Rect,
+};
 use wgpu::util::DeviceExt;
 
 /// GPU painter for hardware-accelerated 2D rendering
@@ -1201,6 +1205,7 @@ pub trait Painter {
     // Clipping
     fn clip_rect(&mut self, rect: Rect);
     fn clip_rrect(&mut self, rrect: RRect);
+    fn clip_path(&mut self, path: &Path);
 
     // Viewport information
     fn viewport_bounds(&self) -> Rect;
@@ -1985,6 +1990,28 @@ impl Painter for WgpuPainter {
         #[cfg(debug_assertions)]
         tracing::warn!(
             "WgpuPainter::clip_rrect: using bounding box fallback (rounded corners not supported yet)"
+        );
+    }
+
+    fn clip_path(&mut self, _path: &Path) {
+        // Path clipping requires stencil buffer or path tessellation
+        // This is a complex feature that needs:
+        // 1. Stencil buffer configuration in render pass
+        // 2. Tessellate path and render to stencil buffer
+        // 3. Enable stencil test for subsequent draws
+        // 4. Stack management for nested clips
+        // 5. Handle even-odd vs non-zero fill rules
+        //
+        // Additionally, Path::bounds() requires &mut Path for caching,
+        // but we only have &Path in this context.
+        //
+        // For now, this is a no-op. Applications should use ClipRect or ClipRRect
+        // for hardware-accelerated clipping. Path clipping will be implemented
+        // in a future version with proper stencil buffer support.
+
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "WgpuPainter::clip_path: not implemented, use ClipRect or ClipRRect instead"
         );
     }
 
