@@ -291,44 +291,10 @@ struct BrowserInfo {
 fn detect_browsers() -> Vec<BrowserInfo> {
     let mut browsers = Vec::new();
 
-    // Windows browsers
+    // Windows browsers - enumerate from StartMenuInternet registry
     #[cfg(target_os = "windows")]
     {
-        // Chrome
-        if let Some(chrome) = check_browser_windows(
-            "Chrome",
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            &["--version"]
-        ) {
-            browsers.push(chrome);
-        }
-
-        // Edge
-        if let Some(edge) = check_browser_windows(
-            "Edge",
-            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            &["--version"]
-        ) {
-            browsers.push(edge);
-        }
-
-        // Firefox
-        if let Some(firefox) = check_browser_windows(
-            "Firefox",
-            r"C:\Program Files\Mozilla Firefox\firefox.exe",
-            &["-v"]
-        ) {
-            browsers.push(firefox);
-        }
-
-        // Brave
-        if let Some(brave) = check_browser_windows(
-            "Brave",
-            r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe",
-            &["--version"]
-        ) {
-            browsers.push(brave);
-        }
+        browsers.extend(enumerate_browsers_windows());
     }
 
     // macOS browsers
@@ -413,33 +379,96 @@ fn detect_browsers() -> Vec<BrowserInfo> {
 }
 
 #[cfg(target_os = "windows")]
-fn check_browser_windows(name: &str, path: &str, _version_args: &[&str]) -> Option<BrowserInfo> {
+fn enumerate_browsers_windows() -> Vec<BrowserInfo> {
     use std::path::Path;
 
-    if !Path::new(path).exists() {
-        return None;
-    }
+    let mut browsers = Vec::new();
 
-    // Try to extract version from path (e.g., Chrome/Application/131.0.6778.86/)
-    let version = std::fs::read_dir(Path::new(path).parent()?)
-        .ok()
-        .and_then(|entries| {
-            for entry in entries.flatten() {
-                let entry_name = entry.file_name();
-                let name_str = entry_name.to_string_lossy();
-                // Check if it looks like a version number (starts with digit, contains dots)
-                if name_str.chars().next()?.is_ascii_digit() && name_str.contains('.') {
-                    return Some(name_str.to_string());
+    // Enumerate browsers from SOFTWARE\Clients\StartMenuInternet
+    // Use simple format instead of JSON for easier parsing
+    let ps_command = r#"
+        foreach ($hive in @('HKLM', 'HKCU')) {
+            $path = "${hive}:\SOFTWARE\Clients\StartMenuInternet"
+            if (Test-Path $path) {
+                Get-ChildItem $path | ForEach-Object {
+                    $name = $_.PSChildName
+                    $shell = Get-ItemProperty -Path "$($_.PSPath)\shell\open\command" -ErrorAction SilentlyContinue
+                    if ($shell.'(default)') {
+                        $exePath = $shell.'(default)' -replace '"', '' -replace ' --.*$', '' -replace ' -%.*$', ''
+                        Write-Output "BROWSER:$name|$exePath"
+                    }
                 }
             }
-            None
-        });
+        }
+    "#;
 
-    Some(BrowserInfo {
-        name: name.to_string(),
-        version,
-        path: Some(path.to_string()),
-    })
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-Command", ps_command])
+        .output();
+
+    if let Ok(output) = output {
+        if output.status.success() {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+
+            // Parse simple format: BROWSER:name|path
+            for line in output_str.lines() {
+                if line.starts_with("BROWSER:") {
+                    let parts: Vec<&str> = line[8..].split('|').collect();
+                    if parts.len() == 2 {
+                        let registry_name = parts[0].trim();
+                        let path = parts[1].trim().to_string();
+
+                        if Path::new(&path).exists() {
+                            let version = extract_version_from_path(&path);
+
+                            // Map registry name to display name
+                            let display_name = match registry_name {
+                                "Google Chrome" | "CHROME.EXE" => "Chrome",
+                                "Microsoft Edge" | "MSEDGE" => "Edge",
+                                "Firefox" | "FIREFOX.EXE" => "Firefox",
+                                "Brave" | "BRAVE.EXE" => "Brave",
+                                "Opera" | "OPERA.EXE" => "Opera",
+                                "IEXPLORE.EXE" => "Internet Explorer",
+                                _ => registry_name,
+                            }.to_string();
+
+                            // Avoid duplicates
+                            if !browsers.iter().any(|b: &BrowserInfo| b.name == display_name) {
+                                browsers.push(BrowserInfo {
+                                    name: display_name,
+                                    version,
+                                    path: Some(path),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    browsers
+}
+
+#[cfg(target_os = "windows")]
+fn extract_version_from_path(path: &str) -> Option<String> {
+    use std::path::Path;
+
+    // Try to find version directory near the executable
+    let parent = Path::new(path).parent()?;
+
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            let entry_name = entry.file_name();
+            let name_str = entry_name.to_string_lossy();
+            // Check if it looks like a version number (starts with digit, contains dots)
+            if name_str.chars().next()?.is_ascii_digit() && name_str.contains('.') {
+                return Some(name_str.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(target_os = "macos")]
