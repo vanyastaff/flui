@@ -3,7 +3,6 @@
 use flui_core::element::ElementTree;
 use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
 use flui_painting::Canvas;
-use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject for lists where all items have the same fixed extent

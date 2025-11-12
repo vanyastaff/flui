@@ -28,3 +28,9 @@ fn android_main(app: android_activity::AndroidApp) {
 
     run_app(Empty);
 }
+
+// Dummy main for Android builds (required by cargo but never called)
+#[cfg(target_os = "android")]
+fn main() {
+    unreachable!("main should not be called on Android");
+}

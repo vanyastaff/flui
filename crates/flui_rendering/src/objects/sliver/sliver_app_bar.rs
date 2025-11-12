@@ -2,7 +2,6 @@
 
 use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
-use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
 
 /// RenderObject for an app bar that can float, pin, or scroll away

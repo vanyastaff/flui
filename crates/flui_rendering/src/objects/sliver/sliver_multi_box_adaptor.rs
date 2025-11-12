@@ -1,7 +1,7 @@
 //! RenderSliverMultiBoxAdaptor - Base for slivers with multiple box children
 
 use flui_core::element::ElementId;
-use flui_types::{Offset, Size};
+use flui_types::Size;
 
 /// Parent data for children of RenderSliverMultiBoxAdaptor
 ///

@@ -134,7 +134,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         // Paint child if present
         if let Some(child_id) = ctx.children.try_single() {
             if self.sliver_geometry.visible {
-                let mut child_canvas = ctx.tree.paint_child(child_id, ctx.offset);
+                let child_canvas = ctx.tree.paint_child(child_id, ctx.offset);
 
                 // Apply opacity to canvas
                 // TODO: When opacity layer support is available, apply it here

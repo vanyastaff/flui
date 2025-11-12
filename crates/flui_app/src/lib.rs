@@ -111,7 +111,6 @@ pub use flui_core::{
     view::{AnyView, BuildContext, View, ViewElement},
 };
 
-use flui_core::view::IntoElement;
 use winit::event_loop::EventLoop;
 
 /// Run a FLUI app

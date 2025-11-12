@@ -2,7 +2,6 @@
 
 use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
-use flui_types::prelude::*;
 use flui_types::SliverGeometry;
 
 /// RenderObject that applies opacity to a sliver child

@@ -19,7 +19,6 @@ use flui_types::{
     Offset, Size,
 };
 use std::sync::Arc;
-use std::time::Instant;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -61,9 +60,6 @@ pub struct WgpuEmbedder {
     /// GPU renderer (encapsulates ALL wgpu resources: device, queue, surface, painter)
     /// This is the ONLY GPU-related field - clean separation of concerns!
     renderer: GpuRenderer,
-
-    /// App start time (for frame timestamps)
-    start_time: Instant,
 
     /// Last cursor position (for mouse events)
     last_cursor_position: Offset,
@@ -139,7 +135,6 @@ impl WgpuEmbedder {
             binding,
             window,
             renderer,
-            start_time: Instant::now(),
             last_cursor_position: Offset::ZERO,
             last_scene: None,
             window_state: WindowStateTracker::new(),
