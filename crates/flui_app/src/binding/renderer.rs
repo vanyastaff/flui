@@ -5,38 +5,10 @@
 
 use super::BindingBase;
 use flui_core::pipeline::PipelineOwner;
-use flui_engine::CanvasLayer;
+use flui_engine::Scene;
 use flui_types::{constraints::BoxConstraints, Size};
 use parking_lot::RwLock;
 use std::sync::Arc;
-
-/// Temporary Scene type until flui_engine exports it
-///
-/// TODO: Replace with flui_engine::Scene when available
-pub struct Scene {
-    size: Size,
-    layer: Option<Box<CanvasLayer>>,
-}
-
-impl Scene {
-    pub fn new(size: Size) -> Self {
-        Self { size, layer: None }
-    }
-
-    pub fn add_canvas_layer(&mut self, layer: Option<Box<CanvasLayer>>) {
-        self.layer = layer;
-    }
-
-    #[must_use]
-    pub fn size(&self) -> Size {
-        self.size
-    }
-
-    #[must_use]
-    pub fn layer(&self) -> Option<&CanvasLayer> {
-        self.layer.as_deref()
-    }
-}
 
 /// Renderer binding - bridges to flui_rendering
 ///
@@ -66,7 +38,7 @@ pub struct RendererBinding {
 impl RendererBinding {
     /// Create a new RendererBinding with a shared PipelineOwner
     ///
-    /// The PipelineOwner must be the same instance used by WidgetsBinding
+    /// The PipelineOwner must be the same instance used by PipelineBinding
     /// to ensure coordinated tree management.
     pub fn new(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
         Self { pipeline_owner }
@@ -96,8 +68,8 @@ impl RendererBinding {
     /// ```rust,ignore
     /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
     /// let scene = renderer.draw_frame(constraints);
-    /// if let Some(layer) = scene.layer() {
-    ///     wgpu_renderer.render(layer, &view, &mut encoder)?;
+    /// if let Some(layer) = scene.root_layer() {
+    ///     wgpu_renderer.render(layer.as_ref(), &view, &mut encoder)?;
     /// }
     /// ```
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Scene {
@@ -129,11 +101,19 @@ impl RendererBinding {
             })
             .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
 
-        // Create scene
-        let mut scene = Scene::new(size);
-        scene.add_canvas_layer(layer);
+        // Create scene using new flui_engine::Scene API
+        let scene = if let Some(layer) = layer {
+            // Wrap layer in Arc for zero-copy sharing with hit testing
+            Scene::with_layer(size, Arc::new(*layer), 0)
+        } else {
+            Scene::new(size)
+        };
 
-        tracing::trace!(size = ?size, has_layer = scene.layer().is_some(), "Draw frame complete");
+        tracing::trace!(
+            size = ?size,
+            has_content = scene.has_content(),
+            "Draw frame complete"
+        );
         scene
     }
 
@@ -181,5 +161,6 @@ mod tests {
         // Should not panic even with empty pipeline
         let scene = binding.draw_frame(constraints);
         assert!(scene.size().width > 0.0);
+        assert!(!scene.has_content()); // No root element, so no content
     }
 }

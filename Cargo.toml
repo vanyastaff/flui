@@ -12,8 +12,9 @@ members = [
     "crates/flui_derive",
     "crates/flui_devtools",
     "crates/flui_gestures",
+    "crates/flui_interaction",  # Event routing and interaction handling
     "crates/flui_animation",    # Animation system
-    # "crates/flui_scheduler",
+    "crates/flui-scheduler",    # Frame scheduling and task prioritization
     # "crates/flui_platform",
     # "crates/flui_provider",
 ]

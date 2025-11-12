@@ -1,0 +1,32 @@
+[package]
+name = "flui_interaction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Event routing and interaction handling for FLUI"
+keywords = ["gui", "ui", "events", "input", "interaction"]
+
+[dependencies]
+# Flui dependencies
+flui_types = { path = "../flui_types" }
+
+# Synchronization
+parking_lot = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Collections
+ahash = { workspace = true }
+
+[dev-dependencies]
+# No additional dev dependencies needed - tests use std
+
+[features]
+default = []
+
+# Serialization support (if needed in the future)
+serde = ["flui_types/serde"]

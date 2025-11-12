@@ -1,0 +1,27 @@
+[package]
+name = "flui-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Frame scheduling, task prioritization, and animation coordination for FLUI"
+keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
+
+[dependencies]
+# Cross-platform time
+instant = "0.1"
+
+# Thread-safe synchronization
+parking_lot.workspace = true
+
+[dev-dependencies]
+# For testing only
+
+[lib]
+name = "flui_scheduler"
+path = "src/lib.rs"
+
+[features]
+default = []

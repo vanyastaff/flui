@@ -1,7 +1,7 @@
-//! Widgets binding - manages root widget via PipelineOwner
+//! Pipeline binding - manages rendering pipeline via PipelineOwner
 //!
-//! WidgetsBinding provides the high-level interface for attaching the root widget
-//! and delegates all tree management to PipelineOwner.
+//! PipelineBinding provides the high-level interface for managing the rendering pipeline,
+//! attaching the root widget, and coordinating build/layout/paint phases.
 
 use super::BindingBase;
 use flui_core::{
@@ -12,12 +12,12 @@ use flui_core::{
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-/// Widgets binding - manages root widget and coordinates with PipelineOwner
+/// Pipeline binding - manages rendering pipeline and root widget
 ///
 /// # Architecture
 ///
 /// ```text
-/// WidgetsBinding
+/// PipelineBinding
 ///   └─ PipelineOwner (shared with RendererBinding)
 ///       ├─ ElementTree
 ///       ├─ BuildPipeline
@@ -33,10 +33,9 @@ use std::sync::Arc;
 ///
 /// # Design Note
 ///
-/// Unlike the old design where WidgetsBinding owned ElementTree separately,
-/// this follows Flutter's pattern where PipelineOwner is the single source of truth
-/// for all tree management.
-pub struct WidgetsBinding {
+/// PipelineOwner is the single source of truth for all tree management,
+/// following Flutter's architecture pattern.
+pub struct PipelineBinding {
     /// Pipeline owner (shared with RendererBinding)
     ///
     /// PipelineOwner manages:
@@ -47,8 +46,8 @@ pub struct WidgetsBinding {
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
 }
 
-impl WidgetsBinding {
-    /// Create a new WidgetsBinding with a shared PipelineOwner
+impl PipelineBinding {
+    /// Create a new PipelineBinding with a shared PipelineOwner
     ///
     /// The PipelineOwner should be shared with RendererBinding for coordinated rendering.
     pub fn new(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
@@ -158,9 +157,9 @@ impl WidgetsBinding {
     }
 }
 
-impl BindingBase for WidgetsBinding {
+impl BindingBase for PipelineBinding {
     fn init(&mut self) {
-        tracing::debug!("WidgetsBinding initialized");
+        tracing::debug!("PipelineBinding initialized");
     }
 }
 
@@ -169,9 +168,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_widgets_binding_creation() {
+    fn test_pipeline_binding_creation() {
         let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
-        let binding = WidgetsBinding::new(pipeline);
+        let binding = PipelineBinding::new(pipeline);
         assert!(!binding.has_root());
         assert_eq!(binding.root_element(), None);
     }
@@ -179,7 +178,7 @@ mod tests {
     #[test]
     fn test_handle_build_frame_empty() {
         let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
-        let binding = WidgetsBinding::new(pipeline);
+        let binding = PipelineBinding::new(pipeline);
 
         // Should not panic with no root
         binding.handle_build_frame();

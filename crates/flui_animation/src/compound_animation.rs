@@ -30,19 +30,19 @@ pub enum AnimationOperator {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{CompoundAnimation, AnimationController, AnimationOperator};
-/// use flui_core::foundation::SimpleTickerProvider;
+/// use flui_animation::{CompoundAnimation, AnimationController, AnimationOperator, Animation};
+/// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let ticker_provider = Arc::new(SimpleTickerProvider);
+/// let scheduler = Arc::new(Scheduler::new());
 /// let controller1 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     ticker_provider.clone(),
+///     scheduler.clone(),
 /// ));
 /// let controller2 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     ticker_provider,
+///     scheduler,
 /// ));
 ///
 /// controller1.set_value(0.5);
@@ -184,14 +184,14 @@ impl fmt::Debug for CompoundAnimation {
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_core::foundation::SimpleTickerProvider;
+    use flui_scheduler::Scheduler;
     use std::time::Duration;
 
     fn create_controller(value: f32) -> Arc<AnimationController> {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
         controller.set_value(value);
         controller

@@ -1,6 +1,8 @@
 //! RenderAbsorbPointer - prevents pointer events from reaching children
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::element::hit_test::{BoxHitTestResult};
+use flui_core::element::hit_test_entry::BoxHitTestEntry;
+use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
 
 use flui_painting::Canvas;
 use flui_types::Size;
@@ -65,12 +67,20 @@ impl Render for RenderAbsorbPointer {
         let offset = ctx.offset;
         // Paint child normally - absorbing only affects hit testing
         tree.paint_child(child_id, offset)
-
-        // TODO: In a real implementation, we would:
-        // 1. Register hit test behavior during hit testing phase
-        // 2. Return true from hit_test to absorb events
-        // 3. Prevent events from propagating to child
     }
+
+    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+        if self.absorbing {
+            // Absorb pointer events - add self to result but DON'T test children
+            // This prevents events from reaching the child
+            result.add(ctx.element_id, BoxHitTestEntry::new(ctx.position, ctx.size));
+            true  // Event absorbed!
+        } else {
+            // Not absorbing - use default behavior (test children)
+            self.hit_test_children(ctx, result)
+        }
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

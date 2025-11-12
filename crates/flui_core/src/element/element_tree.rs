@@ -1411,6 +1411,80 @@ impl ElementTree {
         }
     }
 
+    /// Hit test a child element from a RenderObject
+    ///
+    /// This method is called from `Render::hit_test_children()` to test a specific child.
+    /// It bridges between the RenderObject-level hit testing (BoxHitTestResult) and
+    /// the ElementTree-level hit testing (ElementHitTestResult).
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The child element to test
+    /// - `position`: Global position to test (in window coordinates)
+    /// - `box_result`: BoxHitTestResult from the RenderObject hit testing
+    ///
+    /// # Returns
+    ///
+    /// - `true` if the child or any of its descendants was hit
+    /// - `false` if nothing was hit
+    ///
+    /// # Note
+    ///
+    /// This is a bridge method. In the future, we may unify ElementHitTestResult
+    /// and BoxHitTestResult for a more integrated approach.
+    #[inline]
+    pub fn hit_test_box_child(
+        &self,
+        child_id: ElementId,
+        position: flui_types::Offset,
+        _box_result: &mut crate::element::hit_test::BoxHitTestResult,
+    ) -> bool {
+        // For now, use a temporary ElementHitTestResult to test the child
+        // In a future refactoring, we can merge BoxHitTestResult and ElementHitTestResult
+        let mut temp_result = crate::element::ElementHitTestResult::new();
+        let hit = self.hit_test_recursive(child_id, position, &mut temp_result);
+
+        // TODO: In the future, transfer entries from temp_result to box_result
+        // For now, we just return whether there was a hit
+        hit
+    }
+
+    /// Hit test a child element from a RenderSliver
+    ///
+    /// This method is called from `RenderSliver::hit_test_children()` to test a specific child.
+    /// It bridges between the RenderSliver-level hit testing (SliverHitTestResult) and
+    /// the ElementTree-level hit testing (ElementHitTestResult).
+    ///
+    /// # Parameters
+    ///
+    /// - `child_id`: The child element to test
+    /// - `position`: Global position to test (in window coordinates)
+    /// - `sliver_result`: SliverHitTestResult from the RenderSliver hit testing
+    ///
+    /// # Returns
+    ///
+    /// - `true` if the child or any of its descendants was hit
+    /// - `false` if nothing was hit
+    ///
+    /// # Note
+    ///
+    /// This is a bridge method. In the future, we may unify ElementHitTestResult
+    /// and SliverHitTestResult for a more integrated approach.
+    #[inline]
+    pub fn hit_test_sliver_child(
+        &self,
+        child_id: ElementId,
+        position: flui_types::Offset,
+        _sliver_result: &mut crate::element::hit_test::SliverHitTestResult,
+    ) -> bool {
+        // For now, use a temporary ElementHitTestResult to test the child
+        let mut temp_result = crate::element::ElementHitTestResult::new();
+        let hit = self.hit_test_recursive(child_id, position, &mut temp_result);
+
+        // TODO: In the future, transfer entries from temp_result to sliver_result
+        hit
+    }
+
     /// Hit test for RenderElement
     ///
     /// Checks if position is within element bounds and recursively tests children.

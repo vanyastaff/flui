@@ -1183,13 +1183,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-scheduler"
+version = "0.1.0"
+dependencies = [
+ "instant",
+ "parking_lot",
+]
+
+[[package]]
 name = "flui_animation"
 version = "0.1.0"
 dependencies = [
+ "flui-scheduler",
  "flui_core",
  "flui_types",
  "parking_lot",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1200,8 +1209,11 @@ name = "flui_app"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "flui-scheduler",
  "flui_core",
  "flui_engine",
+ "flui_interaction",
+ "flui_painting",
  "flui_rendering",
  "flui_types",
  "flui_widgets",
@@ -1212,6 +1224,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wgpu",
  "winit",
 ]
 
@@ -1309,6 +1322,7 @@ dependencies = [
  "cosmic-text",
  "env_logger",
  "flui_devtools",
+ "flui_interaction",
  "flui_painting",
  "flui_types",
  "glam",
@@ -1337,6 +1351,16 @@ dependencies = [
  "flui_types",
  "parking_lot",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "flui_interaction"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "flui_types",
+ "parking_lot",
  "tracing",
 ]
 

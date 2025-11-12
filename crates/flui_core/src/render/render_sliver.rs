@@ -145,7 +145,8 @@
 //! }
 //! ```
 
-use crate::render::{Arity, SliverLayoutContext, SliverPaintContext};
+use crate::element::hit_test::SliverHitTestResult;
+use crate::render::{Arity, SliverHitTestContext, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 use std::fmt::Debug;
@@ -340,6 +341,227 @@ pub trait RenderSliver: Send + Sync + Debug + 'static {
     /// ```
     fn arity(&self) -> Arity {
         Arity::Variable
+    }
+
+    // ========== Hit Testing Methods ==========
+
+    /// Perform hit test on this sliver render object
+    ///
+    /// This method is called during hit testing to determine if this sliver
+    /// (or any of its children) was hit by a pointer event at the given position.
+    ///
+    /// # Sliver Hit Testing
+    ///
+    /// Sliver hit testing is viewport-aware and considers:
+    /// - **Scroll offset**: Where content is scrolled to
+    /// - **Paint extent**: Visible region that can be hit
+    /// - **Main axis position**: Position along scroll direction
+    /// - **Cross axis position**: Position perpendicular to scroll
+    ///
+    /// # Hit Test Order
+    ///
+    /// The default implementation:
+    /// 1. Checks if hit is in visible region (0 ≤ main_axis_position < paint_extent)
+    /// 2. Tests children (via `hit_test_children`)
+    /// 3. Tests self (via `hit_test_self`)
+    /// 4. Adds entry to result if hit
+    ///
+    /// # Override Patterns
+    ///
+    /// **Most slivers don't need to override this** - the default implementation
+    /// works for most cases. Override when you need custom behavior:
+    ///
+    /// - **SliverIgnorePointer**: Override to skip hit testing
+    /// - **SliverOpacity**: Override to skip if fully transparent
+    /// - **Custom visibility**: Override to implement custom visibility rules
+    ///
+    /// # Parameters
+    ///
+    /// - `ctx`: Sliver hit test context providing main/cross axis positions, geometry, tree access
+    /// - `result`: Accumulator for hit test entries (adds from child to parent)
+    ///
+    /// # Returns
+    ///
+    /// - `true` if this sliver or any child was hit
+    /// - `false` if nothing was hit (including if scrolled off-screen)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Default behavior (don't override)
+    /// fn hit_test(&self, ctx: &SliverHitTestContext, result: &mut SliverHitTestResult) -> bool {
+    ///     // 1. Check visible region
+    ///     if ctx.main_axis_position < 0.0 || ctx.main_axis_position >= ctx.geometry.paint_extent {
+    ///         return false;  // Scrolled off-screen
+    ///     }
+    ///
+    ///     // 2. Test children
+    ///     let hit_children = self.hit_test_children(ctx, result);
+    ///
+    ///     // 3. Test self
+    ///     if hit_children || self.hit_test_self(ctx.main_axis_position, ctx.cross_axis_position) {
+    ///         result.add(ctx.element_id, SliverHitTestEntry::new(
+    ///             ctx.local_position(),
+    ///             ctx.geometry.clone(),
+    ///             ctx.scroll_offset,
+    ///             ctx.main_axis_position,
+    ///         ));
+    ///         return true;
+    ///     }
+    ///     false
+    /// }
+    ///
+    /// // SliverIgnorePointer - pass through
+    /// fn hit_test(&self, ctx: &SliverHitTestContext, result: &mut SliverHitTestResult) -> bool {
+    ///     if self.ignoring {
+    ///         return false;  // Ignore completely
+    ///     }
+    ///     // Normal behavior
+    ///     self.hit_test_children(ctx, result)
+    /// }
+    ///
+    /// // SliverOpacity - skip if transparent
+    /// fn hit_test(&self, ctx: &SliverHitTestContext, result: &mut SliverHitTestResult) -> bool {
+    ///     if self.opacity <= 0.0 {
+    ///         return false;  // Fully transparent, no hit
+    ///     }
+    ///     self.hit_test_children(ctx, result)
+    /// }
+    /// ```
+    fn hit_test(&self, ctx: &SliverHitTestContext, result: &mut SliverHitTestResult) -> bool {
+        // Default: check visible region, test children, then self
+
+        // 1. Check if hit is in visible region
+        if !ctx.is_visible() {
+            return false;  // Scrolled off-screen
+        }
+
+        // 2. Test children first
+        let hit_children = self.hit_test_children(ctx, result);
+
+        // 3. Test self
+        if hit_children || self.hit_test_self(ctx.main_axis_position, ctx.cross_axis_position) {
+            result.add(
+                ctx.element_id,
+                crate::element::hit_test_entry::SliverHitTestEntry::new(
+                    ctx.local_position(),
+                    ctx.geometry.clone(),
+                    ctx.scroll_offset,
+                    ctx.main_axis_position,
+                ),
+            );
+            return true;
+        }
+        false
+    }
+
+    /// Test if position hits this sliver (ignoring children)
+    ///
+    /// This method is called by the default `hit_test` implementation to check
+    /// if the hit position is within this sliver's bounds along both axes.
+    ///
+    /// # When to Override
+    ///
+    /// Override this method when you have:
+    /// - **Custom hit shapes**: Non-rectangular hit regions
+    /// - **Leaf slivers**: Content without children (e.g., SliverToBoxAdapter)
+    /// - **Hit area expansion**: Expand hit region beyond visual bounds
+    ///
+    /// **Don't override for:**
+    /// - **Simple pass-through**: Default (returns false) is correct
+    /// - **Visibility control**: Override `hit_test` instead
+    ///
+    /// # Parameters
+    ///
+    /// - `main_axis_position`: Position along scroll direction
+    /// - `cross_axis_position`: Position perpendicular to scroll direction
+    ///
+    /// # Returns
+    ///
+    /// - `true` if position is within hit bounds
+    /// - `false` if position is outside (default)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Default (pass-through) - don't override
+    /// fn hit_test_self(&self, main_axis_position: f32, cross_axis_position: f32) -> bool {
+    ///     false  // Only hit if children hit
+    /// }
+    ///
+    /// // Leaf sliver (e.g., SliverToBoxAdapter)
+    /// fn hit_test_self(&self, main_axis_position: f32, cross_axis_position: f32) -> bool {
+    ///     main_axis_position >= 0.0
+    ///         && main_axis_position <= self.item_extent
+    ///         && cross_axis_position >= 0.0
+    ///         && cross_axis_position <= self.cross_axis_extent
+    /// }
+    ///
+    /// // Custom shape sliver
+    /// fn hit_test_self(&self, main_axis_position: f32, cross_axis_position: f32) -> bool {
+    ///     // Custom hit logic for non-rectangular slivers
+    ///     self.custom_hit_shape.contains(main_axis_position, cross_axis_position)
+    /// }
+    /// ```
+    fn hit_test_self(&self, _main_axis_position: f32, _cross_axis_position: f32) -> bool {
+        false  // Default: only hit if children hit
+    }
+
+    /// Test children for hits
+    ///
+    /// This method is called by the default `hit_test` implementation to test
+    /// all children for hits. Children are tested based on their position
+    /// in the sliver's scroll direction.
+    ///
+    /// # When to Override
+    ///
+    /// **Rarely needed** - the default implementation handles standard cases.
+    /// Override only when you need:
+    /// - **Custom child order**: Test children in non-standard order
+    /// - **Child filtering**: Skip certain children during hit testing
+    /// - **Lazy hit testing**: Only test visible children in large lists
+    ///
+    /// # Parameters
+    ///
+    /// - `ctx`: Sliver hit test context with main/cross positions, geometry, tree access
+    /// - `result`: Accumulator for hit test entries
+    ///
+    /// # Returns
+    ///
+    /// - `true` if any child was hit
+    /// - `false` if no children were hit
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Default (don't override)
+    /// fn hit_test_children(&self, ctx: &SliverHitTestContext, result: &mut SliverHitTestResult) -> bool {
+    ///     // Stub - will be implemented in Phase 3.1
+    ///     false
+    /// }
+    ///
+    /// // Custom visibility range (e.g., SliverList with lazy loading)
+    /// fn hit_test_children(&self, ctx: &SliverHitTestContext, result: &mut SliverHitTestResult) -> bool {
+    ///     let mut hit = false;
+    ///
+    ///     // Only test visible children
+    ///     for &child_id in &self.visible_children {
+    ///         if ctx.tree.hit_test_sliver_child(child_id, ctx, result) {
+    ///             hit = true;
+    ///         }
+    ///     }
+    ///     hit
+    /// }
+    /// ```
+    fn hit_test_children(
+        &self,
+        _ctx: &SliverHitTestContext,
+        _result: &mut SliverHitTestResult,
+    ) -> bool {
+        // Default implementation returns false
+        // ElementTree will implement the actual child hit testing logic
+        // This will be properly integrated in Phase 3.1
+        false
     }
 
     /// Downcast to Any for metadata access

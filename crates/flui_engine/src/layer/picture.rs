@@ -3,6 +3,7 @@
 //! REFACTORED: Now uses Clean Architecture with CommandRenderer (Visitor Pattern)
 
 use crate::renderer::CommandRenderer;
+use flui_interaction::{HitTestResult, HitTestable};
 use flui_painting::{Canvas, DisplayList};
 use flui_types::Offset;
 
@@ -90,5 +91,23 @@ impl CanvasLayer {
         }
         draw_fn(painter);
         painter.restore();
+    }
+}
+
+/// Basic hit testing implementation for CanvasLayer
+///
+/// Currently a simple pass-through implementation. In the future, this could:
+/// - Check bounds based on canvas size
+/// - Inspect DrawCommand paths for precise hit testing
+/// - Support event handlers attached to specific regions
+impl HitTestable for CanvasLayer {
+    fn hit_test(&self, _position: Offset, _result: &mut HitTestResult) -> bool {
+        // TODO: Implement proper hit testing
+        // For now, return false to indicate no hit
+        // This will be extended when we have:
+        // 1. Canvas bounds information
+        // 2. Region-based event handlers
+        // 3. Path-based hit detection
+        false
     }
 }

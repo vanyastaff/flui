@@ -3,7 +3,7 @@
 use flui_painting::Canvas;
 use flui_types::{
     painting::{Clip, Path},
-    Rect, Size,
+    Offset, Rect, Size,
 };
 
 use super::clip_base::{ClipShape, RenderClip};
@@ -19,6 +19,33 @@ impl ClipShape for OvalShape {
         let mut path = Path::new();
         path.add_oval(clip_rect);
         canvas.clip_path(&path);
+    }
+
+    fn contains_point(&self, position: Offset, size: Size) -> bool {
+        // Check if point is inside ellipse using the ellipse equation:
+        // (x - cx)² / rx² + (y - cy)² / ry² <= 1
+        //
+        // For an oval filling the bounding box:
+        // - Center: (width/2, height/2)
+        // - Radius X: width/2
+        // - Radius Y: height/2
+
+        let cx = size.width / 2.0;
+        let cy = size.height / 2.0;
+        let rx = size.width / 2.0;
+        let ry = size.height / 2.0;
+
+        // Avoid division by zero for degenerate cases
+        if rx < f32::EPSILON || ry < f32::EPSILON {
+            return false;
+        }
+
+        let dx = position.dx - cx;
+        let dy = position.dy - cy;
+
+        // Ellipse equation
+        let value = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry);
+        value <= 1.0
     }
 }
 

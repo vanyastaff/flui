@@ -1,6 +1,7 @@
 //! RenderIgnorePointer - makes widget ignore pointer events
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::element::hit_test::BoxHitTestResult;
+use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
 
 use flui_painting::Canvas;
 use flui_types::Size;
@@ -64,12 +65,19 @@ impl Render for RenderIgnorePointer {
         let offset = ctx.offset;
         // Paint child normally - ignoring only affects hit testing
         tree.paint_child(child_id, offset)
-
-        // TODO: In a real implementation, we would:
-        // 1. Register hit test behavior during hit testing phase
-        // 2. Return false from hit_test to let events pass through
-        // 3. Child doesn't receive events but widgets behind do
     }
+
+    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+        if self.ignoring {
+            // Ignore pointer events - return false to let events pass through
+            // This makes this widget and its children transparent to pointer events
+            false  // Events pass through to widgets behind
+        } else {
+            // Not ignoring - use default behavior (test children)
+            self.hit_test_children(ctx, result)
+        }
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

@@ -27,9 +27,10 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::element::hit_test::BoxHitTestResult;
+use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
-use flui_types::{painting::Clip, Size};
+use flui_types::{painting::Clip, Offset, Size};
 
 /// Trait for defining clip shapes
 ///
@@ -43,6 +44,27 @@ pub trait ClipShape: std::fmt::Debug + Send + Sync {
     /// - `canvas`: The canvas to apply clipping to
     /// - `size`: The size of the render object (from layout)
     fn apply_clip(&self, canvas: &mut Canvas, size: Size);
+
+    /// Check if a position is inside the clipping region
+    ///
+    /// Used for hit testing. Returns true if the position is inside the shape.
+    ///
+    /// # Parameters
+    ///
+    /// - `position`: The position to test (in local coordinates)
+    /// - `size`: The size of the render object (from layout)
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation assumes rectangular clipping (in-bounds check).
+    /// Override this for custom shapes like ovals, rounded rects, or paths.
+    fn contains_point(&self, position: Offset, size: Size) -> bool {
+        // Default: rectangular bounds check
+        position.dx >= 0.0
+            && position.dy >= 0.0
+            && position.dx <= size.width
+            && position.dy <= size.height
+    }
 }
 
 /// Generic clip RenderObject
@@ -152,6 +174,28 @@ impl<S: ClipShape + 'static> Render for RenderClip<S> {
         canvas.restore();
 
         canvas
+    }
+
+    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+        // For clipping, we need to check if the hit position is inside the clip region.
+        // If it's outside, the hit should fail even if it would hit the child.
+        //
+        // This matches Flutter's behavior: clipped content is not just invisible,
+        // it's also not interactive outside the clip region.
+
+        // If no clipping is applied, use default behavior
+        if !self.clip_behavior.clips() {
+            return self.hit_test_children(ctx, result);
+        }
+
+        // Check if position is inside the clip shape
+        if !self.shape.contains_point(ctx.position, self.size) {
+            // Position is outside clip region - hit fails
+            return false;
+        }
+
+        // Position is inside clip region - test children normally
+        self.hit_test_children(ctx, result)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

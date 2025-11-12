@@ -124,9 +124,10 @@
 //! }
 //! ```
 
-use crate::render::{Arity, LayoutContext, PaintContext};
+use crate::element::hit_test::{BoxHitTestResult};
+use crate::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext};
 use flui_painting::Canvas;
-use flui_types::Size;
+use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
 /// Render trait for all renderers
@@ -445,6 +446,227 @@ pub trait Render: Send + Sync + Debug + 'static {
     /// Returns `None`.
     fn intrinsic_height(&self, _width: Option<f32>) -> Option<f32> {
         None
+    }
+
+    // ========== Hit Testing Methods ==========
+
+    /// Perform hit test on this render object
+    ///
+    /// This method is called during hit testing to determine if this element
+    /// (or any of its children) was hit by a pointer event at the given position.
+    ///
+    /// # Hit Test Order
+    ///
+    /// The default implementation tests in this order:
+    /// 1. Test children (front-to-back via `hit_test_children`)
+    /// 2. Test self (via `hit_test_self`)
+    /// 3. Add entry to result if hit
+    ///
+    /// # Override Patterns
+    ///
+    /// **Most renderers don't need to override this** - the default implementation
+    /// works for 90% of cases. Override when you need custom behavior:
+    ///
+    /// - **AbsorbPointer**: Override to block events from reaching children
+    /// - **IgnorePointer**: Override to skip hit testing entirely
+    /// - **Transform**: Override to apply inverse transform to position
+    /// - **Custom shapes**: Override `hit_test_self` instead
+    ///
+    /// # Parameters
+    ///
+    /// - `ctx`: Hit test context providing position, size, tree access
+    /// - `result`: Accumulator for hit test entries (adds from child to parent)
+    ///
+    /// # Returns
+    ///
+    /// - `true` if this element or any child was hit
+    /// - `false` if nothing was hit
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Default behavior (don't override)
+    /// fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    ///     // 1. Test children first
+    ///     let hit_children = self.hit_test_children(ctx, result);
+    ///
+    ///     // 2. Then test self
+    ///     if hit_children || self.hit_test_self(ctx.position) {
+    ///         result.add(ctx.element_id, BoxHitTestEntry::new(ctx.position, ctx.size));
+    ///         return true;
+    ///     }
+    ///     false
+    /// }
+    ///
+    /// // AbsorbPointer - block events
+    /// fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    ///     if self.absorbing {
+    ///         // Add self but DON'T test children
+    ///         result.add(ctx.element_id, BoxHitTestEntry::new(ctx.position, ctx.size));
+    ///         return true;
+    ///     }
+    ///     // Normal behavior
+    ///     self.hit_test_children(ctx, result)
+    /// }
+    ///
+    /// // IgnorePointer - pass through
+    /// fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    ///     if self.ignoring {
+    ///         return false;  // Ignore completely
+    ///     }
+    ///     self.hit_test_children(ctx, result)
+    /// }
+    ///
+    /// // Transform - apply inverse transform
+    /// fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    ///     let inverse = self.transform.inverse()?;
+    ///     let transformed_pos = inverse.transform_point(ctx.position);
+    ///     let new_ctx = ctx.with_position(transformed_pos);
+    ///     self.hit_test_children(&new_ctx, result)
+    /// }
+    /// ```
+    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+        // Default: test children first, then self
+        let hit_children = self.hit_test_children(ctx, result);
+
+        if hit_children || self.hit_test_self(ctx.position) {
+            result.add(ctx.element_id, crate::element::hit_test_entry::BoxHitTestEntry::new(ctx.position, ctx.size));
+            return true;
+        }
+        false
+    }
+
+    /// Test if position hits this element (ignoring children)
+    ///
+    /// This method is called by the default `hit_test` implementation to check
+    /// if the hit position is within this element's bounds or shape.
+    ///
+    /// # When to Override
+    ///
+    /// Override this method when you have:
+    /// - **Custom hit shapes**: Circles, rounded rectangles, paths
+    /// - **Leaf renderers**: Text, images, boxes (anything without children)
+    /// - **Hit area padding**: Expand or shrink hit region
+    ///
+    /// **Don't override for:**
+    /// - **Simple pass-through**: Default (returns false) is correct
+    /// - **Blocking/ignoring**: Override `hit_test` instead
+    ///
+    /// # Parameters
+    ///
+    /// - `position`: Hit position in local coordinates
+    ///
+    /// # Returns
+    ///
+    /// - `true` if position is within hit bounds/shape
+    /// - `false` if position is outside (default)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Default (pass-through) - don't override
+    /// fn hit_test_self(&self, position: Offset) -> bool {
+    ///     false  // Only hit if children hit
+    /// }
+    ///
+    /// // Leaf renderer (e.g., RenderText)
+    /// fn hit_test_self(&self, position: Offset) -> bool {
+    ///     position.dx >= 0.0
+    ///         && position.dy >= 0.0
+    ///         && position.dx <= self.size.width
+    ///         && position.dy <= self.size.height
+    /// }
+    ///
+    /// // Custom shape (e.g., RenderClipOval)
+    /// fn hit_test_self(&self, position: Offset) -> bool {
+    ///     let center_x = self.size.width / 2.0;
+    ///     let center_y = self.size.height / 2.0;
+    ///     let dx = (position.dx - center_x) / center_x;
+    ///     let dy = (position.dy - center_y) / center_y;
+    ///     dx * dx + dy * dy <= 1.0  // Inside ellipse
+    /// }
+    ///
+    /// // Expanded hit area (e.g., small buttons)
+    /// fn hit_test_self(&self, position: Offset) -> bool {
+    ///     let padding = 8.0;  // Extra hit area
+    ///     position.dx >= -padding
+    ///         && position.dy >= -padding
+    ///         && position.dx <= self.size.width + padding
+    ///         && position.dy <= self.size.height + padding
+    /// }
+    /// ```
+    fn hit_test_self(&self, _position: Offset) -> bool {
+        false  // Default: only hit if children hit
+    }
+
+    /// Test children for hits
+    ///
+    /// This method is called by the default `hit_test` implementation to test
+    /// all children for hits. Children are tested in front-to-back order
+    /// (reverse of paint order) so that topmost children are hit first.
+    ///
+    /// # When to Override
+    ///
+    /// **Rarely needed** - the default implementation handles all standard cases:
+    /// - No children → returns false
+    /// - Single child → delegates to tree
+    /// - Multiple children → tests all in reverse order
+    ///
+    /// Override only when you need:
+    /// - **Custom child order**: Test children in non-standard order
+    /// - **Child filtering**: Skip certain children during hit testing
+    /// - **Child offsets**: Apply custom offsets before hit testing
+    ///
+    /// # Parameters
+    ///
+    /// - `ctx`: Hit test context with position, size, tree access
+    /// - `result`: Accumulator for hit test entries
+    ///
+    /// # Returns
+    ///
+    /// - `true` if any child was hit
+    /// - `false` if no children were hit
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Default (don't override)
+    /// fn hit_test_children(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    ///     match ctx.children {
+    ///         Children::None => false,
+    ///         Children::Single(child_id) => {
+    ///             ctx.tree.hit_test_child(child_id, ctx.position, result)
+    ///         }
+    ///         Children::Multi(children) => {
+    ///             let mut hit = false;
+    ///             // Test front-to-back (reverse order)
+    ///             for &child_id in children.iter().rev() {
+    ///                 if ctx.tree.hit_test_child(child_id, ctx.position, result) {
+    ///                     hit = true;
+    ///                 }
+    ///             }
+    ///             hit
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// // Custom order (e.g., RenderStack with specific z-order)
+    /// fn hit_test_children(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    ///     let mut hit = false;
+    ///     // Test in custom z-order
+    ///     for &child_id in self.z_ordered_children.iter().rev() {
+    ///         if ctx.tree.hit_test_child(child_id, ctx.position, result) {
+    ///             hit = true;
+    ///         }
+    ///     }
+    ///     hit
+    /// }
+    /// ```
+    fn hit_test_children(&self, _ctx: &BoxHitTestContext, _result: &mut BoxHitTestResult) -> bool {
+        // Default implementation returns false
+        // ElementTree will implement the actual child hit testing logic
+        // This will be properly integrated in Phase 3.1
+        false
     }
 
     /// Downcast to Any for metadata access

@@ -33,6 +33,7 @@ pub mod arity;
 pub mod cache;
 pub mod children;
 pub mod context;
+pub mod hit_test_context;
 pub mod parent_data;
 #[allow(clippy::module_inception)] // render module contains Render trait
 pub mod render;
@@ -57,6 +58,9 @@ pub use arity::Arity;
 
 /// Context structs for layout and paint
 pub use context::{LayoutContext, PaintContext, SliverLayoutContext, SliverPaintContext};
+
+/// Context structs for hit testing
+pub use hit_test_context::{BoxHitTestContext, SliverHitTestContext};
 
 // Core types
 /// Parent data and metadata

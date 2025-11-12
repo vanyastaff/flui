@@ -12,6 +12,10 @@ pub mod special;
 pub mod text;
 pub mod viewport;
 
+// Hit test integration tests
+#[cfg(test)]
+mod hit_test_integration_tests;
+
 
 /// Debug render objects and utilities
 /// Effect render objects (opacity, transforms, clips)

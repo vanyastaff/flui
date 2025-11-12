@@ -20,20 +20,20 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{AnimationController, TweenAnimation};
-/// use flui_types::animation::{ColorTween, Color};
-/// use flui_core::foundation::SimpleTickerProvider;
+/// use flui_animation::{AnimationController, TweenAnimation, Animation};
+/// use flui_types::animation::FloatTween;
+/// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let ticker_provider = Arc::new(SimpleTickerProvider);
+/// let scheduler = Arc::new(Scheduler::new());
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     ticker_provider,
+///     scheduler,
 /// ));
 ///
-/// let tween = ColorTween::new(Color::RED, Color::BLUE);
-/// let color_animation = TweenAnimation::new(
+/// let tween = FloatTween::new(0.0, 100.0);
+/// let float_animation = TweenAnimation::new(
 ///     tween,
 ///     controller as Arc<dyn Animation<f32>>,
 /// );
@@ -163,16 +163,16 @@ where
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_core::foundation::SimpleTickerProvider;
+    use flui_scheduler::Scheduler;
     use flui_types::animation::FloatTween;
     use std::time::Duration;
 
     #[test]
     fn test_tween_animation() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
@@ -192,10 +192,10 @@ mod tests {
 
     #[test]
     fn test_tween_animation_status() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
@@ -211,10 +211,10 @@ mod tests {
 
     #[test]
     fn test_animate_helper() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let tween = FloatTween::new(10.0, 20.0);

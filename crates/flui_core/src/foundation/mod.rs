@@ -10,7 +10,6 @@ pub mod error;
 pub mod key;
 pub mod notification;
 pub mod slot;
-pub mod ticker;
 
 pub use atomic_flags::{AtomicElementFlags, ElementFlags};
 pub use change_notifier::{
@@ -27,7 +26,3 @@ pub use notification::{
     Notification, ScrollNotification, SizeChangedNotification,
 };
 pub use slot::Slot;
-pub use ticker::{
-    SimpleTickerProvider, SingleTickerProviderMixin, Ticker, TickerCallback, TickerProvider,
-    TickerProviderMixin,
-};

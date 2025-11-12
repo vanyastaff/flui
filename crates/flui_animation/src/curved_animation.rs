@@ -18,14 +18,14 @@ use std::sync::Arc;
 /// ```
 /// use flui_animation::{AnimationController, CurvedAnimation};
 /// use flui_types::animation::Curves;
-/// use flui_core::foundation::SimpleTickerProvider;
+/// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let ticker_provider = Arc::new(SimpleTickerProvider);
+/// let scheduler = Arc::new(Scheduler::new());
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     ticker_provider,
+///     scheduler,
 /// ));
 ///
 /// let curved = CurvedAnimation::new(controller, Curves::EaseInOut);
@@ -131,16 +131,16 @@ impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> fmt::Debug for Curve
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_core::foundation::SimpleTickerProvider;
+    use flui_scheduler::Scheduler;
     use flui_types::animation::Curves;
     use std::time::Duration;
 
     #[test]
     fn test_curved_animation() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let curved = CurvedAnimation::new(
@@ -159,10 +159,10 @@ mod tests {
 
     #[test]
     fn test_curved_animation_status() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let curved = CurvedAnimation::new(

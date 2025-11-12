@@ -10,23 +10,43 @@
 //!    ↓
 //! runApp(root_widget)
 //!    ↓
-//! WidgetsFlutterBinding::ensure_initialized()
+//! AppBinding::ensure_initialized()
 //!    ├─ GestureBinding (EventRouter integration)
-//!    ├─ SchedulerBinding (frame callbacks)
-//!    ├─ RendererBinding (PipelineOwner integration)
-//!    └─ WidgetsBinding (ElementTree management)
+//!    ├─ SchedulerBinding (wraps flui-scheduler)
+//!    │   ├─ TaskQueue (priority-based task execution)
+//!    │   ├─ FrameBudget (60fps timing, phase statistics)
+//!    │   └─ VSync coordination
+//!    ├─ RendererBinding (rendering)
+//!    └─ PipelineBinding (pipeline and element tree management)
 //!    ↓
 //! WgpuEmbedder::new()
 //!    ├─ Create winit window
-//!    ├─ Initialize wgpu (device, queue, surface)
-//!    └─ Setup render pipeline
+//!    ├─ Initialize GpuRenderer (encapsulates ALL wgpu resources)
+//!    └─ Setup event routing
 //!    ↓
 //! Event Loop (winit)
-//!    ├─ Window events → GestureBinding
-//!    ├─ Frame callback → SchedulerBinding
-//!    ├─ Layout → flui_rendering
-//!    ├─ Paint → Layer tree
-//!    └─ Render layers → wgpu
+//!    ├─ Window events → GestureBinding → EventRouter
+//!    ├─ VSync → begin_frame() → FrameCallbacks
+//!    ├─ Build → Layout → Paint → Scene (flui_engine)
+//!    ├─ Render → GpuRenderer → GPU
+//!    └─ end_frame() → PostFrameCallbacks
+//! ```
+//!
+//! # Performance Monitoring
+//!
+//! Access production-ready frame statistics via `AppBinding`:
+//!
+//! ```rust,ignore
+//! let binding = AppBinding::ensure_initialized();
+//!
+//! // Access frame budget and statistics
+//! let budget = binding.frame_budget();
+//! let stats = budget.lock().phase_stats();
+//!
+//! println!("Build: {:.2}ms", stats.build_ms);
+//! println!("Layout: {:.2}ms", stats.layout_ms);
+//! println!("Paint: {:.2}ms", stats.paint_ms);
+//! println!("Average frame: {:.2}ms", budget.lock().average_frame_time());
 //! ```
 //!
 //! # Example
@@ -68,19 +88,15 @@
 pub mod binding;
 pub mod embedder;
 
-// Legacy modules (will be replaced/removed)
-#[doc(hidden)]
-pub mod app;
-#[doc(hidden)]
+// Supporting modules for window event handling
 pub mod event_callbacks;
-#[doc(hidden)]
 pub mod window_state;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
 // Re-exports for convenience
-pub use binding::WidgetsFlutterBinding;
+pub use binding::AppBinding;
 pub use embedder::WgpuEmbedder;
 
 // Re-export commonly used types from flui_core
@@ -147,10 +163,10 @@ where
     tracing::info!("Starting FLUI app");
 
     // 1. Initialize bindings
-    let binding = WidgetsFlutterBinding::ensure_initialized();
+    let binding = AppBinding::ensure_initialized();
 
     // 2. Attach root widget
-    binding.widgets.attach_root_widget(app);
+    binding.pipeline.attach_root_widget(app);
 
     // 3. Create event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
@@ -162,34 +178,4 @@ where
 
     // 5. Run event loop (blocks)
     embedder.run(event_loop)
-}
-
-/// Run a FLUI app with custom window title and size
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_app::run_app_with_config;
-/// use flui_widgets::*;
-///
-/// fn main() {
-///     run_app_with_config(
-///         MyApp,
-///         "My Custom App",
-///         (1024, 768),
-///     );
-/// }
-/// ```
-#[allow(dead_code)]
-pub fn run_app_with_config<V>(
-    app: V,
-    _title: &str,
-    _size: (u32, u32),
-) -> !
-where
-    V: View + 'static,
-{
-    // TODO: Pass window config to embedder
-    // For now, just use default run_app
-    run_app(app)
 }

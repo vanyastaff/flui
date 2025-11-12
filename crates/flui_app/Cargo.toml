@@ -27,6 +27,7 @@ flui_rendering = { path = "../flui_rendering" }
 flui_widgets = { path = "../flui_widgets", optional = true }
 flui_painting = { path = "../flui_painting" }
 flui_interaction = { path = "../flui_interaction" }
+flui-scheduler = { path = "../flui-scheduler" }
 
 # Rendering engine
 flui_engine = { path = "../flui_engine" }

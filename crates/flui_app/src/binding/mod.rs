@@ -1,4 +1,4 @@
-//! Binding module - Flutter-style framework bindings
+//! Binding module - Framework bindings
 //!
 //! This module provides the binding layer between platform events and framework components.
 //!
@@ -12,31 +12,31 @@
 //!
 //! - **BindingBase**: Base trait for all bindings
 //! - **GestureBinding**: Routes platform events to EventRouter
-//! - **SchedulerBinding**: Manages frame callbacks and timing
-//! - **RendererBinding**: Coordinates rendering pipeline (build/layout/paint)
-//! - **WidgetsBinding**: Manages widget tree lifecycle
-//! - **WidgetsFlutterBinding**: Combined singleton binding
+//! - **SchedulerBinding**: Wraps flui-scheduler for framework integration
+//! - **RendererBinding**: Coordinates rendering
+//! - **PipelineBinding**: Manages pipeline and widget tree lifecycle
+//! - **AppBinding**: Combined singleton binding
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use flui_app::binding::WidgetsFlutterBinding;
+//! use flui_app::binding::AppBinding;
 //!
-//! let binding = WidgetsFlutterBinding::ensure_initialized();
-//! binding.widgets.attach_root_widget(MyApp::new());
+//! let binding = AppBinding::ensure_initialized();
+//! binding.pipeline.attach_root_widget(MyApp::new());
 //! ```
 
+mod app_binding;
 mod base;
 mod gesture;
+mod pipeline;
 mod renderer;
 mod scheduler;
-mod widgets;
-mod widgets_flutter_binding;
 
 // Re-exports
+pub use app_binding::AppBinding;
 pub use base::BindingBase;
 pub use gesture::GestureBinding;
+pub use pipeline::PipelineBinding;
 pub use renderer::RendererBinding;
-pub use scheduler::{FrameCallback, SchedulerBinding};
-pub use widgets::WidgetsBinding;
-pub use widgets_flutter_binding::WidgetsFlutterBinding;
+pub use scheduler::SchedulerBinding;

@@ -1,9 +1,8 @@
 //! AnimationController - The primary animation driver.
 
 use crate::animation::{Animation, AnimationDirection, StatusCallback};
-use flui_core::foundation::{
-    ChangeNotifier, Listenable, ListenerCallback, ListenerId, Ticker, TickerProvider,
-};
+use flui_core::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_scheduler::{Scheduler, Ticker};
 use flui_types::animation::AnimationStatus;
 use parking_lot::Mutex;
 use std::fmt;
@@ -42,15 +41,15 @@ pub enum AnimationError {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::AnimationController;
-/// use flui_core::foundation::SimpleTickerProvider;
+/// use flui_animation::{AnimationController, Animation};
+/// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let ticker_provider = Arc::new(SimpleTickerProvider);
+/// let scheduler = Arc::new(Scheduler::new());
 /// let controller = AnimationController::new(
 ///     Duration::from_millis(300),
-///     ticker_provider,
+///     scheduler,
 /// );
 ///
 /// // Start animation
@@ -90,6 +89,10 @@ struct AnimationControllerInner {
     /// Ticker for frame callbacks
     ticker: Option<Ticker>,
 
+    /// Scheduler reference for ticker coordination
+    #[allow(dead_code)]
+    scheduler: Option<Arc<Scheduler>>,
+
     /// Status listeners
     status_listeners: Vec<(ListenerId, StatusCallback)>,
 
@@ -118,9 +121,9 @@ impl AnimationController {
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `vsync` - Ticker provider for frame callbacks
-    pub fn new(duration: Duration, vsync: Arc<dyn TickerProvider>) -> Self {
-        Self::with_bounds(duration, vsync, 0.0, 1.0)
+    /// * `scheduler` - Scheduler for frame coordination
+    pub fn new(duration: Duration, scheduler: Arc<Scheduler>) -> Self {
+        Self::with_bounds(duration, scheduler, 0.0, 1.0)
     }
 
     /// Create an animation controller with custom bounds.
@@ -128,12 +131,12 @@ impl AnimationController {
     /// # Arguments
     ///
     /// * `duration` - Duration of the forward animation
-    /// * `vsync` - Ticker provider for frame callbacks
+    /// * `scheduler` - Scheduler for frame coordination
     /// * `lower_bound` - Minimum value (default 0.0)
     /// * `upper_bound` - Maximum value (default 1.0)
     pub fn with_bounds(
         duration: Duration,
-        vsync: Arc<dyn TickerProvider>,
+        scheduler: Arc<Scheduler>,
         lower_bound: f32,
         upper_bound: f32,
     ) -> Self {
@@ -144,11 +147,8 @@ impl AnimationController {
 
         let notifier = Arc::new(ChangeNotifier::new());
 
-        // Create ticker with animation update callback
-        let notifier_clone = notifier.clone();
-        let ticker = vsync.create_ticker(Arc::new(move |_elapsed: Duration| {
-            notifier_clone.notify_listeners();
-        }));
+        // Create ticker (no callback needed - we'll handle ticking manually)
+        let ticker = Ticker::new();
 
         let inner = AnimationControllerInner {
             value: lower_bound,
@@ -158,6 +158,7 @@ impl AnimationController {
             lower_bound,
             upper_bound,
             ticker: Some(ticker),
+            scheduler: Some(scheduler),
             status_listeners: Vec::new(),
             direction: AnimationDirection::Forward,
             animation_start_time: None,
@@ -201,8 +202,11 @@ impl AnimationController {
         inner.start_value = inner.value;
         inner.target_value = inner.upper_bound;
 
-        if let Some(ticker) = &inner.ticker {
-            ticker.start();
+        if let Some(ticker) = &mut inner.ticker {
+            let notifier = Arc::clone(&self.notifier);
+            ticker.start(move |_elapsed| {
+                notifier.notify_listeners();
+            });
         }
 
         self.notify_status_listeners(AnimationStatus::Forward, &inner);
@@ -231,8 +235,11 @@ impl AnimationController {
         inner.start_value = inner.value;
         inner.target_value = inner.lower_bound;
 
-        if let Some(ticker) = &inner.ticker {
-            ticker.start();
+        if let Some(ticker) = &mut inner.ticker {
+            let notifier = Arc::clone(&self.notifier);
+            ticker.start(move |_elapsed| {
+                notifier.notify_listeners();
+            });
         }
 
         self.notify_status_listeners(AnimationStatus::Reverse, &inner);
@@ -244,7 +251,7 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         self.check_disposed(&inner)?;
 
-        if let Some(ticker) = &inner.ticker {
+        if let Some(ticker) = &mut inner.ticker {
             ticker.stop();
         }
 
@@ -272,7 +279,7 @@ impl AnimationController {
         inner.value = inner.lower_bound;
         inner.status = AnimationStatus::Dismissed;
 
-        if let Some(ticker) = &inner.ticker {
+        if let Some(ticker) = &mut inner.ticker {
             ticker.stop();
         }
 
@@ -316,8 +323,11 @@ impl AnimationController {
             inner.duration = dur;
         }
 
-        if let Some(ticker) = &inner.ticker {
-            ticker.start();
+        if let Some(ticker) = &mut inner.ticker {
+            let notifier = Arc::clone(&self.notifier);
+            ticker.start(move |_elapsed| {
+                notifier.notify_listeners();
+            });
         }
 
         self.notify_status_listeners(inner.status, &inner);
@@ -367,7 +377,7 @@ impl AnimationController {
         if t >= 1.0 {
             inner.value = inner.target_value;
 
-            if let Some(ticker) = &inner.ticker {
+            if let Some(ticker) = &mut inner.ticker {
                 ticker.stop();
             }
 
@@ -411,8 +421,8 @@ impl AnimationController {
             return;
         }
 
-        if let Some(ticker) = inner.ticker.take() {
-            ticker.dispose();
+        if let Some(mut ticker) = inner.ticker.take() {
+            ticker.stop();
         }
 
         inner.status_listeners.clear();
@@ -496,13 +506,12 @@ impl fmt::Debug for AnimationController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::foundation::SimpleTickerProvider;
-    use std::thread;
+    use flui_scheduler::Scheduler;
 
     #[test]
     fn test_animation_controller_creation() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
-        let controller = AnimationController::new(Duration::from_millis(100), ticker_provider);
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = AnimationController::new(Duration::from_millis(100), scheduler);
 
         assert_eq!(controller.value(), 0.0);
         assert_eq!(controller.status(), AnimationStatus::Dismissed);
@@ -512,8 +521,8 @@ mod tests {
 
     #[test]
     fn test_animation_controller_forward() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
-        let controller = AnimationController::new(Duration::from_millis(100), ticker_provider);
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = AnimationController::new(Duration::from_millis(100), scheduler);
 
         controller.forward().unwrap();
         assert_eq!(controller.status(), AnimationStatus::Forward);
@@ -523,8 +532,8 @@ mod tests {
 
     #[test]
     fn test_animation_controller_reset() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
-        let controller = AnimationController::new(Duration::from_millis(100), ticker_provider);
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = AnimationController::new(Duration::from_millis(100), scheduler);
 
         controller.set_value(0.5);
         assert_eq!(controller.value(), 0.5);
@@ -538,10 +547,10 @@ mod tests {
 
     #[test]
     fn test_animation_controller_bounds() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = AnimationController::with_bounds(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
             10.0,
             20.0,
         );
@@ -560,8 +569,8 @@ mod tests {
 
     #[test]
     fn test_animation_controller_dispose() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
-        let controller = AnimationController::new(Duration::from_millis(100), ticker_provider);
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = AnimationController::new(Duration::from_millis(100), scheduler);
 
         controller.dispose();
 

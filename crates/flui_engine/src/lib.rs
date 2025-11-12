@@ -44,6 +44,7 @@ pub mod gpu_renderer;
 pub mod layer;
 pub mod painter;
 pub mod renderer;
+pub mod scene;
 pub mod text;
 
 // Re-export GPU renderer (high-level abstraction)
@@ -51,6 +52,9 @@ pub use gpu_renderer::{GpuRenderer, RenderError};
 
 // Re-export modern layer type
 pub use layer::CanvasLayer;
+
+// Re-export Scene (rendering snapshot)
+pub use scene::Scene;
 
 // Re-export painter types
 // Note: Two painter systems coexist:

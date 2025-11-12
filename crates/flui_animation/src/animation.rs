@@ -50,7 +50,7 @@ impl AnimationDirection {
 /// use flui_animation::Animation;
 /// use flui_types::animation::AnimationStatus;
 ///
-/// fn use_animation<T: Clone + Send + Sync>(animation: &dyn Animation<T>) {
+/// fn use_animation<T: Clone + Send + Sync + 'static>(animation: &dyn Animation<T>) {
 ///     let value = animation.value();
 ///     let status = animation.status();
 ///

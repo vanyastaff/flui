@@ -16,15 +16,15 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ProxyAnimation, AnimationController};
-/// use flui_core::foundation::SimpleTickerProvider;
+/// use flui_animation::{ProxyAnimation, AnimationController, Animation};
+/// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let ticker_provider = Arc::new(SimpleTickerProvider);
+/// let scheduler = Arc::new(Scheduler::new());
 /// let controller1 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     ticker_provider.clone(),
+///     scheduler.clone(),
 /// ));
 ///
 /// let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// // Later, swap to a different animation
 /// let controller2 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(500),
-///     ticker_provider,
+///     scheduler,
 /// ));
 /// proxy.set_parent(controller2 as Arc<dyn Animation<f32>>);
 /// ```
@@ -136,15 +136,15 @@ where
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_core::foundation::SimpleTickerProvider;
+    use flui_scheduler::Scheduler;
     use std::time::Duration;
 
     #[test]
     fn test_proxy_animation() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller1 = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider.clone(),
+            scheduler.clone(),
         ));
 
         let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
@@ -155,7 +155,7 @@ mod tests {
         // Swap to a different animation
         let controller2 = Arc::new(AnimationController::new(
             Duration::from_millis(200),
-            ticker_provider,
+            scheduler,
         ));
         controller2.set_value(0.75);
         proxy.set_parent(controller2.clone() as Arc<dyn Animation<f32>>);
@@ -168,10 +168,10 @@ mod tests {
 
     #[test]
     fn test_proxy_animation_status() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let proxy = ProxyAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);

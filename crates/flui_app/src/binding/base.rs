@@ -5,12 +5,12 @@
 
 /// Base trait for all bindings
 ///
-/// All bindings (Gesture, Scheduler, Renderer, Widgets) implement this trait
+/// All bindings (Gesture, Scheduler, Renderer, Pipeline) implement this trait
 /// to provide a unified initialization interface.
 pub trait BindingBase: Send + Sync {
     /// Initialize the binding
     ///
-    /// Called once during WidgetsFlutterBinding::ensure_initialized()
+    /// Called once during AppBinding::ensure_initialized()
     /// to set up the binding's internal state and connections.
     fn init(&mut self);
 }

@@ -165,6 +165,10 @@ pub struct PipelineOwner {
     /// Callback when a build is scheduled (optional)
     on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
 
+    /// Frame counter (increments each build_frame call)
+    /// Used for debugging, profiling, and scene identification
+    frame_counter: u64,
+
     // =========================================================================
     // Production Features (Optional)
     // =========================================================================
@@ -229,6 +233,7 @@ impl PipelineOwner {
             root_mgr: RootManager::new(),
             rebuild_queue,
             on_build_scheduled: None,
+            frame_counter: 0,
             metrics: None,
             recovery: None,
             cancellation: None,
@@ -240,6 +245,18 @@ impl PipelineOwner {
     /// Get reference to the rebuild queue
     pub fn rebuild_queue(&self) -> &RebuildQueue {
         &self.rebuild_queue
+    }
+
+    /// Get current frame number
+    ///
+    /// This counter increments each time build_frame() is called.
+    /// Useful for debugging, profiling, and scene identification.
+    ///
+    /// # Returns
+    ///
+    /// The current frame counter value
+    pub fn frame_number(&self) -> u64 {
+        self.frame_counter
     }
 
     // =========================================================================
@@ -495,6 +512,9 @@ impl PipelineOwner {
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
+        // Increment frame counter
+        self.frame_counter += 1;
+
         // Process pending rebuilds from signals
         self.flush_rebuild_queue();
 
@@ -510,6 +530,9 @@ impl PipelineOwner {
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
+        // Increment frame counter
+        self.frame_counter += 1;
+
         // Process pending rebuilds from signals
         self.flush_rebuild_queue();
 

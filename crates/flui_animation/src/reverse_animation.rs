@@ -23,15 +23,15 @@ use std::sync::Arc;
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ReverseAnimation, AnimationController};
-/// use flui_core::foundation::SimpleTickerProvider;
+/// use flui_animation::{ReverseAnimation, AnimationController, Animation};
+/// use flui_scheduler::Scheduler;
 /// use std::sync::Arc;
 /// use std::time::Duration;
 ///
-/// let ticker_provider = Arc::new(SimpleTickerProvider);
+/// let scheduler = Arc::new(Scheduler::new());
 /// let controller = Arc::new(AnimationController::new(
 ///     Duration::from_millis(300),
-///     ticker_provider,
+///     scheduler,
 /// ));
 ///
 /// let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
@@ -136,15 +136,15 @@ impl fmt::Debug for ReverseAnimation {
 mod tests {
     use super::*;
     use crate::AnimationController;
-    use flui_core::foundation::SimpleTickerProvider;
+    use flui_scheduler::Scheduler;
     use std::time::Duration;
 
     #[test]
     fn test_reverse_animation_value() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
@@ -169,10 +169,10 @@ mod tests {
 
     #[test]
     fn test_reverse_animation_status() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
@@ -198,10 +198,10 @@ mod tests {
 
     #[test]
     fn test_reverse_animation_at_extremes() {
-        let ticker_provider = Arc::new(SimpleTickerProvider);
+        let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
-            ticker_provider,
+            scheduler,
         ));
 
         let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);

@@ -13,19 +13,22 @@ categories = ["gui"]
 # Core FLUI types
 flui_types = { version = "0.1", path = "../flui_types" }
 flui_core = { version = "0.1", path = "../flui_core" }
+flui-scheduler = { version = "0.1", path = "../flui-scheduler" }
+
+
 
 # Concurrency
-parking_lot = "0.12"
+parking_lot = {workspace = true}
 
 # Logging
-tracing = "0.1"
+tracing = {workspace = true}
 
 # Utility
-thiserror = "1.0"
+thiserror = {workspace = true}
 
 [dev-dependencies]
-tokio = { version = "1.43", features = ["full"] }
-tracing-subscriber = "0.3"
+tokio = { workspace = true}
+tracing-subscriber = { workspace = true}
 
 [features]
 default = []

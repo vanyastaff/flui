@@ -1,6 +1,7 @@
 //! RenderTransform - applies matrix transformation to child
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::element::hit_test::BoxHitTestResult;
+use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
 use flui_painting::Canvas;
 use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 
@@ -131,6 +132,60 @@ impl Render for RenderTransform {
         canvas.restore();
 
         canvas
+    }
+
+    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+        // To hit test a transformed child, we need to transform the hit position
+        // by the INVERSE of our transform, then test the child with that position.
+        //
+        // Example: If we rotate a button 45°, and the user clicks at (100, 100),
+        // we need to rotate that click position -45° before testing the button.
+
+        // Try to compute inverse transform
+        let inverse_transform = match self.transform.inverse() {
+            Some(inv) => inv,
+            None => {
+                // Transform is singular (non-invertible), e.g., scale by 0
+                // Cannot hit test - return false
+                return false;
+            }
+        };
+
+        // Convert inverse transform to matrix and apply to position
+        let inverse_matrix: Matrix4 = inverse_transform.into();
+
+        // Account for alignment offset when transforming position
+        let mut transformed_position = ctx.position;
+
+        // Apply inverse alignment (reverse of paint order)
+        if self.alignment != Offset::ZERO {
+            transformed_position = Offset::new(
+                transformed_position.dx + self.alignment.dx,
+                transformed_position.dy + self.alignment.dy,
+            );
+        }
+
+        // Apply inverse transform to position
+        let x = transformed_position.dx;
+        let y = transformed_position.dy;
+        let transformed_x = inverse_matrix.m[0] * x + inverse_matrix.m[4] * y + inverse_matrix.m[12];
+        let transformed_y = inverse_matrix.m[1] * x + inverse_matrix.m[5] * y + inverse_matrix.m[13];
+
+        // Reverse inverse alignment
+        let final_position = if self.alignment != Offset::ZERO {
+            Offset::new(
+                transformed_x - self.alignment.dx,
+                transformed_y - self.alignment.dy,
+            )
+        } else {
+            Offset::new(transformed_x, transformed_y)
+        };
+
+        // Create new context with transformed position
+        let new_ctx = ctx.with_position(final_position);
+
+        // Test child with transformed position
+        self.hit_test_children(&new_ctx, result)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
