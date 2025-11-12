@@ -178,3 +178,110 @@ where
     // 5. Run event loop (blocks)
     embedder.run(event_loop)
 }
+
+// Android entry point
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn android_main(app: android_activity::AndroidApp) {
+    use log::LevelFilter;
+    use flui_core::view::{View, BuildContext, IntoElement};
+    use flui_rendering::objects::layout::empty::RenderEmpty;
+    use winit::event::{Event, WindowEvent};
+    use winit::event_loop::ControlFlow;
+
+    android_logger::init_once(android_logger::Config::default().with_max_level(LevelFilter::Info));
+
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+
+    // Minimal empty widget for Android demo (avoid flui_widgets dependency)
+    #[derive(Debug, Clone)]
+    struct AndroidEmpty;
+
+    impl View for AndroidEmpty {
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            (RenderEmpty, ())
+        }
+    }
+
+    log::info!("Starting FLUI Android app");
+
+    // 1. Initialize bindings
+    let binding = AppBinding::ensure_initialized();
+
+    // 2. Attach root widget
+    binding.pipeline.attach_root_widget(AndroidEmpty);
+
+    // 3. Create event loop with Android app
+    let mut event_loop_builder = EventLoop::builder();
+    event_loop_builder.with_android_app(app);
+    let event_loop = event_loop_builder.build().expect("Failed to create event loop");
+
+    log::info!("Event loop created, waiting for Resumed event");
+
+    // 4. Wait for Resumed event before creating embedder
+    // On Android, window/surface creation must happen AFTER Resumed event
+    let mut embedder: Option<crate::embedder::AndroidEmbedder> = None;
+
+    event_loop.run(move |event, elwt| {
+        elwt.set_control_flow(ControlFlow::Poll);
+
+        match event {
+            Event::Resumed => {
+                log::info!("Resumed event received");
+                if embedder.is_none() {
+                    log::info!("Creating AndroidEmbedder after Resumed event");
+                    // Safe to create window and surface now
+                    embedder = Some(pollster::block_on(
+                        crate::embedder::AndroidEmbedder::new(binding.clone(), elwt)
+                    ));
+                    log::info!("AndroidEmbedder created successfully");
+                } else {
+                    // Resume existing embedder
+                    if let Some(ref mut emb) = embedder {
+                        emb.resume();
+                        log::info!("AndroidEmbedder resumed");
+                    }
+                }
+            }
+
+            Event::Suspended => {
+                log::info!("Suspended event received");
+                // Mark as suspended (stops rendering)
+                if let Some(ref mut emb) = embedder {
+                    emb.suspend();
+                    log::info!("AndroidEmbedder suspended (rendering stopped)");
+                }
+                // Drop embedder to release GPU resources
+                embedder = None;
+                log::info!("AndroidEmbedder dropped (GPU resources released)");
+            }
+
+            Event::AboutToWait => {
+                // Request redraw every frame (for animations)
+                if let Some(ref emb) = embedder {
+                    emb.window().request_redraw();
+                }
+            }
+
+            Event::WindowEvent { event, .. } => {
+                if let Some(ref mut emb) = embedder {
+                    match event {
+                        WindowEvent::RedrawRequested => {
+                            log::trace!("RedrawRequested event, rendering frame");
+                            emb.render_frame();
+                        }
+                        WindowEvent::CloseRequested => {
+                            log::info!("Window close requested");
+                            elwt.exit();
+                        }
+                        other => {
+                            emb.handle_event(other, elwt);
+                        }
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }).expect("Event loop error");
+}

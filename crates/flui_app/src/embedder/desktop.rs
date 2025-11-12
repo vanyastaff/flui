@@ -1,14 +1,8 @@
-//! wgpu embedder - winit + wgpu integration
+//! Desktop embedder - Windows, macOS, Linux
 //!
-//! This embedder creates a window using winit and renders using wgpu.
-//! It bridges platform events to the binding layer and renders scenes to the GPU.
-//!
-//! # Clean Architecture
-//!
-//! This implementation follows clean architecture principles:
-//! - **Platform Layer** (this file): Window management, event loop
-//! - **Rendering Layer** (flui_engine::GpuRenderer): GPU abstraction
-//! - **Framework Layer** (AppBinding): UI framework coordination
+//! This embedder handles desktop platforms using a synchronous event loop.
+//! It creates a window, initializes GPU rendering, and runs the application
+//! event loop until the window is closed.
 
 use crate::binding::AppBinding;
 use crate::{event_callbacks::WindowEventCallbacks, window_state::WindowStateTracker};
@@ -25,47 +19,34 @@ use winit::{
     window::Window,
 };
 
-/// wgpu embedder for FLUI apps
+/// Desktop embedder for FLUI apps
 ///
-/// # Clean Architecture
+/// This embedder is designed for desktop platforms (Windows, macOS, Linux).
+/// It uses a synchronous event loop and manages the complete application lifecycle.
+///
+/// # Architecture
 ///
 /// ```text
-/// WgpuEmbedder (Platform Layer)
-///   ├─ Window (winit) - Platform window management
-///   ├─ GpuRenderer (flui_engine) - Encapsulates ALL GPU resources
+/// DesktopEmbedder
+///   ├─ Window (winit) - Desktop window management
+///   ├─ GpuRenderer (flui_engine) - GPU rendering abstraction
 ///   ├─ AppBinding (framework) - UI framework coordination
-///   └─ Scene cache - For hit testing (Arc-based sharing)
+///   └─ Scene cache - For hit testing
 /// ```
-///
-/// # Event Flow
-///
-/// ```text
-/// winit events → handle_window_event() → GestureBinding → EventRouter
-/// vsync → render_frame() → SchedulerBinding → PipelineOwner → Scene → GpuRenderer
-/// ```
-///
-/// # Design Principles
-///
-/// - **Separation of Concerns**: Platform vs Rendering vs Framework
-/// - **Dependency Inversion**: Embedder depends on GpuRenderer abstraction, not wgpu directly
-/// - **Zero Duplication**: All wgpu code is in flui_engine::GpuRenderer
-/// - **Arc-based Sharing**: Scene layers shared between rendering and hit testing
-pub struct WgpuEmbedder {
+pub struct DesktopEmbedder {
     /// Framework binding (gesture, scheduler, renderer, widgets)
     binding: Arc<AppBinding>,
 
-    /// winit window (platform)
+    /// winit window (desktop)
     window: Arc<Window>,
 
-    /// GPU renderer (encapsulates ALL wgpu resources: device, queue, surface, painter)
-    /// This is the ONLY GPU-related field - clean separation of concerns!
+    /// GPU renderer (encapsulates ALL wgpu resources)
     renderer: GpuRenderer,
 
     /// Last cursor position (for mouse events)
     last_cursor_position: Offset,
 
     /// Last rendered scene (cached for hit testing)
-    /// Arc-based sharing allows zero-copy access to layer tree
     last_scene: Option<Scene>,
 
     /// Window state tracker (focus, visibility)
@@ -74,42 +55,30 @@ pub struct WgpuEmbedder {
     /// User-defined window event callbacks
     event_callbacks: WindowEventCallbacks,
 
-    /// Pending pointer move event (for coalescing high-frequency events)
-    ///
-    /// Mouse move events can fire at very high rates (1000+ Hz on gaming mice).
-    /// We coalesce consecutive moves by only processing the last one per frame.
-    /// This reduces CPU overhead while maintaining smooth cursor tracking.
+    /// Pending pointer move event (for coalescing)
     pending_pointer_move: Option<PointerEventData>,
 }
 
-impl WgpuEmbedder {
-    /// Create a new wgpu embedder (async version for WASM compatibility)
+impl DesktopEmbedder {
+    /// Create a new desktop embedder
     ///
     /// # Parameters
     ///
-    /// - `binding`: The framework binding (from `AppBinding::ensure_initialized()`)
+    /// - `binding`: The framework binding
     /// - `event_loop`: The winit event loop
-    ///
-    /// # Clean Architecture
-    ///
-    /// This constructor delegates ALL GPU initialization to `GpuRenderer::new_async()`.
-    /// The embedder only handles platform-specific concerns (window creation).
-    ///
-    /// **Before**: 90+ lines of wgpu initialization code (duplicated from GpuRenderer)
-    /// **After**: 1 line - `GpuRenderer::new_async(window).await`
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let binding = AppBinding::ensure_initialized();
-    /// let event_loop = EventLoop::new();
-    /// let embedder = WgpuEmbedder::new(binding, &event_loop).await;
+    /// let event_loop = EventLoop::new().unwrap();
+    /// let embedder = DesktopEmbedder::new(binding, &event_loop).await;
     /// embedder.run(event_loop);
     /// ```
     pub async fn new(binding: Arc<AppBinding>, event_loop: &EventLoop<()>) -> Self {
-        tracing::info!("Initializing wgpu embedder");
+        tracing::info!("Initializing desktop embedder");
 
-        // 1. Create window (platform layer responsibility)
+        // 1. Create window (desktop-specific attributes)
         let window_attributes = Window::default_attributes()
             .with_title("FLUI App")
             .with_inner_size(winit::dpi::PhysicalSize::new(800, 600));
@@ -122,13 +91,13 @@ impl WgpuEmbedder {
 
         tracing::debug!("Window created");
 
-        // 2. Initialize GPU renderer (delegates to flui_engine - ZERO duplication!)
+        // 2. Initialize GPU renderer
         let renderer = GpuRenderer::new_async(Arc::clone(&window)).await;
 
         tracing::info!(
             size = ?renderer.size(),
             format = ?renderer.format(),
-            "WgpuEmbedder initialized with clean architecture"
+            "Desktop embedder initialized"
         );
 
         Self {
@@ -144,45 +113,25 @@ impl WgpuEmbedder {
     }
 
     /// Get mutable reference to window event callbacks
-    ///
-    /// Use this to register callbacks for system events like focus changes,
-    /// minimization, DPI changes, theme changes, etc.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let mut embedder = WgpuEmbedder::new(binding, &event_loop).await;
-    ///
-    /// embedder.event_callbacks_mut().on_focus(|focused| {
-    ///     if focused {
-    ///         println!("Window gained focus");
-    ///     } else {
-    ///         println!("Window lost focus");
-    ///     }
-    /// });
-    /// ```
     pub fn event_callbacks_mut(&mut self) -> &mut WindowEventCallbacks {
         &mut self.event_callbacks
     }
 
     /// Get reference to window state tracker
-    ///
-    /// Access window focus and visibility state.
     pub fn window_state(&self) -> &WindowStateTracker {
         &self.window_state
     }
 
-    /// Run the event loop
+    /// Get reference to window
+    pub fn window(&self) -> &Arc<Window> {
+        &self.window
+    }
+
+    /// Run the desktop event loop
     ///
     /// This method blocks until the window is closed.
-    ///
-    /// # Event Loop Strategy
-    ///
-    /// Uses `ControlFlow::Poll` for continuous rendering (suitable for animations/games).
-    /// For lower power consumption, could switch to `ControlFlow::Wait` and only
-    /// request_redraw() when state changes.
     pub fn run(mut self, event_loop: EventLoop<()>) -> ! {
-        tracing::info!("Starting event loop");
+        tracing::info!("Starting desktop event loop");
 
         event_loop
             .run(move |event, elwt| {
@@ -213,9 +162,6 @@ impl WgpuEmbedder {
     }
 
     /// Handle window events
-    ///
-    /// Routes platform events to the appropriate binding layer.
-    /// Processes system events (focus, theme, DPI) before user events.
     fn handle_window_event(
         &mut self,
         event: WindowEvent,
@@ -250,7 +196,6 @@ impl WgpuEmbedder {
                 self.renderer.resize(size.width, size.height);
 
                 // Request layout for the entire tree with new window size
-                // This ensures UI adapts to the new dimensions
                 let pipeline = self.binding.pipeline.pipeline_owner();
                 let mut pipeline_write = pipeline.write();
                 if let Some(root_id) = pipeline_write.root_element_id() {
@@ -264,18 +209,15 @@ impl WgpuEmbedder {
                 self.last_cursor_position = Offset::new(position.x as f32, position.y as f32);
 
                 // EVENT COALESCING: Store the move event, will be processed in render_frame()
-                // This reduces CPU overhead for high-frequency mouse moves (1000+ Hz gaming mice)
                 let data =
                     PointerEventData::new(self.last_cursor_position, PointerDeviceKind::Mouse);
 
                 self.pending_pointer_move = Some(data);
 
-                // Schedule task with UserInput priority (highest) to process on next frame
-                // This ensures smooth cursor tracking while avoiding redundant processing
+                // Schedule task with UserInput priority (highest)
                 self.binding.scheduler.scheduler().add_task(
                     flui_scheduler::Priority::UserInput,
                     || {
-                        // Task will trigger frame processing
                         tracing::trace!("Pointer move task scheduled");
                     },
                 );
@@ -320,20 +262,6 @@ impl WgpuEmbedder {
     }
 
     /// Render a frame
-    ///
-    /// # Clean Architecture Flow
-    ///
-    /// ```text
-    /// 1. Scheduler::handle_begin_frame() - Frame callbacks
-    /// 2. RendererBinding::draw_frame() - Build → Layout → Paint → Scene
-    /// 3. GpuRenderer::render() - Scene → GPU commands → Present
-    /// 4. Scheduler::handle_draw_frame() - Post-frame callbacks
-    /// ```
-    ///
-    /// # Layer Sharing
-    ///
-    /// The Scene is cloned (Arc clone is cheap!) and cached for hit testing.
-    /// This allows both rendering and event routing to access the same layer tree.
     fn render_frame(&mut self) {
         // 1. Begin frame (scheduler callbacks)
         let _frame_id = self.binding.scheduler.scheduler().begin_frame();
@@ -364,7 +292,6 @@ impl WgpuEmbedder {
         let scene = self.binding.renderer.draw_frame(constraints);
 
         // 3. Cache scene for hit testing (Arc clone is cheap!)
-        //    This enables zero-copy sharing between rendering and event routing
         if scene.has_content() {
             self.last_scene = Some(scene.clone());
             tracing::trace!(
@@ -373,7 +300,7 @@ impl WgpuEmbedder {
             );
         }
 
-        // 4. Render scene to GPU (delegates ALL GPU work to GpuRenderer)
+        // 4. Render scene to GPU
         if let Some(layer) = scene.root_layer() {
             match self.renderer.render(layer.as_ref()) {
                 Ok(()) => {
