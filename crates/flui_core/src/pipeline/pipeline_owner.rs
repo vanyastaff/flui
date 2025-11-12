@@ -362,11 +362,11 @@ impl PipelineOwner {
         // This matches Flutter's buildScope() pattern for state safety
         self.coordinator.build_mut().set_build_scope(true);
 
-        let element = {
-            // Set up BuildContext guard and convert View to Element
-            let _guard = BuildContextGuard::new(&ctx);
-            widget.into_element()
-        };
+        // Set up BuildContext guard and convert View to Element
+        // IMPORTANT: Guard must stay alive for the entire conversion chain,
+        // including recursive into_element() calls from child widgets
+        let _guard = BuildContextGuard::new(&ctx);
+        let element = widget.into_element();
 
         // Clear build scope
         self.coordinator.build_mut().set_build_scope(false);
