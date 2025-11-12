@@ -108,6 +108,47 @@ cargo bench -p flui_core
 cargo bench -p flui_types
 ```
 
+### Cross-Platform Builds
+
+FLUI uses the **xtask** build system for cross-platform builds. See `BUILD.md` for complete documentation.
+
+```bash
+# Check environment and installed tools
+cargo xtask info
+
+# Build for Android (debug)
+cargo xtask build android
+
+# Build for Android (release)
+cargo xtask build android --release
+
+# Build for Web
+cargo xtask build web --release
+
+# Build for Desktop (Windows/Linux/macOS)
+cargo xtask build desktop --release
+
+# Clean build artifacts
+cargo xtask clean --all
+
+# Convenient aliases (defined in .cargo/config.toml)
+cargo build-android-release
+cargo build-web-release
+cargo build-desktop-release
+```
+
+**Output locations:**
+- Android: `target/flui-out/android/flui-{debug|release}.apk`
+- Web: `target/flui-out/web/` (ready to serve)
+- Desktop: `target/flui-out/desktop/flui_app[.exe]`
+
+**Prerequisites:**
+- **Android**: Android SDK, NDK, Java JDK 11+, `cargo install cargo-ndk`, `rustup target add aarch64-linux-android`
+- **Web**: `cargo install wasm-pack`, `rustup target add wasm32-unknown-unknown`
+- **Desktop**: Platform build tools (MSVC/Xcode/GCC)
+
+See `BUILD.md` for detailed setup instructions and troubleshooting.
+
 ### Linting
 
 ```bash

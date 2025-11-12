@@ -12,11 +12,30 @@ description = "Application framework for Flui - Flutter-inspired UI"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [features]
-default = []
+default = ["desktop", "images"]
+
+# === Platform Features ===
+# Desktop platforms (Windows, Linux, macOS)
+desktop = ["flui_engine/desktop"]
+
+# Mobile platforms
+mobile = ["flui_engine/mobile"]
+android = ["mobile", "flui_engine/android"]
+ios = ["mobile", "flui_engine/ios"]
+
+# Web platform
+web = ["flui_engine/web"]
 
 # === Optional Components ===
 # Widget library (basic widgets like Text, Button, etc.)
 widgets = ["dep:flui_widgets"]
+
+# Image loading support
+images = ["flui_engine/images"]
+
+# === Logging Features ===
+# Pretty hierarchical logging for desktop development
+pretty-logs = ["flui_log/pretty"]
 
 # === DevTools Features ===
 # Developer tools integration
@@ -26,32 +45,35 @@ devtools = ["flui_engine/devtools"]
 # Flui crates
 flui_core = { path = "../flui_core" }
 flui_types = { path = "../flui_types" }
-flui_rendering = { path = "../flui_rendering" }
 flui_widgets = { path = "../flui_widgets", optional = true }
-flui_painting = { path = "../flui_painting" }
 flui_interaction = { path = "../flui_interaction" }
 flui-scheduler = { path = "../flui-scheduler" }
+flui_log = { path = "../flui_log" }
 
 # Rendering engine
 flui_engine = { path = "../flui_engine" }
 
-# GPU rendering
-wgpu.workspace = true
+# GPU rendering (for Surface creation)
+wgpu = { workspace = true }
 
 # Window management
 winit.workspace = true
 
 # Utilities
 tracing.workspace = true
-tracing-subscriber = "0.3"
 parking_lot.workspace = true
 pollster = "0.3"
 
 # Android dependencies
 [target.'cfg(target_os = "android")'.dependencies]
-android_logger = "0.14"
+ndk = "0.9"
+ndk-context = "0.1"
+ndk-glue = "0.7"
+
+jni = "0.21"
+
 android-activity = { version = "0.6", features = ["native-activity"] }
-log = "0.4"
+flui_widgets = { path = "../flui_widgets" }
 
 # iOS dependencies
 [target.'cfg(target_os = "ios")'.dependencies]
@@ -89,3 +111,7 @@ path = "examples/android_minimal.rs"
 [[example]]
 name = "android_empty"
 path = "examples/android_empty.rs"
+
+[[example]]
+name = "counter_demo_working"
+path = "examples/counter_demo_working.rs"

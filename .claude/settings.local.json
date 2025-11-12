@@ -30,7 +30,13 @@
       "Bash(cat:*)",
       "Bash(tar:*)",
       "Bash(mv:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(\"C:\\Users\\vanya\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe\" shell am start -n com.vanya.flui.counter.debug/android.app.NativeActivity)",
+      "Bash(\"C:\\Users\\vanya\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe\" install -r platformsandroidappbuildoutputsapkdebugapp-debug.apk)",
+      "mcp__filesystem__list_directory",
+      "Bash(./target/release/flui.exe create:*)",
+      "Bash(./gradlew.bat assembleDebug:*)",
+      "Bash(adb:*)"
     ],
     "deny": [],
     "ask": []

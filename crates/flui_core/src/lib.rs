@@ -262,7 +262,7 @@ pub mod debug;
 pub mod element;
 pub mod foundation;
 pub mod hooks;
-pub mod logging;
+pub mod macros;
 pub mod pipeline;
 pub mod prelude;
 pub mod render;
@@ -275,6 +275,9 @@ pub use debug::DebugFlags;
 
 // Re-export error types from foundation
 pub use foundation::error::{CoreError, Result};
+
+// Re-export logging
+pub use flui_log;
 
 // Re-export foundation types
 pub use foundation::{

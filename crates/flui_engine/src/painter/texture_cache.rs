@@ -324,6 +324,8 @@ impl TextureCache {
     /// Load texture from file (PNG, JPEG, etc.)
     ///
     /// Supports PNG, JPEG, and other formats via the `image` crate.
+    /// Requires the "images" feature to be enabled.
+    #[cfg(feature = "images")]
     fn load_from_file(&self, path: &str) -> Result<CachedTexture, String> {
         use image::ImageReader;
 
@@ -380,6 +382,11 @@ impl TextureCache {
 
         let view = texture.create_view(&Default::default());
         Ok(CachedTexture::new(texture, view, width, height))
+    }
+
+    #[cfg(not(feature = "images"))]
+    fn load_from_file(&self, _path: &str) -> Result<CachedTexture, String> {
+        Err("Image loading disabled: 'images' feature not enabled".to_string())
     }
 
     /// Check if texture is cached

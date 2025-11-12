@@ -111,7 +111,7 @@ impl RenderSliverList {
     fn calculate_sliver_geometry(
         &self,
         constraints: &SliverConstraints,
-        tree: &ElementTree,
+        _tree: &ElementTree,
         children: &[flui_core::element::ElementId],
     ) -> SliverGeometry {
         // If no children, return zero geometry
@@ -210,7 +210,7 @@ impl RenderSliver for RenderSliverList {
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
         let canvas = Canvas::new();
 
         // Slivers paint their visible children based on scroll offset

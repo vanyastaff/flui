@@ -9,50 +9,209 @@ repository.workspace = true
 description = "Rendering engine for FLUI - Layer, Scene, Painter, Compositor"
 
 [features]
-default = []
+default = ["images"]
+
+# === Desktop Platform Features ===
+# Windows (DirectX 12 primary, Vulkan fallback)
+windows = ["wgpu/wgsl", "wgpu/dx12", "wgpu/vulkan"]
+
+# Linux (Vulkan primary)
+linux = ["wgpu/wgsl", "wgpu/vulkan"]
+
+# macOS (Metal primary)
+macos = ["wgpu/wgsl", "wgpu/metal"]
+
+# Convenience feature for all desktop platforms
+desktop = ["windows", "linux", "macos"]
+
+# === Mobile Platform Features ===
+# Common mobile setup
+mobile = ["wgpu/wgsl", "embedded-fonts-fallback", "mobile-gpu-limits"]
+
+# Android (Vulkan backend)
+android = ["mobile", "wgpu/vulkan"]
+
+# iOS (Metal backend)
+ios = ["mobile", "wgpu/metal"]
+
+# === Web Platform ===
+# WebAssembly (WebGPU backend)
+web = ["wgpu/webgpu", "wgpu/wgsl", "embedded-fonts-fallback"]
+
+# === GPU Backend Features (for manual control) ===
+# Vulkan backend (Android, Linux, Windows fallback)
+vulkan = ["wgpu/vulkan", "wgpu/wgsl"]
+
+# Metal backend (iOS, macOS)
+metal = ["wgpu/metal", "wgpu/wgsl"]
+
+# DirectX 12 backend (Windows primary)
+dx12 = ["wgpu/dx12", "wgpu/wgsl"]
+
+# WebGPU backend (Web)
+webgpu = ["wgpu/webgpu", "wgpu/wgsl"]
+
+# OpenGL ES / WebGL backend (legacy/fallback)
+gles = ["wgpu/gles", "wgpu/wgsl"]
+
+# === Rendering Features ===
+# Always try to load embedded fonts as fallback if system fonts fail
+# (automatically enabled for mobile/web, optional for desktop)
+embedded-fonts-fallback = []
+
+# Reduce GPU limits for mobile devices (smaller textures, fewer draw calls)
+mobile-gpu-limits = []
+
+# Image loading support (optional)
+images = ["dep:image"]
+
+# === Performance Features ===
+# Enable text shaping cache for better performance
+shape-run-cache = ["cosmic-text/shape-run-cache"]
+
+# === Serialization Support ===
+# Enable serde for tessellation and atlas data
+serialization = ["lyon/serialization", "guillotiere/serialization"]
 
 # === DevTools ===
 # Developer tools integration
 devtools = ["dep:flui_devtools"]
 
-# Memory profiling (requires devtools)
-memory-profiler = ["devtools", "flui_devtools/memory-profiler"]
+# TODO: Re-enable when flui_devtools/memory-profiler is fixed
+# memory-profiler = ["devtools", "flui_devtools/memory-profiler"]
+
+# Lyon debugger for tessellation visualization
+lyon-debugger = ["lyon/debugger"]
+
+# Warn when glyphs are missing (useful for debugging font issues)
+warn-missing-glyphs = ["cosmic-text/warn_on_missing_glyphs"]
+
+# Runtime checks for atlas allocator (debugging)
+atlas-checks = ["guillotiere/checks"]
 
 [dependencies]
-# Internal dependencies
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_interaction = { path = "../flui_interaction" }
 flui_devtools = { path = "../flui_devtools", optional = true }
 
-# Math
-glam = { workspace = true }
+# === Engine-specific dependencies (NOT from workspace) ===
+# Math for GPU rendering
+glam = { version = "0.30.9", features = ["serde", "bytemuck"] }
 
-# GPU rendering backend (mandatory)
-wgpu = { workspace = true }
-winit = { workspace = true }
-bytemuck = { workspace = true }
-glyphon = { workspace = true }
-cosmic-text = { workspace = true }
-guillotiere = { workspace = true }
-lyon = { workspace = true }
+# GPU rendering - wgpu (shared with flui_app)
+wgpu = { workspace = true, default-features = false }
+bytemuck = { version = "1.24", features = ["derive"] }
+
+# Text rendering (GPU-accelerated)
+glyphon = "0.9.0"
 ttf-parser = { workspace = true }
+
+# Vector graphics tessellation
+lyon = "1.0.16"
+
+# Texture atlas allocator
+guillotiere = "0.6.2"
+
+# Text shaping (used by glyphon)
+cosmic-text = "0.15.0"
+
+# Utilities (shared)
 pollster = { workspace = true }
 
-# Utilities
+# Image loading (optional, shared with flui_assets)
+image = { workspace = true, optional = true }
+
+# === Shared utilities (from workspace) ===
 parking_lot = { workspace = true }
-ahash = { workspace = true }
-smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-bon.workspace = true
 
-# Image loading
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# === Platform-specific dependencies ===
+
+# Windows-specific
+[target.'cfg(target_os = "windows")'.dependencies]
+# For DirectX 12 support
+# d3d12 = "0.7"  # Uncomment if you need direct D3D12 access
+
+# Linux-specific
+[target.'cfg(target_os = "linux")'.dependencies]
+# For Vulkan support
+# ash = "0.37"  # Uncomment if you need direct Vulkan access
+
+# macOS-specific
+[target.'cfg(target_os = "macos")'.dependencies]
+# For Metal support
+# metal = "0.27"  # Uncomment if you need direct Metal access
+
+# Android-specific
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = "0.9"
+ndk-context = "0.1"
+# android_logger = "0.14"  # Uncomment if you need Android logging
+
+# iOS-specific
+[target.'cfg(target_os = "ios")'.dependencies]
+objc = "0.2"
+# metal = "0.27"  # Uncomment if you need direct Metal access
+
+# WebAssembly-specific
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Document",
+    "Window",
+    "Element",
+    "HtmlCanvasElement",
+    "Performance",
+] }
+console_error_panic_hook = "0.1"
 
 [dev-dependencies]
-pollster = { workspace = true }
-env_logger = "0.11"
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+pollster = "0.4.0"
+env_logger = "0.11.8"
+tokio = { version = "1.48.0", features = ["rt-multi-thread"] }
 # For examples that need asset loading, use flui_assets instead
 # flui_assets = { path = "../flui_assets", features = ["images", "network"] }
+
+# ===================================================================
+# Feature Flags Guide
+# ===================================================================
+#
+# ENGINE-SPECIFIC LIBRARY FEATURES:
+#
+# glyphon (v0.9.0):
+#   - No features available - works as-is
+#
+# cosmic-text (v0.15.0):
+#   - shape-run-cache: Caches shaped text runs for better performance
+#   - warn_on_missing_glyphs: Debug helper for missing font glyphs
+#   - Default: std, swash, fontconfig
+#
+# lyon (v1.0.16):
+#   - serialization: Serde support for tessellation data
+#   - debugger: Visualization and debugging tools
+#   - extra: Additional geometry utilities
+#   - profiling: Performance profiling support
+#
+# guillotiere (v0.6.2):
+#   - serialization: Serde support for atlas allocator
+#   - checks: Runtime validation (debugging)
+#
+# RECOMMENDED COMBINATIONS:
+#
+# Development:
+#   features = ["desktop", "shape-run-cache", "warn-missing-glyphs",
+#               "lyon-debugger", "atlas-checks", "devtools"]
+#
+# Production Desktop:
+#   features = ["desktop", "shape-run-cache", "images"]
+#
+# Production Mobile:
+#   features = ["android", "shape-run-cache"]  # or "ios"
+#
+# With Serialization:
+#   features = ["desktop", "serialization"]
+#
+# ===================================================================

@@ -1,51 +1,54 @@
 # FLUI Mobile Deployment
 
-Complete setup for deploying FLUI applications to multiple platforms.
+Complete guide for deploying FLUI applications to multiple platforms using the FLUI CLI.
 
 ## 📱 Supported Platforms
 
 - ✅ **Desktop** - Windows, Linux, macOS
 - ✅ **Android** - ARM64, ARMv7
-- ✅ **iOS** - Device (ARM64), Simulator (ARM64 + x86_64)
+- 🚧 **iOS** - Device (ARM64), Simulator (ARM64 + x86_64) *(coming soon)*
 - ✅ **Web** - WebAssembly with WebGPU
 
 ---
 
 ## 🚀 Quick Start
 
-### Desktop
+### Using FLUI CLI (Recommended)
+
+The FLUI CLI provides a unified interface for building across all platforms.
+
+#### Desktop
 
 ```bash
+# Run directly
 cargo run -p flui_app --example counter_demo
+
+# Or build with flui_cli
+flui build --platform desktop --example counter_demo --release
+flui run --platform desktop
 ```
 
-### Android (Genymotion)
+#### Android
 
 ```bash
-# Windows
-scripts\build_android.bat
+# Build APK
+flui build --platform android --example counter_demo --release
 
-# Linux/macOS
-chmod +x scripts/build_android.sh
-./scripts/build_android.sh
+# Install to device
+flui install --platform android
+
+# Run on device
+flui run --platform android
 ```
 
-### iOS (macOS only)
+#### Web
 
 ```bash
-chmod +x scripts/build_ios.sh
-./scripts/build_ios.sh
-```
+# Build WASM package
+flui build --platform web --example counter_demo --release
 
-### Web
-
-```bash
-# Windows
-scripts\build_web.bat
-
-# Linux/macOS
-chmod +x scripts/build_web.sh
-./scripts/build_web.sh
+# Serve and open browser
+flui run --platform web
 ```
 
 ---
@@ -55,39 +58,42 @@ chmod +x scripts/build_web.sh
 ```
 flui/
 ├── crates/
+│   ├── flui_build/              # Build system library
+│   │   ├── src/
+│   │   │   ├── android.rs       # Android builder
+│   │   │   ├── web.rs           # Web builder
+│   │   │   ├── desktop.rs       # Desktop builder
+│   │   │   └── platform.rs      # Common trait
+│   │   └── Cargo.toml
+│   │
+│   ├── flui_cli/                # CLI tool
+│   │   ├── src/
+│   │   │   ├── commands/
+│   │   │   │   ├── build.rs
+│   │   │   │   ├── run.rs
+│   │   │   │   └── install.rs
+│   │   │   └── main.rs
+│   │   └── Cargo.toml
+│   │
 │   └── flui_app/
 │       └── examples/
-│           └── counter_demo.rs      # ✨ Universal example
+│           └── counter_demo.rs  # ✨ Universal example
 │
-├── platforms/                       # Platform configurations
-│   ├── android/
-│   │   ├── app/
-│   │   │   ├── src/main/
-│   │   │   │   ├── AndroidManifest.xml
-│   │   │   │   └── jniLibs/         # Native libraries (.so)
-│   │   │   └── build.gradle
-│   │   ├── build.gradle
-│   │   ├── settings.gradle
-│   │   └── gradle.properties
-│   │
-│   ├── ios/
-│   │   ├── FluiCounter/
-│   │   │   ├── AppDelegate.swift
-│   │   │   ├── Info.plist
-│   │   │   └── Assets.xcassets/
-│   │   ├── Libraries/               # Static libraries (.a)
-│   │   └── FluiCounter.xcodeproj/
-│   │
-│   └── web/
-│       ├── index.html
-│       └── pkg/                     # Generated WASM files
-│
-└── scripts/                         # Build automation
-    ├── build_android.bat
-    ├── build_android.sh
-    ├── build_ios.sh
-    ├── build_web.bat
-    └── build_web.sh
+└── platforms/                   # Platform configurations
+    ├── android/
+    │   ├── app/
+    │   │   ├── src/main/
+    │   │   │   ├── AndroidManifest.xml
+    │   │   │   └── jniLibs/     # Native libraries (.so)
+    │   │   └── build.gradle.kts
+    │   ├── build.gradle.kts
+    │   ├── settings.gradle.kts
+    │   ├── gradlew              # Gradle wrapper (Unix)
+    │   └── gradlew.bat          # Gradle wrapper (Windows)
+    │
+    └── web/
+        ├── index.html
+        └── pkg/                 # Generated WASM files
 ```
 
 ---
@@ -96,421 +102,272 @@ flui/
 
 ### All Platforms
 
-- **Rust** 1.70+ ([rustup.rs](https://rustup.rs))
+- **Rust** 1.90+ ([rustup.rs](https://rustup.rs))
 - **Cargo** (comes with Rust)
+- **FLUI CLI** - `cargo install --path crates/flui_cli`
 
 ### Android
 
-- **Android Studio** or Android SDK
-- **Android NDK** r25+ (install via SDK Manager)
-- **Java Development Kit** (JDK 17+)
-- **cargo-ndk**: `cargo install cargo-ndk`
-
-**Environment Variables:**
-```bash
-# Windows
-set ANDROID_HOME=C:\Users\%USERNAME%\AppData\Local\Android\Sdk
-set ANDROID_NDK_HOME=%ANDROID_HOME%\ndk\27.0.12077973
-
-# Linux/macOS
-export ANDROID_HOME=$HOME/Android/Sdk
-export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
-```
-
-### iOS (macOS only)
-
-- **Xcode** 14+ (from App Store)
-- **Xcode Command Line Tools**: `xcode-select --install`
-- **CocoaPods** (optional): `sudo gem install cocoapods`
+- **Android SDK** (Android Studio or command-line tools)
+  - Set `ANDROID_HOME` environment variable
+- **Android NDK** (will auto-detect from SDK)
+- **Java JDK 11+** for Gradle
+  - Set `JAVA_HOME` environment variable
+- **cargo-ndk** - `cargo install cargo-ndk`
+- **Rust target** - `rustup target add aarch64-linux-android`
 
 ### Web
 
-- **wasm-pack**: `cargo install wasm-pack`
-- **Chrome 113+** or Edge 113+ (for WebGPU support)
+- **wasm-pack** - `cargo install wasm-pack`
+- **Rust target** - `rustup target add wasm32-unknown-unknown`
+- Modern browser with WebGPU support (Chrome 113+, Edge 113+)
+
+### Desktop
+
+- Platform-specific build tools:
+  - **Windows**: MSVC (Visual Studio Build Tools)
+  - **Linux**: GCC/Clang
+  - **macOS**: Xcode Command Line Tools
 
 ---
 
-## 📱 Android Setup
+## 📦 Build Commands
 
-### 1. Install Prerequisites
+### Build
+
+Build for a specific platform:
 
 ```bash
-# Install Android Studio
-# Download from: https://developer.android.com/studio
+# Debug build
+flui build --platform android --example counter_demo
 
-# Install cargo-ndk
+# Release build (optimized)
+flui build --platform android --example counter_demo --release
+
+# Specific Android targets
+flui build --platform android --target arm64-v8a --release
+flui build --platform android --target armeabi-v7a --release
+```
+
+### Install
+
+Install built package to device:
+
+```bash
+# Android - installs APK to connected device
+flui install --platform android
+
+# Web - starts local server
+flui install --platform web
+```
+
+### Run
+
+Run the application:
+
+```bash
+# Android - install + launch on device
+flui run --platform android
+
+# Web - build + serve + open browser
+flui run --platform web
+
+# Desktop - build + run
+flui run --platform desktop
+```
+
+### Clean
+
+Clean build artifacts:
+
+```bash
+# Clean all platforms
+flui clean
+
+# Clean specific platform
+flui clean --platform android
+```
+
+---
+
+## 🔍 Environment Validation
+
+Check if your environment is ready for building:
+
+```bash
+# Check all platforms
+flui doctor
+
+# Check specific platform
+flui doctor --platform android
+flui doctor --platform web
+```
+
+Output example:
+```
+✓ Rust toolchain (1.90.0)
+✓ cargo-ndk (3.5.0)
+✓ Android SDK (/Users/you/Library/Android/sdk)
+✓ Android NDK (27.0.12077973)
+✓ Java JDK (17.0.2)
+✓ Gradle (8.5)
+✗ iOS tools (Xcode not installed)
+```
+
+---
+
+## 🛠 Platform-Specific Details
+
+### Android
+
+#### Architecture
+
+```
+Rust Code (counter_demo.rs)
+    ↓ cargo-ndk
+Native Library (.so)
+    ↓ copied to jniLibs/
+Android Project (Gradle)
+    ↓ gradlew assembleRelease
+APK (flui-release.apk)
+```
+
+#### Output Locations
+
+- Native libraries: `platforms/android/app/src/main/jniLibs/arm64-v8a/libcounter_demo.so`
+- APK: `target/flui-out/android/flui-release.apk`
+
+#### Supported ABIs
+
+- `arm64-v8a` - Modern 64-bit ARM devices (primary)
+- `armeabi-v7a` - Older 32-bit ARM devices
+
+#### Common Issues
+
+**Error: ANDROID_HOME not set**
+```bash
+# Windows
+set ANDROID_HOME=C:\Users\YourName\AppData\Local\Android\Sdk
+
+# Linux/macOS
+export ANDROID_HOME=$HOME/Library/Android/sdk
+```
+
+**Error: cargo-ndk not found**
+```bash
 cargo install cargo-ndk
+```
 
-# Add Rust targets
+**Error: Rust target not installed**
+```bash
 rustup target add aarch64-linux-android
-rustup target add armv7-linux-androideabi
 ```
 
-### 2. Configure Android SDK
+### Web
 
-Open Android Studio → SDK Manager, install:
-- **Android SDK Platform** (API 33 or 34)
-- **Android SDK Build-Tools** (34.0.0)
-- **NDK** (Side by side) version 27.0+
+#### Architecture
 
-### 3. Setup Genymotion (Recommended)
-
-1. Download [Genymotion](https://www.genymotion.com/)
-2. Install and create a virtual device
-3. Start the device
-
-### 4. Build and Run
-
-```bash
-# Build APK
-scripts\build_android.bat
-
-# Or manually:
-cargo ndk -t arm64-v8a \
-  -o platforms/android/app/src/main/jniLibs \
-  --manifest-path crates/flui_app/Cargo.toml \
-  build --example counter_demo --release
-
-cd platforms/android
-gradlew assembleDebug
-
-# Install
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-
-# Launch
-adb shell am start -n com.vanya.flui.counter.debug/android.app.NativeActivity
-
-# View logs
-adb logcat -s FLUI
+```
+Rust Code (counter_demo.rs)
+    ↓ wasm-pack
+WASM Package (pkg/)
+    ├── counter_demo_bg.wasm
+    ├── counter_demo.js
+    └── package.json
+    ↓ flui run --platform web
+Local Server (http://localhost:8080)
 ```
 
-### Troubleshooting Android
+#### Output Locations
 
-**"NDK not found"**
+- WASM files: `platforms/web/pkg/`
+- Static files: `platforms/web/index.html`
+
+#### Browser Support
+
+- Chrome 113+ (stable WebGPU)
+- Edge 113+ (stable WebGPU)
+- Firefox 118+ (experimental, enable `dom.webgpu.enabled`)
+- Safari 18+ (experimental)
+
+#### Common Issues
+
+**Error: wasm-pack not found**
 ```bash
-# Check NDK path
-ls $ANDROID_HOME/ndk/
-
-# Set correct version
-export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
-```
-
-**"Build failed: linker error"**
-```bash
-# Clean and rebuild
-cargo clean
-scripts/build_android.bat
-```
-
-**"Device not found"**
-```bash
-# Check connected devices
-adb devices
-
-# If Genymotion not showing:
-adb connect 192.168.56.101:5555  # Genymotion default IP
-```
-
----
-
-## 🍎 iOS Setup
-
-### 1. Install Prerequisites (macOS only)
-
-```bash
-# Install Xcode from App Store
-
-# Install Command Line Tools
-xcode-select --install
-
-# Add Rust targets
-rustup target add aarch64-apple-ios
-rustup target add aarch64-apple-ios-sim
-rustup target add x86_64-apple-ios
-```
-
-### 2. Build Libraries
-
-```bash
-chmod +x scripts/build_ios.sh
-./scripts/build_ios.sh
-```
-
-This creates:
-- `platforms/ios/Libraries/libcounter_demo_device.a` - For real devices
-- `platforms/ios/Libraries/libcounter_demo_sim.a` - For simulator (universal)
-
-### 3. Open in Xcode
-
-```bash
-open platforms/ios/FluiCounter.xcodeproj
-```
-
-### 4. Configure Signing
-
-1. Select project in Xcode
-2. Go to "Signing & Capabilities"
-3. Select your Team
-4. Xcode will create provisioning profile automatically
-
-### 5. Run
-
-1. Select target device/simulator
-2. Click Run (⌘R)
-
-### Troubleshooting iOS
-
-**"Library not found"**
-```bash
-# Ensure libraries are in correct location
-ls platforms/ios/Libraries/
-
-# Check Xcode build settings:
-# Library Search Paths: $(PROJECT_DIR)/Libraries
-```
-
-**"Code signing error"**
-- Add Apple ID in Xcode → Settings → Accounts
-- Select your team in project settings
-
----
-
-## 🌐 Web Setup
-
-### 1. Install Prerequisites
-
-```bash
-# Install wasm-pack
 cargo install wasm-pack
-
-# Add WASM target
-rustup target add wasm32-unknown-unknown
 ```
 
-### 2. Build for Web
-
-```bash
-# Windows
-scripts\build_web.bat
-
-# Linux/macOS
-chmod +x scripts/build_web.sh
-./scripts/build_web.sh
-```
-
-This generates:
-- `platforms/web/pkg/counter_demo.js`
-- `platforms/web/pkg/counter_demo_bg.wasm`
-- `platforms/web/pkg/package.json`
-
-### 3. Serve Locally
-
-```bash
-cd platforms/web
-python -m http.server 8080
-
-# Or with Node.js
-npx http-server . -p 8080
-```
-
-### 4. Open in Browser
-
-Navigate to: http://localhost:8080
-
-**Supported Browsers:**
-- Chrome 113+
-- Edge 113+
-- Firefox with `dom.webgpu.enabled` flag
-
-### Troubleshooting Web
-
-**"WebGPU not supported"**
+**Error: WebGPU not supported**
 - Use Chrome 113+ or Edge 113+
-- Check `chrome://gpu` → WebGPU status
-- Enable in `chrome://flags` → "Unsafe WebGPU"
+- Check `chrome://flags` - ensure WebGPU is enabled
 
-**"Module not found"**
-- Ensure files in `platforms/web/pkg/` exist
-- Check browser console for exact error
+### Desktop
+
+#### Architecture
+
+```
+Rust Code (counter_demo.rs)
+    ↓ cargo build
+Native Binary
+    └── target/release/flui_app[.exe]
+```
+
+#### Output Locations
+
+- **Windows**: `target/flui-out/desktop/flui_app.exe`
+- **Linux**: `target/flui-out/desktop/flui_app`
+- **macOS**: `target/flui-out/desktop/flui_app`
 
 ---
 
-## 🎯 Example Application
+## 🧪 Testing
 
-The `counter_demo.rs` example demonstrates:
+### Manual Testing
 
-✨ **Features:**
-- Reactive state with `use_signal`
-- Computed values with `use_memo`
-- Theme switching
-- Platform detection
-- Touch/mouse interactions
-- Beautiful UI with FLUI widgets
+```bash
+# Build and run on Android device
+flui run --platform android
 
-**Code Structure:**
-```rust
-#[derive(Debug)]
-struct CounterApp;
+# Build and serve Web locally
+flui run --platform web
 
-impl View for CounterApp {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        let count = use_signal(ctx, 0);
-        
-        Column::new()
-            .children(vec![
-                Text::new(format!("Count: {}", count.get(ctx))),
-                Button::new("Increment")
-                    .on_pressed(move || count.update(|n| *n += 1)),
-            ])
-    }
-}
+# Build and run Desktop
+cargo run -p flui_app --example counter_demo
+```
 
-// Platform entry points
-#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-fn main() { run_app(CounterApp); }
+### Automated Testing
 
-#[cfg(target_os = "android")]
-#[no_mangle]
-fn android_main(app: AndroidApp) { run_app(CounterApp); }
+```bash
+# Run unit tests
+cargo test --workspace
 
-#[cfg(target_os = "ios")]
-#[no_mangle]
-pub extern "C" fn start_flui_counter() { run_app(CounterApp); }
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen(start)]
-pub fn wasm_main() { run_app(CounterApp); }
+# Run with logging
+RUST_LOG=debug flui run --platform android
 ```
 
 ---
 
-## 🔍 Verification
+## 📊 Build Performance
 
-After building, verify:
+Typical build times (Apple M1, Release mode):
 
-### Android
-```bash
-# Check APK exists
-ls platforms/android/app/build/outputs/apk/debug/app-debug.apk
-
-# Check native libraries
-ls platforms/android/app/src/main/jniLibs/arm64-v8a/
-
-# Verify on device
-adb shell pm list packages | grep flui
-```
-
-### iOS
-```bash
-# Check libraries
-ls platforms/ios/Libraries/
-
-# Check in Xcode
-open platforms/ios/FluiCounter.xcodeproj
-```
-
-### Web
-```bash
-# Check WASM files
-ls platforms/web/pkg/
-
-# File sizes (should be reasonable)
-du -h platforms/web/pkg/counter_demo_bg.wasm
-```
+| Platform | First Build | Incremental |
+|----------|-------------|-------------|
+| Desktop  | ~2 min      | ~10 sec     |
+| Android  | ~5 min      | ~30 sec     |
+| Web      | ~3 min      | ~20 sec     |
 
 ---
 
-## 📊 Performance Tips
+## 🔗 Resources
 
-### Android
-- Use ARM64 for best performance
-- Enable release builds for production
-- Test on real devices, not just emulators
-
-### iOS
-- Use release builds: `cargo build --release`
-- Test on real devices for accurate performance
-- Profile with Xcode Instruments
-
-### Web
-- Use `--release` flag in wasm-pack
-- Enable WASM optimizations
-- Minimize bundle size with `wasm-opt`
+- **FLUI Documentation**: `README.md`
+- **flui_build API**: `crates/flui_build/README.md`
+- **flui_cli Guide**: `crates/flui_cli/FLUI_CLI_DOCUMENTATION.md`
+- **Example Code**: `crates/flui_app/examples/counter_demo.rs`
 
 ---
 
-## 🐛 Common Issues
-
-### All Platforms
-
-**Slow build times**
-```bash
-# Use sccache for caching
-cargo install sccache
-export RUSTC_WRAPPER=sccache
-```
-
-**Out of memory**
-```bash
-# Reduce parallel jobs
-cargo build -j 2
-```
-
-### Android-Specific
-
-**Gradle build fails**
-```bash
-cd platforms/android
-./gradlew clean
-./gradlew assembleDebug --stacktrace
-```
-
-**App crashes immediately**
-- Check logcat: `adb logcat -s FLUI`
-- Verify library name in AndroidManifest.xml matches Cargo.toml
-
-### iOS-Specific
-
-**Library architecture mismatch**
-```bash
-# Check library architecture
-lipo -info platforms/ios/Libraries/libcounter_demo_device.a
-
-# Should show: arm64
-```
-
-### Web-Specific
-
-**WASM too large**
-```bash
-# Optimize with wasm-opt
-wasm-opt -Oz platforms/web/pkg/counter_demo_bg.wasm \
-  -o platforms/web/pkg/counter_demo_bg.opt.wasm
-```
-
----
-
-## 📚 Next Steps
-
-1. **Customize the app** - Edit `counter_demo.rs`
-2. **Add more widgets** - Explore `flui_widgets`
-3. **Create your own app** - Copy the pattern
-4. **Deploy to stores** - Follow platform guidelines
-
----
-
-## 🆘 Getting Help
-
-- **Issues**: [GitHub Issues](https://github.com/vanyastaff/flui/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vanyastaff/flui/discussions)
-- **Documentation**: [Full Docs](../../docs/)
-
----
-
-## 📄 License
+## 📝 License
 
 MIT OR Apache-2.0
-
----
-
-**Happy Building! 🚀**

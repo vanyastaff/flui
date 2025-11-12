@@ -445,7 +445,7 @@ pub trait RenderSliver: Send + Sync + Debug + 'static {
                 ctx.element_id,
                 crate::element::hit_test_entry::SliverHitTestEntry::new(
                     ctx.local_position(),
-                    ctx.geometry.clone(),
+                    ctx.geometry,
                     ctx.scroll_offset,
                     ctx.main_axis_position,
                 ),

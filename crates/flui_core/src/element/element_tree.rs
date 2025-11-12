@@ -1442,11 +1442,9 @@ impl ElementTree {
         // For now, use a temporary ElementHitTestResult to test the child
         // In a future refactoring, we can merge BoxHitTestResult and ElementHitTestResult
         let mut temp_result = crate::element::ElementHitTestResult::new();
-        let hit = self.hit_test_recursive(child_id, position, &mut temp_result);
-
         // TODO: In the future, transfer entries from temp_result to box_result
         // For now, we just return whether there was a hit
-        hit
+        self.hit_test_recursive(child_id, position, &mut temp_result)
     }
 
     /// Hit test a child element from a RenderSliver
@@ -1479,10 +1477,8 @@ impl ElementTree {
     ) -> bool {
         // For now, use a temporary ElementHitTestResult to test the child
         let mut temp_result = crate::element::ElementHitTestResult::new();
-        let hit = self.hit_test_recursive(child_id, position, &mut temp_result);
-
         // TODO: In the future, transfer entries from temp_result to sliver_result
-        hit
+        self.hit_test_recursive(child_id, position, &mut temp_result)
     }
 
     /// Hit test for RenderElement

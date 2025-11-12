@@ -226,7 +226,7 @@ impl RenderSliver for RenderSliverGrid {
         self.sliver_geometry
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
         let canvas = Canvas::new();
 
         // Grid painting happens in viewport

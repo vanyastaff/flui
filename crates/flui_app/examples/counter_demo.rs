@@ -14,20 +14,22 @@
 //!
 //! ## Android
 //! ```bash
-//! ./scripts/build_android.bat
+//! flui build --platform android --example counter_demo --release
+//! flui install --platform android
+//! flui run --platform android
 //! ```
 //!
 //! ## iOS (macOS only)
 //! ```bash
-//! ./scripts/build_ios.sh
+//! flui build --platform ios --example counter_demo --release
+//! flui run --platform ios
 //! ```
 //!
 //! ## Web
 //! ```bash
-//! ./scripts/build_web.bat
-//! cd platforms/web
-//! python -m http.server 8080
-//! # Open http://localhost:8080
+//! flui build --platform web --example counter_demo --release
+//! flui run --platform web
+//! # Opens browser at http://localhost:8080
 //! ```
 
 use flui_app::run_app;

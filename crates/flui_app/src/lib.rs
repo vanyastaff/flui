@@ -148,15 +148,16 @@ use winit::event_loop::EventLoop;
 /// - Window creation fails
 /// - GPU initialization fails
 /// - Root widget has already been attached
+#[cfg(not(target_os = "android"))]
 pub fn run_app<V>(app: V) -> !
 where
     V: View + 'static,
 {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_level(true)
-        .with_line_number(true)
+    use crate::embedder::DesktopEmbedder;
+
+    // Initialize cross-platform logging
+    flui_log::Logger::default()
+        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info")
         .init();
 
     tracing::info!("Starting FLUI app");
@@ -170,8 +171,8 @@ where
     // 3. Create event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
-    // 4. Create wgpu embedder (async init)
-    let embedder = pollster::block_on(WgpuEmbedder::new(binding, &event_loop));
+    // 4. Create desktop embedder (async init)
+    let embedder = pollster::block_on(DesktopEmbedder::new(binding, &event_loop));
 
     tracing::info!("FLUI app initialized, entering event loop");
 
@@ -183,40 +184,69 @@ where
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "C" fn android_main(app: android_activity::AndroidApp) {
-    use log::LevelFilter;
     use flui_core::view::{View, BuildContext, IntoElement};
-    use flui_rendering::objects::layout::empty::RenderEmpty;
     use winit::event::{Event, WindowEvent};
     use winit::event_loop::ControlFlow;
 
-    android_logger::init_once(android_logger::Config::default().with_max_level(LevelFilter::Info));
+    // Initialize cross-platform logging (uses Android logcat)
+    flui_log::Logger::default()
+        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info")
+        .init();
 
     use winit::platform::android::EventLoopBuilderExtAndroid;
 
-    // Minimal empty widget for Android demo (avoid flui_widgets dependency)
+    // Android Demo - Vulkan backend + embedded fonts
     #[derive(Debug, Clone)]
-    struct AndroidEmpty;
+    struct AndroidDemo;
 
-    impl View for AndroidEmpty {
+    impl View for AndroidDemo {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderEmpty, ())
+            use flui_widgets::{Container, Text, Column};
+            use flui_types::Color;
+            use flui_types::layout::{MainAxisAlignment, CrossAxisAlignment};
+
+            // Vulkan rendering + embedded Roboto font
+            Container::builder()
+                .color(Color::rgb(100, 200, 100))
+                .padding(flui_types::EdgeInsets::all(40.0))
+                .child(
+                    Column::builder()
+                        .main_axis_alignment(MainAxisAlignment::Center)
+                        .cross_axis_alignment(CrossAxisAlignment::Center)
+                        .child(
+                            Text::builder()
+                                .data("FLUI на Android")
+                                .size(32.0)
+                                .color(Color::rgb(255, 255, 255))
+                                .build()
+                        )
+                        .child(
+                            Text::builder()
+                                .data("Vulkan + Embedded Fonts")
+                                .size(18.0)
+                                .color(Color::rgb(255, 255, 255))
+                                .build()
+                        )
+                        .build()
+                )
+                .build()
         }
     }
 
-    log::info!("Starting FLUI Android app");
+    tracing::info!("Starting FLUI Android Demo");
 
     // 1. Initialize bindings
     let binding = AppBinding::ensure_initialized();
 
     // 2. Attach root widget
-    binding.pipeline.attach_root_widget(AndroidEmpty);
+    binding.pipeline.attach_root_widget(AndroidDemo);
 
     // 3. Create event loop with Android app
     let mut event_loop_builder = EventLoop::builder();
     event_loop_builder.with_android_app(app);
     let event_loop = event_loop_builder.build().expect("Failed to create event loop");
 
-    log::info!("Event loop created, waiting for Resumed event");
+    tracing::info!("Event loop created, waiting for Resumed event");
 
     // 4. Wait for Resumed event before creating embedder
     // On Android, window/surface creation must happen AFTER Resumed event
@@ -227,33 +257,33 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
 
         match event {
             Event::Resumed => {
-                log::info!("Resumed event received");
+                tracing::info!("Resumed event received");
                 if embedder.is_none() {
-                    log::info!("Creating AndroidEmbedder after Resumed event");
+                    tracing::info!("Creating AndroidEmbedder after Resumed event");
                     // Safe to create window and surface now
                     embedder = Some(pollster::block_on(
                         crate::embedder::AndroidEmbedder::new(binding.clone(), elwt)
                     ));
-                    log::info!("AndroidEmbedder created successfully");
+                    tracing::info!("AndroidEmbedder created successfully");
                 } else {
                     // Resume existing embedder
                     if let Some(ref mut emb) = embedder {
                         emb.resume();
-                        log::info!("AndroidEmbedder resumed");
+                        tracing::info!("AndroidEmbedder resumed");
                     }
                 }
             }
 
             Event::Suspended => {
-                log::info!("Suspended event received");
+                tracing::info!("Suspended event received");
                 // Mark as suspended (stops rendering)
                 if let Some(ref mut emb) = embedder {
                     emb.suspend();
-                    log::info!("AndroidEmbedder suspended (rendering stopped)");
+                    tracing::info!("AndroidEmbedder suspended (rendering stopped)");
                 }
                 // Drop embedder to release GPU resources
                 embedder = None;
-                log::info!("AndroidEmbedder dropped (GPU resources released)");
+                tracing::info!("AndroidEmbedder dropped (GPU resources released)");
             }
 
             Event::AboutToWait => {
@@ -267,11 +297,11 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
                 if let Some(ref mut emb) = embedder {
                     match event {
                         WindowEvent::RedrawRequested => {
-                            log::trace!("RedrawRequested event, rendering frame");
+                            tracing::trace!("RedrawRequested event, rendering frame");
                             emb.render_frame();
                         }
                         WindowEvent::CloseRequested => {
-                            log::info!("Window close requested");
+                            tracing::info!("Window close requested");
                             elwt.exit();
                         }
                         other => {

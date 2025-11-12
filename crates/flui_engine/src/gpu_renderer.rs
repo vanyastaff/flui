@@ -6,28 +6,27 @@
 //! # Architecture
 //!
 //! ```text
-//! FluiApp (high-level)
-//!     ↓
-//! GpuRenderer (this module)
-//!     ├─ wgpu::Surface
-//!     ├─ wgpu::Device
-//!     ├─ wgpu::Queue
-//!     ├─ SurfaceConfiguration
-//!     └─ WgpuPainter
+//! FluiApp (application layer)
+//!     ├─ winit::Window (window management)
+//!     ├─ wgpu::Instance (creates Surface from Window)
+//!     └─ GpuRenderer (rendering layer - NO window knowledge!)
+//!         ├─ wgpu::Surface (passed from app)
+//!         ├─ wgpu::Device
+//!         ├─ wgpu::Queue
+//!         ├─ SurfaceConfiguration
+//!         └─ WgpuPainter
 //! ```
 //!
 //! # Benefits
 //!
 //! - **Encapsulation**: All GPU details hidden from app layer
-//! - **Separation of Concerns**: Clear boundary between UI and GPU layers
-//! - **Testability**: Easy to mock for testing
+//! - **Separation of Concerns**: Engine doesn't know about windows/winit
+//! - **Testability**: Easy to mock surface for testing
 //! - **Future-proof**: Easy to add new rendering backends
 
 use crate::layer::CanvasLayer;
 use crate::painter::WgpuPainter;
 use crate::renderer::WgpuRenderer as WgpuRendererWrapper;
-use std::sync::Arc;
-use winit::window::Window;
 
 /// High-level GPU rendering abstraction
 ///
@@ -40,8 +39,13 @@ use winit::window::Window;
 /// use flui_engine::GpuRenderer;
 /// use std::sync::Arc;
 ///
-/// let window = /* your winit window */;
-/// let mut renderer = GpuRenderer::new(window);
+/// // Create surface in app layer (flui_app)
+/// let instance = wgpu::Instance::default();
+/// let surface = instance.create_surface(window)?;
+/// let size = window.inner_size();
+///
+/// // Pass surface to engine (NO window reference!)
+/// let mut renderer = GpuRenderer::new(surface, size.width, size.height);
 ///
 /// // Resize on window resize
 /// renderer.resize(1920, 1080);
@@ -69,32 +73,35 @@ pub struct GpuRenderer {
 }
 
 impl GpuRenderer {
-    /// Create a new GPU renderer for a window (async version for WASM)
+    /// Create a new GPU renderer with an existing surface (async version for WASM)
     ///
     /// In WebAssembly, we can't use pollster::block_on because the browser's
     /// event loop doesn't support blocking. Use this method instead.
     ///
     /// # Arguments
     ///
-    /// * `window` - The window to render to
+    /// * `surface` - Pre-created wgpu surface (created by app layer from window)
+    /// * `width` - Initial surface width in pixels
+    /// * `height` - Initial surface height in pixels
     ///
     /// # Panics
     ///
     /// Panics if GPU initialization fails (no adapter, device creation fails, etc.)
-    pub async fn new_async(window: Arc<Window>) -> Self {
-        // Create wgpu instance
+    pub async fn new_async(surface: wgpu::Surface<'static>, width: u32, height: u32) -> Self {
+        // Create wgpu instance with platform-specific backends
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(feature = "webgpu")]
             backends: wgpu::Backends::GL | wgpu::Backends::BROWSER_WEBGPU,
-            #[cfg(not(target_arch = "wasm32"))]
-            backends: wgpu::Backends::all(),
+            #[cfg(all(feature = "android", not(feature = "webgpu")))]
+            backends: wgpu::Backends::VULKAN, // Vulkan mandatory for Android
+            #[cfg(all(feature = "ios", not(feature = "webgpu")))]
+            backends: wgpu::Backends::METAL, // Metal mandatory for iOS
+            #[cfg(all(feature = "desktop", not(any(feature = "webgpu", feature = "android", feature = "ios"))))]
+            backends: wgpu::Backends::all(), // Auto-detect on desktop
+            #[cfg(not(any(feature = "desktop", feature = "android", feature = "ios", feature = "webgpu")))]
+            backends: wgpu::Backends::all(), // Fallback
             ..Default::default()
         });
-
-        // Create surface
-        let surface = instance
-            .create_surface(Arc::clone(&window))
-            .expect("Failed to create surface");
 
         // Request adapter (async)
         let adapter = instance
@@ -106,13 +113,31 @@ impl GpuRenderer {
             .await
             .expect("Failed to find suitable GPU adapter");
 
+        tracing::info!("GPU Adapter info: {:?}", adapter.get_info());
+        tracing::info!("GPU Backend: {:?}", adapter.get_info().backend);
+
         // Request device and queue (async)
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::empty(),
-                #[cfg(target_arch = "wasm32")]
+                #[cfg(feature = "webgpu")]
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(feature = "mobile-gpu-limits", not(feature = "webgpu")))]
+                required_limits: wgpu::Limits {
+                    // Modern mobile GPUs (Adreno 6xx+, Mali G7x+, Apple A12+) support 8192x8192+
+                    // This covers all flagship and mid-range devices from 2018+
+                    max_texture_dimension_2d: 8192,
+                    max_texture_dimension_3d: 2048,
+
+                    // Conservative buffer limits for broad compatibility
+                    max_storage_buffers_per_shader_stage: 4,
+                    max_uniform_buffer_binding_size: 16 << 10, // 16KB
+                    max_storage_buffer_binding_size: 128 << 20, // 128MB
+
+                    // Use default limits for other parameters (more permissive than downlevel)
+                    ..wgpu::Limits::default()
+                },
+                #[cfg(not(any(feature = "webgpu", feature = "mobile-gpu-limits")))]
                 required_limits: wgpu::Limits::default(),
                 label: Some("FLUI GPU Device"),
                 memory_hints: wgpu::MemoryHints::default(),
@@ -121,13 +146,12 @@ impl GpuRenderer {
             .await
             .expect("Failed to create GPU device");
 
-        // Get window size and configure surface
-        let size = window.inner_size();
+        // Configure surface
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface.get_capabilities(&adapter).formats[0],
-            width: size.width,
-            height: size.height,
+            width,
+            height,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
@@ -159,13 +183,15 @@ impl GpuRenderer {
         }
     }
 
-    /// Create a new GPU renderer for a window
+    /// Create a new GPU renderer with an existing surface
     ///
-    /// Initializes all wgpu resources: instance, surface, adapter, device, queue, and painter.
+    /// Initializes all wgpu resources: instance, adapter, device, queue, and painter.
     ///
     /// # Arguments
     ///
-    /// * `window` - The window to render to
+    /// * `surface` - Pre-created wgpu surface (created by app layer from window)
+    /// * `width` - Initial surface width in pixels
+    /// * `height` - Initial surface height in pixels
     ///
     /// # Panics
     ///
@@ -175,17 +201,15 @@ impl GpuRenderer {
     ///
     /// On WebAssembly, use `new_async()` instead as this method uses `pollster::block_on`
     /// which doesn't work in browser environments.
-    pub fn new(window: Arc<Window>) -> Self {
+    pub fn new(surface: wgpu::Surface<'static>, width: u32, height: u32) -> Self {
         // Create wgpu instance
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            #[cfg(target_os = "android")]
+            backends: wgpu::Backends::GL, // Use OpenGL ES on Android (Vulkan crashes on x86_64 emulator)
+            #[cfg(not(target_os = "android"))]
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
-
-        // Create surface
-        let surface = instance
-            .create_surface(Arc::clone(&window))
-            .expect("Failed to create surface");
 
         // Request adapter
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -205,13 +229,12 @@ impl GpuRenderer {
         }))
         .expect("Failed to create GPU device");
 
-        // Get window size and configure surface
-        let size = window.inner_size();
+        // Configure surface
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface.get_capabilities(&adapter).formats[0],
-            width: size.width,
-            height: size.height,
+            width,
+            height,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
@@ -293,7 +316,10 @@ impl GpuRenderer {
     /// }
     /// ```
     pub fn render(&mut self, layer: &CanvasLayer) -> Result<(), RenderError> {
+        tracing::info!("GpuRenderer::render() START");
+
         // Get current frame
+        tracing::info!("GpuRenderer: getting current texture");
         let frame = self.surface.get_current_texture().map_err(|e| match e {
             wgpu::SurfaceError::Lost => {
                 tracing::warn!("Surface lost, reconfiguring...");
@@ -318,10 +344,12 @@ impl GpuRenderer {
                 RenderError::PainterError("Unknown surface error".to_string())
             }
         })?;
+        tracing::info!("GpuRenderer: texture acquired");
 
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        tracing::info!("GpuRenderer: texture view created");
 
         // Create command encoder
         let mut encoder = self
@@ -329,8 +357,10 @@ impl GpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("FLUI Render Encoder"),
             });
+        tracing::info!("GpuRenderer: command encoder created");
 
         // Clear screen
+        tracing::info!("GpuRenderer: beginning clear pass");
         {
             let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Clear Pass"),
@@ -352,23 +382,33 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
         }
+        tracing::info!("GpuRenderer: clear pass completed");
 
         // CRITICAL: Zero-allocation rendering via painter reuse!
         // Take ownership temporarily (field becomes None, zero allocation)
+        tracing::info!("GpuRenderer: taking painter");
         let painter = self
             .painter
             .take()
             .expect("Painter should always exist during render");
 
         // Create renderer wrapper (stack allocation, just one pointer field)
+        tracing::info!("GpuRenderer: creating renderer wrapper");
         let mut renderer_wrapper = WgpuRendererWrapper::new(painter);
+
+        tracing::info!("GpuRenderer: calling layer.render()");
         layer.render(&mut renderer_wrapper);
+        tracing::info!("GpuRenderer: layer.render() completed");
 
         // Extract painter and render accumulated commands to GPU
+        tracing::info!("GpuRenderer: extracting painter");
         let mut painter = renderer_wrapper.into_painter();
+
+        tracing::info!("GpuRenderer: calling painter.render()");
         painter
             .render(&view, &mut encoder)
             .map_err(|e| RenderError::PainterError(e.to_string()))?;
+        tracing::info!("GpuRenderer: painter.render() completed");
 
         // Put painter back (zero allocation, just moves Option)
         self.painter = Some(painter);

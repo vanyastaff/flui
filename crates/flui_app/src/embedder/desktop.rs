@@ -91,8 +91,15 @@ impl DesktopEmbedder {
 
         tracing::debug!("Window created");
 
-        // 2. Initialize GPU renderer
-        let renderer = GpuRenderer::new_async(Arc::clone(&window)).await;
+        // 2. Create GPU instance and surface
+        let instance = wgpu::Instance::default();
+        let surface = instance
+            .create_surface(Arc::clone(&window))
+            .expect("Failed to create surface");
+        let size = window.inner_size();
+
+        // 3. Initialize GPU renderer (pass surface, not window!)
+        let renderer = GpuRenderer::new_async(surface, size.width, size.height).await;
 
         tracing::info!(
             size = ?renderer.size(),

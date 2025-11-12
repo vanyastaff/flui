@@ -1,0 +1,15 @@
+pub mod analyze;
+pub mod build;
+pub mod clean;
+pub mod completions;
+pub mod create;
+pub mod create_interactive;
+pub mod devices;
+pub mod devtools;
+pub mod doctor;
+pub mod emulators;
+pub mod format;
+pub mod platform;
+pub mod run;
+pub mod test;
+pub mod upgrade;

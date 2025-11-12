@@ -6,8 +6,8 @@ pub fn execute(details: bool, _platform: Option<String>) -> Result<()> {
     // Enable ANSI colors on Windows
     #[cfg(target_os = "windows")]
     {
-        let _ = console::set_colors_enabled(true);
-        let _ = console::set_colors_enabled_stderr(true);
+        console::set_colors_enabled(true);
+        console::set_colors_enabled_stderr(true);
     }
 
     println!();
@@ -412,8 +412,8 @@ fn enumerate_browsers_windows() -> Vec<BrowserInfo> {
 
             // Parse simple format: BROWSER:name|path
             for line in output_str.lines() {
-                if line.starts_with("BROWSER:") {
-                    let parts: Vec<&str> = line[8..].split('|').collect();
+                if let Some(stripped) = line.strip_prefix("BROWSER:") {
+                    let parts: Vec<&str> = stripped.split('|').collect();
                     if parts.len() == 2 {
                         let registry_name = parts[0].trim();
                         let path = parts[1].trim().to_string();

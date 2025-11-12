@@ -98,13 +98,16 @@
 mod common;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
-#[cfg(feature = "memory-profiler")]
-pub mod memory;
-#[cfg(feature = "network-monitor")]
-pub mod network;
+// TODO: Add memory profiler module
+// #[cfg(feature = "memory-profiler")]
+// pub mod memory;
+// TODO: Add network monitor module
+// #[cfg(feature = "network-monitor")]
+// pub mod network;
 pub mod profiler;
-#[cfg(feature = "remote-debug")]
-pub mod remote;
+// TODO: Add remote debug module
+// #[cfg(feature = "remote-debug")]
+// pub mod remote;
 #[cfg(feature = "timeline")]
 pub mod timeline;
 
@@ -134,8 +137,9 @@ pub mod prelude {
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::HotReloader;
 
-    #[cfg(feature = "memory-profiler")]
-    pub use crate::memory::{MemoryProfiler, MemorySnapshot};
+    // TODO: Add memory profiler re-exports
+    // #[cfg(feature = "memory-profiler")]
+    // pub use crate::memory::{MemoryProfiler, MemorySnapshot};
 }
 
 #[cfg(test)]

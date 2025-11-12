@@ -19,9 +19,6 @@ parking_lot = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
-# Collections
-ahash = { workspace = true }
-
 [dev-dependencies]
 # No additional dev dependencies needed - tests use std
 

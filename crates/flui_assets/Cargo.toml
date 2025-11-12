@@ -13,7 +13,6 @@ flui_types = { path = "../flui_types" }
 
 # Async runtime
 tokio = { workspace = true, features = ["fs", "io-util"] }
-futures = { workspace = true }
 
 # High-performance cache
 moka = { version = "0.12", features = ["future"] }
@@ -21,44 +20,22 @@ moka = { version = "0.12", features = ["future"] }
 # String interning for efficient asset keys
 lasso = { version = "0.7", features = ["multi-threaded"] }
 
-# Optimized Arc for immutable data
-triomphe = "0.1"
-
 # Sync primitives
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
 
-# Fast hashing
-ahash = { workspace = true }
-
 # Error handling
 thiserror = { workspace = true }
-anyhow = { workspace = true }
 
-# Serialization (for bundles)
+# Serialization (for bundles feature)
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 # Image loading
 image = { workspace = true, optional = true }
 
-# Font parsing
-ttf-parser = { workspace = true }
-
 # Optional: Network loading
 reqwest = { workspace = true, optional = true }
-
-# Optional: Memory-mapped files
-memmap2 = { version = "0.9", optional = true }
-
-# Optional: Parallel processing
-rayon = { version = "1.10", optional = true }
-
-# Optional: Hot reload
-notify = { version = "7.0", optional = true }
-
-# Logging
-tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
@@ -71,11 +48,13 @@ default = []
 bundles = ["serde", "serde_json"]
 images = ["image"]
 network = ["reqwest"]
-hot-reload = ["notify"]
+# TODO: Add notify dependency
+# hot-reload = ["notify"]
 
 # Performance optimizations (opt-in)
-mmap-fonts = ["memmap2"]
-parallel-decode = ["rayon"]
+# TODO: Add memmap2 and rayon dependencies
+# mmap-fonts = ["memmap2"]
+# parallel-decode = ["rayon"]
 
 # Convenience
-full = ["bundles", "images", "network", "hot-reload", "mmap-fonts", "parallel-decode"]
+full = ["bundles", "images", "network"]

@@ -118,7 +118,7 @@ impl Render for RenderErrorBox {
             let mut stripe_paint = Paint::default();
             stripe_paint.color = stripe_color;
 
-            let stripe_width = 10.0;
+            let _stripe_width = 10.0;
             let stripe_spacing = 20.0;
 
             // Draw diagonal stripes from top-left to bottom-right

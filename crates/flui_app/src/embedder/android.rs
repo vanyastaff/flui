@@ -87,7 +87,7 @@ impl AndroidEmbedder {
     /// }
     /// ```
     pub async fn new(binding: Arc<AppBinding>, event_loop: &ActiveEventLoop) -> Self {
-        log::info!("Initializing Android embedder");
+        tracing::info!("Initializing Android embedder");
 
         // 1. Create window from active event loop (Android-specific)
         let window_attributes = Window::default_attributes()
@@ -100,12 +100,19 @@ impl AndroidEmbedder {
                 .expect("Failed to create Android window"),
         );
 
-        log::debug!("Android window created");
+        tracing::debug!("Android window created");
 
-        // 2. Initialize GPU renderer (Vulkan on Android)
-        let renderer = GpuRenderer::new_async(Arc::clone(&window)).await;
+        // 2. Create GPU instance and surface
+        let instance = wgpu::Instance::default();
+        let surface = instance
+            .create_surface(Arc::clone(&window))
+            .expect("Failed to create Android surface");
+        let size = window.inner_size();
 
-        log::info!(
+        // 3. Initialize GPU renderer (pass surface, not window!)
+        let renderer = GpuRenderer::new_async(surface, size.width, size.height).await;
+
+        tracing::info!(
             "Android embedder initialized: {}x{} {:?}",
             renderer.size().0,
             renderer.size().1,
@@ -131,12 +138,12 @@ impl AndroidEmbedder {
     /// shortly after calling this to release GPU resources.
     pub fn suspend(&mut self) {
         if self.is_suspended {
-            log::warn!("suspend() called but already suspended");
+            tracing::warn!("suspend() called but already suspended");
             return;
         }
 
         self.is_suspended = true;
-        log::info!("Android embedder suspended (rendering stopped)");
+        tracing::info!("Android embedder suspended (rendering stopped)");
     }
 
     /// Mark embedder as resumed (app foregrounded)
@@ -145,12 +152,12 @@ impl AndroidEmbedder {
     /// rather than reusing the old one.
     pub fn resume(&mut self) {
         if !self.is_suspended {
-            log::warn!("resume() called but not suspended");
+            tracing::warn!("resume() called but not suspended");
             return;
         }
 
         self.is_suspended = false;
-        log::info!("Android embedder resumed (rendering active)");
+        tracing::info!("Android embedder resumed (rendering active)");
     }
 
     /// Check if embedder is suspended
@@ -208,12 +215,12 @@ impl AndroidEmbedder {
         // STEP 3: Handle framework-level events
         match event {
             WindowEvent::CloseRequested => {
-                log::info!("Window close requested");
+                tracing::info!("Window close requested");
                 elwt.exit();
             }
 
             WindowEvent::Resized(size) => {
-                log::debug!("Android window resized: {}x{}", size.width, size.height);
+                tracing::debug!("Android window resized: {}x{}", size.width, size.height);
 
                 // Delegate resize to GpuRenderer (handles surface reconfiguration)
                 self.renderer.resize(size.width, size.height);
@@ -223,7 +230,7 @@ impl AndroidEmbedder {
                 let mut pipeline_write = pipeline.write();
                 if let Some(root_id) = pipeline_write.root_element_id() {
                     pipeline_write.request_layout(root_id);
-                    log::debug!("Requested layout for root after resize");
+                    tracing::debug!("Requested layout for root after resize");
                 }
             }
 
@@ -241,7 +248,7 @@ impl AndroidEmbedder {
                 self.binding.scheduler.scheduler().add_task(
                     flui_scheduler::Priority::UserInput,
                     || {
-                        log::trace!("Touch move task scheduled");
+                        tracing::trace!("Touch move task scheduled");
                     },
                 );
             }
@@ -269,7 +276,7 @@ impl AndroidEmbedder {
                         }
                     }
                 } else {
-                    log::trace!("Touch event (no scene cached): {:?} {:?}", state, button);
+                    tracing::trace!("Touch event (no scene cached): {:?} {:?}", state, button);
                 }
             }
 
@@ -283,14 +290,18 @@ impl AndroidEmbedder {
     ///
     /// Skips rendering if suspended to save battery.
     pub fn render_frame(&mut self) {
+        tracing::info!("render_frame: START");
+
         // Skip rendering if suspended (battery optimization)
         if self.is_suspended {
-            log::trace!("Skipping render (suspended)");
+            tracing::trace!("Skipping render (suspended)");
             return;
         }
 
         // 1. Begin frame (scheduler callbacks)
+        tracing::info!("render_frame: calling begin_frame");
         let _frame_id = self.binding.scheduler.scheduler().begin_frame();
+        tracing::info!("render_frame: begin_frame completed");
 
         // 1.5. Process coalesced pointer move events (if any)
         if let Some(data) = self.pending_pointer_move.take() {
@@ -309,32 +320,49 @@ impl AndroidEmbedder {
 
         // 2. Draw frame (build + layout + paint → Scene)
         let (width, height) = self.renderer.size();
+        tracing::info!("render_frame: renderer size = {}x{}", width, height);
         let constraints = BoxConstraints::tight(Size::new(width as f32, height as f32));
+        tracing::info!("render_frame: calling draw_frame with constraints");
 
         let scene = self.binding.renderer.draw_frame(constraints);
+        tracing::info!("render_frame: draw_frame completed");
 
         // 3. Cache scene for hit testing (Arc clone is cheap!)
+        tracing::info!("render_frame: checking scene content");
         if scene.has_content() {
             self.last_scene = Some(scene.clone());
-            log::trace!("Scene cached for hit testing (frame {})", scene.frame_number());
+            tracing::info!("Scene cached for hit testing (frame {})", scene.frame_number());
+        } else {
+            tracing::info!("Scene is empty, no content");
         }
 
         // 4. Render scene to GPU (Vulkan on Android)
+        tracing::info!("render_frame: getting root_layer");
         if let Some(layer) = scene.root_layer() {
-            match self.renderer.render(layer.as_ref()) {
-                Ok(()) => {
-                    log::trace!("Frame {} rendered successfully", scene.frame_number());
+            tracing::info!("render_frame: calling renderer.render() on GPU");
+
+            // Wrap render call with panic catch for debugging
+            let render_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.renderer.render(layer.as_ref())
+            }));
+
+            match render_result {
+                Ok(Ok(())) => {
+                    tracing::info!("Frame {} rendered successfully", scene.frame_number());
                 }
-                Err(flui_engine::RenderError::SurfaceLost)
-                | Err(flui_engine::RenderError::SurfaceOutdated) => {
-                    log::debug!("Surface lost/outdated, will retry next frame");
+                Ok(Err(flui_engine::RenderError::SurfaceLost))
+                | Ok(Err(flui_engine::RenderError::SurfaceOutdated)) => {
+                    tracing::debug!("Surface lost/outdated, will retry next frame");
                 }
-                Err(e) => {
-                    log::error!("Render error: {:?}", e);
+                Ok(Err(e)) => {
+                    tracing::error!("Render error: {:?}", e);
+                }
+                Err(panic_err) => {
+                    tracing::error!("PANIC in renderer.render(): {:?}", panic_err);
                 }
             }
         } else {
-            log::trace!("Empty scene, skipping render");
+            tracing::info!("Empty scene, skipping render");
         }
 
         // 5. Post-frame callbacks

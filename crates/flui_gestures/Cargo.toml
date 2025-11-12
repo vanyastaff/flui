@@ -16,7 +16,6 @@ flui_rendering = { path = "../flui_rendering" }
 
 # Utilities
 parking_lot = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

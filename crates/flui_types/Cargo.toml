@@ -8,15 +8,11 @@ description = "Core types for Flui framework - geometry, layout, styling"
 repository.workspace = true
 
 [dependencies]
-# No dependencies on other flui crates - this is the base!
-# flui_types provides ONLY type definitions, no asset loading!
-# Asset loading is in flui_assets crate.
+flui_log ={ path="../flui_log", optional = true}
 
 # Serialization support (optional)
 serde = { workspace = true, optional = true }
 
-# Logging support (optional, for debugging)
-tracing = { workspace = true, optional = true }
 
 # Stack-allocated Vec for small collections (animation curves, color stops)
 smallvec = { workspace = true }
@@ -38,7 +34,8 @@ serde = ["dep:serde"]
 
 # === Logging ===
 # Tracing/logging support (optional, for type validation and debugging)
-tracing = ["dep:tracing"]
+log = ["dep:flui_log"]
+pretty_log = ["log", "flui_log/pretty"]
 
 # === Performance ===
 # SIMD acceleration for math operations
@@ -47,7 +44,7 @@ simd = []
 
 # === Convenience ===
 # Enable all features
-full = ["serde", "tracing", "simd"]
+full = ["serde", "log", "simd"]
 
 # NOTE: Image and font loading moved to flui_assets crate.
 # flui_types only provides type definitions!

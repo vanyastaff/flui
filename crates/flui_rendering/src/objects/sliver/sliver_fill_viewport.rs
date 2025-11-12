@@ -141,7 +141,7 @@ impl RenderSliver for RenderSliverFillViewport {
         }
     }
 
-    fn paint(&self, ctx: &SliverPaintContext) -> Canvas {
+    fn paint(&self, _ctx: &SliverPaintContext) -> Canvas {
         let canvas = Canvas::new();
 
         // Children are painted by viewport

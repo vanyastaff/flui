@@ -39,7 +39,11 @@
 //! painter.render(&view, &mut encoder)?;
 //! ```
 
-pub mod devtools;
+// DevTools integration - commented out until Compositor is implemented
+// TODO: Re-enable when crate::Compositor and crate::CompositorOptions are available
+// #[cfg(feature = "devtools")]
+// pub mod devtools;
+
 pub mod gpu_renderer;
 pub mod layer;
 pub mod painter;
@@ -75,6 +79,7 @@ pub use devtools::{
     ProfiledCompositor, UnifiedDevToolsOverlay,
 };
 
-#[cfg(all(feature = "devtools", feature = "memory-profiler"))]
-pub use devtools::MemoryGraph;
+// TODO: Re-enable memory-profiler feature
+// #[cfg(all(feature = "devtools", feature = "memory-profiler"))]
+// pub use devtools::MemoryGraph;
 

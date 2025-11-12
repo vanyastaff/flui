@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/flui_types",        # Base types - no dependencies
     "crates/flui_assets",       # Asset management system
+    "crates/flui_log",          # Cross-platform logging
     "crates/flui_core",         # Core with foundation utilities
     "crates/flui_rendering",
     "crates/flui_widgets",
@@ -15,6 +16,9 @@ members = [
     "crates/flui_interaction",  # Event routing and interaction handling
     "crates/flui_animation",    # Animation system
     "crates/flui-scheduler",    # Frame scheduling and task prioritization
+    "crates/flui_cli",          # CLI tool for project management
+    "crates/flui_build",        # Build system library for cross-platform builds
+    "xtask",                    # Dev tasks (format, clippy, test-all, ci)
     # "crates/flui_platform",
     # "crates/flui_provider",
 ]
@@ -22,7 +26,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.91"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
 repository = "https://github.com/yourusername/flui"
@@ -53,22 +57,30 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 tracing-forest = { version = "0.3", features = ["ansi", "smallvec"] }
 
-# MATH & GEOMETRY - Core rendering math
-glam = { version = "0.30", features = ["serde", "bytemuck"] }
+# === Shared GPU/Window dependencies ===
+# Used by flui_engine, flui_app, and root examples
+# GPU RENDERING (WGPU BACKEND) - Version 25.x (stable)
+# Note: wgpu 26.0+ and 27.0.x have compilation issues with codespan-reporting
+# The bug is in codespan library itself (feature-flag incompatibility)
+# See: https://github.com/gfx-rs/wgpu/issues/7915
+# Staying on wgpu 25.x until upstream fix
+wgpu = { version = "25.0", default-features = false, features = ["wgsl"] }
+winit = "0.30.12"
+pollster = "0.4"
 
-# IMAGE PROCESSING - Used by flui_types and flui_engine
-image = { version = "0.25", features = ["png", "jpeg", "gif", "webp"] }
+# IMAGE PROCESSING - Used by flui_assets and flui_engine
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
-# GPU RENDERING (WGPU BACKEND)
-wgpu = { version = "25.0", features = ["wgsl"] }
-winit = "0.30.10"
-bytemuck = { version = "1.18", features = ["derive"] }
-glyphon = "0.9"
-cosmic-text = "0.14"
-guillotiere = "0.6"
-lyon = "1.0"
+# FONT PARSING - Used by flui_assets and flui_engine
 ttf-parser = "0.25"
-pollster = "0.3"
+
+# === Engine-specific dependencies (NOT in workspace) ===
+# These are ONLY used in flui_engine:
+# - glam (GPU math)
+# - glyphon, cosmic-text (text rendering)
+# - lyon (tessellation)
+# - guillotiere (texture atlas)
+# - bytemuck
 
 # CACHING - Used by flui_core and flui_assets
 moka = { version = "0.12", features = ["future"] }
@@ -109,26 +121,13 @@ flui_core = { path = "crates/flui_core" }
 flui_painting = { path = "crates/flui_painting" }
 flui_engine = { path = "crates/flui_engine" }
 flui_rendering = { path = "crates/flui_rendering" }
+flui_animation = { path = "crates/flui_animation" }
+flui_gestures = { path = "crates/flui_gestures" }
 flui_app = { path = "crates/flui_app" }
 flui_widgets = { path = "crates/flui_widgets" }
-
-# For wgpu_demo example
-parking_lot = { workspace = true }
-pollster = { workspace = true }
-env_logger = "0.11"
-winit = { workspace = true }
-
-# Workspace dependencies
-tokio.workspace = true
-serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-forest.workspace = true
-
-# Optional profiling dependencies
-puffin = { version = "0.19", optional = true }
-tracing-tracy = { workspace = true, optional = true }
-puffin_http = { workspace = true, optional = true }
 
 [dev-dependencies]
 # criterion only needed in individual crates for benchmarks, not in root
@@ -149,31 +148,27 @@ serde = [
 parallel = ["flui_core/parallel"]
 
 # === Profiling & Debug Features ===
-# Basic profiling with puffin
-profiling = ["puffin", "puffin_http", "flui_core/profiling"]
-
-# Tracy profiler integration (for production profiling)
-tracy = ["tracing-tracy"]
-
-# All profiling features combined
-full-profiling = ["profiling", "tracy"]
+# TODO: Fix puffin dependencies before enabling
+# profiling = ["puffin", "puffin_http", "flui_core/profiling"]
+# tracy = ["tracing-tracy"]
+# full-profiling = ["profiling", "tracy"]
 
 # === DevTools Features ===
 # Developer tools integration
 devtools = ["flui_engine/devtools"]
 
-# Memory profiling
-memory-profiler = ["devtools", "flui_engine/memory-profiler"]
+# TODO: Re-enable when memory-profiler dependencies are fixed
+# memory-profiler = ["devtools", "flui_engine/memory-profiler"]
 
 # === Convenience Features ===
 # Enable all stable features (excludes experimental)
-full = ["serde", "parallel", "profiling", "devtools"]
+full = ["serde", "parallel", "devtools"]
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-strip = true
+strip = "debuginfo"  # Strip debug symbols but keep android_main symbol
 panic = "abort"
 
 [profile.dev]

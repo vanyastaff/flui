@@ -28,6 +28,15 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_app/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_assets/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_assets/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-scheduler/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_animation/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_animation/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_build/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_cli/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_interaction/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_log/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_log/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/xtask/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

@@ -20,9 +20,6 @@ flui-scheduler = { version = "0.1", path = "../flui-scheduler" }
 # Concurrency
 parking_lot = {workspace = true}
 
-# Logging
-tracing = {workspace = true}
-
 # Utility
 thiserror = {workspace = true}
 

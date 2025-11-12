@@ -10,8 +10,8 @@ repository.workspace = true
 [dependencies]
 flui_types = { path = "../flui_types" }
 
-# Math for transformations
-glam = { workspace = true }
+# Note: Math operations use Matrix4 from flui_types, which internally uses glam
+# No direct glam dependency needed here
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

@@ -1,0 +1,76 @@
+-- Merging decision tree log ---
+manifest
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:1:1-31:12
+MERGED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:1:1-31:12
+INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml:1:1-7:12
+INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml:1:1-7:12
+INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml:1:1-7:12
+	package
+		INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+	android:versionName
+		INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+	android:versionCode
+		INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+	xmlns:android
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:1:11-69
+application
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:2:5-19:19
+INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+	android:extractNativeLibs
+		INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+	android:label
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:3:9-34
+	android:hasCode
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:4:9-32
+	android:icon
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:5:9-43
+activity#android.app.NativeActivity
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:6:9-18:20
+	android:label
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:10:13-45
+	android:exported
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:8:13-36
+	android:configChanges
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:9:13-74
+	android:name
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:7:13-54
+meta-data#android.app.lib_name
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:11:13-13:44
+	android:value
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:13:17-41
+	android:name
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:12:17-52
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:14:13-17:29
+action#android.intent.action.MAIN
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:15:17-68
+	android:name
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:15:25-66
+category#android.intent.category.LAUNCHER
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:16:17-76
+	android:name
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:16:27-74
+queries
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:25:5-30:15
+intent#action:name:android.intent.action.PROCESS_TEXT+data:mimeType:text/plain
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:26:9-29:18
+action#android.intent.action.PROCESS_TEXT
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:27:13-72
+	android:name
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:27:21-70
+data
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:28:13-50
+	android:mimeType
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\main\AndroidManifest.xml:28:19-48
+uses-permission#android.permission.INTERNET
+ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml:6:5-66
+	android:name
+		ADDED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml:6:22-64
+uses-sdk
+INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from C:\Users\vanya\RustroverProjects\flui\platforms\android\app\src\debug\AndroidManifest.xml

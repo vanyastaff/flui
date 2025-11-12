@@ -1,0 +1,20 @@
+[package]
+name = "flui_build"
+version = "0.1.0"
+edition = "2021"
+authors = ["FLUI Contributors"]
+description = "Build system library for FLUI framework - handles cross-platform builds"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-repo/flui"
+keywords = ["flui", "build", "cross-platform", "android", "wasm"]
+categories = ["development-tools::build-utils"]
+
+[dependencies]
+
+# Core dependencies
+anyhow = "1.0"
+serde_json = "1.0"
+tracing = "0.1"
+tokio = { version = "1.43", features = ["process", "macros", "rt-multi-thread"] }
+which = "5"
+pollster = "0.3"

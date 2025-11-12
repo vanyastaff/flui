@@ -12,28 +12,22 @@ repository.workspace = true
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_engine = { path = "../flui_engine" }
-flui_derive = { path = "../flui_derive" }
+flui_log = { path = "../flui_log" }
 
 # Essential dependencies
 parking_lot.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-forest.workspace = true
-smallvec.workspace = true
 bitflags.workspace = true
-downcast-rs.workspace = true
 
 # Cache and performance
 moka = { workspace = true, features = ["sync"] }
-ahash.workspace = true
 
 # For element tree
 slab = "0.4"
 
 # Optional features
 serde = { workspace = true, optional = true }
-puffin = { version = "0.19", optional = true }
 rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
@@ -46,9 +40,13 @@ default = []
 # Serde support for element tree and state
 serde = ["dep:serde", "flui_types/serde"]
 
+# === Logging ===
+# Pretty hierarchical logging for desktop development
+pretty-logs = ["flui_log/pretty"]
+
 # === Profiling ===
-# Performance profiling with puffin
-profiling = ["dep:puffin"]
+# TODO: Add puffin dependency if profiling is needed
+# profiling = ["dep:puffin"]
 
 # === Performance ===
 # Multi-threaded parallel build pipeline

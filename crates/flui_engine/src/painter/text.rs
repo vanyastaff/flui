@@ -45,6 +45,67 @@ pub struct TextRenderer {
 }
 
 impl TextRenderer {
+    /// Initialize font system with smart fallback strategy
+    ///
+    /// Strategy:
+    /// 1. Try to load system fonts (works on desktop platforms)
+    /// 2. If system fonts unavailable or empty, load embedded fonts
+    /// 3. Embedded fonts are always included as fallback for reliability
+    fn initialize_font_system() -> FontSystem {
+        let mut fs = FontSystem::new();
+
+        // Check if system fonts were loaded successfully
+        let system_fonts_available = fs.db().faces().count() > 0;
+
+        if system_fonts_available {
+            tracing::debug!(
+                "Loaded {} system fonts",
+                fs.db().faces().count()
+            );
+
+            // Load embedded fonts as fallback even when system fonts are available
+            #[cfg(feature = "embedded-fonts-fallback")]
+            {
+                Self::load_embedded_fonts(&mut fs);
+                tracing::debug!(
+                    "Total fonts after fallback: {}",
+                    fs.db().faces().count()
+                );
+            }
+        } else {
+            // No system fonts - load embedded fonts as primary
+            tracing::warn!("No system fonts available, loading embedded fonts");
+            Self::load_embedded_fonts(&mut fs);
+
+            if fs.db().faces().count() == 0 {
+                tracing::error!("Failed to load any fonts! Text rendering may fail.");
+            } else {
+                tracing::info!(
+                    "Loaded {} embedded fonts",
+                    fs.db().faces().count()
+                );
+            }
+        }
+
+        fs
+    }
+
+    /// Load embedded fonts into font system
+    ///
+    /// Includes Roboto-Regular as the primary fallback font.
+    /// This ensures text rendering works on all platforms.
+    fn load_embedded_fonts(fs: &mut FontSystem) {
+        const ROBOTO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
+
+        // Note: load_font_data() returns (), not Result
+        fs.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
+        tracing::debug!("Loaded embedded Roboto-Regular font");
+
+        // TODO: Add more embedded fonts if needed (Bold, Italic, etc.)
+        // const ROBOTO_BOLD: &[u8] = include_bytes!("../../assets/fonts/Roboto-Bold.ttf");
+        // fs.db_mut().load_font_data(ROBOTO_BOLD.to_vec());
+    }
+
     /// Create a new text renderer
     ///
     /// # Arguments
@@ -55,8 +116,8 @@ impl TextRenderer {
         #[cfg(debug_assertions)]
         tracing::debug!("TextRenderer::new: format={:?}", format);
 
-        // Initialize font system
-        let font_system = FontSystem::new();
+        // Initialize font system with smart fallback
+        let font_system = Self::initialize_font_system();
 
         // Initialize glyph rasterization
         let swash_cache = SwashCache::new();
