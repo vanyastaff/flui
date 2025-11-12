@@ -25,25 +25,25 @@ Persistent animation objects for the FLUI framework, following Flutter's proven 
 
 ### Integration
 
-- **`Ticker`** - Frame-based callback system (in `flui_core`)
-- **`TickerProvider`** - Provides tickers to animation controllers
+- **`Scheduler`** - Frame scheduling and animation timing (via `flui-scheduler`)
+- **`Ticker`** - Frame-based callback system (from `flui-scheduler`)
 - Full integration with `flui_types::animation` (Curves, Tweens)
 
 ## 🚀 Quick Start
 
 ```rust
 use flui_animation::prelude::*;
-use flui_core::foundation::SimpleTickerProvider;
+use flui_scheduler::Scheduler;
 use std::sync::Arc;
 use std::time::Duration;
 
-// Create a ticker provider
-let ticker_provider = Arc::new(SimpleTickerProvider);
+// Create a scheduler
+let scheduler = Arc::new(Scheduler::new());
 
 // Create an animation controller
 let controller = AnimationController::new(
     Duration::from_millis(300),
-    ticker_provider,
+    scheduler,
 );
 
 // Apply an easing curve
@@ -85,8 +85,8 @@ controller.dispose();
 └──────────────────────┬──────────────────────────────────┘
                        │ uses
 ┌──────────────────────▼──────────────────────────────────┐
-│            flui_core/foundation                         │
-│  Ticker, TickerProvider, Listenable                     │
+│              flui-scheduler                             │
+│  Scheduler, Ticker, FrameBudget, Priority               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -95,9 +95,10 @@ controller.dispose();
 ### Basic Controller
 
 ```rust
+let scheduler = Arc::new(Scheduler::new());
 let controller = AnimationController::new(
     Duration::from_millis(300),
-    ticker_provider,
+    scheduler,
 );
 
 controller.forward().unwrap();  // Animate forward
@@ -246,7 +247,8 @@ All animation types are fully thread-safe:
 **Always dispose animation controllers when done:**
 
 ```rust
-let controller = AnimationController::new(duration, ticker_provider);
+let scheduler = Arc::new(Scheduler::new());
+let controller = AnimationController::new(duration, scheduler);
 
 // Use the controller...
 

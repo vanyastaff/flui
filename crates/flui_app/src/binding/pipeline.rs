@@ -77,18 +77,31 @@ impl PipelineBinding {
     where
         V: View + 'static,
     {
+        use flui_core::view::{BuildContext, BuildContextGuard};
+
         tracing::info!("Attaching root widget");
 
-        // Convert View to Element
-        let element = widget.into_element();
+        // Check if root already exists
+        {
+            let pipeline = self.pipeline_owner.read();
+            if pipeline.root_element_id().is_some() {
+                panic!("Root widget already attached. PipelineOwner only supports one root.");
+            }
+        }
+
+        // Create a temporary BuildContext for root widget initialization
+        // We use ElementId(0) as a placeholder since the root doesn't have a parent
+        let tree = self.pipeline_owner.read().tree().clone();
+        let ctx = BuildContext::new(tree.clone(), flui_core::ElementId::new(1));
+
+        // Set up BuildContext guard and convert View to Element
+        let element = {
+            let _guard = BuildContextGuard::new(&ctx);
+            widget.into_element()
+        };
 
         // Set as pipeline root (automatically schedules initial build)
         let mut pipeline = self.pipeline_owner.write();
-
-        if pipeline.root_element_id().is_some() {
-            panic!("Root widget already attached. PipelineOwner only supports one root.");
-        }
-
         let root_id = pipeline.set_root(element);
         drop(pipeline);
 

@@ -44,7 +44,7 @@
 //! }
 //!
 //! # fn main() {
-//! run_app("My App", MyApp);
+//! run_app(MyApp);
 //! # }
 //! ```
 //!
@@ -67,7 +67,7 @@
 //! - [`engine`] - Rendering engine (Layer, Scene, Painter)
 //! - [`rendering`] - Render objects (RenderPadding, RenderFlex, etc.)
 //! - [`widgets`] - Built-in widgets (Container, Row, Column, Text, etc.)
-//! - [`app`] - Application framework (run_app, FluiApp)
+//! - [`app`] - Application framework (run_app, AppBinding, WgpuEmbedder)
 //! - [`prelude`] - Common imports
 
 // Re-export all crates for modular access
@@ -109,7 +109,7 @@ pub mod prelude {
     pub use flui_widgets::prelude::*;
 
     // App framework - always available
-    pub use flui_app::{run_app, FluiApp};
+    pub use flui_app::run_app;
 }
 
 /// Version information

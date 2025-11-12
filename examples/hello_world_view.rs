@@ -46,6 +46,6 @@ impl View for HelloWorldContent {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    run_app(Box::new(HelloWorldApp))
+fn main() -> ! {
+    run_app(HelloWorldApp)
 }
