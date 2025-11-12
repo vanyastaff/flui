@@ -19,6 +19,7 @@ pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> Result<()>
 
     // Platform-specific checks
     if android || (!ios && !web) {
+        all_ok &= check_java(verbose);
         all_ok &= check_android(verbose);
     }
 
@@ -105,6 +106,53 @@ fn check_flui(verbose: bool) -> bool {
     }
 
     true
+}
+
+fn check_java(verbose: bool) -> bool {
+    print!("{} Java (JDK): ", style("[✓]").green());
+
+    match Command::new("java").arg("-version").output() {
+        Ok(output) => {
+            // Java outputs version to stderr
+            let version_output = String::from_utf8_lossy(&output.stderr);
+
+            // Extract version from output like "java version \"11.0.12\""
+            if let Some(line) = version_output.lines().next() {
+                println!("{}", style(line.trim()).cyan());
+
+                if verbose {
+                    // Check JAVA_HOME
+                    if let Ok(java_home) = std::env::var("JAVA_HOME") {
+                        println!("    JAVA_HOME: {}", style(&java_home).dim());
+                    } else {
+                        println!("    JAVA_HOME: {}", style("Not set").yellow());
+                    }
+
+                    // Get java path
+                    if let Ok(path) = which::which("java") {
+                        println!("    Path: {}", style(path.display()).dim());
+                    }
+                }
+
+                // Check if version is 11 or higher
+                if version_output.contains("version \"1.8") {
+                    println!("    {}: Java 11+ recommended for Android development", style("Warning").yellow());
+                    return true; // Still works, just warn
+                }
+
+                true
+            } else {
+                println!("{}", style("Version not detected").yellow());
+                true
+            }
+        }
+        Err(_) => {
+            println!("{}", style("Not found").red());
+            println!("    Java 11+ is required for Android development");
+            println!("    Download from: https://adoptium.net/");
+            false
+        }
+    }
 }
 
 fn check_android(verbose: bool) -> bool {
