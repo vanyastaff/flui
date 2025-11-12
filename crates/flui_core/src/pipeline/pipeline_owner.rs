@@ -333,7 +333,7 @@ impl PipelineOwner {
     where
         V: crate::view::View + 'static,
     {
-        use crate::view::{BuildContext, BuildContextGuard, IntoElement};
+        use crate::view::{BuildContext, IntoElement};
 
         tracing::info!("Attaching root view to pipeline");
 
@@ -362,11 +362,9 @@ impl PipelineOwner {
         // This matches Flutter's buildScope() pattern for state safety
         self.coordinator.build_mut().set_build_scope(true);
 
-        // Set up BuildContext guard and convert View to Element
-        // IMPORTANT: Guard must stay alive for the entire conversion chain,
-        // including recursive into_element() calls from child widgets
-        let _guard = BuildContextGuard::new(&ctx);
-        let element = widget.into_element();
+        // Build the view within a context guard (sets up thread-local)
+        // Using with_build_context() ensures the guard lives for the entire closure execution
+        let element = crate::view::with_build_context(&ctx, || widget.into_element());
 
         // Clear build scope
         self.coordinator.build_mut().set_build_scope(false);
