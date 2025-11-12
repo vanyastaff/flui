@@ -55,7 +55,7 @@ impl PipelineBinding {
     /// Converts the View to an Element and sets it as the pipeline root.
     /// PipelineOwner automatically schedules it for initial build.
     ///
-    /// This method delegates to `PipelineOwner::attach_root_view()` which handles
+    /// This method delegates to `PipelineOwner::attach()` which handles
     /// all the BuildContext setup and View → Element conversion.
     ///
     /// # Parameters
@@ -76,10 +76,10 @@ impl PipelineBinding {
     where
         V: View + 'static,
     {
-        // Delegate to PipelineOwner::attach_root_view()
+        // Delegate to PipelineOwner::attach()
         // This keeps all the View → Element conversion logic in flui-core
         let mut pipeline = self.pipeline_owner.write();
-        pipeline.attach_root_view(widget);
+        pipeline.attach(widget);
     }
 
     /// Get shared reference to the pipeline owner
@@ -100,7 +100,7 @@ impl PipelineBinding {
     /// ```rust,ignore
     /// // Good: Direct access to PipelineOwner
     /// let pipeline = binding.pipeline_owner();
-    /// pipeline.write().attach_root_view(MyApp);
+    /// pipeline.write().attach(MyApp);
     /// pipeline.write().flush_rebuild_queue();
     ///
     /// // Bad: Creating wrapper methods in PipelineBinding

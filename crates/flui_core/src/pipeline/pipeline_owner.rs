@@ -285,11 +285,28 @@ impl PipelineOwner {
         root_id
     }
 
-    /// Attach a View as the root of the tree
+    /// Attach a View as the root of the tree (matches Flutter's `attach` naming)
     ///
     /// This is a high-level method that handles View → Element conversion with proper
     /// BuildContext setup. This is the recommended way to attach root widgets from
     /// application code (flui-app layer).
+    ///
+    /// # Architecture Note
+    ///
+    /// This method follows Flutter's pattern where `RootWidget.attach()` exists in the
+    /// framework layer (framework.dart), not the application layer (widgets binding).
+    /// The View → Element conversion is a framework responsibility.
+    ///
+    /// # BuildContext Note
+    ///
+    /// The root View's build() is called with a special BuildContext that uses a
+    /// placeholder ElementId. This is safe because:
+    /// 1. The root element doesn't exist yet (we're creating it)
+    /// 2. The BuildContext is only used during initial View → Element conversion
+    /// 3. After conversion, the real ElementId is assigned via set_root()
+    ///
+    /// This matches Flutter's approach where the root widget is built in a special
+    /// context before being mounted to the tree.
     ///
     /// # Parameters
     ///
@@ -310,9 +327,9 @@ impl PipelineOwner {
     /// use flui_core::PipelineOwner;
     ///
     /// let mut owner = PipelineOwner::new();
-    /// let root_id = owner.attach_root_view(MyApp);
+    /// let root_id = owner.attach(MyApp);
     /// ```
-    pub fn attach_root_view<V>(&mut self, widget: V) -> ElementId
+    pub fn attach<V>(&mut self, widget: V) -> ElementId
     where
         V: crate::view::View + 'static,
     {
@@ -331,15 +348,28 @@ impl PipelineOwner {
             );
         }
 
-        // Create a temporary BuildContext for root widget initialization
-        // We use ElementId(1) as a placeholder since the root doesn't have a parent
-        let ctx = BuildContext::new(self.tree.clone(), ElementId::new(1));
+        // Create BuildContext for root widget initialization
+        // NOTE: We use a placeholder ElementId since the root doesn't exist yet.
+        // This is safe because the BuildContext is only used during View::build(),
+        // and the real ElementId is assigned immediately after via set_root().
+        //
+        // This matches Flutter's approach where root widgets are built in a
+        // temporary context before being mounted to the element tree.
+        const ROOT_PLACEHOLDER: usize = 1;
+        let ctx = BuildContext::new(self.tree.clone(), ElementId::new(ROOT_PLACEHOLDER));
 
-        // Set up BuildContext guard and convert View to Element
+        // Build scope: Lock state during View → Element conversion
+        // This matches Flutter's buildScope() pattern for state safety
+        self.coordinator.build_mut().set_build_scope(true);
+
         let element = {
+            // Set up BuildContext guard and convert View to Element
             let _guard = BuildContextGuard::new(&ctx);
             widget.into_element()
         };
+
+        // Clear build scope
+        self.coordinator.build_mut().set_build_scope(false);
 
         // Set as pipeline root (automatically schedules initial build)
         let root_id = self.set_root(element);
