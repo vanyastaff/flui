@@ -253,6 +253,15 @@ impl WgpuEmbedder {
 
                 // Delegate resize to GpuRenderer (handles surface reconfiguration)
                 self.renderer.resize(size.width, size.height);
+
+                // Request layout for the entire tree with new window size
+                // This ensures UI adapts to the new dimensions
+                let pipeline = self.binding.pipeline.pipeline_owner();
+                let mut pipeline_write = pipeline.write();
+                if let Some(root_id) = pipeline_write.root_element_id() {
+                    pipeline_write.request_layout(root_id);
+                    tracing::debug!("Requested layout for root after resize");
+                }
             }
 
             WindowEvent::CursorMoved { position, .. } => {
