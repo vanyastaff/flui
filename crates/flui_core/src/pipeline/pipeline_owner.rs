@@ -285,6 +285,70 @@ impl PipelineOwner {
         root_id
     }
 
+    /// Attach a View as the root of the tree
+    ///
+    /// This is a high-level method that handles View → Element conversion with proper
+    /// BuildContext setup. This is the recommended way to attach root widgets from
+    /// application code (flui-app layer).
+    ///
+    /// # Parameters
+    ///
+    /// - `widget`: The root View (typically MaterialApp or similar)
+    ///
+    /// # Returns
+    ///
+    /// The ElementId of the attached root element
+    ///
+    /// # Panics
+    ///
+    /// Panics if a root is already attached. Call `remove_root()` first if you need
+    /// to replace the root widget.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::PipelineOwner;
+    ///
+    /// let mut owner = PipelineOwner::new();
+    /// let root_id = owner.attach_root_view(MyApp);
+    /// ```
+    pub fn attach_root_view<V>(&mut self, widget: V) -> ElementId
+    where
+        V: crate::view::View + 'static,
+    {
+        use crate::view::{BuildContext, BuildContextGuard, IntoElement};
+
+        tracing::info!("Attaching root view to pipeline");
+
+        // Check if root already exists
+        if self.root_element_id().is_some() {
+            panic!(
+                "Root widget already attached to PipelineOwner!\n\
+                \n\
+                Only one root widget is supported at a time.\n\
+                \n\
+                If you need to replace the root widget, call remove_root() first."
+            );
+        }
+
+        // Create a temporary BuildContext for root widget initialization
+        // We use ElementId(1) as a placeholder since the root doesn't have a parent
+        let ctx = BuildContext::new(self.tree.clone(), ElementId::new(1));
+
+        // Set up BuildContext guard and convert View to Element
+        let element = {
+            let _guard = BuildContextGuard::new(&ctx);
+            widget.into_element()
+        };
+
+        // Set as pipeline root (automatically schedules initial build)
+        let root_id = self.set_root(element);
+
+        tracing::info!(root_id = ?root_id, "Root view attached to pipeline");
+
+        root_id
+    }
+
     // =========================================================================
     // Build Scheduling (Delegation to FrameCoordinator)
     // =========================================================================
