@@ -374,6 +374,10 @@ impl PipelineOwner {
         // Set as pipeline root (automatically schedules initial build)
         let root_id = self.set_root(element);
 
+        // CRITICAL: Request layout for the entire tree after attaching root
+        // Without this, the UI won't layout/paint until an external trigger
+        self.request_layout(root_id);
+
         tracing::info!(root_id = ?root_id, "Root view attached to pipeline");
 
         root_id
