@@ -26,7 +26,11 @@
       "Bash(mkdir:*)",
       "Bash(cargo doc:*)",
       "Bash(cargo fmt:*)",
-      "Bash(cargo tree:*)"
+      "Bash(cargo tree:*)",
+      "Bash(cat:*)",
+      "Bash(tar:*)",
+      "Bash(mv:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

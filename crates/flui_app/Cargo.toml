@@ -8,6 +8,9 @@ authors.workspace = true
 repository.workspace = true
 description = "Application framework for Flui - Flutter-inspired UI"
 
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
 [features]
 default = []
 
@@ -44,10 +47,21 @@ tracing-subscriber = "0.3"
 parking_lot.workspace = true
 pollster = "0.3"
 
+# Android dependencies
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
+android-activity = { version = "0.6", features = ["native-activity"] }
+log = "0.4"
+
+# iOS dependencies
+[target.'cfg(target_os = "ios")'.dependencies]
+objc = "0.2"
+
 # WebAssembly support
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+wasm-logger = "0.2"
 web-sys = { version = "0.3", features = [
     "Document",
     "Window",
@@ -57,3 +71,21 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 
 [dev-dependencies]
+flui_widgets = { path = "../flui_widgets" }
+
+# Example definition
+[[example]]
+name = "counter_demo"
+path = "examples/counter_demo.rs"
+
+[[example]]
+name = "counter_demo_simple"
+path = "examples/counter_demo_simple.rs"
+
+[[example]]
+name = "android_minimal"
+path = "examples/android_minimal.rs"
+
+[[example]]
+name = "android_empty"
+path = "examples/android_empty.rs"

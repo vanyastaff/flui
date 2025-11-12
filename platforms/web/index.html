@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FLUI Counter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 
+                         Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #app-container {
+            width: 90vw;
+            max-width: 800px;
+            height: 90vh;
+            max-height: 900px;
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            position: relative;
+        }
+
+        canvas {
+            width: 100% !important;
+            height: 100% !important;
+            display: block;
+        }
+
+        /* Loading Screen */
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 1000;
+        }
+
+        .spinner {
+            border: 4px solid rgba(102, 126, 234, 0.2);
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #loading-text {
+            color: #667eea;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        /* Error Screen */
+        #error {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #ff4444;
+            color: white;
+            padding: 30px 50px;
+            border-radius: 12px;
+            max-width: 80%;
+            text-align: center;
+            z-index: 1001;
+        }
+
+        #error h2 {
+            margin-bottom: 10px;
+        }
+
+        #error-message {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        /* WebGPU Warning */
+        #webgpu-warning {
+            display: none;
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 200, 0, 0.95);
+            color: #333;
+            padding: 15px 30px;
+            border-radius: 8px;
+            max-width: 80%;
+            text-align: center;
+            font-size: 14px;
+            z-index: 1002;
+        }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <!-- Loading Screen -->
+        <div id="loading">
+            <div class="spinner"></div>
+            <div id="loading-text">Loading FLUI Counter...</div>
+        </div>
+
+        <!-- Error Screen -->
+        <div id="error">
+            <h2>⚠️ Error</h2>
+            <p id="error-message"></p>
+        </div>
+
+        <!-- WebGPU Warning -->
+        <div id="webgpu-warning">
+            ⚠️ WebGPU not supported. Please use Chrome 113+ or enable WebGPU in chrome://flags
+        </div>
+    </div>
+
+    <script type="module">
+        // Check WebGPU support
+        if (!navigator.gpu) {
+            document.getElementById('webgpu-warning').style.display = 'block';
+            console.warn('WebGPU is not supported. Please use Chrome 113+ or enable it in chrome://flags');
+        }
+
+        // Import and initialize WASM module
+        import init from './pkg/counter_demo.js';
+
+        async function run() {
+            try {
+                // Initialize WebAssembly module
+                await init();
+                
+                // Hide loading screen
+                document.getElementById('loading').style.display = 'none';
+                
+                console.log('✅ FLUI Counter started successfully!');
+                console.log('Platform: WebAssembly');
+                console.log('Rendering: WebGPU');
+            } catch (err) {
+                console.error('❌ Failed to start FLUI Counter:', err);
+                
+                // Show error
+                document.getElementById('loading').style.display = 'none';
+                const errorDiv = document.getElementById('error');
+                errorDiv.style.display = 'block';
+                document.getElementById('error-message').textContent = err.toString();
+            }
+        }
+
+        run();
+    </script>
+</body>
+</html>

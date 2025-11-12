@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.vanya.flui.counter">
+
+    <!-- OpenGL ES 3.0 requirement for wgpu -->
+    <uses-feature 
+        android:glEsVersion="0x00030000" 
+        android:required="true" />
+
+    <!-- Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:label="FLUI Counter"
+        android:hasCode="false"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+        android:hardwareAccelerated="true">
+        
+        <!-- Main Activity using NativeActivity -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:screenOrientation="unspecified"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            
+            <!-- Library name must match Cargo.toml [lib] name -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="counter_demo" />
+            
+            <!-- Launch intent -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
