@@ -608,6 +608,10 @@ impl PipelineOwner {
     /// Build a complete frame
     ///
     /// Delegates to FrameCoordinator.
+    ///
+    /// **Note**: RebuildQueue is now flushed by the Scheduler's persistent frame callback
+    /// (see AppBinding::wire_up). This ensures signal-driven rebuilds go through the
+    /// scheduler's task prioritization system.
     pub fn build_frame(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
@@ -615,8 +619,8 @@ impl PipelineOwner {
         // Increment frame counter
         self.frame_counter += 1;
 
-        // Process pending rebuilds from signals
-        self.flush_rebuild_queue();
+        // RebuildQueue is flushed by Scheduler before this is called
+        // (via AppBinding::wire_up persistent callback)
 
         // Delegate to coordinator
         self.coordinator
@@ -626,6 +630,8 @@ impl PipelineOwner {
     /// Build a complete frame without creating a frame span (for custom logging)
     ///
     /// This variant doesn't create its own frame span, allowing the caller to manage spans.
+    ///
+    /// **Note**: RebuildQueue is flushed by Scheduler before this is called.
     pub fn build_frame_no_span(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
@@ -633,8 +639,8 @@ impl PipelineOwner {
         // Increment frame counter
         self.frame_counter += 1;
 
-        // Process pending rebuilds from signals
-        self.flush_rebuild_queue();
+        // RebuildQueue is flushed by Scheduler before this is called
+        // (via AppBinding::wire_up persistent callback)
 
         // Delegate to coordinator without frame span
         self.coordinator

@@ -8,6 +8,7 @@
 use instant::Instant;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Unique frame identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -120,6 +121,12 @@ impl FrameTiming {
 
 /// Frame callback - executed at frame boundaries
 pub type FrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;
+
+/// Persistent frame callback (can be called multiple times)
+///
+/// Uses Arc for cheap cloning - persistent callbacks are cloned before execution
+/// to avoid holding locks during callback invocation.
+pub type PersistentFrameCallback = Arc<dyn Fn(&FrameTiming) + Send + Sync>;
 
 /// Post-frame callback - executed after frame completes
 pub type PostFrameCallback = Box<dyn FnOnce(&FrameTiming) + Send>;

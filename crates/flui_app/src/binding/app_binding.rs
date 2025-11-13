@@ -112,19 +112,36 @@ impl AppBinding {
 
         tracing::debug!("Wiring up scheduler callbacks to pipeline");
 
-        // No persistent frame callbacks needed yet - WgpuEmbedder handles frame lifecycle
-        // In the future, we can add:
-        // 1. Animation ticker callbacks
-        // 2. Deferred task processing
-        // 3. Hot reload triggers
+        // Register persistent frame callback for RebuildQueue processing
+        // This integrates signal-driven rebuilds with scheduler's frame lifecycle
+        let pipeline_owner = self.pipeline.pipeline_owner();
 
-        // The frame flow is:
-        // WgpuEmbedder::render_frame()
-        //   → scheduler.begin_frame() [frame callbacks execute here]
-        //   → renderer.draw_frame() [build + layout + paint]
-        //   → scheduler.end_frame() [post-frame callbacks execute here]
+        self.scheduler.scheduler().add_persistent_frame_callback(Arc::new(move |_timing| {
+            // Flush rebuild queue at the start of every frame
+            // This processes all pending signal-driven rebuilds
+            let mut owner = pipeline_owner.write();
+            owner.flush_rebuild_queue();
 
-        tracing::debug!("Scheduler callbacks wired up (using WgpuEmbedder-driven flow)");
+            tracing::trace!("[SCHEDULER] Flushed rebuild queue at frame start");
+        }));
+
+        // Frame flow (integrated):
+        //   WgpuEmbedder::render_frame()
+        //     → scheduler.begin_frame()
+        //       → [PERSISTENT CALLBACKS] flush_rebuild_queue()
+        //       → [ONE-TIME CALLBACKS] animations, tickers, etc.
+        //     → renderer.draw_frame()
+        //       → pipeline.build_frame() [NO flush_rebuild_queue here anymore]
+        //         → build/layout/paint pipelines [respect frame budget]
+        //     → scheduler.end_frame() [record timing]
+        //
+        // Benefits:
+        // ✓ Signal rebuilds go through scheduler's callback system
+        // ✓ RebuildQueue processing happens BEFORE build_frame()
+        // ✓ Frame budget enforced for all work
+        // ✓ Clean separation: Scheduler manages WHEN, Pipeline manages WHAT
+
+        tracing::debug!("Scheduler integration: RebuildQueue → persistent frame callback (issue #43)");
     }
 
     /// Internal helper to access the singleton instance

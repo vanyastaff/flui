@@ -7,7 +7,7 @@
 //! - Animation tickers
 //! - Frame budgets
 
-use crate::frame::{FrameCallback, FrameId, FramePhase, FrameTiming, PostFrameCallback};
+use crate::frame::{FrameCallback, FrameId, FramePhase, FrameTiming, PersistentFrameCallback, PostFrameCallback};
 use crate::task::{Priority, TaskQueue};
 use crate::ticker::TickerProvider;
 use crate::budget::FrameBudget;
@@ -16,6 +16,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 /// Main scheduler for frame and task management
+#[derive(Clone)]
 pub struct Scheduler {
     /// Current frame timing
     current_frame: Arc<Mutex<Option<FrameTiming>>>,
@@ -23,8 +24,11 @@ pub struct Scheduler {
     /// Task queue (priority-based)
     task_queue: TaskQueue,
 
-    /// Frame callbacks (executed at frame start)
+    /// Frame callbacks (executed at frame start, one-time)
     frame_callbacks: Arc<Mutex<Vec<FrameCallback>>>,
+
+    /// Persistent frame callbacks (executed every frame)
+    persistent_frame_callbacks: Arc<Mutex<Vec<PersistentFrameCallback>>>,
 
     /// Post-frame callbacks (executed after frame completes)
     post_frame_callbacks: Arc<Mutex<Vec<PostFrameCallback>>>,
@@ -51,6 +55,7 @@ impl Scheduler {
             current_frame: Arc::new(Mutex::new(None)),
             task_queue: TaskQueue::new(),
             frame_callbacks: Arc::new(Mutex::new(Vec::new())),
+            persistent_frame_callbacks: Arc::new(Mutex::new(Vec::new())),
             post_frame_callbacks: Arc::new(Mutex::new(Vec::new())),
             target_fps,
             budget: Arc::new(Mutex::new(FrameBudget::new(target_fps))),
@@ -81,10 +86,27 @@ impl Scheduler {
 
     /// Schedule a frame callback
     ///
-    /// The callback will be executed at the start of the next frame.
+    /// The callback will be executed at the start of the next frame only.
     pub fn schedule_frame(&self, callback: FrameCallback) {
         self.frame_callbacks.lock().push(callback);
         *self.frame_scheduled.lock() = true;
+    }
+
+    /// Add a persistent frame callback
+    ///
+    /// The callback will be executed at the start of every frame.
+    /// This is useful for rebuilds, animations, and other per-frame work.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// scheduler.add_persistent_frame_callback(Box::new(|timing| {
+    ///     // Process rebuild queue every frame
+    ///     pipeline.flush_rebuild_queue();
+    /// }));
+    /// ```
+    pub fn add_persistent_frame_callback(&self, callback: PersistentFrameCallback) {
+        self.persistent_frame_callbacks.lock().push(callback);
     }
 
     /// Add a post-frame callback
@@ -105,12 +127,25 @@ impl Scheduler {
     pub fn begin_frame(&self) -> FrameId {
         let mut timing = FrameTiming::new(self.target_fps);
         timing.phase = FramePhase::Build;
-        
+
         let frame_id = timing.id;
         *self.current_frame.lock() = Some(timing);
         *self.frame_scheduled.lock() = false;
 
-        // Execute frame callbacks
+        // Execute persistent frame callbacks (every frame)
+        // Clone the callbacks so we don't hold the lock during execution
+        let persistent_callbacks = {
+            let cbs = self.persistent_frame_callbacks.lock();
+            cbs.clone()
+        };
+
+        for callback in persistent_callbacks.iter() {
+            if let Some(timing) = self.current_frame.lock().as_ref() {
+                callback(timing);
+            }
+        }
+
+        // Execute one-time frame callbacks
         let callbacks = {
             let mut cbs = self.frame_callbacks.lock();
             std::mem::take(&mut *cbs)
