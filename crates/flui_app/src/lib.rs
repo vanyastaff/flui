@@ -154,6 +154,8 @@ where
     V: View + 'static,
 {
     use crate::embedder::DesktopEmbedder;
+    use winit::event::{Event, WindowEvent};
+    use winit::event_loop::ControlFlow;
 
     // Initialize cross-platform logging
     flui_log::Logger::default()
@@ -171,13 +173,62 @@ where
     // 3. Create event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
-    // 4. Create desktop embedder (async init)
-    let embedder = pollster::block_on(DesktopEmbedder::new(binding, &event_loop));
-
     tracing::info!("FLUI app initialized, entering event loop");
 
-    // 5. Run event loop (blocks)
-    embedder.run(event_loop)
+    // 4. Create embedder inside event loop (NEW winit 0.30+ pattern)
+    // Window/surface creation must happen after Resumed event
+    let mut embedder: Option<DesktopEmbedder> = None;
+
+    event_loop
+        .run(move |event, elwt| {
+            elwt.set_control_flow(ControlFlow::Poll);
+
+            match event {
+                Event::Resumed => {
+                    tracing::info!("Resumed event received");
+                    if embedder.is_none() {
+                        tracing::info!("Creating DesktopEmbedder after Resumed event");
+                        // Safe to create window and surface now
+                        embedder = Some(pollster::block_on(DesktopEmbedder::new(
+                            binding.clone(),
+                            elwt,
+                        )));
+                        tracing::info!("DesktopEmbedder created successfully");
+                    }
+                }
+
+                Event::AboutToWait => {
+                    // Request redraw every frame (for animations)
+                    if let Some(ref emb) = embedder {
+                        emb.window().request_redraw();
+                    }
+                }
+
+                Event::WindowEvent { event, .. } => {
+                    if let Some(ref mut emb) = embedder {
+                        match event {
+                            WindowEvent::RedrawRequested => {
+                                tracing::trace!("RedrawRequested event, rendering frame");
+                                emb.render_frame();
+                            }
+                            WindowEvent::CloseRequested => {
+                                tracing::info!("Window close requested");
+                                elwt.exit();
+                            }
+                            other => {
+                                emb.handle_window_event(other, elwt);
+                            }
+                        }
+                    }
+                }
+
+                _ => {}
+            }
+        })
+        .expect("Event loop error");
+
+    // Unreachable, but needed to satisfy return type !
+    std::process::exit(0)
 }
 
 // Android entry point

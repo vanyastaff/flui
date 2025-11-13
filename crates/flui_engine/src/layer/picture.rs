@@ -94,20 +94,51 @@ impl CanvasLayer {
     }
 }
 
-/// Basic hit testing implementation for CanvasLayer
+/// Hit testing implementation for CanvasLayer
 ///
-/// Currently a simple pass-through implementation. In the future, this could:
-/// - Check bounds based on canvas size
-/// - Inspect DrawCommand paths for precise hit testing
-/// - Support event handlers attached to specific regions
+/// Checks if a point hits any drawing commands in the canvas by testing
+/// against the display list bounds. This is a basic implementation that
+/// checks the overall bounds - precise hit testing (e.g., path containment)
+/// can be added later.
+///
+/// # Hit Testing Strategy
+///
+/// 1. Get bounds from DisplayList (union of all command bounds)
+/// 2. Check if position is within bounds
+/// 3. If hit, add entry to HitTestResult (no handler by default)
+///
+/// # Future Enhancements
+///
+/// - Region-based event handlers attached to specific drawing commands
+/// - Path-based hit detection for precise containment checks
+/// - Layer-specific event routing (e.g., button clicks, hover)
 impl HitTestable for CanvasLayer {
-    fn hit_test(&self, _position: Offset, _result: &mut HitTestResult) -> bool {
-        // TODO: Implement proper hit testing
-        // For now, return false to indicate no hit
-        // This will be extended when we have:
-        // 1. Canvas bounds information
-        // 2. Region-based event handlers
-        // 3. Path-based hit detection
-        false
+    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
+        use flui_interaction::HitTestEntry;
+        use flui_types::geometry::Point;
+
+        // Get bounds from DisplayList
+        let bounds = self.display_list().bounds();
+
+        // Convert Offset to Point for bounds check
+        let point = Point::new(position.dx, position.dy);
+
+        // Check if position is within bounds
+        if bounds.contains(point) {
+            // Add entry to result (no handler - just marks the hit)
+            // In the future, this could include event handlers attached to specific regions
+            let entry = HitTestEntry::new(position, bounds);
+            result.add(entry);
+
+            tracing::trace!(
+                position = ?position,
+                bounds = ?bounds,
+                "CanvasLayer hit"
+            );
+
+            true
+        } else {
+            false
+        }
     }
 }

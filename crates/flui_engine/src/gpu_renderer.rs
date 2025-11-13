@@ -73,6 +73,50 @@ pub struct GpuRenderer {
 }
 
 impl GpuRenderer {
+    /// Create a new GPU renderer with a window (async version, PREFERRED)
+    ///
+    /// This method creates the surface internally from the window, ensuring that
+    /// the surface is created from the same wgpu::Instance that GpuRenderer uses.
+    /// This avoids lifetime and instance mismatch issues.
+    ///
+    /// # Arguments
+    ///
+    /// * `window` - Window handle (Arc<Window> from winit)
+    /// * `width` - Initial surface width in pixels
+    /// * `height` - Initial surface height in pixels
+    ///
+    /// # Panics
+    ///
+    /// Panics if GPU initialization fails (no adapter, device creation fails, etc.)
+    pub async fn new_async_with_window<W>(window: W, width: u32, height: u32) -> Self
+    where
+        W: Into<wgpu::SurfaceTarget<'static>>,
+    {
+        // Create wgpu instance with platform-specific backends
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            #[cfg(feature = "webgpu")]
+            backends: wgpu::Backends::GL | wgpu::Backends::BROWSER_WEBGPU,
+            #[cfg(all(feature = "android", not(feature = "webgpu")))]
+            backends: wgpu::Backends::VULKAN, // Vulkan mandatory for Android
+            #[cfg(all(feature = "ios", not(feature = "webgpu")))]
+            backends: wgpu::Backends::METAL, // Metal mandatory for iOS
+            #[cfg(all(feature = "desktop", not(any(feature = "webgpu", feature = "android", feature = "ios"))))]
+            backends: wgpu::Backends::all(), // Auto-detect on desktop
+            #[cfg(not(any(feature = "desktop", feature = "android", feature = "ios", feature = "webgpu")))]
+            backends: wgpu::Backends::all(), // Fallback
+            ..Default::default()
+        });
+
+        // Create surface from window using raw_window_handle
+        // IMPORTANT: Surface is created from the SAME instance that we'll use for adapter/device
+        let surface = instance
+            .create_surface(window)
+            .expect("Failed to create surface from window");
+
+        // Delegate to existing new_async implementation
+        Self::new_async_impl(instance, surface, width, height).await
+    }
+
     /// Create a new GPU renderer with an existing surface (async version for WASM)
     ///
     /// In WebAssembly, we can't use pollster::block_on because the browser's
@@ -87,6 +131,11 @@ impl GpuRenderer {
     /// # Panics
     ///
     /// Panics if GPU initialization fails (no adapter, device creation fails, etc.)
+    ///
+    /// # Note
+    ///
+    /// DEPRECATED for desktop/mobile - use `new_async_with_window` instead to avoid
+    /// instance mismatch issues. Only use this for WASM where surface lifetime is managed externally.
     pub async fn new_async(surface: wgpu::Surface<'static>, width: u32, height: u32) -> Self {
         // Create wgpu instance with platform-specific backends
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -103,6 +152,16 @@ impl GpuRenderer {
             ..Default::default()
         });
 
+        Self::new_async_impl(instance, surface, width, height).await
+    }
+
+    /// Internal implementation - creates renderer from instance and surface
+    async fn new_async_impl(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+    ) -> Self {
         // Request adapter (async)
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {

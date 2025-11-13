@@ -241,16 +241,44 @@ impl FrameCoordinator {
         let _frame_budget = self.scheduler.start_frame();
 
         // Phase 1: Build (rebuild dirty widgets)
-        let build_count = self.build.dirty_count();
+        // IMPORTANT: Keep flushing build until tree is fully built (no more dirty elements)
+        // This is critical because rebuilding one component can mark other components as dirty
+        // (e.g., when signals change during rebuild, they schedule more rebuilds)
+        let mut iterations = 0;
+        let mut total_build_count = 0;
+        loop {
+            let build_count = self.build.dirty_count();
 
-        if build_count > 0 {
-            let build_span = tracing::info_span!("build");
+            if build_count == 0 {
+                break;
+            }
+
+            let build_span = tracing::info_span!("build_iteration", iteration = iterations);
             let _build_guard = build_span.enter();
 
             // Use parallel build (automatically falls back to sequential if appropriate)
             self.build.rebuild_dirty_parallel(tree);
+            total_build_count += build_count;
 
-            tracing::info!(count = build_count, "Build complete");
+            tracing::debug!(count = build_count, iteration = iterations, "Build iteration complete");
+
+            iterations += 1;
+
+            // Safety check: prevent infinite loops
+            if iterations > 100 {
+                tracing::warn!(
+                    "Build loop exceeded 100 iterations, breaking (possible rebuild cycle)"
+                );
+                break;
+            }
+        }
+
+        if total_build_count > 0 {
+            tracing::info!(
+                total = total_build_count,
+                iterations,
+                "Build phase complete"
+            );
         }
 
         // Check if we're approaching deadline after build phase
@@ -341,16 +369,44 @@ impl FrameCoordinator {
         let _frame_budget = self.scheduler.start_frame();
 
         // Phase 1: Build (rebuild dirty widgets)
-        let build_count = self.build.dirty_count();
+        // IMPORTANT: Keep flushing build until tree is fully built (no more dirty elements)
+        // This is critical because rebuilding one component can mark other components as dirty
+        // (e.g., when signals change during rebuild, they schedule more rebuilds)
+        let mut iterations = 0;
+        let mut total_build_count = 0;
+        loop {
+            let build_count = self.build.dirty_count();
 
-        if build_count > 0 {
-            let build_span = tracing::info_span!("build");
+            if build_count == 0 {
+                break;
+            }
+
+            let build_span = tracing::info_span!("build_iteration", iteration = iterations);
             let _build_guard = build_span.enter();
 
             // Use parallel build (automatically falls back to sequential if appropriate)
             self.build.rebuild_dirty_parallel(tree);
+            total_build_count += build_count;
 
-            tracing::info!(count = build_count, "Build complete");
+            tracing::debug!(count = build_count, iteration = iterations, "Build iteration complete");
+
+            iterations += 1;
+
+            // Safety check: prevent infinite loops
+            if iterations > 100 {
+                tracing::warn!(
+                    "Build loop exceeded 100 iterations, breaking (possible rebuild cycle)"
+                );
+                break;
+            }
+        }
+
+        if total_build_count > 0 {
+            tracing::info!(
+                total = total_build_count,
+                iterations,
+                "Build phase complete"
+            );
         }
 
         // Check if we're approaching deadline after build phase

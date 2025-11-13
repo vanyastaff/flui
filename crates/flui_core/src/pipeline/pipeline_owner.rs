@@ -356,15 +356,39 @@ impl PipelineOwner {
         // This matches Flutter's approach where root widgets are built in a
         // temporary context before being mounted to the element tree.
         const ROOT_PLACEHOLDER: usize = 1;
-        let ctx = BuildContext::new(self.tree.clone(), ElementId::new(ROOT_PLACEHOLDER));
+        let temp_id = ElementId::new(ROOT_PLACEHOLDER);
+
+        // CRITICAL: Create HookContext for root widget (matches old working code)
+        // Without this, hooks will panic with "Hook called outside component render"
+        let hook_context = Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
+        let rebuild_queue = self.rebuild_queue().clone();
+        let ctx = BuildContext::with_hook_context_and_queue(
+            self.tree.clone(),
+            temp_id,
+            hook_context.clone(),
+            rebuild_queue,
+        );
+
+        // Set up ComponentId for hooks (hooks use u64, ElementId is usize)
+        let component_id = crate::hooks::ComponentId(temp_id.get() as u64);
 
         // Build scope: Lock state during View → Element conversion
         // This matches Flutter's buildScope() pattern for state safety
         self.coordinator.build_mut().set_build_scope(true);
 
+        // Begin component rendering for hook context (CRITICAL for hooks!)
+        ctx.with_hook_context_mut(|hook_ctx| {
+            hook_ctx.begin_component(component_id);
+        });
+
         // Build the view within a context guard (sets up thread-local)
         // Using with_build_context() ensures the guard lives for the entire closure execution
         let element = crate::view::with_build_context(&ctx, || widget.into_element());
+
+        // End component rendering for hook context
+        ctx.with_hook_context_mut(|hook_ctx| {
+            hook_ctx.end_component();
+        });
 
         // Clear build scope
         self.coordinator.build_mut().set_build_scope(false);

@@ -13,11 +13,7 @@ use flui_types::{
     Offset, Size,
 };
 use std::sync::Arc;
-use winit::{
-    event::*,
-    event_loop::{ControlFlow, EventLoop},
-    window::Window,
-};
+use winit::{event::*, window::Window};
 
 /// Desktop embedder for FLUI apps
 ///
@@ -65,20 +61,27 @@ impl DesktopEmbedder {
     /// # Parameters
     ///
     /// - `binding`: The framework binding
-    /// - `event_loop`: The winit event loop
+    /// - `event_loop`: The active event loop (winit 0.30+ requires ActiveEventLoop)
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let binding = AppBinding::ensure_initialized();
-    /// let event_loop = EventLoop::new().unwrap();
-    /// let embedder = DesktopEmbedder::new(binding, &event_loop).await;
-    /// embedder.run(event_loop);
+    /// // Create embedder inside event loop after Resumed event
+    /// event_loop.run(|event, elwt| {
+    ///     if let Event::Resumed = event {
+    ///         let embedder = DesktopEmbedder::new(binding, elwt).await;
+    ///     }
+    /// });
     /// ```
-    pub async fn new(binding: Arc<AppBinding>, event_loop: &EventLoop<()>) -> Self {
+    pub async fn new(
+        binding: Arc<AppBinding>,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) -> Self {
         tracing::info!("Initializing desktop embedder");
 
-        // 1. Create window (desktop-specific attributes)
+        // 1. Create window using ActiveEventLoop (NEW winit 0.30+ API)
+        // This avoids the deprecated EventLoop::create_window()
         let window_attributes = Window::default_attributes()
             .with_title("FLUI App")
             .with_inner_size(winit::dpi::PhysicalSize::new(800, 600));
@@ -91,15 +94,13 @@ impl DesktopEmbedder {
 
         tracing::debug!("Window created");
 
-        // 2. Create GPU instance and surface
-        let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(Arc::clone(&window))
-            .expect("Failed to create surface");
         let size = window.inner_size();
 
-        // 3. Initialize GPU renderer (pass surface, not window!)
-        let renderer = GpuRenderer::new_async(surface, size.width, size.height).await;
+        // 2. Initialize GPU renderer with window (using raw_window_handle)
+        // This ensures surface is created from the same wgpu::Instance that GpuRenderer uses
+        // Fixes "Surface does not exist" error when instance/surface are from different instances
+        let renderer =
+            GpuRenderer::new_async_with_window(Arc::clone(&window), size.width, size.height).await;
 
         tracing::info!(
             size = ?renderer.size(),
@@ -134,42 +135,8 @@ impl DesktopEmbedder {
         &self.window
     }
 
-    /// Run the desktop event loop
-    ///
-    /// This method blocks until the window is closed.
-    pub fn run(mut self, event_loop: EventLoop<()>) -> ! {
-        tracing::info!("Starting desktop event loop");
-
-        event_loop
-            .run(move |event, elwt| {
-                elwt.set_control_flow(ControlFlow::Poll);
-
-                match event {
-                    Event::AboutToWait => {
-                        // Request redraw every frame (for animations)
-                        self.window.request_redraw();
-                    }
-
-                    Event::WindowEvent { event, .. } => match event {
-                        WindowEvent::RedrawRequested => {
-                            self.render_frame();
-                        }
-                        other => {
-                            self.handle_window_event(other, elwt);
-                        }
-                    },
-
-                    _ => {}
-                }
-            })
-            .expect("Event loop error");
-
-        // Unreachable, but needed to satisfy return type !
-        std::process::exit(0)
-    }
-
-    /// Handle window events
-    fn handle_window_event(
+    /// Handle window events (PUBLIC - called from run_app event loop)
+    pub fn handle_window_event(
         &mut self,
         event: WindowEvent,
         elwt: &winit::event_loop::ActiveEventLoop,
@@ -268,8 +235,8 @@ impl DesktopEmbedder {
         }
     }
 
-    /// Render a frame
-    fn render_frame(&mut self) {
+    /// Render a frame (PUBLIC - called from run_app event loop)
+    pub fn render_frame(&mut self) {
         // 1. Begin frame (scheduler callbacks)
         let _frame_id = self.binding.scheduler.scheduler().begin_frame();
 
