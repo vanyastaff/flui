@@ -4,19 +4,18 @@
 //! build → layout → compositing → paint
 
 use super::BindingBase;
-use flui_core::pipeline::PipelineOwner;
+use flui_core::pipeline::Pipeline;
 use flui_engine::Scene;
 use flui_types::{constraints::BoxConstraints, Size};
-use parking_lot::RwLock;
 use std::sync::Arc;
 
-/// Renderer binding - bridges to flui_rendering
+/// Renderer binding - bridges to Pipeline
 ///
 /// # Architecture
 ///
 /// ```text
 /// RendererBinding
-///   ├─ PipelineOwner (build, layout, paint phases)
+///   ├─ Pipeline (trait object - build, layout, paint phases)
 ///   └─ Scene (composited output)
 /// ```
 ///
@@ -29,19 +28,49 @@ use std::sync::Arc;
 ///
 /// # Thread-Safety
 ///
-/// Uses Arc<RwLock<PipelineOwner>> for thread-safe pipeline access.
+/// Uses `Arc<dyn Pipeline>` for trait-based abstraction.
+/// This enables dependency injection, mocking for tests, and alternative implementations.
 pub struct RendererBinding {
-    /// Pipeline owner for coordinating build/layout/paint
-    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    /// Pipeline abstraction for coordinating build/layout/paint
+    pipeline: Arc<dyn Pipeline>,
 }
 
 impl RendererBinding {
-    /// Create a new RendererBinding with a shared PipelineOwner
+    /// Create a new RendererBinding with a Pipeline implementation
     ///
-    /// The PipelineOwner must be the same instance used by PipelineBinding
-    /// to ensure coordinated tree management.
-    pub fn new(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
-        Self { pipeline_owner }
+    /// # Parameters
+    ///
+    /// - `pipeline`: Any implementation of the Pipeline trait
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_core::pipeline::{Pipeline, PipelineOwner};
+    /// use parking_lot::RwLock;
+    /// use std::sync::Arc;
+    ///
+    /// // Production: Use real PipelineOwner
+    /// let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    /// let renderer = RendererBinding::new(owner);
+    ///
+    /// // Testing: Use mock
+    /// let mock: Arc<dyn Pipeline> = Arc::new(MockPipeline::new());
+    /// let renderer = RendererBinding::new(mock);
+    /// ```
+    pub fn new<P>(pipeline: P) -> Self
+    where
+        P: Pipeline + 'static,
+    {
+        Self {
+            pipeline: Arc::new(pipeline),
+        }
+    }
+
+    /// Create from Arc<dyn Pipeline> directly
+    ///
+    /// Useful when you already have an Arc-wrapped pipeline.
+    pub fn from_arc(pipeline: Arc<dyn Pipeline>) -> Self {
+        Self { pipeline }
     }
 
     /// Draw frame - execute complete rendering pipeline
@@ -73,13 +102,11 @@ impl RendererBinding {
     /// }
     /// ```
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Scene {
-        let mut pipeline = self.pipeline_owner.write();
-
         tracing::trace!("Starting draw frame");
 
         // Execute complete pipeline: rebuild queue → build → layout → paint
-        // PipelineOwner::build_frame handles all phases atomically
-        let layer = match pipeline.build_frame(constraints) {
+        // Pipeline::build_frame handles all phases atomically
+        let layer = match self.pipeline.build_frame(constraints) {
             Ok(layer_opt) => {
                 if layer_opt.is_none() {
                     tracing::warn!("Pipeline returned None (empty tree or no root)");
@@ -93,11 +120,13 @@ impl RendererBinding {
         };
 
         // Extract size from pipeline or use constraints as fallback
-        let size = pipeline
+        let size = self
+            .pipeline
             .root_element_id()
             .and_then(|root_id| {
-                let tree = pipeline.tree().read();
-                tree.render_state(root_id).and_then(|state| state.size())
+                let tree = self.pipeline.tree();
+                let tree_guard = tree.read();
+                tree_guard.render_state(root_id).and_then(|state| state.size())
             })
             .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
 
@@ -117,12 +146,20 @@ impl RendererBinding {
         scene
     }
 
-    /// Get shared reference to the pipeline owner
+    /// Get shared reference to the pipeline
     ///
-    /// Used by widgets and framework code to access the pipeline.
+    /// Returns the Pipeline trait object. This allows framework code to
+    /// access the pipeline without depending on concrete PipelineOwner.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let pipeline = renderer.pipeline();
+    /// pipeline.request_layout(element_id);
+    /// ```
     #[must_use]
-    pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
-        self.pipeline_owner.clone()
+    pub fn pipeline(&self) -> Arc<dyn Pipeline> {
+        self.pipeline.clone()
     }
 }
 
@@ -135,12 +172,14 @@ impl BindingBase for RendererBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::pipeline::PipelineOwner;
+    use parking_lot::RwLock;
 
     #[test]
     fn test_renderer_binding_creation() {
         let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
         let binding = RendererBinding::new(pipeline);
-        let _pipeline = binding.pipeline_owner();
+        let _pipeline = binding.pipeline();
         // Should not panic
     }
 

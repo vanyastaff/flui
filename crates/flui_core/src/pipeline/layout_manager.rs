@@ -166,10 +166,6 @@ impl LayoutManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::element::RenderElement;
-    use crate::render::RenderState;
-
     // Note: Full integration tests in crates/flui_core/tests/layout_manager_integration.rs
     // These are unit tests for LayoutManager API
 

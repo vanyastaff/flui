@@ -34,11 +34,13 @@ impl CacheKey {
     /// Create cache key from position and root
     ///
     /// Quantizes position to avoid cache misses from floating point precision.
+    /// Groups coordinates into 0.1px buckets: [0.0..0.1), [0.1..0.2), etc.
     fn new(position: Offset, root_id: ElementId) -> Self {
-        // Quantize to 0.1 pixel precision
-        // This allows small mouse jitter to still hit the cache
-        let x_quantized = (position.dx * 10.0).round() as i32;
-        let y_quantized = (position.dy * 10.0).round() as i32;
+        // Quantize to 0.1 pixel precision by flooring
+        // This groups positions into 0.1px buckets, so small jitter within
+        // the same bucket hits the cache (e.g., 10.05 and 10.09 both → 100)
+        let x_quantized = (position.dx * 10.0).floor() as i32;
+        let y_quantized = (position.dy * 10.0).floor() as i32;
 
         Self {
             x_quantized,

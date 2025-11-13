@@ -172,22 +172,14 @@ pub struct PipelineOwner {
     // =========================================================================
     // Production Features (Optional)
     // =========================================================================
-    /// Performance metrics (optional)
-    metrics: Option<super::PipelineMetrics>,
-
-    /// Error recovery policy (optional)
-    recovery: Option<super::ErrorRecovery>,
-
-    /// Cancellation token (optional)
-    cancellation: Option<super::CancellationToken>,
-
-    /// Triple buffer for lock-free frame exchange (optional)
-    #[allow(clippy::redundant_allocation)]
-    frame_buffer: Option<super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>>,
-
-    /// Hit test result cache (optional)
-    /// Caches hit test results when tree is unchanged for ~5-15% CPU savings
-    hit_test_cache: Option<super::HitTestCache>,
+    /// Optional production features (metrics, recovery, caching, etc.)
+    ///
+    /// All optional features are grouped into PipelineFeatures for better
+    /// Single Responsibility Principle compliance. Features can be enabled/disabled
+    /// independently via `features()` and `features_mut()` accessors.
+    ///
+    /// See [`PipelineFeatures`] for available features.
+    features: super::PipelineFeatures,
 }
 
 impl std::fmt::Debug for PipelineOwner {
@@ -196,11 +188,7 @@ impl std::fmt::Debug for PipelineOwner {
             .field("root_element_id", &self.root_mgr.root_id())
             .field("coordinator", &self.coordinator)
             .field("has_build_callback", &self.on_build_scheduled.is_some())
-            .field("has_metrics", &self.metrics.is_some())
-            .field("has_recovery", &self.recovery.is_some())
-            .field("has_cancellation", &self.cancellation.is_some())
-            .field("has_frame_buffer", &self.frame_buffer.is_some())
-            .field("has_hit_test_cache", &self.hit_test_cache.is_some())
+            .field("features", &self.features)
             .finish()
     }
 }
@@ -234,11 +222,7 @@ impl PipelineOwner {
             rebuild_queue,
             on_build_scheduled: None,
             frame_counter: 0,
-            metrics: None,
-            recovery: None,
-            cancellation: None,
-            frame_buffer: None,
-            hit_test_cache: None,
+            features: super::PipelineFeatures::new(),
         }
     }
 
@@ -573,9 +557,7 @@ impl PipelineOwner {
             .flush_layout(&self.tree, self.root_mgr.root_id(), constraints);
 
         // Invalidate hit test cache when layout changes
-        if let Some(cache) = &mut self.hit_test_cache {
-            cache.invalidate();
-        }
+        self.features.invalidate_hit_test_cache();
 
         result
     }
@@ -588,9 +570,7 @@ impl PipelineOwner {
             .flush_paint(&self.tree, self.root_mgr.root_id());
 
         // Invalidate hit test cache when paint changes
-        if let Some(cache) = &mut self.hit_test_cache {
-            cache.invalidate();
-        }
+        self.features.invalidate_hit_test_cache();
 
         result
     }
@@ -752,98 +732,132 @@ impl PipelineOwner {
     // =========================================================================
     // Production Features (Optional)
     // =========================================================================
+    //
+    // All optional features are now managed by PipelineFeatures for better SRP compliance.
+    // These methods delegate to features for backward compatibility.
 
-    /// Enable performance metrics
-    pub fn enable_metrics(&mut self) {
-        self.metrics = Some(super::PipelineMetrics::new());
-    }
-
-    /// Disable performance metrics
-    pub fn disable_metrics(&mut self) {
-        self.metrics = None;
-    }
-
-    /// Get reference to metrics (if enabled)
-    pub fn metrics(&self) -> Option<&super::PipelineMetrics> {
-        self.metrics.as_ref()
-    }
-
-    /// Get mutable reference to metrics (if enabled)
-    pub fn metrics_mut(&mut self) -> Option<&mut super::PipelineMetrics> {
-        self.metrics.as_mut()
-    }
-
-    /// Enable error recovery with specified policy
-    pub fn enable_error_recovery(&mut self, policy: super::RecoveryPolicy) {
-        self.recovery = Some(super::ErrorRecovery::new(policy));
-    }
-
-    /// Disable error recovery
-    pub fn disable_error_recovery(&mut self) {
-        self.recovery = None;
-    }
-
-    /// Get reference to error recovery (if enabled)
-    pub fn error_recovery(&self) -> Option<&super::ErrorRecovery> {
-        self.recovery.as_ref()
-    }
-
-    /// Get mutable reference to error recovery (if enabled)
-    pub fn error_recovery_mut(&mut self) -> Option<&mut super::ErrorRecovery> {
-        self.recovery.as_mut()
-    }
-
-    /// Enable cancellation support
-    pub fn enable_cancellation(&mut self) {
-        self.cancellation = Some(super::CancellationToken::new());
-    }
-
-    /// Disable cancellation
-    pub fn disable_cancellation(&mut self) {
-        self.cancellation = None;
-    }
-
-    /// Get reference to cancellation token (if enabled)
-    pub fn cancellation_token(&self) -> Option<&super::CancellationToken> {
-        self.cancellation.as_ref()
-    }
-
-    /// Enable triple buffer for lock-free frame exchange
-    pub fn enable_frame_buffer(&mut self, initial: Arc<Box<flui_engine::CanvasLayer>>) {
-        self.frame_buffer = Some(super::TripleBuffer::new(initial));
-    }
-
-    /// Disable frame buffer
-    pub fn disable_frame_buffer(&mut self) {
-        self.frame_buffer = None;
-    }
-
-    /// Get reference to frame buffer (if enabled)
-    pub fn frame_buffer(&self) -> Option<&super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
-        self.frame_buffer.as_ref()
-    }
-
-    /// Enable hit test caching for ~5-15% CPU savings during mouse movement
+    /// Get reference to optional features
     ///
-    /// Caches hit test results when tree is unchanged. Automatically invalidates
-    /// when layout or paint changes occur.
+    /// Access all optional production features (metrics, recovery, caching, etc.)
+    /// via a single unified interface.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Enable metrics
+    /// owner.features_mut().enable_metrics();
+    ///
+    /// // Check if metrics enabled
+    /// if owner.features().has_metrics() {
+    ///     println!("Metrics: {:?}", owner.features().metrics());
+    /// }
+    /// ```
+    pub fn features(&self) -> &super::PipelineFeatures {
+        &self.features
+    }
+
+    /// Get mutable reference to optional features
+    pub fn features_mut(&mut self) -> &mut super::PipelineFeatures {
+        &mut self.features
+    }
+
+    // Convenience methods that delegate to features (for backward compatibility)
+
+    /// Enable performance metrics (delegates to features)
+    pub fn enable_metrics(&mut self) {
+        self.features.enable_metrics();
+    }
+
+    /// Disable performance metrics (delegates to features)
+    pub fn disable_metrics(&mut self) {
+        self.features.disable_metrics();
+    }
+
+    /// Get reference to metrics (delegates to features)
+    pub fn metrics(&self) -> Option<&super::PipelineMetrics> {
+        self.features.metrics()
+    }
+
+    /// Get mutable reference to metrics (delegates to features)
+    pub fn metrics_mut(&mut self) -> Option<&mut super::PipelineMetrics> {
+        self.features.metrics_mut()
+    }
+
+    /// Enable error recovery with specified policy (delegates to features)
+    pub fn enable_error_recovery(&mut self, policy: super::RecoveryPolicy) {
+        self.features.enable_recovery_with_policy(policy);
+    }
+
+    /// Disable error recovery (delegates to features)
+    pub fn disable_error_recovery(&mut self) {
+        self.features.disable_recovery();
+    }
+
+    /// Get reference to error recovery (delegates to features)
+    pub fn error_recovery(&self) -> Option<&super::ErrorRecovery> {
+        self.features.recovery()
+    }
+
+    /// Get mutable reference to error recovery (delegates to features)
+    pub fn error_recovery_mut(&mut self) -> Option<&mut super::ErrorRecovery> {
+        self.features.recovery_mut()
+    }
+
+    /// Enable cancellation support (delegates to features)
+    pub fn enable_cancellation(&mut self, timeout: std::time::Duration) {
+        self.features.enable_cancellation(timeout);
+    }
+
+    /// Disable cancellation (delegates to features)
+    pub fn disable_cancellation(&mut self) {
+        self.features.disable_cancellation();
+    }
+
+    /// Get reference to cancellation token (delegates to features)
+    pub fn cancellation_token(&self) -> Option<&super::CancellationToken> {
+        self.features.cancellation()
+    }
+
+    /// Enable triple buffer for lock-free frame exchange (delegates to features)
+    pub fn enable_frame_buffer(&mut self) {
+        self.features.enable_frame_buffer();
+    }
+
+    /// Disable frame buffer (delegates to features)
+    pub fn disable_frame_buffer(&mut self) {
+        self.features.disable_frame_buffer();
+    }
+
+    /// Get reference to frame buffer (delegates to features)
+    pub fn frame_buffer(&self) -> Option<&super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
+        self.features.frame_buffer()
+    }
+
+    /// Get mutable reference to frame buffer (delegates to features)
+    pub fn frame_buffer_mut(&mut self) -> Option<&mut super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
+        self.features.frame_buffer_mut()
+    }
+
+    /// Enable hit test caching (delegates to features)
+    ///
+    /// Provides ~5-15% CPU savings during mouse movement by caching hit test results.
     pub fn enable_hit_test_cache(&mut self) {
-        self.hit_test_cache = Some(super::HitTestCache::new());
+        self.features.enable_hit_test_cache();
     }
 
-    /// Disable hit test caching
+    /// Disable hit test caching (delegates to features)
     pub fn disable_hit_test_cache(&mut self) {
-        self.hit_test_cache = None;
+        self.features.disable_hit_test_cache();
     }
 
-    /// Get reference to hit test cache (if enabled)
+    /// Get reference to hit test cache (delegates to features)
     pub fn hit_test_cache(&self) -> Option<&super::HitTestCache> {
-        self.hit_test_cache.as_ref()
+        self.features.hit_test_cache()
     }
 
-    /// Get mutable reference to hit test cache (if enabled)
+    /// Get mutable reference to hit test cache (delegates to features)
     pub fn hit_test_cache_mut(&mut self) -> Option<&mut super::HitTestCache> {
-        self.hit_test_cache.as_mut()
+        self.features.hit_test_cache_mut()
     }
 
     /// Perform hit test with caching (if enabled)
@@ -872,7 +886,7 @@ impl PipelineOwner {
         };
 
         // Try cache first
-        if let Some(cache) = &mut self.hit_test_cache {
+        if let Some(cache) = self.features.hit_test_cache_mut() {
             if let Some(cached_result) = cache.get(position, root_id) {
                 return cached_result;
             }
@@ -891,14 +905,9 @@ impl PipelineOwner {
         }
     }
 
-    /// Get mutable reference to frame buffer (if enabled)
-    pub fn frame_buffer_mut(&mut self) -> Option<&mut super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
-        self.frame_buffer.as_mut()
-    }
-
-    /// Publish a frame to the triple buffer (convenience method)
+    /// Publish a frame to the triple buffer (convenience method, delegates to features)
     pub fn publish_frame(&mut self, layer: Box<flui_engine::CanvasLayer>) {
-        if let Some(buffer) = self.frame_buffer.as_mut() {
+        if let Some(buffer) = self.features.frame_buffer_mut() {
             let write_buf = buffer.write();
             let mut write_guard = write_buf.write();
             *write_guard = Arc::new(layer);

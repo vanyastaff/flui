@@ -14,7 +14,7 @@
 //!     .with_metrics()
 //!     .with_error_recovery(RecoveryPolicy::UseLastGoodFrame)
 //!     .with_batching(Duration::from_millis(16))
-//!     .with_cancellation()
+//!     .with_cancellation(Duration::from_millis(16))
 //!     .build();
 //!
 //! // Development config (minimal)
@@ -30,7 +30,6 @@
 //!     .build();
 //! ```
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use super::{PipelineOwner, RecoveryPolicy};
@@ -58,12 +57,11 @@ pub struct PipelineBuilder {
     /// Optional error recovery policy
     recovery_policy: Option<RecoveryPolicy>,
 
-    /// Optional cancellation support
-    enable_cancellation: bool,
+    /// Optional cancellation support with timeout
+    cancellation_timeout: Option<Duration>,
 
     /// Optional frame buffer
-    #[allow(clippy::redundant_allocation)]
-    frame_buffer_initial: Option<Arc<Box<flui_engine::CanvasLayer>>>,
+    enable_frame_buffer: bool,
 
     /// Optional build callback
     on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
@@ -75,8 +73,8 @@ impl std::fmt::Debug for PipelineBuilder {
             .field("batching_duration", &self.batching_duration)
             .field("enable_metrics", &self.enable_metrics)
             .field("recovery_policy", &self.recovery_policy)
-            .field("enable_cancellation", &self.enable_cancellation)
-            .field("has_frame_buffer", &self.frame_buffer_initial.is_some())
+            .field("cancellation_timeout", &self.cancellation_timeout)
+            .field("enable_frame_buffer", &self.enable_frame_buffer)
             .field("has_build_callback", &self.on_build_scheduled.is_some())
             .finish()
     }
@@ -98,8 +96,8 @@ impl PipelineBuilder {
             batching_duration: None,
             enable_metrics: false,
             recovery_policy: None,
-            enable_cancellation: false,
-            frame_buffer_initial: None,
+            cancellation_timeout: None,
+            enable_frame_buffer: false,
             on_build_scheduled: None,
         }
     }
@@ -206,8 +204,8 @@ impl PipelineBuilder {
     /// }
     /// ```
     #[must_use]
-    pub fn with_cancellation(mut self) -> Self {
-        self.enable_cancellation = true;
+    pub fn with_cancellation(mut self, timeout: Duration) -> Self {
+        self.cancellation_timeout = Some(timeout);
         self
     }
 
@@ -232,8 +230,8 @@ impl PipelineBuilder {
     ///     .build();
     /// ```
     #[must_use]
-    pub fn with_frame_buffer(mut self, initial: Arc<Box<flui_engine::CanvasLayer>>) -> Self {
-        self.frame_buffer_initial = Some(initial);
+    pub fn with_frame_buffer(mut self) -> Self {
+        self.enable_frame_buffer = true;
         self
     }
 
@@ -301,13 +299,13 @@ impl PipelineBuilder {
         }
 
         // Configure cancellation
-        if self.enable_cancellation {
-            owner.enable_cancellation();
+        if let Some(timeout) = self.cancellation_timeout {
+            owner.enable_cancellation(timeout);
         }
 
         // Configure frame buffer
-        if let Some(initial) = self.frame_buffer_initial {
-            owner.enable_frame_buffer(initial);
+        if self.enable_frame_buffer {
+            owner.enable_frame_buffer();
         }
 
         owner
@@ -344,7 +342,7 @@ impl PipelineBuilder {
             .with_metrics()
             .with_error_recovery(RecoveryPolicy::UseLastGoodFrame)
             .with_batching(Duration::from_millis(16))
-            .with_cancellation()
+            .with_cancellation(Duration::from_millis(16))
     }
 
     /// Development configuration preset
@@ -408,8 +406,8 @@ mod tests {
         assert!(!builder.enable_metrics);
         assert!(builder.batching_duration.is_none());
         assert!(builder.recovery_policy.is_none());
-        assert!(!builder.enable_cancellation);
-        assert!(builder.frame_buffer_initial.is_none());
+        assert!(builder.cancellation_timeout.is_none());
+        assert!(!builder.enable_frame_buffer);
         assert!(builder.on_build_scheduled.is_none());
     }
 
@@ -437,8 +435,8 @@ mod tests {
 
     #[test]
     fn test_builder_with_cancellation() {
-        let builder = PipelineBuilder::new().with_cancellation();
-        assert!(builder.enable_cancellation);
+        let builder = PipelineBuilder::new().with_cancellation(Duration::from_millis(16));
+        assert!(builder.cancellation_timeout.is_some());
     }
 
     #[test]
@@ -455,7 +453,7 @@ mod tests {
         let owner = PipelineBuilder::new()
             .with_metrics()
             .with_batching(Duration::from_millis(16))
-            .with_cancellation()
+            .with_cancellation(Duration::from_millis(16))
             .build();
 
         assert!(owner.metrics().is_some());
@@ -501,7 +499,7 @@ mod tests {
             .with_metrics()
             .with_batching(Duration::from_millis(10))
             .with_error_recovery(RecoveryPolicy::SkipFrame)
-            .with_cancellation()
+            .with_cancellation(Duration::from_millis(16))
             .build();
 
         assert!(owner.metrics().is_some());
