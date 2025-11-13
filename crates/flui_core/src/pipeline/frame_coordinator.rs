@@ -26,13 +26,14 @@
 //! let layer = coordinator.build_frame(&mut tree, constraints)?;
 //! ```
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
 use super::{
-    BuildPipeline, ElementTree, FrameScheduler, LayoutPipeline, PaintPipeline, PipelineError,
+    BuildPipeline, ElementTree, LayoutPipeline, PaintPipeline, PipelineError,
 };
 use crate::element::ElementId;
+use flui_scheduler::FrameBudget;
 use flui_types::constraints::BoxConstraints;
 
 /// Coordinates the three pipeline phases: build → layout → paint
@@ -46,7 +47,7 @@ use flui_types::constraints::BoxConstraints;
 /// - Dirty tracking → BuildPipeline, LayoutPipeline, PaintPipeline
 /// - Element storage → ElementTree
 /// - Error handling → Caller (via Result)
-/// - Performance metrics → Caller (via PipelineMetrics)
+/// - Performance metrics → Caller (via FrameBudget)
 ///
 /// # Example
 ///
@@ -71,8 +72,8 @@ pub struct FrameCoordinator {
     /// Paint pipeline - manages layer generation phase
     paint: PaintPipeline,
 
-    /// Frame scheduler - manages frame timing and budget
-    scheduler: FrameScheduler,
+    /// Frame budget tracker - manages frame timing and budget (from flui-scheduler)
+    budget: Arc<Mutex<FrameBudget>>,
 }
 
 impl FrameCoordinator {
@@ -84,7 +85,7 @@ impl FrameCoordinator {
             build: BuildPipeline::new_with_queue(rebuild_queue),
             layout: LayoutPipeline::new(),
             paint: PaintPipeline::new(),
-            scheduler: FrameScheduler::new(),
+            budget: Arc::new(Mutex::new(FrameBudget::new(60))), // Default 60 FPS
         }
     }
 
@@ -129,14 +130,11 @@ impl FrameCoordinator {
         &mut self.paint
     }
 
-    /// Get reference to frame scheduler
-    pub fn scheduler(&self) -> &FrameScheduler {
-        &self.scheduler
-    }
-
-    /// Get mutable reference to frame scheduler
-    pub fn scheduler_mut(&mut self) -> &mut FrameScheduler {
-        &mut self.scheduler
+    /// Get reference to frame budget
+    ///
+    /// Returns a shared reference to the thread-safe frame budget tracker.
+    pub fn budget(&self) -> &Arc<Mutex<FrameBudget>> {
+        &self.budget
     }
 
     /// Extract root element's computed size after layout
@@ -237,8 +235,8 @@ impl FrameCoordinator {
         );
         let _frame_guard = frame_span.enter();
 
-        // Start frame and get budget
-        let _frame_budget = self.scheduler.start_frame();
+        // Start frame and reset budget
+        self.budget.lock().reset();
 
         // Phase 1: Build (rebuild dirty widgets)
         // IMPORTANT: Keep flushing build until tree is fully built (no more dirty elements)
@@ -283,11 +281,12 @@ impl FrameCoordinator {
 
         // Check if we're approaching deadline after build phase
         #[cfg(debug_assertions)]
-        if self.scheduler.is_deadline_near() {
-            if let Some(remaining) = self.scheduler.remaining() {
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
                 tracing::warn!(
-                    "Approaching deadline after build, remaining {:?}",
-                    remaining
+                    "Approaching deadline after build, remaining {:.2}ms",
+                    budget.remaining_ms()
                 );
             }
         }
@@ -315,11 +314,12 @@ impl FrameCoordinator {
 
         // Check if we're approaching deadline after layout phase
         #[cfg(debug_assertions)]
-        if self.scheduler.is_deadline_near() {
-            if let Some(remaining) = self.scheduler.remaining() {
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
                 tracing::warn!(
-                    "Approaching deadline after layout, remaining {:?}",
-                    remaining
+                    "Approaching deadline after layout, remaining {:.2}ms",
+                    budget.remaining_ms()
                 );
             }
         }
@@ -341,15 +341,19 @@ impl FrameCoordinator {
         };
 
         // Finish frame and update metrics
-        self.scheduler.finish_frame();
+        self.budget.lock().finish_frame();
 
         // Log frame completion with timing info
         #[cfg(debug_assertions)]
-        if layer.is_some() && self.scheduler.is_deadline_missed() {
-            tracing::warn!(
-                consecutive_misses = self.scheduler.consecutive_misses(),
-                "Frame deadline missed"
-            );
+        {
+            let budget = self.budget.lock();
+            if layer.is_some() && budget.is_over_budget() {
+                tracing::warn!(
+                    elapsed_ms = budget.last_frame_time_ms(),
+                    target_ms = budget.target_duration_ms(),
+                    "Frame deadline missed"
+                );
+            }
         }
 
         Ok(layer)
@@ -365,8 +369,8 @@ impl FrameCoordinator {
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
-        // Start frame and get budget
-        let _frame_budget = self.scheduler.start_frame();
+        // Start frame and reset budget
+        self.budget.lock().reset();
 
         // Phase 1: Build (rebuild dirty widgets)
         // IMPORTANT: Keep flushing build until tree is fully built (no more dirty elements)
@@ -411,11 +415,12 @@ impl FrameCoordinator {
 
         // Check if we're approaching deadline after build phase
         #[cfg(debug_assertions)]
-        if self.scheduler.is_deadline_near() {
-            if let Some(remaining) = self.scheduler.remaining() {
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
                 tracing::warn!(
-                    "Approaching deadline after build, remaining {:?}",
-                    remaining
+                    "Approaching deadline after build, remaining {:.2}ms",
+                    budget.remaining_ms()
                 );
             }
         }
@@ -443,11 +448,12 @@ impl FrameCoordinator {
 
         // Check if we're approaching deadline after layout phase
         #[cfg(debug_assertions)]
-        if self.scheduler.is_deadline_near() {
-            if let Some(remaining) = self.scheduler.remaining() {
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
                 tracing::warn!(
-                    "Approaching deadline after layout, remaining {:?}",
-                    remaining
+                    "Approaching deadline after layout, remaining {:.2}ms",
+                    budget.remaining_ms()
                 );
             }
         }
@@ -469,15 +475,19 @@ impl FrameCoordinator {
         };
 
         // Finish frame and update metrics
-        self.scheduler.finish_frame();
+        self.budget.lock().finish_frame();
 
         // Log frame completion with timing info
         #[cfg(debug_assertions)]
-        if layer.is_some() && self.scheduler.is_deadline_missed() {
-            tracing::warn!(
-                consecutive_misses = self.scheduler.consecutive_misses(),
-                "Frame deadline missed"
-            );
+        {
+            let budget = self.budget.lock();
+            if layer.is_some() && budget.is_over_budget() {
+                tracing::warn!(
+                    elapsed_ms = budget.last_frame_time_ms(),
+                    target_ms = budget.target_duration_ms(),
+                    "Frame deadline missed"
+                );
+            }
         }
 
         Ok(layer)

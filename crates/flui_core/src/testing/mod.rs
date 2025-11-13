@@ -30,6 +30,23 @@
 //! }
 //! ```
 //!
+//! ## Mock Pipeline
+//!
+//! [`MockPipeline`] provides a mock implementation of the Pipeline trait:
+//!
+//! ```rust,ignore
+//! use flui_core::testing::MockPipeline;
+//! use flui_core::pipeline::Pipeline;
+//! use std::sync::Arc;
+//!
+//! let mock = Arc::new(MockPipeline::new());
+//! let pipeline: Arc<dyn Pipeline> = mock.clone();
+//!
+//! // Build frames
+//! pipeline.build_frame(constraints).unwrap();
+//! assert_eq!(pipeline.frame_number(), 1);
+//! ```
+//!
 //! ## Mock Render Objects
 //!
 //! [`MockRender`] and [`SpyRender`] allow testing render objects without actual rendering:
@@ -217,6 +234,7 @@ pub mod fixtures;
 pub mod helpers;
 pub mod inspect;
 pub mod macros;
+pub mod mock_pipeline;
 pub mod mock_render;
 pub mod mock_sliver;
 pub mod snapshot;
@@ -229,6 +247,7 @@ pub use assertions::*;
 pub use fixtures::*;
 pub use helpers::{test_hook_context, test_hook_context_with_id};
 pub use inspect::{print_tree, tree_summary, TreeInspector, TreeSummary};
+pub use mock_pipeline::MockPipeline;
 pub use mock_render::{MockRender, SpyRender};
 pub use mock_sliver::{MockSliverRender, SpySliverRender};
 pub use snapshot::{assert_tree_snapshot, ElementTreeSnapshot, SnapshotDiff};

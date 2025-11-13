@@ -13,7 +13,7 @@
 //!   │   ├─ build: BuildPipeline        // View rebuild (with parallel support)
 //!   │   ├─ layout: LayoutPipeline      // Size computation
 //!   │   ├─ paint: PaintPipeline        // Layer generation
-//!   │   └─ scheduler: FrameScheduler   // Frame timing & budget
+//!   │   └─ budget: FrameBudget         // Frame timing & budget (from flui-scheduler)
 //!   ├─ root_mgr: RootManager           // Root element tracking
 //!   └─ Optional features:
 //!       ├─ metrics: PipelineMetrics
@@ -29,7 +29,7 @@
 //!    - `RootManager`: Manages root element
 //!    - `ElementTree`: Stores elements
 //!    - `BuildPipeline`, `LayoutPipeline`, `PaintPipeline`: Phase-specific logic
-//!    - `FrameScheduler`: Manages frame timing and budget
+//!    - `FrameBudget` (from flui-scheduler): Manages frame timing and budget
 //!    - `parallel_build`: Parallel execution of independent subtrees
 //!
 //! 2. **Open/Closed**: Easy to extend with new features without modifying core
@@ -72,7 +72,6 @@ pub mod cancellation;
 pub mod dirty_tracking;
 pub mod error;
 pub mod frame_coordinator;
-pub mod frame_scheduler;
 pub mod hit_test_cache;
 pub mod layout_manager;
 pub mod layout_pipeline;
@@ -80,7 +79,9 @@ pub mod metrics;
 pub mod paint_pipeline;
 pub mod parallel_build;
 pub mod pipeline_builder;
+pub mod pipeline_features;
 pub mod pipeline_owner;
+pub mod pipeline_trait;
 pub mod rebuild_queue;
 pub mod recovery;
 pub mod root_manager;
@@ -96,14 +97,15 @@ pub use dirty_tracking::LockFreeDirtySet;
 pub use crate::element::ElementTree;
 pub use error::{InvalidDuration, InvalidError, PipelineError, PipelinePhase, TimeoutDuration};
 pub use frame_coordinator::FrameCoordinator;
-pub use frame_scheduler::{FrameScheduler, FrameSkipPolicy};
 pub use hit_test_cache::HitTestCache;
 pub use layout_manager::LayoutManager;
 pub use layout_pipeline::LayoutPipeline;
 pub use metrics::PipelineMetrics;
 pub use paint_pipeline::PaintPipeline;
 pub use pipeline_builder::PipelineBuilder;
+pub use pipeline_features::PipelineFeatures;
 pub use pipeline_owner::PipelineOwner;
+pub use pipeline_trait::Pipeline;
 pub use rebuild_queue::RebuildQueue;
 pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
 pub use root_manager::RootManager;

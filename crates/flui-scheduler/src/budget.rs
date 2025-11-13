@@ -36,6 +36,7 @@ pub struct PhaseStats {
 /// Frame budget manager
 ///
 /// Tracks time spent in each phase and enforces budget limits.
+#[derive(Debug)]
 pub struct FrameBudget {
     /// Target frame duration (ms)
     target_duration_ms: f64,
@@ -213,6 +214,66 @@ impl FrameBudget {
     pub fn is_janky(&self) -> bool {
         self.last_frame_time_ms > self.target_duration_ms * 1.5
     }
+
+    /// Check if deadline is approaching (>80% of budget used)
+    ///
+    /// Returns `true` if 80% or more of the frame budget has been consumed.
+    /// Useful for adaptive work scheduling - skip non-critical work when deadline is near.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_scheduler::FrameBudget;
+    ///
+    /// let mut budget = FrameBudget::new(60);
+    /// budget.reset();
+    ///
+    /// if budget.is_deadline_near() {
+    ///     // Skip non-critical rendering
+    /// }
+    /// ```
+    pub fn is_deadline_near(&self) -> bool {
+        self.utilization() >= 0.8
+    }
+
+    /// Get target FPS
+    ///
+    /// Returns the target frames per second configured for this budget.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_scheduler::FrameBudget;
+    ///
+    /// let budget = FrameBudget::new(60);
+    /// assert_eq!(budget.target_fps(), 60);
+    /// ```
+    pub fn target_fps(&self) -> u32 {
+        (1000.0 / self.target_duration_ms).round() as u32
+    }
+
+    /// Finish current frame and record total time
+    ///
+    /// Records the total frame time from `reset()` to now and updates statistics.
+    /// This is the companion to `reset()` for frame lifecycle management.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_scheduler::FrameBudget;
+    ///
+    /// let mut budget = FrameBudget::new(60);
+    /// budget.reset();
+    /// // ... do frame work ...
+    /// budget.finish_frame();
+    /// ```
+    pub fn finish_frame(&mut self) {
+        if let Some(start) = self.frame_start {
+            let total_ms = start.elapsed().as_secs_f64() * 1000.0;
+            self.record_frame_time(total_ms);
+        }
+        self.frame_start = None;
+    }
 }
 
 /// Shared frame budget (thread-safe)
@@ -271,11 +332,50 @@ mod tests {
     #[test]
     fn test_janky_frame_detection() {
         let mut budget = FrameBudget::new(60); // 16.67ms target
-        
+
         budget.record_frame_time(15.0);
         assert!(!budget.is_janky());
 
         budget.record_frame_time(30.0); // >50% over budget
         assert!(budget.is_janky());
+    }
+
+    #[test]
+    fn test_deadline_near() {
+        let mut budget = FrameBudget::new(1000); // 1ms budget for faster test
+        budget.reset();
+
+        // Initially not near deadline
+        assert!(!budget.is_deadline_near());
+
+        // Wait for 80% of budget
+        std::thread::sleep(std::time::Duration::from_micros(800));
+
+        // Should be near deadline now
+        assert!(budget.is_deadline_near());
+    }
+
+    #[test]
+    fn test_target_fps() {
+        let budget60 = FrameBudget::new(60);
+        assert_eq!(budget60.target_fps(), 60);
+
+        let budget120 = FrameBudget::new(120);
+        assert_eq!(budget120.target_fps(), 120);
+    }
+
+    #[test]
+    fn test_finish_frame() {
+        let mut budget = FrameBudget::new(60);
+        budget.reset();
+
+        // Simulate some work
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        budget.finish_frame();
+
+        // Should have recorded frame time
+        assert!(budget.last_frame_time_ms() > 0.0);
+        assert!(budget.avg_frame_time_ms() > 0.0);
     }
 }

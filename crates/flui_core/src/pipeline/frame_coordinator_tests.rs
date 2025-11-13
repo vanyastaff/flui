@@ -191,13 +191,13 @@ mod tests {
         let _build = coordinator.build();
         let _layout = coordinator.layout();
         let _paint = coordinator.paint();
-        let _scheduler = coordinator.scheduler();
+        let _budget = coordinator.budget();
 
         // Test mutable accessors
         let _build_mut = coordinator.build_mut();
         let _layout_mut = coordinator.layout_mut();
         let _paint_mut = coordinator.paint_mut();
-        let _scheduler_mut = coordinator.scheduler_mut();
+        // Budget uses Arc<Mutex<>> for shared access
     }
 
     #[test]
@@ -265,21 +265,23 @@ mod tests {
     }
 
     #[test]
-    fn test_build_frame_updates_scheduler() {
+    fn test_build_frame_updates_budget() {
         let mut fixture = TestFixture::new();
 
         let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
 
-        // Initial state
-        assert_eq!(fixture.coordinator.scheduler().total_frames(), 0);
-
         // Build frame
-        let _ = fixture
+        let result = fixture
             .coordinator
             .build_frame(&fixture.tree, Some(fixture.root), constraints);
 
-        // Scheduler should track the frame
-        assert_eq!(fixture.coordinator.scheduler().total_frames(), 1);
+        // Should succeed
+        assert!(result.is_ok());
+
+        // Budget should have recorded frame time
+        let budget = fixture.coordinator.budget();
+        let budget_guard = budget.lock();
+        assert!(budget_guard.last_frame_time_ms() > 0.0);
     }
 
     // =========================================================================
@@ -393,8 +395,10 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        // Scheduler should track all frames
-        assert_eq!(fixture.coordinator.scheduler().total_frames(), 10);
+        // Budget should have recorded average frame time
+        let budget = fixture.coordinator.budget();
+        let budget_guard = budget.lock();
+        assert!(budget_guard.avg_frame_time_ms() > 0.0);
     }
 
     #[test]
@@ -446,11 +450,10 @@ mod tests {
                 .build_frame(&fixture.tree, Some(fixture.root), constraints);
         }
 
-        // Check scheduler metrics
-        let scheduler = fixture.coordinator.scheduler();
-        assert_eq!(scheduler.total_frames(), 5);
-        assert_eq!(scheduler.skipped_frames(), 0);
-        assert_eq!(scheduler.skip_rate(), 0.0);
+        // Check budget has recorded frame times
+        let budget = fixture.coordinator.budget();
+        let budget_guard = budget.lock();
+        assert!(budget_guard.avg_frame_time_ms() > 0.0);
     }
 
     // =========================================================================

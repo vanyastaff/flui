@@ -13,6 +13,7 @@ flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_engine = { path = "../flui_engine" }
 flui_log = { path = "../flui_log" }
+flui-scheduler = { path = "../flui-scheduler" }
 
 # Essential dependencies
 parking_lot.workspace = true
