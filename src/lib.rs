@@ -65,7 +65,7 @@
 //! - [`engine`] - Rendering engine (Scene, CanvasLayer, GpuRenderer)
 //! - [`rendering`] - Render objects (RenderPadding, RenderFlex, etc.)
 //! - [`animation`] - Animation system (AnimationController, Tween, Curves)
-//! - [`gestures`] - Gesture recognition (TapGestureRecognizer, DragGestureRecognizer)
+//! - [`interaction`] - Event routing, gesture recognition, and focus management
 //! - [`widgets`] - Built-in widgets (Container, Row, Column, Text, etc.)
 //! - [`app`] - Application framework (run_app, AppBinding, WgpuEmbedder)
 //! - [`prelude`] - Common imports
@@ -75,7 +75,7 @@ pub use flui_animation as animation;
 pub use flui_app as app;
 pub use flui_core as core;
 pub use flui_engine as engine;
-pub use flui_gestures as gestures;
+pub use flui_interaction as interaction;
 pub use flui_rendering as rendering;
 pub use flui_types as types;
 pub use flui_widgets as widgets;
@@ -161,18 +161,23 @@ pub mod prelude {
     };
 
     // ============================================================
-    // GESTURES (for interaction)
+    // INTERACTION (event routing, gestures, focus)
     // ============================================================
-    pub use flui_gestures::{
+    pub use flui_interaction::{
+        // Event routing and hit testing
+        EventRouter,
+        HitTestable,
+        FocusManager,
+
         // Gesture recognizers
         TapGestureRecognizer,
         DragGestureRecognizer,
         LongPressGestureRecognizer,
         ScaleGestureRecognizer,
-
-        // Gesture detector widget
-        GestureDetector,
     };
+
+    // GestureDetector widget is in flui_widgets
+    pub use flui_widgets::GestureDetector;
 
     // Re-export gesture types from flui_types
     pub use flui_types::gestures::{

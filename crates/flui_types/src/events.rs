@@ -78,58 +78,104 @@ impl PointerEventData {
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub enum PointerEvent {
+    /// Pointer device was added (connected)
+    Added {
+        /// Device ID
+        device: i32,
+        /// Device kind
+        device_kind: PointerDeviceKind,
+    },
+    /// Pointer device was removed (disconnected)
+    Removed {
+        /// Device ID
+        device: i32,
+    },
     /// Pointer pressed down
     Down(PointerEventData),
     /// Pointer released
     Up(PointerEventData),
     /// Pointer moved
     Move(PointerEventData),
+    /// Pointer hover (moved without button pressed)
+    Hover(PointerEventData),
     /// Pointer entered widget bounds
     Enter(PointerEventData),
     /// Pointer exited widget bounds
     Exit(PointerEventData),
     /// Event cancelled
     Cancel(PointerEventData),
+    /// Scroll event (mouse wheel, trackpad scroll)
+    Scroll {
+        /// Device ID
+        device: i32,
+        /// Position where scroll occurred
+        position: Offset,
+        /// Scroll delta
+        scroll_delta: Offset,
+    },
 }
 
 impl PointerEvent {
-    /// Get the event data
-    pub fn data(&self) -> &PointerEventData {
+    /// Get the event data (if available)
+    ///
+    /// Returns None for Added, Removed, and Scroll events which don't have PointerEventData
+    pub fn data(&self) -> Option<&PointerEventData> {
         match self {
-            PointerEvent::Down(data) => data,
-            PointerEvent::Up(data) => data,
-            PointerEvent::Move(data) => data,
-            PointerEvent::Enter(data) => data,
-            PointerEvent::Exit(data) => data,
-            PointerEvent::Cancel(data) => data,
+            PointerEvent::Down(data)
+            | PointerEvent::Up(data)
+            | PointerEvent::Move(data)
+            | PointerEvent::Hover(data)
+            | PointerEvent::Enter(data)
+            | PointerEvent::Exit(data)
+            | PointerEvent::Cancel(data) => Some(data),
+            PointerEvent::Added { .. } | PointerEvent::Removed { .. } | PointerEvent::Scroll { .. } => None,
         }
     }
 
-    /// Get mutable event data
-    pub fn data_mut(&mut self) -> &mut PointerEventData {
+    /// Get mutable event data (if available)
+    ///
+    /// Returns None for Added, Removed, and Scroll events which don't have PointerEventData
+    pub fn data_mut(&mut self) -> Option<&mut PointerEventData> {
         match self {
-            PointerEvent::Down(data) => data,
-            PointerEvent::Up(data) => data,
-            PointerEvent::Move(data) => data,
-            PointerEvent::Enter(data) => data,
-            PointerEvent::Exit(data) => data,
-            PointerEvent::Cancel(data) => data,
+            PointerEvent::Down(data)
+            | PointerEvent::Up(data)
+            | PointerEvent::Move(data)
+            | PointerEvent::Hover(data)
+            | PointerEvent::Enter(data)
+            | PointerEvent::Exit(data)
+            | PointerEvent::Cancel(data) => Some(data),
+            PointerEvent::Added { .. } | PointerEvent::Removed { .. } | PointerEvent::Scroll { .. } => None,
         }
     }
 
     /// Get position in global coordinates
     pub fn position(&self) -> Offset {
-        self.data().position
+        match self {
+            PointerEvent::Scroll { position, .. } => *position,
+            _ => self.data().map(|d| d.position).unwrap_or(Offset::ZERO),
+        }
+    }
+
+    /// Get device ID
+    pub fn device(&self) -> i32 {
+        match self {
+            PointerEvent::Added { device, .. }
+            | PointerEvent::Removed { device }
+            | PointerEvent::Scroll { device, .. } => *device,
+            _ => self.data().map(|d| d.device).unwrap_or(0),
+        }
     }
 
     /// Get position in local widget coordinates
     pub fn local_position(&self) -> Offset {
-        self.data().local_position
+        self.data().map(|d| d.local_position).unwrap_or(Offset::ZERO)
     }
 
     /// Set local position (used during hit testing)
     pub fn set_local_position(&mut self, position: Offset) {
-        self.data_mut().local_position = position;
+        if let Some(data) = self.data_mut() {
+            data.local_position = position;
+        }
     }
 }
 

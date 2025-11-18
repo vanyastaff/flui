@@ -6,21 +6,31 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Event routing and interaction handling for FLUI"
-keywords = ["gui", "ui", "events", "input", "interaction"]
+description = "Event routing, interaction handling, and gesture recognition for FLUI"
+keywords = ["gui", "ui", "events", "gestures", "interaction"]
 
 [dependencies]
 # Flui dependencies
 flui_types = { path = "../flui_types" }
 
-# Synchronization
+# Synchronization & Concurrency
 parking_lot = { workspace = true }
+once_cell = { workspace = true }
+dashmap = { workspace = true }
+crossbeam = { workspace = true }
+
+# Collections (optimized for small sizes)
+smallvec = { workspace = true }
+bitflags = { workspace = true }
+
+# Async utilities
+futures = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
 
 [dev-dependencies]
-# No additional dev dependencies needed - tests use std
+tokio = { workspace = true, features = ["full"] }
 
 [features]
 default = []

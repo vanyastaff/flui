@@ -38,7 +38,7 @@ pub struct MultiTapDetails {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_gestures::prelude::*;
+/// use flui_interaction::prelude::*;
 ///
 /// let arena = GestureArena::new();
 ///

@@ -12,8 +12,7 @@ members = [
     "crates/flui_engine",       # Rendering engine - Layer/Scene/Painter
     "crates/flui_derive",
     "crates/flui_devtools",
-    "crates/flui_gestures",
-    "crates/flui_interaction",  # Event routing and interaction handling
+    "crates/flui_interaction",  # Event routing, interaction, and gesture recognition
     "crates/flui_animation",    # Animation system
     "crates/flui-scheduler",    # Frame scheduling and task prioritization
     "crates/flui-reactivity",   # Reactive state management with hooks and signals
@@ -44,6 +43,7 @@ send_wrapper = "0.6"
 parking_lot = "0.12"
 once_cell = "1.20"
 dashmap = "6.1"
+crossbeam = "0.8"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union"] }
@@ -127,7 +127,7 @@ flui_painting = { path = "crates/flui_painting" }
 flui_engine = { path = "crates/flui_engine" }
 flui_rendering = { path = "crates/flui_rendering" }
 flui_animation = { path = "crates/flui_animation" }
-flui_gestures = { path = "crates/flui_gestures" }
+flui_interaction = { path = "crates/flui_interaction" }
 flui_app = { path = "crates/flui_app" }
 flui_widgets = { path = "crates/flui_widgets" }
 tracing.workspace = true

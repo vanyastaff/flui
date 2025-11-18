@@ -34,7 +34,7 @@ pub struct TapDetails {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_gestures::prelude::*;
+/// use flui_interaction::prelude::*;
 ///
 /// let arena = GestureArena::new();
 /// let recognizer = TapGestureRecognizer::new(arena)

@@ -103,7 +103,7 @@ pub type DragCancelCallback = Arc<dyn Fn() + Send + Sync>;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_gestures::prelude::*;
+/// use flui_interaction::prelude::*;
 ///
 /// let arena = GestureArena::new();
 /// let recognizer = DragGestureRecognizer::new(arena, DragAxis::Vertical)

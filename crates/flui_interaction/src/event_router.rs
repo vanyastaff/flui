@@ -210,9 +210,8 @@ trait PointerEventExt {
 
 impl PointerEventExt for PointerEvent {
     fn pointer_id(&self) -> u32 {
-        // TODO: Add pointer_id to PointerEventData in flui_types
-        // For now, return device ID
-        self.data().device as u32
+        // Use device() method which works for all variants
+        self.device() as u32
     }
 }
 
@@ -224,13 +223,12 @@ mod tests {
     /// Mock layer for testing
     struct MockLayer {
         bounds: Rect,
-        hit: bool,
     }
 
     impl HitTestable for MockLayer {
         fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
             if self.bounds.contains(position) {
-                result.add(crate::hit_test::HitTestEntry::new(position, self.bounds));
+                result.add(crate::hit_test::HitTestEntry::new(1, position, self.bounds));
                 true
             } else {
                 false
@@ -249,7 +247,6 @@ mod tests {
         let mut router = EventRouter::new();
         let mut layer = MockLayer {
             bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            hit: false,
         };
 
         // Down event

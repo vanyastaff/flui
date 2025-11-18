@@ -14,8 +14,9 @@
 //! 5. Winner receives all future events for that pointer
 //! ```
 
+use dashmap::DashMap;
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use smallvec::SmallVec;
 use std::sync::Arc;
 
 /// Unique identifier for a pointer device
@@ -62,9 +63,16 @@ pub trait GestureArenaMember: Send + Sync {
 /// Arena entry for a single pointer
 ///
 /// Tracks which recognizers are competing for this pointer.
+///
+/// # Performance Optimization
+///
+/// Uses SmallVec with inline capacity of 4 to avoid heap allocations
+/// for typical gesture scenarios (tap, drag, long-press, double-tap).
+/// Most interactions have 2-3 competing recognizers.
 struct ArenaEntry {
     /// Members competing in this arena
-    members: Vec<Arc<dyn GestureArenaMember>>,
+    /// Inline capacity: 4 (avoids heap for most cases)
+    members: SmallVec<[Arc<dyn GestureArenaMember>; 4]>,
     /// Whether this entry is held open (waiting for more information)
     is_held: bool,
     /// Whether arena has been resolved
@@ -87,7 +95,7 @@ impl std::fmt::Debug for ArenaEntry {
 impl ArenaEntry {
     fn new() -> Self {
         Self {
-            members: Vec::new(),
+            members: SmallVec::new(),
             is_held: false,
             is_resolved: false,
             winner: None,
@@ -143,12 +151,12 @@ impl ArenaEntry {
 ///
 /// # Thread Safety
 ///
-/// GestureArena is thread-safe and uses interior mutability (Arc<Mutex>).
+/// GestureArena is thread-safe and uses DashMap for lock-free concurrent access.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_gestures::arena::{GestureArena, PointerId};
+/// use flui_interaction::arena::{GestureArena, PointerId};
 ///
 /// let arena = GestureArena::new();
 /// let pointer = PointerId::new(0);
@@ -162,15 +170,15 @@ impl ArenaEntry {
 /// ```
 #[derive(Clone)]
 pub struct GestureArena {
-    /// Map from pointer ID to arena entry
-    entries: Arc<Mutex<HashMap<PointerId, ArenaEntry>>>,
+    /// Map from pointer ID to arena entry (lock-free concurrent HashMap)
+    entries: Arc<DashMap<PointerId, Mutex<ArenaEntry>>>,
 }
 
 impl GestureArena {
     /// Create a new gesture arena
     pub fn new() -> Self {
         Self {
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            entries: Arc::new(DashMap::new()),
         }
     }
 
@@ -178,9 +186,11 @@ impl GestureArena {
     ///
     /// Creates a new arena entry if one doesn't exist for this pointer.
     pub fn add(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
-        let mut entries = self.entries.lock();
-        let entry = entries.entry(pointer).or_insert_with(ArenaEntry::new);
-        entry.add(member);
+        self.entries
+            .entry(pointer)
+            .or_insert_with(|| Mutex::new(ArenaEntry::new()))
+            .lock()
+            .add(member);
     }
 
     /// Close the arena for a pointer (no more members can be added)
@@ -188,9 +198,9 @@ impl GestureArena {
     /// If there's only one member, it wins immediately.
     /// Otherwise, waits for members to accept/reject.
     pub fn close(&self, pointer: PointerId) {
-        let mut entries = self.entries.lock();
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            let mut entry = entry_ref.lock();
 
-        if let Some(entry) = entries.get_mut(&pointer) {
             if entry.is_held {
                 return; // Arena is held open
             }
@@ -207,9 +217,8 @@ impl GestureArena {
     ///
     /// Used when a recognizer needs more time to decide.
     pub fn hold(&self, pointer: PointerId) {
-        let mut entries = self.entries.lock();
-        if let Some(entry) = entries.get_mut(&pointer) {
-            entry.hold();
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            entry_ref.lock().hold();
         }
     }
 
@@ -217,8 +226,8 @@ impl GestureArena {
     ///
     /// If arena was waiting to close, it will close now.
     pub fn release(&self, pointer: PointerId) {
-        let mut entries = self.entries.lock();
-        if let Some(entry) = entries.get_mut(&pointer) {
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            let mut entry = entry_ref.lock();
             entry.release();
 
             // If arena was waiting to close, close it now
@@ -237,9 +246,8 @@ impl GestureArena {
     ///
     /// Winner receives accept_gesture(), all others receive reject_gesture().
     pub fn resolve(&self, pointer: PointerId, winner: Option<Arc<dyn GestureArenaMember>>) {
-        let mut entries = self.entries.lock();
-        if let Some(entry) = entries.get_mut(&pointer) {
-            entry.resolve(winner, pointer);
+        if let Some(entry_ref) = self.entries.get(&pointer) {
+            entry_ref.lock().resolve(winner, pointer);
         }
     }
 
@@ -247,39 +255,36 @@ impl GestureArena {
     ///
     /// Called when pointer is released to clean up.
     pub fn sweep(&self, pointer: PointerId) {
-        let mut entries = self.entries.lock();
-        entries.remove(&pointer);
+        self.entries.remove(&pointer);
     }
 
     /// Get the number of active arenas
     pub fn len(&self) -> usize {
-        self.entries.lock().len()
+        self.entries.len()
     }
 
     /// Check if arena is empty
     pub fn is_empty(&self) -> bool {
-        self.entries.lock().is_empty()
+        self.entries.is_empty()
     }
 
     /// Check if an arena exists for a pointer
     pub fn contains(&self, pointer: PointerId) -> bool {
-        self.entries.lock().contains_key(&pointer)
+        self.entries.contains_key(&pointer)
     }
 
     /// Get the winner for a pointer (if resolved)
     pub fn winner(&self, pointer: PointerId) -> Option<Arc<dyn GestureArenaMember>> {
         self.entries
-            .lock()
             .get(&pointer)
-            .and_then(|entry| entry.winner.clone())
+            .and_then(|entry_ref| entry_ref.lock().winner.clone())
     }
 
     /// Check if an arena is resolved
     pub fn is_resolved(&self, pointer: PointerId) -> bool {
         self.entries
-            .lock()
             .get(&pointer)
-            .map(|entry| entry.is_resolved)
+            .map(|entry_ref| entry_ref.lock().is_resolved)
             .unwrap_or(false)
     }
 }
@@ -292,9 +297,8 @@ impl Default for GestureArena {
 
 impl std::fmt::Debug for GestureArena {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let entries = self.entries.lock();
         f.debug_struct("GestureArena")
-            .field("active_arenas", &entries.len())
+            .field("active_arenas", &self.entries.len())
             .finish()
     }
 }

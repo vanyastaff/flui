@@ -157,6 +157,9 @@ mod tests {
         let node1 = FocusNodeId::new(1);
         let node2 = FocusNodeId::new(2);
 
+        // Clear any previous focus from other tests
+        manager.unfocus();
+
         // Initially no focus
         assert_eq!(manager.focused(), None);
 
