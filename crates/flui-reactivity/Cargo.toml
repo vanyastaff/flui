@@ -1,0 +1,36 @@
+[package]
+name = "flui-reactivity"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Synchronization
+parking_lot.workspace = true
+dashmap.workspace = true
+once_cell.workspace = true
+
+# Async runtime
+futures.workspace = true
+tokio = { workspace = true, optional = true }
+
+# Async utilities
+pin-project-lite.workspace = true
+any_spawner.workspace = true
+send_wrapper.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Optional features
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
+
+[features]
+default = []
+async = ["dep:tokio"]
+serde = ["dep:serde"]

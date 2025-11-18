@@ -16,6 +16,7 @@ members = [
     "crates/flui_interaction",  # Event routing and interaction handling
     "crates/flui_animation",    # Animation system
     "crates/flui-scheduler",    # Frame scheduling and task prioritization
+    "crates/flui-reactivity",   # Reactive state management with hooks and signals
     "crates/flui_cli",          # CLI tool for project management
     "crates/flui_build",        # Build system library for cross-platform builds
     "xtask",                    # Dev tasks (format, clippy, test-all, ci)
@@ -35,10 +36,14 @@ repository = "https://github.com/yourusername/flui"
 # ASYNC RUNTIME (Stable: 1.43 LTS - March 2026)
 tokio = { version = "1.43", features = ["full"] }
 futures = "0.3"
+pin-project-lite = "0.2"
+any_spawner = "0.1"
+send_wrapper = "0.6"
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"
 once_cell = "1.20"
+dashmap = "6.1"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union"] }
@@ -176,4 +181,3 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
-
