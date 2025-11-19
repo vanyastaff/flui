@@ -11,7 +11,10 @@ use std::fmt;
 
 // Re-export from flui_types
 pub use flui_types::constraints::BoxConstraints;
-pub use flui_types::SliverGeometry;
+pub use flui_types::{Size, SliverGeometry};
+
+// Import hit test result types
+use crate::element::hit_test::{BoxHitTestResult, SliverHitTestResult};
 
 /// Identifies a layout protocol
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,7 +90,7 @@ pub struct BoxProtocol;
 
 impl Protocol for BoxProtocol {
     type Constraints = BoxConstraints;
-    type Geometry = BoxGeometry;
+    type Geometry = Size;
     type LayoutContext<'a, A: Arity> = BoxLayoutContext<'a, A>;
     type PaintContext<'a, A: Arity> = BoxPaintContext<'a, A>;
     type HitTestContext<'a, A: Arity> = BoxHitTestContext<'a, A>;
@@ -104,11 +107,19 @@ pub struct BoxGeometry {
 }
 
 /// Layout context for Box protocol
+///
+/// Provides safe, controlled access to layout operations without exposing
+/// internal framework lifecycle methods.
 pub struct BoxLayoutContext<'a, A: Arity> {
-    /// Reference to the element tree for child layout operations
-    pub tree: &'a crate::element::ElementTree,
+    /// Reference to the element tree (private - use helper methods)
+    tree: &'a crate::element::ElementTree,
+
+    /// Box constraints from parent
     pub constraints: BoxConstraints,
+
+    /// Typed children accessor
     pub children: A::Children<'a>,
+
     _phantom: std::marker::PhantomData<&'a ()>,
 }
 
@@ -146,8 +157,8 @@ impl<'a, A: Arity> HasTypedChildren<'a, A> for BoxLayoutContext<'a, A> {
 
 /// Paint context for Box protocol
 pub struct BoxPaintContext<'a, A: Arity> {
-    /// Reference to the element tree for child paint operations
-    pub tree: &'a crate::element::ElementTree,
+    /// Reference to the element tree (private - use helper methods)
+    tree: &'a crate::element::ElementTree,
     pub offset: crate::prelude::Offset,
     pub children: A::Children<'a>,
     canvas: flui_painting::Canvas,
@@ -201,8 +212,8 @@ impl<'a, A: Arity> HasTypedChildren<'a, A> for BoxPaintContext<'a, A> {
 
 /// Hit test context for Box protocol
 pub struct BoxHitTestContext<'a, A: Arity> {
-    /// Reference to the element tree for child hit testing
-    pub tree: &'a crate::element::ElementTree,
+    /// Reference to the element tree (private - use helper methods)
+    tree: &'a crate::element::ElementTree,
     /// Hit test position in local coordinates
     pub position: crate::prelude::Offset,
     /// Element size from layout
@@ -239,6 +250,18 @@ impl<'a, A: Arity> BoxHitTestContext<'a, A> {
             element_id: self.element_id,
             children: self.children,
         }
+    }
+
+    /// Hit test a child element (safe helper method)
+    #[inline]
+    pub fn hit_test_child(
+        &self,
+        child_id: std::num::NonZeroUsize,
+        position: crate::prelude::Offset,
+        result: &mut BoxHitTestResult,
+    ) -> bool {
+        self.tree
+            .hit_test_box_child(crate::ElementId::new(child_id.get()), position, result)
     }
 }
 
@@ -337,8 +360,8 @@ impl<'a, A: Arity> HasTypedChildren<'a, A> for SliverPaintContext<'a, A> {
 
 /// Hit test context for Sliver protocol
 pub struct SliverHitTestContext<'a, A: Arity> {
-    /// Reference to the element tree for child hit testing
-    pub tree: &'a crate::element::ElementTree,
+    /// Reference to the element tree (private - use helper methods)
+    tree: &'a crate::element::ElementTree,
     /// Position along main axis (scroll direction)
     pub main_axis_position: f32,
     /// Position along cross axis (perpendicular to scroll)
@@ -382,6 +405,18 @@ impl<'a, A: Arity> SliverHitTestContext<'a, A> {
     /// Get local position as Offset
     pub fn local_position(&self) -> crate::prelude::Offset {
         crate::prelude::Offset::new(self.cross_axis_position, self.main_axis_position)
+    }
+
+    /// Hit test a child element (safe helper method)
+    #[inline]
+    pub fn hit_test_child(
+        &self,
+        child_id: std::num::NonZeroUsize,
+        position: crate::prelude::Offset,
+        result: &mut SliverHitTestResult,
+    ) -> bool {
+        self.tree
+            .hit_test_sliver_child(crate::ElementId::new(child_id.get()), position, result)
     }
 }
 

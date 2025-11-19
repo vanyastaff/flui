@@ -311,10 +311,7 @@ pub trait Render<A: ArityTrait>: Send + Sync + Debug + 'static {
     ) -> bool {
         let mut hit = false;
         for &child in ctx.children.as_slice().iter() {
-            if ctx
-                .tree
-                .hit_test_box_child(child.into(), ctx.position, result)
-            {
+            if ctx.hit_test_child(child, ctx.position, result) {
                 hit = true;
             }
         }
@@ -556,10 +553,7 @@ pub trait SliverRender<A: ArityTrait>: Send + Sync + Debug + 'static {
     ) -> bool {
         let mut hit = false;
         for &child in ctx.children.as_slice().iter() {
-            if ctx
-                .tree
-                .hit_test_sliver_child(child.into(), ctx.local_position(), result)
-            {
+            if ctx.hit_test_child(child, ctx.local_position(), result) {
                 hit = true;
             }
         }
