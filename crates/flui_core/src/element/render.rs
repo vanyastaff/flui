@@ -346,6 +346,7 @@ impl RenderElement {
     }
 
     /// Get mutable children slice (for internal use only)
+    #[allow(dead_code)] // Reserved for future dynamic child management
     #[inline(always)]
     pub(crate) fn children_mut(&mut self) -> &mut Vec<ElementId> {
         &mut self.children
@@ -618,6 +619,7 @@ impl RenderElement {
     ///
     /// # Panics
     ///
+    #[allow(dead_code)] // Reserved for future dynamic child management
     /// Panics if removing child would violate arity (outside transactions).
     pub(crate) fn remove_child(&mut self, child_id: ElementId) -> bool {
         if let Some(pos) = self.children.iter().position(|&id| id == child_id) {

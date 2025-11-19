@@ -269,7 +269,6 @@ pub mod render;
 pub mod testing;
 pub mod view;
 
-
 // Re-export debug types
 pub use debug::DebugFlags;
 
@@ -325,7 +324,7 @@ pub use view::{AnyElement, AnyView, IntoElement, RenderExt, View};
 pub use pipeline::{PipelineBuilder, PipelineOwner};
 
 // Re-export render types
-pub use render::{Arity, Children, LayoutContext, PaintContext, Render, RenderState};
+pub use render::{Arity, Children, Render, RenderState};
 
 /// Prelude module for convenient imports
 ///
@@ -373,7 +372,6 @@ mod tests {
         let _signal: Option<Signal<i32>> = None; // Signal from prelude
 
         // Test render types are available
-        let _arity = Arity::Variable;
+        let _arity = RuntimeArity::Variable;
     }
 }
-

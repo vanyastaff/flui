@@ -24,8 +24,9 @@
 //!
 //! ## Render System
 //! - [`Render`] - Trait for custom render objects
-//! - [`LayoutContext`] - Context for layout operations
-//! - [`PaintContext`] - Context for paint operations
+//! - Protocol-based contexts (see `render::protocol` module):
+//!   - `BoxLayoutContext<A>`, `BoxPaintContext<A>` for box renders
+//!   - `SliverLayoutContext<A>`, `SliverPaintContext<A>` for sliver renders
 //! - [`Arity`] - Child count specification
 //! - [`Children`] - Unified child representation
 //!
@@ -100,14 +101,18 @@ pub use crate::hooks::Signal;
 /// Trait for custom render objects (layout + paint)
 pub use crate::render::Render;
 
-/// Context for layout operations (constraints, children)
-pub use crate::render::LayoutContext;
+// Legacy contexts removed - use protocol-based contexts instead:
+// - BoxLayoutContext<A>, BoxPaintContext<A> from crate::render::protocol
+// - SliverLayoutContext<A>, SliverPaintContext<A> from crate::render::protocol
 
-/// Context for paint operations (offset, children)
-pub use crate::render::PaintContext;
-
-/// Child count specification (Exact(n) or Variable)
+/// Type-safe arity trait for compile-time child count validation
 pub use crate::render::Arity;
+
+/// Runtime arity enum for dynamic child count validation
+pub use crate::render::RuntimeArity;
+
+/// Arity types for zero-cost abstraction
+pub use crate::render::{AtLeast, Exact, Leaf, Optional, Pair, Single, Triple, Variable};
 
 /// Unified child representation (None/Single/Multi)
 pub use crate::render::Children;

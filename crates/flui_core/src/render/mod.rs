@@ -32,8 +32,6 @@
 pub mod arity;
 pub mod cache;
 pub mod children;
-pub mod context;
-pub mod hit_test_context;
 pub mod parent_data;
 pub mod protocol;
 pub mod render_ext;
@@ -105,13 +103,7 @@ pub use type_erasure::{DynConstraints, DynGeometry, DynHitTestResult, DynRenderO
 /// Safe wrappers for type-erased render objects
 pub use wrappers::{BoxRenderObjectWrapper, SliverRenderObjectWrapper};
 
-/// Context structs for layout and paint (legacy - will be deprecated)
-#[deprecated(note = "Use new protocol-based contexts instead")]
-pub use context::{LayoutContext, PaintContext, SliverLayoutContext, SliverPaintContext};
-
-/// Context structs for hit testing (legacy - will be deprecated)
-#[deprecated(note = "Use new protocol-based contexts instead")]
-pub use hit_test_context::{BoxHitTestContext, SliverHitTestContext};
+// Legacy contexts removed - use protocol-based contexts from protocol.rs instead
 
 // Core types
 /// Parent data and metadata

@@ -392,6 +392,7 @@ pub struct WithChildren<R, C> {
 /// Created by `SliverExt::leaf()`. Will implement `IntoElement` to create
 /// a sliver element with zero children.
 #[derive(Debug)]
+#[allow(dead_code)] // Reserved for future sliver migration
 pub struct SliverWithLeaf<S> {
     render: S,
 }
@@ -401,6 +402,7 @@ pub struct SliverWithLeaf<S> {
 /// Created by `SliverExt::child()`. Will implement `IntoElement` to create
 /// a sliver element with one child.
 #[derive(Debug)]
+#[allow(dead_code)] // Reserved for future sliver migration
 pub struct SliverWithChild<S, C> {
     render: S,
     child: C,
@@ -411,6 +413,7 @@ pub struct SliverWithChild<S, C> {
 /// Created by `SliverExt::maybe_child()`. Will implement `IntoElement` to create
 /// a sliver element with zero or one child.
 #[derive(Debug)]
+#[allow(dead_code)] // Reserved for future sliver migration
 pub struct SliverWithOptionalChild<S, C> {
     render: S,
     child: Option<C>,
@@ -421,6 +424,7 @@ pub struct SliverWithOptionalChild<S, C> {
 /// Created by `SliverExt::children()`. Will implement `IntoElement` to create
 /// a sliver element with variable children.
 #[derive(Debug)]
+#[allow(dead_code)] // Reserved for future sliver migration
 pub struct SliverWithChildren<S, C> {
     render: S,
     children: Vec<C>,
