@@ -1,215 +1,464 @@
-//! RenderElement - Performs layout and paint
+//! RenderElement - Unified render object storage with protocol and arity
 //!
-//! RenderElement owns a renderer (Render trait implementation) and manages layout/paint lifecycle.
+//! This is the Phase 6 implementation of the unified-renderobject-system.
+//! It stores protocol and arity as the single source of truth and uses DynRenderObject
+//! for type-erased dispatch.
+//!
+//! # Architecture
+//!
+//! ```text
+//! RenderElement
+//!   ├─ protocol: LayoutProtocol (Box or Sliver)
+//!   ├─ arity: RuntimeArity (Exact(n), Variable, etc.)
+//!   ├─ render_object: Box<dyn DynRenderObject> (type-erased wrapper)
+//!   ├─ render_state: RwLock<RenderState> (size, constraints, flags)
+//!   ├─ children: Vec<ElementId> (validated against arity)
+//!   └─ updating_children: bool (for transactional updates)
+//! ```
+//!
+//! # Key Design
+//!
+//! - **Single Source of Truth**: Protocol and arity stored only in RenderElement
+//! - **Type Erasure**: Wrappers (BoxRenderObjectWrapper) implement DynRenderObject
+//! - **Thread Safety**: Explicit lock ordering (render_object → render_state)
+//! - **Zero Cost**: Debug assertions validate arity (removed in release builds)
 
 use parking_lot::RwLock;
+use std::fmt::Debug;
 
-use super::{ElementBase, ElementLifecycle};
-use crate::element::{Element, ElementId};
-use crate::foundation::Slot;
-use crate::render::{Children, LayoutContext, PaintContext, Render, RenderState};
-use crate::view::IntoElement;
+use super::ElementBase;
+use crate::element::ElementId;
+use crate::render::traits::{Render, SliverRender};
+use crate::render::{
+    Arity, BoxRenderObjectWrapper, DynRenderObject, LayoutProtocol, Leaf, Optional, Pair,
+    RenderState, RuntimeArity, Single, SliverRenderObjectWrapper, Triple, Variable,
+};
 
-/// Element for render objects (type-erased)
+/// RenderElement - Unified render object with protocol and arity
 ///
-/// RenderElement owns a Render and manages its lifecycle.
-/// The render object is type-erased to enable storage in the `enum Element`
-/// without generic parameters.
+/// Stores protocol and arity as single source of truth.
 ///
-/// # Architecture
+/// # Lock Ordering (CRITICAL)
 ///
-/// ```text
-/// RenderElement
-///   ├─ render_object: RwLock<Box<dyn Render>> (type-erased Render)
-///   ├─ render_state: RwLock<RenderState> (size, constraints, dirty flags)
-///   ├─ parent_data: Option<Box<dyn ParentData>> (metadata from parent)
-///   ├─ children: Vec<ElementId> (managed by Render arity)
-///   └─ lifecycle state
+/// Always acquire locks in this order to prevent deadlocks:
+/// 1. `render_object` lock (first)
+/// 2. `render_state` lock (second)
+///
+/// Never acquire in reverse order!
+///
+/// # Transactional Children Updates
+///
+/// Use `begin_children_update()` / `commit_children_update()` for batch operations
+/// that temporarily violate arity constraints:
+///
+/// ```rust,ignore
+/// element.begin_children_update();
+/// element.remove_child(old_child);  // May violate arity temporarily
+/// element.push_child(new_child);    // Restore valid arity
+/// element.commit_children_update(); // Validates final state
 /// ```
-///
-/// # Type Erasure
-///
-/// This version uses type erasure for the render object:
-///
-/// - **Render**: `Box<dyn Render>` (user-extensible, unbounded types)
-/// - **Arity**: Runtime information via Render trait
-///
-/// # Performance
-///
-/// Render is `Box<dyn>`, but this is acceptable because:
-/// - Layout/paint operations use interior mutability (RwLock)
-/// - Hot path (layout) uses trait methods, not enum dispatch
-/// - Element enum provides fast dispatch for element operations
-///
-/// # Lifecycle
-///
-/// 1. **create_render_object()** - View creates Render
-/// 2. **mount()** - Element mounted to tree
-/// 3. **update_render_object()** - View config changes
-/// 4. **layout()** - Render layout pass
-/// 5. **paint()** - Render paint pass
-/// 6. **unmount()** - Render cleanup
 pub struct RenderElement {
-    /// Common element data (parent, slot, lifecycle, dirty)
+    /// Common element data (parent, slot, lifecycle)
     base: ElementBase,
 
-    /// The render object created by the view (type-erased)
-    ///
-    /// Wrapped in RwLock to allow interior mutability during layout.
-    /// RwLock allows multiple concurrent reads OR one exclusive write:
-    /// - Multiple immutable borrows during read operations (safe)
-    /// - Single mutable borrow during write operations
-    /// - More flexible than RefCell which panics on overlapping borrows
-    ///
-    /// **Note**: When you have `&mut self`, prefer using `render_object_mut_direct()`
-    /// to avoid lock contention during the build/mount phase.
-    render_object: RwLock<Box<dyn Render>>,
+    /// Layout protocol (Box or Sliver) - source of truth
+    protocol: LayoutProtocol,
 
-    /// Render state (size, constraints, dirty flags)
+    /// Child count arity - source of truth
+    arity: RuntimeArity,
+
+    /// Type-erased render object (wrapped in BoxRenderObjectWrapper or SliverRenderObjectWrapper)
     ///
-    /// Uses RwLock for interior mutability during layout/paint.
-    /// Atomic flags inside RenderState provide lock-free checks.
+    /// **Lock Ordering**: Always acquire this lock BEFORE render_state lock
+    render_object: RwLock<Box<dyn DynRenderObject>>,
+
+    /// Render state (size/geometry, constraints, dirty flags)
+    ///
+    /// **Lock Ordering**: Always acquire this lock AFTER render_object lock
     render_state: RwLock<RenderState>,
 
     /// Position of this element relative to parent
     ///
-    /// Set during layout phase by parent. Used for:
-    /// - Hit testing (to check if pointer is within bounds)
-    /// - Painting (to position child layers)
-    /// - Coordinate transformation during event dispatch
-    ///
-    /// **Important**: This is in parent's coordinate space.
-    /// Root element has offset (0, 0).
+    /// Set during layout phase by parent. Used for hit testing and painting.
     offset: flui_types::Offset,
 
-    /// Parent data attached by parent Render
-    ///
-    /// This metadata is set by the parent's layout algorithm (e.g., FlexParentData for Flex,
-    /// StackParentData for Stack). Parent accesses this during layout to determine how to
-    /// position and size this child.
-    parent_data: Option<Box<dyn crate::render::ParentData>>,
-
-    /// Child elements (count enforced by Render arity at runtime)
+    /// Child element IDs (validated against arity)
     children: Vec<ElementId>,
 
-    /// Unmounted child elements waiting to be inserted into tree
+    /// Flag indicating transactional update in progress
     ///
-    /// When RenderBuilder creates child elements, they are stored here.
-    /// When this RenderElement is inserted into ElementTree, these children
-    /// are automatically inserted and linked.
-    unmounted_children: Option<Vec<Element>>,
+    /// When true, arity validation is skipped to allow temporary violations.
+    /// Must call commit_children_update() to validate final state.
+    updating_children: bool,
+
+    /// Unmounted children waiting to be inserted into the tree
+    ///
+    /// Used by IntoElement implementations to store child Elements that haven't
+    /// been mounted yet. When this RenderElement is inserted into the tree,
+    /// these children are automatically mounted and added as children.
+    unmounted_children: Option<Vec<crate::element::Element>>,
 }
 
-// Manual Debug implementation because RwLock<Box<dyn Trait>> doesn't auto-derive
-impl std::fmt::Debug for RenderElement {
+impl Debug for RenderElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Acquire render_object lock for debug_name (respects lock ordering)
+        let render_obj = self.render_object.read();
+        let debug_name = render_obj.debug_name();
+
         f.debug_struct("RenderElement")
-            .field("base", &self.base)
-            .field("render_object", &"<RwLock<Box<dyn Render>>>")
-            .field("render_state", &self.render_state)
+            .field("protocol", &self.protocol)
+            .field("arity", &self.arity)
+            .field("render_object", &debug_name)
             .field("offset", &self.offset)
-            .field("parent_data", &self.parent_data.is_some())
-            .field("children", &self.children)
-            .field(
-                "unmounted_children",
-                &self.unmounted_children.as_ref().map(|c| c.len()),
-            )
+            .field("children_count", &self.children.len())
+            .field("updating_children", &self.updating_children)
             .finish()
     }
 }
 
 impl RenderElement {
-    /// Create a new RenderElement from a renderer
+    // ============================================================================
+    // LEGACY COMPATIBILITY (Deprecated)
+    // ============================================================================
+
+    /// Legacy constructor for backward compatibility
     ///
-    /// # Parameters
-    ///
-    /// - `render_object` - The renderer (Render trait implementation) for this element
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let render = Box::new(RenderPadding::new(EdgeInsets::all(10.0)));
-    /// let element = RenderElement::new(render);
-    /// ```
-    pub fn new(render_object: Box<dyn Render>) -> Self {
+    /// **DEPRECATED**: This method is only for compatibility with old code using
+
+    /// Create a Box protocol element with Leaf arity (0 children)
+    pub fn box_leaf<R>(render: R) -> Self
+    where
+        R: Render<Leaf> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Leaf, R>::new(render);
         Self {
             base: ElementBase::new(),
-            render_object: RwLock::new(render_object),
+            protocol: LayoutProtocol::Box,
+            arity: Leaf::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
             render_state: RwLock::new(RenderState::new()),
             offset: flui_types::Offset::ZERO,
-            parent_data: None,
             children: Vec::new(),
+            updating_children: false,
             unmounted_children: None,
         }
     }
 
-    /// Create a new RenderElement with unmounted children
-    ///
-    /// This is used by RenderBuilder to create elements with children
-    /// that will be mounted when this element is inserted into the tree.
-    pub fn new_with_children(render_object: Box<dyn Render>, children: Vec<Element>) -> Self {
+    /// Create a Box protocol element with Optional arity (0-1 children)
+    pub fn box_optional<R>(render: R) -> Self
+    where
+        R: Render<Optional> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Optional, R>::new(render);
         Self {
             base: ElementBase::new(),
-            render_object: RwLock::new(render_object),
+            protocol: LayoutProtocol::Box,
+            arity: Optional::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
             render_state: RwLock::new(RenderState::new()),
             offset: flui_types::Offset::ZERO,
-            parent_data: None,
             children: Vec::new(),
+            updating_children: false,
+            unmounted_children: None,
+        }
+    }
+
+    /// Create a Box protocol element with Single arity (exactly 1 child)
+    pub fn box_single<R>(render: R) -> Self
+    where
+        R: Render<Single> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Single, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Box,
+            arity: Single::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
+            unmounted_children: None,
+        }
+    }
+
+    /// Create a Box protocol element with Single arity with unmounted child
+    ///
+    /// The child will be automatically mounted when this element is inserted into the tree.
+    pub fn box_single_with_child<R>(render: R, child: crate::element::Element) -> Self
+    where
+        R: Render<Single> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Single, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Box,
+            arity: Single::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
+            unmounted_children: Some(vec![child]),
+        }
+    }
+
+    /// Create a Box protocol element with Pair arity (exactly 2 children)
+    pub fn box_pair<R>(render: R) -> Self
+    where
+        R: Render<Pair> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Pair, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Box,
+            arity: Pair::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
+            unmounted_children: None,
+        }
+    }
+
+    /// Create a Box protocol element with Triple arity (exactly 3 children)
+    pub fn box_triple<R>(render: R) -> Self
+    where
+        R: Render<Triple> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Triple, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Box,
+            arity: Triple::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
+            unmounted_children: None,
+        }
+    }
+
+    /// Create a Box protocol element with Variable arity (any number of children)
+    pub fn box_variable<R>(render: R) -> Self
+    where
+        R: Render<Variable> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Variable, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Box,
+            arity: Variable::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
+            unmounted_children: None,
+        }
+    }
+
+    /// Create a Box protocol element with Variable arity with unmounted children
+    ///
+    /// The children will be automatically mounted when this element is inserted into the tree.
+    pub fn box_variable_with_children<R>(render: R, children: Vec<crate::element::Element>) -> Self
+    where
+        R: Render<Variable> + 'static,
+    {
+        let wrapper = BoxRenderObjectWrapper::<Variable, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Box,
+            arity: Variable::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
             unmounted_children: Some(children),
         }
     }
 
-    // Note: widget() method removed - RenderElement no longer stores widget
-    // Per FINAL_ARCHITECTURE_V2.md, elements don't store widgets/views
+    // ============================================================================
+    // CONSTRUCTORS (Sliver Protocol)
+    // ============================================================================
 
-    /// Get reference to the render object
-    ///
-    /// Returns a read guard that allows multiple concurrent immutable borrows.
-    /// This uses parking_lot::RwLock which is more flexible than RefCell.
-    #[inline]
-    pub fn render_object(&self) -> parking_lot::RwLockReadGuard<'_, Box<dyn Render>> {
-        self.render_object.read()
+    /// Create a Sliver protocol element with Single arity (exactly 1 child)
+    pub fn sliver_single<R>(render: R) -> Self
+    where
+        R: SliverRender<Single> + 'static,
+    {
+        let wrapper = SliverRenderObjectWrapper::<Single, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Sliver,
+            arity: Single::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
+            unmounted_children: None,
+        }
     }
 
-    /// Get mutable reference to the render object (through RwLock)
-    ///
-    /// Returns a write guard that allows exclusive mutable access.
-    /// This blocks if there are any active read or write guards.
-    #[inline]
-    pub fn render_object_mut(&self) -> parking_lot::RwLockWriteGuard<'_, Box<dyn Render>> {
-        self.render_object.write()
+    /// Create a Sliver protocol element with Variable arity (any number of children)
+    pub fn sliver_variable<R>(render: R) -> Self
+    where
+        R: SliverRender<Variable> + 'static,
+    {
+        let wrapper = SliverRenderObjectWrapper::<Variable, R>::new(render);
+        Self {
+            base: ElementBase::new(),
+            protocol: LayoutProtocol::Sliver,
+            arity: Variable::runtime_arity(),
+            render_object: RwLock::new(Box::new(wrapper)),
+            render_state: RwLock::new(RenderState::new()),
+            offset: flui_types::Offset::ZERO,
+            children: Vec::new(),
+            updating_children: false,
+            unmounted_children: None,
+        }
     }
 
-    /// Get direct mutable reference to the render object
-    ///
-    /// This method bypasses the RwLock when we have `&mut self` access.
-    /// Use this instead of `render_object_mut()` when you have mutable access
-    /// to avoid lock contention.
-    ///
-    /// # Safety
-    ///
-    /// This is safe because having `&mut self` guarantees exclusive access.
-    #[inline]
-    #[must_use]
-    fn render_object_mut_direct(&mut self) -> &mut Box<dyn Render> {
-        self.render_object.get_mut()
+    // ============================================================================
+    // ACCESSORS
+    // ============================================================================
+
+    /// Get the layout protocol (Box or Sliver)
+    #[inline(always)]
+    pub fn protocol(&self) -> LayoutProtocol {
+        self.protocol
     }
 
-    /// Get children element IDs
-    #[inline]
-    #[must_use]
+    /// Get the runtime arity
+    #[inline(always)]
+    pub fn runtime_arity(&self) -> &RuntimeArity {
+        &self.arity
+    }
+
+    /// Get children slice
+    #[inline(always)]
     pub fn children(&self) -> &[ElementId] {
         &self.children
     }
 
-    /// Get reference to render state
-    ///
-    /// RenderState contains size, constraints, and dirty flags.
-    /// Uses RwLock for interior mutability during layout/paint.
-    #[inline]
-    #[must_use]
+    /// Get mutable children slice (for internal use only)
+    #[inline(always)]
+    pub(crate) fn children_mut(&mut self) -> &mut Vec<ElementId> {
+        &mut self.children
+    }
+
+    /// Get render state lock
+    #[inline(always)]
     pub fn render_state(&self) -> &RwLock<RenderState> {
         &self.render_state
+    }
+
+    /// Get render object read guard
+    #[inline(always)]
+    pub fn render_object(&self) -> parking_lot::RwLockReadGuard<'_, Box<dyn DynRenderObject>> {
+        self.render_object.read()
+    }
+
+    /// Get render object write guard
+    #[inline(always)]
+    pub fn render_object_mut(&self) -> parking_lot::RwLockWriteGuard<'_, Box<dyn DynRenderObject>> {
+        self.render_object.write()
+    }
+
+    // ============================================================================
+    // ELEMENT BASE DELEGATION (Lifecycle, Parent, etc.)
+    // ============================================================================
+
+    /// Get parent element ID
+    #[inline(always)]
+    pub fn parent(&self) -> Option<ElementId> {
+        self.base.parent()
+    }
+
+    /// Get lifecycle state
+    #[inline(always)]
+    pub fn lifecycle(&self) -> super::ElementLifecycle {
+        self.base.lifecycle()
+    }
+
+    /// Mount this element into the tree
+    pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<crate::foundation::Slot>) {
+        self.base.mount(parent, slot);
+    }
+
+    /// Unmount this element from the tree
+    pub fn unmount(&mut self) {
+        self.base.unmount();
+    }
+
+    /// Get children iterator
+    pub fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
+        Box::new(self.children.iter().copied())
+    }
+
+    /// Handle event (placeholder - render elements don't handle events directly)
+    pub fn handle_event(&mut self, _event: &flui_types::Event) -> bool {
+        false
+    }
+
+    /// Deactivate this element
+    pub fn deactivate(&mut self) {
+        self.base.deactivate();
+    }
+
+    /// Activate this element
+    pub fn activate(&mut self) {
+        self.base.activate();
+    }
+
+    /// Check if element is dirty (needs rebuild)
+    pub fn is_dirty(&self) -> bool {
+        self.base.is_dirty()
+    }
+
+    /// Mark element as dirty (needs rebuild)
+    pub fn mark_dirty(&mut self) {
+        self.base.mark_dirty();
+    }
+
+    /// Get parent data (not yet implemented in unified system)
+    ///
+    /// ParentData is a legacy concept from the old render system.
+    /// In the unified system, metadata is stored via the metadata() method
+    /// on render objects. This method returns None for now to maintain
+    /// compatibility with Element enum.
+    ///
+    /// TODO: Implement proper ParentData integration if needed
+    pub fn parent_data(&self) -> Option<&dyn crate::render::ParentData> {
+        None
+    }
+
+    /// Forget a child (remove from internal list without unmounting)
+    ///
+    /// Used by Element enum's forget_child method. Removes the child from
+    /// the children vector without performing any lifecycle operations.
+    ///
+    /// # Thread Safety
+    ///
+    /// Does NOT mark needs layout to avoid lock ordering violations.
+    /// The caller is responsible for calling `mark_needs_layout()` after
+    /// this operation completes.
+    pub(crate) fn forget_child(&mut self, child_id: ElementId) {
+        self.children.retain(|&id| id != child_id);
+        // NOTE: Layout marking is caller's responsibility to avoid lock ordering issues
+    }
+
+    /// Update slot for a child
+    ///
+    /// In the unified system, slots are managed by the parent element.
+    /// This is a compatibility stub for the Element enum.
+    pub fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
+        // TODO: Implement slot tracking if needed
+        // For now, this is a no-op as slots are managed differently
     }
 
     /// Get the offset (position relative to parent)
@@ -225,42 +474,185 @@ impl RenderElement {
         self.offset = offset;
     }
 
-    /// Get parent data attached to this element
+    /// Take unmounted children
     ///
-    /// Returns the ParentData trait object if parent has attached metadata,
-    /// None otherwise.
-    #[inline]
-    #[must_use]
-    pub fn parent_data(&self) -> Option<&dyn crate::render::ParentData> {
-        self.parent_data
-            .as_ref()
-            .map(|pd| &**pd as &dyn crate::render::ParentData)
+    /// Returns and clears any unmounted children waiting to be inserted into the tree.
+    /// Called by ElementTree::insert() to automatically mount children when this
+    /// element is inserted.
+    pub fn take_unmounted_children(&mut self) -> Option<Vec<crate::element::Element>> {
+        self.unmounted_children.take()
     }
 
-    /// Get mutable parent data attached to this element
-    #[inline]
-    #[must_use]
-    pub fn parent_data_mut(&mut self) -> Option<&mut dyn crate::render::ParentData> {
-        self.parent_data
-            .as_mut()
-            .map(|pd| &mut **pd as &mut dyn crate::render::ParentData)
-    }
-
-    /// Set parent data for this element
+    /// Set unmounted children
     ///
-    /// Called by parent Render during setup or when parent changes.
-    pub fn set_parent_data(&mut self, parent_data: Box<dyn crate::render::ParentData>) {
-        self.parent_data = Some(parent_data);
+    /// Used by IntoElement implementations to store child Elements that haven't
+    /// been mounted yet. When this RenderElement is inserted into the tree,
+    /// these children are automatically mounted.
+    pub fn set_unmounted_children(&mut self, children: Vec<crate::element::Element>) {
+        self.unmounted_children = Some(children);
     }
 
-    /// Clear parent data
-    pub fn clear_parent_data(&mut self) {
-        self.parent_data = None;
+    /// Set children (replaces all children)
+    ///
+    /// Compatibility method for Element enum. Use replace_children() instead
+    /// for better arity validation.
+    ///
+    /// # Arity Validation
+    ///
+    /// This method delegates to `replace_children()` which performs full arity
+    /// validation. If the new children count violates the arity constraint,
+    /// this will panic with a descriptive error message.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_children.len()` doesn't match this element's arity constraint.
+    pub fn set_children(&mut self, new_children: Vec<ElementId>) {
+        self.replace_children(new_children);
     }
+
+    // ============================================================================
+    // CHILDREN MANAGEMENT (Transactional API)
+    // ============================================================================
+
+    /// Begin transactional children update
+    ///
+    /// Disables arity validation for intermediate operations.
+    /// Must call `commit_children_update()` to validate final state.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// element.begin_children_update();
+    /// element.remove_child(old_child);  // May temporarily violate arity
+    /// element.push_child(new_child);
+    /// element.commit_children_update(); // Validates final state
+    /// ```
+    pub fn begin_children_update(&mut self) {
+        self.updating_children = true;
+    }
+
+    /// Commit transactional children update
+    ///
+    /// Validates final children count against arity and panics if invalid.
+    /// Clears the `updating_children` flag.
+    ///
+    /// # Panics
+    ///
+    /// Panics if final children count violates arity constraints.
+    /// Panics in debug builds if commit_children_update is called without begin_children_update.
+    pub fn commit_children_update(&mut self) {
+        debug_assert!(
+            self.updating_children,
+            "commit_children_update called without begin_children_update"
+        );
+
+        self.updating_children = false;
+
+        // Validate final state
+        if !self.arity.validate(self.children.len()) {
+            panic!(
+                "Arity violation after commit: expected {:?}, got {} children",
+                self.arity,
+                self.children.len()
+            );
+        }
+
+        // Mark needs layout since children changed
+        self.render_state.write().mark_needs_layout();
+    }
+
+    /// Replace all children atomically
+    ///
+    /// Validates arity before replacement. Recommended for rebuilds and reconciliation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if new children count violates arity constraints.
+    pub fn replace_children(&mut self, new_children: Vec<ElementId>) {
+        // Validate before replacement
+        if !self.arity.validate(new_children.len()) {
+            panic!(
+                "Arity violation in replace_children: expected {:?}, got {} children",
+                self.arity,
+                new_children.len()
+            );
+        }
+
+        self.children = new_children;
+        self.render_state.write().mark_needs_layout();
+    }
+
+    /// Add a child element
+    ///
+    /// During transactions (between begin_children_update and commit_children_update),
+    /// arity validation is skipped. Outside transactions, validates immediately.
+    ///
+    /// # Panics
+    ///
+    /// Panics if adding child would violate arity (outside transactions).
+    pub fn push_child(&mut self, child_id: ElementId) {
+        // Skip validation during transaction
+        if !self.updating_children {
+            // Validate before adding
+            if !self.arity.validate(self.children.len() + 1) {
+                panic!(
+                    "Arity violation: cannot add child to {:?}, expected {:?}",
+                    self.render_object.read().debug_name(),
+                    self.arity
+                );
+            }
+        }
+
+        self.children.push(child_id);
+
+        // Mark needs layout if not in transaction
+        if !self.updating_children {
+            self.render_state.write().mark_needs_layout();
+        }
+    }
+
+    /// Remove a child element (pub(crate) to prevent misuse outside transactions)
+    ///
+    /// During transactions, arity validation is skipped.
+    /// Outside transactions, validates that removal won't violate arity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if removing child would violate arity (outside transactions).
+    pub(crate) fn remove_child(&mut self, child_id: ElementId) -> bool {
+        if let Some(pos) = self.children.iter().position(|&id| id == child_id) {
+            // Skip validation during transaction
+            if !self.updating_children {
+                // Validate before removal
+                if !self.arity.validate(self.children.len() - 1) {
+                    panic!(
+                        "Arity violation: cannot remove child from {:?}, expected {:?}",
+                        self.render_object.read().debug_name(),
+                        self.arity
+                    );
+                }
+            }
+
+            self.children.remove(pos);
+
+            // Mark needs layout if not in transaction
+            if !self.updating_children {
+                self.render_state.write().mark_needs_layout();
+            }
+
+            true
+        } else {
+            false
+        }
+    }
+
+    // ============================================================================
+    // LAYOUT AND PAINT (For ElementTree integration)
+    // ============================================================================
 
     /// Perform layout on this render object
     ///
-    /// Creates a LayoutContext and calls the render object's layout() method.
+    /// Calls the type-erased dyn_layout method through DynRenderObject.
     ///
     /// # Parameters
     ///
@@ -275,15 +667,38 @@ impl RenderElement {
         tree: &crate::element::ElementTree,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> flui_types::Size {
+        use crate::render::protocol::BoxConstraints as ProtocolBoxConstraints;
+        use crate::render::{DynConstraints, DynGeometry};
+
+        // Hot path assertion: verify protocol matches
+        debug_assert!(
+            matches!(self.protocol, crate::render::protocol::LayoutProtocol::Box),
+            "layout_render called on non-Box protocol element"
+        );
+
         let mut render = self.render_object.write();
-        let children = Children::from_slice(&self.children);
-        let ctx = LayoutContext::new(tree, &children, constraints);
-        render.layout(&ctx)
+
+        // Convert flui_types::BoxConstraints to protocol::BoxConstraints
+        let protocol_constraints = ProtocolBoxConstraints {
+            min_width: constraints.min_width,
+            max_width: constraints.max_width,
+            min_height: constraints.min_height,
+            max_height: constraints.max_height,
+        };
+
+        let dyn_constraints = DynConstraints::Box(protocol_constraints);
+        let geometry = render.dyn_layout(tree, &self.children, &dyn_constraints);
+
+        // Extract size from geometry (assumes Box protocol)
+        match geometry {
+            DynGeometry::Box(size) => size,
+            _ => panic!("Expected Box geometry from Box protocol render object"),
+        }
     }
 
     /// Perform paint on this render object
     ///
-    /// Creates a PaintContext and calls the render object's paint() method.
+    /// Calls the type-erased dyn_paint method through DynRenderObject.
     ///
     /// # Parameters
     ///
@@ -292,207 +707,107 @@ impl RenderElement {
     ///
     /// # Returns
     ///
-    /// A boxed layer containing the painted content
+    /// A canvas containing the painted content
     pub(crate) fn paint_render(
         &self,
         tree: &crate::element::ElementTree,
         offset: flui_types::Offset,
     ) -> flui_painting::Canvas {
+        // Hot path assertion: verify protocol matches
+        debug_assert!(
+            matches!(self.protocol, crate::render::protocol::LayoutProtocol::Box),
+            "paint_render called on non-Box protocol element"
+        );
+
         let render = self.render_object.read();
-        let children = Children::from_slice(&self.children);
-        let ctx = PaintContext::new(tree, &children, offset);
-        render.paint(&ctx)
+        render.dyn_paint(tree, &self.children, offset)
     }
+}
 
-    // Note: update() method removed - will be replaced with View-based update
-    // Note: Implement View::rebuild() integration
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::protocol::{BoxGeometry, BoxLayoutContext, BoxPaintContext};
+    use crate::render::Leaf;
+    use flui_types::Size;
 
-    /// Set children (enforces arity constraints at runtime)
-    #[allow(dead_code)]
-    pub(crate) fn set_children(&mut self, children: Vec<ElementId>) {
-        // Enforce arity constraints
-        let render = self.render_object_mut_direct();
-        let arity = render.arity();
+    // Mock leaf render for testing
+    #[derive(Debug)]
+    struct MockLeaf;
 
-        // Use Arity::validate() for consistent validation
-        if let Err(err) = arity.validate(children.len()) {
-            panic!("{}", err);
+    impl Render<Leaf> for MockLeaf {
+        fn layout(&mut self, _ctx: &BoxLayoutContext<Leaf>) -> BoxGeometry {
+            BoxGeometry {
+                size: Size::new(100.0, 100.0),
+            }
         }
 
-        self.children = children;
+        fn paint(&self, _ctx: &BoxPaintContext<Leaf>) {
+            // No-op
+        }
     }
 
-    /// Add a child (for render objects with arity Exact(1) or Variable)
-    ///
-    /// NOTE: This should only be called with RenderElement children!
-    /// ComponentElements should not be added as children to RenderElements.
-    /// The element tree building should ensure that RenderElements only have
-    /// RenderElement children (by walking down through ComponentElements).
-    #[allow(dead_code)]
-    pub(crate) fn add_child(&mut self, child_id: ElementId) {
-        // Add to children list
-        self.children.push(child_id);
+    // Mock variable render for testing
+    #[derive(Debug)]
+    struct MockVariable;
+
+    impl Render<Variable> for MockVariable {
+        fn layout(&mut self, _ctx: &BoxLayoutContext<Variable>) -> BoxGeometry {
+            BoxGeometry {
+                size: Size::new(100.0, 100.0),
+            }
+        }
+
+        fn paint(&self, _ctx: &BoxPaintContext<Variable>) {
+            // No-op
+        }
     }
 
-    /// Remove a child by ID
-    #[allow(dead_code)]
-    pub(crate) fn remove_child(&mut self, child_id: ElementId) {
-        self.children.retain(|&id| id != child_id);
+    #[test]
+    fn test_box_leaf_constructor() {
+        let element = RenderElement::box_leaf(MockLeaf);
+        assert_eq!(element.protocol(), LayoutProtocol::Box);
+        assert_eq!(element.runtime_arity(), &RuntimeArity::Exact(0));
+        assert_eq!(element.children().len(), 0);
     }
 
-    /// Take unmounted children (consumes them)
-    ///
-    /// Returns the unmounted children and sets the field to None.
-    /// This is called by ElementTree during insertion to mount the children.
-    pub(crate) fn take_unmounted_children(&mut self) -> Option<Vec<Element>> {
-        self.unmounted_children.take()
+    #[test]
+    fn test_transactional_update() {
+        // Use box_variable which accepts any number of children
+        let mut element = RenderElement::box_variable(MockVariable);
+
+        // Begin transaction
+        element.begin_children_update();
+
+        // Add children during transaction
+        let child_id1 = ElementId::new(1);
+        let child_id2 = ElementId::new(2);
+        element.push_child(child_id1);
+        element.push_child(child_id2);
+
+        // Commit validates final state
+        element.commit_children_update();
+
+        assert_eq!(element.children().len(), 2);
     }
 
-    // ========== DynElement-like Interface ==========
-    //
-    // These methods match the DynElement trait and are called by Element enum.
-    // Following API Guidelines: is_* for predicates, no get_* prefix.
+    #[test]
+    #[should_panic(expected = "Arity violation")]
+    fn test_push_child_violates_leaf_arity() {
+        let mut element = RenderElement::box_leaf(MockLeaf);
 
-    /// Get parent element ID
-    #[inline]
-    #[must_use]
-    pub fn parent(&self) -> Option<ElementId> {
-        self.base.parent()
+        // Attempting to add child to Leaf should panic
+        let child_id = ElementId::new(1);
+        element.push_child(child_id);
     }
 
-    /// Get iterator over child element IDs
-    #[inline]
-    pub fn children_iter(&self) -> Box<dyn Iterator<Item = ElementId> + '_> {
-        Box::new(self.children.iter().copied())
-    }
+    #[test]
+    fn test_replace_children_atomic() {
+        let mut element = RenderElement::box_variable(MockVariable);
 
-    /// Get current lifecycle state
-    #[inline]
-    #[must_use]
-    pub fn lifecycle(&self) -> ElementLifecycle {
-        self.base.lifecycle()
-    }
+        let children = vec![ElementId::new(1), ElementId::new(2), ElementId::new(3)];
+        element.replace_children(children.clone());
 
-    /// Mount element to tree
-    ///
-    /// Sets parent, slot, and transitions to Active lifecycle state.
-    /// Marks element as dirty to trigger initial build.
-    pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>) {
-        self.base.mount(parent, slot);
-    }
-
-    /// Unmount element from tree
-    ///
-    /// Transitions to Defunct lifecycle state and clears children.
-    /// The children will be unmounted by ElementTree separately.
-    pub fn unmount(&mut self) {
-        self.base.unmount();
-        // Children will be unmounted by ElementTree
-        self.children.clear();
-    }
-
-    /// Deactivate element
-    ///
-    /// Called when element is temporarily deactivated (e.g., moved to cache).
-    pub fn deactivate(&mut self) {
-        self.base.deactivate();
-    }
-
-    /// Activate element
-    ///
-    /// Called when element is reactivated. Marks dirty to trigger rebuild.
-    pub fn activate(&mut self) {
-        self.base.activate();
-    }
-
-    /// Check if element needs rebuild
-    ///
-    /// Following API Guidelines: is_* prefix for boolean predicates.
-    #[inline]
-    #[must_use]
-    pub fn is_dirty(&self) -> bool {
-        self.base.is_dirty()
-    }
-
-    /// Mark element as needing rebuild
-    #[inline]
-    pub fn mark_dirty(&mut self) {
-        self.base.mark_dirty();
-    }
-
-    /// Forget child element
-    ///
-    /// Called by ElementTree when child is being removed.
-    pub(crate) fn forget_child(&mut self, child_id: ElementId) {
-        self.children.retain(|&id| id != child_id);
-    }
-
-    /// Update slot for child
-    ///
-    /// Slot is managed by parent, children don't need to track it.
-    pub(crate) fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
-        // Slot is managed by parent
-    }
-
-    /// Handle an event
-    ///
-    /// RenderElements typically don't need to handle events directly,
-    /// as they focus on layout and painting. However, this can be overridden
-    /// for specific render objects that need to react to events.
-    ///
-    /// **Possible Use Cases:**
-    /// - **RenderImage**: Reload textures on `Event::Window(WindowEvent::ScaleChanged)`
-    /// - **RenderVideo**: Pause playback on `Event::Window(WindowEvent::VisibilityChanged)`
-    /// - **RenderAnimated**: Stop animations on focus loss
-    ///
-    /// Default implementation: does not handle events (returns false)
-    ///
-    /// # Returns
-    ///
-    /// `true` if the event was handled, `false` otherwise
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// match event {
-    ///     Event::Window(WindowEvent::ScaleChanged { scale }) => {
-    ///         self.reload_textures_at_scale(*scale);
-    ///         true // Handled
-    ///     }
-    ///     _ => false // Ignore other events
-    /// }
-    /// ```
-    #[inline]
-    pub fn handle_event(&mut self, _event: &flui_types::Event) -> bool {
-        false // RenderElements don't handle events by default
-    }
-}
-
-// ========== ViewElement Implementation ==========
-
-use crate::view::view::ViewElement;
-use std::any::Any;
-
-impl ViewElement for RenderElement {
-    fn into_element(self: Box<Self>) -> crate::element::Element {
-        crate::element::Element::Render(*self)
-    }
-
-    fn mark_dirty(&mut self) {
-        self.base.mark_dirty();
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
-impl IntoElement for RenderElement {
-    fn into_element(self) -> Element {
-        Element::Render(self)
+        assert_eq!(element.children(), &children[..]);
     }
 }
