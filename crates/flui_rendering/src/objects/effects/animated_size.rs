@@ -4,9 +4,7 @@
 //! It smoothly transitions between sizes using linear interpolation.
 //! A full implementation would use AnimationController and TickerProvider.
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Alignment, Size};
 use std::time::{Duration, Instant};
 
@@ -156,7 +154,8 @@ impl RenderAnimatedSize {
                 target_size,
             } => {
                 let elapsed = start_time.elapsed();
-                let progress = (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0);
+                let progress =
+                    (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0);
 
                 if progress >= 1.0 {
                     // Animation complete
@@ -199,12 +198,12 @@ impl RenderAnimatedSize {
     }
 }
 
-impl LegacyRender for RenderAnimatedSize {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Single> for RenderAnimatedSize {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with same constraints
-        let child_size = ctx.tree.layout_child(child_id, ctx.constraints);
+        let child_size = ctx.layout_child(child_id, ctx.constraints);
 
         // Detect size change and start animation if needed
         if self.last_child_size != Some(child_size) {
@@ -227,7 +226,7 @@ impl LegacyRender for RenderAnimatedSize {
         ctx.constraints.constrain(animated_size)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate child offset based on alignment
@@ -243,15 +242,7 @@ impl LegacyRender for RenderAnimatedSize {
 
         // Paint child at calculated offset
         // TODO: Add clipping if child exceeds current animated size
-        ctx.tree.paint_child(child_id, child_offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+        ctx.paint_child(child_id, child_offset);
     }
 }
 
@@ -276,8 +267,8 @@ mod tests {
 
     #[test]
     fn test_animated_size_with_alignment() {
-        let animated_size =
-            RenderAnimatedSize::new(Duration::from_millis(300)).with_alignment(SizeAlignment::TopLeft);
+        let animated_size = RenderAnimatedSize::new(Duration::from_millis(300))
+            .with_alignment(SizeAlignment::TopLeft);
         assert_eq!(animated_size.alignment, SizeAlignment::TopLeft);
     }
 
@@ -286,7 +277,10 @@ mod tests {
         assert_eq!(SizeAlignment::Center.to_alignment(), Alignment::CENTER);
         assert_eq!(SizeAlignment::TopLeft.to_alignment(), Alignment::TOP_LEFT);
         assert_eq!(SizeAlignment::TopRight.to_alignment(), Alignment::TOP_RIGHT);
-        assert_eq!(SizeAlignment::BottomLeft.to_alignment(), Alignment::BOTTOM_LEFT);
+        assert_eq!(
+            SizeAlignment::BottomLeft.to_alignment(),
+            Alignment::BOTTOM_LEFT
+        );
         assert_eq!(
             SizeAlignment::BottomRight.to_alignment(),
             Alignment::BOTTOM_RIGHT
@@ -305,11 +299,5 @@ mod tests {
         let animated_size = RenderAnimatedSize::new(Duration::from_millis(300));
         assert!(!animated_size.is_animating());
         assert_eq!(animated_size.state, AnimationState::Idle);
-    }
-
-    #[test]
-    fn test_arity() {
-        let animated_size = RenderAnimatedSize::new(Duration::from_millis(300));
-        assert_eq!(animated_size.arity(), RuntimeArity::Exact(1));
     }
 }

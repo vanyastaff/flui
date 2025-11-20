@@ -1,8 +1,6 @@
 //! RenderTexture - GPU texture rendering
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Leaf, RenderBox};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
 use flui_types::styling::BoxFit;
 use flui_types::{Rect, Size};
 

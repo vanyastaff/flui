@@ -1,8 +1,6 @@
 //! RenderOverflowBox - allows child_id to overflow constraints
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Offset, Size};
 
@@ -100,11 +98,11 @@ impl Default for RenderOverflowBox {
     }
 }
 
-impl LegacyRender for RenderOverflowBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderOverflowBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
+
         // Calculate child_id constraints by overriding parent constraints
         let child_min_width = self.min_width.unwrap_or(constraints.min_width);
         let child_max_width = self.max_width.unwrap_or(constraints.max_width);
@@ -118,9 +116,8 @@ impl LegacyRender for RenderOverflowBox {
             child_max_height,
         );
 
-        // SingleArity always has exactly one child_id
         // Layout child_id with overridden constraints
-        let child_size = tree.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints);
 
         // Our size is determined by parent constraints
         // We constrain ourselves, but let child_id overflow
@@ -133,8 +130,7 @@ impl LegacyRender for RenderOverflowBox {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 
@@ -148,14 +144,7 @@ impl LegacyRender for RenderOverflowBox {
         let child_offset = offset + Offset::new(aligned_x, aligned_y);
 
         // Paint child at aligned offset
-        tree.paint_child(child_id, child_offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+        ctx.paint_child(child_id, child_offset);
     }
 }
 

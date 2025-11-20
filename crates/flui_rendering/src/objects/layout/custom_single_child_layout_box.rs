@@ -8,9 +8,7 @@
 //!
 //! Similar to Flutter's RenderCustomSingleChildLayoutBox.
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
@@ -192,8 +190,8 @@ impl RenderCustomSingleChildLayoutBox {
     }
 }
 
-impl LegacyRender for RenderCustomSingleChildLayoutBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // 1. Get parent size from delegate (cannot depend on child size)
@@ -204,30 +202,24 @@ impl LegacyRender for RenderCustomSingleChildLayoutBox {
         let child_constraints = self.delegate.get_constraints_for_child(ctx.constraints);
 
         // 3. Layout child with those constraints
-        let child_size = ctx.tree.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints);
 
         // 4. Get child position from delegate
-        let child_offset = self.delegate.get_position_for_child(parent_size, child_size);
+        let child_offset = self
+            .delegate
+            .get_position_for_child(parent_size, child_size);
         self.cached_child_offset = child_offset;
 
         // Return parent size
         parent_size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Paint child at the offset calculated during layout
         let child_offset = ctx.offset + self.cached_child_offset;
-        ctx.tree.paint_child(child_id, child_offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+        ctx.paint_child(child_id, child_offset);
     }
 }
 
@@ -418,14 +410,6 @@ mod tests {
 
         assert_eq!(render.cached_size, Size::ZERO);
         assert_eq!(render.cached_child_offset, Offset::ZERO);
-    }
-
-    #[test]
-    fn test_render_custom_single_child_layout_box_arity() {
-        let delegate = Box::new(CenterDelegate);
-        let render = RenderCustomSingleChildLayoutBox::new(delegate);
-
-        assert_eq!(render.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]

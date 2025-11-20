@@ -10,9 +10,7 @@
 //! - Parent (RenderFlex) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using flexible children
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{layout::FlexFit, Size};
 
 /// Metadata for flexible children in Flex layout
@@ -187,31 +185,17 @@ impl RenderFlexItem {
     }
 }
 
-impl LegacyRender for RenderFlexItem {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderFlexItem {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
         // Pass-through: just layout child with same constraints
-        tree.layout_child(child_id, constraints)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
         // Pass-through: just paint child at same offset
-        tree.paint_child(child_id, offset)
-    }
-
-    // Note: metadata() method removed - not part of unified Render trait
-    // Parent data should be queried via RenderElement.parent_data() instead
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 
