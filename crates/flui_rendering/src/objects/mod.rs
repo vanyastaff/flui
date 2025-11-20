@@ -36,32 +36,62 @@ pub mod media;
 
 // Layout objects ✅
 pub use layout::{
+    // Additional layout exports
+    FlexItemMetadata,
+    PositionedMetadata,
     // Optional arity
     RenderAlign,
     // Single arity
     RenderAspectRatio,
     RenderBaseline,
+    RenderConstrainedBox,
     // Leaf arity
     RenderEmpty,
     // Variable arity
     RenderFlex,
+    RenderFlexItem,
     RenderFractionallySizedBox,
+    RenderIndexedStack,
     RenderIntrinsicHeight,
     RenderIntrinsicWidth,
+    RenderLimitedBox,
+    RenderListBody,
+    RenderOverflowBox,
     RenderPadding,
+    RenderPositioned,
     RenderPositionedBox,
     RenderRotatedBox,
+    RenderScrollView,
     RenderShiftedBox,
     RenderSizedBox,
     RenderSizedOverflowBox,
     RenderStack,
+    RenderWrap,
+    WrapAlignment,
+    WrapCrossAlignment,
 };
 
 // Visual Effects Single objects (13 objects from effects) ✅
 pub use effects::{
-    DecorationPosition, RenderAnimatedOpacity, RenderBackdropFilter, RenderClipOval,
-    RenderClipPath, RenderClipRRect, RenderClipRect, RenderCustomPaint, RenderDecoratedBox,
-    RenderOffstage, RenderOpacity, RenderRepaintBoundary, RenderShaderMask, RenderTransform,
+    DecorationPosition,
+    // Additional effects exports
+    PhysicalShape,
+    RRectShape,
+    RectShape,
+    RenderAnimatedOpacity,
+    RenderBackdropFilter,
+    RenderClipOval,
+    RenderClipPath,
+    RenderClipRRect,
+    RenderClipRect,
+    RenderCustomPaint,
+    RenderDecoratedBox,
+    RenderOffstage,
+    RenderOpacity,
+    RenderPhysicalModel,
+    RenderRepaintBoundary,
+    RenderShaderMask,
+    RenderTransform,
     RenderVisibility,
 };
 
@@ -74,7 +104,7 @@ pub use interaction::{
 // Semantics Single objects (6 objects) ✅
 pub use special::{
     RenderAnnotatedRegion, RenderBlockSemantics, RenderColoredBox, RenderExcludeSemantics,
-    RenderMergeSemantics, RenderMetaData, RenderView,
+    RenderFittedBox, RenderMergeSemantics, RenderMetaData, RenderView,
 };
 
 // Text Leaf objects (1 object) ✅

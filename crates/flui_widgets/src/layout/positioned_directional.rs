@@ -17,6 +17,7 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::prelude::TextDirection;
@@ -103,7 +104,7 @@ pub struct PositionedDirectional {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for PositionedDirectional {
@@ -117,31 +118,8 @@ impl std::fmt::Debug for PositionedDirectional {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("text_direction", &self.text_direction)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for PositionedDirectional {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            start: self.start,
-            top: self.top,
-            end: self.end,
-            bottom: self.bottom,
-            width: self.width,
-            height: self.height,
-            text_direction: self.text_direction,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -172,7 +150,7 @@ impl PositionedDirectional {
             width: None,
             height: None,
             text_direction: None,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -187,7 +165,7 @@ impl PositionedDirectional {
             width: None,
             height: None,
             text_direction: None,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -202,34 +180,34 @@ impl PositionedDirectional {
             width: None,
             height: None,
             text_direction: None,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
     /// Converts to Positioned using the given text direction.
     ///
     /// This resolves start/end to left/right based on text direction.
-    fn to_positioned(&self, text_direction: TextDirection) -> crate::Positioned {
+    fn to_positioned(self, text_direction: TextDirection) -> crate::Positioned {
         let (left, right) = match text_direction {
             TextDirection::Ltr => (self.start, self.end),
             TextDirection::Rtl => (self.end, self.start),
         };
 
         crate::Positioned {
-            key: self.key.clone(),
+            key: self.key,
             left,
             top: self.top,
             right,
             bottom: self.bottom,
             width: self.width,
             height: self.height,
-            child: self.child.clone(),
+            child: self.child,
         }
     }
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Box<dyn >) {
+    pub fn set_child(&mut self, child: Element) {
         self.child = Some(child);
     }
 }
@@ -260,7 +238,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> PositionedDirectionalBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -274,7 +252,7 @@ impl<S: State> PositionedDirectionalBuilder<S> {
 
 // Implement View trait
 impl View for PositionedDirectional {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Get text direction from context or use default
         let text_direction = self.text_direction.unwrap_or(TextDirection::Ltr);
 

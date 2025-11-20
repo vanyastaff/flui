@@ -31,8 +31,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
@@ -76,8 +76,8 @@ pub struct Padding {
     pub padding: EdgeInsets,
 
     /// The child widget to pad.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Element>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for Padding {
@@ -88,7 +88,7 @@ impl std::fmt::Debug for Padding {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<Element>"
+                    "<child>"
                 } else {
                     "None"
                 },
@@ -101,11 +101,11 @@ impl Padding {
     /// Creates a new empty Padding with zero padding.
     ///
     /// Note: Prefer using convenience methods like `Padding::all()` for most cases.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             key: None,
             padding: EdgeInsets::ZERO,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -153,7 +153,7 @@ impl Padding {
     /// ```
     pub fn only(left: f32, top: f32, right: f32, bottom: f32, child: impl IntoElement) -> Self {
         Self::builder()
-            .padding(EdgeInsets::only(left, top, right, bottom))
+            .padding(EdgeInsets::new(left, top, right, bottom))
             .child(child)
             .build()
     }
@@ -161,7 +161,7 @@ impl Padding {
     /// Creates a Padding with only left padding.
     pub fn left(value: f32, child: impl IntoElement) -> Self {
         Self::builder()
-            .padding(EdgeInsets::only(value, 0.0, 0.0, 0.0))
+            .padding(EdgeInsets::new(value, 0.0, 0.0, 0.0))
             .child(child)
             .build()
     }
@@ -169,7 +169,7 @@ impl Padding {
     /// Creates a Padding with only top padding.
     pub fn top(value: f32, child: impl IntoElement) -> Self {
         Self::builder()
-            .padding(EdgeInsets::only(0.0, value, 0.0, 0.0))
+            .padding(EdgeInsets::new(0.0, value, 0.0, 0.0))
             .child(child)
             .build()
     }
@@ -177,7 +177,7 @@ impl Padding {
     /// Creates a Padding with only right padding.
     pub fn right(value: f32, child: impl IntoElement) -> Self {
         Self::builder()
-            .padding(EdgeInsets::only(0.0, 0.0, value, 0.0))
+            .padding(EdgeInsets::new(0.0, 0.0, value, 0.0))
             .child(child)
             .build()
     }
@@ -185,7 +185,7 @@ impl Padding {
     /// Creates a Padding with only bottom padding.
     pub fn bottom(value: f32, child: impl IntoElement) -> Self {
         Self::builder()
-            .padding(EdgeInsets::only(0.0, 0.0, 0.0, value))
+            .padding(EdgeInsets::new(0.0, 0.0, 0.0, value))
             .child(child)
             .build()
     }
@@ -219,7 +219,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl IntoElement) -> PaddingBuilder<SetChild<S>> {
-        self.child_internal(Some(child.into_element()))
+        self.child_internal(Child::new(child))
     }
 }
 

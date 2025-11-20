@@ -4,8 +4,8 @@
 //! Similar to Flutter's Align widget.
 
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAlign;
@@ -44,8 +44,8 @@ pub struct Align {
     pub height_factor: Option<f32>,
 
     /// The child widget to align.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Element>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for Align {
@@ -58,7 +58,7 @@ impl std::fmt::Debug for Align {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<Element>"
+                    "<child>"
                 } else {
                     "None"
                 },
@@ -69,13 +69,13 @@ impl std::fmt::Debug for Align {
 
 impl Align {
     /// Creates a new empty Align widget with center alignment.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             key: None,
             alignment: Alignment::CENTER,
             width_factor: None,
             height_factor: None,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -170,7 +170,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl IntoElement) -> AlignBuilder<SetChild<S>> {
-        self.child_internal(Some(child.into_element()))
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -224,7 +224,7 @@ macro_rules! align {
 impl View for Align {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderAlign::with_factors(self.alignment, self.width_factor, self.height_factor)
-            .child_opt(self.child)
+            .maybe_child(self.child)
     }
 }
 

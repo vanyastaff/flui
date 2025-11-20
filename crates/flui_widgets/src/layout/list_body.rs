@@ -5,6 +5,9 @@
 //! are sized to their intrinsic size along the main axis.
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -74,7 +77,7 @@ pub struct ListBody {
 
     /// The list of child widgets
     #[builder(default)]
-    pub children: Vec<Box<dyn >>,
+    pub children: Vec<Element>,
 }
 
 impl std::fmt::Debug for ListBody {
@@ -95,17 +98,6 @@ impl std::fmt::Debug for ListBody {
     }
 }
 
-impl Clone for ListBody {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            main_axis: self.main_axis,
-            spacing: self.spacing,
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl ListBody {
     /// Creates a new ListBody.
     ///
@@ -114,7 +106,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::new(Axis::Vertical, children);
     /// ```
-    pub fn new(main_axis: Axis, children: Vec<Box<dyn >>) -> Self {
+    pub fn new(main_axis: Axis, children: Vec<Element>) -> Self {
         Self {
             key: None,
             main_axis,
@@ -130,7 +122,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::vertical(children);
     /// ```
-    pub fn vertical(children: Vec<Box<dyn >>) -> Self {
+    pub fn vertical(children: Vec<Element>) -> Self {
         Self::new(Axis::Vertical, children)
     }
 
@@ -141,7 +133,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::horizontal(children);
     /// ```
-    pub fn horizontal(children: Vec<Box<dyn >>) -> Self {
+    pub fn horizontal(children: Vec<Element>) -> Self {
         Self::new(Axis::Horizontal, children)
     }
 
@@ -152,7 +144,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::vertical_with_spacing(8.0, children);
     /// ```
-    pub fn vertical_with_spacing(spacing: f32, children: Vec<Box<dyn >>) -> Self {
+    pub fn vertical_with_spacing(spacing: f32, children: Vec<Element>) -> Self {
         Self {
             key: None,
             main_axis: Axis::Vertical,
@@ -168,7 +160,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::horizontal_with_spacing(8.0, children);
     /// ```
-    pub fn horizontal_with_spacing(spacing: f32, children: Vec<Box<dyn >>) -> Self {
+    pub fn horizontal_with_spacing(spacing: f32, children: Vec<Element>) -> Self {
         Self {
             key: None,
             main_axis: Axis::Horizontal,
@@ -191,11 +183,11 @@ impl Default for ListBody {
 
 // Implement View trait
 impl View for ListBody {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);
 
-        (render, self.children)
+        render.children(self.children)
     }
 }
 
@@ -206,8 +198,8 @@ mod tests {
     #[test]
     fn test_list_body_new() {
         let children = vec![
-            Box::new(crate::SizedBox::new()) as Box<dyn >,
-            Box::new(crate::SizedBox::new()) as Box<dyn >,
+            Box::new(crate::SizedBox::new()) as Element,
+            Box::new(crate::SizedBox::new()) as Element,
         ];
         let list = ListBody::new(Axis::Vertical, children);
         assert_eq!(list.main_axis, Axis::Vertical);
@@ -217,21 +209,21 @@ mod tests {
 
     #[test]
     fn test_list_body_vertical() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn >];
+        let children = vec![Box::new(crate::SizedBox::new()) as Element];
         let list = ListBody::vertical(children);
         assert_eq!(list.main_axis, Axis::Vertical);
     }
 
     #[test]
     fn test_list_body_horizontal() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn >];
+        let children = vec![Box::new(crate::SizedBox::new()) as Element];
         let list = ListBody::horizontal(children);
         assert_eq!(list.main_axis, Axis::Horizontal);
     }
 
     #[test]
     fn test_list_body_with_spacing() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn >];
+        let children = vec![Box::new(crate::SizedBox::new()) as Element];
         let list = ListBody::vertical_with_spacing(8.0, children);
         assert_eq!(list.spacing, 8.0);
     }

@@ -3,6 +3,7 @@
 //! Based on Flutter's GestureDetector. Wraps a child widget and provides
 //! callbacks for various pointer events.
 
+use flui_core::element::Element;
 use flui_core::view::{BuildContext, IntoElement, View};
 use flui_rendering::objects::PointerCallbacks;
 use flui_types::events::{PointerEvent, PointerEventData};
@@ -28,10 +29,9 @@ pub type PointerCallback = Arc<dyn Fn(&PointerEventData) + Send + Sync>;
 ///     .child(Text::new("Click me"))
 ///     .build()
 /// ```
-#[derive(Clone)]
 pub struct GestureDetector {
     /// Child widget
-    pub child: Box<dyn >,
+    pub child: Element,
 
     /// On tap callback (pointer up)
     pub on_tap: Option<TapCallback>,
@@ -48,7 +48,7 @@ pub struct GestureDetector {
 
 impl GestureDetector {
     /// Create a new GestureDetector with a child
-    pub fn new(child: Box<dyn >) -> Self {
+    pub fn new(child: Element) -> Self {
         Self {
             child,
             on_tap: None,
@@ -65,7 +65,7 @@ impl GestureDetector {
 }
 
 impl View for GestureDetector {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create PointerCallbacks from our simpler callbacks
         let mut callbacks = PointerCallbacks::new();
 
@@ -139,11 +139,8 @@ impl View for GestureDetector {
         // Return RenderPointerListener with child
         // The RenderPointerListener will create PointerListenerLayer
         // which registers hit test handlers with EventRouter
-        use flui_core::view::AnyElement;
-        (
-            flui_rendering::objects::RenderPointerListener::new(callbacks),
-            Some(AnyElement::new(self.child)),
-        )
+        use flui_core::render::RenderBoxExt;
+        flui_rendering::objects::RenderPointerListener::new(callbacks).child(self.child)
     }
 }
 
@@ -161,7 +158,7 @@ impl std::fmt::Debug for GestureDetector {
 
 /// Builder for GestureDetector
 pub struct GestureDetectorBuilder {
-    child: Option<Box<dyn >>,
+    child: Option<Element>,
     on_tap: Option<TapCallback>,
     on_tap_down: Option<PointerCallback>,
     on_tap_up: Option<PointerCallback>,
@@ -181,8 +178,8 @@ impl GestureDetectorBuilder {
     }
 
     /// Set the child widget
-    pub fn child(mut self, child: impl View + 'static) -> Self {
-        self.child = Some(Box::new(child));
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.child = Some(child.into_element());
         self
     }
 
@@ -270,7 +267,7 @@ mod tests {
     }
 
     impl View for MockWidget {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             (MockRender, ())
         }
     }

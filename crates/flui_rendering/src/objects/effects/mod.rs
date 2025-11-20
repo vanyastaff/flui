@@ -22,8 +22,8 @@ pub mod decorated_box;
 pub mod animated_size;
 
 // TODO: Re-enable after migration
-// pub mod physical_model;     // Optional arity
-// pub mod physical_shape;     // Optional arity
+pub mod physical_model; // Optional arity
+                        // pub mod physical_shape;     // Optional arity
 
 pub mod clip_base; // Helper module
 
@@ -48,6 +48,8 @@ pub use decorated_box::{DecorationPosition, RenderDecoratedBox};
 // Single Arity ✅
 pub use animated_size::{RenderAnimatedSize, SizeAlignment};
 
+// Physical model (Optional arity)
+pub use physical_model::{PhysicalShape, RenderPhysicalModel};
+
 // TODO: Re-enable after migration
-// pub use physical_model::{PhysicalShape, RenderPhysicalModel};
 // pub use physical_shape::{RenderPhysicalShape, ShapeClipper};

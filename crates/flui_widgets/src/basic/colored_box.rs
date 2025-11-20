@@ -6,6 +6,7 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderColoredBox;
@@ -65,8 +66,8 @@ pub struct ColoredBox {
     pub color: Color,
 
     /// The child widget (optional).
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Element>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 // Manual Debug implementation
@@ -78,7 +79,7 @@ impl std::fmt::Debug for ColoredBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<Element>"
+                    "<child>"
                 } else {
                     "None"
                 },
@@ -99,7 +100,7 @@ impl ColoredBox {
         Self {
             key: None,
             color,
-            child: Some(child.into_element()),
+            child: Child::new(child),
         }
     }
 
@@ -110,7 +111,7 @@ impl ColoredBox {
         Self {
             key: None,
             color,
-            child: None,
+            child: Child::none(),
         }
     }
 }
@@ -120,7 +121,7 @@ impl Default for ColoredBox {
         Self {
             key: None,
             color: Color::TRANSPARENT,
-            child: None,
+            child: Child::none(),
         }
     }
 }
@@ -134,7 +135,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl IntoElement) -> ColoredBoxBuilder<SetChild<S>> {
-        self.child_internal(Some(child.into_element()))
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -148,7 +149,22 @@ impl<S: State> ColoredBoxBuilder<S> {
 // Implement View for ColoredBox
 impl View for ColoredBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderColoredBox::new(self.color).child_opt(self.child)
+        // RenderColoredBox is a Leaf render (no children)
+        // If we have a child, we need to use a Stack to layer them
+        if self.child.is_some() {
+            // Use Stack to layer colored background with child
+            use flui_rendering::RenderStack;
+            let child: Element = self.child.into_element();
+            RenderStack::default()
+                .children(vec![
+                    RenderColoredBox::new(self.color).leaf().into_element(),
+                    child,
+                ])
+                .into_element()
+        } else {
+            // Just the colored box as a leaf
+            RenderColoredBox::new(self.color).leaf().into_element()
+        }
     }
 }
 

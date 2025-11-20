@@ -4,6 +4,8 @@
 //! widget that can exceed the viewport size.
 
 use super::scroll_controller::ScrollController;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{BuildContext, IntoElement, View};
 use flui_types::layout::Axis;
 
@@ -27,10 +29,9 @@ use flui_types::layout::Axis;
 ///         .children(many_items))
 ///     .build()
 /// ```
-#[derive(Clone)]
 pub struct SingleChildScrollView {
     /// The child widget to scroll
-    pub child: Box<dyn >,
+    pub child: Element,
 
     /// The scroll direction (Vertical or Horizontal)
     pub direction: Axis,
@@ -55,7 +56,7 @@ impl SingleChildScrollView {
     /// Create a new SingleChildScrollView
     pub fn new(child: impl View + 'static) -> Self {
         Self {
-            child: Box::new(child),
+            child: child.into_element(),
             direction: Axis::Vertical,
             reverse: false,
             padding: None,
@@ -73,7 +74,7 @@ impl SingleChildScrollView {
     /// Create a horizontal SingleChildScrollView
     pub fn horizontal(child: impl View + 'static) -> Self {
         Self {
-            child: Box::new(child),
+            child: child.into_element(),
             direction: Axis::Horizontal,
             reverse: false,
             padding: None,
@@ -108,7 +109,7 @@ impl std::fmt::Debug for SingleChildScrollView {
 
 /// Builder for SingleChildScrollView
 pub struct SingleChildScrollViewBuilder {
-    child: Option<Box<dyn >>,
+    child: Option<Element>,
     direction: Axis,
     reverse: bool,
     padding: Option<flui_types::EdgeInsets>,
@@ -133,7 +134,7 @@ impl SingleChildScrollViewBuilder {
 
     /// Set the child widget
     pub fn child(mut self, child: impl View + 'static) -> Self {
-        self.child = Some(Box::new(child));
+        self.child = Some(child.into_element());
         self
     }
 
@@ -240,14 +241,14 @@ mod tests {
     }
 }
 impl View for SingleChildScrollView {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Apply padding if specified
-        let child = match self.padding {
-            Some(padding) => Box::new(crate::Padding {
-                key: None,
-                padding,
-                child: Some(self.child),
-            }),
+        let child: Element = match self.padding {
+            Some(padding) => crate::Padding::builder()
+                .padding(padding)
+                .child(self.child)
+                .build()
+                .into_element(),
             None => self.child,
         };
 
@@ -266,6 +267,6 @@ impl View for SingleChildScrollView {
         render.set_show_scrollbar(self.show_scrollbar);
         render.set_scrollbar_thickness(self.scrollbar_thickness);
 
-        (render, Some(child))
+        render.child(child)
     }
 }

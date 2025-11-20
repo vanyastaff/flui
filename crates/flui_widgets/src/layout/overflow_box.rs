@@ -5,6 +5,8 @@
 //! Similar to Flutter's OverflowBox widget.
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -107,7 +109,7 @@ pub struct OverflowBox {
 
     /// The child widget that may overflow.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for OverflowBox {
@@ -119,29 +121,8 @@ impl std::fmt::Debug for OverflowBox {
             .field("min_height", &self.min_height)
             .field("max_height", &self.max_height)
             .field("alignment", &self.alignment)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for OverflowBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            min_width: self.min_width,
-            max_width: self.max_width,
-            min_height: self.min_height,
-            max_height: self.max_height,
-            alignment: self.alignment,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -184,7 +165,7 @@ impl OverflowBox {
             min_height,
             max_height,
             alignment: Alignment::CENTER,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -203,13 +184,13 @@ impl OverflowBox {
             min_height: None,
             max_height: None,
             alignment,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Box<dyn >) {
+    pub fn set_child(&mut self, child: Element) {
         self.child = Some(child);
     }
 
@@ -254,7 +235,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> OverflowBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -276,7 +257,7 @@ impl<S: State> OverflowBoxBuilder<S> {
 
 // Implement View trait - Simplified API
 impl View for OverflowBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render = RenderOverflowBox::with_constraints(
             self.min_width,
             self.max_width,
@@ -284,7 +265,7 @@ impl View for OverflowBox {
             self.max_height,
         );
 
-        (render, self.child)
+        render.child_opt(self.child)
     }
 }
 

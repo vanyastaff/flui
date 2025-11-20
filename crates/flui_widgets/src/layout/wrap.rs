@@ -4,6 +4,9 @@
 //! Similar to Flutter's Wrap widget.
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Children;
 use flui_core::BuildContext;
 
 use flui_core::view::{IntoElement, View};
@@ -122,7 +125,7 @@ pub struct Wrap {
 
     /// The children widgets
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn >>,
+    pub children: Vec<Element>,
 }
 
 impl std::fmt::Debug for Wrap {
@@ -146,20 +149,6 @@ impl std::fmt::Debug for Wrap {
     }
 }
 
-impl Clone for Wrap {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            direction: self.direction,
-            alignment: self.alignment,
-            spacing: self.spacing,
-            run_spacing: self.run_spacing,
-            cross_alignment: self.cross_alignment,
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Wrap {
     /// Creates a new Wrap with default settings.
     ///
@@ -167,11 +156,11 @@ impl Wrap {
     ///
     /// ```rust,ignore
     /// let wrap = Wrap::new(vec![
-    ///     Box::new(widget1) as Box<dyn >,
-    ///     Box::new(widget2) as Box<dyn >,
+    ///     widget1.into_element(),
+    ///     widget2.into_element(),
     /// ]);
     /// ```
-    pub fn new(children: Vec<Box<dyn >>) -> Self {
+    pub fn new(children: Vec<Element>) -> Self {
         Self {
             key: None,
             direction: Axis::Horizontal,
@@ -190,7 +179,7 @@ impl Wrap {
     /// ```rust,ignore
     /// let wrap = Wrap::horizontal(children);
     /// ```
-    pub fn horizontal(children: Vec<Box<dyn >>) -> Self {
+    pub fn horizontal(children: Vec<Element>) -> Self {
         Self {
             direction: Axis::Horizontal,
             ..Self::new(children)
@@ -204,7 +193,7 @@ impl Wrap {
     /// ```rust,ignore
     /// let wrap = Wrap::vertical(children);
     /// ```
-    pub fn vertical(children: Vec<Box<dyn >>) -> Self {
+    pub fn vertical(children: Vec<Element>) -> Self {
         Self {
             direction: Axis::Vertical,
             ..Self::new(children)
@@ -213,11 +202,11 @@ impl Wrap {
 
     /// Adds a child widget.
     pub fn add_child(&mut self, child: impl View + 'static) {
-        self.children.push(Box::new(child));
+        self.children.push(child.into_element());
     }
 
     /// Sets all children at once.
-    pub fn set_children(&mut self, children: Vec<Box<dyn >>) {
+    pub fn set_children(&mut self, children: Vec<Element>) {
         self.children = children;
     }
 }
@@ -230,14 +219,14 @@ impl Default for Wrap {
 
 // Implement View for Wrap - New architecture
 impl View for Wrap {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render_wrap = RenderWrap::new(self.direction);
         render_wrap.alignment = self.alignment;
         render_wrap.spacing = self.spacing;
         render_wrap.run_spacing = self.run_spacing;
         render_wrap.cross_alignment = self.cross_alignment;
 
-        (render_wrap, self.children)
+        render_wrap.children(self.children)
     }
 }
 
@@ -250,7 +239,7 @@ where
     S::Children: IsUnset,
 {
     /// Sets the children widgets (works in builder chain).
-    pub fn children(self, children: Vec<Box<dyn >>) -> WrapBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Element>) -> WrapBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }
@@ -272,14 +261,14 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }
 
     #[test]
     fn test_wrap_new() {
-        let children = vec![Box::new(MockView) as Box<dyn >, Box::new(MockView)];
+        let children = vec![MockView.into_element(), Box::new(MockView)];
         let wrap = Wrap::new(children);
         assert_eq!(wrap.direction, Axis::Horizontal);
         assert_eq!(wrap.alignment, WrapAlignment::Start);
@@ -290,14 +279,14 @@ mod tests {
 
     #[test]
     fn test_wrap_horizontal() {
-        let children = vec![Box::new(MockView) as Box<dyn >];
+        let children = vec![MockView.into_element()];
         let wrap = Wrap::horizontal(children);
         assert_eq!(wrap.direction, Axis::Horizontal);
     }
 
     #[test]
     fn test_wrap_vertical() {
-        let children = vec![Box::new(MockView) as Box<dyn >];
+        let children = vec![MockView.into_element()];
         let wrap = Wrap::vertical(children);
         assert_eq!(wrap.direction, Axis::Vertical);
     }

@@ -31,6 +31,8 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_rendering::RenderTransform;
 use flui_types::Matrix4;
@@ -141,7 +143,8 @@ pub struct Transform {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for Transform {
@@ -168,7 +171,7 @@ impl Clone for Transform {
             key: self.key.clone(),
             transform: self.transform,
             transform_hit_tests: self.transform_hit_tests,
-            child: self.child.clone(),
+            child: Child::none(),
         }
     }
 }
@@ -194,7 +197,7 @@ impl Transform {
             key: None,
             transform,
             transform_hit_tests: true,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -271,8 +274,8 @@ impl Transform {
     /// let mut widget = Transform::rotate(PI / 4.0);
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 
     /// Validates Transform configuration.
@@ -307,9 +310,9 @@ impl Default for Transform {
 
 // Implement View for Transform - New architecture
 impl View for Transform {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Use from_matrix for backward compatibility
-        (RenderTransform::from_matrix(self.transform), self.child)
+        RenderTransform::from_matrix(self.transform).child_opt(self.child.into_inner())
     }
 }
 

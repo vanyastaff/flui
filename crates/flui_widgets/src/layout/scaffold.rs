@@ -13,6 +13,7 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::prelude::Color;
@@ -64,23 +65,23 @@ pub struct Scaffold {
     pub key: Option<String>,
 
     /// Widget to display at the top of the scaffold (typically an AppBar)
-    pub app_bar: Option<Box<dyn >>,
+    pub app_bar: Option<Element>,
 
     /// The primary content of the scaffold
     #[builder(setters(vis = "", name = body_internal))]
-    pub body: Option<Box<dyn >>,
+    pub body: Option<Element>,
 
     /// Widget to display at the bottom (typically a BottomNavigationBar)
-    pub bottom_navigation_bar: Option<Box<dyn >>,
+    pub bottom_navigation_bar: Option<Element>,
 
     /// Button displayed floating above the body (typically a FloatingActionButton)
-    pub floating_action_button: Option<Box<dyn >>,
+    pub floating_action_button: Option<Element>,
 
     /// Panel sliding in from the side for navigation
-    pub drawer: Option<Box<dyn >>,
+    pub drawer: Option<Element>,
 
     /// Panel sliding in from the right side
-    pub end_drawer: Option<Box<dyn >>,
+    pub end_drawer: Option<Element>,
 
     /// Background color of the scaffold
     #[builder(default = Color::WHITE)]
@@ -116,22 +117,6 @@ impl std::fmt::Debug for Scaffold {
     }
 }
 
-impl Clone for Scaffold {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            app_bar: self.app_bar.clone(),
-            body: self.body.clone(),
-            bottom_navigation_bar: self.bottom_navigation_bar.clone(),
-            floating_action_button: self.floating_action_button.clone(),
-            drawer: self.drawer.clone(),
-            end_drawer: self.end_drawer.clone(),
-            background_color: self.background_color,
-            resize_to_avoid_bottom_inset: self.resize_to_avoid_bottom_inset,
-        }
-    }
-}
-
 impl Scaffold {
     /// Creates a new Scaffold with default settings.
     pub fn new() -> Self {
@@ -149,7 +134,7 @@ impl Scaffold {
     }
 
     /// Creates a Scaffold with just a body widget.
-    pub fn with_body(body: Box<dyn >) -> Self {
+    pub fn with_body(body: Element) -> Self {
         Self {
             key: None,
             app_bar: None,
@@ -179,8 +164,8 @@ where
     S::Body: IsUnset,
 {
     /// Sets the body widget (works in builder chain).
-    pub fn body(self, body: impl View + 'static) -> ScaffoldBuilder<SetBody<S>> {
-        self.body_internal(Box::new(body))
+    pub fn body(self, body: impl IntoElement) -> ScaffoldBuilder<SetBody<S>> {
+        self.body_internal(body.into_element())
     }
 }
 
@@ -194,11 +179,11 @@ impl<S: State> ScaffoldBuilder<S> {
 
 // Implement View trait
 impl View for Scaffold {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         use crate::{ColoredBox, Column, Stack};
 
         // Build the scaffold layout as a column
-        let mut children: Vec<Box<dyn >> = Vec::new();
+        let mut children: Vec<Element> = Vec::new();
 
         // Add app bar if present
         if let Some(app_bar) = self.app_bar {
@@ -207,10 +192,7 @@ impl View for Scaffold {
 
         // Add body (wrapped in Expanded to fill remaining space)
         if let Some(body) = self.body {
-            children.push(Box::new(crate::Expanded {
-                flex: 1,
-                child: body,
-            }));
+            children.push(crate::Expanded::with_flex(1, body).into_element());
         }
 
         // Add bottom navigation bar if present
@@ -229,7 +211,7 @@ impl View for Scaffold {
 
         // Always use Stack to support FAB and drawers
         // Even if they're not present, Stack with single child works fine
-        let mut stack_children: Vec<Box<dyn >> = vec![Box::new(with_background)];
+        let mut stack_children: Vec<Element> = vec![with_background.into_element()];
 
         // Add FAB if present (positioned bottom-right)
         if let Some(fab) = self.floating_action_button {
@@ -243,7 +225,7 @@ impl View for Scaffold {
                 height: None,
                 child: Some(fab),
             };
-            stack_children.push(Box::new(positioned));
+            stack_children.push(positioned.into_element());
         }
 
         // Note: Drawers would require gesture detection and animation

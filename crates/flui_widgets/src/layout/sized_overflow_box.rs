@@ -4,6 +4,8 @@
 //! potentially causing the child to overflow the widget's bounds.
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -100,7 +102,7 @@ pub struct SizedOverflowBox {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for SizedOverflowBox {
@@ -142,31 +144,8 @@ impl std::fmt::Debug for SizedOverflowBox {
                 },
             )
             .field("alignment", &self.alignment)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for SizedOverflowBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            width: self.width,
-            height: self.height,
-            child_min_width: None,
-            child_max_width: None,
-            child_min_height: None,
-            child_max_height: None,
-            alignment: self.alignment,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -188,7 +167,7 @@ impl SizedOverflowBox {
             child_min_height: None,
             child_max_height: None,
             alignment: Alignment::CENTER,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -222,7 +201,7 @@ impl SizedOverflowBox {
             child_min_height,
             child_max_height,
             alignment: Alignment::CENTER,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -325,7 +304,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> SizedOverflowBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -348,7 +327,7 @@ impl<S: State> SizedOverflowBoxBuilder<S> {
 
 // Implement View trait - Simplified API
 impl View for SizedOverflowBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render = if self.child_min_width.is_some()
             || self.child_max_width.is_some()
             || self.child_min_height.is_some()
@@ -367,7 +346,7 @@ impl View for SizedOverflowBox {
         };
         render.alignment = self.alignment;
 
-        (render, self.child)
+        render.child_opt(self.child)
     }
 }
 

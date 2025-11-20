@@ -4,6 +4,8 @@
 //! Similar to Flutter's LimitedBox widget.
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderLimitedBox;
@@ -81,8 +83,8 @@ pub struct LimitedBox {
     pub max_height: f32,
 
     /// The child widget to limit.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for LimitedBox {
@@ -91,26 +93,8 @@ impl std::fmt::Debug for LimitedBox {
             .field("key", &self.key)
             .field("max_width", &self.max_width)
             .field("max_height", &self.max_height)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for LimitedBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            max_width: self.max_width,
-            max_height: self.max_height,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -121,13 +105,13 @@ impl LimitedBox {
             key: None,
             max_width,
             max_height,
-            child: None,
+            child: Child::none(),
         }
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 
     /// Validates LimitedBox configuration.
@@ -150,8 +134,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> LimitedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> LimitedBoxBuilder<SetChild<S>> {
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -164,11 +148,8 @@ impl<S: State> LimitedBoxBuilder<S> {
 
 // Implement View for LimitedBox - New architecture
 impl View for LimitedBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderLimitedBox::new(self.max_width, self.max_height),
-            self.child,
-        )
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderLimitedBox::new(self.max_width, self.max_height).maybe_child(self.child)
     }
 }
 

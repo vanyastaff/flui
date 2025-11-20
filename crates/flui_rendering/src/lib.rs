@@ -62,11 +62,19 @@ pub use flui_types::layout::{FlexFit, StackFit};
 pub use objects::{
     // Effects (Optional)
     DecorationPosition,
+    // Layout - Additional exports for widgets
+    FlexItemMetadata,
     // Interaction callbacks
     MouseCallbacks,
     // Text (Leaf)
     ParagraphData,
+    // Physical model
+    PhysicalShape,
     PointerCallbacks,
+    PositionedMetadata,
+    RRectShape,
+    // Effects - Additional exports for widgets
+    RectShape,
     // Interaction (Single) - already migrated
     RenderAbsorbPointer,
     // Layout (Optional) - already migrated
@@ -86,27 +94,38 @@ pub use objects::{
     RenderClipRect,
     // Special (Leaf)
     RenderColoredBox,
+    RenderConstrainedBox,
     RenderCustomPaint,
     RenderDecoratedBox,
     RenderEmpty,
     RenderExcludeSemantics,
+    // Special - Additional exports for widgets
+    RenderFittedBox,
     // Variable arity
     RenderFlex,
+    RenderFlexItem,
     RenderFractionallySizedBox,
     RenderIgnorePointer,
+    RenderIndexedStack,
     RenderIntrinsicHeight,
     RenderIntrinsicWidth,
+    RenderLimitedBox,
+    RenderListBody,
     RenderMergeSemantics,
     RenderMetaData,
     RenderMouseRegion,
     RenderOffstage,
     RenderOpacity,
+    RenderOverflowBox,
     RenderPadding,
     RenderParagraph,
+    RenderPhysicalModel,
     RenderPointerListener,
+    RenderPositioned,
     RenderPositionedBox,
     RenderRepaintBoundary,
     RenderRotatedBox,
+    RenderScrollView,
     RenderShaderMask,
     RenderShiftedBox,
     RenderSizedBox,
@@ -115,6 +134,9 @@ pub use objects::{
     RenderTransform,
     RenderView,
     RenderVisibility,
+    RenderWrap,
+    WrapAlignment,
+    WrapCrossAlignment,
 };
 
 // Re-export all RenderObjects

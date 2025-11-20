@@ -9,7 +9,7 @@
 //! ```rust,ignore
 //! Flexible {
 //!     flex: 1,
-//!     child: Some(Box::new(widget)),
+//!     child: Some(widget.into_element()),
 //!     ..Default::default()
 //! }
 //! ```
@@ -30,6 +30,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -146,7 +148,7 @@ pub struct Flexible {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 // Manual Debug implementation since  doesn't implement Debug
@@ -156,27 +158,8 @@ impl std::fmt::Debug for Flexible {
             .field("key", &self.key)
             .field("flex", &self.flex)
             .field("fit", &self.fit)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-// Manual Clone implementation since  doesn't implement Clone
-impl Clone for Flexible {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            flex: self.flex,
-            fit: self.fit,
-            child: self.child.clone(), // Widgets aren't cloned deeply
-        }
     }
 }
 
@@ -199,7 +182,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> FlexibleBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -238,7 +221,7 @@ impl Flexible {
             key: None,
             flex,
             fit: FlexFit::Loose,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -261,13 +244,13 @@ impl Flexible {
             key: None,
             flex,
             fit: FlexFit::Tight,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Box<dyn >) {
+    pub fn set_child(&mut self, child: Element) {
         self.child = Some(child);
     }
 
@@ -305,14 +288,12 @@ impl Default for Flexible {
 
 // Implement View trait - Simplified API
 impl View for Flexible {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderFlexItem::new(FlexItemMetadata {
-                flex: self.flex,
-                fit: self.fit,
-            }),
-            self.child,
-        )
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderFlexItem::new(FlexItemMetadata {
+            flex: self.flex,
+            fit: self.fit,
+        })
+        .child_opt(self.child)
     }
 }
 

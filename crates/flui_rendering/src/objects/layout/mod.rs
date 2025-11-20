@@ -61,7 +61,7 @@ pub mod custom_single_child_layout_box;
 // TODO: Uncomment after migration
 // ============================================================================
 // pub mod editable_line;                   // Optional arity
-// pub mod scroll_view;                     // Single arity
+pub mod scroll_view; // Single arity
 
 // ============================================================================
 // Re-exports - Single Arity (Migrated)
@@ -118,4 +118,4 @@ pub use positioned::{PositionedMetadata, RenderPositioned};
 // TODO: Uncomment after migration
 // ============================================================================
 // pub use editable_line::{RenderEditableLine, TextSelection};
-// pub use scroll_view::RenderScrollView;
+pub use scroll_view::RenderScrollView;

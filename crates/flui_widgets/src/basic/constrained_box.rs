@@ -4,6 +4,8 @@
 //! Similar to Flutter's ConstrainedBox widget.
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderConstrainedBox;
@@ -45,8 +47,8 @@ pub struct ConstrainedBox {
     pub constraints: Option<BoxConstraints>,
 
     /// The child widget to constrain.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for ConstrainedBox {
@@ -54,25 +56,8 @@ impl std::fmt::Debug for ConstrainedBox {
         f.debug_struct("ConstrainedBox")
             .field("key", &self.key)
             .field("constraints", &self.constraints)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for ConstrainedBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            constraints: self.constraints,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -82,14 +67,14 @@ impl ConstrainedBox {
         Self {
             key: None,
             constraints: Some(constraints),
-            child: None,
+            child: Child::none(),
         }
     }
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 
     /// Validates ConstrainedBox configuration.
@@ -126,8 +111,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> ConstrainedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> ConstrainedBoxBuilder<SetChild<S>> {
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -147,9 +132,9 @@ impl<S: State> ConstrainedBoxBuilder<S> {
 
 // Implement View for ConstrainedBox - New architecture
 impl View for ConstrainedBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let constraints = self.constraints.unwrap_or(BoxConstraints::UNCONSTRAINED);
-        (RenderConstrainedBox::new(constraints), self.child)
+        RenderConstrainedBox::new(constraints).maybe_child(self.child)
     }
 }
 

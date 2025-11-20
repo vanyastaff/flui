@@ -26,6 +26,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -111,7 +113,7 @@ use flui_rendering::{FlexItemMetadata, RenderFlexItem};
 /// - Flexible: For children that can be smaller than allocated space
 /// - Row: Horizontal flex layout
 /// - Column: Vertical flex layout
-#[derive(Builder, Clone)]
+#[derive(Builder)]
 #[builder(
     on(i32, into),
     finish_fn(name = build_internal, vis = "")
@@ -126,7 +128,7 @@ pub struct Expanded {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Box<dyn >,
+    pub child: Element,
 }
 
 // Manual Debug implementation since  doesn't implement Debug
@@ -158,7 +160,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> ExpandedBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -197,7 +199,7 @@ impl Expanded {
     pub fn new(child: impl View + 'static) -> Self {
         Self {
             flex: 1,
-            child: Box::new(child),
+            child: child.into_element(),
         }
     }
 
@@ -214,10 +216,10 @@ impl Expanded {
     /// // This child gets twice as much space as flex: 1
     /// let widget = Expanded::with_flex(2, Container::new());
     /// ```
-    pub fn with_flex(flex: i32, child: impl View + 'static) -> Self {
+    pub fn with_flex(flex: i32, child: impl IntoElement) -> Self {
         Self {
             flex,
-            child: Box::new(child),
+            child: child.into_element(),
         }
     }
 
@@ -237,11 +239,8 @@ impl Expanded {
 
 // Implement View trait - Simplified API
 impl View for Expanded {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)),
-            Some(self.child),
-        )
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)).child(self.child)
     }
 }
 

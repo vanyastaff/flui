@@ -30,6 +30,9 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Children;
 use flui_core::BuildContext;
 
 use flui_core::view::{IntoElement, View};
@@ -158,7 +161,7 @@ pub struct IndexedStack {
     /// Only the child at `index` will be visible, but all children
     /// are laid out to compute the correct size and maintain state.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn >>,
+    pub children: Vec<Element>,
 }
 
 impl std::fmt::Debug for IndexedStack {
@@ -177,18 +180,6 @@ impl std::fmt::Debug for IndexedStack {
                 },
             )
             .finish()
-    }
-}
-
-impl Clone for IndexedStack {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            index: self.index,
-            alignment: self.alignment,
-            sizing: self.sizing,
-            children: self.children.clone(),
-        }
     }
 }
 
@@ -245,7 +236,7 @@ impl IndexedStack {
     /// stack.child(Text::new("Page 2"));
     /// ```
     pub fn add_child(&mut self, child: impl View + 'static) {
-        self.children.push(Box::new(child));
+        self.children.push(child.into_element());
     }
 
     /// Sets the children widgets.
@@ -259,7 +250,7 @@ impl IndexedStack {
     ///     Box::new(Text::new("Page 2")),
     /// ]);
     /// ```
-    pub fn set_children(&mut self, children: Vec<Box<dyn >>) {
+    pub fn set_children(&mut self, children: Vec<Element>) {
         self.children = children;
     }
 
@@ -288,11 +279,8 @@ impl Default for IndexedStack {
 
 // Implement View for IndexedStack - New architecture
 impl View for IndexedStack {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderIndexedStack::with_alignment(self.index, self.alignment),
-            self.children,
-        )
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderIndexedStack::with_alignment(self.index, self.alignment).children(self.children)
     }
 }
 
@@ -312,12 +300,12 @@ where
     /// IndexedStack::builder()
     ///     .index(0)
     ///     .children(vec![
-    ///         Box::new(Text::new("Page 1")) as Box<dyn >,
-    ///         Box::new(Container::new()) as Box<dyn >,
+    ///         Box::new(Text::new("Page 1")) as Element,
+    ///         Box::new(Container::new()) as Element,
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Box<dyn >>) -> IndexedStackBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Element>) -> IndexedStackBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }
@@ -383,7 +371,7 @@ mod tests {
     }
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

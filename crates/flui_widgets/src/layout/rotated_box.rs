@@ -4,6 +4,8 @@
 //! Similar to Flutter's RotatedBox widget.
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -96,7 +98,7 @@ pub struct RotatedBox {
 
     /// The child widget to rotate.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for RotatedBox {
@@ -104,25 +106,8 @@ impl std::fmt::Debug for RotatedBox {
         f.debug_struct("RotatedBox")
             .field("key", &self.key)
             .field("quarter_turns", &self.quarter_turns)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for RotatedBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            quarter_turns: self.quarter_turns,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -138,7 +123,7 @@ impl RotatedBox {
         Self {
             key: None,
             quarter_turns,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -177,7 +162,7 @@ impl RotatedBox {
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Box<dyn >) {
+    pub fn set_child(&mut self, child: Element) {
         self.child = Some(child);
     }
 }
@@ -210,7 +195,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> RotatedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -223,8 +208,8 @@ impl<S: State> RotatedBoxBuilder<S> {
 
 // Implement View trait - Simplified API
 impl View for RotatedBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderRotatedBox::new(self.quarter_turns), self.child)
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderRotatedBox::new(self.quarter_turns).child_opt(self.child)
     }
 }
 

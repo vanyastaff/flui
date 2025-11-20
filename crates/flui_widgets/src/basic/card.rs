@@ -4,12 +4,14 @@
 //! Similar to Flutter's Card widget.
 
 use bon::Builder;
+use flui_core::element::Element;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::styling::BorderRadius;
 use flui_types::{Color, EdgeInsets};
 
-use crate::visual_effects::Material;
+// TODO: Re-enable Material after visual_effects migration is complete
+// use crate::visual_effects::Material;
 use crate::Container;
 
 /// A Material Design card.
@@ -96,7 +98,7 @@ pub struct Card {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for Card {
@@ -110,25 +112,12 @@ impl std::fmt::Debug for Card {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<>"
+                    "<child>"
                 } else {
                     "None"
                 },
             )
             .finish()
-    }
-}
-
-impl Clone for Card {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            color: self.color,
-            elevation: self.elevation,
-            margin: self.margin,
-            shape: self.shape,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -140,14 +129,14 @@ impl Card {
     /// ```rust,ignore
     /// let card = Card::new(child_widget);
     /// ```
-    pub fn new(child: impl View + 'static) -> Self {
+    pub fn new(child: impl IntoElement) -> Self {
         Self {
             key: None,
             color: Color::rgb(255, 255, 255),
             elevation: 1.0,
             margin: None,
             shape: BorderRadius::circular(4.0),
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -158,14 +147,14 @@ impl Card {
     /// ```rust,ignore
     /// let card = Card::with_elevation(4.0, child_widget);
     /// ```
-    pub fn with_elevation(elevation: f32, child: impl View + 'static) -> Self {
+    pub fn with_elevation(elevation: f32, child: impl IntoElement) -> Self {
         Self {
             key: None,
             color: Color::rgb(255, 255, 255),
             elevation,
             margin: None,
             shape: BorderRadius::circular(4.0),
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 }
@@ -191,8 +180,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> CardBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> CardBuilder<SetChild<S>> {
+        self.child_internal(child.into_element())
     }
 }
 
@@ -205,30 +194,27 @@ impl<S: State> CardBuilder<S> {
 
 // Implement View trait
 impl View for Card {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        // Create child widget
-        let child_view: Box<dyn > = if let Some(child) = self.child {
-            child
-        } else {
-            Box::new(crate::SizedBox::new())
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        // TODO: Add elevation/shadow support when Material widget is available
+        // For now, create a simple card with color and border radius
+        use flui_types::styling::BoxDecoration;
+
+        let decoration = BoxDecoration {
+            color: Some(self.color),
+            border_radius: Some(self.shape),
+            ..Default::default()
         };
 
-        // Create Material surface for Material Design elevation effect
-        let material = Material {
-            key: None,
-            elevation: self.elevation,
-            color: self.color,
-            shadow_color: None,
-            border_radius: self.shape,
-            child: Some(child_view),
-        };
+        let mut container_builder = Container::builder().decoration(decoration);
 
-        // Wrap with margin if specified
         if let Some(margin) = self.margin {
-            Box::new(Container::builder().margin(margin).child(material).build())
-                as Box<dyn >
+            container_builder = container_builder.margin(margin);
+        }
+
+        if let Some(child) = self.child {
+            container_builder.child(child).build()
         } else {
-            Box::new(material) as Box<dyn >
+            container_builder.build()
         }
     }
 }
@@ -239,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_card_new() {
-        let card = Card::new(Box::new(crate::SizedBox::new()));
+        let card = Card::new(crate::SizedBox::new());
         assert_eq!(card.elevation, 1.0);
         assert_eq!(card.color, Color::rgb(255, 255, 255));
         assert!(card.child.is_some());
@@ -247,16 +233,13 @@ mod tests {
 
     #[test]
     fn test_card_with_elevation() {
-        let card = Card::with_elevation(4.0, Box::new(crate::SizedBox::new()));
+        let card = Card::with_elevation(4.0, crate::SizedBox::new());
         assert_eq!(card.elevation, 4.0);
     }
 
     #[test]
     fn test_card_builder() {
-        let _card = Card::builder()
-            .elevation(2.0)
-            .color(Color::BLUE)
-            .build_card();
+        let _card = Card::builder().elevation(2.0).color(Color::BLUE).build();
     }
 
     #[test]

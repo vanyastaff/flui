@@ -26,6 +26,7 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -221,14 +222,13 @@ impl Default for Spacer {
 
 // Implement View trait - Simplified API
 impl View for Spacer {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Build zero-sized SizedBox as child
         let sized_box = crate::SizedBox::builder().width(0.0).height(0.0).build();
 
-        (
-            RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)),
-            Some(Box::new(sized_box) as Box<dyn flui_core::view::>),
-        )
+        use flui_core::render::RenderBoxExt;
+        RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex))
+            .child(sized_box.into_element())
     }
 }
 

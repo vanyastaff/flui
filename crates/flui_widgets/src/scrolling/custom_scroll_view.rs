@@ -4,9 +4,10 @@
 
 use super::{Scrollable, Viewport};
 use crate::layout::ScrollController;
+use flui_core::view::children::Children;
 use flui_core::view::{BuildContext, IntoElement, View};
-use flui_rendering::objects::ClipBehavior;
 use flui_types::layout::AxisDirection;
+use flui_types::painting::ClipBehavior;
 
 /// High-level widget for sliver-based scrolling
 ///
@@ -41,7 +42,6 @@ use flui_types::layout::AxisDirection;
 ///             .children(grid_items)),
 ///     ])
 /// ```
-#[derive(Clone)]
 pub struct CustomScrollView {
     /// Scroll axis direction
     pub axis_direction: AxisDirection,
@@ -62,7 +62,7 @@ pub struct CustomScrollView {
     pub physics_enabled: bool,
 
     /// Sliver children
-    pub slivers: Vec<Box<dyn >>,
+    pub slivers: Children,
 }
 
 impl std::fmt::Debug for CustomScrollView {
@@ -89,7 +89,7 @@ impl CustomScrollView {
             cache_extent: 250.0,
             clip_behavior: ClipBehavior::HardEdge,
             physics_enabled: true,
-            slivers: Vec::new(),
+            slivers: Children::new(),
         }
     }
 
@@ -129,15 +129,21 @@ impl CustomScrollView {
         self
     }
 
+    /// Set sliver children from a vector
+    pub fn slivers_vec(mut self, slivers: Vec<impl IntoElement>) -> Self {
+        self.slivers = slivers.into_iter().collect();
+        self
+    }
+
     /// Set sliver children
-    pub fn slivers(mut self, slivers: Vec<Box<dyn >>) -> Self {
+    pub fn slivers(mut self, slivers: Children) -> Self {
         self.slivers = slivers;
         self
     }
 
     /// Add a single sliver child
-    pub fn add_sliver(mut self, sliver: impl View + 'static) -> Self {
-        self.slivers.push(Box::new(sliver));
+    pub fn add_sliver(mut self, sliver: impl IntoElement) -> Self {
+        self.slivers.push(sliver);
         self
     }
 }
@@ -149,9 +155,10 @@ impl Default for CustomScrollView {
 }
 
 impl View for CustomScrollView {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Get scroll offset from controller if present
-        let scroll_offset = self.controller
+        let scroll_offset = self
+            .controller
             .as_ref()
             .map(|c| c.offset())
             .unwrap_or(0.0);

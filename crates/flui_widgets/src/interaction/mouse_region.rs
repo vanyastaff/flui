@@ -16,6 +16,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::{MouseCallbacks, RenderMouseRegion};
@@ -72,8 +74,8 @@ pub struct MouseRegion {
     pub on_hover: Option<PointerEventHandler>,
 
     /// The child widget
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl MouseRegion {
@@ -84,13 +86,13 @@ impl MouseRegion {
             on_enter: None,
             on_exit: None,
             on_hover: None,
-            child: None,
+            child: Child::none(),
         }
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Box<dyn >) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 }
 
@@ -101,18 +103,6 @@ impl Default for MouseRegion {
 }
 
 // Implement Widget trait with associated type
-
-impl Clone for MouseRegion {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            on_enter: self.on_enter.clone(),
-            on_exit: self.on_exit.clone(),
-            on_hover: self.on_hover.clone(),
-            child: self.child.clone(), // Widgets aren't cloned deeply
-        }
-    }
-}
 
 impl std::fmt::Debug for MouseRegion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -135,8 +125,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> MouseRegionBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> MouseRegionBuilder<SetChild<S>> {
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -258,16 +248,8 @@ mod tests {
     #[test]
     fn test_mouse_region_set_child() {
         let mut widget = MouseRegion::new();
-        widget.set_child(Box::new(crate::SizedBox::new()));
+        widget.set_child(crate::SizedBox::new());
         assert!(widget.child.is_some());
-    }
-
-    #[test]
-    fn test_mouse_region_clone() {
-        let widget1 = MouseRegion::builder().on_enter(|_| {}).build();
-
-        let widget2 = widget1.clone();
-        assert!(widget2.on_enter.is_some());
     }
 
     #[test]
@@ -285,7 +267,7 @@ mod tests {
 
 // Implement View trait
 impl View for MouseRegion {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create RenderMouseRegion
         // TODO: RenderMouseRegion currently uses fn() callbacks as placeholders
         // The widget's Arc<dyn Fn> callbacks will be properly supported when
@@ -296,6 +278,6 @@ impl View for MouseRegion {
             on_hover: None,
         };
 
-        (RenderMouseRegion::new(callbacks), self.child)
+        RenderMouseRegion::new(callbacks).child_opt(self.child.into_inner())
     }
 }
