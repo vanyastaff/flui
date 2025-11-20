@@ -32,7 +32,6 @@
 //! ```
 
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
@@ -121,24 +120,19 @@ impl std::fmt::Debug for Row {
 }
 
 // bon Builder Extensions - Custom builder methods for RowBuilder
-impl<S: row_builder::State> RowBuilder<S> {
+use row_builder::{IsUnset, SetChildren, State};
+
+impl<S: State> RowBuilder<S>
+where
+    S::Children: IsUnset,
+{
     /// Sets all children at once.
-    pub fn children(self, children: impl Into<Children>) -> Self {
+    pub fn children(self, children: impl Into<Children>) -> RowBuilder<SetChildren<S>> {
         self.children_internal(children.into())
     }
+}
 
-    /// Adds a single child widget (chainable).
-    pub fn child(self, child: impl IntoElement) -> Self {
-        let mut row = self.build_internal();
-        row.children.push(child);
-        Row::builder()
-            .key(row.key)
-            .main_axis_alignment(row.main_axis_alignment)
-            .cross_axis_alignment(row.cross_axis_alignment)
-            .main_axis_size(row.main_axis_size)
-            .children(row.children)
-    }
-
+impl<S: State> RowBuilder<S> {
     /// Builds the Row with optional validation.
     pub fn build(self) -> Row {
         let row = self.build_internal();

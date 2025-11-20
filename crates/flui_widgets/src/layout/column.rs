@@ -32,7 +32,6 @@
 //! ```
 
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
@@ -117,25 +116,20 @@ impl std::fmt::Debug for Column {
     }
 }
 
-// Custom builder methods for ColumnBuilder
-impl<S: column_builder::State> ColumnBuilder<S> {
+// bon Builder Extensions - Custom builder methods for ColumnBuilder
+use column_builder::{IsUnset, SetChildren, State};
+
+impl<S: State> ColumnBuilder<S>
+where
+    S::Children: IsUnset,
+{
     /// Sets all children at once.
-    pub fn children(self, children: impl Into<Children>) -> Self {
+    pub fn children(self, children: impl Into<Children>) -> ColumnBuilder<SetChildren<S>> {
         self.children_internal(children.into())
     }
+}
 
-    /// Adds a single child widget (chainable).
-    pub fn child(self, child: impl IntoElement) -> Self {
-        let mut column = self.build_internal();
-        column.children.push(child);
-        Column::builder()
-            .key(column.key)
-            .main_axis_alignment(column.main_axis_alignment)
-            .cross_axis_alignment(column.cross_axis_alignment)
-            .main_axis_size(column.main_axis_size)
-            .children_internal(column.children)
-    }
-
+impl<S: State> ColumnBuilder<S> {
     /// Builds the Column with optional validation.
     pub fn build(self) -> Column {
         let column = self.build_internal();

@@ -197,6 +197,7 @@ impl View for Card {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: Add elevation/shadow support when Material widget is available
         // For now, create a simple card with color and border radius
+        use flui_core::view::children::Child;
         use flui_types::styling::BoxDecoration;
 
         let decoration = BoxDecoration {
@@ -205,17 +206,20 @@ impl View for Card {
             ..Default::default()
         };
 
-        let mut container_builder = Container::builder().decoration(decoration);
+        // Build container with decoration
+        let mut container = Container::builder().decoration(decoration).build();
 
+        // Apply margin if present
         if let Some(margin) = self.margin {
-            container_builder = container_builder.margin(margin);
+            container.margin = Some(margin);
         }
 
+        // Apply child if present
         if let Some(child) = self.child {
-            container_builder.child(child).build()
-        } else {
-            container_builder.build()
+            container.child = Child::from_element(child);
         }
+
+        container
     }
 }
 

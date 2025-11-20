@@ -252,7 +252,12 @@ impl View for Stack {
 }
 
 // bon Builder Extensions - Custom builder methods for StackBuilder
-impl<S: stack_builder::State> StackBuilder<S> {
+use stack_builder::{IsUnset, SetChildren, State};
+
+impl<S: State> StackBuilder<S>
+where
+    S::Children: IsUnset,
+{
     /// Sets all children at once.
     ///
     /// # Examples
@@ -266,31 +271,12 @@ impl<S: stack_builder::State> StackBuilder<S> {
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(self, children: impl Into<Children>) -> Self {
+    pub fn children(self, children: impl Into<Children>) -> StackBuilder<SetChildren<S>> {
         self.children_internal(children.into())
     }
+}
 
-    /// Adds a single child widget (chainable).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Stack::builder()
-    ///     .alignment(Alignment::CENTER)
-    ///     .child(Container::new())
-    ///     .child(Text::new("Overlay"))
-    ///     .build()
-    /// ```
-    pub fn child(self, child: impl IntoElement) -> Self {
-        let mut stack = self.build_internal();
-        stack.children.push(child);
-        Stack::builder()
-            .key(stack.key)
-            .alignment(stack.alignment)
-            .fit(stack.fit)
-            .children(stack.children)
-    }
-
+impl<S: State> StackBuilder<S> {
     /// Builds the Stack with optional validation.
     pub fn build(self) -> Stack {
         let stack = self.build_internal();

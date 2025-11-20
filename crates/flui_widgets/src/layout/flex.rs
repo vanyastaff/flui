@@ -145,7 +145,12 @@ impl std::fmt::Debug for Flex {
 }
 
 // bon Builder Extensions - Custom builder methods for FlexBuilder
-impl<S: flex_builder::State> FlexBuilder<S> {
+use flex_builder::{IsUnset, SetChildren, State};
+
+impl<S: State> FlexBuilder<S>
+where
+    S::Children: IsUnset,
+{
     /// Sets all children at once.
     ///
     /// # Example
@@ -155,35 +160,12 @@ impl<S: flex_builder::State> FlexBuilder<S> {
     ///     .children(vec![child1, child2, child3])
     ///     .build()
     /// ```
-    pub fn children(self, children: impl Into<Children>) -> Self {
+    pub fn children(self, children: impl Into<Children>) -> FlexBuilder<SetChildren<S>> {
         self.children_internal(children.into())
     }
+}
 
-    /// Adds a single child widget (chainable).
-    ///
-    /// This method allows you to add children one at a time:
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// Flex::builder()
-    ///     .direction(Axis::Horizontal)
-    ///     .child(widget1)
-    ///     .child(widget2)
-    ///     .child(widget3)
-    ///     .build()
-    /// ```
-    pub fn child(self, child: impl IntoElement) -> Self {
-        let mut flex = self.build_internal();
-        flex.children.push(child);
-        Flex::builder()
-            .key(flex.key)
-            .direction(flex.direction)
-            .main_axis_alignment(flex.main_axis_alignment)
-            .cross_axis_alignment(flex.cross_axis_alignment)
-            .main_axis_size(flex.main_axis_size)
-            .children(flex.children)
-    }
-
+impl<S: State> FlexBuilder<S> {
     /// Builds the Flex with optional validation.
     pub fn build(self) -> Flex {
         let flex = self.build_internal();

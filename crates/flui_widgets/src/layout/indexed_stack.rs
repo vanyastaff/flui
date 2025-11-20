@@ -32,7 +32,6 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::children::Children;
 use flui_core::BuildContext;
 
 use flui_core::view::{IntoElement, View};
