@@ -245,6 +245,13 @@ impl Row {
         self.children.push(child);
     }
 
+    /// Adds a child widget to the row.
+    ///
+    /// Alias for `add_child()` for better ergonomics.
+    pub fn child(&mut self, child: impl View + 'static) {
+        self.children.push(child);
+    }
+
     /// Sets all children at once.
     #[deprecated(note = "Use builder pattern with .children() instead")]
     pub fn set_children(&mut self, children: impl Into<Children>) {
@@ -340,6 +347,8 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive(Clone)]
@@ -347,7 +356,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+            RenderEmpty.leaf()
         }
     }
 
@@ -372,7 +381,7 @@ mod tests {
     fn test_row_struct_literal() {
         let row = Row {
             main_axis_alignment: MainAxisAlignment::Center,
-            children: vec![Box::new(MockView)],
+            children: vec![MockView.into_element()].into(),
             ..Default::default()
         };
         assert_eq!(row.main_axis_alignment, MainAxisAlignment::Center);

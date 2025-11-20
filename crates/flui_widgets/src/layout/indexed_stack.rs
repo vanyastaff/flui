@@ -231,10 +231,25 @@ impl IndexedStack {
     ///
     /// ```rust,ignore
     /// let mut stack = IndexedStack::new(Some(0));
+    /// stack.add_child(Container::new());
+    /// stack.add_child(Text::new("Page 2"));
+    /// ```
+    pub fn add_child(&mut self, child: impl View + 'static) {
+        self.children.push(child.into_element());
+    }
+
+    /// Adds a child widget.
+    ///
+    /// Alias for `add_child()` for better ergonomics.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut stack = IndexedStack::new(Some(0));
     /// stack.child(Container::new());
     /// stack.child(Text::new("Page 2"));
     /// ```
-    pub fn add_child(&mut self, child: impl View + 'static) {
+    pub fn child(&mut self, child: impl View + 'static) {
         self.children.push(child.into_element());
     }
 
@@ -355,6 +370,8 @@ macro_rules! indexed_stack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
@@ -371,7 +388,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+            RenderEmpty.leaf()
         }
     }
 

@@ -221,6 +221,13 @@ impl Stack {
         self.children.push(child);
     }
 
+    /// Adds a child widget.
+    ///
+    /// Alias for `add_child()` for better ergonomics.
+    pub fn child(&mut self, child: impl View + 'static) {
+        self.children.push(child);
+    }
+
     /// Sets the children widgets.
     #[deprecated(note = "Use builder pattern with .children() instead")]
     pub fn set_children(&mut self, children: impl Into<Children>) {
@@ -326,6 +333,8 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
@@ -342,7 +351,7 @@ mod tests {
 
     impl View for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+            RenderEmpty.leaf()
         }
     }
 

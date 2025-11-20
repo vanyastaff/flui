@@ -240,35 +240,16 @@ impl Default for GestureDetectorBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_core::render::{LayoutContext, PaintContext, Render};
-    use flui_engine::{BoxedLayer, ContainerLayer};
-    use flui_types::Size;
-    use std::any::Any;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    #[derive(Debug)]
-    struct MockRender;
-
-    impl Render for MockRender {
-        fn layout(&mut self, ctx: &LayoutContext) -> Size {
-            ctx.constraints.constrain(Size::new(100.0, 100.0))
-        }
-
-        fn paint(&self, _ctx: &PaintContext) -> BoxedLayer {
-            Box::new(ContainerLayer::new())
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
-
     impl View for MockWidget {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            (MockRender, ())
+            RenderEmpty.leaf()
         }
     }
 
