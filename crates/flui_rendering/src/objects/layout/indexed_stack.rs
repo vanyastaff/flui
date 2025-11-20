@@ -1,9 +1,8 @@
 //! RenderIndexedStack - shows only one child by index
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
-
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::{Alignment, Size};
 
 /// RenderObject that shows only one child from a list
@@ -71,12 +70,12 @@ impl Default for RenderIndexedStack {
     }
 }
 
-impl LegacyRender for RenderIndexedStack {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+impl RenderBox<Variable> for RenderIndexedStack {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        if child_ids.is_empty() {
+        let children = ctx.children;
+
+        if children.as_slice().is_empty() {
             self.child_sizes.clear();
             return constraints.smallest();
         }
@@ -86,8 +85,8 @@ impl LegacyRender for RenderIndexedStack {
         let mut max_height: f32 = 0.0;
         self.child_sizes.clear();
 
-        for child in child_ids.iter().copied() {
-            let child_size = tree.layout_child(child, constraints);
+        for child in children.iter() {
+            let child_size = ctx.layout_child(child, constraints);
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -101,13 +100,11 @@ impl LegacyRender for RenderIndexedStack {
         self.size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        // Create canvas
-        let mut canvas = Canvas::new();
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
         // Only paint the selected child
         if let Some(index) = self.index {
@@ -117,20 +114,10 @@ impl LegacyRender for RenderIndexedStack {
                 // Calculate aligned position
                 let child_offset = self.alignment.calculate_offset(child_size, self.size);
 
-                // Paint child and append to canvas
-                let child_canvas = tree.paint_child(child_id, offset + child_offset);
-                canvas.append_canvas(child_canvas);
+                // Paint child
+                ctx.paint_child(child_id, offset + child_offset);
             }
         }
-
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multi-child container
     }
 }
 

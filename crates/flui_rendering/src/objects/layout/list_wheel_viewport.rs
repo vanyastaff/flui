@@ -1,10 +1,10 @@
 //! RenderListWheelViewport - 3D wheel picker viewport
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
-use flui_types::prelude::*;
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::constraints::BoxConstraints;
+use flui_types::prelude::*;
 use std::f32::consts::PI;
 
 /// RenderObject for a 3D cylindrical scrolling viewport (wheel picker)
@@ -187,6 +187,7 @@ impl RenderListWheelViewport {
     }
 
     /// Check if an item is visible in the viewport
+    #[allow(dead_code)]
     fn is_item_visible(&self, offset: Offset, viewport_height: f32) -> bool {
         let item_top = offset.dy;
         let item_bottom = offset.dy + self.item_extent;
@@ -202,16 +203,15 @@ impl Default for RenderListWheelViewport {
     }
 }
 
-impl LegacyRender for RenderListWheelViewport {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+impl RenderBox<Variable> for RenderListWheelViewport {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
+        let children = ctx.children;
 
         // Viewport takes all available space
         let size = constraints.biggest();
 
-        if child_ids.is_empty() {
+        if children.as_slice().is_empty() {
             self.child_offsets.clear();
             self.child_transforms.clear();
             return size;
@@ -226,9 +226,9 @@ impl LegacyRender for RenderListWheelViewport {
             BoxConstraints::new(0.0, size.width, self.item_extent, self.item_extent);
 
         // Layout all children and calculate their transforms
-        for (index, &child_id) in child_ids.iter().enumerate() {
+        for (index, child_id) in children.iter().enumerate() {
             // Layout child with fixed constraints
-            let _child_size = tree.layout_child(child_id, child_constraints);
+            let _child_size = ctx.layout_child(child_id, child_constraints);
 
             // Calculate 3D transform and offset
             let (transform, offset, _scale) = self.calculate_item_transform(index, size.height);
@@ -241,20 +241,19 @@ impl LegacyRender for RenderListWheelViewport {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        if child_ids.is_empty() {
-            return Canvas::new();
-        }
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
-        let mut canvas = Canvas::new();
+        if child_ids.is_empty() {
+            return;
+        }
 
         // Paint children in order (back to front for proper layering)
         // Items further back (higher z) should be painted first
-        for (index, &child_id) in child_ids.iter().enumerate() {
+        for (index, child_id) in child_ids.into_iter().enumerate() {
             if index >= self.child_offsets.len() {
                 break;
             }
@@ -266,19 +265,8 @@ impl LegacyRender for RenderListWheelViewport {
             // For now, just using the calculated offsets for cylindrical positioning
             // Visibility culling would be done based on scroll position, but for now
             // we paint all children (could be optimized later)
-            let child_canvas = tree.paint_child(child_id, offset + child_offset);
-            canvas.append_canvas(child_canvas);
+            ctx.paint_child(child_id, offset + child_offset);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Variable number of children
     }
 }
 
@@ -390,11 +378,5 @@ mod tests {
 
         // Item completely below viewport
         assert!(!viewport.is_item_visible(Offset::new(0.0, 400.0), viewport_height));
-    }
-
-    #[test]
-    fn test_arity_is_variable() {
-        let viewport = RenderListWheelViewport::new(50.0);
-        assert_eq!(viewport.arity(), RuntimeArity::Variable);
     }
 }

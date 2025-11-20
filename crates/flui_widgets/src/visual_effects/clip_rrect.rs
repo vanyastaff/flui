@@ -31,7 +31,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_rendering::{RRectShape, RenderClipRRect};
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
@@ -144,7 +144,7 @@ pub struct ClipRRect {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for ClipRRect {
@@ -156,7 +156,7 @@ impl std::fmt::Debug for ClipRRect {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

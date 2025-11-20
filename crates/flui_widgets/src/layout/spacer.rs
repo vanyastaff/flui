@@ -227,7 +227,7 @@ impl View for Spacer {
 
         (
             RenderFlexItem::new(FlexItemMetadata::expanded_with_flex(self.flex)),
-            Some(Box::new(sized_box) as Box<dyn flui_core::view::AnyView>),
+            Some(Box::new(sized_box) as Box<dyn flui_core::view::>),
         )
     }
 }

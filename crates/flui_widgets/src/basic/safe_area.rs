@@ -15,7 +15,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
@@ -87,7 +87,7 @@ pub struct SafeArea {
 
     /// The child widget to inset
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for SafeArea {
@@ -102,7 +102,7 @@ impl std::fmt::Debug for SafeArea {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -140,7 +140,7 @@ impl SafeArea {
     }
 
     /// Creates a SafeArea that only avoids vertical system UI (top and bottom).
-    pub fn vertical(child: Box<dyn AnyView>) -> Self {
+    pub fn vertical(child: Box<dyn >) -> Self {
         Self {
             key: None,
             top: true,
@@ -153,7 +153,7 @@ impl SafeArea {
     }
 
     /// Creates a SafeArea that only avoids horizontal system UI (left and right).
-    pub fn horizontal(child: Box<dyn AnyView>) -> Self {
+    pub fn horizontal(child: Box<dyn >) -> Self {
         Self {
             key: None,
             top: false,
@@ -166,7 +166,7 @@ impl SafeArea {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
+    pub fn set_child(&mut self, child: Box<dyn >) {
         self.child = Some(child);
     }
 

@@ -26,7 +26,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -126,15 +126,15 @@ pub struct Expanded {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Box<dyn AnyView>,
+    pub child: Box<dyn >,
 }
 
-// Manual Debug implementation since AnyView doesn't implement Debug
+// Manual Debug implementation since  doesn't implement Debug
 impl std::fmt::Debug for Expanded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Expanded")
             .field("flex", &self.flex)
-            .field("child", &"<AnyView>")
+            .field("child", &"<>")
             .finish()
     }
 }

@@ -1,7 +1,7 @@
 //! Layout RenderObjects
 
 // ============================================================================
-// Module declarations - Single Arity (Migrated ✅)
+// Module declarations - Single Arity (Migrated)
 // ============================================================================
 pub mod aspect_ratio;
 pub mod baseline;
@@ -15,35 +15,47 @@ pub mod shifted_box;
 pub mod sized_overflow_box;
 
 // ============================================================================
+// Leaf Arity (Migrated)
+// ============================================================================
+pub mod empty;
+
+// ============================================================================
+// Optional Arity (Migrated)
+// ============================================================================
+pub mod align;
+pub mod sized_box;
+
+// ============================================================================
+// Variable Arity (Migrated)
+// ============================================================================
+pub mod custom_multi_child_layout_box;
+pub mod flex;
+pub mod flow;
+pub mod grid;
+pub mod indexed_stack;
+pub mod list_body;
+pub mod list_wheel_viewport;
+pub mod stack;
+pub mod table;
+pub mod wrap;
+
+// ============================================================================
 // TODO: Uncomment after migration
 // ============================================================================
-// pub mod align;                           // Optional arity
 // pub mod constrained_box;                 // Optional arity
 // pub mod constrained_overflow_box;        // Optional arity
 // pub mod constraints_transform_box;       // Single arity
-// pub mod custom_multi_child_layout_box;   // Variable arity
 // pub mod custom_single_child_layout_box;  // Single arity
 // pub mod editable_line;                   // Optional arity
-// pub mod empty;                           // Leaf arity
-// pub mod flex;                            // Variable arity
 // pub mod flex_item;                       // Single arity (metadata provider)
-// pub mod flow;                            // Variable arity
 // pub mod fractional_translation;          // Single arity
-// pub mod grid;                            // Variable arity
-// pub mod indexed_stack;                   // Variable arity
 // pub mod limited_box;                     // Optional arity
-// pub mod list_body;                       // Variable arity
-// pub mod list_wheel_viewport;             // Variable arity
 // pub mod overflow_box;                    // Optional arity
 // pub mod positioned;                      // Single arity (metadata provider)
 // pub mod scroll_view;                     // Single arity
-// pub mod sized_box;                       // Leaf arity
-// pub mod stack;                           // Variable arity
-// pub mod table;                           // Variable arity
-// pub mod wrap;                            // Variable arity
 
 // ============================================================================
-// Re-exports - Single Arity (Migrated ✅)
+// Re-exports - Single Arity (Migrated)
 // ============================================================================
 pub use aspect_ratio::RenderAspectRatio;
 pub use baseline::RenderBaseline;
@@ -56,11 +68,32 @@ pub use rotated_box::RenderRotatedBox;
 pub use shifted_box::RenderShiftedBox;
 pub use sized_overflow_box::RenderSizedOverflowBox;
 
+// Leaf arity
+pub use empty::RenderEmpty;
+
+// Optional arity
+pub use align::RenderAlign;
+pub use sized_box::RenderSizedBox;
+
+// Variable arity
+pub use custom_multi_child_layout_box::{
+    MultiChildLayoutContext, MultiChildLayoutDelegate, RenderCustomMultiChildLayoutBox,
+    SimpleGridDelegate,
+};
+pub use flex::RenderFlex;
+pub use flow::{FlowDelegate, FlowPaintContext, RenderFlow, SimpleFlowDelegate};
+pub use grid::{GridPlacement, GridTrackSize, RenderGrid};
+pub use indexed_stack::RenderIndexedStack;
+pub use list_body::RenderListBody;
+pub use list_wheel_viewport::RenderListWheelViewport;
+pub use stack::RenderStack;
+pub use table::{RenderTable, TableCellVerticalAlignment, TableColumnWidth};
+pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+
 // ============================================================================
 // TODO: Uncomment after migration
 // ============================================================================
 // // Optional arity
-// pub use align::RenderAlign;
 // pub use constrained_box::RenderConstrainedBox;
 // pub use constrained_overflow_box::RenderConstrainedOverflowBox;
 // pub use limited_box::RenderLimitedBox;
@@ -76,22 +109,3 @@ pub use sized_overflow_box::RenderSizedOverflowBox;
 // pub use fractional_translation::RenderFractionalTranslation;
 // pub use positioned::{PositionedMetadata, RenderPositioned};
 // pub use scroll_view::RenderScrollView;
-//
-// // Leaf arity
-// pub use empty::RenderEmpty;
-// pub use sized_box::RenderSizedBox;
-//
-// // Variable arity
-// pub use custom_multi_child_layout_box::{
-//     MultiChildLayoutContext, MultiChildLayoutDelegate, RenderCustomMultiChildLayoutBox,
-//     SimpleGridDelegate,
-// };
-// pub use flex::RenderFlex;
-// pub use flow::{FlowDelegate, FlowPaintContext, RenderFlow, SimpleFlowDelegate};
-// pub use grid::{GridPlacement, GridTrackSize, RenderGrid};
-// pub use indexed_stack::RenderIndexedStack;
-// pub use list_body::RenderListBody;
-// pub use list_wheel_viewport::RenderListWheelViewport;
-// pub use stack::RenderStack;
-// pub use table::{RenderTable, TableCellVerticalAlignment, TableColumnWidth};
-// pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};

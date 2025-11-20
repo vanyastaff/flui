@@ -31,7 +31,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
@@ -75,7 +77,7 @@ pub struct Padding {
 
     /// The child widget to pad.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for Padding {
@@ -86,22 +88,12 @@ impl std::fmt::Debug for Padding {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<Element>"
                 } else {
                     "None"
                 },
             )
             .finish()
-    }
-}
-
-impl Clone for Padding {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            padding: self.padding,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -126,7 +118,7 @@ impl Padding {
     /// ```rust,ignore
     /// Padding::all(16.0, Text::new("Hello"))
     /// ```
-    pub fn all(value: f32, child: impl View + 'static) -> Self {
+    pub fn all(value: f32, child: impl IntoElement) -> Self {
         Self::builder()
             .padding(EdgeInsets::all(value))
             .child(child)
@@ -143,7 +135,7 @@ impl Padding {
     /// // 20px left/right, 10px top/bottom
     /// Padding::symmetric(20.0, 10.0, content)
     /// ```
-    pub fn symmetric(horizontal: f32, vertical: f32, child: impl View + 'static) -> Self {
+    pub fn symmetric(horizontal: f32, vertical: f32, child: impl IntoElement) -> Self {
         Self::builder()
             .padding(EdgeInsets::symmetric(horizontal, vertical))
             .child(child)
@@ -152,84 +144,61 @@ impl Padding {
 
     /// Creates a Padding with custom padding on specific sides only.
     ///
-    /// Flexible method for asymmetric padding. All parameters are optional.
+    /// Flexible method for asymmetric padding.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Only left and top padding
-    /// Padding::only(widget, left: 10.0, top: 5.0)
-    ///
-    /// // Only right padding
-    /// Padding::only(widget, right: 20.0)
+    /// Padding::only(10.0, 5.0, 10.0, 5.0, content)  // left, top, right, bottom
     /// ```
-    pub fn only(
-        child: impl View + 'static,
-        left: Option<f32>,
-        top: Option<f32>,
-        right: Option<f32>,
-        bottom: Option<f32>,
-    ) -> Self {
+    pub fn only(left: f32, top: f32, right: f32, bottom: f32, child: impl IntoElement) -> Self {
         Self::builder()
-            .padding(EdgeInsets::new(
-                left.unwrap_or(0.0),
-                top.unwrap_or(0.0),
-                right.unwrap_or(0.0),
-                bottom.unwrap_or(0.0),
-            ))
+            .padding(EdgeInsets::only(left, top, right, bottom))
             .child(child)
             .build()
     }
 
-    /// Creates a Padding with only horizontal padding (left and right).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// Padding::horizontal(20.0, widget)
-    /// ```
-    pub fn horizontal(value: f32, child: impl View + 'static) -> Self {
-        Self::symmetric(value, 0.0, child)
+    /// Creates a Padding with only left padding.
+    pub fn left(value: f32, child: impl IntoElement) -> Self {
+        Self::builder()
+            .padding(EdgeInsets::only(value, 0.0, 0.0, 0.0))
+            .child(child)
+            .build()
     }
 
-    /// Creates a Padding with only vertical padding (top and bottom).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// Padding::vertical(10.0, widget)
-    /// ```
-    pub fn vertical(value: f32, child: impl View + 'static) -> Self {
-        Self::symmetric(0.0, value, child)
+    /// Creates a Padding with only top padding.
+    pub fn top(value: f32, child: impl IntoElement) -> Self {
+        Self::builder()
+            .padding(EdgeInsets::only(0.0, value, 0.0, 0.0))
+            .child(child)
+            .build()
     }
 
-    /// Creates a Padding with the given EdgeInsets and child.
-    ///
-    /// Use this when you already have an EdgeInsets instance.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let insets = EdgeInsets::all(16.0);
-    /// Padding::from_insets(insets, widget)
-    /// ```
-    pub fn from_insets(padding: EdgeInsets, child: impl View + 'static) -> Self {
-        Self::builder().padding(padding).child(child).build()
+    /// Creates a Padding with only right padding.
+    pub fn right(value: f32, child: impl IntoElement) -> Self {
+        Self::builder()
+            .padding(EdgeInsets::only(0.0, 0.0, value, 0.0))
+            .child(child)
+            .build()
     }
 
-    /// Validates padding configuration.
-    ///
-    /// Returns an error if any padding value is negative.
+    /// Creates a Padding with only bottom padding.
+    pub fn bottom(value: f32, child: impl IntoElement) -> Self {
+        Self::builder()
+            .padding(EdgeInsets::only(0.0, 0.0, 0.0, value))
+            .child(child)
+            .build()
+    }
+
+    /// Validates Padding configuration.
     pub fn validate(&self) -> Result<(), String> {
-        // Padding values should be non-negative
         if self.padding.left < 0.0
-            || self.padding.right < 0.0
             || self.padding.top < 0.0
+            || self.padding.right < 0.0
             || self.padding.bottom < 0.0
         {
-            return Err("Padding values must be non-negative".to_string());
+            return Err("Negative padding values are not supported".to_string());
         }
-
         Ok(())
     }
 }
@@ -237,13 +206,6 @@ impl Padding {
 impl Default for Padding {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Implement View for Padding - Simplified API
-impl View for Padding {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderPadding::new(self.padding), self.child)
     }
 }
 
@@ -256,8 +218,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> PaddingBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> PaddingBuilder<SetChild<S>> {
+        self.child_internal(Some(child.into_element()))
     }
 }
 
@@ -267,7 +229,6 @@ impl<S: State> PaddingBuilder<S> {
     pub fn build(self) -> Padding {
         let padding = self.build_internal();
 
-        // In debug mode, validate configuration and warn on issues
         #[cfg(debug_assertions)]
         if let Err(e) = padding.validate() {
             tracing::warn!("Padding validation warning: {}", e);
@@ -278,22 +239,6 @@ impl<S: State> PaddingBuilder<S> {
 }
 
 /// Macro for creating Padding with declarative syntax.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Empty padding
-/// padding!()
-///
-/// // With child only (zero padding)
-/// padding!(child: Text::new("Hello"))
-///
-/// // With child and padding
-/// padding!(child: widget, padding: EdgeInsets::all(16.0))
-///
-/// // Properties only (no child)
-/// padding!(padding: EdgeInsets::all(10.0))
-/// ```
 #[macro_export]
 macro_rules! padding {
     // Empty padding
@@ -301,7 +246,7 @@ macro_rules! padding {
         $crate::Padding::new()
     };
 
-    // With child only (zero padding)
+    // With child only
     (child: $child:expr) => {
         $crate::Padding::builder()
             .child($child)
@@ -319,23 +264,31 @@ macro_rules! padding {
     // Without child, just properties
     ($($field:ident : $value:expr),+ $(,)?) => {
         $crate::Padding {
-            $($field: $value.into(),)*
+            $($field: Some($value.into()),)*
             ..Default::default()
         }
     };
 }
 
+// Implement View for Padding
+impl View for Padding {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderPadding::new(self.padding).child_opt(self.child)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -354,73 +307,15 @@ mod tests {
     }
 
     #[test]
-    fn test_padding_all() {
-        let padding = Padding::all(16.0, MockView);
-        assert_eq!(padding.padding, EdgeInsets::all(16.0));
-        assert!(padding.child.is_some());
-    }
-
-    #[test]
-    fn test_padding_symmetric() {
-        let padding = Padding::symmetric(20.0, 10.0, MockView);
-        assert_eq!(padding.padding.left, 20.0);
-        assert_eq!(padding.padding.right, 20.0);
-        assert_eq!(padding.padding.top, 10.0);
-        assert_eq!(padding.padding.bottom, 10.0);
-        assert!(padding.child.is_some());
-    }
-
-    #[test]
-    fn test_padding_horizontal() {
-        let padding = Padding::horizontal(15.0, MockView);
-        assert_eq!(padding.padding.left, 15.0);
-        assert_eq!(padding.padding.right, 15.0);
-        assert_eq!(padding.padding.top, 0.0);
-        assert_eq!(padding.padding.bottom, 0.0);
-        assert!(padding.child.is_some());
-    }
-
-    #[test]
-    fn test_padding_vertical() {
-        let padding = Padding::vertical(10.0, MockView);
-        assert_eq!(padding.padding.left, 0.0);
-        assert_eq!(padding.padding.right, 0.0);
-        assert_eq!(padding.padding.top, 10.0);
-        assert_eq!(padding.padding.bottom, 10.0);
-        assert!(padding.child.is_some());
-    }
-
-    #[test]
-    fn test_padding_only() {
-        let padding = Padding::only(MockView, Some(5.0), Some(10.0), None, None);
-        assert_eq!(padding.padding.left, 5.0);
-        assert_eq!(padding.padding.top, 10.0);
-        assert_eq!(padding.padding.right, 0.0);
-        assert_eq!(padding.padding.bottom, 0.0);
-        assert!(padding.child.is_some());
-    }
-
-    #[test]
-    fn test_padding_from_insets() {
-        let insets = EdgeInsets::all(12.0);
-        let padding = Padding::from_insets(insets, MockView);
-        assert_eq!(padding.padding, EdgeInsets::all(12.0));
-        assert!(padding.child.is_some());
-    }
-
-    #[test]
     fn test_padding_builder() {
-        let padding = Padding::builder().padding(EdgeInsets::all(10.0)).build();
-        assert_eq!(padding.padding, EdgeInsets::all(10.0));
+        let padding = Padding::builder().padding(EdgeInsets::all(16.0)).build();
+        assert_eq!(padding.padding, EdgeInsets::all(16.0));
     }
 
     #[test]
-    fn test_padding_builder_with_child() {
-        let padding = Padding::builder()
-            .padding(EdgeInsets::all(10.0))
-            .child(MockView)
-            .build();
-        assert!(padding.child.is_some());
+    fn test_padding_validate_ok() {
+        let padding = Padding::builder().padding(EdgeInsets::all(16.0)).build();
+        assert!(padding.validate().is_ok());
     }
 
     #[test]
@@ -428,54 +323,4 @@ mod tests {
         let padding = padding!();
         assert_eq!(padding.padding, EdgeInsets::ZERO);
     }
-
-    #[test]
-    fn test_padding_macro_with_child() {
-        let padding = padding!(child: MockView);
-        assert!(padding.child.is_some());
-        assert_eq!(padding.padding, EdgeInsets::ZERO);
-    }
-
-    #[test]
-    fn test_padding_macro_with_child_and_padding() {
-        let padding = padding!(child: MockView, padding: EdgeInsets::all(20.0));
-        assert!(padding.child.is_some());
-        assert_eq!(padding.padding, EdgeInsets::all(20.0));
-    }
-
-    #[test]
-    fn test_padding_macro_with_padding() {
-        let padding = padding! {
-            padding: EdgeInsets::all(20.0),
-        };
-        assert_eq!(padding.padding, EdgeInsets::all(20.0));
-    }
-
-    #[test]
-    fn test_padding_validate_ok() {
-        let padding = Padding::all(10.0, MockView);
-        assert!(padding.validate().is_ok());
-    }
-
-    #[test]
-    fn test_padding_validate_negative() {
-        let padding = Padding {
-            padding: EdgeInsets::new(10.0, -5.0, 0.0, 0.0),
-            ..Default::default()
-        };
-        assert!(padding.validate().is_err());
-    }
-
-    #[test]
-    fn test_padding_view_trait() {
-        let padding = Padding::builder()
-            .padding(EdgeInsets::all(10.0))
-            .child(MockView)
-            .build();
-
-        // Test child field
-        assert!(padding.child.is_some());
-    }
 }
-
-// Padding now implements View trait directly

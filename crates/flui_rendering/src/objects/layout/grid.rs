@@ -1,10 +1,9 @@
 //! RenderGrid - CSS Grid-inspired layout
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 /// Track size specification for grid rows/columns
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,7 +51,12 @@ impl GridPlacement {
     }
 
     /// Create with spans
-    pub fn with_span(column_start: usize, column_span: usize, row_start: usize, row_span: usize) -> Self {
+    pub fn with_span(
+        column_start: usize,
+        column_span: usize,
+        row_start: usize,
+        row_span: usize,
+    ) -> Self {
         Self {
             column_start,
             column_span: column_span.max(1),
@@ -172,8 +176,8 @@ impl RenderGrid {
     /// Compute column widths based on track sizes
     fn compute_column_widths(
         &self,
-        children: &[flui_core::element::ElementId],
-        tree: &flui_core::element::ElementTree,
+        children: &[NonZeroUsize],
+        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
         constraints: BoxConstraints,
     ) -> Vec<f32> {
         if self.column_sizes.is_empty() {
@@ -209,7 +213,7 @@ impl RenderGrid {
                                 0.0,
                                 constraints.max_height,
                             );
-                            let child_size = tree.layout_child(child_id, child_constraints);
+                            let child_size = ctx.layout_child(child_id, child_constraints);
                             max_width = max_width.max(child_size.width);
                         }
                     }
@@ -237,8 +241,8 @@ impl RenderGrid {
     /// Compute row heights based on track sizes
     fn compute_row_heights(
         &self,
-        children: &[flui_core::element::ElementId],
-        tree: &flui_core::element::ElementTree,
+        children: &[NonZeroUsize],
+        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
         column_widths: &[f32],
         constraints: BoxConstraints,
     ) -> Vec<f32> {
@@ -282,7 +286,7 @@ impl RenderGrid {
                                 0.0,
                                 constraints.max_height,
                             );
-                            let child_size = tree.layout_child(child_id, child_constraints);
+                            let child_size = ctx.layout_child(child_id, child_constraints);
                             max_height = max_height.max(child_size.height);
                         }
                     }
@@ -308,13 +312,15 @@ impl RenderGrid {
     }
 }
 
-impl LegacyRender for RenderGrid {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let children = ctx.children.multi();
+impl RenderBox<Variable> for RenderGrid {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
+        let children = ctx.children;
 
-        if self.column_sizes.is_empty() || self.row_sizes.is_empty() || children.is_empty() {
+        // Collect children first for multiple passes
+        let child_ids: Vec<_> = children.iter().collect();
+
+        if self.column_sizes.is_empty() || self.row_sizes.is_empty() || child_ids.is_empty() {
             self.computed_column_widths.clear();
             self.computed_row_heights.clear();
             self.size = Size::ZERO;
@@ -322,12 +328,12 @@ impl LegacyRender for RenderGrid {
         }
 
         // Compute track sizes
-        self.computed_column_widths = self.compute_column_widths(children, tree, constraints);
+        self.computed_column_widths = self.compute_column_widths(&child_ids, &ctx, constraints);
         self.computed_row_heights =
-            self.compute_row_heights(children, tree, &self.computed_column_widths, constraints);
+            self.compute_row_heights(&child_ids, &ctx, &self.computed_column_widths, constraints);
 
         // Layout each child in its grid cell
-        for (idx, &child_id) in children.iter().enumerate() {
+        for (idx, &child_id) in child_ids.iter().enumerate() {
             let placement = self.get_placement(idx);
 
             // Calculate child constraints from spanned tracks
@@ -353,19 +359,16 @@ impl LegacyRender for RenderGrid {
                 }
             }
 
-            let child_constraints = BoxConstraints::new(
-                child_width,
-                child_width,
-                child_height,
-                child_height,
-            );
-            tree.layout_child(child_id, child_constraints);
+            let child_constraints =
+                BoxConstraints::new(child_width, child_width, child_height, child_height);
+            ctx.layout_child(child_id, child_constraints);
         }
 
         // Calculate total size
         let total_width: f32 = self.computed_column_widths.iter().sum();
         let total_height: f32 = self.computed_row_heights.iter().sum();
-        let gap_width = self.column_gap * (self.computed_column_widths.len().saturating_sub(1)) as f32;
+        let gap_width =
+            self.column_gap * (self.computed_column_widths.len().saturating_sub(1)) as f32;
         let gap_height = self.row_gap * (self.computed_row_heights.len().saturating_sub(1)) as f32;
 
         let size = constraints.constrain(Size::new(
@@ -377,19 +380,18 @@ impl LegacyRender for RenderGrid {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let children = ctx.children.multi();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        let mut canvas = Canvas::new();
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
-        if self.column_sizes.is_empty() || self.row_sizes.is_empty() || children.is_empty() {
-            return canvas;
+        if self.column_sizes.is_empty() || self.row_sizes.is_empty() || child_ids.is_empty() {
+            return;
         }
 
         // Paint each child at its grid position
-        for (idx, &child_id) in children.iter().enumerate() {
+        for (idx, child_id) in child_ids.into_iter().enumerate() {
             let placement = self.get_placement(idx);
 
             // Calculate child offset
@@ -408,19 +410,8 @@ impl LegacyRender for RenderGrid {
             }
 
             let child_offset = Offset::new(x, y);
-            let child_canvas = tree.paint_child(child_id, child_offset);
-            canvas.append_canvas(child_canvas);
+            ctx.paint_child(child_id, child_offset);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable
     }
 }
 
@@ -488,9 +479,7 @@ mod tests {
 
     #[test]
     fn test_grid_placement_span_methods() {
-        let placement = GridPlacement::new(0, 0)
-            .column_span(3)
-            .row_span(2);
+        let placement = GridPlacement::new(0, 0).column_span(3).row_span(2);
 
         assert_eq!(placement.column_span, 3);
         assert_eq!(placement.row_span, 2);
@@ -527,15 +516,5 @@ mod tests {
         assert_eq!(default.row_start, 0);
         assert_eq!(default.column_span, 1);
         assert_eq!(default.row_span, 1);
-    }
-
-    #[test]
-    fn test_arity_is_variable() {
-        let grid = RenderGrid::new(
-            vec![GridTrackSize::Flex(1.0)],
-            vec![GridTrackSize::Flex(1.0)],
-        );
-
-        assert_eq!(grid.arity(), RuntimeArity::Variable);
     }
 }

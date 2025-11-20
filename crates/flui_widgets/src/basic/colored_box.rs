@@ -4,7 +4,9 @@
 //! Similar to Flutter's ColoredBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderColoredBox;
 use flui_types::Color;
@@ -33,19 +35,6 @@ use flui_types::Color;
 ///     .color(Color::rgb(240, 240, 240))
 ///     .child(MyAppContent::new())
 ///     .build()
-/// ```
-///
-/// ### Colored spacer
-/// ```rust,ignore
-/// Row::new()
-///     .children(vec![
-///         widget1,
-///         ColoredBox::builder()
-///             .color(Color::RED)
-///             .child(SizedBox::builder().width(2.0).build())  // 2px red line
-///             .build(),
-///         widget2,
-///     ])
 /// ```
 ///
 /// ## Examples
@@ -77,10 +66,10 @@ pub struct ColoredBox {
 
     /// The child widget (optional).
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Element>,
 }
 
-// Manual Debug implementation since AnyView doesn't implement Debug
+// Manual Debug implementation
 impl std::fmt::Debug for ColoredBox {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ColoredBox")
@@ -89,7 +78,7 @@ impl std::fmt::Debug for ColoredBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<Element>"
                 } else {
                     "None"
                 },
@@ -98,36 +87,31 @@ impl std::fmt::Debug for ColoredBox {
     }
 }
 
-// Manual Clone implementation since AnyView doesn't implement Clone
-impl Clone for ColoredBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            color: self.color,
-            child: self.child.clone(),
-        }
-    }
-}
-
 impl ColoredBox {
-    /// Creates a new ColoredBox with the given color.
+    /// Creates a new ColoredBox with the given color and child.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// let widget = ColoredBox::new(Color::BLUE, Text::new("Hello"));
     /// ```
-    pub fn new(color: Color, child: impl View + 'static) -> Self {
+    pub fn new(color: Color, child: impl IntoElement) -> Self {
         Self {
             key: None,
             color,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
-    /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    /// Creates a ColoredBox with just a color (no child).
+    ///
+    /// The box will expand to fill available space.
+    pub fn color_only(color: Color) -> Self {
+        Self {
+            key: None,
+            color,
+            child: None,
+        }
     }
 }
 
@@ -149,8 +133,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> ColoredBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> ColoredBoxBuilder<SetChild<S>> {
+        self.child_internal(Some(child.into_element()))
     }
 }
 
@@ -161,26 +145,25 @@ impl<S: State> ColoredBoxBuilder<S> {
     }
 }
 
-// Implement View for ColoredBox - New architecture
+// Implement View for ColoredBox
 impl View for ColoredBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderColoredBox::new(self.color), self.child)
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderColoredBox::new(self.color).child_opt(self.child)
     }
 }
-
-// ColoredBox now implements View trait directly
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -205,12 +188,10 @@ mod tests {
     }
 
     #[test]
-    fn test_colored_box_set_child() {
-        let mut widget = ColoredBox::default();
+    fn test_colored_box_color_only() {
+        let widget = ColoredBox::color_only(Color::GREEN);
+        assert_eq!(widget.color, Color::GREEN);
         assert!(widget.child.is_none());
-
-        widget.set_child(MockView);
-        assert!(widget.child.is_some());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! Similar to Flutter's FittedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFittedBox;
 use flui_types::Alignment;
@@ -100,7 +100,7 @@ pub struct FittedBox {
 
     /// The child widget to scale and position.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for FittedBox {
@@ -112,7 +112,7 @@ impl std::fmt::Debug for FittedBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

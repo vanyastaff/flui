@@ -1,9 +1,8 @@
 //! RenderListBody - simple scrollable list layout
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
-
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -76,12 +75,12 @@ impl Default for RenderListBody {
     }
 }
 
-impl LegacyRender for RenderListBody {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+impl RenderBox<Variable> for RenderListBody {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        if child_ids.is_empty() {
+        let children = ctx.children;
+
+        if children.as_slice().is_empty() {
             self.child_sizes.clear();
             return constraints.smallest();
         }
@@ -94,7 +93,7 @@ impl LegacyRender for RenderListBody {
                 let mut total_height = 0.0_f32;
                 let mut max_width = 0.0_f32;
 
-                for child in child_ids.iter().copied() {
+                for child in children.iter() {
                     // Child gets parent's width constraints, infinite height
                     let child_constraints = BoxConstraints::new(
                         constraints.min_width,
@@ -103,7 +102,7 @@ impl LegacyRender for RenderListBody {
                         f32::INFINITY,
                     );
 
-                    let child_size = tree.layout_child(child, child_constraints);
+                    let child_size = ctx.layout_child(child, child_constraints);
                     self.child_sizes.push(child_size);
 
                     total_height += child_size.height;
@@ -111,8 +110,8 @@ impl LegacyRender for RenderListBody {
                 }
 
                 // Add spacing between children
-                if !child_ids.is_empty() {
-                    total_height += self.spacing * (child_ids.len() - 1) as f32;
+                if !children.as_slice().is_empty() {
+                    total_height += self.spacing * (children.as_slice().len() - 1) as f32;
                 }
 
                 constraints.constrain(Size::new(max_width, total_height))
@@ -121,7 +120,7 @@ impl LegacyRender for RenderListBody {
                 let mut total_width = 0.0_f32;
                 let mut max_height = 0.0_f32;
 
-                for child in child_ids.iter().copied() {
+                for child in children.iter() {
                     // Child gets infinite width, parent's height constraints
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -130,7 +129,7 @@ impl LegacyRender for RenderListBody {
                         constraints.max_height,
                     );
 
-                    let child_size = tree.layout_child(child, child_constraints);
+                    let child_size = ctx.layout_child(child, child_constraints);
                     self.child_sizes.push(child_size);
 
                     total_width += child_size.width;
@@ -138,8 +137,8 @@ impl LegacyRender for RenderListBody {
                 }
 
                 // Add spacing between children
-                if !child_ids.is_empty() {
-                    total_width += self.spacing * (child_ids.len() - 1) as f32;
+                if !children.as_slice().is_empty() {
+                    total_width += self.spacing * (children.as_slice().len() - 1) as f32;
                 }
 
                 constraints.constrain(Size::new(total_width, max_height))
@@ -147,15 +146,15 @@ impl LegacyRender for RenderListBody {
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
-        let mut canvas = Canvas::new();
+
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
         let mut current_offset = 0.0_f32;
 
-        for (i, &child_id) in child_ids.iter().enumerate() {
+        for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_size = self.child_sizes.get(i).copied().unwrap_or(Size::ZERO);
 
             let child_offset = match self.main_axis {
@@ -163,24 +162,14 @@ impl LegacyRender for RenderListBody {
                 Axis::Horizontal => Offset::new(current_offset, 0.0),
             };
 
-            // Paint child with combined offset and append to canvas
-            let child_canvas = tree.paint_child(child_id, offset + child_offset);
-            canvas.append_canvas(child_canvas);
+            // Paint child with combined offset
+            ctx.paint_child(child_id, offset + child_offset);
 
             current_offset += match self.main_axis {
                 Axis::Vertical => child_size.height + self.spacing,
                 Axis::Horizontal => child_size.width + self.spacing,
             };
         }
-
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multi-child container
     }
 }
 

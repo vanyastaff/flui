@@ -1,9 +1,10 @@
 //! RenderFlex - flex layout container (Row/Column)
 
-use flui_core::element::ElementId;
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::{
+    constraints::BoxConstraints,
     layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize},
     typography::TextBaseline,
     Axis, Offset, Size,
@@ -19,14 +20,13 @@ use flui_types::{
 /// - Main axis alignment (start, end, center, space between/around/evenly)
 /// - Cross axis alignment (start, end, center, stretch, baseline)
 /// - Main axis sizing (min or max)
-/// - TODO: Flexible/Expanded child support via GAT Metadata (see FINAL_ARCHITECTURE_V2.md)
+/// - TODO: Flexible/Expanded child support via parent_data
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use flui_rendering::objects::layout::RenderFlex;
 /// use flui_types::Axis;
-use flui_types::constraints::BoxConstraints;
 ///
 /// let mut flex = RenderFlex::row();
 /// ```
@@ -136,11 +136,6 @@ impl RenderFlex {
     }
 
     /// Helper: Estimate baseline distance from top for a given size
-    ///
-    /// This is a simplified heuristic. In a full implementation, baseline would be
-    /// queried from the child RenderObject or computed from text metrics.
-    ///
-    /// For now, we use a heuristic: baseline = height * 0.75 (75% down from top)
     fn estimate_baseline(&self, size: Size) -> f32 {
         match self.direction {
             Axis::Horizontal => size.height * 0.75,
@@ -149,9 +144,6 @@ impl RenderFlex {
     }
 
     /// Get overflow information (debug only)
-    ///
-    /// Returns (horizontal_overflow, vertical_overflow) in pixels.
-    /// Used by ElementTree to copy overflow to RenderState for painting.
     #[cfg(debug_assertions)]
     pub fn get_overflow(&self) -> (f32, f32) {
         match self.direction {
@@ -167,38 +159,26 @@ impl Default for RenderFlex {
     }
 }
 
-impl LegacyRender for RenderFlex {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+impl RenderBox<Variable> for RenderFlex {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        // Clear overflow from previous layout (important for resize!)
-        #[cfg(debug_assertions)]
-        tree.set_current_overflow(self.direction, 0.0);
-
-        if child_ids.is_empty() {
-            self.child_offsets.clear();
-            return constraints.smallest();
-        }
+        let children = ctx.children;
 
         // Clear cache
         self.child_offsets.clear();
 
-        // ========== FLEX LAYOUT ALGORITHM ==========
-        // Proper flex layout with support for Flexible/Expanded widgets
-        //
-        // Algorithm:
-        // 1. Separate inflexible and flexible children
-        // 2. Layout inflexible children first
-        // 3. Calculate remaining space and total flex
-        // 4. Allocate space to flexible children proportionally
-        // 5. Layout flexible children with FlexFit constraints
+        let child_count = children.as_slice().len();
+        if child_count == 0 {
+            return constraints.smallest();
+        }
 
-        let mut child_sizes: Vec<Size> = Vec::new();
+        // ========== SIMPLE FLEX LAYOUT (no flexible children yet) ==========
+        // TODO: Add FlexItemMetadata support for Flexible/Expanded widgets
+
         let direction = self.direction;
         let main_axis_size = self.main_axis_size;
 
-        // Cross-axis constraints (same for all children)
+        // Cross-axis constraints
         let cross_constraints = match direction {
             Axis::Horizontal => {
                 if self.cross_axis_alignment == CrossAxisAlignment::Stretch {
@@ -216,50 +196,17 @@ impl LegacyRender for RenderFlex {
             }
         };
 
-        // Step 1: Separate inflexible and flexible children
-        // IMPORTANT: Track original index to preserve child order!
-        let mut inflexible_children: Vec<(usize, ElementId, Size)> = Vec::new();
-        let mut flexible_children: Vec<(usize, ElementId, i32, flui_types::layout::FlexFit)> =
-            Vec::new();
-        let mut total_flex = 0i32;
+        // Layout all children
+        let mut child_sizes: Vec<Size> = Vec::with_capacity(child_count);
+        let mut total_main_size = 0.0f32;
+        let mut max_cross_size = 0.0f32;
 
-        for (index, &child) in child_ids.iter().enumerate() {
-            // Check if child has FlexItemMetadata (via RenderFlexItem wrapper)
-            if let Some(element) = tree.get(child) {
-                if let Some(render_node_guard) = element.render_object() {
-                    // Try to downcast to RenderFlexItem to access metadata
-                    if let Some(flex_item) = render_node_guard
-                        .as_any()
-                        .downcast_ref::<super::flex_item::RenderFlexItem>()
-                    {
-                        let flex_meta = &flex_item.metadata;
-                        if flex_meta.is_flexible() {
-                            // Child is flexible
-                            flexible_children.push((index, child, flex_meta.flex, flex_meta.fit));
-                            total_flex += flex_meta.flex;
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            // Child is inflexible (no FlexItemMetadata or flex == 0)
-            inflexible_children.push((index, child, Size::ZERO)); // Size will be filled in next step
-        }
-
-        // Step 2: Layout inflexible children
         let max_main_size = match direction {
             Axis::Horizontal => constraints.max_width,
             Axis::Vertical => constraints.max_height,
         };
 
-        let mut allocated_main_size = 0.0f32;
-        let mut max_cross_size = 0.0f32;
-
-        // Store child sizes with their original indices
-        let mut child_data: Vec<(usize, Size)> = Vec::with_capacity(child_ids.len());
-
-        for (index, child, size_slot) in inflexible_children.iter_mut() {
+        for child_id in children.iter() {
             let child_constraints = match direction {
                 Axis::Horizontal => BoxConstraints::new(
                     0.0,
@@ -275,110 +222,17 @@ impl LegacyRender for RenderFlex {
                 ),
             };
 
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "RenderFlex::layout inflexible child #{}: constraints={:?}",
-                index,
-                child_constraints
-            );
+            let child_size = ctx.layout_child(child_id, child_constraints);
+            child_sizes.push(child_size);
 
-            let child_size = tree.layout_child(*child, child_constraints);
-
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "RenderFlex::layout inflexible child #{}: returned size={:?}",
-                index,
-                child_size
-            );
-
-            *size_slot = child_size;
-            child_data.push((*index, child_size));
-
-            let child_main_size = match direction {
-                Axis::Horizontal => child_size.width,
-                Axis::Vertical => child_size.height,
-            };
-            let child_cross_size = match direction {
-                Axis::Horizontal => child_size.height,
-                Axis::Vertical => child_size.width,
+            let (child_main, child_cross) = match direction {
+                Axis::Horizontal => (child_size.width, child_size.height),
+                Axis::Vertical => (child_size.height, child_size.width),
             };
 
-            // Use safe arithmetic to prevent overflow (Rust 1.91.0 strict arithmetic)
-            allocated_main_size = (allocated_main_size + child_main_size).min(f32::MAX);
-            max_cross_size = max_cross_size.max(child_cross_size);
+            total_main_size = (total_main_size + child_main).min(f32::MAX);
+            max_cross_size = max_cross_size.max(child_cross);
         }
-
-        // Step 3: Calculate space for flexible children
-        let remaining_space = (max_main_size - allocated_main_size).max(0.0);
-        let space_per_flex = if total_flex > 0 {
-            remaining_space / total_flex as f32
-        } else {
-            0.0
-        };
-
-        // Step 4 & 5: Layout flexible children
-        for (index, child, flex, fit) in flexible_children.iter() {
-            let allocated_space = space_per_flex * (*flex as f32);
-
-            let child_constraints = match (direction, fit) {
-                (Axis::Horizontal, flui_types::layout::FlexFit::Tight) => {
-                    // Tight fit: child must fill allocated space
-                    BoxConstraints::new(
-                        allocated_space,
-                        allocated_space,
-                        cross_constraints.0,
-                        cross_constraints.1,
-                    )
-                }
-                (Axis::Horizontal, flui_types::layout::FlexFit::Loose) => {
-                    // Loose fit: child can be smaller
-                    BoxConstraints::new(
-                        0.0,
-                        allocated_space,
-                        cross_constraints.0,
-                        cross_constraints.1,
-                    )
-                }
-                (Axis::Vertical, flui_types::layout::FlexFit::Tight) => BoxConstraints::new(
-                    cross_constraints.0,
-                    cross_constraints.1,
-                    allocated_space,
-                    allocated_space,
-                ),
-                (Axis::Vertical, flui_types::layout::FlexFit::Loose) => BoxConstraints::new(
-                    cross_constraints.0,
-                    cross_constraints.1,
-                    0.0,
-                    allocated_space,
-                ),
-            };
-
-            let child_size = tree.layout_child(*child, child_constraints);
-            child_data.push((*index, child_size));
-
-            let child_main_size = match direction {
-                Axis::Horizontal => child_size.width,
-                Axis::Vertical => child_size.height,
-            };
-            let child_cross_size = match direction {
-                Axis::Horizontal => child_size.height,
-                Axis::Vertical => child_size.width,
-            };
-
-            // Use safe arithmetic to prevent overflow (Rust 1.91.0 strict arithmetic)
-            allocated_main_size = (allocated_main_size + child_main_size).min(f32::MAX);
-            max_cross_size = max_cross_size.max(child_cross_size);
-        }
-
-        // Sort child_data by original index to preserve child order
-        child_data.sort_by_key(|(index, _)| *index);
-
-        // Extract child_sizes in correct order
-        for (_, size) in child_data {
-            child_sizes.push(size);
-        }
-
-        let total_main_size = allocated_main_size;
 
         // Calculate final size
         let size = match direction {
@@ -388,20 +242,10 @@ impl LegacyRender for RenderFlex {
                 } else {
                     total_main_size.min(constraints.max_width)
                 };
-                let final_size = Size::new(
+                Size::new(
                     width,
                     max_cross_size.clamp(constraints.min_height, constraints.max_height),
-                );
-
-                #[cfg(debug_assertions)]
-                tracing::debug!(
-                    "RenderFlex::layout (Row): total_main={}, max_cross={}, final_size={:?}",
-                    total_main_size,
-                    max_cross_size,
-                    final_size
-                );
-
-                final_size
+                )
             }
             Axis::Vertical => {
                 let height = if main_axis_size.is_max() {
@@ -409,24 +253,14 @@ impl LegacyRender for RenderFlex {
                 } else {
                     total_main_size.min(constraints.max_height)
                 };
-                let final_size = Size::new(
+                Size::new(
                     max_cross_size.clamp(constraints.min_width, constraints.max_width),
                     height,
-                );
-
-                #[cfg(debug_assertions)]
-                tracing::debug!(
-                    "RenderFlex::layout (Column): total_main={}, max_cross={}, final_size={:?}",
-                    total_main_size,
-                    max_cross_size,
-                    final_size
-                );
-
-                final_size
+                )
             }
         };
 
-        // ========== DEBUG: Track overflow ==========
+        // Debug: Track overflow
         #[cfg(debug_assertions)]
         {
             let container_main_size = match direction {
@@ -437,53 +271,43 @@ impl LegacyRender for RenderFlex {
             self.overflow_pixels = (total_main_size - container_main_size).max(0.0);
             self.container_size = size;
 
-            // Report overflow to ElementTree for automatic indicator painting
-            tree.set_current_overflow(direction, self.overflow_pixels);
-
-            // Log overflow warning
             if self.overflow_pixels > 0.0 {
                 tracing::warn!(
                     direction = ?direction,
                     content_size_px = total_main_size,
                     container_size_px = container_main_size,
                     overflow_px = self.overflow_pixels,
-                    "RenderFlex overflow detected! \
-                     Tip: Use Flexible/Expanded widgets or reduce content size"
+                    "RenderFlex overflow detected!"
                 );
             }
         }
 
-        // ========== Calculate child offsets ==========
-        // Calculate available space for main axis alignment
+        // Calculate child offsets for main axis alignment
         let available_space = match direction {
             Axis::Horizontal => size.width - total_main_size,
             Axis::Vertical => size.height - total_main_size,
         };
 
-        // Calculate main axis spacing
         let (leading_space, between_space) = self
             .main_axis_alignment
-            .calculate_spacing(available_space.max(0.0), child_ids.len());
+            .calculate_spacing(available_space.max(0.0), child_count);
 
-        // For baseline alignment, calculate baselines for all children
+        // For baseline alignment
         let child_baselines: Vec<f32> = if self.cross_axis_alignment == CrossAxisAlignment::Baseline
         {
             child_sizes
                 .iter()
-                .map(|&size| self.estimate_baseline(size))
+                .map(|&s| self.estimate_baseline(s))
                 .collect()
         } else {
             Vec::new()
         };
-
-        // Find max baseline for baseline alignment
         let max_baseline = child_baselines.iter().copied().fold(0.0f32, f32::max);
 
         // Calculate offset for each child
         let mut current_main_pos = leading_space;
 
         for (i, child_size) in child_sizes.iter().enumerate() {
-            // Calculate cross-axis offset based on alignment
             let child_offset = match direction {
                 Axis::Horizontal => {
                     let cross_offset = match self.cross_axis_alignment {
@@ -492,7 +316,6 @@ impl LegacyRender for RenderFlex {
                         CrossAxisAlignment::End => size.height - child_size.height,
                         CrossAxisAlignment::Stretch => 0.0,
                         CrossAxisAlignment::Baseline => {
-                            // Align by baseline: offset = max_baseline - child_baseline
                             let child_baseline = child_baselines.get(i).copied().unwrap_or(0.0);
                             max_baseline - child_baseline
                         }
@@ -506,7 +329,6 @@ impl LegacyRender for RenderFlex {
                         CrossAxisAlignment::End => size.width - child_size.width,
                         CrossAxisAlignment::Stretch => 0.0,
                         CrossAxisAlignment::Baseline => {
-                            // For vertical direction, baseline alignment uses horizontal baseline
                             let child_baseline = child_baselines.get(i).copied().unwrap_or(0.0);
                             max_baseline - child_baseline
                         }
@@ -517,7 +339,6 @@ impl LegacyRender for RenderFlex {
 
             self.child_offsets.push(child_offset);
 
-            // Advance main axis position
             current_main_pos += match direction {
                 Axis::Horizontal => child_size.width,
                 Axis::Vertical => child_size.height,
@@ -527,38 +348,16 @@ impl LegacyRender for RenderFlex {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        let mut canvas = flui_painting::Canvas::new();
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
-        // Paint children with their calculated offsets
-        for (i, &child_id) in child_ids.iter().enumerate() {
+        for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-
-            // Paint child and append to canvas
-            let child_canvas = tree.paint_child(child_id, offset + child_offset);
-            canvas.append_canvas(child_canvas);
+            ctx.paint_child(child_id, offset + child_offset);
         }
-
-        // TODO: Add overflow indicator drawing via Canvas API in debug mode
-        // #[cfg(debug_assertions)]
-        // if self.overflow_pixels > 0.0 {
-        //     let (overflow_h, overflow_v) = self.get_overflow();
-        //     // Draw overflow indicators using canvas.draw_* methods
-        // }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multi-child render - variable number of children
     }
 }
 

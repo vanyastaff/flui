@@ -1,22 +1,20 @@
 //! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate
 
-use flui_core::element::ElementId;
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 
 /// Context provided to delegate during layout
-pub struct MultiChildLayoutContext<'a> {
-    /// The element tree for laying out children
-    pub tree: &'a flui_core::element::ElementTree,
+pub struct MultiChildLayoutContext<'a, 'b> {
+    /// The layout context
+    ctx: &'a LayoutContext<'b, Variable, BoxProtocol>,
     /// The children IDs
-    pub children: &'a [ElementId],
+    pub children: &'a [NonZeroUsize],
 }
 
-impl<'a> MultiChildLayoutContext<'a> {
+impl<'a, 'b> MultiChildLayoutContext<'a, 'b> {
     /// Layout a child with the given constraints
     ///
     /// # Arguments
@@ -29,7 +27,7 @@ impl<'a> MultiChildLayoutContext<'a> {
         if index >= self.children.len() {
             return Size::ZERO;
         }
-        self.tree.layout_child(self.children[index], constraints)
+        self.ctx.layout_child(self.children[index], constraints)
     }
 
     /// Get the number of children
@@ -210,16 +208,18 @@ impl RenderCustomMultiChildLayoutBox {
     }
 }
 
-impl LegacyRender for RenderCustomMultiChildLayoutBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+impl RenderBox<Variable> for RenderCustomMultiChildLayoutBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
+        let children = ctx.children;
+
+        // Collect children for delegate
+        let child_ids: Vec<_> = children.iter().collect();
 
         // Create layout context for delegate
         let layout_ctx = MultiChildLayoutContext {
-            tree,
-            children: child_ids,
+            ctx: &ctx,
+            children: &child_ids,
         };
 
         // Let delegate perform layout
@@ -232,33 +232,21 @@ impl LegacyRender for RenderCustomMultiChildLayoutBox {
         constraints.constrain(size)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        let mut canvas = Canvas::new();
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
         // Paint children at their calculated offsets
-        for (index, &child_id) in child_ids.iter().enumerate() {
+        for (index, child_id) in child_ids.into_iter().enumerate() {
             if index >= self.child_offsets.len() {
                 break;
             }
 
             let child_offset = self.child_offsets[index];
-            let child_canvas = tree.paint_child(child_id, offset + child_offset);
-            canvas.append_canvas(child_canvas);
+            ctx.paint_child(child_id, offset + child_offset);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Variable number of children
     }
 }
 
@@ -293,13 +281,5 @@ mod tests {
 
         // Different configuration - relayout needed
         assert!(delegate1.should_relayout(delegate3.as_any()));
-    }
-
-    #[test]
-    fn test_arity_is_variable() {
-        let delegate = SimpleGridDelegate::new(2, 5.0);
-        let layout = RenderCustomMultiChildLayoutBox::new(Box::new(delegate));
-
-        assert_eq!(layout.arity(), RuntimeArity::Variable);
     }
 }

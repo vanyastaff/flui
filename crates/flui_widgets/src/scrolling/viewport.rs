@@ -2,7 +2,7 @@
 //!
 //! This widget creates a RenderViewport and manages sliver layout.
 
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, View};
 use flui_rendering::objects::{ClipBehavior, RenderViewport};
 use flui_types::layout::AxisDirection;
 
@@ -53,7 +53,7 @@ pub struct Viewport {
     pub clip_behavior: ClipBehavior,
 
     /// Sliver children
-    pub slivers: Vec<Box<dyn AnyView>>,
+    pub slivers: Vec<Box<dyn >>,
 }
 
 impl std::fmt::Debug for Viewport {
@@ -105,7 +105,7 @@ impl Viewport {
     }
 
     /// Set sliver children
-    pub fn slivers(mut self, slivers: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn slivers(mut self, slivers: Vec<Box<dyn >>) -> Self {
         self.slivers = slivers;
         self
     }

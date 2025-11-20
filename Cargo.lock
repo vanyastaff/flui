@@ -1274,6 +1274,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "criterion",
+ "flui-reactivity",
  "flui-scheduler",
  "flui_engine",
  "flui_log",

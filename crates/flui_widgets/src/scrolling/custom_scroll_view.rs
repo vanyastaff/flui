@@ -4,7 +4,7 @@
 
 use super::{Scrollable, Viewport};
 use crate::layout::ScrollController;
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, View};
 use flui_rendering::objects::ClipBehavior;
 use flui_types::layout::AxisDirection;
 
@@ -62,7 +62,7 @@ pub struct CustomScrollView {
     pub physics_enabled: bool,
 
     /// Sliver children
-    pub slivers: Vec<Box<dyn AnyView>>,
+    pub slivers: Vec<Box<dyn >>,
 }
 
 impl std::fmt::Debug for CustomScrollView {
@@ -130,7 +130,7 @@ impl CustomScrollView {
     }
 
     /// Set sliver children
-    pub fn slivers(mut self, slivers: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn slivers(mut self, slivers: Vec<Box<dyn >>) -> Self {
         self.slivers = slivers;
         self
     }

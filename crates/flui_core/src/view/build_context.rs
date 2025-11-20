@@ -1,8 +1,8 @@
 //! Build context for view construction.
 
-use crate::hooks::HookContext;
 use crate::pipeline::{ElementTree, RebuildQueue};
 use crate::ElementId;
+use flui_reactivity::HookContext;
 use parking_lot::{Mutex, RwLock};
 use std::cell::Cell;
 use std::sync::Arc;

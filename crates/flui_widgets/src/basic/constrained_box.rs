@@ -4,7 +4,7 @@
 //! Similar to Flutter's ConstrainedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderConstrainedBox;
 use flui_types::BoxConstraints;
@@ -46,7 +46,7 @@ pub struct ConstrainedBox {
 
     /// The child widget to constrain.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for ConstrainedBox {
@@ -57,7 +57,7 @@ impl std::fmt::Debug for ConstrainedBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

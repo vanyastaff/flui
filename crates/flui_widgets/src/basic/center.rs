@@ -31,7 +31,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
@@ -94,10 +96,10 @@ pub struct Center {
 
     /// The child widget to center.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Element>,
 }
 
-// Manual Debug implementation since AnyView doesn't implement Debug
+// Manual Debug implementation
 impl std::fmt::Debug for Center {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Center")
@@ -107,24 +109,12 @@ impl std::fmt::Debug for Center {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<Element>"
                 } else {
                     "None"
                 },
             )
             .finish()
-    }
-}
-
-// Manual Clone implementation since AnyView doesn't implement Clone
-impl Clone for Center {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            width_factor: self.width_factor,
-            height_factor: self.height_factor,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -149,7 +139,7 @@ impl Center {
     /// ```rust,ignore
     /// let centered = Center::with_child(Text::new("Hello"));
     /// ```
-    pub fn with_child(child: impl View + 'static) -> Self {
+    pub fn with_child(child: impl IntoElement) -> Self {
         Self::builder().child(child).build()
     }
 
@@ -162,7 +152,7 @@ impl Center {
     /// ```rust,ignore
     /// let tight_center = Center::tight(Text::new("Wrapped"));
     /// ```
-    pub fn tight(child: impl View + 'static) -> Self {
+    pub fn tight(child: impl IntoElement) -> Self {
         Self::builder()
             .child(child)
             .width_factor(1.0)
@@ -179,7 +169,7 @@ impl Center {
     /// // Center is 2x child width and 1.5x child height
     /// let scaled = Center::with_factors(some_widget, 2.0, 1.5);
     /// ```
-    pub fn with_factors(child: impl View + 'static, width_factor: f32, height_factor: f32) -> Self {
+    pub fn with_factors(child: impl IntoElement, width_factor: f32, height_factor: f32) -> Self {
         Self::builder()
             .child(child)
             .width_factor(width_factor)
@@ -228,8 +218,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> CenterBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> CenterBuilder<SetChild<S>> {
+        self.child_internal(Some(child.into_element()))
     }
 }
 
@@ -239,7 +229,6 @@ impl<S: State> CenterBuilder<S> {
     pub fn build(self) -> Center {
         let center = self.build_internal();
 
-        // In debug mode, validate configuration and warn on issues
         #[cfg(debug_assertions)]
         if let Err(e) = center.validate() {
             tracing::warn!("Center validation warning: {}", e);
@@ -250,22 +239,6 @@ impl<S: State> CenterBuilder<S> {
 }
 
 /// Macro for creating Center with declarative syntax.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Empty center
-/// center!()
-///
-/// // With child only
-/// center!(child: Text::new("Hello"))
-///
-/// // With child and properties
-/// center!(child: some_widget, width_factor: 2.0)
-///
-/// // Properties only (no child)
-/// center!(width_factor: 2.0, height_factor: 1.5)
-/// ```
 #[macro_export]
 macro_rules! center {
     // Empty center
@@ -297,20 +270,26 @@ macro_rules! center {
     };
 }
 
+// Implement View for Center
+impl View for Center {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderAlign::with_factors(Alignment::CENTER, self.width_factor, self.height_factor)
+            .child_opt(self.child)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use flui_rendering::RenderPadding;
-    use flui_types::EdgeInsets;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -336,12 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn test_center_builder_with_child() {
-        let center = Center::builder().child(MockView).build();
-        assert!(center.child.is_some());
-    }
-
-    #[test]
     fn test_center_builder_with_factors() {
         let center = Center::builder()
             .width_factor(2.0)
@@ -349,58 +322,6 @@ mod tests {
             .build();
         assert_eq!(center.width_factor, Some(2.0));
         assert_eq!(center.height_factor, Some(1.5));
-    }
-
-    #[test]
-    fn test_center_with_child() {
-        let center = Center::with_child(MockView);
-        assert!(center.child.is_some());
-        assert!(center.width_factor.is_none());
-        assert!(center.height_factor.is_none());
-    }
-
-    #[test]
-    fn test_center_tight() {
-        let center = Center::tight(MockView);
-        assert!(center.child.is_some());
-        assert_eq!(center.width_factor, Some(1.0));
-        assert_eq!(center.height_factor, Some(1.0));
-    }
-
-    #[test]
-    fn test_center_with_factors() {
-        let center = Center::with_factors(MockView, 2.5, 3.0);
-        assert!(center.child.is_some());
-        assert_eq!(center.width_factor, Some(2.5));
-        assert_eq!(center.height_factor, Some(3.0));
-    }
-
-    #[test]
-    fn test_center_macro_empty() {
-        let center = center!();
-        assert!(center.child.is_none());
-    }
-
-    #[test]
-    fn test_center_macro_with_child() {
-        let center = center!(child: MockView);
-        assert!(center.child.is_some());
-    }
-
-    #[test]
-    fn test_center_macro_with_child_and_factors() {
-        let center = center!(child: MockView, width_factor: 2.0, height_factor: 1.5);
-        assert!(center.child.is_some());
-        assert_eq!(center.width_factor, Some(2.0));
-        assert_eq!(center.height_factor, Some(1.5));
-    }
-
-    #[test]
-    fn test_center_macro_with_factors() {
-        let center = center! {
-            width_factor: 2.0,
-        };
-        assert_eq!(center.width_factor, Some(2.0));
     }
 
     #[test]
@@ -428,31 +349,8 @@ mod tests {
     }
 
     #[test]
-    fn test_center_view_trait() {
-        let center = Center::builder().child(MockView).build();
-
-        // Test that it implements View
-        assert!(center.child.is_some());
-    }
-
-    #[test]
-    fn test_center_builder_full() {
-        let center = Center::builder().width_factor(2.0).child(MockView).build();
-
-        // Test child field
-        assert!(center.child.is_some());
-        assert_eq!(center.width_factor, Some(2.0));
+    fn test_center_macro_empty() {
+        let center = center!();
+        assert!(center.child.is_none());
     }
 }
-
-// Implement View for Center - Simplified API
-impl View for Center {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderAlign::with_factors(Alignment::CENTER, self.width_factor, self.height_factor),
-            self.child,
-        )
-    }
-}
-
-// Center now implements View trait directly

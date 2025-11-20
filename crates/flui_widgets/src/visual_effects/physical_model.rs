@@ -3,7 +3,7 @@
 //! A widget that renders Material Design elevation effects with shadows.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::{PhysicalShape, RenderPhysicalModel};
 use flui_types::Color;
@@ -97,7 +97,7 @@ pub struct PhysicalModel {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for PhysicalModel {
@@ -112,7 +112,7 @@ impl std::fmt::Debug for PhysicalModel {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

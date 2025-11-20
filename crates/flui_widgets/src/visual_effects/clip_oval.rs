@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_rendering::RenderClipOval;
 use flui_types::painting::Clip;
 
@@ -85,7 +85,7 @@ pub struct ClipOval {
 
     /// The child widget to clip.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for ClipOval {
@@ -96,7 +96,7 @@ impl std::fmt::Debug for ClipOval {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

@@ -52,7 +52,8 @@ pub mod wrappers;
 
 // Re-export main traits
 pub use render_box::{
-    EmptyRender, RenderBox, RenderBoxExt, WithChild, WithChildren, WithLeaf, WithOptionalChild,
+    EmptyRender, RenderBox, RenderBoxExt, WithChild, WithChildren, WithLeaf, WithMaybeChild,
+    WithOptionalChild,
 };
 pub use render_silver::{
     SliverExt, SliverRender, SliverWithChild, SliverWithChildren, SliverWithLeaf,

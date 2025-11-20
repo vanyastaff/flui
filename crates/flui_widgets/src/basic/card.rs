@@ -4,7 +4,7 @@
 //! Similar to Flutter's Card widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::styling::BorderRadius;
 use flui_types::{Color, EdgeInsets};
@@ -96,7 +96,7 @@ pub struct Card {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for Card {
@@ -110,7 +110,7 @@ impl std::fmt::Debug for Card {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -207,7 +207,7 @@ impl<S: State> CardBuilder<S> {
 impl View for Card {
     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Create child widget
-        let child_view: Box<dyn AnyView> = if let Some(child) = self.child {
+        let child_view: Box<dyn > = if let Some(child) = self.child {
             child
         } else {
             Box::new(crate::SizedBox::new())
@@ -226,9 +226,9 @@ impl View for Card {
         // Wrap with margin if specified
         if let Some(margin) = self.margin {
             Box::new(Container::builder().margin(margin).child(material).build())
-                as Box<dyn AnyView>
+                as Box<dyn >
         } else {
-            Box::new(material) as Box<dyn AnyView>
+            Box::new(material) as Box<dyn >
         }
     }
 }

@@ -14,7 +14,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderOffstage;
 
@@ -71,7 +71,7 @@ pub struct Offstage {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for Offstage {
@@ -82,7 +82,7 @@ impl std::fmt::Debug for Offstage {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -127,7 +127,7 @@ impl Offstage {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
+    pub fn set_child(&mut self, child: Box<dyn >) {
         self.child = Some(child);
     }
 }

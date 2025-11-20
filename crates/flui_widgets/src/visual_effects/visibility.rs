@@ -16,7 +16,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderVisibility;
 
@@ -128,11 +128,11 @@ pub struct Visibility {
     ///
     /// Only used when visible=false and maintain_size=false.
     #[builder(setters(vis = "", name = replacement_internal))]
-    pub replacement: Option<Box<dyn AnyView>>,
+    pub replacement: Option<Box<dyn >>,
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for Visibility {
@@ -148,7 +148,7 @@ impl std::fmt::Debug for Visibility {
             .field(
                 "replacement",
                 &if self.replacement.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -156,7 +156,7 @@ impl std::fmt::Debug for Visibility {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -257,12 +257,12 @@ impl Visibility {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
+    pub fn set_child(&mut self, child: Box<dyn >) {
         self.child = Some(child);
     }
 
     /// Sets the replacement widget.
-    pub fn set_replacement(&mut self, replacement: Box<dyn AnyView>) {
+    pub fn set_replacement(&mut self, replacement: Box<dyn >) {
         self.replacement = Some(replacement);
     }
 }

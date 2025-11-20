@@ -29,7 +29,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAspectRatio;
 
@@ -103,10 +103,10 @@ pub struct AspectRatio {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
-// Manual Debug implementation since AnyView doesn't implement Debug
+// Manual Debug implementation since  doesn't implement Debug
 impl std::fmt::Debug for AspectRatio {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AspectRatio")
@@ -115,7 +115,7 @@ impl std::fmt::Debug for AspectRatio {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -124,7 +124,7 @@ impl std::fmt::Debug for AspectRatio {
     }
 }
 
-// Manual Clone implementation since AnyView doesn't implement Clone
+// Manual Clone implementation since  doesn't implement Clone
 impl Clone for AspectRatio {
     fn clone(&self) -> Self {
         Self {

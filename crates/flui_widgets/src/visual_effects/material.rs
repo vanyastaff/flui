@@ -4,7 +4,7 @@
 //! shadows, and shape.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::styling::BorderRadius;
 use flui_types::Color;
@@ -86,7 +86,7 @@ pub struct Material {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for Material {
@@ -100,7 +100,7 @@ impl std::fmt::Debug for Material {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

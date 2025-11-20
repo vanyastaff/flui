@@ -4,7 +4,7 @@
 //! Similar to Flutter's IntrinsicHeight widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderIntrinsicHeight;
 
@@ -94,7 +94,7 @@ pub struct IntrinsicHeight {
 
     /// The child widget to size
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for IntrinsicHeight {
@@ -106,7 +106,7 @@ impl std::fmt::Debug for IntrinsicHeight {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -134,7 +134,7 @@ impl IntrinsicHeight {
     /// ```rust,ignore
     /// let widget = IntrinsicHeight::new(Box::new(child));
     /// ```
-    pub fn new(child: Box<dyn AnyView>) -> Self {
+    pub fn new(child: Box<dyn >) -> Self {
         Self {
             key: None,
             step_width: None,
@@ -150,7 +150,7 @@ impl IntrinsicHeight {
     /// ```rust,ignore
     /// let widget = IntrinsicHeight::with_step_height(50.0, Box::new(child));
     /// ```
-    pub fn with_step_height(step_height: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn with_step_height(step_height: f32, child: Box<dyn >) -> Self {
         Self {
             key: None,
             step_width: None,
@@ -166,7 +166,7 @@ impl IntrinsicHeight {
     /// ```rust,ignore
     /// let widget = IntrinsicHeight::with_steps(10.0, 10.0, Box::new(child));
     /// ```
-    pub fn with_steps(step_width: f32, step_height: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn with_steps(step_width: f32, step_height: f32, child: Box<dyn >) -> Self {
         Self {
             key: None,
             step_width: Some(step_width),

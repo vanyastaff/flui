@@ -102,13 +102,13 @@ pub use embedder::WgpuEmbedder;
 // Re-export commonly used types from flui_core
 pub use flui_core::{
     // Element system
-    element::{ComponentElement, Element, ProviderElement, RenderElement, SliverElement},
+    element::{ComponentElement, Element, ProviderElement, RenderElement},
 
     // Foundation types
     foundation::{ElementId, Key, Slot},
 
     // View system (new API)
-    view::{AnyView, BuildContext, View, ViewElement},
+    view::{BuildContext, View, ViewElement},
 };
 
 use winit::event_loop::EventLoop;
@@ -235,7 +235,7 @@ where
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "C" fn android_main(app: android_activity::AndroidApp) {
-    use flui_core::view::{View, BuildContext, IntoElement};
+    use flui_core::view::{BuildContext, IntoElement, View};
     use winit::event::{Event, WindowEvent};
     use winit::event_loop::ControlFlow;
 
@@ -252,9 +252,9 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
 
     impl View for AndroidDemo {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-            use flui_widgets::{Container, Text, Column};
+            use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment};
             use flui_types::Color;
-            use flui_types::layout::{MainAxisAlignment, CrossAxisAlignment};
+            use flui_widgets::{Column, Container, Text};
 
             // Vulkan rendering + embedded Roboto font
             Container::builder()
@@ -269,16 +269,16 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
                                 .data("FLUI на Android")
                                 .size(32.0)
                                 .color(Color::rgb(255, 255, 255))
-                                .build()
+                                .build(),
                         )
                         .child(
                             Text::builder()
                                 .data("Vulkan + Embedded Fonts")
                                 .size(18.0)
                                 .color(Color::rgb(255, 255, 255))
-                                .build()
+                                .build(),
                         )
-                        .build()
+                        .build(),
                 )
                 .build()
         }
@@ -295,7 +295,9 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
     // 3. Create event loop with Android app
     let mut event_loop_builder = EventLoop::builder();
     event_loop_builder.with_android_app(app);
-    let event_loop = event_loop_builder.build().expect("Failed to create event loop");
+    let event_loop = event_loop_builder
+        .build()
+        .expect("Failed to create event loop");
 
     tracing::info!("Event loop created, waiting for Resumed event");
 
@@ -303,66 +305,69 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
     // On Android, window/surface creation must happen AFTER Resumed event
     let mut embedder: Option<crate::embedder::AndroidEmbedder> = None;
 
-    event_loop.run(move |event, elwt| {
-        elwt.set_control_flow(ControlFlow::Poll);
+    event_loop
+        .run(move |event, elwt| {
+            elwt.set_control_flow(ControlFlow::Poll);
 
-        match event {
-            Event::Resumed => {
-                tracing::info!("Resumed event received");
-                if embedder.is_none() {
-                    tracing::info!("Creating AndroidEmbedder after Resumed event");
-                    // Safe to create window and surface now
-                    embedder = Some(pollster::block_on(
-                        crate::embedder::AndroidEmbedder::new(binding.clone(), elwt)
-                    ));
-                    tracing::info!("AndroidEmbedder created successfully");
-                } else {
-                    // Resume existing embedder
+            match event {
+                Event::Resumed => {
+                    tracing::info!("Resumed event received");
+                    if embedder.is_none() {
+                        tracing::info!("Creating AndroidEmbedder after Resumed event");
+                        // Safe to create window and surface now
+                        embedder = Some(pollster::block_on(crate::embedder::AndroidEmbedder::new(
+                            binding.clone(),
+                            elwt,
+                        )));
+                        tracing::info!("AndroidEmbedder created successfully");
+                    } else {
+                        // Resume existing embedder
+                        if let Some(ref mut emb) = embedder {
+                            emb.resume();
+                            tracing::info!("AndroidEmbedder resumed");
+                        }
+                    }
+                }
+
+                Event::Suspended => {
+                    tracing::info!("Suspended event received");
+                    // Mark as suspended (stops rendering)
                     if let Some(ref mut emb) = embedder {
-                        emb.resume();
-                        tracing::info!("AndroidEmbedder resumed");
+                        emb.suspend();
+                        tracing::info!("AndroidEmbedder suspended (rendering stopped)");
+                    }
+                    // Drop embedder to release GPU resources
+                    embedder = None;
+                    tracing::info!("AndroidEmbedder dropped (GPU resources released)");
+                }
+
+                Event::AboutToWait => {
+                    // Request redraw every frame (for animations)
+                    if let Some(ref emb) = embedder {
+                        emb.window().request_redraw();
                     }
                 }
-            }
 
-            Event::Suspended => {
-                tracing::info!("Suspended event received");
-                // Mark as suspended (stops rendering)
-                if let Some(ref mut emb) = embedder {
-                    emb.suspend();
-                    tracing::info!("AndroidEmbedder suspended (rendering stopped)");
-                }
-                // Drop embedder to release GPU resources
-                embedder = None;
-                tracing::info!("AndroidEmbedder dropped (GPU resources released)");
-            }
-
-            Event::AboutToWait => {
-                // Request redraw every frame (for animations)
-                if let Some(ref emb) = embedder {
-                    emb.window().request_redraw();
-                }
-            }
-
-            Event::WindowEvent { event, .. } => {
-                if let Some(ref mut emb) = embedder {
-                    match event {
-                        WindowEvent::RedrawRequested => {
-                            tracing::trace!("RedrawRequested event, rendering frame");
-                            emb.render_frame();
-                        }
-                        WindowEvent::CloseRequested => {
-                            tracing::info!("Window close requested");
-                            elwt.exit();
-                        }
-                        other => {
-                            emb.handle_event(other, elwt);
+                Event::WindowEvent { event, .. } => {
+                    if let Some(ref mut emb) = embedder {
+                        match event {
+                            WindowEvent::RedrawRequested => {
+                                tracing::trace!("RedrawRequested event, rendering frame");
+                                emb.render_frame();
+                            }
+                            WindowEvent::CloseRequested => {
+                                tracing::info!("Window close requested");
+                                elwt.exit();
+                            }
+                            other => {
+                                emb.handle_event(other, elwt);
+                            }
                         }
                     }
                 }
-            }
 
-            _ => {}
-        }
-    }).expect("Event loop error");
+                _ => {}
+            }
+        })
+        .expect("Event loop error");
 }

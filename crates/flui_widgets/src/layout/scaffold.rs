@@ -13,7 +13,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::prelude::Color;
 
@@ -64,23 +64,23 @@ pub struct Scaffold {
     pub key: Option<String>,
 
     /// Widget to display at the top of the scaffold (typically an AppBar)
-    pub app_bar: Option<Box<dyn AnyView>>,
+    pub app_bar: Option<Box<dyn >>,
 
     /// The primary content of the scaffold
     #[builder(setters(vis = "", name = body_internal))]
-    pub body: Option<Box<dyn AnyView>>,
+    pub body: Option<Box<dyn >>,
 
     /// Widget to display at the bottom (typically a BottomNavigationBar)
-    pub bottom_navigation_bar: Option<Box<dyn AnyView>>,
+    pub bottom_navigation_bar: Option<Box<dyn >>,
 
     /// Button displayed floating above the body (typically a FloatingActionButton)
-    pub floating_action_button: Option<Box<dyn AnyView>>,
+    pub floating_action_button: Option<Box<dyn >>,
 
     /// Panel sliding in from the side for navigation
-    pub drawer: Option<Box<dyn AnyView>>,
+    pub drawer: Option<Box<dyn >>,
 
     /// Panel sliding in from the right side
-    pub end_drawer: Option<Box<dyn AnyView>>,
+    pub end_drawer: Option<Box<dyn >>,
 
     /// Background color of the scaffold
     #[builder(default = Color::WHITE)]
@@ -95,18 +95,18 @@ impl std::fmt::Debug for Scaffold {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Scaffold")
             .field("key", &self.key)
-            .field("app_bar", &self.app_bar.as_ref().map(|_| "<AnyView>"))
-            .field("body", &self.body.as_ref().map(|_| "<AnyView>"))
+            .field("app_bar", &self.app_bar.as_ref().map(|_| "<>"))
+            .field("body", &self.body.as_ref().map(|_| "<>"))
             .field(
                 "bottom_navigation_bar",
-                &self.bottom_navigation_bar.as_ref().map(|_| "<AnyView>"),
+                &self.bottom_navigation_bar.as_ref().map(|_| "<>"),
             )
             .field(
                 "floating_action_button",
-                &self.floating_action_button.as_ref().map(|_| "<AnyView>"),
+                &self.floating_action_button.as_ref().map(|_| "<>"),
             )
-            .field("drawer", &self.drawer.as_ref().map(|_| "<AnyView>"))
-            .field("end_drawer", &self.end_drawer.as_ref().map(|_| "<AnyView>"))
+            .field("drawer", &self.drawer.as_ref().map(|_| "<>"))
+            .field("end_drawer", &self.end_drawer.as_ref().map(|_| "<>"))
             .field("background_color", &self.background_color)
             .field(
                 "resize_to_avoid_bottom_inset",
@@ -149,7 +149,7 @@ impl Scaffold {
     }
 
     /// Creates a Scaffold with just a body widget.
-    pub fn with_body(body: Box<dyn AnyView>) -> Self {
+    pub fn with_body(body: Box<dyn >) -> Self {
         Self {
             key: None,
             app_bar: None,
@@ -198,7 +198,7 @@ impl View for Scaffold {
         use crate::{ColoredBox, Column, Stack};
 
         // Build the scaffold layout as a column
-        let mut children: Vec<Box<dyn AnyView>> = Vec::new();
+        let mut children: Vec<Box<dyn >> = Vec::new();
 
         // Add app bar if present
         if let Some(app_bar) = self.app_bar {
@@ -229,7 +229,7 @@ impl View for Scaffold {
 
         // Always use Stack to support FAB and drawers
         // Even if they're not present, Stack with single child works fine
-        let mut stack_children: Vec<Box<dyn AnyView>> = vec![Box::new(with_background)];
+        let mut stack_children: Vec<Box<dyn >> = vec![Box::new(with_background)];
 
         // Add FAB if present (positioned bottom-right)
         if let Some(fab) = self.floating_action_button {

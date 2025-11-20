@@ -70,6 +70,21 @@ impl Child {
     pub fn into_inner(self) -> Option<Element> {
         self.inner
     }
+
+    /// Takes the element out of Child, leaving None in its place.
+    #[inline]
+    pub fn take(&mut self) -> Option<Element> {
+        self.inner.take()
+    }
+
+    /// Maps the element if present.
+    #[inline]
+    pub fn map<F, U>(self, f: F) -> Option<U>
+    where
+        F: FnOnce(Element) -> U,
+    {
+        self.inner.map(f)
+    }
 }
 
 impl IntoElement for Child {
@@ -179,6 +194,15 @@ impl<V: IntoElement> FromIterator<V> for Children {
         let mut children = Children::new();
         children.extend(iter);
         children
+    }
+}
+
+impl IntoIterator for Children {
+    type Item = Element;
+    type IntoIter = std::vec::IntoIter<Element>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
     }
 }
 

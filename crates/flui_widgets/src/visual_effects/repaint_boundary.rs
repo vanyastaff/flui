@@ -4,7 +4,7 @@
 //! repainting from its ancestors for performance optimization.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderRepaintBoundary;
 
@@ -57,7 +57,7 @@ pub struct RepaintBoundary {
 
     /// The child widget to isolate
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for RepaintBoundary {
@@ -67,7 +67,7 @@ impl std::fmt::Debug for RepaintBoundary {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

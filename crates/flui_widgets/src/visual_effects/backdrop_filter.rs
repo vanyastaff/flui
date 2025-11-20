@@ -4,7 +4,7 @@
 //! behind it, creating effects like frosted glass.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderBackdropFilter;
 use flui_types::painting::{BlendMode, ImageFilter};
@@ -84,10 +84,10 @@ pub struct BackdropFilter {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
-// Manual Debug implementation since AnyView doesn't implement Debug
+// Manual Debug implementation since  doesn't implement Debug
 impl std::fmt::Debug for BackdropFilter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BackdropFilter")
@@ -97,7 +97,7 @@ impl std::fmt::Debug for BackdropFilter {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

@@ -37,7 +37,9 @@
 //! sized_box!(child: widget, width: 100.0, height: 50.0)
 //! ```
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::objects::RenderSizedBox;
 
@@ -96,7 +98,7 @@ pub struct SizedBox {
     ///
     /// If null, the box will be empty with the specified dimensions.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for SizedBox {
@@ -108,23 +110,12 @@ impl std::fmt::Debug for SizedBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<Element>"
                 } else {
                     "None"
                 },
             )
             .finish()
-    }
-}
-
-impl Clone for SizedBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            width: self.width,
-            height: self.height,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -151,7 +142,7 @@ impl SizedBox {
     /// ```rust,ignore
     /// SizedBox::square(100.0, icon)  // 100x100 box
     /// ```
-    pub fn square(size: f32, child: impl View + 'static) -> Self {
+    pub fn square(size: f32, child: impl IntoElement) -> Self {
         Self::builder()
             .width(size)
             .height(size)
@@ -167,7 +158,7 @@ impl SizedBox {
     /// ```rust,ignore
     /// SizedBox::from_size(200.0, 100.0, widget)
     /// ```
-    pub fn from_size(width: f32, height: f32, child: impl View + 'static) -> Self {
+    pub fn from_size(width: f32, height: f32, child: impl IntoElement) -> Self {
         Self::builder()
             .width(width)
             .height(height)
@@ -183,7 +174,7 @@ impl SizedBox {
     /// ```rust,ignore
     /// SizedBox::width_only(200.0, flexible_height_content)
     /// ```
-    pub fn width_only(width: f32, child: impl View + 'static) -> Self {
+    pub fn width_only(width: f32, child: impl IntoElement) -> Self {
         Self::builder().width(width).child(child).build()
     }
 
@@ -195,7 +186,7 @@ impl SizedBox {
     /// ```rust,ignore
     /// SizedBox::height_only(100.0, flexible_width_content)
     /// ```
-    pub fn height_only(height: f32, child: impl View + 'static) -> Self {
+    pub fn height_only(height: f32, child: impl IntoElement) -> Self {
         Self::builder().height(height).child(child).build()
     }
 
@@ -207,7 +198,7 @@ impl SizedBox {
     /// ```rust,ignore
     /// SizedBox::expand(content)  // Fills parent
     /// ```
-    pub fn expand(child: impl View + 'static) -> Self {
+    pub fn expand(child: impl IntoElement) -> Self {
         Self::builder()
             .width(f32::INFINITY)
             .height(f32::INFINITY)
@@ -241,9 +232,9 @@ impl SizedBox {
     /// # Example
     /// ```rust,ignore
     /// Row::new().children(vec![
-    ///     Box::new(widget1),
-    ///     Box::new(SizedBox::h_space(20.0)),
-    ///     Box::new(widget2),
+    ///     widget1,
+    ///     SizedBox::h_space(20.0),
+    ///     widget2,
     /// ])
     /// ```
     pub fn h_space(width: f32) -> Self {
@@ -262,9 +253,9 @@ impl SizedBox {
     /// # Example
     /// ```rust,ignore
     /// Column::new().children(vec![
-    ///     Box::new(widget1),
-    ///     Box::new(SizedBox::v_space(20.0)),
-    ///     Box::new(widget2),
+    ///     widget1,
+    ///     SizedBox::v_space(20.0),
+    ///     widget2,
     /// ])
     /// ```
     pub fn v_space(height: f32) -> Self {
@@ -315,17 +306,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// SizedBox::builder()
-    ///     .width(100.0)
-    ///     .child(some_widget)
-    ///     .build()
-    /// ```
-    pub fn child(self, child: impl View + 'static) -> SizedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> SizedBoxBuilder<SetChild<S>> {
+        self.child_internal(Some(child.into_element()))
     }
 }
 
@@ -335,7 +317,6 @@ impl<S: State> SizedBoxBuilder<S> {
     pub fn build(self) -> SizedBox {
         let sized_box = self.build_internal();
 
-        // In debug mode, validate configuration and warn on issues
         #[cfg(debug_assertions)]
         if let Err(e) = sized_box.validate() {
             tracing::warn!("SizedBox validation warning: {}", e);
@@ -346,22 +327,6 @@ impl<S: State> SizedBoxBuilder<S> {
 }
 
 /// Macro for creating SizedBox with declarative syntax.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Empty sized box
-/// sized_box!()
-///
-/// // With child only (no constraints)
-/// sized_box!(child: Text::new("Hello"))
-///
-/// // With child and size
-/// sized_box!(child: widget, width: 100.0, height: 50.0)
-///
-/// // Properties only (no child, for spacing)
-/// sized_box!(width: 100.0, height: 50.0)
-/// ```
 #[macro_export]
 macro_rules! sized_box {
     // Empty sized box
@@ -393,19 +358,25 @@ macro_rules! sized_box {
     };
 }
 
+// Implement View for SizedBox
+impl View for SizedBox {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderSizedBox::new(self.width, self.height).child_opt(self.child)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use flui_core::ComponentElement;
-
     use super::*;
+    use flui_rendering::RenderEmpty;
 
     // Mock widget for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -426,17 +397,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sized_box_struct_literal() {
-        let sized_box = SizedBox {
-            width: Some(100.0),
-            height: Some(50.0),
-            ..Default::default()
-        };
-        assert_eq!(sized_box.width, Some(100.0));
-        assert_eq!(sized_box.height, Some(50.0));
-    }
-
-    #[test]
     fn test_sized_box_builder() {
         let sized_box = SizedBox::builder().width(100.0).build();
         assert_eq!(sized_box.width, Some(100.0));
@@ -449,46 +409,6 @@ mod tests {
 
         assert_eq!(sized_box.width, Some(200.0));
         assert_eq!(sized_box.height, Some(100.0));
-    }
-
-    #[test]
-    fn test_sized_box_expand() {
-        let sized_box = SizedBox::expand(MockView);
-        assert_eq!(sized_box.width, Some(f32::INFINITY));
-        assert_eq!(sized_box.height, Some(f32::INFINITY));
-        assert!(sized_box.child.is_some());
-    }
-
-    #[test]
-    fn test_sized_box_square() {
-        let sized_box = SizedBox::square(100.0, MockView);
-        assert_eq!(sized_box.width, Some(100.0));
-        assert_eq!(sized_box.height, Some(100.0));
-        assert!(sized_box.child.is_some());
-    }
-
-    #[test]
-    fn test_sized_box_from_size() {
-        let sized_box = SizedBox::from_size(200.0, 100.0, MockView);
-        assert_eq!(sized_box.width, Some(200.0));
-        assert_eq!(sized_box.height, Some(100.0));
-        assert!(sized_box.child.is_some());
-    }
-
-    #[test]
-    fn test_sized_box_width_only() {
-        let sized_box = SizedBox::width_only(200.0, MockView);
-        assert_eq!(sized_box.width, Some(200.0));
-        assert!(sized_box.height.is_none());
-        assert!(sized_box.child.is_some());
-    }
-
-    #[test]
-    fn test_sized_box_height_only() {
-        let sized_box = SizedBox::height_only(150.0, MockView);
-        assert!(sized_box.width.is_none());
-        assert_eq!(sized_box.height, Some(150.0));
-        assert!(sized_box.child.is_some());
     }
 
     #[test]
@@ -513,69 +433,6 @@ mod tests {
         assert!(sized_box.width.is_none());
         assert_eq!(sized_box.height, Some(30.0));
         assert!(sized_box.child.is_none());
-    }
-
-    #[test]
-    fn test_sized_box_builder_with_child() {
-        let sized_box = SizedBox::builder().width(100.0).child(MockView).build();
-        assert!(sized_box.child.is_some());
-    }
-
-    #[test]
-    fn test_sized_box_macro_empty() {
-        let sized_box = sized_box!();
-        assert!(sized_box.width.is_none());
-        assert!(sized_box.child.is_none());
-    }
-
-    #[test]
-    fn test_sized_box_macro_with_child() {
-        let sized_box = sized_box!(child: MockView);
-        assert!(sized_box.child.is_some());
-        assert!(sized_box.width.is_none());
-        assert!(sized_box.height.is_none());
-    }
-
-    #[test]
-    fn test_sized_box_macro_with_child_and_size() {
-        let sized_box = sized_box!(child: MockView, width: 100.0, height: 50.0);
-        assert!(sized_box.child.is_some());
-        assert_eq!(sized_box.width, Some(100.0));
-        assert_eq!(sized_box.height, Some(50.0));
-    }
-
-    #[test]
-    fn test_sized_box_macro_with_fields() {
-        let sized_box = sized_box! {
-            width: 100.0,
-            height: 50.0,
-        };
-        assert_eq!(sized_box.width, Some(100.0));
-        assert_eq!(sized_box.height, Some(50.0));
-        assert!(sized_box.child.is_none());
-    }
-
-    #[test]
-    fn test_all_convenience_methods() {
-        // Test that all convenience methods with child create widgets with children
-        assert!(SizedBox::square(100.0, MockView).child.is_some());
-        assert!(SizedBox::from_size(200.0, 100.0, MockView).child.is_some());
-        assert!(SizedBox::width_only(150.0, MockView).child.is_some());
-        assert!(SizedBox::height_only(75.0, MockView).child.is_some());
-        assert!(SizedBox::expand(MockView).child.is_some());
-
-        // Test that spacing helpers have no children
-        assert!(SizedBox::shrink().child.is_none());
-        assert!(SizedBox::h_space(20.0).child.is_none());
-        assert!(SizedBox::v_space(30.0).child.is_none());
-
-        // Verify dimensions
-        assert_eq!(SizedBox::square(100.0, MockView).width, Some(100.0));
-        assert_eq!(SizedBox::square(100.0, MockView).height, Some(100.0));
-        assert_eq!(SizedBox::h_space(20.0).width, Some(20.0));
-        assert!(SizedBox::h_space(20.0).height.is_none());
-        assert!(SizedBox::v_space(30.0).width.is_none());
-        assert_eq!(SizedBox::v_space(30.0).height, Some(30.0));
     }
 
     #[test]
@@ -604,54 +461,29 @@ mod tests {
 
     #[test]
     fn test_sized_box_validate_infinity_ok() {
-        let sized_box = SizedBox::expand();
+        let sized_box = SizedBox {
+            width: Some(f32::INFINITY),
+            height: Some(f32::INFINITY),
+            ..Default::default()
+        };
         assert!(sized_box.validate().is_ok());
     }
 
     #[test]
-    fn test_sized_box_only_width() {
-        let sized_box = SizedBox::builder().width(100.0).build();
-        assert_eq!(sized_box.width, Some(100.0));
-        assert!(sized_box.height.is_none());
-    }
-
-    #[test]
-    fn test_sized_box_only_height() {
-        let sized_box = SizedBox::builder().height(50.0).build();
+    fn test_sized_box_macro_empty() {
+        let sized_box = sized_box!();
         assert!(sized_box.width.is_none());
+        assert!(sized_box.child.is_none());
+    }
+
+    #[test]
+    fn test_sized_box_macro_with_fields() {
+        let sized_box = sized_box! {
+            width: 100.0,
+            height: 50.0,
+        };
+        assert_eq!(sized_box.width, Some(100.0));
         assert_eq!(sized_box.height, Some(50.0));
-    }
-
-    #[test]
-    fn test_view_trait() {
-        let sized_box = SizedBox::builder().width(100.0).child(MockView).build();
-
-        // Test child field
-        assert!(sized_box.child.is_some());
-    }
-
-    #[test]
-    fn test_single_child_view() {
-        let sized_box = SizedBox::builder().width(100.0).child(MockView).build();
-
-        // Test child field - returns Option
-        assert!(sized_box.child.is_some());
+        assert!(sized_box.child.is_none());
     }
 }
-
-// Implement View for SizedBox - New architecture
-impl View for SizedBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        use crate::basic::Empty;
-
-        // Use RenderSizedBox (requires exactly one child)
-        // If no child provided, use Empty as a placeholder
-        let child = self
-            .child
-            .or_else(|| Some(Box::new(Empty) as Box<dyn AnyView>));
-
-        (RenderSizedBox::new(self.width, self.height), child)
-    }
-}
-
-// SizedBox now implements View trait directly

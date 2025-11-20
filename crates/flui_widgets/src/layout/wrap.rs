@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
@@ -122,7 +122,7 @@ pub struct Wrap {
 
     /// The children widgets
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn AnyView>>,
+    pub children: Vec<Box<dyn >>,
 }
 
 impl std::fmt::Debug for Wrap {
@@ -137,7 +137,7 @@ impl std::fmt::Debug for Wrap {
             .field(
                 "children",
                 &if !self.children.is_empty() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -167,11 +167,11 @@ impl Wrap {
     ///
     /// ```rust,ignore
     /// let wrap = Wrap::new(vec![
-    ///     Box::new(widget1) as Box<dyn AnyView>,
-    ///     Box::new(widget2) as Box<dyn AnyView>,
+    ///     Box::new(widget1) as Box<dyn >,
+    ///     Box::new(widget2) as Box<dyn >,
     /// ]);
     /// ```
-    pub fn new(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn new(children: Vec<Box<dyn >>) -> Self {
         Self {
             key: None,
             direction: Axis::Horizontal,
@@ -190,7 +190,7 @@ impl Wrap {
     /// ```rust,ignore
     /// let wrap = Wrap::horizontal(children);
     /// ```
-    pub fn horizontal(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn horizontal(children: Vec<Box<dyn >>) -> Self {
         Self {
             direction: Axis::Horizontal,
             ..Self::new(children)
@@ -204,7 +204,7 @@ impl Wrap {
     /// ```rust,ignore
     /// let wrap = Wrap::vertical(children);
     /// ```
-    pub fn vertical(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn vertical(children: Vec<Box<dyn >>) -> Self {
         Self {
             direction: Axis::Vertical,
             ..Self::new(children)
@@ -217,7 +217,7 @@ impl Wrap {
     }
 
     /// Sets all children at once.
-    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn >>) {
         self.children = children;
     }
 }
@@ -250,7 +250,7 @@ where
     S::Children: IsUnset,
 {
     /// Sets the children widgets (works in builder chain).
-    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> WrapBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Box<dyn >>) -> WrapBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_wrap_new() {
-        let children = vec![Box::new(MockView) as Box<dyn AnyView>, Box::new(MockView)];
+        let children = vec![Box::new(MockView) as Box<dyn >, Box::new(MockView)];
         let wrap = Wrap::new(children);
         assert_eq!(wrap.direction, Axis::Horizontal);
         assert_eq!(wrap.alignment, WrapAlignment::Start);
@@ -290,14 +290,14 @@ mod tests {
 
     #[test]
     fn test_wrap_horizontal() {
-        let children = vec![Box::new(MockView) as Box<dyn AnyView>];
+        let children = vec![Box::new(MockView) as Box<dyn >];
         let wrap = Wrap::horizontal(children);
         assert_eq!(wrap.direction, Axis::Horizontal);
     }
 
     #[test]
     fn test_wrap_vertical() {
-        let children = vec![Box::new(MockView) as Box<dyn AnyView>];
+        let children = vec![Box::new(MockView) as Box<dyn >];
         let wrap = Wrap::vertical(children);
         assert_eq!(wrap.direction, Axis::Vertical);
     }

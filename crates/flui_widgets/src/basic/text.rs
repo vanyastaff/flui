@@ -42,6 +42,7 @@
 //! ```
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::{ParagraphData, RenderParagraph};
@@ -299,7 +300,7 @@ impl<S: State> TextBuilder<S> {
 
 // Implement View for Text - Simplified API
 impl View for Text {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create paragraph data
         let data = ParagraphData::new(&self.data)
             .with_font_size(self.size)
@@ -316,8 +317,8 @@ impl View for Text {
         data.text_direction = self.text_direction;
         data.soft_wrap = self.soft_wrap;
 
-        // Create and return RenderParagraph
-        (RenderParagraph::new(data), ())
+        // Create and return RenderParagraph using RenderBoxExt
+        RenderParagraph::new(data).leaf()
     }
 }
 
@@ -442,8 +443,6 @@ mod tests {
         assert_eq!(text.color, Color::rgb(100, 100, 100));
     }
 
-    // RenderParagraph tests are in flui_rendering crate
-
     #[test]
     fn test_text_macro_simple() {
         let text = Text::new("Hello");
@@ -457,5 +456,3 @@ mod tests {
         assert_eq!(text.size, 20.0);
     }
 }
-
-// Text now implements View trait directly - no need for IntoWidget wrapper

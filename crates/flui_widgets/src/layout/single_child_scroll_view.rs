@@ -4,7 +4,7 @@
 //! widget that can exceed the viewport size.
 
 use super::scroll_controller::ScrollController;
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, View};
 use flui_types::layout::Axis;
 
 /// A scrollable widget with a single child
@@ -30,7 +30,7 @@ use flui_types::layout::Axis;
 #[derive(Clone)]
 pub struct SingleChildScrollView {
     /// The child widget to scroll
-    pub child: Box<dyn AnyView>,
+    pub child: Box<dyn >,
 
     /// The scroll direction (Vertical or Horizontal)
     pub direction: Axis,
@@ -108,7 +108,7 @@ impl std::fmt::Debug for SingleChildScrollView {
 
 /// Builder for SingleChildScrollView
 pub struct SingleChildScrollViewBuilder {
-    child: Option<Box<dyn AnyView>>,
+    child: Option<Box<dyn >>,
     direction: Axis,
     reverse: bool,
     padding: Option<flui_types::EdgeInsets>,

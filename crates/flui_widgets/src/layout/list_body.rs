@@ -5,7 +5,7 @@
 //! are sized to their intrinsic size along the main axis.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderListBody;
@@ -74,7 +74,7 @@ pub struct ListBody {
 
     /// The list of child widgets
     #[builder(default)]
-    pub children: Vec<Box<dyn AnyView>>,
+    pub children: Vec<Box<dyn >>,
 }
 
 impl std::fmt::Debug for ListBody {
@@ -86,7 +86,7 @@ impl std::fmt::Debug for ListBody {
             .field(
                 "children",
                 &if !self.children.is_empty() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -114,7 +114,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::new(Axis::Vertical, children);
     /// ```
-    pub fn new(main_axis: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn new(main_axis: Axis, children: Vec<Box<dyn >>) -> Self {
         Self {
             key: None,
             main_axis,
@@ -130,7 +130,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::vertical(children);
     /// ```
-    pub fn vertical(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn vertical(children: Vec<Box<dyn >>) -> Self {
         Self::new(Axis::Vertical, children)
     }
 
@@ -141,7 +141,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::horizontal(children);
     /// ```
-    pub fn horizontal(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn horizontal(children: Vec<Box<dyn >>) -> Self {
         Self::new(Axis::Horizontal, children)
     }
 
@@ -152,7 +152,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::vertical_with_spacing(8.0, children);
     /// ```
-    pub fn vertical_with_spacing(spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn vertical_with_spacing(spacing: f32, children: Vec<Box<dyn >>) -> Self {
         Self {
             key: None,
             main_axis: Axis::Vertical,
@@ -168,7 +168,7 @@ impl ListBody {
     /// ```rust,ignore
     /// let list = ListBody::horizontal_with_spacing(8.0, children);
     /// ```
-    pub fn horizontal_with_spacing(spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn horizontal_with_spacing(spacing: f32, children: Vec<Box<dyn >>) -> Self {
         Self {
             key: None,
             main_axis: Axis::Horizontal,
@@ -206,8 +206,8 @@ mod tests {
     #[test]
     fn test_list_body_new() {
         let children = vec![
-            Box::new(crate::SizedBox::new()) as Box<dyn AnyView>,
-            Box::new(crate::SizedBox::new()) as Box<dyn AnyView>,
+            Box::new(crate::SizedBox::new()) as Box<dyn >,
+            Box::new(crate::SizedBox::new()) as Box<dyn >,
         ];
         let list = ListBody::new(Axis::Vertical, children);
         assert_eq!(list.main_axis, Axis::Vertical);
@@ -217,21 +217,21 @@ mod tests {
 
     #[test]
     fn test_list_body_vertical() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn AnyView>];
+        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn >];
         let list = ListBody::vertical(children);
         assert_eq!(list.main_axis, Axis::Vertical);
     }
 
     #[test]
     fn test_list_body_horizontal() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn AnyView>];
+        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn >];
         let list = ListBody::horizontal(children);
         assert_eq!(list.main_axis, Axis::Horizontal);
     }
 
     #[test]
     fn test_list_body_with_spacing() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn AnyView>];
+        let children = vec![Box::new(crate::SizedBox::new()) as Box<dyn >];
         let list = ListBody::vertical_with_spacing(8.0, children);
         assert_eq!(list.spacing, 8.0);
     }

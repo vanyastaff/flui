@@ -99,5 +99,5 @@ pub trait View: 'static {
     /// ```
     ///
     /// [`RenderBoxExt`]: crate::render::RenderBoxExt
-    fn build(&self, ctx: &BuildContext) -> impl IntoElement;
+    fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }

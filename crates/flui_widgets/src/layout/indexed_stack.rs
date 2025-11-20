@@ -32,7 +32,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -158,7 +158,7 @@ pub struct IndexedStack {
     /// Only the child at `index` will be visible, but all children
     /// are laid out to compute the correct size and maintain state.
     #[builder(default, setters(vis = "", name = children_internal))]
-    pub children: Vec<Box<dyn AnyView>>,
+    pub children: Vec<Box<dyn >>,
 }
 
 impl std::fmt::Debug for IndexedStack {
@@ -171,7 +171,7 @@ impl std::fmt::Debug for IndexedStack {
             .field(
                 "children",
                 &if !self.children.is_empty() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -259,7 +259,7 @@ impl IndexedStack {
     ///     Box::new(Text::new("Page 2")),
     /// ]);
     /// ```
-    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn >>) {
         self.children = children;
     }
 
@@ -312,12 +312,12 @@ where
     /// IndexedStack::builder()
     ///     .index(0)
     ///     .children(vec![
-    ///         Box::new(Text::new("Page 1")) as Box<dyn AnyView>,
-    ///         Box::new(Container::new()) as Box<dyn AnyView>,
+    ///         Box::new(Text::new("Page 1")) as Box<dyn >,
+    ///         Box::new(Container::new()) as Box<dyn >,
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Box<dyn AnyView>>) -> IndexedStackBuilder<SetChildren<S>> {
+    pub fn children(self, children: Vec<Box<dyn >>) -> IndexedStackBuilder<SetChildren<S>> {
         self.children_internal(children)
     }
 }

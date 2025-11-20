@@ -4,7 +4,7 @@
 //! Similar to Flutter's IntrinsicWidth widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderIntrinsicWidth;
 
@@ -93,7 +93,7 @@ pub struct IntrinsicWidth {
 
     /// The child widget to size
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for IntrinsicWidth {
@@ -105,7 +105,7 @@ impl std::fmt::Debug for IntrinsicWidth {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -133,7 +133,7 @@ impl IntrinsicWidth {
     /// ```rust,ignore
     /// let widget = IntrinsicWidth::new(Box::new(child));
     /// ```
-    pub fn new(child: Box<dyn AnyView>) -> Self {
+    pub fn new(child: Box<dyn >) -> Self {
         Self {
             key: None,
             step_width: None,
@@ -149,7 +149,7 @@ impl IntrinsicWidth {
     /// ```rust,ignore
     /// let widget = IntrinsicWidth::with_step_width(50.0, Box::new(child));
     /// ```
-    pub fn with_step_width(step_width: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn with_step_width(step_width: f32, child: Box<dyn >) -> Self {
         Self {
             key: None,
             step_width: Some(step_width),
@@ -165,7 +165,7 @@ impl IntrinsicWidth {
     /// ```rust,ignore
     /// let widget = IntrinsicWidth::with_steps(10.0, 10.0, Box::new(child));
     /// ```
-    pub fn with_steps(step_width: f32, step_height: f32, child: Box<dyn AnyView>) -> Self {
+    pub fn with_steps(step_width: f32, step_height: f32, child: Box<dyn >) -> Self {
         Self {
             key: None,
             step_width: Some(step_width),

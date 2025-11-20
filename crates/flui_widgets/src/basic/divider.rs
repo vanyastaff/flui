@@ -23,7 +23,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::Color;
 
@@ -180,7 +180,7 @@ impl View for Divider {
         let effective_height = self.height.unwrap_or(self.thickness);
 
         // Build the child view
-        let child: Box<dyn AnyView> = if self.indent > 0.0 || self.end_indent > 0.0 {
+        let child: Box<dyn > = if self.indent > 0.0 || self.end_indent > 0.0 {
             // If we have indents, we need to wrap in a Container with padding
             Box::new(
                 Container::builder()

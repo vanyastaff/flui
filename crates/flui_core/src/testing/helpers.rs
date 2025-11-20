@@ -2,7 +2,7 @@
 //!
 //! Common utilities for writing tests
 
-use crate::hooks::hook_context::{ComponentId, HookContext};
+use crate::hooks::{ComponentId, HookContext};
 
 /// Create a test HookContext with a component ID set
 ///

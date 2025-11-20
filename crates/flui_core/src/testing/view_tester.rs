@@ -151,14 +151,14 @@ impl TestView {
 }
 
 impl View for TestView {
-    fn build(&self, _ctx: &BuildContext) -> impl crate::IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
         // Return None for minimal testing (terminates tree)
         Option::<TestView>::None
     }
 }
 
 impl View for TestWidget {
-    fn build(&self, _ctx: &BuildContext) -> impl crate::IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
         // Return None to terminate tree
         Option::<TestWidget>::None
     }

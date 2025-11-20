@@ -1,8 +1,8 @@
 //! RenderStack - layering container
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::layout::StackFit;
 use flui_types::{Alignment, Offset, Size};
@@ -15,10 +15,9 @@ use flui_types::{Alignment, Offset, Size};
 ///
 /// # Features
 ///
-/// - StackParentData for positioned children
-/// - Positioned widget support (top, left, right, bottom, width, height)
+/// - Alignment-based positioning for non-positioned children
+/// - StackFit control for child sizing
 /// - Offset caching for performance
-/// - Default hit_test_children via ParentDataWithOffset
 ///
 /// # Example
 ///
@@ -77,12 +76,13 @@ impl Default for RenderStack {
     }
 }
 
-impl LegacyRender for RenderStack {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+impl RenderBox<Variable> for RenderStack {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        if child_ids.is_empty() {
+        let children = ctx.children;
+
+        let child_count = children.as_slice().len();
+        if child_count == 0 {
             self.child_sizes.clear();
             self.child_offsets.clear();
             return constraints.smallest();
@@ -96,43 +96,16 @@ impl LegacyRender for RenderStack {
         let mut max_width: f32 = 0.0;
         let mut max_height: f32 = 0.0;
 
-        for child in child_ids.iter().copied() {
-            // Check if child has PositionedMetadata (via RenderPositioned wrapper)
-            let positioned_metadata = if let Some(element) = tree.get(child) {
-                if let Some(render_node_guard) = element.render_object() {
-                    render_node_guard
-                        .as_any()
-                        .downcast_ref::<super::positioned::RenderPositioned>()
-                        .map(|pos| pos.metadata)
-                } else {
-                    None
-                }
-            } else {
-                None
+        for child_id in children.iter() {
+            // For now, all children use fit-based constraints
+            // TODO: Add PositionedMetadata support for positioned children
+            let child_constraints = match self.fit {
+                StackFit::Loose => constraints.loosen(),
+                StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
+                StackFit::Passthrough => constraints,
             };
 
-            let child_constraints = if let Some(pos_meta) = positioned_metadata {
-                if pos_meta.is_positioned() {
-                    // Child is positioned - use computed constraints
-                    pos_meta.compute_constraints(constraints)
-                } else {
-                    // Child has PositionedMetadata but is not positioned - use fit-based constraints
-                    match self.fit {
-                        StackFit::Loose => constraints.loosen(),
-                        StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
-                        StackFit::Passthrough => constraints,
-                    }
-                }
-            } else {
-                // Child has no PositionedMetadata - use fit-based constraints
-                match self.fit {
-                    StackFit::Loose => constraints.loosen(),
-                    StackFit::Expand => BoxConstraints::tight(constraints.biggest()),
-                    StackFit::Passthrough => constraints,
-                }
-            };
-
-            let child_size = tree.layout_child(child, child_constraints);
+            let child_size = ctx.layout_child(child_id, child_constraints);
             self.child_sizes.push(child_size);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
@@ -153,67 +126,26 @@ impl LegacyRender for RenderStack {
             self.fit, constraints, max_width, max_height, size
         );
 
-        // Calculate and save child offsets
-        for (i, &child) in child_ids.iter().enumerate() {
-            let child_size = self.child_sizes[i];
-
-            // Check if child has PositionedMetadata
-            let positioned_metadata = if let Some(element) = tree.get(child) {
-                if let Some(render_node_guard) = element.render_object() {
-                    render_node_guard
-                        .as_any()
-                        .downcast_ref::<super::positioned::RenderPositioned>()
-                        .map(|pos| pos.metadata)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let child_offset = if let Some(pos_meta) = positioned_metadata {
-                if let Some(offset) = pos_meta.calculate_offset(child_size, size) {
-                    // Child is positioned - use calculated offset
-                    offset
-                } else {
-                    // Child has PositionedMetadata but is not positioned - use alignment
-                    self.alignment.calculate_offset(child_size, size)
-                }
-            } else {
-                // Child has no PositionedMetadata - use alignment-based positioning
-                self.alignment.calculate_offset(child_size, size)
-            };
-
+        // Calculate and save child offsets using alignment
+        for child_size in &self.child_sizes {
+            let child_offset = self.alignment.calculate_offset(*child_size, size);
             self.child_offsets.push(child_offset);
         }
 
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
-        let mut canvas = flui_painting::Canvas::new();
+
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
         // Paint children in order (first child in back, last child on top)
-        for (i, &child_id) in child_ids.iter().enumerate() {
+        for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-
-            // Paint child with combined offset and append to canvas
-            let child_canvas = tree.paint_child(child_id, offset + child_offset);
-            canvas.append_canvas(child_canvas);
+            ctx.paint_child(child_id, offset + child_offset);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable
     }
 }
 

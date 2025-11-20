@@ -1,9 +1,6 @@
 //! RenderAlign - aligns child within available space
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, Optional, PaintContext, RenderBox};
 use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject that aligns its child within the available space
@@ -45,8 +42,7 @@ pub struct RenderAlign {
     pub height_factor: Option<f32>,
 
     // Cached values from layout for paint phase
-    child_size: Size,
-    size: Size,
+    child_offset: Offset,
 }
 
 impl RenderAlign {
@@ -56,8 +52,7 @@ impl RenderAlign {
             alignment,
             width_factor: None,
             height_factor: None,
-            child_size: Size::ZERO,
-            size: Size::ZERO,
+            child_offset: Offset::ZERO,
         }
     }
 
@@ -71,8 +66,7 @@ impl RenderAlign {
             alignment,
             width_factor,
             height_factor,
-            child_size: Size::ZERO,
-            size: Size::ZERO,
+            child_offset: Offset::ZERO,
         }
     }
 
@@ -98,76 +92,60 @@ impl Default for RenderAlign {
     }
 }
 
-impl LegacyRender for RenderAlign {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+impl RenderBox<Optional> for RenderAlign {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        // Layout child with loose constraints to get its natural size
-        // Loose constraints allow the child to be smaller than max constraints
-        let child_size = tree.layout_child(child_id, constraints.loosen());
 
-        // Store child size for paint phase
-        self.child_size = child_size;
+        // Check if we have a child
+        if let Some(child_id) = ctx.children.get() {
+            // Layout child with loose constraints to get its natural size
+            let child_size = ctx.layout_child(child_id, constraints.loosen());
 
-        // Calculate our size based on factors
-        // Flutter-compatible behavior:
-        // - If factor is set: size = child_size * factor (clamped to constraints)
-        // - If no factor: expand to fill max constraints
-        let width = if let Some(factor) = self.width_factor {
-            (child_size.width * factor).clamp(constraints.min_width, constraints.max_width)
+            // Calculate our size based on factors
+            // Flutter-compatible behavior:
+            // - If factor is set: size = child_size * factor (clamped to constraints)
+            // - If no factor: expand to fill max constraints
+            let width = if let Some(factor) = self.width_factor {
+                (child_size.width * factor).clamp(constraints.min_width, constraints.max_width)
+            } else {
+                // No factor: expand to fill available width
+                constraints.max_width
+            };
+
+            let height = if let Some(factor) = self.height_factor {
+                (child_size.height * factor).clamp(constraints.min_height, constraints.max_height)
+            } else {
+                // No factor: expand to fill available height
+                constraints.max_height
+            };
+
+            let size = Size::new(width, height);
+
+            // Calculate aligned offset in local coordinates
+            // Alignment uses normalized coordinates: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
+            let available_width = size.width - child_size.width;
+            let available_height = size.height - child_size.height;
+
+            // Convert normalized alignment to pixel offset
+            // Formula: offset = (available_space * (alignment + 1.0)) / 2.0
+            let aligned_x = (available_width * (self.alignment.x + 1.0)) / 2.0;
+            let aligned_y = (available_height * (self.alignment.y + 1.0)) / 2.0;
+
+            self.child_offset = Offset::new(aligned_x, aligned_y);
+
+            size
         } else {
-            // No factor: expand to fill available width
-            constraints.max_width
-        };
-
-        let height = if let Some(factor) = self.height_factor {
-            (child_size.height * factor).clamp(constraints.min_height, constraints.max_height)
-        } else {
-            // No factor: expand to fill available height
-            constraints.max_height
-        };
-
-        let size = Size::new(width, height);
-        // Store our size for paint phase
-        self.size = size;
-        size
+            // No child - just take max size
+            Size::new(constraints.max_width, constraints.max_height)
+        }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // Use cached values from layout phase
-        let size = self.size;
-        let child_size = self.child_size;
-
-        // Calculate aligned offset in local coordinates
-        // Alignment uses normalized coordinates: -1.0 = left/top, 0.0 = center, 1.0 = right/bottom
-        let available_width = size.width - child_size.width;
-        let available_height = size.height - child_size.height;
-
-        // Convert normalized alignment to pixel offset
-        // Formula: offset = (available_space * (alignment + 1.0)) / 2.0
-        // Examples:
-        //   alignment = -1.0 → offset = 0.0 (left/top)
-        //   alignment =  0.0 → offset = available_space / 2.0 (center)
-        //   alignment =  1.0 → offset = available_space (right/bottom)
-        let aligned_x = (available_width * (self.alignment.x + 1.0)) / 2.0;
-        let aligned_y = (available_height * (self.alignment.y + 1.0)) / 2.0;
-
-        let local_child_offset = Offset::new(aligned_x, aligned_y);
-
-        // Paint child at aligned position (combine parent offset with local offset)
-        let child_offset = offset + local_child_offset;
-        tree.paint_child(child_id, child_offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+        // If we have a child, paint it at aligned position
+        if let Some(child_id) = ctx.children.get() {
+            let child_offset = ctx.offset + self.child_offset;
+            ctx.paint_child(child_id, child_offset);
+        }
     }
 }
 

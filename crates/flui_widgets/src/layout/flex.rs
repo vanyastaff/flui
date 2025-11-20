@@ -39,7 +39,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
@@ -96,7 +96,7 @@ pub struct Flex {
     /// - `.children(vec![...])` to set all at once
     /// - `.child(widget)` repeatedly to add one at a time (chainable)
     #[builder(field)]
-    pub children: Vec<Box<dyn AnyView>>,
+    pub children: Vec<Box<dyn >>,
 
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -165,7 +165,7 @@ impl<S: flex_builder::State> FlexBuilder<S> {
     ///     .children(vec![child1, child2, child3])
     ///     .build()
     /// ```
-    pub fn children(mut self, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn children(mut self, children: Vec<Box<dyn >>) -> Self {
         self.children = children;
         self
     }
@@ -183,7 +183,7 @@ impl<S: flex_builder::State> FlexBuilder<S> {
     ///     .child(widget3)
     ///     .build()
     /// ```
-    pub fn child(mut self, child: impl AnyView + 'static) -> Self {
+    pub fn child(mut self, child: impl  + 'static) -> Self {
         self.children.push(Box::new(child));
         self
     }
@@ -248,7 +248,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::centered(Axis::Horizontal, vec![child1, child2]);
     /// ```
-    pub fn centered(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn centered(direction: Axis, children: Vec<Box<dyn >>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::Center)
@@ -266,7 +266,7 @@ impl Flex {
     /// // Vertical layout with 16px spacing
     /// let flex = Flex::spaced(Axis::Vertical, 16.0, vec![child1, child2]);
     /// ```
-    pub fn spaced(direction: Axis, spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn spaced(direction: Axis, spacing: f32, children: Vec<Box<dyn >>) -> Self {
         if children.is_empty() {
             return Self::builder()
                 .direction(direction)
@@ -279,7 +279,7 @@ impl Flex {
         for (i, child) in children.into_iter().enumerate() {
             if i > 0 {
                 // Add spacer between children
-                let spacer: Box<dyn AnyView> = match direction {
+                let spacer: Box<dyn > = match direction {
                     Axis::Horizontal => Box::new(SizedBox::h_space(spacing)),
                     Axis::Vertical => Box::new(SizedBox::v_space(spacing)),
                 };
@@ -302,7 +302,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::start(Axis::Horizontal, vec![child1, child2]);
     /// ```
-    pub fn start(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn start(direction: Axis, children: Vec<Box<dyn >>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::Start)
@@ -318,7 +318,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::end(Axis::Horizontal, vec![child1, child2]);
     /// ```
-    pub fn end(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn end(direction: Axis, children: Vec<Box<dyn >>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::End)
@@ -334,7 +334,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::space_between(Axis::Horizontal, vec![child1, child2, child3]);
     /// ```
-    pub fn space_between(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn space_between(direction: Axis, children: Vec<Box<dyn >>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -350,7 +350,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::space_around(Axis::Horizontal, vec![child1, child2, child3]);
     /// ```
-    pub fn space_around(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn space_around(direction: Axis, children: Vec<Box<dyn >>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::SpaceAround)
@@ -366,7 +366,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::space_evenly(Axis::Horizontal, vec![child1, child2, child3]);
     /// ```
-    pub fn space_evenly(direction: Axis, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn space_evenly(direction: Axis, children: Vec<Box<dyn >>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::SpaceEvenly)

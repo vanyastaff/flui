@@ -4,7 +4,7 @@
 //! It delegates visual rendering to a Viewport child.
 
 use crate::layout::ScrollController;
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, View};
 use flui_types::layout::AxisDirection;
 
 /// Scrollable widget that handles gestures and scroll physics
@@ -40,7 +40,7 @@ use flui_types::layout::AxisDirection;
 #[derive(Clone)]
 pub struct Scrollable {
     /// The viewport child that renders scrollable content
-    pub child: Box<dyn AnyView>,
+    pub child: Box<dyn >,
 
     /// Scroll axis direction
     pub axis_direction: AxisDirection,
@@ -58,7 +58,7 @@ pub struct Scrollable {
 impl std::fmt::Debug for Scrollable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Scrollable")
-            .field("child", &"<dyn AnyView>")
+            .field("child", &"<dyn >")
             .field("axis_direction", &self.axis_direction)
             .field("controller", &self.controller)
             .field("physics_enabled", &self.physics_enabled)

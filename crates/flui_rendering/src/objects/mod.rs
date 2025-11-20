@@ -16,42 +16,65 @@ pub mod layout;
 /// Special render objects (custom paint, metadata, semantics, etc.)
 pub mod special;
 
+/// Text render objects (paragraph, editable text)
+pub mod text;
+
 // TODO: Re-enable after migration
 // pub mod basic;
 // pub mod debug;
 // pub mod media;
 // pub mod sliver;
-// pub mod text;
 // pub mod viewport;
 
 // ============================================================================
 // Re-exports - Single Arity (Migrated ✅)
 // ============================================================================
 
-// Layout Single objects (10 objects) ✅
+// Layout objects ✅
 pub use layout::{
-    RenderAspectRatio, RenderBaseline, RenderFractionallySizedBox, RenderIntrinsicHeight,
-    RenderIntrinsicWidth, RenderPadding, RenderPositionedBox, RenderRotatedBox, RenderShiftedBox,
+    // Optional arity
+    RenderAlign,
+    // Single arity
+    RenderAspectRatio,
+    RenderBaseline,
+    // Leaf arity
+    RenderEmpty,
+    // Variable arity
+    RenderFlex,
+    RenderFractionallySizedBox,
+    RenderIntrinsicHeight,
+    RenderIntrinsicWidth,
+    RenderPadding,
+    RenderPositionedBox,
+    RenderRotatedBox,
+    RenderShiftedBox,
+    RenderSizedBox,
     RenderSizedOverflowBox,
+    RenderStack,
 };
 
 // Visual Effects Single objects (13 objects from effects) ✅
 pub use effects::{
-    RenderAnimatedOpacity, RenderBackdropFilter, RenderClipOval, RenderClipPath, RenderClipRRect,
-    RenderClipRect, RenderCustomPaint, RenderOffstage, RenderOpacity, RenderRepaintBoundary,
-    RenderShaderMask, RenderTransform, RenderVisibility,
+    DecorationPosition, RenderAnimatedOpacity, RenderBackdropFilter, RenderClipOval,
+    RenderClipPath, RenderClipRRect, RenderClipRect, RenderCustomPaint, RenderDecoratedBox,
+    RenderOffstage, RenderOpacity, RenderRepaintBoundary, RenderShaderMask, RenderTransform,
+    RenderVisibility,
 };
 
 // Interaction Single objects (4 objects) ✅
 pub use interaction::{
-    RenderAbsorbPointer, RenderIgnorePointer, RenderMouseRegion, RenderPointerListener,
+    MouseCallbacks, PointerCallbacks, RenderAbsorbPointer, RenderIgnorePointer, RenderMouseRegion,
+    RenderPointerListener,
 };
 
 // Semantics Single objects (6 objects) ✅
 pub use special::{
-    RenderAnnotatedRegion, RenderBlockSemantics, RenderExcludeSemantics, RenderMergeSemantics,
-    RenderMetaData, RenderView,
+    RenderAnnotatedRegion, RenderBlockSemantics, RenderColoredBox, RenderExcludeSemantics,
+    RenderMergeSemantics, RenderMetaData, RenderView,
 };
+
+// Text Leaf objects (1 object) ✅
+pub use text::{ParagraphData, RenderParagraph};
 
 // ============================================================================
 // TODO: Re-enable after migration

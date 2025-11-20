@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
@@ -152,7 +152,7 @@ pub struct Stack {
     /// - `.children(vec![...])` to set all at once
     /// - `.child(widget)` repeatedly to add one at a time (chainable)
     #[builder(field)]
-    pub children: Vec<Box<dyn AnyView>>,
+    pub children: Vec<Box<dyn >>,
 
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -187,7 +187,7 @@ impl std::fmt::Debug for Stack {
             .field(
                 "children",
                 &if !self.children.is_empty() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -232,7 +232,7 @@ impl Stack {
 
     /// Sets the children widgets.
     #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
+    pub fn set_children(&mut self, children: Vec<Box<dyn >>) {
         self.children = children;
     }
 
@@ -275,7 +275,7 @@ impl<S: stack_builder::State> StackBuilder<S> {
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(mut self, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn children(mut self, children: Vec<Box<dyn >>) -> Self {
         self.children = children;
         self
     }
@@ -291,7 +291,7 @@ impl<S: stack_builder::State> StackBuilder<S> {
     ///     .child(Text::new("Overlay"))
     ///     .build()
     /// ```
-    pub fn child(mut self, child: impl AnyView + 'static) -> Self {
+    pub fn child(mut self, child: impl  + 'static) -> Self {
         self.children.push(Box::new(child));
         self
     }

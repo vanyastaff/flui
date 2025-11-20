@@ -4,7 +4,7 @@
 //! Similar to Flutter's LimitedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderLimitedBox;
 
@@ -82,7 +82,7 @@ pub struct LimitedBox {
 
     /// The child widget to limit.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for LimitedBox {
@@ -94,7 +94,7 @@ impl std::fmt::Debug for LimitedBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

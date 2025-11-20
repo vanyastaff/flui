@@ -12,7 +12,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::prelude::Color;
 
@@ -64,14 +64,14 @@ pub struct AppBar {
 
     /// The primary widget displayed in the app bar (typically Text)
     #[builder(setters(vis = "", name = title_internal))]
-    pub title: Option<Box<dyn AnyView>>,
+    pub title: Option<Box<dyn >>,
 
     /// Widget to display before the title (typically back button or menu icon)
-    pub leading: Option<Box<dyn AnyView>>,
+    pub leading: Option<Box<dyn >>,
 
     /// Widgets to display after the title (typically icon buttons)
     #[builder(default = vec![])]
-    pub actions: Vec<Box<dyn AnyView>>,
+    pub actions: Vec<Box<dyn >>,
 
     /// Background color of the app bar
     #[builder(default = Color::rgb(33, 150, 243))] // Material Blue 500
@@ -90,8 +90,8 @@ impl std::fmt::Debug for AppBar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppBar")
             .field("key", &self.key)
-            .field("title", &self.title.as_ref().map(|_| "<AnyView>"))
-            .field("leading", &self.leading.as_ref().map(|_| "<AnyView>"))
+            .field("title", &self.title.as_ref().map(|_| "<>"))
+            .field("leading", &self.leading.as_ref().map(|_| "<>"))
             .field("actions", &format!("[{} actions]", self.actions.len()))
             .field("background_color", &self.background_color)
             .field("elevation", &self.elevation)
@@ -187,7 +187,7 @@ impl View for AppBar {
         use flui_types::{Alignment, EdgeInsets};
 
         // Build the content row
-        let mut row_children: Vec<Box<dyn AnyView>> = Vec::new();
+        let mut row_children: Vec<Box<dyn >> = Vec::new();
 
         // Add leading widget (with padding)
         if let Some(leading) = self.leading {

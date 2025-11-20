@@ -3,7 +3,7 @@
 //! Based on Flutter's GestureDetector. Wraps a child widget and provides
 //! callbacks for various pointer events.
 
-use flui_core::view::{AnyView, BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, View};
 use flui_rendering::objects::PointerCallbacks;
 use flui_types::events::{PointerEvent, PointerEventData};
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub type PointerCallback = Arc<dyn Fn(&PointerEventData) + Send + Sync>;
 #[derive(Clone)]
 pub struct GestureDetector {
     /// Child widget
-    pub child: Box<dyn AnyView>,
+    pub child: Box<dyn >,
 
     /// On tap callback (pointer up)
     pub on_tap: Option<TapCallback>,
@@ -48,7 +48,7 @@ pub struct GestureDetector {
 
 impl GestureDetector {
     /// Create a new GestureDetector with a child
-    pub fn new(child: Box<dyn AnyView>) -> Self {
+    pub fn new(child: Box<dyn >) -> Self {
         Self {
             child,
             on_tap: None,
@@ -161,7 +161,7 @@ impl std::fmt::Debug for GestureDetector {
 
 /// Builder for GestureDetector
 pub struct GestureDetectorBuilder {
-    child: Option<Box<dyn AnyView>>,
+    child: Option<Box<dyn >>,
     on_tap: Option<TapCallback>,
     on_tap_down: Option<PointerCallback>,
     on_tap_up: Option<PointerCallback>,

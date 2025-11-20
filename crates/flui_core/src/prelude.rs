@@ -83,8 +83,32 @@ pub use crate::hooks::use_memo;
 /// Run side effects when dependencies change
 pub use crate::hooks::use_effect;
 
-/// Reactive value handle (cheap to clone, use in closures)
+/// Run side effects with explicit dependencies
+pub use crate::hooks::use_effect_with_deps;
+
+/// Create memoized callback
+pub use crate::hooks::use_callback;
+
+/// Create mutable reference (no rebuild on change)
+pub use crate::hooks::use_ref;
+
+/// Redux-style state with reducer
+pub use crate::hooks::use_reducer;
+
+/// Reactive value handle (Copy, 8 bytes)
 pub use crate::hooks::Signal;
+
+/// Computed value with automatic dependency tracking
+pub use crate::hooks::Computed;
+
+/// Batch multiple updates
+pub use crate::hooks::batch;
+
+/// Dependency identifier for hooks
+pub use crate::hooks::DependencyId;
+
+/// Hook context for managing hook state
+pub use crate::hooks::HookContext;
 
 // ============================================================
 // RENDER SYSTEM (for custom render objects)

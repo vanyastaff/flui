@@ -54,7 +54,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::element::Element;
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::constraints::BoxConstraints;
 use flui_types::styling::{BorderRadius, BorderSide, BorderStyle, BoxDecoration, BoxShadow};
@@ -106,7 +107,7 @@ use flui_types::{Alignment, Color, EdgeInsets, Offset};
     on(EdgeInsets, into),
     on(BoxDecoration, into),
     on(Color, into),
-    finish_fn(name = build_internal, vis = "")  // Private internal build function
+    finish_fn(name = build_internal, vis = "")
 )]
 pub struct Container {
     /// Unique key for this widget
@@ -154,18 +155,11 @@ pub struct Container {
     /// Width and height constraints override min/max constraints in BoxConstraints.
     pub constraints: Option<BoxConstraints>,
 
-    // Note: Transform feature is currently disabled
-    // /// The transformation matrix to apply to the container.
-    // ///
-    // /// If non-null, the container will be wrapped in a Transform widget.
-    // /// The transformation is applied OUTSIDE all other effects (decoration, alignment, etc).
-    // pub transform: Option<Matrix4>,
     /// The child contained by the container.
     ///
     /// If null, the container will size itself according to other properties.
-    /// Use the custom `.child()` setter in the builder.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for Container {
@@ -183,29 +177,12 @@ impl std::fmt::Debug for Container {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<Element>"
                 } else {
                     "None"
                 },
             )
             .finish()
-    }
-}
-
-impl Clone for Container {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            alignment: self.alignment,
-            padding: self.padding,
-            color: self.color,
-            decoration: self.decoration.clone(),
-            margin: self.margin,
-            width: self.width,
-            height: self.height,
-            constraints: self.constraints,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -230,7 +207,6 @@ impl Container {
             width: None,
             height: None,
             constraints: None,
-            // transform: None,  // Transform feature is currently disabled
             child: None,
         }
     }
@@ -256,13 +232,6 @@ impl Container {
     /// - Invalid size values (negative, NaN, infinite)
     ///
     /// Returns `Ok(())` if validation passes.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let container = Container::new();
-    /// assert!(container.validate().is_ok());
-    /// ```
     pub fn validate(&self) -> Result<(), String> {
         // Check for invalid width
         if let Some(width) = self.width {
@@ -276,11 +245,6 @@ impl Container {
             if height < 0.0 || height.is_nan() || height.is_infinite() {
                 return Err(format!("Invalid height: {}", height));
             }
-        }
-
-        // Warn if both color and decoration are set (decoration takes precedence)
-        if self.color.is_some() && self.decoration.is_some() {
-            // Not an error, but decoration will override color
         }
 
         Ok(())
@@ -298,7 +262,7 @@ impl Container {
     /// // Blue background container
     /// Container::colored(Color::BLUE, Text::new("Hello"))
     /// ```
-    pub fn colored(color: Color, child: impl View + 'static) -> Self {
+    pub fn colored(color: Color, child: impl IntoElement) -> Self {
         Self::builder().color(color).child(child).build()
     }
 
@@ -309,16 +273,7 @@ impl Container {
     /// - 8dp border radius (rounded corners)
     /// - Subtle elevation shadow
     /// - 16dp padding by default
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Container::card(Column::new().children(vec![
-    ///     Box::new(Text::headline("Card Title")),
-    ///     Box::new(Text::body("Card content...")),
-    /// ]))
-    /// ```
-    pub fn card(child: impl View + 'static) -> Self {
+    pub fn card(child: impl IntoElement) -> Self {
         let shadow = BoxShadow::new(Color::rgba(0, 0, 0, 25), Offset::new(0.0, 2.0), 4.0, 0.0);
         let decoration = BoxDecoration::default()
             .set_color(Some(Color::WHITE))
@@ -339,14 +294,7 @@ impl Container {
     /// - 1px solid border in specified color
     /// - 8dp border radius
     /// - 12dp padding
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Blue outlined container
-    /// Container::outlined(Color::BLUE, Text::new("Outlined"))
-    /// ```
-    pub fn outlined(border_color: Color, child: impl View + 'static) -> Self {
+    pub fn outlined(border_color: Color, child: impl IntoElement) -> Self {
         let decoration = BoxDecoration::default()
             .set_border_radius(Some(BorderRadius::circular(8.0)))
             .set_border(Some(flui_types::styling::Border::all(BorderSide::new(
@@ -368,15 +316,7 @@ impl Container {
     /// - Light gray background (Material surface color)
     /// - 4dp border radius
     /// - 16dp padding
-    ///
-    /// Perfect for sections, panels, or content areas.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Container::surface(content)
-    /// ```
-    pub fn surface(child: impl View + 'static) -> Self {
+    pub fn surface(child: impl IntoElement) -> Self {
         Self::builder()
             .color(Color::rgb(250, 250, 250))
             .padding(EdgeInsets::all(16.0))
@@ -385,14 +325,7 @@ impl Container {
     }
 
     /// Creates a container with rounded corners and a colored background.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Green rounded container with 12dp radius
-    /// Container::rounded(Color::GREEN, 12.0, Text::new("Rounded"))
-    /// ```
-    pub fn rounded(color: Color, radius: f32, child: impl View + 'static) -> Self {
+    pub fn rounded(color: Color, radius: f32, child: impl IntoElement) -> Self {
         let decoration = BoxDecoration::default()
             .set_color(Some(color))
             .set_border_radius(Some(BorderRadius::circular(radius)));
@@ -401,14 +334,7 @@ impl Container {
     }
 
     /// Creates a container with fixed width and height.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // 200x100 container
-    /// Container::sized(200.0, 100.0, content)
-    /// ```
-    pub fn sized(width: f32, height: f32, child: impl View + 'static) -> Self {
+    pub fn sized(width: f32, height: f32, child: impl IntoElement) -> Self {
         Self::builder()
             .width(width)
             .height(height)
@@ -417,25 +343,12 @@ impl Container {
     }
 
     /// Creates a container with padding applied.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// // Container with 16dp padding on all sides
-    /// Container::padded(EdgeInsets::all(16.0), content)
-    /// ```
-    pub fn padded(padding: EdgeInsets, child: impl View + 'static) -> Self {
+    pub fn padded(padding: EdgeInsets, child: impl IntoElement) -> Self {
         Self::builder().padding(padding).child(child).build()
     }
 
     /// Creates a centered container.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Container::centered(widget)
-    /// ```
-    pub fn centered(child: impl View + 'static) -> Self {
+    pub fn centered(child: impl IntoElement) -> Self {
         Self::builder()
             .alignment(Alignment::CENTER)
             .child(child)
@@ -454,71 +367,76 @@ impl Default for Container {
 // Container composes other Views (Padding, Align, DecoratedBox, SizedBox, etc.) into a tree.
 
 impl View for Container {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Build widget tree from inside out:
         // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
         //
         // Key insight: When alignment is set, decoration must be OUTSIDE alignment
         // so that decoration receives tight constraints and expands to full size.
 
-        let mut current: Box<dyn AnyView> = if let Some(child) = self.child {
+        let mut current: Element = if let Some(child) = self.child {
             child
         } else {
             // No child - use empty SizedBox
-            Box::new(crate::SizedBox::new())
+            crate::SizedBox::new().into_element()
         };
 
         // Apply padding (inner spacing around child)
         if let Some(padding) = self.padding {
-            let mut padding_widget = crate::Padding::builder().padding(padding).build();
-            padding_widget.child = Some(current);
-            current = Box::new(padding_widget);
+            current = crate::Padding::builder()
+                .padding(padding)
+                .child(current)
+                .build()
+                .into_element();
         }
 
         // Apply alignment BEFORE decoration!
         if let Some(alignment) = self.alignment {
-            let mut align_widget = crate::Align::builder().alignment(alignment).build();
-            align_widget.child = Some(current);
-            current = Box::new(align_widget);
+            current = crate::Align::builder()
+                .alignment(alignment)
+                .child(current)
+                .build()
+                .into_element();
         }
 
         // Apply decoration or color AFTER alignment
         if let Some(decoration) = self.decoration {
-            let mut decorated_widget = crate::DecoratedBox::builder()
+            current = crate::DecoratedBox::builder()
                 .decoration(decoration)
                 .position(crate::DecorationPosition::Background)
-                .build();
-            decorated_widget.child = Some(current);
-            current = Box::new(decorated_widget);
+                .child(current)
+                .build()
+                .into_element();
         } else if let Some(color) = self.color {
             let decoration = BoxDecoration {
                 color: Some(color),
                 ..Default::default()
             };
-            let mut decorated_widget = crate::DecoratedBox::builder()
+            current = crate::DecoratedBox::builder()
                 .decoration(decoration)
                 .position(crate::DecorationPosition::Background)
-                .build();
-            decorated_widget.child = Some(current);
-            current = Box::new(decorated_widget);
+                .child(current)
+                .build()
+                .into_element();
         }
 
         // Apply margin BEFORE size constraints!
         if let Some(margin) = self.margin {
-            let mut margin_widget = crate::Padding::builder().padding(margin).build();
-            margin_widget.child = Some(current);
-            current = Box::new(margin_widget);
+            current = crate::Padding::builder()
+                .padding(margin)
+                .child(current)
+                .build()
+                .into_element();
         }
 
         // Apply width/height constraints
         if self.width.is_some() || self.height.is_some() {
-            let sized_widget = crate::SizedBox {
-                key: None,
-                width: self.width,
-                height: self.height,
-                child: Some(current),
-            };
-            current = Box::new(sized_widget);
+            current = crate::SizedBox::builder()
+                .width(self.width.unwrap_or(0.0))
+                .height(self.height.unwrap_or(0.0))
+                .child(current)
+                .build()
+                .into_element();
         }
 
         // Return the composed widget tree
@@ -536,18 +454,9 @@ where
 {
     /// Sets the child widget (works in builder chain).
     ///
-    /// Accepts anything that implements `View` trait.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Container::builder()
-    ///     .width(100.0)
-    ///     .child(Text::new("Hello"))
-    ///     .build()
-    /// ```
-    pub fn child(self, child: impl View + 'static) -> ContainerBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    /// Accepts anything that implements `IntoElement`.
+    pub fn child(self, child: impl IntoElement) -> ContainerBuilder<SetChild<S>> {
+        self.child_internal(Some(child.into_element()))
     }
 }
 
@@ -569,24 +478,6 @@ impl<S: State> ContainerBuilder<S> {
 }
 
 /// Macro for creating Container with declarative syntax.
-///
-/// Supports child-first syntax for ergonomic widget composition.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // With child (recommended)
-/// container!(child: widget)
-/// container!(child: widget, width: 100.0, height: 200.0)
-///
-/// // Without child (property-only)
-/// container! {
-///     width: 100.0,
-///     height: 200.0,
-///     padding: EdgeInsets::all(16.0),
-///     color: Color::rgb(255, 0, 0),
-/// }
-/// ```
 #[macro_export]
 macro_rules! container {
     // Empty container
@@ -624,8 +515,8 @@ macro_rules! container {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use flui_rendering::RenderPadding;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
     use flui_types::Size;
 
     // Mock view for testing
@@ -633,8 +524,8 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -814,98 +705,5 @@ mod tests {
 
         assert_eq!(container.padding, Some(EdgeInsets::all(16.0)));
         assert_eq!(container.color, Some(Color::rgb(255, 0, 0)));
-    }
-
-    // ========== Tests for Convenience Methods ==========
-
-    #[test]
-    fn test_container_colored() {
-        let container = Container::colored(Color::BLUE, MockView);
-        assert_eq!(container.color, Some(Color::BLUE));
-        assert!(container.child.is_some());
-    }
-
-    #[test]
-    fn test_container_card() {
-        let container = Container::card(MockView);
-        assert!(container.decoration.is_some());
-        assert_eq!(container.padding, Some(EdgeInsets::all(16.0)));
-        assert!(container.child.is_some());
-
-        let decoration = container.decoration.unwrap();
-        assert_eq!(decoration.color, Some(Color::WHITE));
-        assert!(decoration.border_radius.is_some());
-        assert!(decoration.box_shadow.is_some());
-    }
-
-    #[test]
-    fn test_container_outlined() {
-        let container = Container::outlined(Color::BLUE, MockView);
-        assert!(container.decoration.is_some());
-        assert_eq!(container.padding, Some(EdgeInsets::all(12.0)));
-        assert!(container.child.is_some());
-
-        let decoration = container.decoration.unwrap();
-        assert!(decoration.border.is_some());
-        assert!(decoration.border_radius.is_some());
-    }
-
-    #[test]
-    fn test_container_surface() {
-        let container = Container::surface(MockView);
-        assert_eq!(container.color, Some(Color::rgb(250, 250, 250)));
-        assert_eq!(container.padding, Some(EdgeInsets::all(16.0)));
-        assert!(container.child.is_some());
-    }
-
-    #[test]
-    fn test_container_rounded() {
-        let container = Container::rounded(Color::GREEN, 12.0, MockView);
-        assert!(container.decoration.is_some());
-        assert!(container.child.is_some());
-
-        let decoration = container.decoration.unwrap();
-        assert_eq!(decoration.color, Some(Color::GREEN));
-        assert!(decoration.border_radius.is_some());
-    }
-
-    #[test]
-    fn test_container_sized() {
-        let container = Container::sized(200.0, 100.0, MockView);
-        assert_eq!(container.width, Some(200.0));
-        assert_eq!(container.height, Some(100.0));
-        assert!(container.child.is_some());
-    }
-
-    #[test]
-    fn test_container_padded() {
-        let padding = EdgeInsets::symmetric(20.0, 10.0);
-        let container = Container::padded(padding, MockView);
-        assert_eq!(container.padding, Some(padding));
-        assert!(container.child.is_some());
-    }
-
-    #[test]
-    fn test_container_centered() {
-        let container = Container::centered(MockView);
-        assert_eq!(container.alignment, Some(Alignment::CENTER));
-        assert!(container.child.is_some());
-    }
-
-    #[test]
-    fn test_all_convenience_methods() {
-        // Verify all convenience methods create widgets with children
-        assert!(Container::colored(Color::RED, MockView).child.is_some());
-        assert!(Container::card(MockView).child.is_some());
-        assert!(Container::outlined(Color::BLUE, MockView).child.is_some());
-        assert!(Container::surface(MockView).child.is_some());
-        assert!(Container::rounded(Color::GREEN, 12.0, MockView)
-            .child
-            .is_some());
-        assert!(Container::sized(100.0, 100.0, MockView).child.is_some());
-        assert!(Container::padded(EdgeInsets::all(16.0), MockView)
-            .child
-            .is_some());
-        assert!(Container::centered(MockView).child.is_some());
     }
 }

@@ -1,44 +1,34 @@
 //! RenderFlow - Custom layout with delegate pattern
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 
 /// Context provided to FlowDelegate during paint
-pub struct FlowPaintContext<'a> {
-    /// Parent canvas
-    pub canvas: &'a mut Canvas,
+pub struct FlowPaintContext<'a, 'b> {
+    /// Paint context reference
+    pub paint_ctx: &'a mut PaintContext<'b, Variable>,
     /// Number of children
     pub child_count: usize,
     /// Size of each child (after layout)
     pub child_sizes: &'a [Size],
-    /// Parent offset
-    pub offset: Offset,
+    /// Children IDs
+    pub children: &'a [NonZeroUsize],
 }
 
-impl<'a> FlowPaintContext<'a> {
+impl<'a, 'b> FlowPaintContext<'a, 'b> {
     /// Paint a child with transformation matrix
-    pub fn paint_child(
-        &mut self,
-        index: usize,
-        transform: Matrix4,
-        tree: &flui_core::element::ElementTree,
-        children: &[flui_core::element::ElementId],
-        offset: Offset,
-    ) {
-        if index >= children.len() {
+    pub fn paint_child(&mut self, index: usize, transform: Matrix4, offset: Offset) {
+        if index >= self.children.len() {
             return;
         }
 
-        // Apply transformation and paint child
-        self.canvas.save();
-        self.canvas.set_transform(transform);
-        let child_canvas = tree.paint_child(children[index], offset);
-        self.canvas.append_canvas(child_canvas);
-        self.canvas.restore();
+        // TODO: Apply transformation matrix when transform layers are supported
+        // For now, just paint at offset
+        let _ = transform; // Suppress warning
+        self.paint_ctx.paint_child(self.children[index], offset);
     }
 }
 
@@ -48,16 +38,14 @@ pub trait FlowDelegate: Debug + Send + Sync {
     fn get_size(&self, constraints: BoxConstraints) -> Size;
 
     /// Get constraints for a specific child
-    fn get_constraints_for_child(&self, index: usize, constraints: BoxConstraints) -> BoxConstraints;
+    fn get_constraints_for_child(
+        &self,
+        index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints;
 
     /// Paint children with custom transformations
-    fn paint_children(
-        &self,
-        context: &mut FlowPaintContext,
-        tree: &flui_core::element::ElementTree,
-        children: &[flui_core::element::ElementId],
-        offset: Offset,
-    );
+    fn paint_children(&self, context: &mut FlowPaintContext, offset: Offset);
 
     /// Check if layout should be recomputed
     fn should_relayout(&self, old: &dyn Any) -> bool;
@@ -89,18 +77,16 @@ impl FlowDelegate for SimpleFlowDelegate {
         Size::new(constraints.max_width, constraints.max_height)
     }
 
-    fn get_constraints_for_child(&self, _index: usize, constraints: BoxConstraints) -> BoxConstraints {
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
         // Give children loose constraints
         BoxConstraints::new(0.0, constraints.max_width, 0.0, constraints.max_height)
     }
 
-    fn paint_children(
-        &self,
-        context: &mut FlowPaintContext,
-        tree: &flui_core::element::ElementTree,
-        children: &[flui_core::element::ElementId],
-        offset: Offset,
-    ) {
+    fn paint_children(&self, context: &mut FlowPaintContext, offset: Offset) {
         let mut x = 0.0;
 
         for i in 0..context.child_count {
@@ -109,7 +95,7 @@ impl FlowDelegate for SimpleFlowDelegate {
             // Create translation matrix for this child
             let transform = Matrix4::translation(offset.dx + x, offset.dy, 0.0);
 
-            context.paint_child(i, transform, tree, children, Offset::ZERO);
+            context.paint_child(i, transform, Offset::new(offset.dx + x, offset.dy));
 
             x += child_size.width + self.spacing;
         }
@@ -180,20 +166,19 @@ impl Debug for RenderFlow {
     }
 }
 
-impl LegacyRender for RenderFlow {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let children = ctx.children.multi();
+impl RenderBox<Variable> for RenderFlow {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
+        let children = ctx.children;
 
         // Get container size from delegate
         let size = self.delegate.get_size(constraints);
 
         // Layout each child with constraints from delegate
         self.child_sizes.clear();
-        for (i, &child_id) in children.iter().enumerate() {
+        for (i, child_id) in children.iter().enumerate() {
             let child_constraints = self.delegate.get_constraints_for_child(i, constraints);
-            let child_size = tree.layout_child(child_id, child_constraints);
+            let child_size = ctx.layout_child(child_id, child_constraints);
             self.child_sizes.push(child_size);
         }
 
@@ -201,34 +186,22 @@ impl LegacyRender for RenderFlow {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let children = ctx.children.multi();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        let mut canvas = Canvas::new();
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
-        // Create paint context
-        let mut paint_context = FlowPaintContext {
-            canvas: &mut canvas,
-            child_count: children.len(),
+        // Create paint context for delegate
+        let mut flow_paint_ctx = FlowPaintContext {
+            paint_ctx: ctx,
+            child_count: child_ids.len(),
             child_sizes: &self.child_sizes,
-            offset,
+            children: &child_ids,
         };
 
         // Let delegate paint children with transformations
-        self.delegate
-            .paint_children(&mut paint_context, tree, children, offset);
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable
+        self.delegate.paint_children(&mut flow_paint_ctx, offset);
     }
 }
 
@@ -299,13 +272,5 @@ mod tests {
 
         // Delegate should be updated (can't easily verify without layout)
         assert_eq!(flow.child_sizes.len(), 0);
-    }
-
-    #[test]
-    fn test_arity_is_variable() {
-        let delegate = Box::new(SimpleFlowDelegate::new(10.0));
-        let flow = RenderFlow::new(delegate);
-
-        assert_eq!(flow.arity(), RuntimeArity::Variable);
     }
 }

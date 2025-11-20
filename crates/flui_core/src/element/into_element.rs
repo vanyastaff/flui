@@ -51,6 +51,7 @@ pub(crate) mod sealed_into_element {
     impl<T: Sealed> Sealed for Option<T> {}
 
     // Element types
+    impl Sealed for crate::element::Element {}
     impl Sealed for crate::element::RenderElement {}
     impl Sealed for crate::element::ComponentElement {}
     impl Sealed for crate::element::ProviderElement {}
@@ -63,6 +64,10 @@ pub(crate) mod sealed_into_element {
     }
     impl<R: crate::render::RenderBox<crate::render::Single>> Sealed
         for crate::render::WithOptionalChild<R>
+    {
+    }
+    impl<R: crate::render::RenderBox<crate::render::Optional>> Sealed
+        for crate::render::WithMaybeChild<R>
     {
     }
     impl<R: crate::render::RenderBox<crate::render::Variable>> Sealed
@@ -221,6 +226,22 @@ impl<V: crate::view::View> IntoElement for V {
         element_like.into_element()
     }
 }
+
+        /// Identity implementation for Element itself.
+        ///
+        /// Enables Element to be returned directly from build():
+        ///
+        /// ```rust,ignore
+        /// fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        ///     // Can return Element directly
+        ///     some_view.into_element()
+        /// }
+        /// ```
+        impl IntoElement for Element {
+            fn into_element(self) -> Element {
+                self
+            }
+        }
 
 /// Implementation for optional elements.
 ///

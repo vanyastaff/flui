@@ -29,7 +29,7 @@
 
 use crate::element::hit_test::BoxHitTestResult;
 use crate::element::Element;
-use crate::render::arity::{Arity, ChildrenAccess, Leaf, Single, Variable};
+use crate::render::arity::{Arity, ChildrenAccess, Leaf, Optional, Single, Variable};
 use crate::render::contexts::{HitTestContext, LayoutContext, PaintContext};
 use crate::render::protocol::BoxProtocol;
 use crate::render::render_element::RenderElement;
@@ -179,12 +179,25 @@ pub trait RenderBoxExt: Sized {
         }
     }
 
-    /// Wraps this render with an optional child.
+    /// Wraps this render with an optional child (for Single arity).
     fn child_opt(self, child: impl Into<Option<Element>>) -> WithOptionalChild<Self>
     where
         Self: RenderBox<Single>,
     {
         WithOptionalChild {
+            render: self,
+            child: child.into(),
+        }
+    }
+
+    /// Wraps this render with an optional child (for Optional arity).
+    ///
+    /// Use this for render objects that implement `RenderBox<Optional>`.
+    fn maybe_child(self, child: impl Into<Option<Element>>) -> WithMaybeChild<Self>
+    where
+        Self: RenderBox<Optional>,
+    {
+        WithMaybeChild {
             render: self,
             child: child.into(),
         }
@@ -228,11 +241,22 @@ pub struct WithChild<R, C> {
     pub child: C,
 }
 
-/// Builder wrapper for render objects with optional child.
+/// Builder wrapper for render objects with optional child (Single arity).
+///
+/// Created by [`RenderBoxExt::child_opt()`]. Implements `IntoElement`.
+#[derive(Debug)]
+pub struct WithOptionalChild<R> {
+    /// The render object.
+    pub render: R,
+    /// The optional child element.
+    pub child: Option<Element>,
+}
+
+/// Builder wrapper for render objects with optional child (Optional arity).
 ///
 /// Created by [`RenderBoxExt::maybe_child()`]. Implements `IntoElement`.
 #[derive(Debug)]
-pub struct WithOptionalChild<R> {
+pub struct WithMaybeChild<R> {
     /// The render object.
     pub render: R,
     /// The optional child element.
@@ -272,6 +296,16 @@ impl<R: RenderBox<Single>, C: IntoElement> IntoElement for WithChild<R, C> {
 impl<R: RenderBox<Single>> IntoElement for WithOptionalChild<R> {
     fn into_element(self) -> Element {
         let mut elem = RenderElement::r#box::<Single, _>(self.render);
+        if let Some(child) = self.child {
+            elem.set_unmounted_children(vec![child]);
+        }
+        Element::Render(elem)
+    }
+}
+
+impl<R: RenderBox<Optional>> IntoElement for WithMaybeChild<R> {
+    fn into_element(self) -> Element {
+        let mut elem = RenderElement::r#box::<Optional, _>(self.render);
         if let Some(child) = self.child {
             elem.set_unmounted_children(vec![child]);
         }

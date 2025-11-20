@@ -1,9 +1,8 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
-
+use flui_core::render::{
+    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 
@@ -117,12 +116,12 @@ impl Default for RenderWrap {
     }
 }
 
-impl LegacyRender for RenderWrap {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+impl RenderBox<Variable> for RenderWrap {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        if child_ids.is_empty() {
+        let children = ctx.children;
+
+        if children.as_slice().is_empty() {
             self.child_offsets.clear();
             return constraints.smallest();
         }
@@ -138,7 +137,7 @@ impl LegacyRender for RenderWrap {
                 let mut max_run_height = 0.0_f32;
                 let mut total_width = 0.0_f32;
 
-                for child in child_ids.iter().copied() {
+                for child_id in children.iter() {
                     // Child gets unconstrained width, constrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -147,7 +146,7 @@ impl LegacyRender for RenderWrap {
                         constraints.max_height,
                     );
 
-                    let child_size = tree.layout_child(child, child_constraints);
+                    let child_size = ctx.layout_child(child_id, child_constraints);
 
                     // Check if we need to wrap
                     if current_x + child_size.width > max_width && current_x > 0.0 {
@@ -176,7 +175,7 @@ impl LegacyRender for RenderWrap {
                 let mut max_run_width = 0.0_f32;
                 let mut total_height = 0.0_f32;
 
-                for child in child_ids.iter().copied() {
+                for child_id in children.iter() {
                     // Child gets constrained width, unconstrained height
                     let child_constraints = BoxConstraints::new(
                         0.0,
@@ -185,7 +184,7 @@ impl LegacyRender for RenderWrap {
                         max_height - current_y,
                     );
 
-                    let child_size = tree.layout_child(child, child_constraints);
+                    let child_size = ctx.layout_child(child_id, child_constraints);
 
                     // Check if we need to wrap
                     if current_y + child_size.height > max_height && current_y > 0.0 {
@@ -210,30 +209,16 @@ impl LegacyRender for RenderWrap {
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_ids = ctx.children.as_slice();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        // Create canvas for all children
-        let mut canvas = Canvas::new();
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
-        for (i, &child_id) in child_ids.iter().enumerate() {
+        for (i, child_id) in child_ids.into_iter().enumerate() {
             let child_offset = self.child_offsets.get(i).copied().unwrap_or(Offset::ZERO);
-
-            // Paint child and append to canvas
-            let child_canvas = tree.paint_child(child_id, offset + child_offset);
-            canvas.append_canvas(child_canvas);
+            ctx.paint_child(child_id, offset + child_offset);
         }
-
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable // Multi-child container
     }
 }
 

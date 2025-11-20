@@ -1,10 +1,9 @@
 //! RenderTable - Table layout with configurable column widths
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 /// Column width specification for table columns
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -115,7 +114,12 @@ impl RenderTable {
     }
 
     /// Compute column widths based on constraints and column specs
-    fn compute_column_widths(&self, children: &[flui_core::element::ElementId], tree: &flui_core::element::ElementTree, constraints: BoxConstraints) -> Vec<f32> {
+    fn compute_column_widths(
+        &self,
+        children: &[NonZeroUsize],
+        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
+        constraints: BoxConstraints,
+    ) -> Vec<f32> {
         if self.columns == 0 {
             return Vec::new();
         }
@@ -150,7 +154,7 @@ impl RenderTable {
                                 0.0,
                                 constraints.max_height,
                             );
-                            let child_size = tree.layout_child(children[idx], child_constraints);
+                            let child_size = ctx.layout_child(children[idx], child_constraints);
                             max_width = max_width.max(child_size.width);
                         }
                     }
@@ -182,8 +186,8 @@ impl RenderTable {
     /// Compute row heights based on column widths and cell contents
     fn compute_row_heights(
         &self,
-        children: &[flui_core::element::ElementId],
-        tree: &flui_core::element::ElementTree,
+        children: &[NonZeroUsize],
+        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
         column_widths: &[f32],
         constraints: BoxConstraints,
     ) -> Vec<f32> {
@@ -206,7 +210,7 @@ impl RenderTable {
                         0.0,
                         constraints.max_height,
                     );
-                    let child_size = tree.layout_child(children[idx], child_constraints);
+                    let child_size = ctx.layout_child(children[idx], child_constraints);
                     max_height = max_height.max(child_size.height);
                 }
             }
@@ -218,13 +222,15 @@ impl RenderTable {
     }
 }
 
-impl LegacyRender for RenderTable {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let children = ctx.children.multi();
+impl RenderBox<Variable> for RenderTable {
+    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
+        let children = ctx.children;
 
-        if self.columns == 0 || children.is_empty() {
+        // Collect children first for multiple passes
+        let child_ids: Vec<_> = children.iter().collect();
+
+        if self.columns == 0 || child_ids.is_empty() {
             self.computed_column_widths.clear();
             self.computed_row_heights.clear();
             self.size = Size::ZERO;
@@ -232,11 +238,11 @@ impl LegacyRender for RenderTable {
         }
 
         // Compute column widths
-        self.computed_column_widths = self.compute_column_widths(children, tree, constraints);
+        self.computed_column_widths = self.compute_column_widths(&child_ids, &ctx, constraints);
 
         // Compute row heights
         self.computed_row_heights =
-            self.compute_row_heights(children, tree, &self.computed_column_widths, constraints);
+            self.compute_row_heights(&child_ids, &ctx, &self.computed_column_widths, constraints);
 
         // Calculate total size
         let total_width: f32 = self.computed_column_widths.iter().sum();
@@ -248,15 +254,14 @@ impl LegacyRender for RenderTable {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let children = ctx.children.multi();
+    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
         let offset = ctx.offset;
 
-        let mut canvas = Canvas::new();
+        // Collect child IDs first to avoid borrow checker issues
+        let child_ids: Vec<_> = ctx.children.iter().collect();
 
-        if self.columns == 0 || children.is_empty() {
-            return canvas;
+        if self.columns == 0 || child_ids.is_empty() {
+            return;
         }
 
         let row_count = self.computed_row_heights.len();
@@ -268,7 +273,7 @@ impl LegacyRender for RenderTable {
 
             for col in 0..self.columns {
                 let idx = row * self.columns + col;
-                if idx >= children.len() {
+                if idx >= child_ids.len() {
                     break;
                 }
 
@@ -290,24 +295,13 @@ impl LegacyRender for RenderTable {
                     TableCellVerticalAlignment::Fill => Offset::new(x, y),
                 };
 
-                let child_canvas = tree.paint_child(children[idx], cell_offset);
-                canvas.append_canvas(child_canvas);
+                ctx.paint_child(child_ids[idx], cell_offset);
 
                 x += col_width;
             }
 
             y += row_height;
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Variable
     }
 }
 
@@ -360,11 +354,20 @@ mod tests {
 
     #[test]
     fn test_table_column_width_variants() {
-        assert_eq!(TableColumnWidth::Fixed(100.0), TableColumnWidth::Fixed(100.0));
-        assert_ne!(TableColumnWidth::Fixed(100.0), TableColumnWidth::Fixed(200.0));
+        assert_eq!(
+            TableColumnWidth::Fixed(100.0),
+            TableColumnWidth::Fixed(100.0)
+        );
+        assert_ne!(
+            TableColumnWidth::Fixed(100.0),
+            TableColumnWidth::Fixed(200.0)
+        );
         assert_eq!(TableColumnWidth::Flex(1.0), TableColumnWidth::Flex(1.0));
         assert_eq!(TableColumnWidth::Intrinsic, TableColumnWidth::Intrinsic);
-        assert_eq!(TableColumnWidth::Fraction(0.5), TableColumnWidth::Fraction(0.5));
+        assert_eq!(
+            TableColumnWidth::Fraction(0.5),
+            TableColumnWidth::Fraction(0.5)
+        );
     }
 
     #[test]
@@ -397,11 +400,5 @@ mod tests {
     fn test_table_cell_vertical_alignment_default() {
         let default = TableCellVerticalAlignment::default();
         assert_eq!(default, TableCellVerticalAlignment::Top);
-    }
-
-    #[test]
-    fn test_arity_is_multi_child() {
-        let table = RenderTable::new(3);
-        assert_eq!(table.arity(), RuntimeArity::Variable);
     }
 }

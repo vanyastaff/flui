@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::styling::{BorderRadius, BoxDecoration, BoxShadow};
 use flui_types::{Color, EdgeInsets};
@@ -76,7 +76,7 @@ impl Button {
 }
 
 impl View for Button {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate intrinsic size based on text + padding
         // Text width is approximately char_count * font_size * 0.6
         let text_width = (self.label.len() as f32) * 14.0 * 0.6;
@@ -95,10 +95,10 @@ impl View for Button {
             .build();
 
         // Wrap text in Center to center it within the button
-        let centered_text = crate::Center::builder().child(text).build();
+        let centered_text = crate::Center::with_child(text);
 
         // Create the visual container with EXPLICIT width/height to prevent expansion
-        let mut container = Container::builder()
+        let container = Container::builder()
             .width(button_width)
             .height(button_height)
             .padding(self.padding)
@@ -108,22 +108,21 @@ impl View for Button {
                 box_shadow: self.box_shadow,
                 ..Default::default()
             })
+            .child(centered_text)
             .build();
-
-        container.child = Some(Box::new(centered_text));
 
         // Wrap in GestureDetector for tap handling
         if let Some(on_tap) = self.on_tap {
-            Box::new(
-                GestureDetector::builder()
-                    .child(container)
-                    .on_tap(move || {
-                        on_tap();
-                    })
-                    .build(),
-            ) as Box<dyn AnyView>
+            GestureDetector::builder()
+                .child(container)
+                .on_tap(move || {
+                    on_tap();
+                })
+                .build()
         } else {
-            Box::new(container) as Box<dyn AnyView>
+            // Return container directly without gesture detection
+            // We need to return the same type, so wrap in a no-op gesture detector
+            GestureDetector::builder().child(container).build()
         }
     }
 }

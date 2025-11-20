@@ -4,7 +4,7 @@
 //! Similar to Flutter's RotatedBox widget.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderRotatedBox;
@@ -96,7 +96,7 @@ pub struct RotatedBox {
 
     /// The child widget to rotate.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for RotatedBox {
@@ -107,7 +107,7 @@ impl std::fmt::Debug for RotatedBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -177,7 +177,7 @@ impl RotatedBox {
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
+    pub fn set_child(&mut self, child: Box<dyn >) {
         self.child = Some(child);
     }
 }

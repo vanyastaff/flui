@@ -1,8 +1,6 @@
 //! RenderEmpty - a render object that does nothing
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::traits::Render;
-use flui_core::render::Leaf;
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
 use flui_types::Size;
 
 /// A render object that renders nothing

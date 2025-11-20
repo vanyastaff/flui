@@ -4,7 +4,7 @@
 //! potentially causing the child to overflow the widget's bounds.
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderSizedOverflowBox;
@@ -100,7 +100,7 @@ pub struct SizedOverflowBox {
 
     /// The child widget
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
 impl std::fmt::Debug for SizedOverflowBox {
@@ -112,7 +112,7 @@ impl std::fmt::Debug for SizedOverflowBox {
             .field(
                 "child_min_width",
                 &if self.child_min_width.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -120,7 +120,7 @@ impl std::fmt::Debug for SizedOverflowBox {
             .field(
                 "child_max_width",
                 &if self.child_max_width.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -128,7 +128,7 @@ impl std::fmt::Debug for SizedOverflowBox {
             .field(
                 "child_min_height",
                 &if self.child_min_height.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -136,7 +136,7 @@ impl std::fmt::Debug for SizedOverflowBox {
             .field(
                 "child_max_height",
                 &if self.child_max_height.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -145,7 +145,7 @@ impl std::fmt::Debug for SizedOverflowBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },

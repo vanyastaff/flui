@@ -58,6 +58,65 @@ pub use flui_core::render::{
 // Re-export from flui_types for convenience
 pub use flui_types::layout::{FlexFit, StackFit};
 
+// Re-export commonly used RenderObjects from objects module
+pub use objects::{
+    // Effects (Optional)
+    DecorationPosition,
+    // Interaction callbacks
+    MouseCallbacks,
+    // Text (Leaf)
+    ParagraphData,
+    PointerCallbacks,
+    // Interaction (Single) - already migrated
+    RenderAbsorbPointer,
+    // Layout (Optional) - already migrated
+    RenderAlign,
+    // Effects (Single) - already migrated
+    RenderAnimatedOpacity,
+    // Special/Semantics (Single) - already migrated
+    RenderAnnotatedRegion,
+    // Layout (Single) - already migrated
+    RenderAspectRatio,
+    RenderBackdropFilter,
+    RenderBaseline,
+    RenderBlockSemantics,
+    RenderClipOval,
+    RenderClipPath,
+    RenderClipRRect,
+    RenderClipRect,
+    // Special (Leaf)
+    RenderColoredBox,
+    RenderCustomPaint,
+    RenderDecoratedBox,
+    RenderEmpty,
+    RenderExcludeSemantics,
+    // Variable arity
+    RenderFlex,
+    RenderFractionallySizedBox,
+    RenderIgnorePointer,
+    RenderIntrinsicHeight,
+    RenderIntrinsicWidth,
+    RenderMergeSemantics,
+    RenderMetaData,
+    RenderMouseRegion,
+    RenderOffstage,
+    RenderOpacity,
+    RenderPadding,
+    RenderParagraph,
+    RenderPointerListener,
+    RenderPositionedBox,
+    RenderRepaintBoundary,
+    RenderRotatedBox,
+    RenderShaderMask,
+    RenderShiftedBox,
+    RenderSizedBox,
+    RenderSizedOverflowBox,
+    RenderStack,
+    RenderTransform,
+    RenderView,
+    RenderVisibility,
+};
+
 // Re-export all RenderObjects
 // pub use objects::{
 //     DecorationPosition,

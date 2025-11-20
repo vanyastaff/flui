@@ -8,7 +8,7 @@
 //! ## 1. Struct Literal
 //! ```rust,ignore
 //! Column {
-//!     main_axis_alignment: Some(MainAxisAlignment::Center),
+//!     main_axis_alignment: MainAxisAlignment::Center,
 //!     children: vec![child1, child2],
 //!     ..Default::default()
 //! }
@@ -32,7 +32,9 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
@@ -57,8 +59,8 @@ use crate::SizedBox;
 /// Column::builder()
 ///     .main_axis_alignment(MainAxisAlignment::Center)
 ///     .children(vec![
-///         Box::new(Text::new("Hello")),
-///         Box::new(Text::new("World")),
+///         Text::new("Hello").into_element(),
+///         Text::new("World").into_element(),
 ///     ])
 ///     .build()
 /// ```
@@ -74,11 +76,8 @@ pub struct Column {
     /// The widgets to display in this column.
     ///
     /// Children are laid out vertically (top-to-bottom) in the order they appear in the vector.
-    /// Can be set via:
-    /// - `.children(vec![...])` to set all at once
-    /// - `.child(widget)` repeatedly to add one at a time (chainable)
     #[builder(field)]
-    pub children: Vec<Box<dyn AnyView>>,
+    pub children: Vec<Element>,
 
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -117,29 +116,17 @@ impl std::fmt::Debug for Column {
     }
 }
 
-impl Clone for Column {
-    fn clone(&self) -> Self {
-        Self {
-            children: self.children.clone(),
-            key: self.key.clone(),
-            main_axis_alignment: self.main_axis_alignment,
-            cross_axis_alignment: self.cross_axis_alignment,
-            main_axis_size: self.main_axis_size,
-        }
-    }
-}
-
 // Custom builder methods for ColumnBuilder
 impl<S: column_builder::State> ColumnBuilder<S> {
     /// Sets all children at once.
-    pub fn children(mut self, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn children(mut self, children: Vec<Element>) -> Self {
         self.children = children;
         self
     }
 
     /// Adds a single child widget (chainable).
-    pub fn child(mut self, child: impl AnyView + 'static) -> Self {
-        self.children.push(Box::new(child));
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_element());
         self
     }
 
@@ -177,7 +164,7 @@ impl Column {
     /// Creates a Column with centered alignment.
     ///
     /// Both main axis and cross axis are centered.
-    pub fn centered(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn centered(children: Vec<Element>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::Center)
             .cross_axis_alignment(CrossAxisAlignment::Center)
@@ -188,7 +175,7 @@ impl Column {
     /// Creates a Column with spacing between children.
     ///
     /// Automatically inserts SizedBox spacers between children.
-    pub fn spaced(spacing: f32, children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn spaced(spacing: f32, children: Vec<Element>) -> Self {
         if children.is_empty() {
             return Self::builder().children(vec![]).build();
         }
@@ -196,7 +183,7 @@ impl Column {
         let mut spaced_children = Vec::with_capacity(children.len() * 2 - 1);
         for (i, child) in children.into_iter().enumerate() {
             if i > 0 {
-                spaced_children.push(Box::new(SizedBox::v_space(spacing)) as Box<dyn AnyView>);
+                spaced_children.push(SizedBox::v_space(spacing).into_element());
             }
             spaced_children.push(child);
         }
@@ -205,7 +192,7 @@ impl Column {
     }
 
     /// Creates a Column with start alignment.
-    pub fn start(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn start(children: Vec<Element>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::Start)
             .children(children)
@@ -213,7 +200,7 @@ impl Column {
     }
 
     /// Creates a Column with end alignment.
-    pub fn end(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn end(children: Vec<Element>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::End)
             .children(children)
@@ -221,7 +208,7 @@ impl Column {
     }
 
     /// Creates a Column with space-between alignment.
-    pub fn space_between(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn space_between(children: Vec<Element>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .children(children)
@@ -229,7 +216,7 @@ impl Column {
     }
 
     /// Creates a Column with space-around alignment.
-    pub fn space_around(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn space_around(children: Vec<Element>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceAround)
             .children(children)
@@ -237,27 +224,11 @@ impl Column {
     }
 
     /// Creates a Column with space-evenly alignment.
-    pub fn space_evenly(children: Vec<Box<dyn AnyView>>) -> Self {
+    pub fn space_evenly(children: Vec<Element>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
             .children(children)
             .build()
-    }
-
-    // ========================================================================
-    // Mutable API (Deprecated - use builder instead)
-    // ========================================================================
-
-    /// Adds a child widget to the column.
-    #[deprecated(note = "Use builder pattern with chainable .child() instead")]
-    pub fn add_child(&mut self, child: impl View + 'static) {
-        self.children.push(Box::new(child));
-    }
-
-    /// Sets all children at once.
-    #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: Vec<Box<dyn AnyView>>) {
-        self.children = children;
     }
 
     /// Validates column configuration.
@@ -274,48 +245,19 @@ impl Default for Column {
     }
 }
 
-// Implement View for Column - New architecture
+// Implement View for Column
 impl View for Column {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render_flex = RenderFlex::column()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        (render_flex, self.children)
+        render_flex.children(self.children)
     }
 }
 
 /// Macro for creating Column with declarative syntax.
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// // Empty column
-/// column!()
-///
-/// // With properties only
-/// column! {
-///     main_axis_alignment: MainAxisAlignment::Center,
-///     cross_axis_alignment: CrossAxisAlignment::Start
-/// }
-///
-/// // With children using vec!-like syntax
-/// column![
-///     Text::new("First"),
-///     Text::new("Second"),
-///     Text::new("Third")
-/// ]
-///
-/// // With both properties and children (separated by semicolon)
-/// column! {
-///     main_axis_alignment: MainAxisAlignment::Center;
-///     [
-///         Text::new("First"),
-///         Text::new("Second")
-///     ]
-/// }
-/// ```
 #[macro_export]
 macro_rules! column {
     // Empty column
@@ -326,7 +268,7 @@ macro_rules! column {
     // With children only (using bracket syntax like vec!)
     [$($child:expr),* $(,)?] => {
         $crate::Column::builder()
-            .children(vec![$(Box::new($child) as Box<dyn $crate::AnyView>),*])
+            .children(vec![$($child.into_element()),*])
             .build()
     };
 
@@ -341,7 +283,7 @@ macro_rules! column {
     {$($field:ident : $value:expr),+ ; [$($child:expr),* $(,)?]} => {
         $crate::Column::builder()
             $(.$field($value))+
-            .children(vec![$(Box::new($child) as Box<dyn $crate::AnyView>),*])
+            .children(vec![$($child.into_element()),*])
             .build()
     };
 }
@@ -349,17 +291,15 @@ macro_rules! column {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use flui_rendering::RenderPadding;
-    use flui_types::layout::EdgeInsets;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive(Clone)]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -381,17 +321,6 @@ mod tests {
     }
 
     #[test]
-    fn test_column_struct_literal() {
-        let column = Column {
-            main_axis_alignment: MainAxisAlignment::Center,
-            children: vec![Box::new(MockView)],
-            ..Default::default()
-        };
-        assert_eq!(column.main_axis_alignment, MainAxisAlignment::Center);
-        assert_eq!(column.children.len(), 1);
-    }
-
-    #[test]
     fn test_column_builder() {
         let column = Column::builder()
             .main_axis_alignment(MainAxisAlignment::Center)
@@ -410,48 +339,6 @@ mod tests {
         assert_eq!(column.main_axis_alignment, MainAxisAlignment::SpaceBetween);
         assert_eq!(column.cross_axis_alignment, CrossAxisAlignment::Start);
         assert_eq!(column.main_axis_size, MainAxisSize::Min);
-    }
-
-    #[test]
-    fn test_column_builder_children() {
-        let column = Column::builder()
-            .children(vec![Box::new(MockView), Box::new(MockView)])
-            .build();
-
-        assert_eq!(column.children.len(), 2);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_column_add_child() {
-        let mut column = Column::new();
-        column.child(MockView);
-        column.child(MockView);
-        assert_eq!(column.children.len(), 2);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_column_set_children() {
-        let mut column = Column::new();
-        column.set_children(vec![Box::new(MockView), Box::new(MockView)]);
-        assert_eq!(column.children.len(), 2);
-    }
-
-    #[test]
-    fn test_column_macro_empty() {
-        let column = column!();
-        assert_eq!(column.children.len(), 0);
-    }
-
-    #[test]
-    fn test_column_macro_with_fields() {
-        let column = column! {
-            main_axis_alignment: MainAxisAlignment::End,
-            cross_axis_alignment: CrossAxisAlignment::Stretch,
-        };
-        assert_eq!(column.main_axis_alignment, MainAxisAlignment::End);
-        assert_eq!(column.cross_axis_alignment, CrossAxisAlignment::Stretch);
     }
 
     #[test]
@@ -491,17 +378,18 @@ mod tests {
     }
 
     #[test]
-    fn test_column_multi_child() {
-        let column = Column::builder()
-            .children(vec![
-                Box::new(MockView),
-                Box::new(MockView),
-                Box::new(MockView),
-            ])
-            .build();
+    fn test_column_macro_empty() {
+        let column = column!();
+        assert_eq!(column.children.len(), 0);
+    }
 
-        assert_eq!(column.children.len(), 3);
+    #[test]
+    fn test_column_macro_with_fields() {
+        let column = column! {
+            main_axis_alignment: MainAxisAlignment::End,
+            cross_axis_alignment: CrossAxisAlignment::Stretch,
+        };
+        assert_eq!(column.main_axis_alignment, MainAxisAlignment::End);
+        assert_eq!(column.cross_axis_alignment, CrossAxisAlignment::Stretch);
     }
 }
-
-// Column now implements View trait directly

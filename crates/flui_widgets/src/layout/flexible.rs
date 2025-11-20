@@ -30,7 +30,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{AnyView, IntoElement, View};
+use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -146,10 +146,10 @@ pub struct Flexible {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn AnyView>>,
+    pub child: Option<Box<dyn >>,
 }
 
-// Manual Debug implementation since AnyView doesn't implement Debug
+// Manual Debug implementation since  doesn't implement Debug
 impl std::fmt::Debug for Flexible {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Flexible")
@@ -159,7 +159,7 @@ impl std::fmt::Debug for Flexible {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<AnyView>"
+                    "<>"
                 } else {
                     "None"
                 },
@@ -168,7 +168,7 @@ impl std::fmt::Debug for Flexible {
     }
 }
 
-// Manual Clone implementation since AnyView doesn't implement Clone
+// Manual Clone implementation since  doesn't implement Clone
 impl Clone for Flexible {
     fn clone(&self) -> Self {
         Self {
@@ -267,7 +267,7 @@ impl Flexible {
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Box<dyn AnyView>) {
+    pub fn set_child(&mut self, child: Box<dyn >) {
         self.child = Some(child);
     }
 
