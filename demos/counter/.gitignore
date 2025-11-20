@@ -1,0 +1,28 @@
+# Build artifacts
+/target
+/build
+
+# Platform-specific
+platforms/android/app/build/
+platforms/android/.gradle/
+platforms/web/pkg/
+platforms/ios/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# FLUI
+flui.lock
+
+# Rust
+**/*.rs.bk
+*.pdb
+Cargo.lock
