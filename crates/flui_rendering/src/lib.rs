@@ -51,75 +51,75 @@ pub mod objects;
 // Re-export from flui_core - the unified Render trait architecture
 // Note: RenderPipeline is internal to flui_core and not re-exported
 pub use flui_core::render::{
-    Arity, Children, LayoutContext, PaintContext, ParentData, ParentDataWithOffset, Render,
-    RenderFlags, RenderState,
+    Arity, BoxProtocol, HitTestContext, LayoutContext, PaintContext, ParentData,
+    ParentDataWithOffset, RenderBox, RenderFlags, RenderState,
 };
 
 // Re-export from flui_types for convenience
 pub use flui_types::layout::{FlexFit, StackFit};
 
 // Re-export all RenderObjects
-pub use objects::{
-    DecorationPosition,
-    // Metadata types
-    FlexItemMetadata,
-    MouseCallbacks,
-    ParagraphData,
-    // Effects objects
-    PhysicalShape,
-    PositionedMetadata,
-    RRectShape,
-    RectShape,
-    // Interaction objects
-    RenderAbsorbPointer,
-    // Layout objects
-    RenderAlign,
-    RenderAspectRatio,
-    RenderBackdropFilter,
-    RenderBaseline,
-    RenderClipOval,
-    RenderClipRRect,
-    RenderClipRect,
-    RenderColoredBox,
-    RenderConstrainedBox,
-    RenderDecoratedBox,
-    RenderFittedBox,
-    RenderFlex,
-    RenderFlexItem,
-    RenderFractionallySizedBox,
-    RenderIgnorePointer,
-    RenderIndexedStack,
-    RenderIntrinsicHeight,
-    RenderIntrinsicWidth,
-    RenderLimitedBox,
-    RenderListBody,
-    RenderMouseRegion,
-    RenderOffstage,
-    RenderOpacity,
-    RenderOverflowBox,
+// pub use objects::{
+//     DecorationPosition,
+//     // Metadata types
+//     FlexItemMetadata,
+//     MouseCallbacks,
+//     ParagraphData,
+//     // Effects objects
+//     PhysicalShape,
+//     PositionedMetadata,
+//     RRectShape,
+//     RectShape,
+//     // Interaction objects
+//     RenderAbsorbPointer,
+//     // Layout objects
+//     RenderAlign,
+//     RenderAspectRatio,
+//     RenderBackdropFilter,
+//     RenderBaseline,
+//     RenderClipOval,
+//     RenderClipRRect,
+//     RenderClipRect,
+//     RenderColoredBox,
+//     RenderConstrainedBox,
+//     RenderDecoratedBox,
+//     RenderFittedBox,
+//     RenderFlex,
+//     RenderFlexItem,
+//     RenderFractionallySizedBox,
+//     RenderIgnorePointer,
+//     RenderIndexedStack,
+//     RenderIntrinsicHeight,
+//     RenderIntrinsicWidth,
+//     RenderLimitedBox,
+//     RenderListBody,
+//     RenderMouseRegion,
+//     RenderOffstage,
+//     RenderOpacity,
+//     RenderOverflowBox,
 
-    RenderPadding,
-    // Text objects
-    RenderParagraph,
-    RenderPhysicalModel,
-    RenderPointerListener,
-    RenderPositioned,
-    RenderPositionedBox,
-    RenderRepaintBoundary,
-    RenderRotatedBox,
-    RenderSizedBox,
-    RenderSizedOverflowBox,
-    RenderStack,
-    RenderTransform,
-    RenderVisibility,
-    RenderWrap,
-    WrapAlignment,
-    WrapCrossAlignment,
-};
+//     RenderPadding,
+//     // Text objects
+//     RenderParagraph,
+//     RenderPhysicalModel,
+//     RenderPointerListener,
+//     RenderPositioned,
+//     RenderPositionedBox,
+//     RenderRepaintBoundary,
+//     RenderRotatedBox,
+//     RenderSizedBox,
+//     RenderSizedOverflowBox,
+//     RenderStack,
+//     RenderTransform,
+//     RenderVisibility,
+//     RenderWrap,
+//     WrapAlignment,
+//     WrapCrossAlignment,
+// };
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::{Render, RenderFlags, RenderState};
+    pub use crate::{RenderBox, RenderFlags, RenderState};
 
-    pub use crate::objects::*;
+    // pub use crate::objects::*;
 }

@@ -1,10 +1,32 @@
-//! RenderState - per-Render state storage
+//! RenderState - per-render state storage.
 //!
-//! Migrated from flui_core_old with performance optimizations
+//! Generic state storage for render objects, parameterized by Protocol.
+//! Provides lock-free flag checks for hot paths while using RwLock for
+//! actual data storage.
+//!
+//! # Performance Design
+//!
+//! - **Atomic flags**: Lock-free for hot checks (`needs_layout()`, `needs_paint()`)
+//! - **RwLock data**: For geometry, constraints, offset (less frequent access)
+//! - **Separate locks**: Minimize contention between layout and paint
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! let state = RenderState::<BoxProtocol>::new();
+//!
+//! // Lock-free checks (fast!)
+//! if state.needs_layout() {
+//!     // Perform layout...
+//!     state.set_geometry(computed_size);
+//!     state.clear_needs_layout();
+//! }
+//! ```
 
-use flui_types::constraints::BoxConstraints;
-use flui_types::{Offset, Size};
+use flui_types::Offset;
 use parking_lot::RwLock;
+
+use crate::render::Protocol;
 
 use super::render_flags::{AtomicRenderFlags, RenderFlags};
 
@@ -12,23 +34,25 @@ use super::render_flags::{AtomicRenderFlags, RenderFlags};
 ///
 /// **Performance Critical Design**:
 /// - Atomic flags for lock-free checks (10x faster than RwLock)
-/// - RwLock for actual data (size, constraints, offset)
+/// - RwLock for actual data (geometry, constraints, offset)
 /// - Separate locks to minimize contention
+///
+/// # Type Parameters
+///
+/// - `P`: Protocol (BoxProtocol or SliverProtocol)
 ///
 /// # Memory Layout
 ///
 /// ```text
-/// RenderState {
-///     flags: 4 bytes (atomic)      ← Lock-free!
-///     size: RwLock<Option<Size>>   ← 16 bytes + lock
-///     constraints: RwLock<...>     ← 16 bytes + lock
-///     offset: RwLock<Offset>       ← 8 bytes + lock
+/// RenderState<P> {
+///     flags: 4 bytes (atomic)           ← Lock-free!
+///     geometry: RwLock<Option<...>>     ← Protocol::Geometry + lock
+///     constraints: RwLock<Option<...>>  ← Protocol::Constraints + lock
+///     offset: RwLock<Offset>            ← 8 bytes + lock
 /// }
 /// ```
-///
-/// Total: ~60 bytes per Render (acceptable overhead)
 #[derive(Debug)]
-pub struct RenderState {
+pub struct RenderState<P: Protocol> {
     /// Atomic flags for lock-free state checks
     ///
     /// **Critical for performance**: checking `needs_layout()` happens
@@ -36,49 +60,34 @@ pub struct RenderState {
     /// than RwLock for these hot paths.
     pub flags: AtomicRenderFlags,
 
-    /// Computed size after layout
+    /// Computed geometry after layout
     ///
     /// `None` if layout hasn't been computed yet.
-    /// RwLock allows concurrent reads from multiple threads.
-    pub size: RwLock<Option<Size>>,
+    /// For BoxProtocol: Size
+    /// For SliverProtocol: SliverGeometry
+    pub geometry: RwLock<Option<P::Geometry>>,
 
     /// Constraints used for last layout
     ///
     /// Used for cache validation and relayout decisions.
-    pub constraints: RwLock<Option<BoxConstraints>>,
+    /// For BoxProtocol: BoxConstraints
+    /// For SliverProtocol: SliverConstraints
+    pub constraints: RwLock<Option<P::Constraints>>,
 
     /// Offset in parent's coordinate space
     ///
     /// Set during parent's layout phase.
     pub offset: RwLock<Offset>,
-
-    /// Overflow on horizontal axis (debug mode only)
-    ///
-    /// Number of pixels that overflow the container horizontally.
-    /// Set during layout when content width exceeds available width.
-    #[cfg(debug_assertions)]
-    pub overflow_horizontal: RwLock<f32>,
-
-    /// Overflow on vertical axis (debug mode only)
-    ///
-    /// Number of pixels that overflow the container vertically.
-    /// Set during layout when content height exceeds available height.
-    #[cfg(debug_assertions)]
-    pub overflow_vertical: RwLock<f32>,
 }
 
-impl RenderState {
+impl<P: Protocol> RenderState<P> {
     /// Create new RenderState with empty flags
     pub fn new() -> Self {
         Self {
             flags: AtomicRenderFlags::empty(),
-            size: RwLock::new(None),
+            geometry: RwLock::new(None),
             constraints: RwLock::new(None),
             offset: RwLock::new(Offset::ZERO),
-            #[cfg(debug_assertions)]
-            overflow_horizontal: RwLock::new(0.0),
-            #[cfg(debug_assertions)]
-            overflow_vertical: RwLock::new(0.0),
         }
     }
 
@@ -86,13 +95,9 @@ impl RenderState {
     pub fn with_flags(flags: RenderFlags) -> Self {
         Self {
             flags: AtomicRenderFlags::new(flags),
-            size: RwLock::new(None),
+            geometry: RwLock::new(None),
             constraints: RwLock::new(None),
             offset: RwLock::new(Offset::ZERO),
-            #[cfg(debug_assertions)]
-            overflow_horizontal: RwLock::new(0.0),
-            #[cfg(debug_assertions)]
-            overflow_vertical: RwLock::new(0.0),
         }
     }
 
@@ -188,34 +193,34 @@ impl RenderState {
         self.flags.remove(RenderFlags::NEEDS_COMPOSITING);
     }
 
-    // ========== Size & Constraints ==========
+    // ========== Geometry & Constraints ==========
 
-    /// Get computed size
+    /// Get computed geometry
     #[inline]
-    pub fn size(&self) -> Option<Size> {
-        *self.size.read()
+    pub fn geometry(&self) -> Option<P::Geometry> {
+        self.geometry.read().clone()
     }
 
-    /// Set computed size
-    pub fn set_size(&self, size: Size) {
-        *self.size.write() = Some(size);
-        self.flags.set(RenderFlags::HAS_SIZE);
+    /// Set computed geometry
+    pub fn set_geometry(&self, geometry: P::Geometry) {
+        *self.geometry.write() = Some(geometry);
+        self.flags.set(RenderFlags::HAS_GEOMETRY);
     }
 
-    /// Check if size has been computed
+    /// Check if geometry has been computed
     #[inline]
-    pub fn has_size(&self) -> bool {
-        self.flags.contains(RenderFlags::HAS_SIZE)
+    pub fn has_geometry(&self) -> bool {
+        self.flags.contains(RenderFlags::HAS_GEOMETRY)
     }
 
     /// Get constraints
     #[inline]
-    pub fn constraints(&self) -> Option<BoxConstraints> {
-        *self.constraints.read()
+    pub fn constraints(&self) -> Option<P::Constraints> {
+        self.constraints.read().clone()
     }
 
     /// Set constraints
-    pub fn set_constraints(&self, constraints: BoxConstraints) {
+    pub fn set_constraints(&self, constraints: P::Constraints) {
         *self.constraints.write() = Some(constraints);
     }
 
@@ -241,136 +246,50 @@ impl RenderState {
         *self.offset.write() = offset;
     }
 
-    // ========== Overflow (Debug Only) ==========
-
-    /// Set overflow amount for a specific axis
-    ///
-    /// This should be called during layout when content doesn't fit in available space.
-    /// The overflow amount is in pixels.
-    ///
-    /// # Arguments
-    /// * `axis` - The axis on which overflow occurred
-    /// * `pixels` - Number of pixels that overflow (must be >= 0.0)
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let overflow = (total_width - available_width).max(0.0);
-    /// state.set_overflow(Axis::Horizontal, overflow);
-    /// ```
-    #[cfg(debug_assertions)]
-    pub fn set_overflow(&self, axis: flui_types::Axis, pixels: f32) {
-        let pixels = pixels.max(0.0); // Ensure non-negative
-        match axis {
-            flui_types::Axis::Horizontal => *self.overflow_horizontal.write() = pixels,
-            flui_types::Axis::Vertical => *self.overflow_vertical.write() = pixels,
-        }
-
-        // Set HAS_OVERFLOW flag if any overflow exists
-        if pixels > 0.0 {
-            self.flags.set(RenderFlags::HAS_OVERFLOW);
-        } else {
-            // Clear flag if both axes are now zero
-            let other_axis = match axis {
-                flui_types::Axis::Horizontal => *self.overflow_vertical.read(),
-                flui_types::Axis::Vertical => *self.overflow_horizontal.read(),
-            };
-            if other_axis <= 0.0 {
-                self.flags.remove(RenderFlags::HAS_OVERFLOW);
-            }
-        }
-    }
-
-    /// Get overflow amount for a specific axis
-    ///
-    /// Returns the number of pixels that overflow on the given axis.
-    #[cfg(debug_assertions)]
-    pub fn overflow(&self, axis: flui_types::Axis) -> f32 {
-        match axis {
-            flui_types::Axis::Horizontal => *self.overflow_horizontal.read(),
-            flui_types::Axis::Vertical => *self.overflow_vertical.read(),
-        }
-    }
-
-    /// Check if there is any overflow (lock-free!)
-    ///
-    /// This is a fast atomic check that can be used in hot paths.
-    /// Returns true if either horizontal or vertical overflow is > 0.
-    #[cfg(debug_assertions)]
-    #[inline]
-    pub fn has_overflow(&self) -> bool {
-        self.flags.contains(RenderFlags::HAS_OVERFLOW)
-    }
-
-    /// Get both overflow amounts
-    ///
-    /// Returns (horizontal_overflow, vertical_overflow)
-    #[cfg(debug_assertions)]
-    pub fn overflow_both(&self) -> (f32, f32) {
-        (
-            *self.overflow_horizontal.read(),
-            *self.overflow_vertical.read(),
-        )
-    }
-
-    /// Clear all overflow information
-    #[cfg(debug_assertions)]
-    pub fn clear_overflow(&self) {
-        *self.overflow_horizontal.write() = 0.0;
-        *self.overflow_vertical.write() = 0.0;
-        self.flags.remove(RenderFlags::HAS_OVERFLOW);
-    }
-
     // ========== Lifecycle ==========
-
-    /// Check if detached from tree
-    #[inline]
-    pub fn is_detached(&self) -> bool {
-        self.flags.contains(RenderFlags::IS_DETACHED)
-    }
-
-    /// Mark as detached
-    #[inline]
-    pub fn mark_detached(&self) {
-        self.flags.set(RenderFlags::IS_DETACHED);
-    }
-
-    /// Mark as attached
-    #[inline]
-    pub fn mark_attached(&self) {
-        self.flags.remove(RenderFlags::IS_DETACHED);
-    }
 
     /// Reset all state (for reuse)
     pub fn reset(&self) {
         self.flags.clear();
-        *self.size.write() = None;
+        *self.geometry.write() = None;
         *self.constraints.write() = None;
         *self.offset.write() = Offset::ZERO;
-        #[cfg(debug_assertions)]
-        {
-            *self.overflow_horizontal.write() = 0.0;
-            *self.overflow_vertical.write() = 0.0;
-        }
     }
 }
 
-impl Default for RenderState {
+impl<P: Protocol> Default for RenderState<P> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Clone for RenderState {
+// Specialized methods for BoxProtocol
+impl RenderState<crate::render::BoxProtocol> {
+    /// Get computed size (BoxProtocol convenience method)
+    #[inline]
+    pub fn size(&self) -> flui_types::Size {
+        self.geometry().unwrap_or_default()
+    }
+
+    /// Set computed size (BoxProtocol convenience method)
+    pub fn set_size(&self, size: flui_types::Size) {
+        self.set_geometry(size);
+    }
+
+    /// Check if size has been computed (BoxProtocol convenience method)
+    #[inline]
+    pub fn has_size(&self) -> bool {
+        self.has_geometry()
+    }
+}
+
+impl<P: Protocol> Clone for RenderState<P> {
     fn clone(&self) -> Self {
         Self {
             flags: self.flags.clone(),
-            size: RwLock::new(*self.size.read()),
-            constraints: RwLock::new(*self.constraints.read()),
+            geometry: RwLock::new(self.geometry.read().clone()),
+            constraints: RwLock::new(self.constraints.read().clone()),
             offset: RwLock::new(*self.offset.read()),
-            #[cfg(debug_assertions)]
-            overflow_horizontal: RwLock::new(*self.overflow_horizontal.read()),
-            #[cfg(debug_assertions)]
-            overflow_vertical: RwLock::new(*self.overflow_vertical.read()),
         }
     }
 }
@@ -378,18 +297,22 @@ impl Clone for RenderState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::BoxProtocol;
+    use flui_types::Size;
+
+    type BoxRenderState = RenderState<BoxProtocol>;
 
     #[test]
     fn test_render_state_creation() {
-        let state = RenderState::new();
+        let state = BoxRenderState::new();
         assert!(!state.needs_layout());
         assert!(!state.needs_paint());
-        assert!(!state.has_size());
+        assert!(!state.has_geometry());
     }
 
     #[test]
     fn test_layout_flags() {
-        let state = RenderState::new();
+        let state = BoxRenderState::new();
 
         state.mark_needs_layout();
         assert!(state.needs_layout());
@@ -399,18 +322,18 @@ mod tests {
     }
 
     #[test]
-    fn test_size_management() {
-        let state = RenderState::new();
-        assert!(!state.has_size());
+    fn test_geometry_management() {
+        let state = BoxRenderState::new();
+        assert!(!state.has_geometry());
 
-        state.set_size(Size::new(100.0, 100.0));
-        assert!(state.has_size());
-        assert_eq!(state.size(), Some(Size::new(100.0, 100.0)));
+        state.set_geometry(Size::new(100.0, 100.0));
+        assert!(state.has_geometry());
+        assert_eq!(state.geometry(), Some(Size::new(100.0, 100.0)));
     }
 
     #[test]
     fn test_relayout_boundary() {
-        let state = RenderState::new();
+        let state = BoxRenderState::new();
         assert!(!state.is_relayout_boundary());
 
         state.set_relayout_boundary(true);
@@ -422,15 +345,15 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let state = RenderState::new();
+        let state = BoxRenderState::new();
 
         state.mark_needs_layout();
-        state.set_size(Size::new(50.0, 50.0));
+        state.set_geometry(Size::new(50.0, 50.0));
 
         state.reset();
 
         assert!(!state.needs_layout());
-        assert!(!state.has_size());
-        assert_eq!(state.size(), None);
+        assert!(!state.has_geometry());
+        assert_eq!(state.geometry(), None);
     }
 }

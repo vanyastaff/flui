@@ -148,7 +148,7 @@ impl Default for Opacity {
 
 // Implement View for Opacity - New architecture
 impl View for Opacity {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderOpacity::new(self.opacity), self.child)
     }
 }

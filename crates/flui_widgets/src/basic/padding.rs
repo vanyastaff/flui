@@ -242,7 +242,7 @@ impl Default for Padding {
 
 // Implement View for Padding - Simplified API
 impl View for Padding {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderPadding::new(self.padding), self.child)
     }
 }
@@ -334,7 +334,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

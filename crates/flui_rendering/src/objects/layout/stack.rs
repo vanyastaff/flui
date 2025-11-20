@@ -1,6 +1,7 @@
 //! RenderStack - layering container
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 
 use flui_types::constraints::BoxConstraints;
 use flui_types::layout::StackFit;
@@ -76,7 +77,7 @@ impl Default for RenderStack {
     }
 }
 
-impl Render for RenderStack {
+impl LegacyRender for RenderStack {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
@@ -211,8 +212,8 @@ impl Render for RenderStack {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable
     }
 }
 

@@ -289,15 +289,15 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
             );
         }
 
-        crate::element::Element::Sliver(_sliver) => {
-            // SliverElements don't rebuild - they only relayout
-            #[cfg(debug_assertions)]
-            tracing::trace!(
-                "Sliver element {:?} skipped (rebuilds via layout)",
-                element_id
-            );
-        }
-
+        // TODO: Re-enable after sliver migration
+        // crate::element::Element::Sliver(_sliver) => {
+        //     // SliverElements don't rebuild - they only relayout
+        //     #[cfg(debug_assertions)]
+        //     tracing::trace!(
+        //         "Sliver element {:?} skipped (rebuilds via layout)",
+        //         element_id
+        //     );
+        // }
         crate::element::Element::Provider(_provider) => {
             // Provider rebuild - propagate changes to descendants
             #[cfg(debug_assertions)]
@@ -321,27 +321,19 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
 mod tests {
     use super::*;
     use crate::element::{Element, RenderElement};
-    use crate::render::{Arity, LayoutContext, PaintContext, Render};
+    use crate::render::{
+        contexts::LayoutContext, contexts::PaintContext, BoxProtocol, Leaf, RenderBox,
+    };
 
     #[derive(Debug)]
     struct MockRender;
 
-    impl Render for MockRender {
-        fn layout(&mut self, _ctx: &LayoutContext) -> flui_types::Size {
+    impl RenderBox<Leaf> for MockRender {
+        fn layout(&mut self, _ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> flui_types::Size {
             flui_types::Size::new(100.0, 100.0)
         }
 
-        fn paint(&self, _ctx: &PaintContext) -> flui_painting::Canvas {
-            flui_painting::Canvas::new()
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-
-        fn arity(&self) -> Arity {
-            Arity::Exact(0)
-        }
+        fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     }
 
     fn create_test_tree() -> Arc<RwLock<ElementTree>> {
@@ -361,7 +353,7 @@ mod tests {
 
         // Helper to create a simple render element
         fn create_render_elem() -> Element {
-            Element::Render(RenderElement::new(Box::new(MockRender)))
+            Element::Render(RenderElement::r#box::<Leaf, _>(MockRender))
         }
 
         // Root

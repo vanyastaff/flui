@@ -1,6 +1,7 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 
 use flui_types::constraints::BoxConstraints;
@@ -116,7 +117,7 @@ impl Default for RenderWrap {
     }
 }
 
-impl Render for RenderWrap {
+impl LegacyRender for RenderWrap {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
@@ -231,8 +232,8 @@ impl Render for RenderWrap {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multi-child container
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multi-child container
     }
 }
 

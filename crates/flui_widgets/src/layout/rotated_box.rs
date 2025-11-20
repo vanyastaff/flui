@@ -223,7 +223,7 @@ impl<S: State> RotatedBoxBuilder<S> {
 
 // Implement View trait - Simplified API
 impl View for RotatedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderRotatedBox::new(self.quarter_turns), self.child)
     }
 }

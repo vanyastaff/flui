@@ -2,108 +2,86 @@
 //!
 //! # Architecture
 //!
-//! - `Render` trait: Unified trait for all render objects
-//! - `Children` enum: Unified child representation (None/Single/Multi)
-//! - `LayoutContext` / `PaintContext`: Context structs for operations
-//! - `Arity`: Runtime child count validation
+//! - `Render` trait: Box protocol render objects
+//! - `SliverRender` trait: Sliver protocol render objects
+//! - `RenderObject` trait: Type-erased render object interface
+//! - `Arity`: Compile-time child count validation
 //! - `ParentData`: Metadata system (stored in RenderElement)
 //!
 //! # Pattern
 //!
 //! ```text
-//! View (trait) → Element (enum) → RenderNode → Render trait
+//! View (trait) → Element (enum) → RenderElement → RenderObject trait
 //!                                      ↓
 //!                                  LayoutContext / PaintContext
 //! ```
 //!
 //! # Implementation Guide
 //!
-//! To create a renderer, implement the unified `Render` trait:
+//! To create a box renderer, implement the `Render` trait:
 //!
 //! ```rust,ignore
-//! impl Render for MyRenderer {
-//!     fn layout(&mut self, ctx: &LayoutContext) -> Size { /* ... */ }
-//!     fn paint(&self, ctx: &PaintContext) -> BoxedLayer { /* ... */ }
-//!     fn arity(&self) -> Arity { Arity::Variable }  // or Exact(n)
+//! impl RenderBox<Leaf> for MyRenderer {
+//!     fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size { /* ... */ }
+//!     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) { /* ... */ }
+//! }
+//! ```
+//!
+//! To create a sliver renderer, implement the `SliverRender` trait:
+//!
+//! ```rust,ignore
+//! impl SliverRender<Variable> for MySliverRenderer {
+//!     fn layout(&mut self, ctx: LayoutContext<'_, Variable, SliverProtocol>) -> SliverGeometry { /* ... */ }
+//!     fn paint(&self, ctx: &mut PaintContext<'_, Variable>) { /* ... */ }
 //! }
 //! ```
 
 // Core modules
 pub mod arity;
-pub mod cache;
-pub mod children;
+pub mod contexts;
 pub mod parent_data;
 pub mod protocol;
-pub mod render_ext;
+pub mod render_box;
+pub mod render_element;
 pub mod render_flags;
-pub mod render_sliver_state;
+pub mod render_object;
+pub mod render_proxy;
+pub mod render_silver;
 pub mod render_state;
-pub mod traits;
-pub mod type_erasure;
 pub mod wrappers;
 
-/// Generic Render trait - box protocol with compile-time arity validation (NEW)
-///
-/// This is the new public trait for implementing layout and painting with
-/// compile-time child count validation via the `A` type parameter.
-/// This will eventually replace the legacy `render::Render` trait.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// impl traits::Render<Single> for RenderPadding {
-///     fn layout(&mut self, ctx: &BoxLayoutContext<Single>) -> BoxGeometry { /* ... */ }
-///     fn paint(&self, ctx: &BoxPaintContext<Single>) { /* ... */ }
-///     fn hit_test(&self, ctx: &BoxHitTestContext<Single>, result: &mut BoxHitTestResult) -> bool { /* ... */ }
-/// }
-/// ```
-pub use traits::Render;
+// Re-export main traits
+pub use render_box::{
+    EmptyRender, RenderBox, RenderBoxExt, WithChild, WithChildren, WithLeaf, WithOptionalChild,
+};
+pub use render_silver::{
+    SliverExt, SliverRender, SliverWithChild, SliverWithChildren, SliverWithLeaf,
+    SliverWithOptionalChild,
+};
 
-/// Generic SliverRender trait - sliver protocol with compile-time arity validation (NEW)
-///
-/// This is the new public trait for implementing scrollable layouts with
-/// compile-time child count validation via the `A` type parameter.
-/// This will eventually replace the legacy `render_sliver::RenderSliver` trait.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// impl traits::SliverRender<Variable> for RenderSliverList {
-///     fn layout(&mut self, ctx: &SliverLayoutContext<Variable>) -> SliverGeometry { /* ... */ }
-///     fn paint(&self, ctx: &SliverPaintContext<Variable>) { /* ... */ }
-///     fn hit_test(&self, ctx: &SliverHitTestContext<Variable>, result: &mut SliverHitTestResult) -> bool { /* ... */ }
-/// }
-/// ```
-pub use traits::SliverRender;
-
-// Legacy traits removed - use generic `Render<A>` and `SliverRender<A>` instead
-
-/// Children enum - unified child representation
-pub use children::Children;
+// Re-export contexts
+pub use contexts::{HasTypedChildren, HitTestContext, LayoutContext, PaintContext};
 
 /// Type-safe arity system for compile-time child count validation
 pub use arity::{
     Arity, AtLeast, ChildrenAccess, Exact, FixedChildren, Leaf, NoChildren, Optional,
-    OptionalChild, Pair, RuntimeArity, Single, SliceChildren, Triple, Variable,
+    OptionalChild, RuntimeArity, Single, SliceChildren, Variable,
 };
 
 /// Protocol system for unified rendering
-pub use protocol::{
-    BoxConstraints, BoxGeometry, BoxHitTestContext as ProtocolBoxHitTestContext,
-    BoxLayoutContext as ProtocolBoxLayoutContext, BoxPaintContext as ProtocolBoxPaintContext,
-    BoxProtocol, HasTypedChildren, LayoutProtocol, Protocol, SliverConstraints, SliverGeometry,
-    SliverHitTestContext as ProtocolSliverHitTestContext,
-    SliverLayoutContext as ProtocolSliverLayoutContext,
-    SliverPaintContext as ProtocolSliverPaintContext, SliverProtocol,
-};
+pub use protocol::{BoxConstraints, BoxProtocol, LayoutProtocol, Protocol, SliverProtocol};
+
+// Re-export from flui_types
+pub use flui_types::{SliverConstraints, SliverGeometry};
 
 /// Type erasure for render objects
-pub use type_erasure::{DynConstraints, DynGeometry, DynHitTestResult, DynRenderObject};
+pub use render_object::{Constraints as DynConstraints, Geometry as DynGeometry, RenderObject};
 
 /// Safe wrappers for type-erased render objects
-pub use wrappers::{BoxRenderObjectWrapper, SliverRenderObjectWrapper};
+pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
 
-// Legacy contexts removed - use protocol-based contexts from protocol.rs instead
+/// Render element
+pub use render_element::RenderElement;
 
 // Core types
 /// Parent data and metadata
@@ -112,10 +90,8 @@ pub use parent_data::{
 };
 
 /// Supporting types
-pub use cache::{LayoutCache, LayoutCacheKey, LayoutResult};
 pub use render_flags::{AtomicRenderFlags, RenderFlags};
-pub use render_sliver_state::RenderSliverState;
 pub use render_state::RenderState;
 
-// Extension traits for ergonomic render object construction
-pub use render_ext::{RenderExt, SliverExt};
+/// Proxy traits for pass-through render objects
+pub use render_proxy::{RenderBoxProxy, RenderSliverProxy};

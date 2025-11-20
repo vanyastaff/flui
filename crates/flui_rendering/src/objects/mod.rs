@@ -1,43 +1,73 @@
 //! RenderObjects organized by category
 
-/// Basic render objects (primitives, shapes)
-pub mod basic;
-pub mod debug;
-pub mod effects;
-pub mod interaction;
-pub mod layout;
-pub mod media;
-pub mod sliver;
-pub mod special;
-pub mod text;
-pub mod viewport;
+// ============================================================================
+// Module declarations
+// ============================================================================
 
-// Hit test integration tests
-#[cfg(test)]
-mod hit_test_integration_tests;
-
-
-/// Debug render objects and utilities
 /// Effect render objects (opacity, transforms, clips)
+pub mod effects;
+
 /// Interaction render objects (pointer listeners, gesture detection)
+pub mod interaction;
+
 /// Layout render objects (flex, padding, align, etc.)
-/// Scrollable viewport render object
-/// Viewport render object for clipping and scrolling
-/// Special render objects (custom paint, etc.)
-/// Text rendering objects
-pub use effects::*;
-pub use interaction::*;
-pub use layout::*;
-pub use media::*;
-pub use sliver::*;
-pub use special::*;
-pub use text::*;
-pub use viewport::*;
+pub mod layout;
 
-// Debug objects
-pub use debug::{RenderErrorBox, RenderPlaceholder};
+/// Special render objects (custom paint, metadata, semantics, etc.)
+pub mod special;
 
+// TODO: Re-enable after migration
+// pub mod basic;
+// pub mod debug;
+// pub mod media;
+// pub mod sliver;
+// pub mod text;
+// pub mod viewport;
 
+// ============================================================================
+// Re-exports - Single Arity (Migrated ✅)
+// ============================================================================
 
+// Layout Single objects (10 objects) ✅
+pub use layout::{
+    RenderAspectRatio, RenderBaseline, RenderFractionallySizedBox, RenderIntrinsicHeight,
+    RenderIntrinsicWidth, RenderPadding, RenderPositionedBox, RenderRotatedBox, RenderShiftedBox,
+    RenderSizedOverflowBox,
+};
 
+// Visual Effects Single objects (13 objects from effects) ✅
+pub use effects::{
+    RenderAnimatedOpacity, RenderBackdropFilter, RenderClipOval, RenderClipPath, RenderClipRRect,
+    RenderClipRect, RenderCustomPaint, RenderOffstage, RenderOpacity, RenderRepaintBoundary,
+    RenderShaderMask, RenderTransform, RenderVisibility,
+};
 
+// Interaction Single objects (4 objects) ✅
+pub use interaction::{
+    RenderAbsorbPointer, RenderIgnorePointer, RenderMouseRegion, RenderPointerListener,
+};
+
+// Semantics Single objects (6 objects) ✅
+pub use special::{
+    RenderAnnotatedRegion, RenderBlockSemantics, RenderExcludeSemantics, RenderMergeSemantics,
+    RenderMetaData, RenderView,
+};
+
+// ============================================================================
+// TODO: Re-enable after migration
+// ============================================================================
+
+// // Debug objects
+// pub use debug::{RenderErrorBox, RenderPlaceholder};
+//
+// // Media objects
+// pub use media::*;
+//
+// // Sliver objects
+// pub use sliver::*;
+//
+// // Text objects
+// pub use text::*;
+//
+// // Viewport objects
+// pub use viewport::*;

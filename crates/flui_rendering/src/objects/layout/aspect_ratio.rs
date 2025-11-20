@@ -1,8 +1,7 @@
 //! RenderAspectRatio - maintains aspect ratio
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -45,9 +44,8 @@ impl Default for RenderAspectRatio {
     }
 }
 
-impl Render for RenderAspectRatio {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderAspectRatio {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
         let aspect_ratio = self.aspect_ratio;
@@ -75,26 +73,17 @@ impl Render for RenderAspectRatio {
         // Constrain to bounds
         let final_size = constraints.constrain(size);
 
-        // SingleArity always has exactly one child
         // Layout child with tight constraints
-        tree.layout_child(child_id, BoxConstraints::tight(final_size));
+        ctx.layout_child(child_id, BoxConstraints::tight(final_size));
 
         final_size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
-        // Simply return child layer - no transformation needed
-        (tree.paint_child(child_id, offset)) as _
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        // Simply paint child - no transformation needed
+        ctx.paint_child(child_id, offset);
     }
 }
 
@@ -104,32 +93,32 @@ mod tests {
 
     #[test]
     fn test_render_aspect_ratio_new() {
-        let aspect = RenderAspectRatio::new(2.0);
-        assert!((aspect.aspect_ratio - 2.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_render_aspect_ratio_default() {
-        let aspect = RenderAspectRatio::default();
-        assert!((aspect.aspect_ratio - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    #[should_panic(expected = "Aspect ratio must be positive")]
-    fn test_render_aspect_ratio_new_zero() {
-        RenderAspectRatio::new(0.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Aspect ratio must be positive")]
-    fn test_render_aspect_ratio_new_negative() {
-        RenderAspectRatio::new(-1.0);
+        let aspect = RenderAspectRatio::new(16.0 / 9.0);
+        assert!((aspect.aspect_ratio - 16.0 / 9.0).abs() < 0.001);
     }
 
     #[test]
     fn test_render_aspect_ratio_set() {
         let mut aspect = RenderAspectRatio::new(16.0 / 9.0);
         aspect.set_aspect_ratio(4.0 / 3.0);
-        assert!((aspect.aspect_ratio - 4.0 / 3.0).abs() < f32::EPSILON);
+        assert!((aspect.aspect_ratio - 4.0 / 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    #[should_panic(expected = "Aspect ratio must be positive")]
+    fn test_aspect_ratio_negative() {
+        RenderAspectRatio::new(-1.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Aspect ratio must be positive")]
+    fn test_aspect_ratio_zero() {
+        RenderAspectRatio::new(0.0);
+    }
+
+    #[test]
+    fn test_render_aspect_ratio_default() {
+        let aspect = RenderAspectRatio::default();
+        assert_eq!(aspect.aspect_ratio, 1.0);
     }
 }

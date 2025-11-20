@@ -1,7 +1,7 @@
 //! RenderSliverGrid - Scrollable grid with lazy loading
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
+use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -213,7 +213,7 @@ impl RenderSliverGrid {
     }
 }
 
-impl RenderSliver for RenderSliverGrid {
+impl LegacySliverRender for RenderSliverGrid {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -242,8 +242,8 @@ impl RenderSliver for RenderSliverGrid {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multiple children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple children
     }
 }
 
@@ -505,6 +505,6 @@ mod tests {
         let delegate = Box::new(SliverGridDelegateFixedCrossAxisCount::new(3, 100.0));
         let grid = RenderSliverGrid::new(delegate);
 
-        assert_eq!(grid.arity(), Arity::Variable);
+        assert_eq!(grid.arity(), RuntimeArity::Variable);
     }
 }

@@ -3,9 +3,11 @@
 //! This render object applies image filters (like blur) to the content that lies
 //! behind it in the paint order. Common use case is frosted glass effect.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::{painting::BlendMode, painting::ImageFilter, Size};
 
 // ===== RenderObject =====
@@ -85,38 +87,27 @@ impl RenderBackdropFilter {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderBackdropFilter {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderBackdropFilter {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Layout child_id with same constraints
-        tree.layout_child(child_id, constraints)
+        // Layout child with same constraints
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // Capture child_id layer
+
         // Note: Full backdrop filtering requires compositor support
         // In production, this would:
         // 1. Capture the current paint layer content
         // 2. Apply the image filter to that content
         // 3. Paint the filtered result
-        // 4. Paint the child_id on top
+        // 4. Paint the child on top
         //
-        // For now, we just return the child_id layer
+        // For now, we just paint the child
         // TODO: Implement BackdropFilterLayer when compositor supports it
 
-        (tree.paint_child(child_id, offset)) as _
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

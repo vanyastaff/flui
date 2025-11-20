@@ -1,10 +1,12 @@
 //! RenderAbsorbPointer - prevents pointer events from reaching children
 
-use flui_core::element::hit_test::{BoxHitTestResult};
+use flui_core::element::hit_test::BoxHitTestResult;
 use flui_core::element::hit_test_entry::BoxHitTestEntry;
-use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 
 /// RenderObject that prevents pointer events from reaching its child
@@ -52,41 +54,29 @@ impl Default for RenderAbsorbPointer {
     }
 }
 
-impl Render for RenderAbsorbPointer {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderAbsorbPointer {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
         // Layout child with same constraints
-        tree.layout_child(child_id, constraints)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
         // Paint child normally - absorbing only affects hit testing
-        tree.paint_child(child_id, offset)
+        ctx.paint_child(child_id, ctx.offset);
     }
 
-    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
         if self.absorbing {
             // Absorb pointer events - add self to result but DON'T test children
             // This prevents events from reaching the child
-            result.add(ctx.element_id, BoxHitTestEntry::new(ctx.position, ctx.size));
-            true  // Event absorbed!
+            result.add(ctx.element_id, BoxHitTestEntry::new(ctx.position, ctx.size()));
+            true // Event absorbed!
         } else {
             // Not absorbing - use default behavior (test children)
-            self.hit_test_children(ctx, result)
+            self.hit_test_children(&ctx, result)
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
     }
 }
 

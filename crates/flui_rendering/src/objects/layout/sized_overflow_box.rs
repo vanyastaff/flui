@@ -1,7 +1,10 @@
-//! RenderSizedOverflowBox - fixed size with child_id overflow
+//! RenderSizedOverflowBox - fixed size with child overflow
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Size};
 
@@ -119,16 +122,15 @@ impl RenderSizedOverflowBox {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderSizedOverflowBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderSizedOverflowBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Build child_id constraints from override values
-        let child_min_width = self.child_min_width.unwrap_or(constraints.min_width);
-        let child_max_width = self.child_max_width.unwrap_or(constraints.max_width);
-        let child_min_height = self.child_min_height.unwrap_or(constraints.min_height);
-        let child_max_height = self.child_max_height.unwrap_or(constraints.max_height);
+
+        // Build child constraints from override values
+        let child_min_width = self.child_min_width.unwrap_or(ctx.constraints.min_width);
+        let child_max_width = self.child_max_width.unwrap_or(ctx.constraints.max_width);
+        let child_min_height = self.child_min_height.unwrap_or(ctx.constraints.min_height);
+        let child_max_height = self.child_max_height.unwrap_or(ctx.constraints.max_height);
 
         let child_constraints = BoxConstraints::new(
             child_min_width,
@@ -137,35 +139,26 @@ impl Render for RenderSizedOverflowBox {
             child_max_height,
         );
 
-        // Layout child_id with override constraints
-        self.child_size = tree.layout_child(child_id, child_constraints);
+        // Layout child with override constraints
+        self.child_size = ctx.layout_child(child_id, child_constraints);
 
         // Our size is the specified size (or constrained by parent)
-        let width = self.width.unwrap_or(constraints.max_width);
-        let height = self.height.unwrap_or(constraints.max_height);
+        let width = self.width.unwrap_or(ctx.constraints.max_width);
+        let height = self.height.unwrap_or(ctx.constraints.max_height);
 
-        self.size = constraints.constrain(Size::new(width, height));
+        self.size = ctx.constraints.constrain(Size::new(width, height));
         self.size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
 
         // Calculate aligned position
         let align_offset = self.alignment.calculate_offset(self.child_size, self.size);
-        let child_offset = offset + align_offset;
+        let child_offset = ctx.offset + align_offset;
 
         // Paint child at aligned offset
-        tree.paint_child(child_id, child_offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, child_offset);
     }
 }
 

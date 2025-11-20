@@ -307,7 +307,7 @@ impl Default for Transform {
 
 // Implement View for Transform - New architecture
 impl View for Transform {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Use from_matrix for backward compatibility
         (RenderTransform::from_matrix(self.transform), self.child)
     }

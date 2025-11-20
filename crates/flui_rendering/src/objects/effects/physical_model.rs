@@ -1,11 +1,9 @@
 //! RenderPhysicalModel - Material Design elevation with shadow
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    painting::Path,
-    Color, Point, RRect, Rect, Size,
-};
+use flui_types::{painting::Path, Color, Point, RRect, Rect, Size};
 
 /// Shape for physical model
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +20,10 @@ pub enum PhysicalShape {
 ///
 /// Creates a physical layer effect with shadow based on elevation.
 /// Higher elevation values create larger, softer shadows.
+///
+/// # Without Child
+///
+/// When no child is present, still renders the physical shape with shadow (decorative).
 ///
 /// # Example
 ///
@@ -112,13 +114,17 @@ impl Default for RenderPhysicalModel {
     }
 }
 
-impl Render for RenderPhysicalModel {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+impl RenderBox<Optional> for RenderPhysicalModel {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        // SingleArity always has exactly one child_id
-        let size = tree.layout_child(child_id, constraints);
+
+        let size = if let Some(child_id) = ctx.children.get() {
+            // Layout child and use its size
+            ctx.layout_child(child_id, constraints)
+        } else {
+            // No child - use max constraints for shape size
+            Size::new(constraints.max_width, constraints.max_height)
+        };
 
         // Store size for paint
         self.size = size;
@@ -126,12 +132,9 @@ impl Render for RenderPhysicalModel {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
         let offset = ctx.offset;
 
-        let mut canvas = Canvas::new();
         let size = self.size;
 
         // Draw shadow if elevation > 0
@@ -155,7 +158,8 @@ impl Render for RenderPhysicalModel {
                 }
             };
 
-            canvas.draw_shadow(&shadow_path, self.shadow_color, self.elevation);
+            ctx.canvas()
+                .draw_shadow(&shadow_path, self.shadow_color, self.elevation);
         }
 
         // Paint background shape at the offset position
@@ -164,7 +168,7 @@ impl Render for RenderPhysicalModel {
         match self.shape {
             PhysicalShape::Rectangle => {
                 let rect = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
-                canvas.draw_rect(rect, &paint);
+                ctx.canvas().draw_rect(rect, &paint);
             }
             PhysicalShape::RoundedRectangle => {
                 let radius = flui_types::styling::Radius::circular(self.border_radius);
@@ -172,28 +176,20 @@ impl Render for RenderPhysicalModel {
                     Rect::from_xywh(offset.dx, offset.dy, size.width, size.height),
                     radius,
                 );
-                canvas.draw_rrect(rrect, &paint);
+                ctx.canvas().draw_rrect(rrect, &paint);
             }
             PhysicalShape::Circle => {
                 let radius = size.width.min(size.height) / 2.0;
                 let center =
                     Point::new(offset.dx + size.width / 2.0, offset.dy + size.height / 2.0);
-                canvas.draw_circle(center, radius, &paint);
+                ctx.canvas().draw_circle(center, radius, &paint);
             }
         }
 
-        // Paint child on top at same offset
-        let child_canvas = tree.paint_child(child_id, offset);
-        canvas.append_canvas(child_canvas);
-
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        // Paint child on top at same offset if present
+        if let Some(child_id) = ctx.children.get() {
+            ctx.paint_child(child_id, offset);
+        }
     }
 }
 

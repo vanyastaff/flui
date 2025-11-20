@@ -1,6 +1,10 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_painting::Canvas;
 use flui_types::Size;
 
@@ -140,51 +144,37 @@ impl Default for RenderCustomPaint {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderCustomPaint {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderCustomPaint {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // SingleArity always has exactly one child_id
-        // Layout child_id with our constraints
-        let size = tree.layout_child(child_id, constraints);
+
+        // Single arity always has exactly one child
+        // Layout child with our constraints
+        let size = ctx.layout_child(child_id, ctx.constraints);
 
         // Store the laid out size for use during paint
         self.laid_out_size = size;
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
+
         // Use the size from layout phase
         let size = self.laid_out_size;
 
-        let mut canvas = Canvas::new();
-
         // Paint background painter (if any)
         if let Some(bg_painter) = &self.painter {
-            bg_painter.paint(&mut canvas, size);
+            bg_painter.paint(ctx.canvas(), size);
         }
 
         // Paint child
-        let child_canvas = tree.paint_child(child_id, offset);
-        canvas.append_canvas(child_canvas);
+        ctx.paint_child(child_id, ctx.offset);
 
         // Paint foreground painter on top (if any)
         if let Some(fg_painter) = &self.foreground_painter {
-            fg_painter.paint(&mut canvas, size);
+            fg_painter.paint(ctx.canvas(), size);
         }
-
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
     }
 }
 

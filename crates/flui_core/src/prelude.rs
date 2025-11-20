@@ -13,8 +13,6 @@
 //! - [`View`] - The main trait for creating UI components
 //! - [`BuildContext`] - Context provided during view building
 //! - [`IntoElement`] - Trait for converting tuples to elements
-//! - [`AnyView`] - Type-erased view for heterogeneous collections
-//! - [`AnyElement`] - Type-erased element storage
 //!
 //! ## Reactive State (Hooks)
 //! - [`use_signal`] - Create reactive state
@@ -69,12 +67,6 @@ pub use crate::view::BuildContext;
 /// Trait for converting tuples to elements
 pub use crate::view::IntoElement;
 
-/// Type-erased view for heterogeneous collections
-pub use crate::view::AnyView;
-
-/// Type-erased element storage
-pub use crate::view::AnyElement;
-
 /// Element enum (Component/Render/Provider)
 pub use crate::element::Element;
 
@@ -99,7 +91,7 @@ pub use crate::hooks::Signal;
 // ============================================================
 
 /// Trait for custom render objects (layout + paint)
-pub use crate::render::Render;
+pub use crate::render::RenderBox;
 
 // Legacy contexts removed - use protocol-based contexts instead:
 // - BoxLayoutContext<A>, BoxPaintContext<A> from crate::render::protocol
@@ -112,10 +104,10 @@ pub use crate::render::Arity;
 pub use crate::render::RuntimeArity;
 
 /// Arity types for zero-cost abstraction
-pub use crate::render::{AtLeast, Exact, Leaf, Optional, Pair, Single, Triple, Variable};
+pub use crate::render::{AtLeast, Exact, Leaf, Optional, Single, Variable};
 
-/// Unified child representation (None/Single/Multi)
-pub use crate::render::Children;
+/// Children accessor types
+pub use crate::render::{ChildrenAccess, FixedChildren, NoChildren, OptionalChild, SliceChildren};
 
 // ============================================================
 // FOUNDATION (keys and IDs)

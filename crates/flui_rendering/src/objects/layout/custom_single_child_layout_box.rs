@@ -8,7 +8,8 @@
 //!
 //! Similar to Flutter's RenderCustomSingleChildLayoutBox.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
@@ -191,7 +192,7 @@ impl RenderCustomSingleChildLayoutBox {
     }
 }
 
-impl Render for RenderCustomSingleChildLayoutBox {
+impl LegacyRender for RenderCustomSingleChildLayoutBox {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let child_id = ctx.children.single();
 
@@ -225,8 +226,8 @@ impl Render for RenderCustomSingleChildLayoutBox {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 
@@ -424,7 +425,7 @@ mod tests {
         let delegate = Box::new(CenterDelegate);
         let render = RenderCustomSingleChildLayoutBox::new(delegate);
 
-        assert_eq!(render.arity(), Arity::Exact(1));
+        assert_eq!(render.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]

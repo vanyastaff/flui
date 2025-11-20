@@ -404,7 +404,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }
@@ -641,7 +641,7 @@ mod tests {
 
 // Implement View for SizedBox - New architecture
 impl View for SizedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         use crate::basic::Empty;
 
         // Use RenderSizedBox (requires exactly one child)

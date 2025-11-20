@@ -1,7 +1,8 @@
 //! RenderViewport - Container for sliver content with scrolling
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::layout::{Axis, AxisDirection};
@@ -199,7 +200,7 @@ impl Default for RenderViewport {
     }
 }
 
-impl Render for RenderViewport {
+impl LegacyRender for RenderViewport {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let constraints = &ctx.constraints;
 
@@ -239,8 +240,8 @@ impl Render for RenderViewport {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multiple sliver children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple sliver children
     }
 }
 
@@ -395,6 +396,6 @@ mod tests {
     #[test]
     fn test_arity_is_variable() {
         let viewport = RenderViewport::new(AxisDirection::TopToBottom, 600.0, 0.0);
-        assert_eq!(viewport.arity(), Arity::Variable);
+        assert_eq!(viewport.arity(), RuntimeArity::Variable);
     }
 }

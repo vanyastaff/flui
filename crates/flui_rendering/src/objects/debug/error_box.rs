@@ -1,6 +1,7 @@
 //! RenderErrorBox - Debug error visualization
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
@@ -90,75 +91,61 @@ impl Default for RenderErrorBox {
     }
 }
 
-impl Render for RenderErrorBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Leaf> for RenderErrorBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Error box takes up all available space
-        let size = constraints.biggest();
+        let size = Size::new(constraints.max_width, constraints.max_height);
 
         self.size = size;
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let offset = ctx.offset;
-        let mut canvas = Canvas::new();
-
-        let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        let mut paint = Paint::default();
+        let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
 
         // Draw background
-        let mut bg_paint = Paint::default();
-        bg_paint.color = self.background_color;
-        canvas.draw_rect(rect, &bg_paint);
+        paint.color = self.background_color;
+        paint.style = flui_painting::PaintStyle::Fill;
+        ctx.canvas().draw_rect(rect, &paint);
 
-        // Draw diagonal stripes for visual distinction
+        // Draw diagonal stripes if enabled
         if self.show_stripes {
-            let stripe_color = Color::rgba(0, 0, 0, 50); // Semi-transparent black
-            let mut stripe_paint = Paint::default();
-            stripe_paint.color = stripe_color;
+            paint.color = Color::rgba(255, 255, 255, 50); // Semi-transparent white
+            paint.style = flui_painting::PaintStyle::Stroke;
+            paint.stroke_width = 2.0;
 
-            let _stripe_width = 10.0;
             let stripe_spacing = 20.0;
-
-            // Draw diagonal stripes from top-left to bottom-right
-            let mut x = -self.size.height; // Start off-screen to cover the whole area
-            while x < self.size.width {
-                let x1 = offset.dx + x;
-                let y1 = offset.dy;
-                let x2 = offset.dx + x + self.size.height;
-                let y2 = offset.dy + self.size.height;
-
-                // Draw stripe as a thin rotated rectangle
-                // For simplicity, we draw it as a line with width
-                use flui_types::Point;
-                canvas.draw_line(Point::new(x1, y1), Point::new(x2, y2), &stripe_paint);
-
+            let mut x = 0.0;
+            while x < self.size.width + self.size.height {
+                ctx.canvas().draw_line(
+                    flui_types::Point::new(x, 0.0),
+                    flui_types::Point::new(x - self.size.height, self.size.height),
+                    &paint,
+                );
                 x += stripe_spacing;
             }
         }
 
-        // Draw error message text
+        // Draw error message
+        paint.color = self.text_color;
+        paint.style = flui_painting::PaintStyle::Fill;
+
+        let text_x = 10.0;
+        let text_y = self.size.height / 2.0;
+
         let text_style = TextStyle::default()
-            .with_color(self.text_color)
-            .with_font_size(16.0);
+            .with_font_size(14.0)
+            .with_color(self.text_color);
 
-        let text_offset = flui_types::Offset::new(offset.dx + 10.0, offset.dy + 10.0);
-
-        let mut text_paint = Paint::default();
-        text_paint.color = self.text_color;
-
-        canvas.draw_text(&self.message, text_offset, &text_style, &text_paint);
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)
+        ctx.canvas().draw_text(
+            &self.message,
+            flui_types::Offset::new(text_x, text_y),
+            &text_style,
+            &paint,
+        );
     }
 }
 
@@ -236,12 +223,5 @@ mod tests {
         let error_box = RenderErrorBox::default().without_stripes();
 
         assert!(!error_box.show_stripes);
-    }
-
-    #[test]
-    fn test_arity_is_leaf() {
-        let error_box = RenderErrorBox::default();
-
-        assert_eq!(error_box.arity(), Arity::Exact(0));
     }
 }

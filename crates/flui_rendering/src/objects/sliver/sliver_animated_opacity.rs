@@ -1,6 +1,6 @@
 //! RenderSliverAnimatedOpacity - Animated opacity for sliver content
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
@@ -111,7 +111,7 @@ impl Default for RenderSliverAnimatedOpacity {
     }
 }
 
-impl RenderSliver for RenderSliverAnimatedOpacity {
+impl LegacySliverRender for RenderSliverAnimatedOpacity {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         // Pass constraints through to child
         let child_geometry = if let Some(child_id) = ctx.children.try_single() {
@@ -155,8 +155,8 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child sliver
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -269,6 +269,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let opacity = RenderSliverAnimatedOpacity::new(0.5);
-        assert_eq!(opacity.arity(), Arity::Exact(1));
+        assert_eq!(opacity.arity(), RuntimeArity::Exact(1));
     }
 }

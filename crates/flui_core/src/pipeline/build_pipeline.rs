@@ -49,6 +49,12 @@ use std::time::{Duration, Instant};
 use crate::element::ElementId;
 use crate::element::ElementTree;
 
+// Debug print prefixes
+#[cfg(debug_assertions)]
+const PRINT_SCHEDULE_BUILD: &str = "[SCHEDULE_BUILD]";
+#[cfg(debug_assertions)]
+const PRINT_BUILD_SCOPE: &str = "[BUILD_SCOPE]";
+
 #[cfg(debug_assertions)]
 use crate::debug_println;
 
@@ -104,15 +110,15 @@ impl BuildBatcher {
             self.builds_saved += 1;
             #[cfg(debug_assertions)]
             debug_println!(
+                "{} Build batched: element {:?} already in batch (saved 1 build)",
                 PRINT_SCHEDULE_BUILD,
-                "Build batched: element {:?} already in batch (saved 1 build)",
                 element_id
             );
         } else {
             #[cfg(debug_assertions)]
             debug_println!(
+                "{} Build batched: added element {:?} to batch",
                 PRINT_SCHEDULE_BUILD,
-                "Build batched: added element {:?} to batch",
                 element_id
             );
         }
@@ -227,8 +233,8 @@ impl BuildPipeline {
         // This is more efficient than O(n) check on every schedule()
         #[cfg(debug_assertions)]
         debug_println!(
+            "{} Scheduling element {:?} for rebuild (depth {})",
             PRINT_SCHEDULE_BUILD,
-            "Scheduling element {:?} for rebuild (depth {})",
             element_id,
             depth
         );
@@ -317,8 +323,8 @@ impl BuildPipeline {
             if !pending.is_empty() {
                 #[cfg(debug_assertions)]
                 debug_println!(
+                    "{} Flushing batch: {} elements",
                     PRINT_SCHEDULE_BUILD,
-                    "Flushing batch: {} elements",
                     pending.len()
                 );
 
@@ -414,8 +420,8 @@ impl BuildPipeline {
 
         #[cfg(debug_assertions)]
         debug_println!(
+            "{} rebuild_dirty #{}: rebuilding {} dirty elements",
             PRINT_BUILD_SCOPE,
-            "rebuild_dirty #{}: rebuilding {} dirty elements",
             build_num,
             dirty_count
         );
@@ -498,8 +504,8 @@ impl BuildPipeline {
 
         #[cfg(debug_assertions)]
         debug_println!(
+            "{} rebuild_dirty #{}: complete ({} elements rebuilt)",
             PRINT_BUILD_SCOPE,
-            "rebuild_dirty #{}: complete ({} elements rebuilt)",
             build_num,
             rebuilt_count
         );
@@ -616,7 +622,7 @@ impl BuildPipeline {
     /// Rebuild a ComponentElement
     ///
     /// Three-stage process:
-    /// 1. Extract component data (view, child, hooks) - minimize lock time
+    /// 1. Check dirty flag and extract component data - minimize lock time
     /// 2. Build new child element (outside locks) - this is the expensive part
     /// 3. Reconcile old/new children in tree - update tree atomically
     fn rebuild_component(
@@ -627,8 +633,8 @@ impl BuildPipeline {
     ) -> bool {
         crate::trace_hot_path!("Rebuilding component", ?element_id);
 
-        // Stage 1: Extract component data (minimize lock time)
-        let (view, old_child_id, hook_context) = {
+        // Stage 1: Check dirty flag, extract component data and prepare hook context (write lock)
+        let (old_child_id, hook_context) = {
             let mut tree_guard = tree.write();
             let element = match tree_guard.get_mut(element_id) {
                 Some(e) => e,
@@ -640,17 +646,22 @@ impl BuildPipeline {
                 None => return false,
             };
 
-            // Clone view for rebuild
-            let view = component.view().clone_box();
+            // Skip rebuild if not dirty
+            if !component.is_dirty() {
+                #[cfg(debug_assertions)]
+                tracing::trace!("Skipping rebuild for {:?} - not dirty", element_id);
+                return false;
+            }
+
             let old_child = component.child();
 
             // Extract or create hook context (helper method)
             let hook_context = Self::extract_or_create_hook_context(component);
 
-            (view, old_child, hook_context)
+            (old_child, hook_context)
         };
 
-        // Stage 2: Build new child view (outside locks - this is the expensive part)
+        // Stage 2: Build new child view (read lock for view access)
         let ctx = crate::view::BuildContext::with_hook_context_and_queue(
             tree.clone(),
             element_id,
@@ -667,8 +678,13 @@ impl BuildPipeline {
             hook_ctx.begin_component(component_id);
         }
 
-        // Build with thread-local BuildContext
-        let new_element = crate::view::with_build_context(&ctx, || view.build_any());
+        // Build with thread-local BuildContext (read lock for builder access)
+        let new_element = {
+            let tree_guard = tree.read();
+            let element = tree_guard.get(element_id).expect("element should exist");
+            let component = element.as_component().expect("should be component");
+            crate::view::with_build_context(&ctx, || component.build())
+        };
 
         // End component rendering
         {
@@ -676,10 +692,17 @@ impl BuildPipeline {
             hook_ctx.end_component();
         }
 
-        // Stage 3: Reconcile old/new children in tree (write lock, atomic update)
+        // Stage 3: Reconcile old/new children in tree and clear dirty flag (write lock, atomic update)
         {
             let mut tree_guard = tree.write();
             Self::reconcile_child(&mut tree_guard, element_id, old_child_id, Some(new_element));
+
+            // Clear dirty flag after successful rebuild
+            if let Some(element) = tree_guard.get_mut(element_id) {
+                if let Some(component) = element.as_component_mut() {
+                    component.clear_dirty();
+                }
+            }
         }
 
         true
@@ -696,21 +719,33 @@ impl BuildPipeline {
     ) -> bool {
         crate::trace_hot_path!("Rebuilding provider", ?element_id);
 
-        // Phase 1: Get dependents list (read-only)
+        // Phase 1: Check dirty flag and get dependents list
         let dependents = {
-            let tree_guard = tree.read();
-            let element = match tree_guard.get(element_id) {
+            let mut tree_guard = tree.write();
+            let element = match tree_guard.get_mut(element_id) {
                 Some(e) => e,
                 None => return false,
             };
 
-            let provider = match element.as_provider() {
+            let provider = match element.as_provider_mut() {
                 Some(p) => p,
                 None => return false,
             };
 
+            // Skip rebuild if not dirty
+            if !provider.is_dirty() {
+                #[cfg(debug_assertions)]
+                tracing::trace!("Skipping provider rebuild for {:?} - not dirty", element_id);
+                return false;
+            }
+
             // Copy dependents list
-            provider.dependents().iter().copied().collect::<Vec<_>>()
+            let deps = provider.dependents().iter().copied().collect::<Vec<_>>();
+
+            // Clear dirty flag
+            provider.clear_dirty();
+
+            deps
         };
 
         // Phase 2: Notify all dependents
@@ -782,8 +817,8 @@ impl BuildPipeline {
 
         #[cfg(debug_assertions)]
         debug_println!(
+            "{} rebuild_dirty_parallel #{}: rebuilding {} dirty elements",
             PRINT_BUILD_SCOPE,
-            "rebuild_dirty_parallel #{}: rebuilding {} dirty elements",
             build_num,
             dirty_count
         );
@@ -802,8 +837,8 @@ impl BuildPipeline {
 
         #[cfg(debug_assertions)]
         debug_println!(
+            "{} rebuild_dirty_parallel #{}: complete ({} elements processed)",
             PRINT_BUILD_SCOPE,
-            "rebuild_dirty_parallel #{}: complete ({} elements processed)",
             build_num,
             count
         );

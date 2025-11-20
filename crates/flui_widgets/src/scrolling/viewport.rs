@@ -124,7 +124,7 @@ impl Default for Viewport {
 }
 
 impl View for Viewport {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate viewport main axis extent from scroll offset
         // In a real implementation, this would come from parent constraints
         let viewport_main_axis_extent = 600.0; // Placeholder

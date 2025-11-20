@@ -383,7 +383,7 @@ impl Default for Flex {
 
 // Implement View trait
 impl View for Flex {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         let render_flex = RenderFlex::new(self.direction)
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)

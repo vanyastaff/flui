@@ -127,7 +127,8 @@ impl HitTestable for CanvasLayer {
         if bounds.contains(point) {
             // Add entry to result (no handler - just marks the hit)
             // In the future, this could include event handlers attached to specific regions
-            let entry = HitTestEntry::new(position, bounds);
+            // Using 0 as temporary element_id (will be replaced with actual element ID system)
+            let entry = HitTestEntry::new(0, position, bounds);
             result.add(entry);
 
             tracing::trace!(

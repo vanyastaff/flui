@@ -1,7 +1,8 @@
 //! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate
 
 use flui_core::element::ElementId;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
@@ -209,7 +210,7 @@ impl RenderCustomMultiChildLayoutBox {
     }
 }
 
-impl Render for RenderCustomMultiChildLayoutBox {
+impl LegacyRender for RenderCustomMultiChildLayoutBox {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
@@ -256,8 +257,8 @@ impl Render for RenderCustomMultiChildLayoutBox {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Variable number of children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Variable number of children
     }
 }
 
@@ -299,6 +300,6 @@ mod tests {
         let delegate = SimpleGridDelegate::new(2, 5.0);
         let layout = RenderCustomMultiChildLayoutBox::new(Box::new(delegate));
 
-        assert_eq!(layout.arity(), Arity::Variable);
+        assert_eq!(layout.arity(), RuntimeArity::Variable);
     }
 }

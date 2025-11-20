@@ -1,7 +1,6 @@
 //! RenderPadding - adds padding around a child
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{EdgeInsets, Size};
 
 /// RenderObject that adds padding around its child
@@ -36,8 +35,8 @@ impl RenderPadding {
     }
 }
 
-impl Render for RenderPadding {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Single> for RenderPadding {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let padding = self.padding;
 
@@ -54,20 +53,12 @@ impl Render for RenderPadding {
         )
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Apply padding offset and paint child
         let child_offset = flui_types::Offset::new(self.padding.left, self.padding.top);
-        ctx.paint_child(child_id, ctx.offset + child_offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single-child render
+        ctx.paint_child(child_id, ctx.offset + child_offset);
     }
 }
 

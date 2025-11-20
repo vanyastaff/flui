@@ -29,9 +29,7 @@
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
-use super::{
-    BuildPipeline, ElementTree, LayoutPipeline, PaintPipeline, PipelineError,
-};
+use super::{BuildPipeline, ElementTree, LayoutPipeline, PaintPipeline, PipelineError};
 use crate::element::ElementId;
 use flui_scheduler::FrameBudget;
 use flui_types::constraints::BoxConstraints;
@@ -150,7 +148,11 @@ impl FrameCoordinator {
                 if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
                     let render_state_lock = render_elem.render_state();
                     let render_state = render_state_lock.read();
-                    render_state.size()
+                    if render_state.has_size() {
+                        Some(render_state.size())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -229,10 +231,7 @@ impl FrameCoordinator {
         constraints: BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
         // Create frame span for hierarchical logging
-        let frame_span = tracing::info_span!(
-            "frame",
-            ?constraints
-        );
+        let frame_span = tracing::info_span!("frame", ?constraints);
         let _frame_guard = frame_span.enter();
 
         // Start frame and reset budget
@@ -258,7 +257,11 @@ impl FrameCoordinator {
             self.build.rebuild_dirty_parallel(tree);
             total_build_count += build_count;
 
-            tracing::debug!(count = build_count, iteration = iterations, "Build iteration complete");
+            tracing::debug!(
+                count = build_count,
+                iteration = iterations,
+                "Build iteration complete"
+            );
 
             iterations += 1;
 
@@ -392,7 +395,11 @@ impl FrameCoordinator {
             self.build.rebuild_dirty_parallel(tree);
             total_build_count += build_count;
 
-            tracing::debug!(count = build_count, iteration = iterations, "Build iteration complete");
+            tracing::debug!(
+                count = build_count,
+                iteration = iterations,
+                "Build iteration complete"
+            );
 
             iterations += 1;
 
@@ -544,7 +551,11 @@ impl FrameCoordinator {
                             Some(crate::element::Element::Render(child_render)) => {
                                 let render_state_lock = child_render.render_state();
                                 let render_state = render_state_lock.read();
-                                render_state.size()
+                                if render_state.has_size() {
+                                    Some(render_state.size())
+                                } else {
+                                    None
+                                }
                             }
                             _ => None,
                         },
@@ -630,7 +641,3 @@ impl Default for FrameCoordinator {
         Self::new()
     }
 }
-
-#[cfg(test)]
-#[path = "frame_coordinator_tests.rs"]
-mod frame_coordinator_tests;

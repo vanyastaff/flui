@@ -193,7 +193,7 @@ impl Default for Baseline {
 
 // Implement View for Baseline - New architecture
 impl View for Baseline {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         let baseline = self.baseline.unwrap_or(0.0);
 
         (
@@ -252,7 +252,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

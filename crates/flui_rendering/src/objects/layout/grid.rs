@@ -1,6 +1,7 @@
 //! RenderGrid - CSS Grid-inspired layout
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
@@ -307,7 +308,7 @@ impl RenderGrid {
     }
 }
 
-impl Render for RenderGrid {
+impl LegacyRender for RenderGrid {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let children = ctx.children.multi();
@@ -418,8 +419,8 @@ impl Render for RenderGrid {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable
     }
 }
 
@@ -535,6 +536,6 @@ mod tests {
             vec![GridTrackSize::Flex(1.0)],
         );
 
-        assert_eq!(grid.arity(), Arity::Variable);
+        assert_eq!(grid.arity(), RuntimeArity::Variable);
     }
 }

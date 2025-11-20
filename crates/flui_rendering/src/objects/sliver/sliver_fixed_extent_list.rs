@@ -1,7 +1,7 @@
 //! RenderSliverFixedExtentList - Optimized list with fixed item size
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
+use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -127,7 +127,7 @@ impl RenderSliverFixedExtentList {
     }
 }
 
-impl RenderSliver for RenderSliverFixedExtentList {
+impl LegacySliverRender for RenderSliverFixedExtentList {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -151,8 +151,8 @@ impl RenderSliver for RenderSliverFixedExtentList {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multiple children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple children
     }
 }
 
@@ -408,6 +408,6 @@ mod tests {
     #[test]
     fn test_arity_is_variable() {
         let list = RenderSliverFixedExtentList::new(50.0);
-        assert_eq!(list.arity(), Arity::Variable);
+        assert_eq!(list.arity(), RuntimeArity::Variable);
     }
 }

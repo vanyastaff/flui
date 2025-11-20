@@ -215,7 +215,7 @@ where
 
 // Implement View trait
 impl View for SafeArea {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, ctx: &BuildContext) -> impl IntoElement {
         let insets = self.calculate_insets(ctx);
 
         (RenderPadding::new(insets), self.child)

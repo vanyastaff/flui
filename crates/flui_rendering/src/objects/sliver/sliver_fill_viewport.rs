@@ -1,7 +1,7 @@
 //! RenderSliverFillViewport - Sliver where each child fills the viewport
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
+use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -105,7 +105,7 @@ impl Default for RenderSliverFillViewport {
     }
 }
 
-impl RenderSliver for RenderSliverFillViewport {
+impl LegacySliverRender for RenderSliverFillViewport {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -156,8 +156,8 @@ impl RenderSliver for RenderSliverFillViewport {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multiple children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple children
     }
 }
 
@@ -396,6 +396,6 @@ mod tests {
     #[test]
     fn test_arity_is_variable() {
         let viewport = RenderSliverFillViewport::new(1.0);
-        assert_eq!(viewport.arity(), Arity::Variable);
+        assert_eq!(viewport.arity(), RuntimeArity::Variable);
     }
 }

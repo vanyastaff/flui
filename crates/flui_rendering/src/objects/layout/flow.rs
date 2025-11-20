@@ -1,6 +1,7 @@
 //! RenderFlow - Custom layout with delegate pattern
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
 use std::any::Any;
@@ -179,7 +180,7 @@ impl Debug for RenderFlow {
     }
 }
 
-impl Render for RenderFlow {
+impl LegacyRender for RenderFlow {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let children = ctx.children.multi();
@@ -226,8 +227,8 @@ impl Render for RenderFlow {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable
     }
 }
 
@@ -305,6 +306,6 @@ mod tests {
         let delegate = Box::new(SimpleFlowDelegate::new(10.0));
         let flow = RenderFlow::new(delegate);
 
-        assert_eq!(flow.arity(), Arity::Variable);
+        assert_eq!(flow.arity(), RuntimeArity::Variable);
     }
 }

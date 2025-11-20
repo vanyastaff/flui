@@ -105,7 +105,7 @@ impl Builder {
 
 // Implement View trait
 impl View for Builder {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, ctx: &BuildContext) -> impl IntoElement {
         // Call the builder function with the context
         (self.builder)(ctx)
     }

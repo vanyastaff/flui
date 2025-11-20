@@ -1,8 +1,7 @@
 //! RenderLimitedBox - limits max width/height
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -11,6 +10,10 @@ use flui_types::Size;
 /// This is useful to prevent a child from becoming infinitely large when
 /// placed in an unbounded context. Only applies limits when the incoming
 /// constraints are infinite.
+///
+/// # Without Child
+///
+/// When no child is present, returns the limited size (useful for reserving bounded space).
 ///
 /// # Example
 ///
@@ -56,11 +59,10 @@ impl Default for RenderLimitedBox {
     }
 }
 
-impl Render for RenderLimitedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+impl RenderBox<Optional> for RenderLimitedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
+
         // Apply limits only if constraints are infinite
         let max_width = if constraints.max_width.is_infinite() {
             self.max_width
@@ -80,22 +82,21 @@ impl Render for RenderLimitedBox {
             max_height,
         );
 
-        // SingleArity always has exactly one child
-        tree.layout_child(child_id, limited_constraints)
+        if let Some(child_id) = ctx.children.get() {
+            // Layout child with limited constraints
+            ctx.layout_child(child_id, limited_constraints)
+        } else {
+            // No child - return limited size
+            Size::new(max_width, max_height)
+        }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        tree.paint_child(child_id, offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+        // If we have a child, paint it at our offset
+        if let Some(child_id) = ctx.children.get() {
+            ctx.paint_child(child_id, ctx.offset);
+        }
+        // If no child, nothing to paint
     }
 }
 

@@ -10,7 +10,8 @@
 //! - Parent (RenderFlex) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using flexible children
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 
 use flui_types::{layout::FlexFit, Size};
 
@@ -186,7 +187,7 @@ impl RenderFlexItem {
     }
 }
 
-impl Render for RenderFlexItem {
+impl LegacyRender for RenderFlexItem {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -209,8 +210,8 @@ impl Render for RenderFlexItem {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 

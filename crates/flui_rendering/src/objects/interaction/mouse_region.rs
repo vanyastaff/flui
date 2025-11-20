@@ -1,8 +1,10 @@
 //! RenderMouseRegion - handles mouse hover events
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 
 /// Mouse hover event callbacks
@@ -86,34 +88,23 @@ impl RenderMouseRegion {
     }
 }
 
-impl Render for RenderMouseRegion {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderMouseRegion {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Layout child_id with same constraints
-        tree.layout_child(child_id, constraints)
+        // Layout child with same constraints
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // Simply paint child_id - hover handling happens elsewhere
-        tree.paint_child(child_id, offset)
+
+        // Simply paint child - hover handling happens elsewhere
+        ctx.paint_child(child_id, ctx.offset);
 
         // TODO: In a real implementation, we would:
         // 1. Register hit test area for hover detection
         // 2. Track mouse enter/exit events
         // 3. Call appropriate callbacks when hover state changes
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
     }
 }
 

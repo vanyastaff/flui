@@ -184,7 +184,7 @@ mod tests {
     struct TestView;
 
     impl View for TestView {
-        fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl crate::IntoElement {
             // Return None for minimal testing (terminates tree)
             Option::<TestView>::None
         }

@@ -1,6 +1,6 @@
 //! RenderSliverOffstage - Conditionally hides sliver without removing from tree
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 
@@ -69,7 +69,7 @@ impl Default for RenderSliverOffstage {
     }
 }
 
-impl RenderSliver for RenderSliverOffstage {
+impl LegacySliverRender for RenderSliverOffstage {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         if self.offstage {
             // When offstage, report zero geometry
@@ -103,8 +103,8 @@ impl RenderSliver for RenderSliverOffstage {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child sliver
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -162,6 +162,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let offstage = RenderSliverOffstage::new(true);
-        assert_eq!(offstage.arity(), Arity::Exact(1));
+        assert_eq!(offstage.arity(), RuntimeArity::Exact(1));
     }
 }

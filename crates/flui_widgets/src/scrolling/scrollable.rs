@@ -105,7 +105,7 @@ impl Scrollable {
 }
 
 impl View for Scrollable {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: Implement gesture detection and physics
         // For now, just pass through to child (Viewport)
         // In full implementation:

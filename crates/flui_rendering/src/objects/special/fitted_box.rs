@@ -1,8 +1,10 @@
-//! RenderFittedBox - scales and positions child_id according to BoxFit
+//! RenderFittedBox - scales and positions child according to BoxFit
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 
 /// RenderObject that scales and positions its child_id according to BoxFit
@@ -165,39 +167,29 @@ impl Default for RenderFittedBox {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderFittedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderFittedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Our size is determined by constraints (we try to be as large as possible)
-        let size = constraints.biggest();
 
-        // Layout child_id with unbounded constraints to get natural size
+        // Our size is determined by constraints (we try to be as large as possible)
+        let size = ctx.constraints.biggest();
+
+        // Layout child with unbounded constraints to get natural size
         let child_constraints =
             flui_types::constraints::BoxConstraints::new(0.0, f32::INFINITY, 0.0, f32::INFINITY);
-        tree.layout_child(child_id, child_constraints);
+        ctx.layout_child(child_id, child_constraints);
 
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // Get child_id layer and calculate fit
-        // TODO: Apply transform for scaling based on self.data.calculate_fit()
-        // For now, just return child_id layer as-is
+
+        // TODO: Apply transform for scaling based on self.calculate_fit()
+        // For now, just paint child as-is
         // In a real implementation, we'd wrap in a TransformLayer
 
-        (tree.paint_child(child_id, offset)) as _
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

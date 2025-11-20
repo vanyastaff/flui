@@ -188,7 +188,7 @@ impl Default for FittedBox {
 
 // Implement View for FittedBox - New architecture
 impl View for FittedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (
             RenderFittedBox::with_alignment(self.fit, self.alignment),
             self.child,
@@ -227,7 +227,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

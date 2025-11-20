@@ -1,6 +1,6 @@
 //! RenderSliverMainAxisGroup - Groups multiple slivers along main axis
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::{Offset, SliverGeometry};
 
@@ -153,7 +153,7 @@ impl Default for RenderSliverMainAxisGroup {
     }
 }
 
-impl RenderSliver for RenderSliverMainAxisGroup {
+impl LegacySliverRender for RenderSliverMainAxisGroup {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         self.sliver_geometry = self.calculate_sliver_geometry(ctx);
         self.sliver_geometry
@@ -185,8 +185,8 @@ impl RenderSliver for RenderSliverMainAxisGroup {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multiple sliver children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple sliver children
     }
 }
 
@@ -216,6 +216,6 @@ mod tests {
     #[test]
     fn test_arity_multiple_children() {
         let group = RenderSliverMainAxisGroup::new();
-        assert_eq!(group.arity(), Arity::Variable);
+        assert_eq!(group.arity(), RuntimeArity::Variable);
     }
 }

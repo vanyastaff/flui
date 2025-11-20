@@ -1,8 +1,11 @@
 //! RenderTransform - applies matrix transformation to child
 
 use flui_core::element::hit_test::BoxHitTestResult;
-use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 
 /// RenderObject that applies a transformation to its child
@@ -92,49 +95,46 @@ impl RenderTransform {
     }
 }
 
-impl Render for RenderTransform {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderTransform {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
         // Layout child with same constraints (transform doesn't affect layout)
-        tree.layout_child(child_id, constraints)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
+
+        // Read offset before taking mutable borrow
         let offset = ctx.offset;
 
-        // Create a new canvas for the transformed content
-        let mut canvas = Canvas::new();
-
         // Apply transform using Canvas API
-        canvas.save();
+        ctx.canvas().save();
+
+        // Move to offset first
+        ctx.canvas().translate(offset.dx, offset.dy);
 
         // Apply alignment if needed
         if self.alignment != Offset::ZERO {
-            canvas.translate(self.alignment.dx, self.alignment.dy);
+            ctx.canvas().translate(self.alignment.dx, self.alignment.dy);
         }
 
         // Use the new Canvas::transform() method
-        canvas.transform(&self.transform);
+        ctx.canvas().transform(&self.transform);
 
         // Reverse alignment
         if self.alignment != Offset::ZERO {
-            canvas.translate(-self.alignment.dx, -self.alignment.dy);
+            ctx.canvas()
+                .translate(-self.alignment.dx, -self.alignment.dy);
         }
 
-        // Paint child and append its canvas
-        let child_canvas = tree.paint_child(child_id, offset);
-        canvas.append_canvas(child_canvas);
+        // Paint child at origin (transform already applied)
+        ctx.paint_child(child_id, Offset::ZERO);
 
-        canvas.restore();
-
-        canvas
+        ctx.canvas().restore();
     }
 
-    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
         // To hit test a transformed child, we need to transform the hit position
         // by the INVERSE of our transform, then test the child with that position.
         //
@@ -168,8 +168,10 @@ impl Render for RenderTransform {
         // Apply inverse transform to position
         let x = transformed_position.dx;
         let y = transformed_position.dy;
-        let transformed_x = inverse_matrix.m[0] * x + inverse_matrix.m[4] * y + inverse_matrix.m[12];
-        let transformed_y = inverse_matrix.m[1] * x + inverse_matrix.m[5] * y + inverse_matrix.m[13];
+        let transformed_x =
+            inverse_matrix.m[0] * x + inverse_matrix.m[4] * y + inverse_matrix.m[12];
+        let transformed_y =
+            inverse_matrix.m[1] * x + inverse_matrix.m[5] * y + inverse_matrix.m[13];
 
         // Reverse inverse alignment
         let final_position = if self.alignment != Offset::ZERO {
@@ -186,14 +188,6 @@ impl Render for RenderTransform {
 
         // Test child with transformed position
         self.hit_test_children(&new_ctx, result)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
     }
 }
 

@@ -236,7 +236,7 @@ impl<S: State> PhysicalModelBuilder<S> {
 
 // Implement View trait
 impl View for PhysicalModel {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Create RenderPhysicalModel with custom properties
         let mut render = RenderPhysicalModel::new(self.shape, self.elevation, self.color);
         render.border_radius = self.border_radius;

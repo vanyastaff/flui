@@ -1,6 +1,7 @@
 //! RenderAlign - aligns child within available space
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 
 use flui_painting::Canvas;
 use flui_types::{Alignment, Offset, Size};
@@ -97,7 +98,7 @@ impl Default for RenderAlign {
     }
 }
 
-impl Render for RenderAlign {
+impl LegacyRender for RenderAlign {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -165,8 +166,8 @@ impl Render for RenderAlign {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 

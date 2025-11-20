@@ -208,7 +208,7 @@ impl FractionallySizedBox {
 
 // Implement View for FractionallySizedBox - Simplified API
 impl View for FractionallySizedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (
             RenderFractionallySizedBox::new(self.width_factor, self.height_factor),
             self.child,
@@ -258,7 +258,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

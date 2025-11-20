@@ -164,7 +164,7 @@ impl Default for ClipOval {
 
 // Implement View for ClipOval - New architecture
 impl View for ClipOval {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderClipOval::with_clip(self.clip_behavior), self.child)
     }
 }
@@ -200,7 +200,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

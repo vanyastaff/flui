@@ -35,7 +35,6 @@
 //! - **Lock-free reads** for RenderState flags via atomic operations
 
 // Modules
-pub mod component;
 pub mod dependency;
 #[allow(clippy::module_inception)] // element/element.rs is intentional for main Element enum
 pub mod element;
@@ -43,24 +42,31 @@ pub mod element_base;
 pub mod element_tree;
 pub mod hit_test;
 pub mod hit_test_entry;
+pub mod into_element;
 pub mod lifecycle;
 pub mod provider;
-pub mod render;
-pub mod sliver;
-
+// TODO: Re-enable sliver support after completing box render migration
+// pub mod sliver;
 
 // Re-exports
-pub use component::ComponentElement;
+// ViewElement (formerly ComponentElement) is in view module
+pub use crate::view::ViewElement;
+// Keep ComponentElement as alias for backwards compatibility
+pub use crate::view::ViewElement as ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
 pub use element::Element;
 // ElementBase is internal - used by framework only
 pub(crate) use element_base::ElementBase;
 pub use element_tree::ElementTree; // Moved from pipeline to break circular dependency
-pub use hit_test::{ElementHitTestEntry, ElementHitTestResult};
+pub use hit_test::{
+    BoxHitTestResult, ElementHitTestEntry, ElementHitTestResult, SliverHitTestResult,
+};
 pub use lifecycle::ElementLifecycle;
 pub use provider::ProviderElement;
-pub use render::RenderElement;
-pub use sliver::SliverElement;
+// RenderElement is now in render module
+pub use crate::render::RenderElement;
+// TODO: Re-enable sliver support after completing box render migration
+// pub use sliver::SliverElement;
 
 // Moved to other modules (Phase 1):
 // - BuildContext moved to view::BuildContext
@@ -77,3 +83,5 @@ pub use sliver::SliverElement;
 // Previously: element → render → pipeline → element (CIRCULAR!)
 pub use crate::foundation::ElementId;
 
+// IntoElement trait for converting views/renders to elements
+pub use into_element::IntoElement;

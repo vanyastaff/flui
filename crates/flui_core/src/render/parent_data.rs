@@ -1,37 +1,28 @@
-//! ParentData - layout-specific data attached to children by their parent
+//! ParentData: per-child layout metadata set by the parent render node.
 //!
-//! The ParentData system allows parent Renders to attach metadata to their children
-//! without maintaining separate data structures. This is a core concept in the rendering
-//! pipeline, enabling parents to store per-child layout information efficiently.
+//! This subsystem enables parents to attach layout / traversal data directly to
+//! their children without external side maps, keeping memory access locality high.
 //!
-//! # Architecture
+//! # Goals
+//! - Zero-cost access (plain structs, no virtual lookup beyond trait object use)
+//! - Type-safe downcasting (`as_any()` / `as_any_mut()`)
+//! - Optional capabilities (offset caching, sibling links) composed via traits
 //!
-//! The `ParentData` trait provides:
-//! - **Type-safe downcasting** via automatic `as_any()` methods
-//! - **Debug formatting** for all implementations
-//! - **Thread safety** (`Send + Sync`) for concurrent rendering
+//! # Core Traits
+//! - `ParentData`: base marker + downcasting surface
+//! - `ParentDataWithOffset`: opt-in cached child offset (for paint and hit test)
 //!
-//! # Common Use Cases
-//!
-//! - **Flex Layouts**: Store flex factor and fit mode for each child
-//! - **Stack Layouts**: Store positioning (top, left, width, height) for each child
-//! - **Offset Storage**: Cache calculated child positions for efficient painting/hit-testing
+//! # Common Types
+//! - `BoxParentData`: just an offset
+//! - `ContainerParentData<ChildId>`: sibling links
+//! - `ContainerBoxParentData<ChildId>`: offset + sibling links
 //!
 //! # Example
-//!
 //! ```rust,ignore
-//! use flui_core::{ParentData, BoxParentData};
-//! use flui_types::Offset;
-//!
-//! // Create parent data with offset
-//! let data = BoxParentData::with_offset(Offset::new(10.0, 20.0));
-//!
-//! // Store as trait object
-//! let boxed: Box<dyn ParentData> = Box::new(data);
-//!
-//! // Downcast to access concrete type using as_any()
-//! if let Some(box_data) = boxed.as_any().downcast_ref::<BoxParentData>() {
-//!     println!("Offset: {:?}", box_data.offset());
+//! let data = BoxParentData::with_offset(Offset::new(8.0, 16.0));
+//! let dyn_data: Box<dyn ParentData> = Box::new(data);
+//! if let Some(offset_cap) = dyn_data.as_parent_data_with_offset() {
+//!     assert_eq!(offset_cap.offset(), Offset::new(8.0,16.0));
 //! }
 //! ```
 
@@ -47,16 +38,16 @@ use flui_types::Offset;
 mod sealed {
     use super::*;
 
-    /// Sealed trait to prevent external implementations.
-    ///
-    /// This helper trait provides as_any() automatically for all ParentData types.
-    /// It's sealed to ensure it's only used internally.
+    /// Internal sealed helper that supplies `as_any_parent_data()` for all `ParentData`
+    /// implementors. Not exposed publicly; prevents external blanket impls.
     pub trait AsAnyParentData: fmt::Debug + Send + Sync + 'static {
+        /// Immutable type-erased view.
         fn as_any_parent_data(&self) -> &dyn Any;
+        /// Mutable type-erased view.
         fn as_any_parent_data_mut(&mut self) -> &mut dyn Any;
     }
 
-    /// Blanket implementation: All 'static types get as_any() for free
+    /// Blanket implementation for all suitable `'static` types.
     impl<T> AsAnyParentData for T
     where
         T: fmt::Debug + Send + Sync + 'static,
@@ -64,7 +55,6 @@ mod sealed {
         fn as_any_parent_data(&self) -> &dyn Any {
             self
         }
-
         fn as_any_parent_data_mut(&mut self) -> &mut dyn Any {
             self
         }
@@ -113,29 +103,15 @@ mod sealed {
 /// }
 /// ```
 pub trait ParentData: sealed::AsAnyParentData {
-    /// Downcast to &dyn Any for type-safe downcasting
-    ///
-    /// This method is automatically implemented via the helper trait.
+    /// Immutable type-erased access for downcasting.
     fn as_any(&self) -> &dyn Any {
         self.as_any_parent_data()
     }
-
-    /// Downcast to &mut dyn Any for mutable downcasting
-    ///
-    /// This method is automatically implemented via the helper trait.
+    /// Mutable type-erased access for downcasting.
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self.as_any_parent_data_mut()
     }
-
-    /// Try to access this ParentData as ParentDataWithOffset
-    ///
-    /// Returns `Some` if this ParentData implements ParentDataWithOffset,
-    /// `None` otherwise. This enables generic access to offset data without
-    /// knowing the concrete type.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns `None`. Override in types that implement ParentDataWithOffset.
+    /// Optional offset capability accessor (returns `Some` if this implements `ParentDataWithOffset`).
     fn as_parent_data_with_offset(&self) -> Option<&dyn ParentDataWithOffset> {
         None
     }
@@ -178,14 +154,9 @@ pub trait ParentData: sealed::AsAnyParentData {
 /// }
 /// ```
 pub trait ParentDataWithOffset: ParentData {
-    /// Get the cached offset for this child
-    ///
-    /// This offset is calculated during layout and read during paint/hit_test.
+    /// Get cached layout offset (parent-local coordinates).
     fn offset(&self) -> Offset;
-
-    /// Set the cached offset for this child
-    ///
-    /// Called by parent Render during layout.
+    /// Set cached layout offset.
     fn set_offset(&mut self, offset: Offset);
 }
 
@@ -202,7 +173,7 @@ impl ParentData for () {}
 ///
 /// # Coordinate System
 ///
-/// - Origin is at parent's top-left corner
+/// - Origin is in the parent's top-left corner
 /// - Positive x moves right, positive y moves down
 /// - Offset is applied during painting, not during layout
 ///
@@ -218,7 +189,7 @@ impl ParentData for () {}
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxParentData {
-    /// Offset from parent's origin where this child should be painted
+    /// Offset from the parent's origin where this child should be painted
     offset: Offset,
 }
 
@@ -231,7 +202,7 @@ impl Default for BoxParentData {
 }
 
 impl BoxParentData {
-    /// Create new box parent data at the origin (0, 0)
+    /// Create a new box parent_data at the origin (0, 0)
     pub const fn new() -> Self {
         Self {
             offset: Offset::ZERO,
@@ -428,7 +399,7 @@ impl<ChildId> Default for ContainerBoxParentData<ChildId> {
 }
 
 impl<ChildId> ContainerBoxParentData<ChildId> {
-    /// Create new container box parent data at origin with no siblings
+    /// Create a new container box parent_data at origin with no siblings
     pub fn new() -> Self {
         Self::default()
     }
@@ -592,8 +563,8 @@ mod tests {
         let boxed: Box<dyn ParentData> = Box::new(data);
 
         assert!(boxed.as_any().is::<BoxParentData>());
-        let downcasted = boxed.as_any().downcast_ref::<BoxParentData>().unwrap();
-        assert_eq!(downcasted.offset(), Offset::ZERO);
+        let downcast = boxed.as_any().downcast_ref::<BoxParentData>().unwrap();
+        assert_eq!(downcast.offset(), Offset::ZERO);
     }
 
     #[test]

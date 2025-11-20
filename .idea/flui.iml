@@ -37,6 +37,11 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_log/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/flui_log/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/xtask/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-reactivity/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui-reactivity/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/flui_painting/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/demos/counter/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/demos/counter/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

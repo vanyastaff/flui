@@ -4,8 +4,11 @@
 //! compositor/window. It handles the initial frame setup and coordinates
 //! the output surface configuration.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::{BoxConstraints, Size};
 
 /// Configuration for the RenderView's layout constraints
@@ -128,8 +131,8 @@ impl RenderView {
     }
 }
 
-impl Render for RenderView {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Single> for RenderView {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         // Get the single child
         let child_id = ctx.children.single();
 
@@ -137,7 +140,7 @@ impl Render for RenderView {
         let constraints = self.configuration.to_constraints();
 
         // Layout child with tight constraints (fills entire surface)
-        let child_size = ctx.tree.layout_child(child_id, constraints);
+        let child_size = ctx.layout_child(child_id, constraints);
 
         // RenderView always returns the configuration size, regardless of child
         // (child must conform to our constraints)
@@ -149,19 +152,11 @@ impl Render for RenderView {
         self.configuration.size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // Simply paint the child at origin (0, 0)
         // RenderView doesn't apply any transformations or effects
         let child_id = ctx.children.single();
-        ctx.tree.paint_child(child_id, ctx.offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Exactly one child (the root UI widget)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 
@@ -232,7 +227,7 @@ mod tests {
     #[test]
     fn test_render_view_arity() {
         let view = RenderView::with_default_config();
-        assert_eq!(view.arity(), Arity::Exact(1));
+        assert_eq!(view.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]

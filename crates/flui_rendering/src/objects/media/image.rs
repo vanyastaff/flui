@@ -1,11 +1,10 @@
 //! RenderImage - Displays a raster image
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::traits::Render;
+use flui_core::render::Leaf;
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    painting::Image,
-    Rect, Size,
-};
+use flui_types::{painting::Image, Rect, Size};
 
 /// How an image should be inscribed into the allocated space
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -157,56 +156,41 @@ impl RenderImage {
     }
 }
 
-impl Render for RenderImage {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let constraints = ctx.constraints;
+impl RenderBox<Leaf> for RenderImage {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+        let constraints = &ctx.constraints;
 
         // If we have specific size constraints, use them
-        if constraints.has_tight_width() && constraints.has_tight_height() {
-            return Size::new(constraints.max_width, constraints.max_height);
-        }
+        let is_tight = constraints.min_width == constraints.max_width
+            && constraints.min_height == constraints.max_height;
 
-        // Otherwise, use image's intrinsic size within constraints
-        let image_width = self.image.width() as f32;
-        let image_height = self.image.height() as f32;
+        let size = if is_tight {
+            Size::new(constraints.max_width, constraints.max_height)
+        } else {
+            // Otherwise, use image's intrinsic size within constraints
+            let image_width = self.image.width() as f32;
+            let image_height = self.image.height() as f32;
 
-        let width = image_width.clamp(constraints.min_width, constraints.max_width);
-        let height = image_height.clamp(constraints.min_height, constraints.max_height);
+            let width = image_width.clamp(constraints.min_width, constraints.max_width);
+            let height = image_height.clamp(constraints.min_height, constraints.max_height);
 
-        Size::new(width, height)
+            Size::new(width, height)
+        };
+
+        size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let offset = ctx.offset;
-        let mut canvas = Canvas::new();
-
-        // Get the size we laid out with
-        let size = Size::new(
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        // Get the destination rectangle based on fit and alignment
+        let dest_rect = self.calculate_dest_rect(Size::new(
             self.image.width() as f32,
             self.image.height() as f32,
-        );
+        ));
 
-        // Calculate destination rect
-        let local_rect = self.calculate_dest_rect(size);
-        let dest_rect = Rect::from_xywh(
-            offset.dx + local_rect.left(),
-            offset.dy + local_rect.top(),
-            local_rect.width(),
-            local_rect.height(),
-        );
-
-        // Draw the image
-        canvas.draw_image(self.image.clone(), dest_rect, self.paint.as_ref());
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0) // Leaf render object
+        // Draw the image into the context's canvas
+        let paint_opt = self.paint.as_ref();
+        ctx.canvas()
+            .draw_image(self.image.clone(), dest_rect, paint_opt);
     }
 }
 

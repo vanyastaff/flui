@@ -4,7 +4,8 @@
 //! It smoothly transitions between sizes using linear interpolation.
 //! A full implementation would use AnimationController and TickerProvider.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{Alignment, Size};
 use std::time::{Duration, Instant};
@@ -198,7 +199,7 @@ impl RenderAnimatedSize {
     }
 }
 
-impl Render for RenderAnimatedSize {
+impl LegacyRender for RenderAnimatedSize {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let child_id = ctx.children.single();
 
@@ -249,8 +250,8 @@ impl Render for RenderAnimatedSize {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 
@@ -309,6 +310,6 @@ mod tests {
     #[test]
     fn test_arity() {
         let animated_size = RenderAnimatedSize::new(Duration::from_millis(300));
-        assert_eq!(animated_size.arity(), Arity::Exact(1));
+        assert_eq!(animated_size.arity(), RuntimeArity::Exact(1));
     }
 }

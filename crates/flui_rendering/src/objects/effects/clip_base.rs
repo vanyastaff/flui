@@ -28,7 +28,11 @@
 //! ```
 
 use flui_core::element::hit_test::BoxHitTestResult;
-use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
+use flui_core::render::{
+    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_painting::Canvas;
 use flui_types::{painting::Clip, Offset, Size};
 
@@ -135,48 +139,45 @@ impl<S: ClipShape> RenderClip<S> {
     }
 }
 
-impl<S: ClipShape + 'static> Render for RenderClip<S> {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Layout child_id with same constraints (pass-through)
-        let size = tree.layout_child(child_id, constraints);
+        // Layout child with same constraints (pass-through)
+        let size = ctx.layout_child(child_id, ctx.constraints);
         // Cache size for paint
         self.size = size;
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
 
-        // If no clipping needed, just return child canvas directly
+        // If no clipping needed, just paint child directly
         if !self.clip_behavior.clips() {
-            return tree.paint_child(child_id, offset);
+            ctx.paint_child(child_id, ctx.offset);
+            return;
         }
 
-        // Create canvas and apply clipping
-        let mut canvas = Canvas::new();
+        // Read offset before taking mutable borrow
+        let offset = ctx.offset;
 
         // Save canvas state before clipping
-        canvas.save();
+        ctx.canvas().save();
+
+        // Move to offset
+        ctx.canvas().translate(offset.dx, offset.dy);
 
         // Let the shape apply its specific clipping
-        self.shape.apply_clip(&mut canvas, self.size);
+        self.shape.apply_clip(ctx.canvas(), self.size);
 
-        // Paint child with clipping applied
-        let child_canvas = tree.paint_child(child_id, offset);
-        canvas.append_canvas(child_canvas);
+        // Paint child at origin (already translated)
+        ctx.paint_child(child_id, Offset::ZERO);
 
         // Restore canvas state
-        canvas.restore();
-
-        canvas
+        ctx.canvas().restore();
     }
 
-    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
         // For clipping, we need to check if the hit position is inside the clip region.
         // If it's outside, the hit should fail even if it would hit the child.
         //
@@ -185,7 +186,7 @@ impl<S: ClipShape + 'static> Render for RenderClip<S> {
 
         // If no clipping is applied, use default behavior
         if !self.clip_behavior.clips() {
-            return self.hit_test_children(ctx, result);
+            return self.hit_test_children(&ctx, result);
         }
 
         // Check if position is inside the clip shape
@@ -195,15 +196,7 @@ impl<S: ClipShape + 'static> Render for RenderClip<S> {
         }
 
         // Position is inside clip region - test children normally
-        self.hit_test_children(ctx, result)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        self.hit_test_children(&ctx, result)
     }
 }
 

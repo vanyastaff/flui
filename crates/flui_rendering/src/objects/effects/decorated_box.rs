@@ -1,6 +1,7 @@
 //! RenderDecoratedBox - paints decoration around a child
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::{BorderPosition, BoxDecoration, Radius},
@@ -19,6 +20,10 @@ pub enum DecorationPosition {
 /// RenderObject that paints a decoration around its child
 ///
 /// This renders backgrounds, borders, shadows, and gradients.
+///
+/// # Without Child
+///
+/// When no child is present, still paints the decoration (useful for decorative boxes).
 ///
 /// # Example
 ///
@@ -275,13 +280,17 @@ impl RenderDecoratedBox {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderDecoratedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+impl RenderBox<Optional> for RenderDecoratedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        // SingleArity always has exactly one child
-        let size = tree.layout_child(child_id, constraints);
+
+        let size = if let Some(child_id) = ctx.children.get() {
+            // Layout child and use its size
+            ctx.layout_child(child_id, constraints)
+        } else {
+            // No child - use max constraints for decoration size
+            Size::new(constraints.max_width, constraints.max_height)
+        };
 
         // Store size for paint
         self.size = size;
@@ -289,39 +298,26 @@ impl Render for RenderDecoratedBox {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
         let offset = ctx.offset;
-
-        let mut canvas = Canvas::new();
 
         // Paint decoration in LOCAL coordinates at offset
         let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
 
         // Paint decoration in background position
         if self.position == DecorationPosition::Background {
-            self.paint_decoration(&mut canvas, rect);
+            self.paint_decoration(ctx.canvas(), rect);
         }
 
-        // Paint child
-        let child_canvas = tree.paint_child(child_id, offset);
-        canvas.append_canvas(child_canvas);
+        // Paint child if present
+        if let Some(child_id) = ctx.children.get() {
+            ctx.paint_child(child_id, offset);
+        }
 
         // Paint decoration in foreground position
         if self.position == DecorationPosition::Foreground {
-            self.paint_decoration(&mut canvas, rect);
+            self.paint_decoration(ctx.canvas(), rect);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
     }
 }
 

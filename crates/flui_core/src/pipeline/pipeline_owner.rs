@@ -52,6 +52,10 @@ use crate::element::{Element, ElementId};
 #[cfg(debug_assertions)]
 use crate::debug_println;
 
+// Debug print prefixes
+#[cfg(debug_assertions)]
+const PRINT_BUILD_SCOPE: &str = "[BUILD_SCOPE]";
+
 /// PipelineOwner - orchestrates the three-phase rendering pipeline
 ///
 /// PipelineOwner is the main entry point for FLUI's rendering system. It coordinates
@@ -473,7 +477,7 @@ impl PipelineOwner {
         self.lock_state(|owner| {
             if !owner.coordinator.build().has_dirty() {
                 #[cfg(debug_assertions)]
-                debug_println!(PRINT_BUILD_SCOPE, "finalize_tree: tree is clean");
+                debug_println!("{} finalize_tree: tree is clean", PRINT_BUILD_SCOPE);
             } else {
                 tracing::warn!(
                     dirty_count = owner.dirty_count(),
@@ -553,8 +557,9 @@ impl PipelineOwner {
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
     ) -> Result<Option<flui_types::Size>, super::PipelineError> {
-        let result = self.coordinator
-            .flush_layout(&self.tree, self.root_mgr.root_id(), constraints);
+        let result =
+            self.coordinator
+                .flush_layout(&self.tree, self.root_mgr.root_id(), constraints);
 
         // Invalidate hit test cache when layout changes
         self.features.invalidate_hit_test_cache();
@@ -565,8 +570,11 @@ impl PipelineOwner {
     /// Flush the paint phase
     ///
     /// Delegates to FrameCoordinator.
-    pub fn flush_paint(&mut self) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
-        let result = self.coordinator
+    pub fn flush_paint(
+        &mut self,
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
+        let result = self
+            .coordinator
             .flush_paint(&self.tree, self.root_mgr.root_id());
 
         // Invalidate hit test cache when paint changes
@@ -659,13 +667,16 @@ impl PipelineOwner {
             Some(id) => id,
             None => {
                 #[cfg(debug_assertions)]
-                debug_println!(PRINT_BUILD_SCOPE, "reassemble_tree: no root element");
+                debug_println!("{} reassemble_tree: no root element", PRINT_BUILD_SCOPE);
                 return 0;
             }
         };
 
         #[cfg(debug_assertions)]
-        debug_println!(PRINT_BUILD_SCOPE, "reassemble_tree: hot reload triggered");
+        debug_println!(
+            "{} reassemble_tree: hot reload triggered",
+            PRINT_BUILD_SCOPE
+        );
 
         // Collect all element IDs to process with their depths
         let element_ids = {
@@ -675,8 +686,8 @@ impl PipelineOwner {
 
         #[cfg(debug_assertions)]
         debug_println!(
+            "{} reassemble_tree: found {} elements",
             PRINT_BUILD_SCOPE,
-            "reassemble_tree: found {} elements",
             element_ids.len()
         );
 
@@ -697,8 +708,8 @@ impl PipelineOwner {
 
         #[cfg(debug_assertions)]
         debug_println!(
+            "{} reassemble_tree: complete ({} stateful elements reassembled)",
             PRINT_BUILD_SCOPE,
-            "reassemble_tree: complete ({} stateful elements reassembled)",
             reassembled_count
         );
 
@@ -840,7 +851,9 @@ impl PipelineOwner {
     }
 
     /// Get mutable reference to frame buffer (delegates to features)
-    pub fn frame_buffer_mut(&mut self) -> Option<&mut super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
+    pub fn frame_buffer_mut(
+        &mut self,
+    ) -> Option<&mut super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
         self.features.frame_buffer_mut()
     }
 
@@ -1021,7 +1034,11 @@ impl PipelineOwner {
             }
         };
 
-        crate::trace_hot_path!("dispatch_pointer_event: pos={:?} event={:?}", position, event);
+        crate::trace_hot_path!(
+            "dispatch_pointer_event: pos={:?} event={:?}",
+            position,
+            event
+        );
 
         // Perform hit testing
         let hit_result = {
@@ -1029,7 +1046,10 @@ impl PipelineOwner {
             tree.hit_test(root_id, position)
         };
 
-        crate::trace_hot_path!("dispatch_pointer_event: hit {} elements", hit_result.entries().len());
+        crate::trace_hot_path!(
+            "dispatch_pointer_event: hit {} elements",
+            hit_result.entries().len()
+        );
 
         // Dispatch event to hit elements
         let mut tree = self.tree.write();
@@ -1058,8 +1078,6 @@ impl Default for PipelineOwner {
 mod tests {
     use super::*;
     use crate::element::{ComponentElement, Element};
-    use crate::testing::TestWidget;
-    use crate::view::AnyView;
 
     #[test]
     fn test_build_owner_creation() {
@@ -1288,9 +1306,14 @@ mod tests {
     #[test]
     fn test_set_root() {
         let mut owner = PipelineOwner::new();
-        let view: Box<dyn AnyView> = Box::new(TestWidget);
-        let state: Box<dyn std::any::Any> = Box::new(());
-        let component = ComponentElement::new(view, state);
+        // Create a BuildFn that captures the view
+        let builder: crate::view::BuildFn = Box::new(|| {
+            // Return a minimal element for testing
+            Element::Component(ComponentElement::new(Box::new(|| {
+                panic!("nested build not called in test")
+            })))
+        });
+        let component = ComponentElement::new(builder);
         let root = Element::Component(component);
 
         let root_id = owner.set_root(root);

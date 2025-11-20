@@ -1,6 +1,7 @@
 //! RenderEditableLine - Single-line editable text
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextAlign, TextStyle};
 use flui_types::{Rect, Size};
@@ -222,8 +223,8 @@ impl RenderEditableLine {
     }
 }
 
-impl Render for RenderEditableLine {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Leaf> for RenderEditableLine {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Calculate text size
@@ -233,72 +234,55 @@ impl Render for RenderEditableLine {
         let text_height = font_size * 1.2; // Line height
 
         // Size based on constraints
-        let width = constraints.constrain_width(text_width.max(100.0)); // Min 100px
-        let height = constraints.constrain_height(text_height);
+        let width = text_width
+            .max(100.0)
+            .clamp(constraints.min_width, constraints.max_width);
+        let height = text_height.clamp(constraints.min_height, constraints.max_height);
 
         let size = Size::new(width, height);
         self.size = size;
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let offset = ctx.offset;
-        let mut canvas = Canvas::new();
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        let mut paint = Paint::default();
 
-        let display = self.display_text();
-
-        // Paint selection highlight
+        // Draw selection highlight if not collapsed
         if !self.selection.is_collapsed() {
-            let start = self.selection.start();
-            let end = self.selection.end();
-
-            let before_selection = display.chars().take(start).collect::<String>();
-            let selection_text = display.chars().skip(start).take(end - start).collect::<String>();
-
-            let selection_x = self.calculate_text_width(&before_selection);
-            let selection_width = self.calculate_text_width(&selection_text);
-
-            let selection_rect = Rect::from_ltrb(
-                offset.dx + selection_x,
-                offset.dy,
-                offset.dx + selection_x + selection_width,
-                offset.dy + self.size.height,
+            let selection_rect = Rect::from_xywh(
+                self.selection.start() as f32 * 8.0, // Approximate char width
+                0.0,
+                self.selection.length() as f32 * 8.0,
+                self.size.height,
             );
-
-            let mut paint = Paint::default();
             paint.color = self.selection_color;
-            canvas.draw_rect(selection_rect, &paint);
+            paint.style = flui_painting::PaintStyle::Fill;
+            ctx.canvas().draw_rect(selection_rect, &paint);
         }
 
-        // Paint text
-        let mut text_paint = Paint::default();
-        text_paint.color = self.style.color.unwrap_or(Color::BLACK);
-        canvas.draw_text(&display, offset, &self.style, &text_paint);
+        // Draw text
+        paint.color = self.style.color.unwrap_or(Color::BLACK);
+        let display_text = if self.obscure_text {
+            "•".repeat(self.text.len())
+        } else {
+            self.text.clone()
+        };
 
-        // Paint cursor
-        if self.show_cursor && self.selection.is_collapsed() {
-            let cursor_x = self.get_cursor_x();
-            let cursor_rect = Rect::from_ltrb(
-                offset.dx + cursor_x,
-                offset.dy,
-                offset.dx + cursor_x + self.cursor_width,
-                offset.dy + self.size.height,
-            );
+        ctx.canvas().draw_text(
+            &display_text,
+            flui_types::Offset::new(0.0, 0.0),
+            &self.style,
+            &paint,
+        );
 
-            let mut paint = Paint::default();
+        // Draw cursor if showing
+        if self.show_cursor {
+            let cursor_x = self.selection.base as f32 * 8.0; // Approximate
+            let cursor_rect = Rect::from_xywh(cursor_x, 0.0, self.cursor_width, self.size.height);
             paint.color = self.cursor_color;
-            canvas.draw_rect(cursor_rect, &paint);
+            paint.style = flui_painting::PaintStyle::Fill;
+            ctx.canvas().draw_rect(cursor_rect, &paint);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)
     }
 }
 
@@ -478,6 +462,6 @@ mod tests {
         let style = TextStyle::default();
         let editable = RenderEditableLine::new("Hello".to_string(), style);
 
-        assert_eq!(editable.arity(), Arity::Exact(0));
+        assert_eq!(editable.arity(), RuntimeArity::Exact(0));
     }
 }

@@ -1,7 +1,10 @@
-//! RenderRotatedBox - rotates child_id by quarter turns (90°, 180°, 270°)
+//! RenderRotatedBox - rotates child by quarter turns (90°, 180°, 270°)
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{geometry::QuarterTurns, Offset, Size};
 
@@ -61,28 +64,27 @@ impl RenderRotatedBox {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderRotatedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderRotatedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
+
         // For odd quarter turns (90°, 270°), swap width and height constraints
         let child_constraints = if self.quarter_turns.swaps_dimensions() {
             // Manually flip constraints - swap width and height
             BoxConstraints::new(
-                constraints.min_height,
-                constraints.max_height,
-                constraints.min_width,
-                constraints.max_width,
+                ctx.constraints.min_height,
+                ctx.constraints.max_height,
+                ctx.constraints.min_width,
+                ctx.constraints.max_width,
             )
         } else {
-            constraints
+            ctx.constraints
         };
 
-        // Layout child_id
-        let child_size = tree.layout_child(child_id, child_constraints);
+        // Layout child
+        let child_size = ctx.layout_child(child_id, child_constraints);
 
-        // Our size is child_id size with potentially swapped dimensions
+        // Our size is child size with potentially swapped dimensions
         let size = if self.quarter_turns.swaps_dimensions() {
             Size::new(child_size.height, child_size.width)
         } else {
@@ -94,28 +96,27 @@ impl Render for RenderRotatedBox {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
 
         // If no rotation, just paint child directly
         if self.quarter_turns == QuarterTurns::Zero {
-            return tree.paint_child(child_id, offset);
+            ctx.paint_child(child_id, ctx.offset);
+            return;
         }
 
-        // Create canvas with rotation transform
-        let mut canvas = Canvas::new();
+        // Read offset before taking mutable borrow
+        let offset = ctx.offset;
 
         // Save canvas state
-        canvas.save();
+        ctx.canvas().save();
 
         // Move to rotation origin (our top-left)
-        canvas.translate(offset.dx, offset.dy);
+        ctx.canvas().translate(offset.dx, offset.dy);
 
         // Apply rotation transform
         let angle_radians = self.quarter_turns.radians();
-        canvas.rotate(angle_radians);
+        ctx.canvas().rotate(angle_radians);
 
         // Calculate child offset in rotated space
         let child_offset = match self.quarter_turns {
@@ -126,20 +127,10 @@ impl Render for RenderRotatedBox {
         };
 
         // Paint child with rotated offset
-        let child_canvas = tree.paint_child(child_id, child_offset);
-        canvas.append_canvas(child_canvas);
+        ctx.paint_child(child_id, child_offset);
 
         // Restore canvas state
-        canvas.restore();
-
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.canvas().restore();
     }
 }
 

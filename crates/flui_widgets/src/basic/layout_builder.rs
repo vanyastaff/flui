@@ -119,7 +119,7 @@ impl LayoutBuilder {
 
 // Implement View trait
 impl View for LayoutBuilder {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, ctx: &BuildContext) -> impl IntoElement {
         // In a simplified implementation, we call the builder with unconstrained constraints
         // A full implementation would need a special RenderObject that rebuilds during layout
         let constraints = BoxConstraints::UNCONSTRAINED;

@@ -298,7 +298,7 @@ impl Default for DecoratedBox {
 
 // Implement View for DecoratedBox - New architecture
 impl View for DecoratedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         let child = self
             .child
             .or_else(|| Some(Box::new(crate::SizedBox::new())));
@@ -411,7 +411,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

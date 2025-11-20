@@ -235,12 +235,12 @@ pub mod helpers;
 pub mod inspect;
 pub mod macros;
 pub mod mock_pipeline;
-pub mod mock_render;
-pub mod mock_sliver;
+// TODO: Re-enable after migrating to new Render<A> trait
+// pub mod mock_render;
+// pub mod mock_sliver;
 pub mod snapshot;
 pub mod test_harness;
 pub mod view_tester;
-
 
 // Re-export main types for convenience
 pub use assertions::*;
@@ -248,9 +248,9 @@ pub use fixtures::*;
 pub use helpers::{test_hook_context, test_hook_context_with_id};
 pub use inspect::{print_tree, tree_summary, TreeInspector, TreeSummary};
 pub use mock_pipeline::MockPipeline;
-pub use mock_render::{MockRender, SpyRender};
-pub use mock_sliver::{MockSliverRender, SpySliverRender};
+// TODO: Re-enable after migrating to new Render<A> trait
+// pub use mock_render::{MockRender, SpyRender};
+// pub use mock_sliver::{MockSliverRender, SpySliverRender};
 pub use snapshot::{assert_tree_snapshot, ElementTreeSnapshot, SnapshotDiff};
 pub use test_harness::TestHarness;
 pub use view_tester::{TestView, TestWidget, ViewTestResult, ViewTester};
-

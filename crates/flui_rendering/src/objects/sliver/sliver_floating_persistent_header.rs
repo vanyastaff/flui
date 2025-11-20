@@ -1,6 +1,6 @@
 //! RenderSliverFloatingPersistentHeader - Header that floats and can scroll off
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -120,7 +120,7 @@ impl Default for RenderSliverFloatingPersistentHeader {
     }
 }
 
-impl RenderSliver for RenderSliverFloatingPersistentHeader {
+impl LegacySliverRender for RenderSliverFloatingPersistentHeader {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         // Calculate and cache sliver geometry
         self.sliver_geometry = self.calculate_sliver_geometry(&ctx.constraints);
@@ -142,8 +142,8 @@ impl RenderSliver for RenderSliverFloatingPersistentHeader {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child (header content)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child (header content)
     }
 }
 
@@ -261,6 +261,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let header = RenderSliverFloatingPersistentHeader::new(80.0);
-        assert_eq!(header.arity(), Arity::Exact(1));
+        assert_eq!(header.arity(), RuntimeArity::Exact(1));
     }
 }

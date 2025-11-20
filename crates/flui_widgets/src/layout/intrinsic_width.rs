@@ -198,7 +198,7 @@ impl<S: State> IntrinsicWidthBuilder<S> {
 
 // Implement View trait - Simplified API
 impl View for IntrinsicWidth {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         let render = match (self.step_width, self.step_height) {
             (Some(w), Some(h)) => RenderIntrinsicWidth::with_steps(w, h),
             (Some(w), None) => RenderIntrinsicWidth::with_step_width(w),

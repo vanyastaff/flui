@@ -1,6 +1,6 @@
 //! RenderSliverConstrainedCrossAxis - Constrains cross-axis extent for slivers
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -106,7 +106,7 @@ impl Default for RenderSliverConstrainedCrossAxis {
     }
 }
 
-impl RenderSliver for RenderSliverConstrainedCrossAxis {
+impl LegacySliverRender for RenderSliverConstrainedCrossAxis {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -140,8 +140,8 @@ impl RenderSliver for RenderSliverConstrainedCrossAxis {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child sliver
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -320,6 +320,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let constrained = RenderSliverConstrainedCrossAxis::new(600.0);
-        assert_eq!(constrained.arity(), Arity::Exact(1));
+        assert_eq!(constrained.arity(), RuntimeArity::Exact(1));
     }
 }

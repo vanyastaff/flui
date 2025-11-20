@@ -1,46 +1,45 @@
-//! Compile-time type-safe arity system for render objects
+//! Compile-time arity system for render nodes
 //!
-//! This module provides a compile-time arity type system that validates child counts
-//! at type-definition time, with optional debug-only runtime validation for development safety.
+//! This module provides a production-grade, zero-cost abstraction for expressing
+//! and validating child counts of render nodes using Rust's type system.
 //!
-//! # Design Philosophy
+//! # Overview
+//! - Compile time: Type-level arity prevents invalid layouts from compiling.
+//! - Debug builds: `debug_assert!` guards catch incorrect internal usage (no cost in release).
+//! - Runtime (optional): `try_from_slice()` enables dynamic validation paths when needed.
 //!
-//! The arity system uses Rust's type system to enforce child count constraints:
-//! - Compile time: Type parameters enforce arity at definition time
-//! - Debug time: `debug_assert!` validation catches mismatches (zero cost in release)
-//! - Runtime: Optional dynamic validation via `try_from_slice()`
+//! # Arity Forms
+//! - `Leaf` — 0 children
+//! - `Optional` — 0 or 1 child
+//! - `Exact<1>` — exactly 1 child
+//! - `Exact<2>` / `Exact<3>` — exactly 2 / 3 children
+//! - `Exact<N>` — exactly N children
+//! - `AtLeast<N>` — N or more children
+//! - `Variable` — any number (0..)
 //!
-//! # Arity Types
+//! # Guarantees
+//! - Accessors never panic when used through the typed API.
+//! - Zero allocations: all accessors are thin views over slices.
+//! - Ergonomic helpers for common fixed arities (`single()`, `pair()`, `triple()`).
 //!
-//! - `Leaf` - 0 children (e.g., Text, Image)
-//! - `Optional` - 0 or 1 child (e.g., SizedBox, Container)
-//! - `Single` (alias for `Exact<1>`) - exactly 1 child (e.g., Padding)
-//! - `Pair` (alias for `Exact<2>`) - exactly 2 children
-//! - `Triple` (alias for `Exact<3>`) - exactly 3 children
-//! - `Exact<N>` - exactly N children (generic const parameter)
-//! - `AtLeast<N>` - N or more children
-//! - `Variable` - any number (0..∞)
-//!
-//! # Example: Type-Safe Children Access
-//!
+//! # Example
 //! ```rust,ignore
-//! // Old API (runtime validation):
-//! impl SingleRender for RenderPadding {
-//!     fn layout(&mut self, ctx: &LayoutContext) -> Size {
-//!         let child = ctx.children.single()
-//!             .expect("Padding requires exactly 1 child");  // May panic!
-//!         // ...
-//!     }
-//! }
-//!
-//! // New API (compile-time validation):
-//! impl Render<Single> for RenderPadding {
-//!     fn layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single>) -> Size {
-//!         let child = ctx.children().single();  // Guaranteed safe, no unwrap!
+//! impl Render<Exact<1>> for RenderPadding {
+//!     fn layout(&mut self, ctx: &mut BoxLayoutContext<'_, Exact<1>>) -> Size {
+//!         let child = ctx.children().single(); // Statically guaranteed
 //!         // ...
 //!     }
 //! }
 //! ```
+//!
+//! # Dynamic Interop
+//! If arity is only known at runtime, use `A::try_from_slice(&ids)` to get a
+//! typed accessor safely.
+//!
+//! # Debugging Tips
+//! - Enable `debug_assertions` in development builds to catch arity mismatches.
+//! - Use `runtime_arity()` in error messages to report expected arity.
+//! - Leverage the `ChildrenAccess` trait for flexible, arity-agnostic code.
 
 /// Runtime arity information
 ///
@@ -50,7 +49,7 @@
 pub enum RuntimeArity {
     /// Exactly N children
     Exact(usize),
-    /// 0 or 1 child
+    /// 0 or 1 a child
     Optional,
     /// At least N children
     AtLeast(usize),
@@ -59,7 +58,7 @@ pub enum RuntimeArity {
 }
 
 impl RuntimeArity {
-    /// Check if count is valid for this arity
+    /// Check if the count is valid for this arity
     #[inline(always)]
     pub fn validate(&self, count: usize) -> bool {
         match self {
@@ -75,9 +74,9 @@ impl std::fmt::Display for RuntimeArity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Exact(0) => write!(f, "Leaf (0 children)"),
-            Self::Exact(1) => write!(f, "Single (1 child)"),
-            Self::Exact(2) => write!(f, "Pair (2 children)"),
-            Self::Exact(3) => write!(f, "Triple (3 children)"),
+            Self::Exact(1) => write!(f, "Exact(1 child)"),
+            Self::Exact(2) => write!(f, "Exact(2 children)"),
+            Self::Exact(3) => write!(f, "Exact(3 children)"),
             Self::Exact(n) => write!(f, "Exact({} children)", n),
             Self::AtLeast(n) => write!(f, "AtLeast({} children)", n),
             Self::Optional => write!(f, "Optional (0 or 1 child)"),
@@ -86,10 +85,10 @@ impl std::fmt::Display for RuntimeArity {
     }
 }
 
-/// Marker trait for compile-time arity specification
+/// Marker trait for compile-time arity.
 ///
-/// This trait is sealed and users cannot implement it.
-/// Use the provided types: `Leaf`, `Optional`, `Single`, `Variable`, etc.
+/// Implementations are sealed; use the provided types (`Leaf`, `Optional`,
+/// `Single`, `Exact<N>`, `AtLeast<N>`, `Variable`) rather than defining your own.
 pub trait Arity: sealed::Sealed + Send + Sync + 'static {
     /// The accessor type for this arity
     ///
@@ -136,13 +135,16 @@ mod sealed {
 /// Note: All children accessors are Copy (they contain only references or small arrays),
 /// which ensures they can be safely returned from methods returning `A::Children<'_>`.
 pub trait ChildrenAccess: std::fmt::Debug + Copy {
+    /// Borrow the underlying slice of child ids.
     fn as_slice(&self) -> &[std::num::NonZeroUsize];
 
+    /// Number of children.
     #[inline]
     fn len(&self) -> usize {
         self.as_slice().len()
     }
 
+    /// True if there are zero children.
     #[inline]
     fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
@@ -182,6 +184,7 @@ impl Arity for Leaf {
 pub struct NoChildren;
 
 impl ChildrenAccess for NoChildren {
+    /// Always returns an empty slice (leaf has no children).
     fn as_slice(&self) -> &[std::num::NonZeroUsize] {
         &[]
     }
@@ -223,6 +226,7 @@ pub struct OptionalChild<'a> {
 }
 
 impl ChildrenAccess for OptionalChild<'_> {
+    /// Returns the slice (length 0 or 1).
     fn as_slice(&self) -> &[std::num::NonZeroUsize] {
         self.children
     }
@@ -295,7 +299,7 @@ impl<'a> OptionalChild<'a> {
     }
 }
 
-/// Exactly N children (const generic)
+/// Const generic exact arity (exactly `N` children).
 #[derive(Debug, Clone, Copy)]
 pub struct Exact<const N: usize>;
 
@@ -326,11 +330,6 @@ impl<const N: usize> Arity for Exact<N> {
     }
 }
 
-/// Type aliases for common exact arities
-pub type Single = Exact<1>;
-pub type Pair = Exact<2>;
-pub type Triple = Exact<3>;
-
 /// Fixed children accessor (for Exact<N>)
 #[derive(Debug, Clone, Copy)]
 pub struct FixedChildren<'a, const N: usize> {
@@ -338,12 +337,14 @@ pub struct FixedChildren<'a, const N: usize> {
 }
 
 impl<'a, const N: usize> ChildrenAccess for FixedChildren<'a, N> {
+    /// Returns the fixed-size slice of children.
     fn as_slice(&self) -> &[std::num::NonZeroUsize] {
         self.children
     }
 }
 
 impl<'a> FixedChildren<'a, 1> {
+    /// Return the single child (guaranteed to exist).
     #[inline(always)]
     pub fn single(&self) -> std::num::NonZeroUsize {
         self.children[0]
@@ -351,16 +352,17 @@ impl<'a> FixedChildren<'a, 1> {
 }
 
 impl<'a> FixedChildren<'a, 2> {
+    /// First child.
     #[inline(always)]
     pub fn first(&self) -> std::num::NonZeroUsize {
         self.children[0]
     }
-
+    /// Second child.
     #[inline(always)]
     pub fn second(&self) -> std::num::NonZeroUsize {
         self.children[1]
     }
-
+    /// Both children as a tuple.
     #[inline(always)]
     pub fn pair(&self) -> (std::num::NonZeroUsize, std::num::NonZeroUsize) {
         (self.children[0], self.children[1])
@@ -368,6 +370,7 @@ impl<'a> FixedChildren<'a, 2> {
 }
 
 impl<'a> FixedChildren<'a, 3> {
+    /// All three children as a tuple.
     #[inline(always)]
     pub fn triple(
         &self,
@@ -379,6 +382,9 @@ impl<'a> FixedChildren<'a, 3> {
         (self.children[0], self.children[1], self.children[2])
     }
 }
+
+/// Exactly one child (alias for `Exact<1>`).
+pub type Single = Exact<1>;
 
 /// At least N children
 #[derive(Debug, Clone, Copy)]
@@ -436,27 +442,32 @@ pub struct SliceChildren<'a> {
 }
 
 impl ChildrenAccess for SliceChildren<'_> {
+    /// Returns the backing slice.
     fn as_slice(&self) -> &[std::num::NonZeroUsize] {
         self.children
     }
 }
 
 impl<'a> SliceChildren<'a> {
+    /// Get child at index or None if out of bounds.
     #[inline(always)]
     pub fn get(&self, index: usize) -> Option<std::num::NonZeroUsize> {
         self.children.get(index).copied()
     }
 
+    /// Iterator over all children (by value).
     #[inline(always)]
     pub fn iter(&self) -> impl Iterator<Item = std::num::NonZeroUsize> + '_ {
         self.children.iter().copied()
     }
 
+    /// First child, if any.
     #[inline(always)]
     pub fn first(&self) -> Option<std::num::NonZeroUsize> {
         self.children.first().copied()
     }
 
+    /// Last child, if any.
     #[inline(always)]
     pub fn last(&self) -> Option<std::num::NonZeroUsize> {
         self.children.last().copied()
@@ -483,20 +494,20 @@ mod tests {
     }
 
     #[test]
-    fn test_single_arity() {
-        assert_eq!(Single::runtime_arity(), RuntimeArity::Exact(1));
-        assert!(!Single::validate_count(0));
-        assert!(Single::validate_count(1));
-        assert!(!Single::validate_count(2));
+    fn test_exact_one_arity() {
+        assert_eq!(Exact::<1>::runtime_arity(), RuntimeArity::Exact(1));
+        assert!(!Exact::<1>::validate_count(0));
+        assert!(Exact::<1>::validate_count(1));
+        assert!(!Exact::<1>::validate_count(2));
     }
 
     #[test]
-    fn test_pair_arity() {
-        assert_eq!(Pair::runtime_arity(), RuntimeArity::Exact(2));
-        assert!(!Pair::validate_count(0));
-        assert!(!Pair::validate_count(1));
-        assert!(Pair::validate_count(2));
-        assert!(!Pair::validate_count(3));
+    fn test_exact_two_arity() {
+        assert_eq!(Exact::<2>::runtime_arity(), RuntimeArity::Exact(2));
+        assert!(!Exact::<2>::validate_count(0));
+        assert!(!Exact::<2>::validate_count(1));
+        assert!(Exact::<2>::validate_count(2));
+        assert!(!Exact::<2>::validate_count(3));
     }
 
     #[test]
@@ -543,23 +554,19 @@ mod tests {
     #[test]
     fn test_fixed_children_single() {
         use std::num::NonZeroUsize;
-
         let child = NonZeroUsize::new(1).unwrap();
         let children = [child];
-        let fixed = Single::from_slice(&children);
-
+        let fixed = Exact::<1>::from_slice(&children);
         assert_eq!(fixed.single(), child);
     }
 
     #[test]
     fn test_fixed_children_pair() {
         use std::num::NonZeroUsize;
-
         let a = NonZeroUsize::new(1).unwrap();
         let b = NonZeroUsize::new(2).unwrap();
         let children = [a, b];
-        let fixed = Pair::from_slice(&children);
-
+        let fixed = Exact::<2>::from_slice(&children);
         assert_eq!(fixed.first(), a);
         assert_eq!(fixed.second(), b);
         assert_eq!(fixed.pair(), (a, b));
@@ -622,7 +629,7 @@ mod tests {
                 if count > 100 {
                     return TestResult::discard();
                 }
-                TestResult::from_bool(Single::validate_count(count) == (count == 1))
+                TestResult::from_bool(Exact::<1>::validate_count(count) == (count == 1))
             }
             quickcheck(prop as fn(usize) -> TestResult);
         }
@@ -660,22 +667,20 @@ mod tests {
 
         #[test]
         fn prop_exact_n_validates_correctly() {
-            fn prop(n: usize, count: usize) -> TestResult {
+            fn prop(n: usize, count: usize) -> quickcheck::TestResult {
                 if n > 10 || count > 100 {
-                    return TestResult::discard();
+                    return quickcheck::TestResult::discard();
                 }
-
                 let valid = match n {
                     0 => Leaf::validate_count(count),
-                    1 => Single::validate_count(count),
-                    2 => Pair::validate_count(count),
-                    3 => Triple::validate_count(count),
-                    _ => return TestResult::discard(),
+                    1 => Exact::<1>::validate_count(count),
+                    2 => Exact::<2>::validate_count(count),
+                    3 => Exact::<3>::validate_count(count),
+                    _ => return quickcheck::TestResult::discard(),
                 };
-
-                TestResult::from_bool(valid == (count == n))
+                quickcheck::TestResult::from_bool(valid == (count == n))
             }
-            quickcheck(prop as fn(usize, usize) -> TestResult);
+            quickcheck::quickcheck(prop as fn(usize, usize) -> quickcheck::TestResult);
         }
 
         #[test]

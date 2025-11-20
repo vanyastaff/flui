@@ -33,6 +33,7 @@ rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+quickcheck = "1.0"
 
 [features]
 default = []
@@ -60,4 +61,3 @@ trace-hot-paths = []
 [lib]
 name = "flui_core"
 path = "src/lib.rs"
-

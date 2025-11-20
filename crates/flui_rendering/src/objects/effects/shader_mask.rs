@@ -1,11 +1,13 @@
 //! RenderShaderMask - Applies a shader as a mask
 //!
 //! This render object applies a shader (gradient, pattern, etc.) as a mask
-//! to its child_id, controlling which parts are visible.
+//! to its child, controlling which parts are visible.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::{painting::BlendMode, styling::Color32, Size};
 
 // ===== Data Structure =====
@@ -129,36 +131,24 @@ impl RenderShaderMask {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderShaderMask {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderShaderMask {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Layout child_id with same constraints
-        tree.layout_child(child_id, constraints)
+        // Layout child with same constraints
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // Capture child_id layer
+
         // Note: Full shader masking requires compositor support
-        // For now, we'll paint child_id normally
+        // For now, we'll paint child normally
         // In production, this would use a ShaderMaskLayer with egui's shader system
         // or a custom compositor
         //
         // TODO: Implement ShaderMaskLayer when compositor supports it
 
-        (tree.paint_child(child_id, offset)) as _
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

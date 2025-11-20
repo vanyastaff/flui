@@ -1,6 +1,7 @@
 //! RenderTable - Table layout with configurable column widths
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
@@ -217,7 +218,7 @@ impl RenderTable {
     }
 }
 
-impl Render for RenderTable {
+impl LegacyRender for RenderTable {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let children = ctx.children.multi();
@@ -305,8 +306,8 @@ impl Render for RenderTable {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable
     }
 }
 
@@ -401,6 +402,6 @@ mod tests {
     #[test]
     fn test_arity_is_multi_child() {
         let table = RenderTable::new(3);
-        assert_eq!(table.arity(), Arity::Variable);
+        assert_eq!(table.arity(), RuntimeArity::Variable);
     }
 }

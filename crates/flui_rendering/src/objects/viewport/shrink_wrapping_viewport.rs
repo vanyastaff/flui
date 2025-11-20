@@ -7,7 +7,8 @@
 //! and layout system.
 
 use flui_core::element::{ElementId, ElementTree};
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_types::prelude::*;
@@ -99,7 +100,7 @@ impl RenderShrinkWrappingViewport {
     }
 }
 
-impl Render for RenderShrinkWrappingViewport {
+impl LegacyRender for RenderShrinkWrappingViewport {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         // Placeholder: In real implementation, would:
         // 1. Layout sliver children to measure total extent
@@ -123,8 +124,8 @@ impl Render for RenderShrinkWrappingViewport {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multiple sliver children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple sliver children
     }
 }
 

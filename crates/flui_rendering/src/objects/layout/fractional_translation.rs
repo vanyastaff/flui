@@ -3,7 +3,8 @@
 //! Applies a translation transformation before painting, where the translation
 //! is specified as a fraction of the child's size rather than absolute pixels.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{Offset, Size};
 
@@ -121,7 +122,7 @@ impl RenderFractionalTranslation {
     }
 }
 
-impl Render for RenderFractionalTranslation {
+impl LegacyRender for RenderFractionalTranslation {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let child_id = ctx.children.single();
 
@@ -150,8 +151,8 @@ impl Render for RenderFractionalTranslation {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 
@@ -235,7 +236,7 @@ mod tests {
     #[test]
     fn test_arity() {
         let render = RenderFractionalTranslation::new(Offset::ZERO);
-        assert_eq!(render.arity(), Arity::Exact(1));
+        assert_eq!(render.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]

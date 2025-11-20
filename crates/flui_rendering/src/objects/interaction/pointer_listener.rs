@@ -3,9 +3,11 @@
 //! This RenderObject wraps a child and listens for pointer events,
 //! calling the appropriate callbacks when events occur.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
-
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::events::{PointerEvent, PointerEventHandler};
 use flui_types::Size;
 use std::sync::Arc;
@@ -169,13 +171,12 @@ impl RenderPointerListener {
     }
 }
 
-impl Render for RenderPointerListener {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderPointerListener {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
+
         // Layout child with same constraints
-        let size = tree.layout_child(child_id, constraints);
+        let size = ctx.layout_child(child_id, ctx.constraints);
 
         // Cache size for use in paint
         self.size = size;
@@ -183,10 +184,8 @@ impl Render for RenderPointerListener {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
 
         // Paint child
         // TODO: Integrate pointer event handling with Canvas architecture
@@ -196,14 +195,7 @@ impl Render for RenderPointerListener {
         // 1. Hit-test metadata attached to RenderObjects
         // 2. Event propagation through element tree
         // 3. Separate event handling layer above the Canvas system
-        tree.paint_child(child_id, offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

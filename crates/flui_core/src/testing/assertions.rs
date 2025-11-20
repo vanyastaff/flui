@@ -138,11 +138,7 @@ pub fn assert_element_size(tree: &ElementTree, id: ElementId, expected: Size) {
         .as_render()
         .unwrap_or_else(|| panic!("Element {:?} is not a RenderElement", id));
 
-    let actual = render
-        .render_state()
-        .read()
-        .size()
-        .unwrap_or_else(|| panic!("Element {:?} has not been laid out", id));
+    let actual = render.render_state().read().size();
 
     assert_eq!(
         actual, expected,
@@ -272,7 +268,7 @@ fn element_type_name(element: &Element) -> &'static str {
     match element {
         Element::Component(_) => "Component",
         Element::Render(_) => "Render",
-        Element::Sliver(_) => "Sliver",
+        // Element::Sliver(_) => "Sliver", // TODO: Re-enable after sliver migration
         Element::Provider(_) => "Provider",
     }
 }

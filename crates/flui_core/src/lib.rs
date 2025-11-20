@@ -192,26 +192,6 @@
 //! - ✅ Direct state access
 //! - ✅ Automatic rebuilds
 //!
-//! ## Type-Erased Views
-//!
-//! All views can be type-erased via the `AnyView` trait for heterogeneous storage:
-//!
-//! ```rust,ignore
-//! use flui_core::{Component, View, BuildContext};
-//!
-//! #[derive(Debug)]
-//! struct MyView;
-//!
-//! impl Component for MyView {
-//!     fn build(&self, context: &BuildContext) -> View {
-//!         Text::new("Test").into()
-//!     }
-//! }
-//!
-//! // AnyView enables heterogeneous view collections
-//! let view: Box<dyn AnyView> = Box::new(MyView);
-//! ```
-//!
 //! ## No Forced Clone
 //!
 //! Views don't require Clone, enabling use of closures and non-Clone types:
@@ -318,13 +298,13 @@ pub use element::{
 pub use view::BuildContext;
 
 // Re-export simplified API (View, IntoElement, tuple syntax)
-pub use view::{AnyElement, AnyView, IntoElement, RenderExt, View};
+pub use view::{IntoElement, View};
 
 // Re-export pipeline types
 pub use pipeline::{PipelineBuilder, PipelineOwner};
 
 // Re-export render types
-pub use render::{Arity, Children, Render, RenderState};
+pub use render::{Arity, RenderBox, RenderState};
 
 /// Prelude module for convenient imports
 ///

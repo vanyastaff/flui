@@ -1,6 +1,7 @@
 //! RenderColoredBox - simple solid color box
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_types::{Color, Rect, Size};
 
 /// RenderObject that paints a solid color background
@@ -49,59 +50,23 @@ impl Default for RenderColoredBox {
     }
 }
 
-impl Render for RenderColoredBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+impl RenderBox<Leaf> for RenderColoredBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        // SingleArity always has exactly one child
-        // Pass through constraints
-        let size = tree.layout_child(child_id, constraints);
-        // Cache size for paint
+        // Leaf renders have no children - fill available space
+        let size = Size::new(constraints.max_width, constraints.max_height);
         self.size = size;
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> flui_painting::Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "RenderColoredBox::paint: color={:?}, size={:?}, offset={:?}",
-            self.color,
-            self.size,
-            offset
-        );
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        // Draw solid color rectangle
+        let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
+        let mut paint = flui_painting::Paint::default();
+        paint.color = self.color;
+        paint.style = flui_painting::PaintStyle::Fill;
 
-        // Create canvas for drawing
-        let mut canvas = flui_painting::Canvas::new();
-
-        // Apply offset directly to background rect
-        let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("RenderColoredBox::paint: drawing rect={:?}", rect);
-
-        // Create paint for the color
-        let paint = flui_painting::Paint::fill(self.color);
-
-        // Draw the background rectangle
-        canvas.draw_rect(rect, &paint);
-
-        // SingleArity always has exactly one child
-        // Paint child at the same offset and append to our canvas
-        let child_canvas = tree.paint_child(child_id, offset);
-        canvas.append_canvas(child_canvas);
-
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.canvas().draw_rect(rect, &paint);
     }
 }
 

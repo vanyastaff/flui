@@ -3,7 +3,8 @@
 //! This render object provides simple box-based scrolling for a single child.
 //! Used by SingleChildScrollView for straightforward scroll scenarios without slivers.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::layout::Axis;
@@ -181,7 +182,7 @@ impl Default for RenderScrollView {
     }
 }
 
-impl Render for RenderScrollView {
+impl LegacyRender for RenderScrollView {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let viewport_constraints = &ctx.constraints;
 
@@ -245,8 +246,8 @@ impl Render for RenderScrollView {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child
     }
 }
 
@@ -466,6 +467,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let scroll_view = RenderScrollView::new(Axis::Vertical, false);
-        assert_eq!(scroll_view.arity(), Arity::Exact(1));
+        assert_eq!(scroll_view.arity(), RuntimeArity::Exact(1));
     }
 }

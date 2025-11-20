@@ -1,7 +1,10 @@
-//! RenderPositionedBox - positions child_id with explicit coordinates
+//! RenderPositionedBox - positions child with explicit coordinates
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::{Offset, Size};
 
 /// RenderObject that positions child_id with explicit coordinates
@@ -84,12 +87,12 @@ impl Default for RenderPositionedBox {
     }
 }
 
-impl Render for RenderPositionedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderPositionedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
-        // Calculate child_id constraints based on positioning
+
+        // Calculate child constraints based on positioning
         let child_constraints = if let (Some(left), Some(right)) = (self.left, self.right) {
             // Width determined by left and right
             let width = (constraints.max_width - left - right).max(0.0);
@@ -114,28 +117,19 @@ impl Render for RenderPositionedBox {
             child_constraints
         };
 
-        // Layout child_id (SingleArity always has a child_id)
-        tree.layout_child(child_id, child_constraints)
+        // Layout child (Single arity always has a child)
+        ctx.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
 
         // Calculate paint offset based on positioning
         let position_offset = Offset::new(self.left.unwrap_or(0.0), self.top.unwrap_or(0.0));
-        let child_offset = offset + position_offset;
+        let child_offset = ctx.offset + position_offset;
 
         // Paint child at positioned offset
-        tree.paint_child(child_id, child_offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, child_offset);
     }
 }
 

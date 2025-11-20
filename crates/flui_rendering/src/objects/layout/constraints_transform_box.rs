@@ -8,7 +8,8 @@
 //!
 //! The parent tries to match the child's size but respects its own constraints.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{Alignment, BoxConstraints, Offset, Size};
 use std::fmt::Debug;
@@ -154,7 +155,7 @@ impl RenderConstraintsTransformBox {
     }
 }
 
-impl Render for RenderConstraintsTransformBox {
+impl LegacyRender for RenderConstraintsTransformBox {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let child_id = ctx.children.single();
 
@@ -192,8 +193,8 @@ impl Render for RenderConstraintsTransformBox {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 
@@ -277,6 +278,6 @@ mod tests {
     #[test]
     fn test_arity() {
         let transform_box = RenderConstraintsTransformBox::loosen();
-        assert_eq!(transform_box.arity(), Arity::Exact(1));
+        assert_eq!(transform_box.arity(), RuntimeArity::Exact(1));
     }
 }

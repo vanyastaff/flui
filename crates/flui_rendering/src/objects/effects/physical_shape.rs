@@ -1,6 +1,7 @@
 //! RenderPhysicalShape - Custom shape with Material Design elevation
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
     painting::Path,
@@ -14,6 +15,10 @@ pub type ShapeClipper = Box<dyn Fn(Size) -> Path + Send + Sync>;
 ///
 /// Unlike RenderPhysicalModel which supports only Rectangle/RoundedRectangle/Circle,
 /// RenderPhysicalShape accepts any custom Path via a clipper function.
+///
+/// # Without Child
+///
+/// When no child is present, still renders the custom shape with shadow (decorative).
 ///
 /// # Example
 ///
@@ -97,14 +102,17 @@ impl std::fmt::Debug for RenderPhysicalShape {
     }
 }
 
-impl Render for RenderPhysicalShape {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+impl RenderBox<Optional> for RenderPhysicalShape {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
-        // Layout child with full constraints
-        let size = tree.layout_child(child_id, constraints);
+        let size = if let Some(child_id) = ctx.children.get() {
+            // Layout child with full constraints
+            ctx.layout_child(child_id, constraints)
+        } else {
+            // No child - use max constraints for shape size
+            Size::new(constraints.max_width, constraints.max_height)
+        };
 
         // Store size for paint
         self.size = size;
@@ -112,48 +120,35 @@ impl Render for RenderPhysicalShape {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
         let offset = ctx.offset;
-
-        let mut canvas = Canvas::new();
 
         // Get the custom shape path in local coordinates
         let local_path = self.get_shape_path();
 
         // Transform the path to world coordinates by applying offset translation
         // Since Path doesn't have a transform method, we use Canvas transforms instead
-        canvas.save();
-        canvas.translate(offset.dx, offset.dy);
+        ctx.canvas().save();
+        ctx.canvas().translate(offset.dx, offset.dy);
 
         // Draw shadow if elevation > 0
         if self.elevation > 0.0 {
-            canvas.draw_shadow(&local_path, self.shadow_color, self.elevation);
+            ctx.canvas().draw_shadow(&local_path, self.shadow_color, self.elevation);
         }
 
         // Fill the shape with color
         let paint = Paint::fill(self.color);
-        canvas.draw_path(&local_path, &paint);
+        ctx.canvas().draw_path(&local_path, &paint);
 
         // Clip to shape for child
-        canvas.clip_path(&local_path);
+        ctx.canvas().clip_path(&local_path);
 
-        canvas.restore();
+        ctx.canvas().restore();
 
-        // Paint child on top
-        let child_canvas = tree.paint_child(child_id, offset);
-        canvas.append_canvas(child_canvas);
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        // Paint child on top if present
+        if let Some(child_id) = ctx.children.get() {
+            ctx.paint_child(child_id, offset);
+        }
     }
 }
 
@@ -265,13 +260,5 @@ mod tests {
         assert!(bounds.width() > 0.0);
         assert_eq!(bounds.left(), 0.0);
         assert_eq!(bounds.top(), 0.0);
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let clipper = create_rect_clipper();
-        let shape = RenderPhysicalShape::new(clipper, 4.0, Color::WHITE);
-
-        assert_eq!(shape.arity(), Arity::Exact(1));
     }
 }

@@ -1,6 +1,7 @@
 //! RenderOverflowBox - allows child_id to overflow constraints
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Alignment, Offset, Size};
@@ -99,7 +100,7 @@ impl Default for RenderOverflowBox {
     }
 }
 
-impl Render for RenderOverflowBox {
+impl LegacyRender for RenderOverflowBox {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -153,8 +154,8 @@ impl Render for RenderOverflowBox {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 

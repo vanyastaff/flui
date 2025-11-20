@@ -1,6 +1,6 @@
 //! CustomPaint widget for drawing custom graphics
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, Render};
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_painting::Canvas;
@@ -69,7 +69,7 @@ impl Debug for CustomPaint {
 }
 
 impl View for CustomPaint {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (
             RenderCustomPaint {
                 painter: self.painter,
@@ -121,8 +121,8 @@ impl Render for RenderCustomPaint {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(0)
     }
 }
 

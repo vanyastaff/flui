@@ -380,7 +380,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }
@@ -575,7 +575,7 @@ mod tests {
 
 // Implement View for Align - Simplified API
 impl View for Align {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (
             RenderAlign::with_factors(self.alignment, self.width_factor, self.height_factor),
             self.child,

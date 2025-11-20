@@ -1,8 +1,10 @@
 //! RenderOffstage - hides widget from display
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
-
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 
 /// RenderObject that hides its child from display
@@ -45,13 +47,11 @@ impl Default for RenderOffstage {
     }
 }
 
-impl Render for RenderOffstage {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderOffstage {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // SingleArity always has exactly one child - layout it to maintain state
-        let child_size = tree.layout_child(child_id, constraints);
+        // Single arity always has exactly one child - layout it to maintain state
+        let child_size = ctx.layout_child(child_id, ctx.constraints);
 
         // Report size as zero if offstage, otherwise use child size
         if self.offstage {
@@ -59,28 +59,17 @@ impl Render for RenderOffstage {
         } else if child_size != Size::ZERO {
             child_size
         } else {
-            constraints.smallest()
+            ctx.constraints.smallest()
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
-        let offset = ctx.offset;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // Don't paint if offstage
         if !self.offstage {
-            tree.paint_child(child_id, offset)
-        } else {
-            // Return empty canvas when offstage
-            Canvas::new()
+            let child_id = ctx.children.single();
+            ctx.paint_child(child_id, ctx.offset);
         }
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        // When offstage, don't paint anything (empty)
     }
 }
 

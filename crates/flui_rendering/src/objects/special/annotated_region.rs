@@ -3,8 +3,11 @@
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 
 /// RenderAnnotatedRegion - Annotates a region with a value
@@ -69,30 +72,20 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 
 // ===== RenderObject Implementation =====
 
-impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> Render for RenderAnnotatedRegion<T> {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderBox<Single>
+    for RenderAnnotatedRegion<T>
+{
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Layout child_id with same constraints (pass-through)
-        tree.layout_child(child_id, constraints)
+        // Layout child with same constraints (pass-through)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // This is a pass-through - just paint child_id
+        // This is a pass-through - just paint child
         // The annotation value is used by ancestors, not painted
-        tree.paint_child(child_id, offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

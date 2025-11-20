@@ -212,7 +212,7 @@ impl<S: State> BackdropFilterBuilder<S> {
 
 // Implement View trait
 impl View for BackdropFilter {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Create RenderBackdropFilter with custom properties
         let mut render = RenderBackdropFilter::new(self.filter.clone());
         render.blend_mode = self.blend_mode;

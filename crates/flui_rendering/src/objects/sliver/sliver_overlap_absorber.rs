@@ -1,6 +1,6 @@
 //! RenderSliverOverlapAbsorber - Absorbs overlap for nested scroll views
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 use std::sync::{Arc, Mutex};
@@ -148,7 +148,7 @@ impl Default for RenderSliverOverlapAbsorber {
     }
 }
 
-impl RenderSliver for RenderSliverOverlapAbsorber {
+impl LegacySliverRender for RenderSliverOverlapAbsorber {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         // If no child, return zero geometry and clear handle
         let Some(child_id) = ctx.children.try_single() else {
@@ -178,8 +178,8 @@ impl RenderSliver for RenderSliverOverlapAbsorber {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child sliver
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -335,6 +335,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let absorber = RenderSliverOverlapAbsorber::default();
-        assert_eq!(absorber.arity(), Arity::Exact(1));
+        assert_eq!(absorber.arity(), RuntimeArity::Exact(1));
     }
 }

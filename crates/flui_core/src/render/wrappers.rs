@@ -1,38 +1,33 @@
-//! Safe wrappers for type-erased render objects
+//! Wrappers that bridge typed render traits to type-erased `RenderObject`.
 //!
-//! This module provides zero-overhead wrappers that bridge between typed render objects
-//! (Render<A>, SliverRender<A>) and type-erased trait objects (DynRenderObject).
+//! These wrappers enable storing render objects with different arities and
+//! protocols in a uniform `Box<dyn RenderObject>` while preserving type safety
+//! at the boundary.
 //!
 //! # Architecture
 //!
 //! ```text
-//! User Code                Type-Safe Layer              Type-Erased Layer
-//! ─────────────────────────────────────────────────────────────────────────
-//! impl Render<Single>  →  BoxRenderObjectWrapper<>  →  Box<dyn DynRenderObject>
-//! impl SliverRender<>  →  SliverRenderObjectWrapper  →  Box<dyn DynRenderObject>
+//! RenderBox<A> → BoxRenderWrapper<A, R> → Box<dyn RenderObject>
+//! SliverRender<A> → SliverRenderWrapper<A, R> → Box<dyn RenderObject>
 //! ```
 //!
-//! # Key Design Decisions
+//! # Implementation
 //!
-//! 1. **No unsafe code**: All wrappers use safe Rust abstractions
-//! 2. **Debug assertions only**: Arity validation is zero-cost in release builds
-//! 3. **Single source of truth**: Protocol and arity stored in RenderElement, not wrappers
-//! 4. **Zero overhead**: Wrappers inline away completely in release builds
-//!
-//! # Safety Guarantees
-//!
-//! - **Compile time**: Type system ensures Render<A> matches arity A
-//! - **Debug time**: debug_assert! validates runtime arity matches compile-time arity
-//! - **Release time**: No overhead, direct delegation to inner render object
+//! The wrappers:
+//! 1. Convert type-erased `Constraints` to typed constraints
+//! 2. Convert `&[ElementId]` to typed children accessor
+//! 3. Create the appropriate context
+//! 4. Call the typed render method
+//! 5. Convert result back to type-erased `Geometry`
 
-use super::arity::Arity;
-use super::protocol::{
-    BoxHitTestContext, BoxLayoutContext, BoxPaintContext, SliverHitTestContext,
-    SliverLayoutContext, SliverPaintContext,
-};
-use super::traits::{Render, SliverRender};
-use super::type_erasure::{DynConstraints, DynGeometry, DynHitTestResult, DynRenderObject};
 use crate::element::{ElementId, ElementTree};
+use crate::render::arity::Arity;
+use crate::render::contexts::{HitTestContext, LayoutContext, PaintContext};
+use crate::render::render_box::RenderBox;
+use crate::render::render_object::{
+    Constraints as DynConstraints, Geometry as DynGeometry, RenderObject,
+};
+use crate::render::render_silver::SliverRender;
 use flui_types::Offset;
 use std::any::Any;
 use std::fmt::Debug;
@@ -41,51 +36,42 @@ use std::fmt::Debug;
 // Box Protocol Wrapper
 // ============================================================================
 
-/// Safe wrapper for Box protocol render objects
+/// Wrapper that adapts `RenderBox<A>` to `RenderObject`.
 ///
-/// This wrapper converts a typed `Render<A>` into a type-erased `DynRenderObject`.
-/// It validates arity in debug builds and delegates to the inner render object.
+/// Stores a typed render object and implements `RenderObject` by converting
+/// between type-erased and typed representations.
 ///
 /// # Type Parameters
 ///
-/// - `A`: Arity type (Leaf, Single, Variable, etc.)
-/// - `R`: Concrete render object type implementing Render<A>
-///
-/// # Performance
-///
-/// In release builds, this wrapper compiles to direct function calls with no overhead.
-/// Debug assertions are completely removed by the optimizer.
-pub struct BoxRenderObjectWrapper<A, R>
+/// - `A`: Arity (child count)
+/// - `R`: The concrete render type implementing `RenderBox<A>`
+pub struct BoxRenderWrapper<A, R>
 where
     A: Arity,
-    R: Render<A>,
+    R: RenderBox<A>,
 {
     inner: R,
     _phantom: std::marker::PhantomData<A>,
 }
 
-impl<A, R> Debug for BoxRenderObjectWrapper<A, R>
+impl<A, R> Debug for BoxRenderWrapper<A, R>
 where
     A: Arity,
-    R: Render<A>,
+    R: RenderBox<A>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BoxRenderObjectWrapper")
+        f.debug_struct("BoxRenderWrapper")
             .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<A, R> BoxRenderObjectWrapper<A, R>
+impl<A, R> BoxRenderWrapper<A, R>
 where
     A: Arity,
-    R: Render<A>,
+    R: RenderBox<A>,
 {
-    /// Create a new wrapper around a render object
-    ///
-    /// # Arguments
-    ///
-    /// * `inner` - The concrete render object implementing Render<A>
+    /// Creates a new wrapper around the given render object.
     #[inline]
     pub fn new(inner: R) -> Self {
         Self {
@@ -94,147 +80,108 @@ where
         }
     }
 
-    /// Get a reference to the inner render object
+    /// Returns a reference to the inner render object.
     #[inline]
     pub fn inner(&self) -> &R {
         &self.inner
     }
 
-    /// Get a mutable reference to the inner render object
+    /// Returns a mutable reference to the inner render object.
     #[inline]
     pub fn inner_mut(&mut self) -> &mut R {
         &mut self.inner
     }
 
-    /// Consume the wrapper and return the inner render object
+    /// Consumes the wrapper and returns the inner render object.
     #[inline]
     pub fn into_inner(self) -> R {
         self.inner
     }
 }
 
-impl<A, R> DynRenderObject for BoxRenderObjectWrapper<A, R>
+impl<A, R> RenderObject for BoxRenderWrapper<A, R>
 where
     A: Arity,
-    R: Render<A>,
+    R: RenderBox<A>,
 {
-    fn dyn_layout(
+    fn layout(
         &mut self,
         tree: &ElementTree,
         children: &[ElementId],
         constraints: &DynConstraints,
     ) -> DynGeometry {
-        // Validate arity in debug builds (zero cost in release)
         debug_assert!(
             A::validate_count(children.len()),
-            "Arity violation in {}: expected {:?}, got {} children",
-            std::any::type_name::<R>(),
+            "Arity violation: expected {:?}, got {}",
             A::runtime_arity(),
             children.len()
         );
 
-        // Extract BoxConstraints (panics if wrong protocol)
         let box_constraints = constraints.as_box();
 
-        // SAFETY: ElementId is repr(transparent) over NonZeroUsize
-        // so &[ElementId] has same layout as &[NonZeroUsize]
+        // Convert &[ElementId] to typed children
         let children_slice: &[std::num::NonZeroUsize] = unsafe {
             std::slice::from_raw_parts(
                 children.as_ptr() as *const std::num::NonZeroUsize,
                 children.len(),
             )
         };
-
-        // Create typed children accessor
         let typed_children = A::from_slice(children_slice);
 
-        // Create context with tree reference for layout_child() helper
-        let ctx = BoxLayoutContext::new(tree, *box_constraints, typed_children);
+        let ctx = LayoutContext::new(tree, *box_constraints, typed_children);
+        let size = self.inner.layout(ctx);
 
-        // Delegate to typed render object
-        let size = self.inner.layout(&ctx);
-
-        // Wrap result in type-erased enum
         DynGeometry::Box(size)
     }
 
-    fn dyn_paint(
+    fn paint(
         &self,
         tree: &ElementTree,
         children: &[ElementId],
         offset: Offset,
     ) -> flui_painting::Canvas {
-        // Validate arity in debug builds
-        debug_assert!(
-            A::validate_count(children.len()),
-            "Arity violation in {}: expected {:?}, got {} children",
-            std::any::type_name::<R>(),
-            A::runtime_arity(),
-            children.len()
-        );
+        debug_assert!(A::validate_count(children.len()));
 
-        // SAFETY: ElementId is repr(transparent) over NonZeroUsize
         let children_slice: &[std::num::NonZeroUsize] = unsafe {
             std::slice::from_raw_parts(
                 children.as_ptr() as *const std::num::NonZeroUsize,
                 children.len(),
             )
         };
-
-        // Create typed children accessor
         let typed_children = A::from_slice(children_slice);
 
-        // Create context with tree reference for paint_child() helper
-        let mut ctx = BoxPaintContext::new(tree, offset, typed_children);
-
-        // Delegate to typed render object (paints into ctx.canvas())
+        let mut ctx = PaintContext::new(tree, offset, typed_children);
         self.inner.paint(&mut ctx);
 
-        // Take ownership of the canvas and return it
         ctx.take_canvas()
     }
 
-    fn dyn_hit_test(
+    fn hit_test(
         &self,
         tree: &ElementTree,
         children: &[ElementId],
         position: Offset,
-    ) -> DynHitTestResult {
-        // Validate arity in debug builds
-        debug_assert!(
-            A::validate_count(children.len()),
-            "Arity violation in {}: expected {:?}, got {} children",
-            std::any::type_name::<R>(),
-            A::runtime_arity(),
-            children.len()
-        );
+        geometry: &DynGeometry,
+    ) -> bool {
+        debug_assert!(A::validate_count(children.len()));
 
-        // SAFETY: ElementId is repr(transparent) over NonZeroUsize
         let children_slice: &[std::num::NonZeroUsize] = unsafe {
             std::slice::from_raw_parts(
                 children.as_ptr() as *const std::num::NonZeroUsize,
                 children.len(),
             )
         };
-
-        // Create typed children accessor
         let typed_children = A::from_slice(children_slice);
 
-        // TODO Phase 6: Get element_id and size from RenderElement
-        // For now, use placeholder values
+        let size = geometry.as_box();
+
+        // TODO: get element_id from caller
         let element_id = ElementId::new(1);
-        let size = flui_types::Size::new(0.0, 0.0);
 
-        // Create context (using position from parameter)
-        let ctx = BoxHitTestContext::new(tree, position, size, element_id, typed_children);
-
-        // Create result accumulator
+        let ctx = HitTestContext::new(tree, position, size, element_id, typed_children);
         let mut result = crate::element::hit_test::BoxHitTestResult::new();
 
-        // Delegate to typed render object
-        let hit = self.inner.hit_test(&ctx, &mut result);
-
-        DynHitTestResult::Box(hit)
+        self.inner.hit_test(ctx, &mut result)
     }
 
     fn debug_name(&self) -> &'static str {
@@ -254,21 +201,15 @@ where
 // Sliver Protocol Wrapper
 // ============================================================================
 
-/// Safe wrapper for Sliver protocol render objects
+/// Wrapper that adapts `SliverRender<A>` to `RenderObject`.
 ///
-/// This wrapper converts a typed `SliverRender<A>` into a type-erased `DynRenderObject`.
-/// It validates arity in debug builds and delegates to the inner render object.
+/// Similar to `BoxRenderWrapper` but for sliver protocol render objects.
 ///
 /// # Type Parameters
 ///
-/// - `A`: Arity type (Leaf, Single, Variable, etc.)
-/// - `R`: Concrete render object type implementing SliverRender<A>
-///
-/// # Performance
-///
-/// In release builds, this wrapper compiles to direct function calls with no overhead.
-/// Debug assertions are completely removed by the optimizer.
-pub struct SliverRenderObjectWrapper<A, R>
+/// - `A`: Arity (child count)
+/// - `R`: The concrete render type implementing `SliverRender<A>`
+pub struct SliverRenderWrapper<A, R>
 where
     A: Arity,
     R: SliverRender<A>,
@@ -277,28 +218,24 @@ where
     _phantom: std::marker::PhantomData<A>,
 }
 
-impl<A, R> Debug for SliverRenderObjectWrapper<A, R>
+impl<A, R> Debug for SliverRenderWrapper<A, R>
 where
     A: Arity,
     R: SliverRender<A>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SliverRenderObjectWrapper")
+        f.debug_struct("SliverRenderWrapper")
             .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<A, R> SliverRenderObjectWrapper<A, R>
+impl<A, R> SliverRenderWrapper<A, R>
 where
     A: Arity,
     R: SliverRender<A>,
 {
-    /// Create a new wrapper around a sliver render object
-    ///
-    /// # Arguments
-    ///
-    /// * `inner` - The concrete render object implementing SliverRender<A>
+    /// Creates a new wrapper around the given sliver render object.
     #[inline]
     pub fn new(inner: R) -> Self {
         Self {
@@ -307,156 +244,102 @@ where
         }
     }
 
-    /// Get a reference to the inner render object
+    /// Returns a reference to the inner sliver render object.
     #[inline]
     pub fn inner(&self) -> &R {
         &self.inner
     }
 
-    /// Get a mutable reference to the inner render object
+    /// Returns a mutable reference to the inner sliver render object.
     #[inline]
     pub fn inner_mut(&mut self) -> &mut R {
         &mut self.inner
     }
 
-    /// Consume the wrapper and return the inner render object
+    /// Consumes the wrapper and returns the inner sliver render object.
     #[inline]
     pub fn into_inner(self) -> R {
         self.inner
     }
 }
 
-impl<A, R> DynRenderObject for SliverRenderObjectWrapper<A, R>
+impl<A, R> RenderObject for SliverRenderWrapper<A, R>
 where
     A: Arity,
     R: SliverRender<A>,
 {
-    fn dyn_layout(
+    fn layout(
         &mut self,
-        _tree: &ElementTree,
+        tree: &ElementTree,
         children: &[ElementId],
         constraints: &DynConstraints,
     ) -> DynGeometry {
-        // Validate arity in debug builds (zero cost in release)
-        debug_assert!(
-            A::validate_count(children.len()),
-            "Arity violation in {}: expected {:?}, got {} children",
-            std::any::type_name::<R>(),
-            A::runtime_arity(),
-            children.len()
-        );
+        debug_assert!(A::validate_count(children.len()));
 
-        // Extract SliverConstraints (panics if wrong protocol)
         let sliver_constraints = constraints.as_sliver();
 
-        // SAFETY: ElementId is repr(transparent) over NonZeroUsize
         let children_slice: &[std::num::NonZeroUsize] = unsafe {
             std::slice::from_raw_parts(
                 children.as_ptr() as *const std::num::NonZeroUsize,
                 children.len(),
             )
         };
-
-        // Create typed children accessor
         let typed_children = A::from_slice(children_slice);
 
-        // Create context (NOTE: helper methods will be added in Phase 6)
-        let ctx = SliverLayoutContext::new(*sliver_constraints, typed_children);
+        let ctx = LayoutContext::new(tree, *sliver_constraints, typed_children);
+        let geometry = self.inner.layout(ctx);
 
-        // Delegate to typed render object
-        let geometry = self.inner.layout(&ctx);
-
-        // Wrap result in type-erased enum
         DynGeometry::Sliver(geometry)
     }
 
-    fn dyn_paint(
+    fn paint(
         &self,
-        _tree: &ElementTree,
+        tree: &ElementTree,
         children: &[ElementId],
         offset: Offset,
     ) -> flui_painting::Canvas {
-        // Validate arity in debug builds
-        debug_assert!(
-            A::validate_count(children.len()),
-            "Arity violation in {}: expected {:?}, got {} children",
-            std::any::type_name::<R>(),
-            A::runtime_arity(),
-            children.len()
-        );
+        debug_assert!(A::validate_count(children.len()));
 
-        // SAFETY: ElementId is repr(transparent) over NonZeroUsize
         let children_slice: &[std::num::NonZeroUsize] = unsafe {
             std::slice::from_raw_parts(
                 children.as_ptr() as *const std::num::NonZeroUsize,
                 children.len(),
             )
         };
-
-        // Create typed children accessor
         let typed_children = A::from_slice(children_slice);
 
-        // Create context (NOTE: helper methods will be added in Phase 6)
-        let mut ctx = SliverPaintContext::new(offset, typed_children);
-
-        // Delegate to typed render object (paints into ctx.canvas())
+        let mut ctx = PaintContext::new(tree, offset, typed_children);
         self.inner.paint(&mut ctx);
 
-        // Take ownership of the canvas and return it
         ctx.take_canvas()
     }
 
-    fn dyn_hit_test(
+    fn hit_test(
         &self,
         tree: &ElementTree,
         children: &[ElementId],
         position: Offset,
-    ) -> DynHitTestResult {
-        // Validate arity in debug builds
-        debug_assert!(
-            A::validate_count(children.len()),
-            "Arity violation in {}: expected {:?}, got {} children",
-            std::any::type_name::<R>(),
-            A::runtime_arity(),
-            children.len()
-        );
+        geometry: &DynGeometry,
+    ) -> bool {
+        debug_assert!(A::validate_count(children.len()));
 
-        // SAFETY: ElementId is repr(transparent) over NonZeroUsize
         let children_slice: &[std::num::NonZeroUsize] = unsafe {
             std::slice::from_raw_parts(
                 children.as_ptr() as *const std::num::NonZeroUsize,
                 children.len(),
             )
         };
-
-        // Create typed children accessor
         let typed_children = A::from_slice(children_slice);
 
-        // TODO Phase 6: Get proper element_id, geometry, and coordinates
+        let sliver_geometry = *geometry.as_sliver();
+
+        // TODO: get element_id from caller
         let element_id = ElementId::new(1);
-        let geometry = super::protocol::SliverGeometry::default();
-        let main_axis_position = 0.0;
-        let cross_axis_position = 0.0;
-        let scroll_offset = 0.0;
 
-        // Create context
-        let ctx = SliverHitTestContext::new(
-            tree,
-            main_axis_position,
-            cross_axis_position,
-            geometry,
-            scroll_offset,
-            element_id,
-            typed_children,
-        );
-
-        // Create result accumulator
+        let ctx = HitTestContext::new(tree, position, sliver_geometry, element_id, typed_children);
         let mut result = crate::element::hit_test::SliverHitTestResult::new();
 
-        // Delegate to typed render object
-        let hit = self.inner.hit_test(&ctx, &mut result);
-
-        DynHitTestResult::Sliver(hit)
+        self.inner.hit_test(ctx, &mut result)
     }
 
     fn debug_name(&self) -> &'static str {
@@ -475,67 +358,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::arity::Leaf;
-    use crate::render::protocol;
+    use crate::render::{BoxProtocol, Leaf};
     use flui_types::Size;
 
-    // Mock render object for testing
     #[derive(Debug)]
-    struct MockLeafRender {
+    struct MockRender {
         size: Size,
     }
 
-    impl Render<Leaf> for MockLeafRender {
-        fn layout(&mut self, _ctx: &BoxLayoutContext<Leaf>) -> protocol::BoxGeometry {
-            protocol::BoxGeometry { size: self.size }
+    impl RenderBox<Leaf> for MockRender {
+        fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+            ctx.constraints.constrain(self.size)
         }
 
-        fn paint(&self, _ctx: &BoxPaintContext<Leaf>) {
-            // No-op for mock
-        }
-
-        fn hit_test(
-            &self,
-            _ctx: &BoxHitTestContext<Leaf>,
-            _result: &mut crate::element::hit_test::BoxHitTestResult,
-        ) -> bool {
-            true
-        }
+        fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
     }
 
     #[test]
-    fn test_box_wrapper_creation() {
-        let render = MockLeafRender {
+    fn test_box_wrapper() {
+        let render = MockRender {
             size: Size::new(100.0, 100.0),
         };
-        let wrapper = BoxRenderObjectWrapper::<Leaf, _>::new(render);
-
+        let wrapper = BoxRenderWrapper::<Leaf, _>::new(render);
         assert_eq!(wrapper.inner().size.width, 100.0);
-        assert_eq!(
-            wrapper.debug_name(),
-            "flui_core::render::wrappers::tests::MockLeafRender"
-        );
     }
-
-    #[test]
-    fn test_box_wrapper_inner_access() {
-        let render = MockLeafRender {
-            size: Size::new(100.0, 100.0),
-        };
-        let mut wrapper = BoxRenderObjectWrapper::<Leaf, _>::new(render);
-
-        // Test immutable access
-        assert_eq!(wrapper.inner().size.width, 100.0);
-
-        // Test mutable access
-        wrapper.inner_mut().size = Size::new(200.0, 200.0);
-        assert_eq!(wrapper.inner().size.width, 200.0);
-
-        // Test into_inner
-        let render = wrapper.into_inner();
-        assert_eq!(render.size.width, 200.0);
-    }
-
-    // Note: Full integration tests for dyn_layout/dyn_paint/dyn_hit_test
-    // will be added in Phase 6 when ElementTree integration is complete
 }

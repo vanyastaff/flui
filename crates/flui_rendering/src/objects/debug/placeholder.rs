@@ -1,6 +1,7 @@
 //! RenderPlaceholder - Debug placeholder visualization
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
@@ -45,7 +46,7 @@ impl RenderPlaceholder {
             fallback_width: fallback_size.width,
             fallback_height: fallback_size.height,
             stroke_color: Color::rgba(100, 100, 100, 255), // Gray
-            fill_color: Color::rgba(200, 200, 200, 128), // Light gray, semi-transparent
+            fill_color: Color::rgba(200, 200, 200, 128),   // Light gray, semi-transparent
             stroke_width: 2.0,
             label: None,
             size: Size::ZERO,
@@ -114,19 +115,19 @@ impl Default for RenderPlaceholder {
     }
 }
 
-impl Render for RenderPlaceholder {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Leaf> for RenderPlaceholder {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Use fallback size if unconstrained, otherwise use constraints
-        let width = if constraints.has_bounded_width() {
-            constraints.constrain_width(self.fallback_width)
+        let width = if constraints.max_width.is_finite() {
+            self.fallback_width.min(constraints.max_width)
         } else {
             self.fallback_width
         };
 
-        let height = if constraints.has_bounded_height() {
-            constraints.constrain_height(self.fallback_height)
+        let height = if constraints.max_height.is_finite() {
+            self.fallback_height.min(constraints.max_height)
         } else {
             self.fallback_height
         };
@@ -136,8 +137,8 @@ impl Render for RenderPlaceholder {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let offset = ctx.offset;
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
+        let offset = _ctx.offset;
         let mut canvas = Canvas::new();
 
         let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
@@ -169,16 +170,6 @@ impl Render for RenderPlaceholder {
 
             canvas.draw_text(label, text_offset, &text_style, &text_paint);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)
     }
 }
 
@@ -287,6 +278,6 @@ mod tests {
     fn test_arity_is_leaf() {
         let placeholder = RenderPlaceholder::default();
 
-        assert_eq!(placeholder.arity(), Arity::Exact(0));
+        assert_eq!(placeholder.arity(), RuntimeArity::Exact(0));
     }
 }

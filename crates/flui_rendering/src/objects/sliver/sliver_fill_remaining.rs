@@ -1,6 +1,6 @@
 //! RenderSliverFillRemaining - Fills remaining viewport space
 
-use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
+use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -144,7 +144,7 @@ impl Default for RenderSliverFillRemaining {
     }
 }
 
-impl RenderSliver for RenderSliverFillRemaining {
+impl LegacySliverRender for RenderSliverFillRemaining {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -182,8 +182,8 @@ impl RenderSliver for RenderSliverFillRemaining {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child
     }
 }
 
@@ -383,6 +383,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let fill = RenderSliverFillRemaining::new();
-        assert_eq!(fill.arity(), Arity::Exact(1));
+        assert_eq!(fill.arity(), RuntimeArity::Exact(1));
     }
 }

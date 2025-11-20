@@ -1,9 +1,11 @@
 //! RenderIgnorePointer - makes widget ignore pointer events
 
 use flui_core::element::hit_test::BoxHitTestResult;
-use flui_core::render::{Arity, BoxHitTestContext, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 
 /// RenderObject that makes its subtree ignore pointer events
@@ -50,40 +52,28 @@ impl Default for RenderIgnorePointer {
     }
 }
 
-impl Render for RenderIgnorePointer {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderIgnorePointer {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
         // Layout child with same constraints
-        tree.layout_child(child_id, constraints)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
         // Paint child normally - ignoring only affects hit testing
-        tree.paint_child(child_id, offset)
+        ctx.paint_child(child_id, ctx.offset);
     }
 
-    fn hit_test(&self, ctx: &BoxHitTestContext, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
         if self.ignoring {
             // Ignore pointer events - return false to let events pass through
             // This makes this widget and its children transparent to pointer events
-            false  // Events pass through to widgets behind
+            false // Events pass through to widgets behind
         } else {
             // Not ignoring - use default behavior (test children)
-            self.hit_test_children(ctx, result)
+            self.hit_test_children(&ctx, result)
         }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
     }
 }
 

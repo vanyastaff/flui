@@ -1,6 +1,7 @@
 //! RenderTexture - GPU texture rendering
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::Canvas;
 use flui_types::styling::BoxFit;
 use flui_types::{Rect, Size};
@@ -143,7 +144,10 @@ impl RenderTexture {
                     (available_size.width, available_size.width / texture_aspect)
                 } else {
                     // Height-constrained
-                    (available_size.height * texture_aspect, available_size.height)
+                    (
+                        available_size.height * texture_aspect,
+                        available_size.height,
+                    )
                 };
 
                 // Center in available space
@@ -159,7 +163,10 @@ impl RenderTexture {
 
                 let (width, height) = if texture_aspect > available_aspect {
                     // Height-constrained, width overflow
-                    (available_size.height * texture_aspect, available_size.height)
+                    (
+                        available_size.height * texture_aspect,
+                        available_size.height,
+                    )
                 } else {
                     // Width-constrained, height overflow
                     (available_size.width, available_size.width / texture_aspect)
@@ -211,7 +218,10 @@ impl RenderTexture {
                     let (width, height) = if texture_aspect > available_aspect {
                         (available_size.width, available_size.width / texture_aspect)
                     } else {
-                        (available_size.height * texture_aspect, available_size.height)
+                        (
+                            available_size.height * texture_aspect,
+                            available_size.height,
+                        )
                     };
 
                     let x = (available_size.width - width) / 2.0;
@@ -224,65 +234,32 @@ impl RenderTexture {
     }
 }
 
-impl Render for RenderTexture {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Leaf> for RenderTexture {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Textures typically take up all available space
         // In real implementation, we might query texture dimensions
-        let size = constraints.biggest();
+        let size = Size::new(constraints.max_width, constraints.max_height);
 
         self.size = size;
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let offset = ctx.offset;
-        let mut canvas = Canvas::new();
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        // Draw GPU texture
+        // Note: Canvas API will need to support texture drawing
+        // For now, we draw a placeholder rectangle to show the texture bounds
+        let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
+        let mut paint = flui_painting::Paint::default();
+        paint.style = flui_painting::PaintStyle::Stroke;
+        paint.stroke_width = 2.0;
+        paint.color = flui_types::Color::rgba(128, 128, 128, 255);
 
-        // For now, we assume a default texture size
-        // In real implementation, this would query the actual GPU texture dimensions
-        let texture_size = Size::new(1920.0, 1080.0); // Placeholder
+        ctx.canvas().draw_rect(rect, &paint);
 
-        // Calculate destination rectangle
-        let dest_rect = self.calculate_dest_rect(texture_size, self.size);
-
-        // Transform to world coordinates
-        let world_rect = Rect::from_ltrb(
-            offset.dx + dest_rect.left(),
-            offset.dy + dest_rect.top(),
-            offset.dx + dest_rect.right(),
-            offset.dy + dest_rect.bottom(),
-        );
-
-        // TODO: Draw texture
-        // Note: In real implementation, this would use platform-specific
-        // texture rendering via wgpu/vulkan/metal. For now, we just draw
-        // a placeholder rectangle to indicate where the texture would be.
-        //
-        // Future API would look like:
-        // canvas.draw_texture(self.texture_id, world_rect, self.filter_quality, self.freeze);
-
-        // Placeholder visualization (debug rect)
-        #[cfg(debug_assertions)]
-        {
-            use flui_painting::Paint;
-            use flui_types::Color;
-
-            let mut paint = Paint::default();
-            paint.color = Color::rgba(100, 100, 100, 128); // Gray placeholder
-            canvas.draw_rect(world_rect, &paint);
-        }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)
+        // TODO: Once Canvas supports texture drawing, use:
+        // ctx.canvas().draw_texture(self.texture_id, rect, self.filter_quality);
     }
 }
 
@@ -485,6 +462,6 @@ mod tests {
     #[test]
     fn test_arity_is_leaf() {
         let texture = RenderTexture::new(TextureId::new(1));
-        assert_eq!(texture.arity(), Arity::Exact(0));
+        assert_eq!(texture.arity(), RuntimeArity::Exact(0));
     }
 }

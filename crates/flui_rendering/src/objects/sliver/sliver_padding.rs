@@ -1,6 +1,6 @@
 //! RenderSliverPadding - Adds padding around sliver content
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -116,7 +116,7 @@ impl RenderSliverPadding {
     }
 }
 
-impl RenderSliver for RenderSliverPadding {
+impl LegacySliverRender for RenderSliverPadding {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let child_id = ctx.children.single();
 
@@ -149,8 +149,8 @@ impl RenderSliver for RenderSliverPadding {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child sliver
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -307,6 +307,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let padding = RenderSliverPadding::all(10.0);
-        assert_eq!(padding.arity(), Arity::Exact(1));
+        assert_eq!(padding.arity(), RuntimeArity::Exact(1));
     }
 }

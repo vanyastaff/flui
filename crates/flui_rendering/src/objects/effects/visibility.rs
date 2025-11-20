@@ -2,8 +2,11 @@
 //!
 //! More advanced than RenderOffstage, supports maintaining size, state, and other properties.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 
 /// RenderObject that controls visibility with fine-grained options
@@ -93,23 +96,22 @@ impl Default for RenderVisibility {
     }
 }
 
-impl Render for RenderVisibility {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderVisibility {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
+
         // Layout child if visible OR if we need to maintain state/size
         let should_layout = self.visible || self.maintain_state || self.maintain_size;
 
         if should_layout {
-            let child_size = tree.layout_child(child_id, constraints);
+            let child_size = ctx.layout_child(child_id, ctx.constraints);
 
             // Return child size if visible or maintaining size
             if self.visible || self.maintain_size {
                 if child_size != Size::ZERO {
                     child_size
                 } else {
-                    constraints.smallest()
+                    ctx.constraints.smallest()
                 }
             } else {
                 // Not visible, not maintaining size: report zero
@@ -121,29 +123,18 @@ impl Render for RenderVisibility {
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
-        let offset = ctx.offset;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // Only paint if visible
         if self.visible {
-            tree.paint_child(child_id, offset)
-        } else {
-            // Return empty canvas when not visible
-            Canvas::new()
+            let child_id = ctx.children.single();
+            ctx.paint_child(child_id, ctx.offset);
         }
+        // When not visible, don't paint anything
     }
 
     // Note: In a full implementation, you would also override:
     // - hit_test() - to control interactivity based on maintain_interactivity
     // - visit_children_for_semantics() - to control semantics based on maintain_semantics
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
-    }
 }
 
 #[cfg(test)]

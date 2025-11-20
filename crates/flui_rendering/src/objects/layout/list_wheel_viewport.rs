@@ -1,6 +1,7 @@
 //! RenderListWheelViewport - 3D wheel picker viewport
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::constraints::BoxConstraints;
@@ -201,7 +202,7 @@ impl Default for RenderListWheelViewport {
     }
 }
 
-impl Render for RenderListWheelViewport {
+impl LegacyRender for RenderListWheelViewport {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
@@ -276,8 +277,8 @@ impl Render for RenderListWheelViewport {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Variable number of children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Variable number of children
     }
 }
 
@@ -394,6 +395,6 @@ mod tests {
     #[test]
     fn test_arity_is_variable() {
         let viewport = RenderListWheelViewport::new(50.0);
-        assert_eq!(viewport.arity(), Arity::Variable);
+        assert_eq!(viewport.arity(), RuntimeArity::Variable);
     }
 }

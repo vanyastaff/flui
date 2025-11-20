@@ -1,8 +1,7 @@
 //! RenderSizedBox - enforces exact size constraints
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -18,6 +17,10 @@ use flui_types::Size;
 /// - **Height only**: Sets height, width fills constraint
 /// - **Neither specified**: Fills max constraints (same as unconstrained child)
 ///
+/// # Without Child (Spacer)
+///
+/// When no child is present, RenderSizedBox acts as a spacer, returning the specified size.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -31,6 +34,9 @@ use flui_types::Size;
 ///
 /// // Set height only, width flexible
 /// let tall = RenderSizedBox::height(150.0);
+///
+/// // Spacer (no child): 50px horizontal gap
+/// let spacer = RenderSizedBox::width(50.0);
 /// ```
 #[derive(Debug)]
 pub struct RenderSizedBox {
@@ -87,56 +93,55 @@ impl Default for RenderSizedBox {
     }
 }
 
-impl Render for RenderSizedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
+impl RenderBox<Optional> for RenderSizedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
-        // Layout child first if we need its size
-        let child_size = if self.width.is_none() || self.height.is_none() {
-            // Need child's intrinsic size for unspecified dimensions
-            // Give child loose constraints for dimensions we don't control
-            let child_constraints = BoxConstraints::new(
-                0.0,
-                self.width.unwrap_or(constraints.max_width),
-                0.0,
-                self.height.unwrap_or(constraints.max_height),
-            );
-            tree.layout_child(child_id, child_constraints)
+        // Check if we have a child
+        if let Some(child_id) = ctx.children.get() {
+            // Layout child first if we need its size
+            let child_size = if self.width.is_none() || self.height.is_none() {
+                // Need child's intrinsic size for unspecified dimensions
+                // Give child loose constraints for dimensions we don't control
+                let child_constraints = BoxConstraints::new(
+                    0.0,
+                    self.width.unwrap_or(constraints.max_width),
+                    0.0,
+                    self.height.unwrap_or(constraints.max_height),
+                );
+                ctx.layout_child(child_id, child_constraints)
+            } else {
+                // Both dimensions specified, we don't need child size yet
+                Size::ZERO
+            };
+
+            // Calculate final size
+            let width = self.width.unwrap_or(child_size.width);
+            let height = self.height.unwrap_or(child_size.height);
+            let size = Size::new(width, height);
+
+            // If we already laid out child with correct constraints, we're done
+            // Otherwise, force child to match our size
+            if self.width.is_some() && self.height.is_some() {
+                let child_constraints = BoxConstraints::tight(size);
+                ctx.layout_child(child_id, child_constraints);
+            }
+
+            size
         } else {
-            // Both dimensions specified, we don't need child size yet
-            Size::ZERO
-        };
-
-        // Calculate final size
-        let width = self.width.unwrap_or(child_size.width);
-        let height = self.height.unwrap_or(child_size.height);
-        let size = Size::new(width, height);
-
-        // If we already laid out child with correct constraints, we're done
-        // Otherwise, force child to match our size
-        if self.width.is_some() && self.height.is_some() {
-            let child_constraints = BoxConstraints::tight(size);
-            tree.layout_child(child_id, child_constraints);
+            // No child - act as spacer with specified dimensions
+            let width = self.width.unwrap_or(constraints.max_width);
+            let height = self.height.unwrap_or(constraints.max_height);
+            Size::new(width, height)
         }
-
-        size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
-        let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // Pass-through: child painted at our offset
-        tree.paint_child(child_id, offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+        // If we have a child, paint it at our offset
+        if let Some(child_id) = ctx.children.get() {
+            ctx.paint_child(child_id, ctx.offset);
+        }
+        // If no child, nothing to paint (spacer)
     }
 }
 

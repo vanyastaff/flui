@@ -3,7 +3,7 @@
 //! Provides mock implementations of sliver render objects that can be used in tests
 //! to verify sliver layout and paint behavior without actual rendering.
 
-use crate::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use crate::render::{LegacySliverRender, RuntimeArity, SliverLayoutContext, SliverPaintContext};
 use flui_types::{Offset, SliverConstraints, SliverGeometry};
 use std::sync::{Arc, Mutex};
 
@@ -237,7 +237,8 @@ impl MockSliverRender {
     }
 }
 
-impl RenderSliver for MockSliverRender {
+#[allow(deprecated)]
+impl LegacySliverRender for MockSliverRender {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let mut state = self.state.lock().unwrap();
         state.layout_calls += 1;
@@ -254,11 +255,11 @@ impl RenderSliver for MockSliverRender {
         flui_painting::Canvas::new()
     }
 
-    fn arity(&self) -> Arity {
+    fn arity(&self) -> RuntimeArity {
         match self.child_count {
-            0 => Arity::Exact(0),
-            1 => Arity::Exact(1),
-            n => Arity::Exact(n),
+            0 => RuntimeArity::Exact(0),
+            1 => RuntimeArity::Exact(1),
+            n => RuntimeArity::Exact(n),
         }
     }
 
@@ -284,12 +285,14 @@ impl RenderSliver for MockSliverRender {
 /// assert_eq!(spy.layout_call_count(), 1);
 /// ```
 #[derive(Debug)]
-pub struct SpySliverRender<R: RenderSliver> {
+#[allow(deprecated)]
+pub struct SpySliverRender<R: LegacySliverRender> {
     inner: R,
     state: Arc<Mutex<MockSliverRenderState>>,
 }
 
-impl<R: RenderSliver> SpySliverRender<R> {
+#[allow(deprecated)]
+impl<R: LegacySliverRender> SpySliverRender<R> {
     /// Create a new spy sliver render wrapping an inner sliver render object
     ///
     /// # Examples
@@ -345,7 +348,8 @@ impl<R: RenderSliver> SpySliverRender<R> {
     }
 }
 
-impl<R: RenderSliver> RenderSliver for SpySliverRender<R> {
+#[allow(deprecated)]
+impl<R: LegacySliverRender> LegacySliverRender for SpySliverRender<R> {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let mut state = self.state.lock().unwrap();
         state.layout_calls += 1;
@@ -364,7 +368,7 @@ impl<R: RenderSliver> RenderSliver for SpySliverRender<R> {
         self.inner.paint(ctx)
     }
 
-    fn arity(&self) -> Arity {
+    fn arity(&self) -> RuntimeArity {
         self.inner.arity()
     }
 
@@ -384,7 +388,7 @@ mod tests {
 
         assert_eq!(mock.layout_call_count(), 0);
         assert_eq!(mock.paint_call_count(), 0);
-        assert_eq!(mock.arity(), Arity::Exact(0));
+        assert_eq!(mock.arity(), RuntimeArity::Exact(0));
     }
 
     #[test]
@@ -392,7 +396,7 @@ mod tests {
         let geometry = SliverGeometry::simple(100.0, 50.0);
         let mock = MockSliverRender::single_child(geometry);
 
-        assert_eq!(mock.arity(), Arity::Exact(1));
+        assert_eq!(mock.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]
@@ -400,7 +404,7 @@ mod tests {
         let geometry = SliverGeometry::simple(100.0, 50.0);
         let mock = MockSliverRender::multi_child(geometry, 3);
 
-        assert_eq!(mock.arity(), Arity::Exact(3));
+        assert_eq!(mock.arity(), RuntimeArity::Exact(3));
     }
 
     #[test]
@@ -408,7 +412,7 @@ mod tests {
         let mock = MockSliverRender::with_extents(1000.0, 300.0);
 
         assert_eq!(mock.layout_call_count(), 0);
-        assert_eq!(mock.arity(), Arity::Exact(0));
+        assert_eq!(mock.arity(), RuntimeArity::Exact(0));
     }
 
     #[test]

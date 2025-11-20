@@ -10,7 +10,8 @@
 //! - Parent (RenderStack) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using positioned children
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 
 use flui_painting::Canvas;
 use flui_types::constraints::BoxConstraints;
@@ -262,7 +263,7 @@ impl RenderPositioned {
     }
 }
 
-impl Render for RenderPositioned {
+impl LegacyRender for RenderPositioned {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -285,8 +286,8 @@ impl Render for RenderPositioned {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 

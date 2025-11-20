@@ -163,7 +163,7 @@ impl<S: State> ColoredBoxBuilder<S> {
 
 // Implement View for ColoredBox - New architecture
 impl View for ColoredBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderColoredBox::new(self.color), self.child)
     }
 }
@@ -179,7 +179,7 @@ mod tests {
     struct MockView;
 
     impl View for MockView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }
     }

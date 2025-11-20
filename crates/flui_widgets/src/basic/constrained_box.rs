@@ -147,7 +147,7 @@ impl<S: State> ConstrainedBoxBuilder<S> {
 
 // Implement View for ConstrainedBox - New architecture
 impl View for ConstrainedBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         let constraints = self.constraints.unwrap_or(BoxConstraints::UNCONSTRAINED);
         (RenderConstrainedBox::new(constraints), self.child)
     }

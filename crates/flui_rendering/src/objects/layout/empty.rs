@@ -1,7 +1,8 @@
 //! RenderEmpty - a render object that does nothing
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::traits::Render;
+use flui_core::render::Leaf;
 use flui_types::Size;
 
 /// A render object that renders nothing
@@ -11,23 +12,14 @@ use flui_types::Size;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RenderEmpty;
 
-impl Render for RenderEmpty {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Leaf> for RenderEmpty {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         // Take minimum space
-        let constraints = ctx.constraints;
-        Size::new(constraints.min_width, constraints.min_height)
+        let constraints = &ctx.constraints;
+        flui_types::Size::new(constraints.min_width, constraints.min_height)
     }
 
-    fn paint(&self, _ctx: &PaintContext) -> Canvas {
-        // Return empty canvas - nothing to paint
-        Canvas::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)
+    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
+        // Nothing to paint
     }
 }

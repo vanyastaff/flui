@@ -36,7 +36,10 @@
       "mcp__filesystem__list_directory",
       "Bash(./target/release/flui.exe create:*)",
       "Bash(./gradlew.bat assembleDebug:*)",
-      "Bash(adb:*)"
+      "Bash(adb:*)",
+      "Bash(cp:*)",
+      "mcp__filesystem__create_directory",
+      "mcp__filesystem__write_file"
     ],
     "deny": [],
     "ask": []

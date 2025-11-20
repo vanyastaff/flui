@@ -43,9 +43,9 @@ use crate::foundation::{AtomicElementFlags, ElementFlags, Slot};
 /// - `flags`: Atomic flags for lock-free dirty tracking
 ///
 /// Element-specific data is stored in the element variants:
-/// - ComponentElement: stores `view: Box<dyn AnyView>` + `state: Box<dyn Any>` + `child: ElementId`
+/// - ComponentElement: stores `builder: BuildFn` + `state: Box<dyn Any>` + `child: ElementId`
 /// - RenderElement: stores `render_node: RenderNode`
-/// - ProviderElement: stores `view: Box<dyn AnyView>` + `dependencies` + `child: ElementId`
+/// - ProviderElement: stores `builder: BuildFn` + `provided` + `dependencies` + `child: ElementId`
 ///
 /// # Lifecycle States
 ///

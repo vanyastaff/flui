@@ -1,6 +1,6 @@
 //! RenderSliverToBoxAdapter - Adapts box widget to sliver protocol
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -118,7 +118,7 @@ impl Default for RenderSliverToBoxAdapter {
     }
 }
 
-impl RenderSliver for RenderSliverToBoxAdapter {
+impl LegacySliverRender for RenderSliverToBoxAdapter {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -154,8 +154,8 @@ impl RenderSliver for RenderSliverToBoxAdapter {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child (the box widget)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child (the box widget)
     }
 }
 
@@ -353,6 +353,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let adapter = RenderSliverToBoxAdapter::new();
-        assert_eq!(adapter.arity(), Arity::Exact(1));
+        assert_eq!(adapter.arity(), RuntimeArity::Exact(1));
     }
 }

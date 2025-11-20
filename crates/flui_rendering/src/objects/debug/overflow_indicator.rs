@@ -20,7 +20,8 @@
 //! }
 //! ```
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 #[cfg(debug_assertions)]
 #[cfg(debug_assertions)]
 #[cfg(debug_assertions)]
@@ -326,7 +327,7 @@ impl RenderOverflowIndicator {
 }
 
 #[cfg(debug_assertions)]
-impl Render for RenderOverflowIndicator {
+impl LegacyRender for RenderOverflowIndicator {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_id = ctx.children.single();
@@ -387,8 +388,8 @@ impl Render for RenderOverflowIndicator {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Default - update if needed
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Default - update if needed
     }
 }
 

@@ -1,7 +1,7 @@
 //! RenderBaseline - aligns child based on baseline
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{RenderBox, Single};
 use flui_types::{typography::TextBaseline, Offset, Size};
 
 /// RenderObject that positions child based on baseline
@@ -59,13 +59,13 @@ impl RenderBaseline {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderBaseline {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderBaseline {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
+
         // Layout child with same constraints
-        let child_size = tree.layout_child(child_id, constraints);
+        let child_size = ctx.layout_child(child_id, constraints);
 
         // Our height includes space above baseline and child height
         // For simplicity, we use child height + baseline offset
@@ -75,21 +75,13 @@ impl Render for RenderBaseline {
         )
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 
         // Apply baseline offset to child painting position
         let child_offset = offset + Offset::new(0.0, self.baseline);
-        tree.paint_child(child_id, child_offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, child_offset);
     }
 }
 

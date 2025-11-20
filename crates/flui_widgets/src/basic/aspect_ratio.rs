@@ -227,7 +227,7 @@ impl Default for AspectRatio {
 
 // Implement View for AspectRatio - New architecture
 impl View for AspectRatio {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderAspectRatio::new(self.aspect_ratio), self.child)
     }
 }

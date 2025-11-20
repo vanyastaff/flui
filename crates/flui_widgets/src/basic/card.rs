@@ -205,7 +205,7 @@ impl<S: State> CardBuilder<S> {
 
 // Implement View trait
 impl View for Card {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Create child widget
         let child_view: Box<dyn AnyView> = if let Some(child) = self.child {
             child

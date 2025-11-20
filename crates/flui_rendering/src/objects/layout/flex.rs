@@ -1,7 +1,8 @@
 //! RenderFlex - flex layout container (Row/Column)
 
 use flui_core::element::ElementId;
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_types::{
     layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize},
     typography::TextBaseline,
@@ -166,7 +167,7 @@ impl Default for RenderFlex {
     }
 }
 
-impl Render for RenderFlex {
+impl LegacyRender for RenderFlex {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
@@ -556,8 +557,8 @@ impl Render for RenderFlex {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multi-child render - variable number of children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multi-child render - variable number of children
     }
 }
 

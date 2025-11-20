@@ -1,8 +1,10 @@
-//! RenderFractionallySizedBox - sizes child_id as fraction of parent
+//! RenderFractionallySizedBox - sizes child as fraction of parent
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 
 /// RenderObject that sizes child_id as a fraction of available space
@@ -91,34 +93,24 @@ impl Default for RenderFractionallySizedBox {
     }
 }
 
-impl Render for RenderFractionallySizedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderFractionallySizedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
+
         // Calculate target size based on factors
-        let target_width = self.width_factor.map(|f| constraints.max_width * f);
-        let target_height = self.height_factor.map(|f| constraints.max_height * f);
+        let target_width = self.width_factor.map(|f| ctx.constraints.max_width * f);
+        let target_height = self.height_factor.map(|f| ctx.constraints.max_height * f);
 
-        // Create child_id constraints
-        let child_constraints = constraints.tighten(target_width, target_height);
+        // Create child constraints
+        let child_constraints = ctx.constraints.tighten(target_width, target_height);
 
-        // SingleArity always has exactly one child_id
-        tree.layout_child(child_id, child_constraints)
+        // Single arity always has exactly one child
+        ctx.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        tree.paint_child(child_id, offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

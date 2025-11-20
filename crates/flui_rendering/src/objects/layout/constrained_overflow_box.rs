@@ -9,7 +9,8 @@
 //! - Allowing children to exceed parent boundaries with specific size limits
 //! - Transforming constraints passed to children
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::{Alignment, BoxConstraints, Size};
 
@@ -140,7 +141,7 @@ impl Default for RenderConstrainedOverflowBox {
     }
 }
 
-impl Render for RenderConstrainedOverflowBox {
+impl LegacyRender for RenderConstrainedOverflowBox {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let child_id = ctx.children.single();
 
@@ -177,8 +178,8 @@ impl Render for RenderConstrainedOverflowBox {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1)
     }
 }
 
@@ -274,7 +275,7 @@ mod tests {
     #[test]
     fn test_arity() {
         let overflow_box = RenderConstrainedOverflowBox::new();
-        assert_eq!(overflow_box.arity(), Arity::Exact(1));
+        assert_eq!(overflow_box.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]

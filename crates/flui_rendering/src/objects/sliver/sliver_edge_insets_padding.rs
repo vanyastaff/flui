@@ -1,6 +1,6 @@
 //! RenderSliverEdgeInsetsPadding - EdgeInsets-based padding for slivers
 
-use flui_core::render::{Arity, RenderSliver, SliverLayoutContext, SliverPaintContext};
+use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};
@@ -139,7 +139,7 @@ impl Default for RenderSliverEdgeInsetsPadding {
     }
 }
 
-impl RenderSliver for RenderSliverEdgeInsetsPadding {
+impl LegacySliverRender for RenderSliverEdgeInsetsPadding {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -175,8 +175,8 @@ impl RenderSliver for RenderSliverEdgeInsetsPadding {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1) // Single child sliver
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Exact(1) // Single child sliver
     }
 }
 
@@ -319,6 +319,6 @@ mod tests {
     #[test]
     fn test_arity_is_single_child() {
         let sliver = RenderSliverEdgeInsetsPadding::new(EdgeInsets::ZERO);
-        assert_eq!(sliver.arity(), Arity::Exact(1));
+        assert_eq!(sliver.arity(), RuntimeArity::Exact(1));
     }
 }

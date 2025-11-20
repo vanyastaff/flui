@@ -240,7 +240,7 @@ mod tests {
     }
 }
 impl View for SingleChildScrollView {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Apply padding if specified
         let child = match self.padding {
             Some(padding) => Box::new(crate::Padding {

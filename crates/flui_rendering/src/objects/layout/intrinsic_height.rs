@@ -1,8 +1,10 @@
-//! RenderIntrinsicHeight - sizes child_id to its intrinsic height
+//! RenderIntrinsicHeight - sizes child to its intrinsic height
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -78,22 +80,19 @@ impl Default for RenderIntrinsicHeight {
     }
 }
 
-impl Render for RenderIntrinsicHeight {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderIntrinsicHeight {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // SingleArity always has exactly one child_id
-        // Layout child_id with infinite height to get intrinsic height
-        // Get child_id's intrinsic height by giving it infinite height
+
+        // Layout child with infinite height to get intrinsic height
         let intrinsic_constraints = BoxConstraints::new(
-            constraints.min_width,
-            constraints.max_width,
+            ctx.constraints.min_width,
+            ctx.constraints.max_width,
             0.0,
             f32::INFINITY,
         );
 
-        let child_size = tree.layout_child(child_id, intrinsic_constraints);
+        let child_size = ctx.layout_child(child_id, intrinsic_constraints);
 
         // Apply step width/height if specified
         let width = if let Some(step) = self.step_width {
@@ -109,21 +108,12 @@ impl Render for RenderIntrinsicHeight {
         };
 
         // Constrain to parent constraints
-        constraints.constrain(Size::new(width, height))
+        ctx.constraints.constrain(Size::new(width, height))
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        tree.paint_child(child_id, offset)
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

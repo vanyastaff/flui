@@ -1,7 +1,10 @@
 //! RenderShiftedBox - Shifts child position by an offset
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::{Offset, Size};
 
 /// RenderObject that shifts its child by a fixed offset
@@ -74,14 +77,12 @@ impl Default for RenderShiftedBox {
     }
 }
 
-impl Render for RenderShiftedBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderShiftedBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
 
         // Layout child with full constraints
-        let size = tree.layout_child(child_id, constraints);
+        let size = ctx.layout_child(child_id, ctx.constraints);
 
         // Store size for paint
         self.size = size;
@@ -90,26 +91,16 @@ impl Render for RenderShiftedBox {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
 
         // Paint child at shifted position
         let child_offset = Offset::new(
-            offset.dx + self.offset.dx,
-            offset.dy + self.offset.dy,
+            ctx.offset.dx + self.offset.dx,
+            ctx.offset.dy + self.offset.dy,
         );
 
-        tree.paint_child(child_id, child_offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        ctx.paint_child(child_id, child_offset);
     }
 }
 
@@ -189,6 +180,6 @@ mod tests {
     fn test_arity_is_single_child() {
         let shifted = RenderShiftedBox::zero();
 
-        assert_eq!(shifted.arity(), Arity::Exact(1));
+        assert_eq!(shifted.arity(), RuntimeArity::Exact(1));
     }
 }

@@ -1,8 +1,11 @@
 //! RenderAnimatedOpacity - animated opacity transitions
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-use flui_painting::Canvas;
-
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
+use flui_core::ElementId;
 use flui_types::Size;
 
 /// RenderObject that applies animated opacity to its child
@@ -67,44 +70,35 @@ impl Default for RenderAnimatedOpacity {
     }
 }
 
-impl Render for RenderAnimatedOpacity {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderAnimatedOpacity {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
         // Layout child with same constraints
-        tree.layout_child(child_id, constraints)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
 
         // Skip painting if fully transparent
         if self.opacity <= 0.0 {
-            return Canvas::new();
+            return;
         }
 
-        // Get child canvas
-        let child_canvas = tree.paint_child(child_id, offset);
-
-        // If fully opaque, return child canvas directly (zero-copy)
+        // If fully opaque, paint child directly (zero-cost fast path)
         if self.opacity >= 1.0 {
-            return child_canvas;
+            ctx.paint_child(child_id, ctx.offset);
+            return;
         }
 
-        // Apply opacity to all child drawing commands
-        let mut canvas = Canvas::new();
-        canvas.append_canvas_with_opacity(child_canvas, self.opacity);
-        canvas
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+        // Paint child to its own canvas
+        let child_canvas = ctx
+            .tree()
+            .paint_child(ElementId::new(child_id.get()), ctx.offset);
 
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        // Append child canvas with opacity
+        ctx.canvas()
+            .append_canvas_with_opacity(child_canvas, self.opacity);
     }
 }
 

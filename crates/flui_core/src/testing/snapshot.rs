@@ -49,10 +49,11 @@ impl ElementTreeSnapshot {
                         render_count += 1;
                         structure.push_str(&format!("  Render({})\n", id.get()));
                     }
-                    Element::Sliver(_) => {
-                        render_count += 1;
-                        structure.push_str(&format!("  Sliver({})\n", id.get()));
-                    }
+                    // TODO: Re-enable after sliver migration
+                    // Element::Sliver(_) => {
+                    //     render_count += 1;
+                    //     structure.push_str(&format!("  Sliver({})\n", id.get()));
+                    // }
                     Element::Provider(_) => {
                         provider_count += 1;
                         structure.push_str(&format!("  Provider({})\n", id.get()));

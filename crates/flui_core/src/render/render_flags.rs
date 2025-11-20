@@ -1,53 +1,61 @@
-//! Atomic RenderFlags for lock-free state management
+//! Lock-free render state flags.
 //!
-//! Migrated from flui_core_old with performance optimizations
+//! Efficient atomic bitset used in hot layout / paint paths. All operations are
+//! single atomic instructions; no locks or contention.
+//!
+//! # Goals
+//! - O(1) flag mutations (fetch_or / fetch_and / fetch_xor)
+//! - Minimal memory traffic (single `AtomicU32`)
+//! - Clear semantic separation (layout / paint / compositing)
+//!
+//! # Memory Ordering
+//! - Loads use `Acquire` to observe prior mutations.
+//! - Stores use `Release` to publish a complete flag set.
+//! - Mutations use `AcqRel` ensuring read-modify-write correctness.
+//!   This is enough because flags are simple presence indicators; no
+//!   dependent data is co-located in this atomic.
+//!
+//! # Example
+//! ```rust,ignore
+//! let flags = AtomicRenderFlags::empty();
+//! flags.set(RenderFlags::NEEDS_LAYOUT);
+//! if flags.contains(RenderFlags::NEEDS_LAYOUT) {
+//!     // recompute layout
+//!     flags.remove(RenderFlags::NEEDS_LAYOUT);
+//! }
+//! ```
 
 use bitflags::bitflags;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 bitflags! {
-    /// Flags for render object state
+    /// Per-render-node state flags (stored compactly in one `u32`).
     ///
-    /// These flags are stored in an AtomicU32 for lock-free access.
-    /// This is critical for performance - checking `needs_layout()` happens
-    /// ~1000 times per frame, so we need it to be fast (5ns vs 50ns with RwLock).
+    /// Use via `AtomicRenderFlags` for thread-safe, lock-free access.
+    ///
+    /// # Note
+    ///
+    /// Lifecycle flags (MOUNTED, DETACHED, ACTIVE) are in `ElementFlags`,
+    /// not here. RenderFlags is only for layout/paint state.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct RenderFlags: u32 {
-        /// Render needs layout computation
+        /// Layout recomputation required.
         const NEEDS_LAYOUT = 1 << 0;
-
-        /// Render needs painting
+        /// Painting pass required.
         const NEEDS_PAINT = 1 << 1;
-
-        /// Render needs compositing
+        /// Compositing pass required.
         const NEEDS_COMPOSITING = 1 << 2;
-
-        /// Render is a relayout boundary
-        ///
-        /// When true, layout changes don't propagate to parent.
-        /// This is a critical optimization for large trees.
+        /// Layout change isolation boundary.
         const IS_RELAYOUT_BOUNDARY = 1 << 3;
-
-        /// Render is a repaint boundary
-        ///
-        /// When true, paint changes don't trigger parent repaint.
+        /// Paint change isolation boundary.
         const IS_REPAINT_BOUNDARY = 1 << 4;
-
-        /// Render needs semantics update
+        /// Semantics (accessibility) update required.
         const NEEDS_SEMANTICS = 1 << 5;
-
-        /// Render is detached from tree
-        const IS_DETACHED = 1 << 6;
-
-        /// Render has been laid out at least once
-        const HAS_SIZE = 1 << 7;
-
-        /// Render has overflow (debug mode only)
-        ///
-        /// Set when content doesn't fit in available space.
-        /// Used for lock-free overflow detection in paint phase.
+        /// Node has computed geometry at least once.
+        const HAS_GEOMETRY = 1 << 6;
+        /// Overflow detected (debug builds only).
         #[cfg(debug_assertions)]
-        const HAS_OVERFLOW = 1 << 8;
+        const HAS_OVERFLOW = 1 << 7;
     }
 }
 
@@ -72,61 +80,75 @@ pub struct AtomicRenderFlags {
 }
 
 impl AtomicRenderFlags {
-    /// Create new atomic flags
+    /// Creates a new atomic flag set with initial flags.
     pub const fn new(flags: RenderFlags) -> Self {
         Self {
             bits: AtomicU32::new(flags.bits()),
         }
     }
 
-    /// Create empty flags
+    /// Creates an empty atomic flag set (no flags set).
     pub const fn empty() -> Self {
         Self::new(RenderFlags::empty())
     }
 
-    /// Load current flags
+    /// Loads the current flags atomically.
+    ///
+    /// Uses `Acquire` ordering to observe prior mutations.
     #[inline]
     pub fn load(&self) -> RenderFlags {
         RenderFlags::from_bits_truncate(self.bits.load(Ordering::Acquire))
     }
 
-    /// Store new flags
+    /// Stores a complete flag set atomically.
+    ///
+    /// Uses `Release` ordering to publish the new state.
     #[inline]
     pub fn store(&self, flags: RenderFlags) {
         self.bits.store(flags.bits(), Ordering::Release);
     }
 
-    /// Check if flags contain a specific flag
+    /// Checks if the specified flag is set.
     #[inline]
     pub fn contains(&self, flag: RenderFlags) -> bool {
         self.load().contains(flag)
     }
 
-    /// Set a flag (atomic OR)
+    /// Sets a single flag atomically.
+    ///
+    /// Uses `AcqRel` ordering for read-modify-write correctness.
     #[inline]
     pub fn set(&self, flag: RenderFlags) {
         self.bits.fetch_or(flag.bits(), Ordering::AcqRel);
     }
 
-    /// Remove a flag (atomic AND NOT)
+    /// Removes a single flag atomically.
+    ///
+    /// Uses `AcqRel` ordering for read-modify-write correctness.
     #[inline]
     pub fn remove(&self, flag: RenderFlags) {
         self.bits.fetch_and(!flag.bits(), Ordering::AcqRel);
     }
 
-    /// Toggle a flag (atomic XOR)
+    /// Toggles a flag atomically.
+    ///
+    /// Uses `AcqRel` ordering for read-modify-write correctness.
     #[inline]
     pub fn toggle(&self, flag: RenderFlags) {
         self.bits.fetch_xor(flag.bits(), Ordering::AcqRel);
     }
 
-    /// Insert multiple flags at once
+    /// Inserts multiple flags atomically.
+    ///
+    /// Uses `AcqRel` ordering for read-modify-write correctness.
     #[inline]
     pub fn insert(&self, flags: RenderFlags) {
         self.bits.fetch_or(flags.bits(), Ordering::AcqRel);
     }
 
-    /// Clear all flags
+    /// Clears all flags atomically.
+    ///
+    /// Uses `Release` ordering to publish the cleared state.
     #[inline]
     pub fn clear(&self) {
         self.bits.store(0, Ordering::Release);
@@ -183,5 +205,14 @@ mod tests {
     fn test_relayout_boundary() {
         let flags = AtomicRenderFlags::new(RenderFlags::IS_RELAYOUT_BOUNDARY);
         assert!(flags.contains(RenderFlags::IS_RELAYOUT_BOUNDARY));
+    }
+
+    #[test]
+    fn test_has_geometry() {
+        let flags = AtomicRenderFlags::empty();
+        assert!(!flags.contains(RenderFlags::HAS_GEOMETRY));
+
+        flags.set(RenderFlags::HAS_GEOMETRY);
+        assert!(flags.contains(RenderFlags::HAS_GEOMETRY));
     }
 }

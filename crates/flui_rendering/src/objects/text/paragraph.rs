@@ -3,7 +3,8 @@
 //! This is a Leaf RenderObject that renders multi-line text with styling,
 //! line breaks, and text wrapping.
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
+use flui_core::render::{Leaf, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
     styling::Color,
@@ -108,13 +109,16 @@ pub struct RenderParagraph {
     /// The paragraph data
     data: ParagraphData,
     /// Cached layout size (set during layout, used during paint)
-    size: Option<Size>,
+    size: Size,
 }
 
 impl RenderParagraph {
     /// Create new RenderParagraph
     pub fn new(data: ParagraphData) -> Self {
-        Self { data, size: None }
+        Self {
+            data,
+            size: Size::ZERO,
+        }
     }
 
     /// Get reference to data
@@ -174,8 +178,8 @@ impl RenderParagraph {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderParagraph {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Leaf> for RenderParagraph {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
         #[cfg(debug_assertions)]
         tracing::debug!(
@@ -232,7 +236,7 @@ impl Render for RenderParagraph {
         let size = constraints.constrain(Size::new(width, height));
 
         // Cache the size for painting
-        self.size = Some(size);
+        self.size = size;
 
         #[cfg(debug_assertions)]
         tracing::debug!(
@@ -244,55 +248,29 @@ impl Render for RenderParagraph {
         size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let offset = ctx.offset;
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "RenderParagraph::paint: text='{}', offset={:?}, size={:?}",
-            self.data.text,
-            offset,
-            self.size
-        );
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+        // Draw text using Canvas API
+        let mut paint = Paint::default();
+        paint.color = self.data.color;
 
-        // Use Canvas API from flui_painting
-        let mut canvas = Canvas::new();
+        // Calculate text position based on alignment
+        let x = match self.data.text_align {
+            TextAlign::Left | TextAlign::Start => 0.0,
+            TextAlign::Center => self.size.width / 2.0,
+            TextAlign::Right | TextAlign::End => self.size.width,
+            TextAlign::Justify => 0.0,
+        };
 
-        if let Some(_size) = self.size {
-            // Create text style from paragraph data
-            let style = TextStyle {
-                font_size: Some(self.data.font_size as f64),
-                color: Some(self.data.color),
-                ..Default::default()
-            };
+        let position = flui_types::Offset::new(x, 0.0);
 
-            let paint = Paint::fill(self.data.color);
+        // Create TextStyle
+        let text_style = TextStyle::default()
+            .with_font_size(self.data.font_size as f64)
+            .with_color(self.data.color);
 
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "RenderParagraph::paint: drawing text with style {:?} at {:?}",
-                style,
-                offset
-            );
-
-            // Record drawing command via Canvas API
-            canvas.draw_text(&self.data.text, offset, &style, &paint);
-        } else {
-            #[cfg(debug_assertions)]
-            tracing::warn!("RenderParagraph::paint: size is None, cannot paint text");
-        }
-
-        #[cfg(debug_assertions)]
-        tracing::debug!("RenderParagraph::paint: returning canvas");
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0) // Leaf render - no children
+        // Draw the text
+        ctx.canvas()
+            .draw_text(&self.data.text, position, &text_style, &paint);
     }
 }
 

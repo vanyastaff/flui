@@ -1,8 +1,10 @@
-//! RenderMetaData - attaches metadata to child_id for parent access
+//! RenderMetaData - attaches metadata to child for parent access
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
-
-use flui_painting::Canvas;
+use flui_core::render::{
+    {BoxProtocol, LayoutContext, PaintContext},
+    RenderBox,
+    Single,
+};
 use flui_types::Size;
 use std::any::Any;
 
@@ -110,29 +112,17 @@ impl Default for RenderMetaData {
 
 // ===== RenderObject Implementation =====
 
-impl Render for RenderMetaData {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let tree = ctx.tree;
+impl RenderBox<Single> for RenderMetaData {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
-        let constraints = ctx.constraints;
-        // Layout child_id with same constraints (pass-through)
-        tree.layout_child(child_id, constraints)
+        // Layout child with same constraints (pass-through)
+        ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let tree = ctx.tree;
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
-        let offset = ctx.offset;
-        // Paint child_id directly (pass-through)
-        tree.paint_child(child_id, offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)
+        // Paint child directly (pass-through)
+        ctx.paint_child(child_id, ctx.offset);
     }
 }
 

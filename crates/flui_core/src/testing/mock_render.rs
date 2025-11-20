@@ -3,7 +3,8 @@
 //! Provides mock implementations of render objects that can be used in tests
 //! to verify layout and paint behavior without actual rendering.
 
-use crate::render::{Arity, LayoutContext, PaintContext, Render};
+#[allow(deprecated)]
+use crate::render::{LayoutContext, LegacyRender, PaintContext, RuntimeArity};
 // Removed unused imports: BoxedLayer, ContainerLayer (now using Canvas)
 use flui_types::{BoxConstraints, Offset, Size};
 use std::sync::{Arc, Mutex};
@@ -115,7 +116,8 @@ impl MockRender {
     }
 }
 
-impl Render for MockRender {
+#[allow(deprecated)]
+impl LegacyRender for MockRender {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let mut state = self.state.lock().unwrap();
         state.layout_calls += 1;
@@ -137,11 +139,11 @@ impl Render for MockRender {
         flui_painting::Canvas::new()
     }
 
-    fn arity(&self) -> Arity {
+    fn arity(&self) -> RuntimeArity {
         match self.child_count {
-            0 => Arity::Exact(0),
-            1 => Arity::Exact(1),
-            n => Arity::Exact(n),
+            0 => RuntimeArity::Exact(0),
+            1 => RuntimeArity::Exact(1),
+            n => RuntimeArity::Exact(n),
         }
     }
 
@@ -167,12 +169,14 @@ impl Render for MockRender {
 /// assert_eq!(spy.layout_call_count(), 1);
 /// ```
 #[derive(Debug)]
-pub struct SpyRender<R: Render> {
+#[allow(deprecated)]
+pub struct SpyRender<R: LegacyRender> {
     inner: R,
     state: Arc<Mutex<MockRenderState>>,
 }
 
-impl<R: Render> SpyRender<R> {
+#[allow(deprecated)]
+impl<R: LegacyRender> SpyRender<R> {
     /// Create a new spy render wrapping an inner render object
     pub fn new(inner: R) -> Self {
         Self {
@@ -221,7 +225,8 @@ impl<R: Render> SpyRender<R> {
     }
 }
 
-impl<R: Render> Render for SpyRender<R> {
+#[allow(deprecated)]
+impl<R: LegacyRender> LegacyRender for SpyRender<R> {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let mut state = self.state.lock().unwrap();
         state.layout_calls += 1;
@@ -240,10 +245,6 @@ impl<R: Render> Render for SpyRender<R> {
         self.inner.paint(ctx)
     }
 
-    fn arity(&self) -> Arity {
-        self.inner.arity()
-    }
-
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -259,7 +260,7 @@ mod tests {
 
         assert_eq!(mock.layout_call_count(), 0);
         assert_eq!(mock.paint_call_count(), 0);
-        assert_eq!(mock.arity(), Arity::Exact(0));
+        assert_eq!(mock.arity(), RuntimeArity::Exact(0));
     }
 
     #[test]

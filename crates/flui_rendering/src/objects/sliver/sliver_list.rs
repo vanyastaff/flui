@@ -1,7 +1,7 @@
 //! RenderSliverList - Scrollable list with lazy loading
 
 use flui_core::element::ElementTree;
-use flui_core::render::{Arity, SliverLayoutContext, SliverPaintContext, RenderSliver};
+use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 
@@ -197,7 +197,7 @@ impl Default for RenderSliverList {
     }
 }
 
-impl RenderSliver for RenderSliverList {
+impl LegacySliverRender for RenderSliverList {
     fn layout(&mut self, ctx: &SliverLayoutContext) -> SliverGeometry {
         let constraints = &ctx.constraints;
 
@@ -228,8 +228,8 @@ impl RenderSliver for RenderSliverList {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multiple children
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multiple children
     }
 }
 
@@ -430,6 +430,6 @@ mod tests {
     #[test]
     fn test_arity_is_variable() {
         let list = RenderSliverList::new();
-        assert_eq!(list.arity(), Arity::Variable);
+        assert_eq!(list.arity(), RuntimeArity::Variable);
     }
 }

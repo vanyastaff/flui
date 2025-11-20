@@ -1,6 +1,7 @@
 //! RenderIndexedStack - shows only one child by index
 
-use flui_core::render::{Arity, LayoutContext, PaintContext, Render};
+// TODO: Migrate to Render<A>
+// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 
 use flui_types::{Alignment, Size};
@@ -70,7 +71,7 @@ impl Default for RenderIndexedStack {
     }
 }
 
-impl Render for RenderIndexedStack {
+impl LegacyRender for RenderIndexedStack {
     fn layout(&mut self, ctx: &LayoutContext) -> Size {
         let tree = ctx.tree;
         let child_ids = ctx.children.as_slice();
@@ -128,8 +129,8 @@ impl Render for RenderIndexedStack {
         self
     }
 
-    fn arity(&self) -> Arity {
-        Arity::Variable // Multi-child container
+    fn arity(&self) -> RuntimeArity {
+        RuntimeArity::Variable // Multi-child container
     }
 }
 
