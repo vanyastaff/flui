@@ -84,7 +84,13 @@ impl CommandRenderer for DebugRenderer {
         );
     }
 
-    fn render_drrect(&mut self, _outer: RRect, _inner: RRect, _paint: &Paint, _transform: &Matrix4) {
+    fn render_drrect(
+        &mut self,
+        _outer: RRect,
+        _inner: RRect,
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
         self.log_command("render_drrect", "double rounded rect");
     }
 

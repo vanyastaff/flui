@@ -28,8 +28,7 @@ use flui_types::BoxConstraints;
 use std::sync::Arc;
 
 /// Type for layout builder function that creates a widget from BuildContext and constraints
-pub type LayoutWidgetBuilder =
-    Arc<dyn Fn(&BuildContext, BoxConstraints) -> Element + Send + Sync>;
+pub type LayoutWidgetBuilder = Arc<dyn Fn(&BuildContext, BoxConstraints) -> Element + Send + Sync>;
 
 /// A widget that calls a builder function with BoxConstraints.
 ///

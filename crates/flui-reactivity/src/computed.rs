@@ -117,7 +117,10 @@ impl<T> fmt::Debug for ComputedInner<T> {
         f.debug_struct("ComputedInner")
             .field("id", &self.id)
             .field("dependencies_count", &self.dependencies.lock().len())
-            .field("is_dirty", &self.is_dirty.load(std::sync::atomic::Ordering::Acquire))
+            .field(
+                "is_dirty",
+                &self.is_dirty.load(std::sync::atomic::Ordering::Acquire),
+            )
             .finish()
     }
 }
@@ -232,7 +235,9 @@ where
 
             match SignalRuntime::global().subscribe(dep_id, move || {
                 if let Some(inner) = weak.upgrade() {
-                    inner.is_dirty.store(true, std::sync::atomic::Ordering::Release);
+                    inner
+                        .is_dirty
+                        .store(true, std::sync::atomic::Ordering::Release);
                     trace!(computed_id = ?inner.id, "Marked dirty");
 
                     // Trigger notification on cached_value to propagate dirty flag
@@ -314,7 +319,10 @@ where
 
         // CRITICAL FIX: Atomically check and reset dirty flag using swap
         // This prevents race where another thread sets dirty between our check and recompute
-        let was_dirty = self.inner.is_dirty.swap(false, std::sync::atomic::Ordering::AcqRel);
+        let was_dirty = self
+            .inner
+            .is_dirty
+            .swap(false, std::sync::atomic::Ordering::AcqRel);
 
         if was_dirty {
             // If recompute fails (deadlock detected), panic with clear message
@@ -423,7 +431,9 @@ where
                 let sub_id = SignalRuntime::global()
                     .subscribe(dep_id, move || {
                         if let Some(inner) = weak.upgrade() {
-                            inner.is_dirty.store(true, std::sync::atomic::Ordering::Release);
+                            inner
+                                .is_dirty
+                                .store(true, std::sync::atomic::Ordering::Release);
                         }
                     })
                     .expect("Failed to subscribe to dependency: too many subscribers");
@@ -510,7 +520,9 @@ where
 
     /// Check if the computed signal is currently dirty.
     pub fn is_dirty(&self) -> bool {
-        self.inner.is_dirty.load(std::sync::atomic::Ordering::Acquire)
+        self.inner
+            .is_dirty
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Register this computed with an owner for automatic cleanup.

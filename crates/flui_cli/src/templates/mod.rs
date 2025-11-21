@@ -1,5 +1,5 @@
-mod counter;
 mod basic;
+mod counter;
 
 use anyhow::Result;
 use std::path::Path;

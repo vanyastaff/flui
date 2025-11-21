@@ -3,9 +3,7 @@
 use flui_core::element::hit_test::BoxHitTestResult;
 use flui_core::element::hit_test_entry::BoxHitTestEntry;
 use flui_core::render::{
-    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -67,11 +65,18 @@ impl RenderBox<Single> for RenderAbsorbPointer {
         ctx.paint_child(child_id, ctx.offset);
     }
 
-    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(
+        &self,
+        ctx: HitTestContext<'_, Single, BoxProtocol>,
+        result: &mut BoxHitTestResult,
+    ) -> bool {
         if self.absorbing {
             // Absorb pointer events - add self to result but DON'T test children
             // This prevents events from reaching the child
-            result.add(ctx.element_id, BoxHitTestEntry::new(ctx.position, ctx.size()));
+            result.add(
+                ctx.element_id,
+                BoxHitTestEntry::new(ctx.position, ctx.size()),
+            );
             true // Event absorbed!
         } else {
             // Not absorbing - use default behavior (test children)

@@ -74,28 +74,25 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod budget;
 pub mod frame;
 pub mod scheduler;
 pub mod task;
 pub mod ticker;
-pub mod budget;
 pub mod vsync;
 
 // Re-exports
+pub use budget::{BudgetPolicy, FrameBudget, PhaseStats};
 pub use frame::{FrameCallback, FrameId, FramePhase, FrameTiming};
 pub use scheduler::{Scheduler, SchedulerBinding};
 pub use task::{Priority, Task, TaskId, TaskQueue};
 pub use ticker::{Ticker, TickerCallback, TickerProvider};
-pub use budget::{FrameBudget, BudgetPolicy, PhaseStats};
-pub use vsync::{VsyncScheduler, VsyncCallback};
+pub use vsync::{VsyncCallback, VsyncScheduler};
 
 /// Prelude for common scheduler types
 pub mod prelude {
     pub use crate::{
-        Scheduler, SchedulerBinding,
-        Priority, Task, TaskQueue,
-        Ticker, TickerProvider,
-        FrameBudget, BudgetPolicy,
-        FramePhase, FrameTiming,
+        BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, Scheduler, SchedulerBinding,
+        Task, TaskQueue, Ticker, TickerProvider,
     };
 }

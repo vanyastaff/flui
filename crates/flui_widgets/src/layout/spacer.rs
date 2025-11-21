@@ -26,7 +26,6 @@
 //! ```
 
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;

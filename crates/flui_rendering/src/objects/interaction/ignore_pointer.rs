@@ -2,9 +2,7 @@
 
 use flui_core::element::hit_test::BoxHitTestResult;
 use flui_core::render::{
-    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -65,7 +63,11 @@ impl RenderBox<Single> for RenderIgnorePointer {
         ctx.paint_child(child_id, ctx.offset);
     }
 
-    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(
+        &self,
+        ctx: HitTestContext<'_, Single, BoxProtocol>,
+        result: &mut BoxHitTestResult,
+    ) -> bool {
         if self.ignoring {
             // Ignore pointer events - return false to let events pass through
             // This makes this widget and its children transparent to pointer events

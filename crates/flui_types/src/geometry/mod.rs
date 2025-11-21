@@ -10,7 +10,6 @@ pub mod size;
 pub mod text_path;
 pub mod transform;
 
-
 pub use matrix4::Matrix4;
 pub use offset::Offset;
 pub use point::Point;
@@ -25,4 +24,3 @@ pub use text_path::{
     arc_position, bezier_point, bezier_tangent_rotation, grid_position, parametric_position,
     spiral_position, vertical_scale, wave_offset, wave_rotation, CharTransform,
 };
-

@@ -14,15 +14,9 @@ pub struct BuilderContext {
 /// Platform to build for
 #[derive(Debug, Clone)]
 pub enum Platform {
-    Android {
-        targets: Vec<String>,
-    },
-    Web {
-        target: String,
-    },
-    Desktop {
-        target: Option<String>,
-    },
+    Android { targets: Vec<String> },
+    Web { target: String },
+    Desktop { target: Option<String> },
 }
 
 impl Platform {
@@ -84,7 +78,11 @@ pub trait PlatformBuilder: Send + Sync {
     fn build_rust(&self, ctx: &BuilderContext) -> Result<BuildArtifacts>;
 
     /// Build platform-specific artifacts (APK, WASM, etc.)
-    fn build_platform(&self, ctx: &BuilderContext, artifacts: &BuildArtifacts) -> Result<FinalArtifacts>;
+    fn build_platform(
+        &self,
+        ctx: &BuilderContext,
+        artifacts: &BuildArtifacts,
+    ) -> Result<FinalArtifacts>;
 
     /// Clean build artifacts
     fn clean(&self, ctx: &BuilderContext) -> Result<()>;

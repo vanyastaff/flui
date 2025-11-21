@@ -1,9 +1,7 @@
 //! RenderFittedBox - scales and positions child according to BoxFit
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{layout::BoxFit, painting::ClipBehavior, Alignment, Offset, Size};
 

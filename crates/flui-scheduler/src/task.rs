@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn test_task_queue_priority() {
         let queue = TaskQueue::new();
-        
+
         // Add tasks in random priority order
         queue.add(Priority::Idle, || {});
         queue.add(Priority::UserInput, || {});

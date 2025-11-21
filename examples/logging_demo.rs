@@ -8,11 +8,11 @@
 //! - No noisy paint_child spam
 //! - Configurable log levels
 
+use flui_app::*;
 use flui_core::logging::{init_logging, LogConfig, LogMode};
 use flui_core::prelude::*;
-use flui_rendering::objects::{RenderFlex, FlexDirection};
+use flui_rendering::objects::{FlexDirection, RenderFlex};
 use flui_widgets::Text;
-use flui_app::*;
 
 #[derive(Debug)]
 struct LoggingDemo;

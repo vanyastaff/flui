@@ -538,109 +538,181 @@ impl DrawCommand {
     /// Clipping commands and commands without Paint are returned unchanged.
     pub fn with_opacity(&self, opacity: f32) -> Self {
         match self {
-            DrawCommand::DrawRect { rect, paint, transform } => DrawCommand::DrawRect {
+            DrawCommand::DrawRect {
+                rect,
+                paint,
+                transform,
+            } => DrawCommand::DrawRect {
                 rect: *rect,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawRRect { rrect, paint, transform } => DrawCommand::DrawRRect {
+            DrawCommand::DrawRRect {
+                rrect,
+                paint,
+                transform,
+            } => DrawCommand::DrawRRect {
                 rrect: *rrect,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawCircle { center, radius, paint, transform } => DrawCommand::DrawCircle {
+            DrawCommand::DrawCircle {
+                center,
+                radius,
+                paint,
+                transform,
+            } => DrawCommand::DrawCircle {
                 center: *center,
                 radius: *radius,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawOval { rect, paint, transform } => DrawCommand::DrawOval {
+            DrawCommand::DrawOval {
+                rect,
+                paint,
+                transform,
+            } => DrawCommand::DrawOval {
                 rect: *rect,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawLine { p1, p2, paint, transform } => DrawCommand::DrawLine {
+            DrawCommand::DrawLine {
+                p1,
+                p2,
+                paint,
+                transform,
+            } => DrawCommand::DrawLine {
                 p1: *p1,
                 p2: *p2,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawPath { path, paint, transform } => DrawCommand::DrawPath {
+            DrawCommand::DrawPath {
+                path,
+                paint,
+                transform,
+            } => DrawCommand::DrawPath {
                 path: path.clone(),
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawText { text, offset, style, paint, transform } => DrawCommand::DrawText {
+            DrawCommand::DrawText {
+                text,
+                offset,
+                style,
+                paint,
+                transform,
+            } => DrawCommand::DrawText {
                 text: text.clone(),
                 offset: *offset,
                 style: style.clone(),
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawShadow { path, color, elevation, transform } => DrawCommand::DrawShadow {
+            DrawCommand::DrawShadow {
+                path,
+                color,
+                elevation,
+                transform,
+            } => DrawCommand::DrawShadow {
                 path: path.clone(),
                 color: color.with_opacity(opacity),
                 elevation: *elevation,
                 transform: *transform,
             },
-            DrawCommand::DrawArc { rect, start_angle, sweep_angle, use_center, paint, transform } => {
-                DrawCommand::DrawArc {
-                    rect: *rect,
-                    start_angle: *start_angle,
-                    sweep_angle: *sweep_angle,
-                    use_center: *use_center,
-                    paint: paint.clone().with_opacity(opacity),
-                    transform: *transform,
-                }
-            }
-            DrawCommand::DrawDRRect { outer, inner, paint, transform } => DrawCommand::DrawDRRect {
+            DrawCommand::DrawArc {
+                rect,
+                start_angle,
+                sweep_angle,
+                use_center,
+                paint,
+                transform,
+            } => DrawCommand::DrawArc {
+                rect: *rect,
+                start_angle: *start_angle,
+                sweep_angle: *sweep_angle,
+                use_center: *use_center,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawDRRect {
+                outer,
+                inner,
+                paint,
+                transform,
+            } => DrawCommand::DrawDRRect {
                 outer: *outer,
                 inner: *inner,
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawPoints { mode, points, paint, transform } => DrawCommand::DrawPoints {
+            DrawCommand::DrawPoints {
+                mode,
+                points,
+                paint,
+                transform,
+            } => DrawCommand::DrawPoints {
                 mode: *mode,
                 points: points.clone(),
                 paint: paint.clone().with_opacity(opacity),
                 transform: *transform,
             },
-            DrawCommand::DrawVertices { vertices, colors, tex_coords, indices, paint, transform } => {
-                DrawCommand::DrawVertices {
-                    vertices: vertices.clone(),
-                    colors: colors.clone(),
-                    tex_coords: tex_coords.clone(),
-                    indices: indices.clone(),
-                    paint: paint.clone().with_opacity(opacity),
-                    transform: *transform,
-                }
-            }
-            DrawCommand::DrawColor { color, blend_mode, transform } => DrawCommand::DrawColor {
+            DrawCommand::DrawVertices {
+                vertices,
+                colors,
+                tex_coords,
+                indices,
+                paint,
+                transform,
+            } => DrawCommand::DrawVertices {
+                vertices: vertices.clone(),
+                colors: colors.clone(),
+                tex_coords: tex_coords.clone(),
+                indices: indices.clone(),
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::DrawColor {
+                color,
+                blend_mode,
+                transform,
+            } => DrawCommand::DrawColor {
                 color: color.with_opacity(opacity),
                 blend_mode: *blend_mode,
                 transform: *transform,
             },
-            DrawCommand::DrawImage { image, dst, paint, transform } => DrawCommand::DrawImage {
+            DrawCommand::DrawImage {
+                image,
+                dst,
+                paint,
+                transform,
+            } => DrawCommand::DrawImage {
                 image: image.clone(),
                 dst: *dst,
                 paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
                 transform: *transform,
             },
-            DrawCommand::DrawAtlas { image, sprites, transforms, colors, blend_mode, paint, transform } => {
-                DrawCommand::DrawAtlas {
-                    image: image.clone(),
-                    sprites: sprites.clone(),
-                    transforms: transforms.clone(),
-                    colors: colors.clone(),
-                    blend_mode: *blend_mode,
-                    paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
-                    transform: *transform,
-                }
-            }
+            DrawCommand::DrawAtlas {
+                image,
+                sprites,
+                transforms,
+                colors,
+                blend_mode,
+                paint,
+                transform,
+            } => DrawCommand::DrawAtlas {
+                image: image.clone(),
+                sprites: sprites.clone(),
+                transforms: transforms.clone(),
+                colors: colors.clone(),
+                blend_mode: *blend_mode,
+                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                transform: *transform,
+            },
             // Clipping commands don't have paint, return unchanged
-            DrawCommand::ClipRect { .. } | DrawCommand::ClipRRect { .. } | DrawCommand::ClipPath { .. } => {
-                self.clone()
-            }
+            DrawCommand::ClipRect { .. }
+            | DrawCommand::ClipRRect { .. }
+            | DrawCommand::ClipPath { .. } => self.clone(),
         }
     }
 
@@ -650,13 +722,21 @@ impl DrawCommand {
     /// This returns transformed screen-space bounds (local bounds transformed by the command's matrix).
     fn bounds(&self) -> Option<Rect> {
         match self {
-            DrawCommand::DrawRect { rect, paint, transform } => {
+            DrawCommand::DrawRect {
+                rect,
+                paint,
+                transform,
+            } => {
                 // Account for stroke width if stroking
                 let outset = paint.effective_stroke_width() * 0.5;
                 let local_bounds = rect.expand(outset);
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawRRect { rrect, paint, transform } => {
+            DrawCommand::DrawRRect {
+                rrect,
+                paint,
+                transform,
+            } => {
                 let outset = paint.effective_stroke_width() * 0.5;
                 let local_bounds = rrect.bounding_rect().expand(outset);
                 Some(transform.transform_rect(&local_bounds))
@@ -674,15 +754,22 @@ impl DrawCommand {
                 let local_bounds = Rect::from_center_size(*center, size);
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawOval { rect, paint, transform } => {
+            DrawCommand::DrawOval {
+                rect,
+                paint,
+                transform,
+            } => {
                 let outset = paint.effective_stroke_width() * 0.5;
                 let local_bounds = rect.expand(outset);
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawImage { dst, transform, .. } => {
-                Some(transform.transform_rect(dst))
-            }
-            DrawCommand::DrawLine { p1, p2, paint, transform } => {
+            DrawCommand::DrawImage { dst, transform, .. } => Some(transform.transform_rect(dst)),
+            DrawCommand::DrawLine {
+                p1,
+                p2,
+                paint,
+                transform,
+            } => {
                 // Account for stroke width
                 let stroke_half = paint.effective_stroke_width() * 0.5;
                 let min_x = p1.x.min(p2.x) - stroke_half;
@@ -706,17 +793,32 @@ impl DrawCommand {
                 // 3. Making bounds() work with &self (recompute each time)
                 None
             }
-            DrawCommand::DrawArc { rect, paint, transform, .. } => {
+            DrawCommand::DrawArc {
+                rect,
+                paint,
+                transform,
+                ..
+            } => {
                 let outset = paint.effective_stroke_width() * 0.5;
                 let local_bounds = rect.expand(outset);
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawDRRect { outer, paint, transform, .. } => {
+            DrawCommand::DrawDRRect {
+                outer,
+                paint,
+                transform,
+                ..
+            } => {
                 let outset = paint.effective_stroke_width() * 0.5;
                 let local_bounds = outer.bounding_rect().expand(outset);
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawPoints { points, paint, transform, .. } => {
+            DrawCommand::DrawPoints {
+                points,
+                paint,
+                transform,
+                ..
+            } => {
                 if points.is_empty() {
                     return None;
                 }
@@ -741,7 +843,11 @@ impl DrawCommand {
                 );
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawVertices { vertices, transform, .. } => {
+            DrawCommand::DrawVertices {
+                vertices,
+                transform,
+                ..
+            } => {
                 if vertices.is_empty() {
                     return None;
                 }
@@ -778,7 +884,8 @@ impl DrawCommand {
 
                 let mut combined_bounds: Option<Rect> = None;
 
-                for (sprite_rect, sprite_transform) in sprites.iter().zip(sprite_transforms.iter()) {
+                for (sprite_rect, sprite_transform) in sprites.iter().zip(sprite_transforms.iter())
+                {
                     // Transform sprite rect by its local transform
                     let local_transformed = sprite_transform.transform_rect(sprite_rect);
 
@@ -855,4 +962,3 @@ mod tests {
 }
 
 // ===== Command Pattern Implementation (Visitor Pattern) =====
-

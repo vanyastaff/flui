@@ -1,7 +1,7 @@
 use crate::Template;
 use anyhow::Result;
 use console::style;
-use dialoguer::{Input, Select, Confirm};
+use dialoguer::{Confirm, Input, Select};
 
 pub struct ProjectConfig {
     pub name: String,
@@ -10,7 +10,10 @@ pub struct ProjectConfig {
 }
 
 pub fn interactive_create() -> Result<ProjectConfig> {
-    println!("{}", style("Let's create a new FLUI project!").green().bold());
+    println!(
+        "{}",
+        style("Let's create a new FLUI project!").green().bold()
+    );
     println!();
 
     // Ask for project name
@@ -46,7 +49,13 @@ pub fn interactive_create() -> Result<ProjectConfig> {
 
     let selection = Select::new()
         .with_prompt("Choose a template")
-        .items(templates.iter().map(|(name, desc)| format!("{} - {}", name, desc)).collect::<Vec<_>>().as_slice())
+        .items(
+            templates
+                .iter()
+                .map(|(name, desc)| format!("{} - {}", name, desc))
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
         .default(0)
         .interact()?;
 
@@ -63,7 +72,10 @@ pub fn interactive_create() -> Result<ProjectConfig> {
     println!("{}", style("Summary:").cyan().bold());
     println!("  Name: {}", style(&name).yellow());
     println!("  Organization: {}", style(&org).yellow());
-    println!("  Template: {:?}", style(format!("{:?}", template)).yellow());
+    println!(
+        "  Template: {:?}",
+        style(format!("{:?}", template)).yellow()
+    );
     println!();
 
     let confirmed = Confirm::new()
@@ -75,5 +87,9 @@ pub fn interactive_create() -> Result<ProjectConfig> {
         anyhow::bail!("Project creation cancelled");
     }
 
-    Ok(ProjectConfig { name, org, template })
+    Ok(ProjectConfig {
+        name,
+        org,
+        template,
+    })
 }

@@ -227,21 +227,21 @@ impl<V: crate::view::View> IntoElement for V {
     }
 }
 
-        /// Identity implementation for Element itself.
-        ///
-        /// Enables Element to be returned directly from build():
-        ///
-        /// ```rust,ignore
-        /// fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        ///     // Can return Element directly
-        ///     some_view.into_element()
-        /// }
-        /// ```
-        impl IntoElement for Element {
-            fn into_element(self) -> Element {
-                self
-            }
-        }
+/// Identity implementation for Element itself.
+///
+/// Enables Element to be returned directly from build():
+///
+/// ```rust,ignore
+/// fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+///     // Can return Element directly
+///     some_view.into_element()
+/// }
+/// ```
+impl IntoElement for Element {
+    fn into_element(self) -> Element {
+        self
+    }
+}
 
 /// Implementation for optional elements.
 ///

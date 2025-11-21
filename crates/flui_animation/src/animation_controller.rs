@@ -548,12 +548,8 @@ mod tests {
     #[test]
     fn test_animation_controller_bounds() {
         let scheduler = Arc::new(Scheduler::new());
-        let controller = AnimationController::with_bounds(
-            Duration::from_millis(100),
-            scheduler,
-            10.0,
-            20.0,
-        );
+        let controller =
+            AnimationController::with_bounds(Duration::from_millis(100), scheduler, 10.0, 20.0);
 
         assert_eq!(controller.value(), 10.0);
 

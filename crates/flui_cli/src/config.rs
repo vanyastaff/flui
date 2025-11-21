@@ -88,11 +88,9 @@ impl FluiConfig {
             anyhow::bail!("Not a FLUI project (flui.toml not found)");
         }
 
-        let content = std::fs::read_to_string(config_path)
-            .context("Failed to read flui.toml")?;
+        let content = std::fs::read_to_string(config_path).context("Failed to read flui.toml")?;
 
-        let config: FluiConfig = toml::from_str(&content)
-            .context("Failed to parse flui.toml")?;
+        let config: FluiConfig = toml::from_str(&content).context("Failed to parse flui.toml")?;
 
         Ok(config)
     }
@@ -100,19 +98,16 @@ impl FluiConfig {
     /// Save configuration to flui.toml
     #[allow(dead_code)]
     pub fn save(&self, path: &Path) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
-        std::fs::write(path.join("flui.toml"), content)
-            .context("Failed to write flui.toml")?;
+        std::fs::write(path.join("flui.toml"), content).context("Failed to write flui.toml")?;
 
         Ok(())
     }
 }
 
 /// Global FLUI CLI configuration (~/.flui/config.toml)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[allow(dead_code)]
 pub struct GlobalConfig {
     #[serde(default)]
@@ -200,11 +195,11 @@ impl GlobalConfig {
             return Ok(Self::default());
         }
 
-        let content = std::fs::read_to_string(&config_path)
-            .context("Failed to read global config")?;
+        let content =
+            std::fs::read_to_string(&config_path).context("Failed to read global config")?;
 
-        let config: GlobalConfig = toml::from_str(&content)
-            .context("Failed to parse global config")?;
+        let config: GlobalConfig =
+            toml::from_str(&content).context("Failed to parse global config")?;
 
         Ok(config)
     }
@@ -215,14 +210,11 @@ impl GlobalConfig {
         let config_path = Self::config_path()?;
         let config_dir = config_path.parent().unwrap();
 
-        std::fs::create_dir_all(config_dir)
-            .context("Failed to create config directory")?;
+        std::fs::create_dir_all(config_dir).context("Failed to create config directory")?;
 
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
-        std::fs::write(&config_path, content)
-            .context("Failed to write global config")?;
+        std::fs::write(&config_path, content).context("Failed to write global config")?;
 
         Ok(())
     }
@@ -230,13 +222,12 @@ impl GlobalConfig {
     /// Get global config path (~/.flui/config.toml)
     #[allow(dead_code)]
     fn config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+        let home =
+            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
 
         Ok(home.join(".flui").join("config.toml"))
     }
 }
-
 
 // Add num_cpus to Cargo.toml dependencies
 // For now, use a simple fallback

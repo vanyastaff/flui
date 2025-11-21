@@ -184,10 +184,10 @@ impl PositionedDirectional {
         }
     }
 
-    /// Converts to Positioned using the given text direction.
+    /// Converts into Positioned using the given text direction.
     ///
     /// This resolves start/end to left/right based on text direction.
-    fn to_positioned(self, text_direction: TextDirection) -> crate::Positioned {
+    fn into_positioned(self, text_direction: TextDirection) -> crate::Positioned {
         let (left, right) = match text_direction {
             TextDirection::Ltr => (self.start, self.end),
             TextDirection::Rtl => (self.end, self.start),
@@ -257,7 +257,7 @@ impl View for PositionedDirectional {
         let text_direction = self.text_direction.unwrap_or(TextDirection::Ltr);
 
         // Convert to regular Positioned and build
-        self.to_positioned(text_direction)
+        self.into_positioned(text_direction)
     }
 }
 
@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn test_positioned_directional_to_positioned_ltr() {
+    fn test_positioned_directional_into_positioned_ltr() {
         let widget = PositionedDirectional {
             key: None,
             start: Some(10.0),
@@ -327,7 +327,7 @@ mod tests {
             child: None,
         };
 
-        let positioned = widget.to_positioned(TextDirection::Ltr);
+        let positioned = widget.into_positioned(TextDirection::Ltr);
         assert_eq!(positioned.left, Some(10.0));
         assert_eq!(positioned.top, Some(20.0));
         assert_eq!(positioned.right, Some(30.0));
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn test_positioned_directional_to_positioned_rtl() {
+    fn test_positioned_directional_into_positioned_rtl() {
         let widget = PositionedDirectional {
             key: None,
             start: Some(10.0),
@@ -348,7 +348,7 @@ mod tests {
             child: None,
         };
 
-        let positioned = widget.to_positioned(TextDirection::Rtl);
+        let positioned = widget.into_positioned(TextDirection::Rtl);
         // In RTL: start becomes right, end becomes left
         assert_eq!(positioned.left, Some(30.0));
         assert_eq!(positioned.top, Some(20.0));

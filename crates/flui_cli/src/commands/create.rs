@@ -1,5 +1,5 @@
-use crate::{Platform, Template};
 use crate::templates::TemplateGenerator;
+use crate::{Platform, Template};
 use anyhow::{Context, Result};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -14,7 +14,12 @@ pub fn execute(
     path: Option<PathBuf>,
     _is_lib: bool,
 ) -> Result<()> {
-    println!("{}", style(format!("Creating FLUI project '{}'...", name)).green().bold());
+    println!(
+        "{}",
+        style(format!("Creating FLUI project '{}'...", name))
+            .green()
+            .bold()
+    );
     println!();
 
     // Validate project name
@@ -37,13 +42,12 @@ pub fn execute(
     spinner.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .unwrap()
+            .unwrap(),
     );
 
     // Create project directory
     spinner.set_message("Creating project directory...");
-    std::fs::create_dir_all(&project_dir)
-        .context("Failed to create project directory")?;
+    std::fs::create_dir_all(&project_dir).context("Failed to create project directory")?;
 
     spinner.finish_and_clear();
 
@@ -56,7 +60,7 @@ pub fn execute(
     spinner.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     spinner.set_message("Generating project files...");
 
@@ -77,7 +81,7 @@ pub fn execute(
     spinner.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     spinner.set_message("Initializing git repository...");
     init_git_repo(&project_dir)?;
@@ -89,7 +93,7 @@ pub fn execute(
     spinner.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     spinner.set_message("Running cargo check (this may take a while)...");
     run_cargo_check(&project_dir)?;
@@ -97,10 +101,19 @@ pub fn execute(
     println!("  {} Cargo check completed", style("✓").green());
 
     println!();
-    println!("{}", style(format!("✓ Successfully created FLUI project '{}'", name)).green().bold());
+    println!(
+        "{}",
+        style(format!("✓ Successfully created FLUI project '{}'", name))
+            .green()
+            .bold()
+    );
     println!();
     println!("To get started:");
-    println!("  {} {}", style("$").dim(), style(format!("cd {}", name)).cyan());
+    println!(
+        "  {} {}",
+        style("$").dim(),
+        style(format!("cd {}", name)).cyan()
+    );
     println!("  {} {}", style("$").dim(), style("flui run").cyan());
     println!();
 
@@ -112,7 +125,10 @@ fn validate_project_name(name: &str) -> Result<()> {
         anyhow::bail!("Project name cannot be empty");
     }
 
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
         anyhow::bail!(
             "Project name must contain only alphanumeric characters, hyphens, and underscores"
         );
@@ -124,13 +140,11 @@ fn validate_project_name(name: &str) -> Result<()> {
 
     // Reserved Rust keywords
     const RESERVED: &[&str] = &[
-        "abstract", "as", "async", "await", "become", "box", "break", "const",
-        "continue", "crate", "do", "dyn", "else", "enum", "extern", "false",
-        "final", "fn", "for", "if", "impl", "in", "let", "loop", "macro",
-        "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
-        "return", "self", "Self", "static", "struct", "super", "trait", "true",
-        "type", "typeof", "unsafe", "unsized", "use", "virtual", "where",
-        "while", "yield",
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+        "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
+        "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+        "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "typeof",
+        "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
     ];
 
     if RESERVED.contains(&name) {
@@ -179,8 +193,7 @@ flui.lock
 Cargo.lock
 "#;
 
-    std::fs::write(dir.join(".gitignore"), gitignore)
-        .context("Failed to create .gitignore")?;
+    std::fs::write(dir.join(".gitignore"), gitignore).context("Failed to create .gitignore")?;
 
     Ok(())
 }
@@ -194,9 +207,15 @@ fn run_cargo_check(dir: &PathBuf) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("\n{}", style("Warning: cargo check reported issues:").yellow());
+        eprintln!(
+            "\n{}",
+            style("Warning: cargo check reported issues:").yellow()
+        );
         eprintln!("{}", stderr);
-        eprintln!("{}", style("The project was created but may need fixes.").yellow());
+        eprintln!(
+            "{}",
+            style("The project was created but may need fixes.").yellow()
+        );
     }
 
     Ok(())

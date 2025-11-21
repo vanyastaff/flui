@@ -29,9 +29,7 @@
 
 use flui_core::element::hit_test::BoxHitTestResult;
 use flui_core::render::{
-    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_painting::Canvas;
 use flui_types::{painting::Clip, Offset, Size};
@@ -177,7 +175,11 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
         ctx.canvas().restore();
     }
 
-    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(
+        &self,
+        ctx: HitTestContext<'_, Single, BoxProtocol>,
+        result: &mut BoxHitTestResult,
+    ) -> bool {
         // For clipping, we need to check if the hit position is inside the clip region.
         // If it's outside, the hit should fail even if it would hit the child.
         //

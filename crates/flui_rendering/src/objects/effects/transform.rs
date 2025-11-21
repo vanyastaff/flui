@@ -2,9 +2,7 @@
 
 use flui_core::element::hit_test::BoxHitTestResult;
 use flui_core::render::{
-    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 
@@ -134,7 +132,11 @@ impl RenderBox<Single> for RenderTransform {
         ctx.canvas().restore();
     }
 
-    fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut BoxHitTestResult) -> bool {
+    fn hit_test(
+        &self,
+        ctx: HitTestContext<'_, Single, BoxProtocol>,
+        result: &mut BoxHitTestResult,
+    ) -> bool {
         // To hit test a transformed child, we need to transform the hit position
         // by the INVERSE of our transform, then test the child with that position.
         //

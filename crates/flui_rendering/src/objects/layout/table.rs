@@ -25,9 +25,10 @@ impl Default for TableColumnWidth {
 }
 
 /// Vertical alignment for table cells
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TableCellVerticalAlignment {
     /// Align to top of row
+    #[default]
     Top,
     /// Center vertically in row
     Middle,
@@ -35,12 +36,6 @@ pub enum TableCellVerticalAlignment {
     Bottom,
     /// Fill entire row height
     Fill,
-}
-
-impl Default for TableCellVerticalAlignment {
-    fn default() -> Self {
-        TableCellVerticalAlignment::Top
-    }
 }
 
 /// RenderObject that implements table layout
@@ -114,6 +109,7 @@ impl RenderTable {
     }
 
     /// Compute column widths based on constraints and column specs
+    #[allow(clippy::needless_range_loop)]
     fn compute_column_widths(
         &self,
         children: &[NonZeroUsize],
@@ -124,7 +120,7 @@ impl RenderTable {
             return Vec::new();
         }
 
-        let row_count = (children.len() + self.columns - 1) / self.columns;
+        let row_count = children.len().div_ceil(self.columns);
         let available_width = constraints.max_width;
 
         // First pass: compute fixed and intrinsic widths
@@ -184,6 +180,7 @@ impl RenderTable {
     }
 
     /// Compute row heights based on column widths and cell contents
+    #[allow(clippy::needless_range_loop)]
     fn compute_row_heights(
         &self,
         children: &[NonZeroUsize],
@@ -195,7 +192,7 @@ impl RenderTable {
             return Vec::new();
         }
 
-        let row_count = (children.len() + self.columns - 1) / self.columns;
+        let row_count = children.len().div_ceil(self.columns);
         let mut heights = vec![0.0; row_count];
 
         for row in 0..row_count {

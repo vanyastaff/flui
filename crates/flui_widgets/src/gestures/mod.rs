@@ -9,16 +9,16 @@ pub use flui_interaction::{
     // Gesture recognizers
     DoubleTapGestureRecognizer,
     DragGestureRecognizer,
-    GestureRecognizer,
-    LongPressGestureRecognizer,
-    MultiTapGestureRecognizer,
-    ScaleGestureRecognizer,
-    TapGestureRecognizer,
     // Arena
     GestureArena,
     GestureArenaMember,
     GestureDisposition,
+    GestureRecognizer,
+    LongPressGestureRecognizer,
+    MultiTapGestureRecognizer,
     PointerId,
+    ScaleGestureRecognizer,
+    TapGestureRecognizer,
 };
 
 // Re-export our own GestureDetector widget

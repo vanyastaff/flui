@@ -12,7 +12,6 @@ pub mod paint;
 pub mod path;
 pub mod shader;
 
-
 // Re-exports for convenience
 pub use blend_mode::BlendMode;
 pub use canvas::{
@@ -35,4 +34,3 @@ pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, Ima
 pub use paint::{Paint, PaintBuilder, PaintStyle};
 pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};
-

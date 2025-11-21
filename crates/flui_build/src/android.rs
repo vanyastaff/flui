@@ -39,8 +39,7 @@ impl PlatformBuilder for AndroidBuilder {
 
     fn validate_environment(&self) -> Result<()> {
         // Check cargo-ndk
-        check_command_exists("cargo")
-            .context("cargo not found - Rust toolchain required")?;
+        check_command_exists("cargo").context("cargo not found - Rust toolchain required")?;
 
         // Try to find cargo-ndk
         let cargo_ndk_result = std::process::Command::new("cargo")
@@ -54,14 +53,13 @@ impl PlatformBuilder for AndroidBuilder {
         }
 
         // Check Gradle (optional - warn if not found)
-        let gradle_wrapper = self.workspace_root
-            .join("platforms")
-            .join("android")
-            .join(if cfg!(target_os = "windows") {
+        let gradle_wrapper = self.workspace_root.join("platforms").join("android").join(
+            if cfg!(target_os = "windows") {
                 "gradlew.bat"
             } else {
                 "gradlew"
-            });
+            },
+        );
 
         if !gradle_wrapper.exists() {
             tracing::warn!("Gradle wrapper not found - will build native libraries only");
@@ -159,7 +157,11 @@ impl PlatformBuilder for AndroidBuilder {
         })
     }
 
-    fn build_platform(&self, ctx: &BuilderContext, artifacts: &BuildArtifacts) -> Result<FinalArtifacts> {
+    fn build_platform(
+        &self,
+        ctx: &BuilderContext,
+        artifacts: &BuildArtifacts,
+    ) -> Result<FinalArtifacts> {
         tracing::info!("Building APK with Gradle...");
 
         let android_dir = self.workspace_root.join("platforms").join("android");
@@ -174,10 +176,14 @@ impl PlatformBuilder for AndroidBuilder {
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
         if !gradle_wrapper_path.exists() {
             tracing::warn!("Gradle wrapper not found, skipping APK build");
-            tracing::info!("Native libraries built successfully at: platforms/android/app/src/main/jniLibs/");
+            tracing::info!(
+                "Native libraries built successfully at: platforms/android/app/src/main/jniLibs/"
+            );
 
             // Return the .so file as the artifact
-            let so_file = artifacts.rust_libs.first()
+            let so_file = artifacts
+                .rust_libs
+                .first()
                 .ok_or_else(|| anyhow!("No native libraries found"))?;
             let size_bytes = std::fs::metadata(so_file)?.len();
 

@@ -47,13 +47,13 @@
 //! # }
 //! ```
 
-pub mod platform;
 pub mod android;
-pub mod web;
 pub mod desktop;
+pub mod platform;
 pub mod util;
+pub mod web;
 
-pub use platform::*;
 pub use android::AndroidBuilder;
-pub use web::WebBuilder;
 pub use desktop::DesktopBuilder;
+pub use platform::*;
+pub use web::WebBuilder;

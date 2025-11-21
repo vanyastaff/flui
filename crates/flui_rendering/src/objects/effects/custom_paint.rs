@@ -1,9 +1,7 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_painting::Canvas;
 use flui_types::Size;

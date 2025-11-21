@@ -123,10 +123,7 @@ pub trait Pipeline: Send + Sync {
     /// - `Ok(Some(size))`: Layout succeeded, returns root size
     /// - `Ok(None)`: No root element or tree is empty
     /// - `Err(e)`: Layout error occurred
-    fn flush_layout(
-        &self,
-        constraints: BoxConstraints,
-    ) -> Result<Option<Size>, PipelineError>;
+    fn flush_layout(&self, constraints: BoxConstraints) -> Result<Option<Size>, PipelineError>;
 
     /// Flush the paint phase
     ///
@@ -248,10 +245,7 @@ impl Pipeline for Arc<RwLock<PipelineOwner>> {
         self.write().flush_build();
     }
 
-    fn flush_layout(
-        &self,
-        constraints: BoxConstraints,
-    ) -> Result<Option<Size>, PipelineError> {
+    fn flush_layout(&self, constraints: BoxConstraints) -> Result<Option<Size>, PipelineError> {
         self.write().flush_layout(constraints)
     }
 

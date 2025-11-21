@@ -470,7 +470,8 @@ mod tests {
 
         // Move out of region
         let empty_result = HitTestResult::new();
-        let mut data2 = PointerEventData::new(Offset::new(1000.0, 1000.0), PointerDeviceKind::Mouse);
+        let mut data2 =
+            PointerEventData::new(Offset::new(1000.0, 1000.0), PointerDeviceKind::Mouse);
         data2.device = 0;
         tracker.update_with_event(&PointerEvent::Hover(data2), &empty_result);
 

@@ -7,10 +7,12 @@
 //! - Animation tickers
 //! - Frame budgets
 
-use crate::frame::{FrameCallback, FrameId, FramePhase, FrameTiming, PersistentFrameCallback, PostFrameCallback};
+use crate::budget::FrameBudget;
+use crate::frame::{
+    FrameCallback, FrameId, FramePhase, FrameTiming, PersistentFrameCallback, PostFrameCallback,
+};
 use crate::task::{Priority, TaskQueue};
 use crate::ticker::TickerProvider;
-use crate::budget::FrameBudget;
 use instant::Instant;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -263,7 +265,7 @@ impl Default for Scheduler {
 pub trait SchedulerBinding: Send + Sync {
     /// Get reference to the scheduler
     fn scheduler(&self) -> &Scheduler;
-    
+
     /// Schedule a frame
     fn schedule_frame(&self) {
         self.scheduler().schedule_frame(Box::new(|_| {}));

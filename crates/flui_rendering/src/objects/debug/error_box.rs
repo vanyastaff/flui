@@ -2,7 +2,7 @@
 
 use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
 use flui_core::render::{Leaf, RenderBox};
-use flui_painting::{Canvas, Paint};
+use flui_painting::Paint;
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
 

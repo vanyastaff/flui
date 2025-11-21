@@ -52,22 +52,17 @@ pub struct RenderTexture {
 }
 
 /// Filter quality for texture sampling
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FilterQuality {
     /// Nearest neighbor (pixelated, fastest)
     None,
     /// Bilinear filtering (smooth)
+    #[default]
     Low,
     /// Bilinear + mipmaps
     Medium,
     /// Bicubic filtering (best quality, slowest)
     High,
-}
-
-impl Default for FilterQuality {
-    fn default() -> Self {
-        FilterQuality::Low
-    }
 }
 
 impl RenderTexture {
@@ -122,7 +117,7 @@ impl RenderTexture {
 
     /// Calculate destination rectangle based on BoxFit
     /// Returns the rect where the texture should be drawn
-    fn calculate_dest_rect(&self, texture_size: Size, available_size: Size) -> Rect {
+    pub fn calculate_dest_rect(&self, texture_size: Size, available_size: Size) -> Rect {
         if texture_size.is_empty() || available_size.is_empty() {
             return Rect::from_xywh(0.0, 0.0, available_size.width, available_size.height);
         }
@@ -249,10 +244,12 @@ impl RenderBox<Leaf> for RenderTexture {
         // Note: Canvas API will need to support texture drawing
         // For now, we draw a placeholder rectangle to show the texture bounds
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
-        let mut paint = flui_painting::Paint::default();
-        paint.style = flui_painting::PaintStyle::Stroke;
-        paint.stroke_width = 2.0;
-        paint.color = flui_types::Color::rgba(128, 128, 128, 255);
+        let paint = flui_painting::Paint {
+            style: flui_painting::PaintStyle::Stroke,
+            stroke_width: 2.0,
+            color: flui_types::Color::rgba(128, 128, 128, 255),
+            ..Default::default()
+        };
 
         ctx.canvas().draw_rect(rect, &paint);
 

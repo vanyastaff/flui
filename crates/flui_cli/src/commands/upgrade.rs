@@ -21,7 +21,10 @@ pub fn execute(self_update: bool, dependencies: bool) -> Result<()> {
     }
 
     if dependencies || !self_update {
-        println!("{}", style("Updating project dependencies...").green().bold());
+        println!(
+            "{}",
+            style("Updating project dependencies...").green().bold()
+        );
         println!();
 
         let status = Command::new("cargo")

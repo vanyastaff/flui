@@ -53,7 +53,11 @@ impl GestureBinding {
     /// let pointer_event = Event::Pointer(PointerEvent::Down { ... });
     /// binding.handle_event(pointer_event, &mut root_layer);
     /// ```
-    pub fn handle_event(&self, event: Event, root: &mut dyn flui_interaction::hit_test::HitTestable) {
+    pub fn handle_event(
+        &self,
+        event: Event,
+        root: &mut dyn flui_interaction::hit_test::HitTestable,
+    ) {
         let mut router = self.event_router.write();
         router.route_event(root, &event);
     }

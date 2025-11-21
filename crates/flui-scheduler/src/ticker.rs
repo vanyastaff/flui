@@ -4,9 +4,9 @@
 //! They coordinate with the scheduler to ensure animations stay synchronized with
 //! the display refresh rate.
 
+use instant::Instant;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use instant::Instant;
 
 /// Ticker callback - receives elapsed time in seconds
 pub type TickerCallback = Box<dyn FnMut(f64) + Send>;

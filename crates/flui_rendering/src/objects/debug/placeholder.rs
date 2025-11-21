@@ -144,15 +144,19 @@ impl RenderBox<Leaf> for RenderPlaceholder {
         let rect = Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
 
         // Draw fill
-        let mut fill_paint = Paint::default();
-        fill_paint.color = self.fill_color;
+        let fill_paint = Paint {
+            color: self.fill_color,
+            ..Default::default()
+        };
         canvas.draw_rect(rect, &fill_paint);
 
         // Draw border
-        let mut stroke_paint = Paint::default();
-        stroke_paint.color = self.stroke_color;
-        stroke_paint.style = flui_painting::PaintStyle::Stroke;
-        stroke_paint.stroke_width = self.stroke_width;
+        let stroke_paint = Paint {
+            color: self.stroke_color,
+            style: flui_painting::PaintStyle::Stroke,
+            stroke_width: self.stroke_width,
+            ..Default::default()
+        };
         canvas.draw_rect(rect, &stroke_paint);
 
         // Draw label if present
@@ -165,8 +169,10 @@ impl RenderBox<Leaf> for RenderPlaceholder {
             let text_offset =
                 flui_types::Offset::new(offset.dx + 10.0, offset.dy + self.size.height / 2.0);
 
-            let mut text_paint = Paint::default();
-            text_paint.color = Color::BLACK;
+            let text_paint = Paint {
+                color: Color::BLACK,
+                ..Default::default()
+            };
 
             canvas.draw_text(label, text_offset, &text_style, &text_paint);
         }

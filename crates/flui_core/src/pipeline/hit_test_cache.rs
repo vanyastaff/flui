@@ -130,12 +130,7 @@ impl HitTestCache {
     /// Insert result into cache
     ///
     /// Stores result for future lookups at this position.
-    pub fn insert(
-        &mut self,
-        position: Offset,
-        root_id: ElementId,
-        result: ElementHitTestResult,
-    ) {
+    pub fn insert(&mut self, position: Offset, root_id: ElementId, result: ElementHitTestResult) {
         let key = CacheKey::new(position, root_id);
 
         #[cfg(debug_assertions)]

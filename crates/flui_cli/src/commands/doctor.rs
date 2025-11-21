@@ -31,7 +31,10 @@ pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> Result<()>
         #[cfg(not(target_os = "macos"))]
         {
             if ios {
-                println!("{} iOS: Not available on non-macOS platforms", style("[!]").yellow());
+                println!(
+                    "{} iOS: Not available on non-macOS platforms",
+                    style("[!]").yellow()
+                );
             }
         }
     }
@@ -48,7 +51,12 @@ pub fn execute(verbose: bool, android: bool, ios: bool, web: bool) -> Result<()>
     if all_ok {
         println!("{}", style("✓ All checks passed!").green().bold());
     } else {
-        println!("{}", style("✗ Some checks failed. Please fix the issues above.").yellow().bold());
+        println!(
+            "{}",
+            style("✗ Some checks failed. Please fix the issues above.")
+                .yellow()
+                .bold()
+        );
     }
 
     Ok(())
@@ -136,7 +144,10 @@ fn check_java(verbose: bool) -> bool {
 
                 // Check if version is 11 or higher
                 if version_output.contains("version \"1.8") {
-                    println!("    {}: Java 11+ recommended for Android development", style("Warning").yellow());
+                    println!(
+                        "    {}: Java 11+ recommended for Android development",
+                        style("Warning").yellow()
+                    );
                     return true; // Still works, just warn
                 }
 
@@ -197,7 +208,10 @@ fn check_android(verbose: bool) -> bool {
     }
 
     // Check Android Rust targets
-    if let Ok(output) = Command::new("rustup").args(["target", "list", "--installed"]).output() {
+    if let Ok(output) = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+    {
         let targets = String::from_utf8_lossy(&output.stdout);
 
         let android_targets = [
@@ -223,7 +237,10 @@ fn check_android(verbose: bool) -> bool {
             for target in &missing_targets {
                 println!("    Missing: {}", style(target).yellow());
             }
-            println!("    Install with: rustup target add {}", missing_targets.join(" "));
+            println!(
+                "    Install with: rustup target add {}",
+                missing_targets.join(" ")
+            );
             android_ok = false;
         }
     }
@@ -260,7 +277,10 @@ fn check_ios(verbose: bool) -> bool {
     }
 
     // Check iOS Rust targets
-    if let Ok(output) = Command::new("rustup").args(["target", "list", "--installed"]).output() {
+    if let Ok(output) = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+    {
         let targets = String::from_utf8_lossy(&output.stdout);
 
         let ios_targets = [
@@ -285,7 +305,10 @@ fn check_ios(verbose: bool) -> bool {
             for target in &missing_targets {
                 println!("    Missing: {}", style(target).yellow());
             }
-            println!("    Install with: rustup target add {}", missing_targets.join(" "));
+            println!(
+                "    Install with: rustup target add {}",
+                missing_targets.join(" ")
+            );
             ios_ok = false;
         }
     }
@@ -318,7 +341,10 @@ fn check_web(_verbose: bool) -> bool {
     }
 
     // Check wasm32 target
-    if let Ok(output) = Command::new("rustup").args(["target", "list", "--installed"]).output() {
+    if let Ok(output) = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+    {
         let targets = String::from_utf8_lossy(&output.stdout);
 
         if targets.contains("wasm32-unknown-unknown") {

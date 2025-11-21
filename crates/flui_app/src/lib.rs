@@ -92,9 +92,6 @@ pub mod embedder;
 pub mod event_callbacks;
 pub mod window_state;
 
-#[cfg(target_arch = "wasm32")]
-pub mod wasm;
-
 // Re-exports for convenience
 pub use binding::AppBinding;
 pub use embedder::WgpuEmbedder;

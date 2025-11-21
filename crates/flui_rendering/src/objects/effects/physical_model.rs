@@ -2,7 +2,7 @@
 
 use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
 use flui_core::render::{Optional, RenderBox};
-use flui_painting::{Canvas, Paint};
+use flui_painting::Paint;
 use flui_types::{painting::Path, Color, Point, RRect, Rect, Size};
 
 /// Shape for physical model

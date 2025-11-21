@@ -225,7 +225,10 @@ mod tests {
         let modified = constraints.copy_with_scroll_offset(250.0);
 
         assert_eq!(modified.scroll_offset, 250.0);
-        assert_eq!(modified.remaining_paint_extent, constraints.remaining_paint_extent);
+        assert_eq!(
+            modified.remaining_paint_extent,
+            constraints.remaining_paint_extent
+        );
     }
 
     #[test]

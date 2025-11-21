@@ -1,9 +1,7 @@
 //! RenderOpacity - applies opacity to a child using OpacityLayer
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_core::ElementId;
 use flui_types::Size;

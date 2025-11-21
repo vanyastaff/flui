@@ -19,11 +19,13 @@ pub fn execute(details: bool, _platform: Option<String>) -> Result<()> {
     print_section_header("Desktop");
     #[cfg(target_os = "windows")]
     {
-        println!("  {} {}",
+        println!(
+            "  {} {}",
             style("●").green().bold(),
             style("Windows").cyan()
         );
-        println!("    {} {}",
+        println!(
+            "    {} {}",
             style("└─").dim(),
             style(get_windows_version()).dim()
         );
@@ -31,22 +33,17 @@ pub fn execute(details: bool, _platform: Option<String>) -> Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        println!("  {} {}",
-            style("●").green().bold(),
-            style("Linux").cyan()
-        );
+        println!("  {} {}", style("●").green().bold(), style("Linux").cyan());
     }
 
     #[cfg(target_os = "macos")]
     {
-        println!("  {} {}",
-            style("●").green().bold(),
-            style("macOS").cyan()
-        );
+        println!("  {} {}", style("●").green().bold(), style("macOS").cyan());
     }
 
     if details {
-        println!("    {} {}",
+        println!(
+            "    {} {}",
             style("  └─").dim(),
             style("Available for development and testing").dim()
         );
@@ -81,7 +78,8 @@ fn list_android_devices(details: bool) {
             let output_str = String::from_utf8_lossy(&output.stdout);
             let mut device_count = 0;
 
-            for line in output_str.lines().skip(1) { // Skip "List of devices attached"
+            for line in output_str.lines().skip(1) {
+                // Skip "List of devices attached"
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -102,7 +100,8 @@ fn list_android_devices(details: bool) {
                         _ => (style("●").dim(), status),
                     };
 
-                    println!("  {} {} {}",
+                    println!(
+                        "  {} {} {}",
                         status_icon,
                         style(device_id).cyan(),
                         style(format!("({})", status_text)).dim()
@@ -114,7 +113,9 @@ fn list_android_devices(details: bool) {
                             .args(["-s", device_id, "shell", "getprop", "ro.product.model"])
                             .output()
                         {
-                            let model = String::from_utf8_lossy(&model_output.stdout).trim().to_string();
+                            let model = String::from_utf8_lossy(&model_output.stdout)
+                                .trim()
+                                .to_string();
                             if !model.is_empty() {
                                 println!("    {} Model: {}", style("├─").dim(), style(model).dim());
                             }
@@ -122,12 +123,24 @@ fn list_android_devices(details: bool) {
 
                         // Get Android version
                         if let Ok(version_output) = Command::new("adb")
-                            .args(["-s", device_id, "shell", "getprop", "ro.build.version.release"])
+                            .args([
+                                "-s",
+                                device_id,
+                                "shell",
+                                "getprop",
+                                "ro.build.version.release",
+                            ])
                             .output()
                         {
-                            let version = String::from_utf8_lossy(&version_output.stdout).trim().to_string();
+                            let version = String::from_utf8_lossy(&version_output.stdout)
+                                .trim()
+                                .to_string();
                             if !version.is_empty() {
-                                println!("    {} Android {}", style("└─").dim(), style(version).dim());
+                                println!(
+                                    "    {} Android {}",
+                                    style("└─").dim(),
+                                    style(version).dim()
+                                );
                             }
                         }
                     }
@@ -135,22 +148,26 @@ fn list_android_devices(details: bool) {
             }
 
             if device_count == 0 {
-                println!("  {} {}",
+                println!(
+                    "  {} {}",
                     style("○").dim(),
                     style("No devices connected").dim()
                 );
-                println!("    {} {}",
+                println!(
+                    "    {} {}",
                     style("└─").dim(),
                     style("Connect via USB or start emulator").dim()
                 );
             }
         }
         Err(_) => {
-            println!("  {} {}",
+            println!(
+                "  {} {}",
                 style("✗").yellow().bold(),
                 style("adb not found").yellow()
             );
-            println!("    {} {}",
+            println!(
+                "    {} {}",
                 style("└─").dim(),
                 style("Install Android SDK and add adb to PATH").dim()
             );
@@ -188,7 +205,8 @@ fn list_ios_simulators(details: bool) {
                     // Extract device name (before first parenthesis)
                     if let Some(name_end) = line.find('(') {
                         let name = line[..name_end].trim();
-                        println!("  {} {} {}",
+                        println!(
+                            "  {} {} {}",
                             status_icon,
                             style(name).cyan(),
                             style(format!("({})", status_text)).dim()
@@ -199,7 +217,11 @@ fn list_ios_simulators(details: bool) {
                             if let Some(uuid_start) = line.find('(') {
                                 if let Some(uuid_end) = line[uuid_start..].find(')') {
                                     let uuid = &line[uuid_start + 1..uuid_start + uuid_end];
-                                    println!("    {} UUID: {}", style("└─").dim(), style(uuid).dim());
+                                    println!(
+                                        "    {} UUID: {}",
+                                        style("└─").dim(),
+                                        style(uuid).dim()
+                                    );
                                 }
                             }
                         }
@@ -208,14 +230,16 @@ fn list_ios_simulators(details: bool) {
             }
 
             if simulator_count == 0 {
-                println!("  {} {}",
+                println!(
+                    "  {} {}",
                     style("○").dim(),
                     style("No simulators available").dim()
                 );
             }
         }
         Err(_) => {
-            println!("  {} {}",
+            println!(
+                "  {} {}",
                 style("✗").yellow().bold(),
                 style("Xcode not installed").yellow()
             );
@@ -242,11 +266,13 @@ fn list_web_browsers(details: bool) {
     let browsers = detect_browsers();
 
     if browsers.is_empty() {
-        println!("  {} {}",
+        println!(
+            "  {} {}",
             style("○").dim(),
             style("No browsers detected").dim()
         );
-        println!("    {} {}",
+        println!(
+            "    {} {}",
             style("└─").dim(),
             style("Install Chrome, Edge, Firefox, or Safari").dim()
         );
@@ -254,7 +280,8 @@ fn list_web_browsers(details: bool) {
         for (i, browser) in browsers.iter().enumerate() {
             let is_last = i == browsers.len() - 1;
 
-            println!("  {} {}",
+            println!(
+                "  {} {}",
                 style("●").green().bold(),
                 style(&browser.name).cyan()
             );
@@ -262,17 +289,15 @@ fn list_web_browsers(details: bool) {
             if details {
                 let tree_char = if is_last { "└─" } else { "├─" };
                 if let Some(version) = &browser.version {
-                    println!("    {} Version: {}",
+                    println!(
+                        "    {} Version: {}",
                         style(tree_char).dim(),
                         style(version).dim()
                     );
                 }
                 if let Some(path) = &browser.path {
                     let tree_char = if is_last { "  └─" } else { "  ├─" };
-                    println!("    {} Path: {}",
-                        style(tree_char).dim(),
-                        style(path).dim()
-                    );
+                    println!("    {} Path: {}", style(tree_char).dim(), style(path).dim());
                 }
             }
         }
@@ -304,7 +329,7 @@ fn detect_browsers() -> Vec<BrowserInfo> {
         if let Some(chrome) = check_browser_macos(
             "Chrome",
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            &["--version"]
+            &["--version"],
         ) {
             browsers.push(chrome);
         }
@@ -313,7 +338,7 @@ fn detect_browsers() -> Vec<BrowserInfo> {
         if let Some(safari) = check_browser_macos(
             "Safari",
             "/Applications/Safari.app/Contents/MacOS/Safari",
-            &["-v"]
+            &["-v"],
         ) {
             browsers.push(safari);
         }
@@ -322,7 +347,7 @@ fn detect_browsers() -> Vec<BrowserInfo> {
         if let Some(firefox) = check_browser_macos(
             "Firefox",
             "/Applications/Firefox.app/Contents/MacOS/firefox",
-            &["-v"]
+            &["-v"],
         ) {
             browsers.push(firefox);
         }
@@ -331,7 +356,7 @@ fn detect_browsers() -> Vec<BrowserInfo> {
         if let Some(edge) = check_browser_macos(
             "Edge",
             "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-            &["--version"]
+            &["--version"],
         ) {
             browsers.push(edge);
         }
@@ -340,7 +365,7 @@ fn detect_browsers() -> Vec<BrowserInfo> {
         if let Some(brave) = check_browser_macos(
             "Brave",
             "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-            &["--version"]
+            &["--version"],
         ) {
             browsers.push(brave);
         }
@@ -430,10 +455,14 @@ fn enumerate_browsers_windows() -> Vec<BrowserInfo> {
                                 "Opera" | "OPERA.EXE" => "Opera",
                                 "IEXPLORE.EXE" => "Internet Explorer",
                                 _ => registry_name,
-                            }.to_string();
+                            }
+                            .to_string();
 
                             // Avoid duplicates
-                            if !browsers.iter().any(|b: &BrowserInfo| b.name == display_name) {
+                            if !browsers
+                                .iter()
+                                .any(|b: &BrowserInfo| b.name == display_name)
+                            {
                                 browsers.push(BrowserInfo {
                                     name: display_name,
                                     version,
@@ -498,16 +527,15 @@ fn check_browser_macos(name: &str, path: &str, version_args: &[&str]) -> Option<
 #[cfg(target_os = "linux")]
 fn check_browser_linux(name: &str, command: &str, version_args: &[&str]) -> Option<BrowserInfo> {
     // Check if command exists in PATH
-    let which_output = Command::new("which")
-        .arg(command)
-        .output()
-        .ok()?;
+    let which_output = Command::new("which").arg(command).output().ok()?;
 
     if !which_output.status.success() {
         return None;
     }
 
-    let path = String::from_utf8_lossy(&which_output.stdout).trim().to_string();
+    let path = String::from_utf8_lossy(&which_output.stdout)
+        .trim()
+        .to_string();
 
     let version = Command::new(command)
         .args(version_args)

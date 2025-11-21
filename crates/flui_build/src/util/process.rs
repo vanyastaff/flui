@@ -19,7 +19,10 @@ pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<()>
         .with_context(|| format!("Failed to execute: {}", program))?;
 
     if !status.success() {
-        return Err(anyhow!("Command failed with exit code: {:?}", status.code()));
+        return Err(anyhow!(
+            "Command failed with exit code: {:?}",
+            status.code()
+        ));
     }
 
     Ok(())
@@ -29,7 +32,11 @@ pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> Result<()>
 pub async fn run_command_with_output<S: AsRef<str>>(program: &str, args: &[S]) -> Result<String> {
     let args_str: Vec<&str> = args.iter().map(|s| s.as_ref()).collect();
 
-    tracing::debug!("Running (capturing output): {} {}", program, args_str.join(" "));
+    tracing::debug!(
+        "Running (capturing output): {} {}",
+        program,
+        args_str.join(" ")
+    );
 
     let output = Command::new(program)
         .args(&args_str)
@@ -70,7 +77,10 @@ pub async fn run_command_in_dir<S: AsRef<str>>(
         .with_context(|| format!("Failed to execute: {}", program))?;
 
     if !status.success() {
-        return Err(anyhow!("Command failed with exit code: {:?}", status.code()));
+        return Err(anyhow!(
+            "Command failed with exit code: {:?}",
+            status.code()
+        ));
     }
 
     Ok(())

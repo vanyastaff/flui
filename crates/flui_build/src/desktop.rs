@@ -108,7 +108,11 @@ impl PlatformBuilder for DesktopBuilder {
         })
     }
 
-    fn build_platform(&self, ctx: &BuilderContext, artifacts: &BuildArtifacts) -> Result<FinalArtifacts> {
+    fn build_platform(
+        &self,
+        ctx: &BuilderContext,
+        artifacts: &BuildArtifacts,
+    ) -> Result<FinalArtifacts> {
         let lib_src = artifacts
             .rust_libs
             .first()

@@ -10,7 +10,12 @@ pub fn execute(
     verbose: bool,
 ) -> Result<()> {
     let mode = if release { "release" } else { "debug" };
-    println!("{}", style(format!("Running FLUI app ({} mode)...", mode)).green().bold());
+    println!(
+        "{}",
+        style(format!("Running FLUI app ({} mode)...", mode))
+            .green()
+            .bold()
+    );
     println!();
 
     // Check if in FLUI project
@@ -23,7 +28,11 @@ pub fn execute(
         select_default_device()?
     };
 
-    println!("  {} Target device: {}", style("✓").green(), style(&target_device).cyan());
+    println!(
+        "  {} Target device: {}",
+        style("✓").green(),
+        style(&target_device).cyan()
+    );
 
     // Build cargo command
     let mut cmd = Command::new("cargo");

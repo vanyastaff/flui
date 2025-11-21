@@ -7,8 +7,10 @@ use std::time::Duration;
 
 fn main() {
     // Initialize logging with tracing-forest (same as flui_core::logging)
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry, Layer};
     use tracing_forest::ForestLayer;
+    use tracing_subscriber::{
+        layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer, Registry,
+    };
 
     let filter = EnvFilter::new("debug");
     let forest_layer = ForestLayer::default().with_filter(filter);

@@ -58,19 +58,13 @@ impl TextRenderer {
         let system_fonts_available = fs.db().faces().count() > 0;
 
         if system_fonts_available {
-            tracing::debug!(
-                "Loaded {} system fonts",
-                fs.db().faces().count()
-            );
+            tracing::debug!("Loaded {} system fonts", fs.db().faces().count());
 
             // Load embedded fonts as fallback even when system fonts are available
             #[cfg(feature = "embedded-fonts-fallback")]
             {
                 Self::load_embedded_fonts(&mut fs);
-                tracing::debug!(
-                    "Total fonts after fallback: {}",
-                    fs.db().faces().count()
-                );
+                tracing::debug!("Total fonts after fallback: {}", fs.db().faces().count());
             }
         } else {
             // No system fonts - load embedded fonts as primary
@@ -80,10 +74,7 @@ impl TextRenderer {
             if fs.db().faces().count() == 0 {
                 tracing::error!("Failed to load any fonts! Text rendering may fail.");
             } else {
-                tracing::info!(
-                    "Loaded {} embedded fonts",
-                    fs.db().faces().count()
-                );
+                tracing::info!("Loaded {} embedded fonts", fs.db().faces().count());
             }
         }
 

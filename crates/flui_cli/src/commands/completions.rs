@@ -12,7 +12,12 @@ pub fn execute(shell: Option<Shell>) -> Result<()> {
         detect_shell()?
     };
 
-    println!("{}", style(format!("Generating completions for {:?}...", shell)).green().bold());
+    println!(
+        "{}",
+        style(format!("Generating completions for {:?}...", shell))
+            .green()
+            .bold()
+    );
     println!();
 
     let mut cmd = crate::Cli::command();

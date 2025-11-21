@@ -103,8 +103,8 @@ pub mod arena;
 pub mod recognizers;
 
 // Advanced interaction modules
-pub mod resampler;
 pub mod mouse_tracker;
+pub mod resampler;
 pub mod signal_resolver;
 
 // Re-export main event routing types

@@ -384,8 +384,5 @@ fn stress_test_high_contention() {
         (NUM_THREADS * OPERATIONS_PER_THREAD) as f64 / elapsed.as_secs_f64()
     );
 
-    assert_eq!(
-        signal.get(),
-        (NUM_THREADS * OPERATIONS_PER_THREAD) as u64
-    );
+    assert_eq!(signal.get(), (NUM_THREADS * OPERATIONS_PER_THREAD) as u64);
 }

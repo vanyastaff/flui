@@ -13,7 +13,12 @@ pub fn execute(
     universal: bool,
 ) -> Result<()> {
     let mode = if release { "release" } else { "debug" };
-    println!("{}", style(format!("Building for {:?} ({} mode)...", target, mode)).green().bold());
+    println!(
+        "{}",
+        style(format!("Building for {:?} ({} mode)...", target, mode))
+            .green()
+            .bold()
+    );
     println!();
 
     // Use flui_build for cross-platform builds
@@ -29,7 +34,11 @@ pub fn execute(
 
     // Copy artifacts to output directory if specified
     if let Some(output_dir) = output {
-        println!("  {} Copying artifacts to {}", style("✓").green(), output_dir.display());
+        println!(
+            "  {} Copying artifacts to {}",
+            style("✓").green(),
+            output_dir.display()
+        );
         std::fs::create_dir_all(&output_dir)?;
         // TODO: Implement artifact copying based on platform
     }
@@ -50,34 +59,46 @@ fn build_android(release: bool, _split_per_abi: bool) -> Result<()> {
         platform: Platform::Android {
             targets: vec!["arm64-v8a".to_string()],
         },
-        profile: if release { Profile::Release } else { Profile::Debug },
+        profile: if release {
+            Profile::Release
+        } else {
+            Profile::Debug
+        },
         features: vec![],
-        output_dir: workspace_root.join("target").join("flui-out").join("android"),
+        output_dir: workspace_root
+            .join("target")
+            .join("flui-out")
+            .join("android"),
     };
 
     std::fs::create_dir_all(&ctx.output_dir)?;
 
     // Create builder
-    let builder = AndroidBuilder::new(&workspace_root)
-        .context("Failed to initialize Android builder")?;
+    let builder =
+        AndroidBuilder::new(&workspace_root).context("Failed to initialize Android builder")?;
 
     // Validate environment
-    builder.validate_environment()
+    builder
+        .validate_environment()
         .context("Android environment validation failed")?;
 
     // Build Rust libraries
-    let artifacts = builder.build_rust(&ctx)
+    let artifacts = builder
+        .build_rust(&ctx)
         .context("Failed to build Rust libraries")?;
 
     // Build APK
-    let final_artifacts = builder.build_platform(&ctx, &artifacts)
+    let final_artifacts = builder
+        .build_platform(&ctx, &artifacts)
         .context("Failed to build APK")?;
 
-    println!("  {} APK location: {}",
+    println!(
+        "  {} APK location: {}",
         style("✓").green(),
         style(final_artifacts.app_binary.display()).cyan()
     );
-    println!("  {} Size: {:.2} MB",
+    println!(
+        "  {} Size: {:.2} MB",
         style("→").cyan(),
         final_artifacts.size_bytes as f64 / 1_048_576.0
     );
@@ -90,9 +111,14 @@ fn build_ios(release: bool, _universal: bool) -> Result<()> {
     println!("  {} iOS support coming soon", style("→").cyan());
     println!();
     println!("For now, please use:");
-    println!("  1. Direct cargo build: {}",
-        style(format!("cargo build --target aarch64-apple-ios{}",
-            if release { " --release" } else { "" })).cyan());
+    println!(
+        "  1. Direct cargo build: {}",
+        style(format!(
+            "cargo build --target aarch64-apple-ios{}",
+            if release { " --release" } else { "" }
+        ))
+        .cyan()
+    );
     println!("  2. Or use Xcode for iOS builds");
 
     anyhow::bail!("iOS build via flui CLI not yet implemented")
@@ -108,7 +134,11 @@ fn build_web(release: bool, _optimize_wasm: bool) -> Result<()> {
         platform: Platform::Web {
             target: "web".to_string(),
         },
-        profile: if release { Profile::Release } else { Profile::Debug },
+        profile: if release {
+            Profile::Release
+        } else {
+            Profile::Debug
+        },
         features: vec![],
         output_dir: workspace_root.join("target").join("flui-out").join("web"),
     };
@@ -116,26 +146,28 @@ fn build_web(release: bool, _optimize_wasm: bool) -> Result<()> {
     std::fs::create_dir_all(&ctx.output_dir)?;
 
     // Create builder
-    let builder = WebBuilder::new(&workspace_root)
-        .context("Failed to initialize Web builder")?;
+    let builder = WebBuilder::new(&workspace_root).context("Failed to initialize Web builder")?;
 
     // Validate environment
-    builder.validate_environment()
+    builder
+        .validate_environment()
         .context("Web environment validation failed")?;
 
     // Build WASM
-    let artifacts = builder.build_rust(&ctx)
-        .context("Failed to build WASM")?;
+    let artifacts = builder.build_rust(&ctx).context("Failed to build WASM")?;
 
     // Build final web package
-    let final_artifacts = builder.build_platform(&ctx, &artifacts)
+    let final_artifacts = builder
+        .build_platform(&ctx, &artifacts)
         .context("Failed to build web package")?;
 
-    println!("  {} Build location: {}",
+    println!(
+        "  {} Build location: {}",
         style("✓").green(),
         style(ctx.output_dir.display()).cyan()
     );
-    println!("  {} Size: {:.2} KB",
+    println!(
+        "  {} Size: {:.2} KB",
         style("→").cyan(),
         final_artifacts.size_bytes as f64 / 1024.0
     );
@@ -153,34 +185,44 @@ fn build_desktop(release: bool) -> Result<()> {
         platform: Platform::Desktop {
             target: None, // Auto-detect host platform
         },
-        profile: if release { Profile::Release } else { Profile::Debug },
+        profile: if release {
+            Profile::Release
+        } else {
+            Profile::Debug
+        },
         features: vec![],
-        output_dir: workspace_root.join("target").join("flui-out").join("desktop"),
+        output_dir: workspace_root
+            .join("target")
+            .join("flui-out")
+            .join("desktop"),
     };
 
     std::fs::create_dir_all(&ctx.output_dir)?;
 
     // Create builder
-    let builder = DesktopBuilder::new(&workspace_root)
-        .context("Failed to initialize Desktop builder")?;
+    let builder =
+        DesktopBuilder::new(&workspace_root).context("Failed to initialize Desktop builder")?;
 
     // Validate environment
-    builder.validate_environment()
+    builder
+        .validate_environment()
         .context("Desktop environment validation failed")?;
 
     // Build binary
-    let artifacts = builder.build_rust(&ctx)
-        .context("Failed to build binary")?;
+    let artifacts = builder.build_rust(&ctx).context("Failed to build binary")?;
 
     // Copy to output
-    let final_artifacts = builder.build_platform(&ctx, &artifacts)
+    let final_artifacts = builder
+        .build_platform(&ctx, &artifacts)
         .context("Failed to copy binary")?;
 
-    println!("  {} Binary location: {}",
+    println!(
+        "  {} Binary location: {}",
         style("✓").green(),
         style(final_artifacts.app_binary.display()).cyan()
     );
-    println!("  {} Size: {:.2} MB",
+    println!(
+        "  {} Size: {:.2} MB",
         style("→").cyan(),
         final_artifacts.size_bytes as f64 / 1_048_576.0
     );
@@ -191,7 +233,11 @@ fn build_desktop(release: bool) -> Result<()> {
 fn build_specific_platform(target: BuildTarget, release: bool) -> Result<()> {
     let target_triple = get_target_triple(target);
 
-    println!("  {} Building for target: {}", style("→").cyan(), target_triple);
+    println!(
+        "  {} Building for target: {}",
+        style("→").cyan(),
+        target_triple
+    );
 
     let workspace_root = std::env::current_dir()?;
 
@@ -200,27 +246,35 @@ fn build_specific_platform(target: BuildTarget, release: bool) -> Result<()> {
         platform: Platform::Desktop {
             target: Some(target_triple.to_string()),
         },
-        profile: if release { Profile::Release } else { Profile::Debug },
+        profile: if release {
+            Profile::Release
+        } else {
+            Profile::Debug
+        },
         features: vec![],
-        output_dir: workspace_root.join("target").join("flui-out").join(target_triple),
+        output_dir: workspace_root
+            .join("target")
+            .join("flui-out")
+            .join(target_triple),
     };
 
     std::fs::create_dir_all(&ctx.output_dir)?;
 
     // Use desktop builder with specific target
-    let builder = DesktopBuilder::new(&workspace_root)
-        .context("Failed to initialize builder")?;
+    let builder = DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
 
-    builder.validate_environment()
+    builder
+        .validate_environment()
         .context("Environment validation failed")?;
 
-    let artifacts = builder.build_rust(&ctx)
-        .context("Failed to build")?;
+    let artifacts = builder.build_rust(&ctx).context("Failed to build")?;
 
-    let final_artifacts = builder.build_platform(&ctx, &artifacts)
+    let final_artifacts = builder
+        .build_platform(&ctx, &artifacts)
         .context("Failed to copy artifacts")?;
 
-    println!("  {} Binary location: {}",
+    println!(
+        "  {} Binary location: {}",
         style("✓").green(),
         style(final_artifacts.app_binary.display()).cyan()
     );

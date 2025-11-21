@@ -97,13 +97,11 @@ pub use reverse_animation::ReverseAnimation;
 pub use tween_animation::{animate, TweenAnimation};
 
 // Re-export scheduler types for convenience
-pub use flui_scheduler::{
-    Scheduler, SchedulerBinding, Priority, TaskQueue,
-    Ticker, TickerProvider, TickerCallback,
-    FrameBudget, BudgetPolicy, FramePhase, FrameTiming,
-    VsyncScheduler, VsyncCallback,
-};
 pub use flui_scheduler::ticker::TickerState;
+pub use flui_scheduler::{
+    BudgetPolicy, FrameBudget, FramePhase, FrameTiming, Priority, Scheduler, SchedulerBinding,
+    TaskQueue, Ticker, TickerCallback, TickerProvider, VsyncCallback, VsyncScheduler,
+};
 
 // Re-export types from flui_types for convenience
 pub use flui_types::animation::{Animatable, AnimationStatus, Curve, Curves, Tween, TweenSequence};
@@ -121,7 +119,7 @@ pub mod prelude {
 
     // Re-export scheduler types
     pub use crate::{
-        Scheduler, SchedulerBinding, Priority, TaskQueue,
-        Ticker, TickerProvider, FrameBudget, FramePhase,
+        FrameBudget, FramePhase, Priority, Scheduler, SchedulerBinding, TaskQueue, Ticker,
+        TickerProvider,
     };
 }

@@ -109,8 +109,7 @@ impl SliverHitTestEntry {
     /// Returns true if the hit position is within the painted portion of the sliver
     /// that's currently visible in the viewport.
     pub fn is_visible(&self) -> bool {
-        self.main_axis_position >= 0.0
-            && self.main_axis_position < self.geometry.paint_extent
+        self.main_axis_position >= 0.0 && self.main_axis_position < self.geometry.paint_extent
     }
 
     /// Check if hit is in cache extent (includes off-screen buffer)
@@ -119,8 +118,7 @@ impl SliverHitTestEntry {
     /// the visible region plus an off-screen buffer for smooth scrolling.
     pub fn is_in_cache_extent(&self) -> bool {
         self.main_axis_position >= -self.geometry.cache_extent
-            && self.main_axis_position
-                < self.geometry.paint_extent + self.geometry.cache_extent
+            && self.main_axis_position < self.geometry.paint_extent + self.geometry.cache_extent
     }
 
     /// Get distance from leading edge of viewport

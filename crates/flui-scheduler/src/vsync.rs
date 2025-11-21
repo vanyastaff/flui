@@ -16,10 +16,10 @@ pub type VsyncCallback = Box<dyn FnMut(Instant) + Send>;
 pub enum VsyncMode {
     /// Wait for vsync (no tearing, may reduce FPS)
     On,
-    
+
     /// Don't wait for vsync (tearing possible, max FPS)
     Off,
-    
+
     /// Adaptive vsync (wait only when under budget)
     Adaptive,
 }
@@ -32,16 +32,16 @@ pub enum VsyncMode {
 pub struct VsyncScheduler {
     /// VSync mode
     mode: Arc<Mutex<VsyncMode>>,
-    
+
     /// Target refresh rate (Hz)
     refresh_rate: u32,
-    
+
     /// Last vsync time
     last_vsync: Arc<Mutex<Option<Instant>>>,
-    
+
     /// VSync callback
     callback: Arc<Mutex<Option<VsyncCallback>>>,
-    
+
     /// Whether vsync is active
     active: Arc<Mutex<bool>>,
 }
@@ -114,7 +114,7 @@ impl VsyncScheduler {
     /// - Web: requestAnimationFrame
     pub fn wait_for_vsync(&self) -> Instant {
         let now = Instant::now();
-        
+
         match *self.mode.lock() {
             VsyncMode::Off => {
                 // No waiting
@@ -125,7 +125,7 @@ impl VsyncScheduler {
                 if let Some(last) = *self.last_vsync.lock() {
                     let elapsed = now.duration_since(last);
                     let interval = self.frame_interval();
-                    
+
                     if elapsed < interval {
                         let wait_time = interval - elapsed;
                         std::thread::sleep(wait_time);

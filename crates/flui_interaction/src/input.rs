@@ -15,10 +15,10 @@ use flui_types::{
 /// This is a helper for platform integration code.
 pub fn device_kind_from_button(button: u32) -> PointerDeviceKind {
     match button {
-        0 => PointerDeviceKind::Mouse,      // Left button
-        1 => PointerDeviceKind::Mouse,      // Right button
-        2 => PointerDeviceKind::Mouse,      // Middle button
-        _ => PointerDeviceKind::Touch,      // Touch or stylus
+        0 => PointerDeviceKind::Mouse, // Left button
+        1 => PointerDeviceKind::Mouse, // Right button
+        2 => PointerDeviceKind::Mouse, // Middle button
+        _ => PointerDeviceKind::Touch, // Touch or stylus
     }
 }
 
@@ -204,10 +204,7 @@ mod tests {
 
     #[test]
     fn test_modifiers_builder() {
-        let modifiers = ModifiersBuilder::new()
-            .ctrl(true)
-            .shift(true)
-            .build();
+        let modifiers = ModifiersBuilder::new().ctrl(true).shift(true).build();
 
         assert!(modifiers.control);
         assert!(modifiers.shift);
@@ -224,10 +221,7 @@ mod tests {
             .build();
 
         assert_eq!(event.data().physical_key, PhysicalKey::Enter);
-        assert!(matches!(
-            event.data().logical_key,
-            LogicalKey::Character(_)
-        ));
+        assert!(matches!(event.data().logical_key, LogicalKey::Character(_)));
         assert!(matches!(event, KeyEvent::Down(_)));
         assert!(event.data().modifiers.control);
     }
@@ -239,22 +233,16 @@ mod tests {
         let event = scroll_event(pos, delta);
 
         assert_eq!(event.position, pos);
-        assert!(matches!(event.delta, ScrollDelta::Pixels { x: 0.0, y: 10.0 }));
+        assert!(matches!(
+            event.delta,
+            ScrollDelta::Pixels { x: 0.0, y: 10.0 }
+        ));
     }
 
     #[test]
     fn test_device_kind_from_button() {
-        assert_eq!(
-            device_kind_from_button(0),
-            PointerDeviceKind::Mouse
-        );
-        assert_eq!(
-            device_kind_from_button(1),
-            PointerDeviceKind::Mouse
-        );
-        assert_eq!(
-            device_kind_from_button(10),
-            PointerDeviceKind::Touch
-        );
+        assert_eq!(device_kind_from_button(0), PointerDeviceKind::Mouse);
+        assert_eq!(device_kind_from_button(1), PointerDeviceKind::Mouse);
+        assert_eq!(device_kind_from_button(10), PointerDeviceKind::Touch);
     }
 }

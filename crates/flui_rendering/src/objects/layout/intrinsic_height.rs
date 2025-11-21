@@ -1,9 +1,7 @@
 //! RenderIntrinsicHeight - sizes child to its intrinsic height
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;

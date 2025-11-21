@@ -62,9 +62,11 @@ impl RenderBox<Leaf> for RenderColoredBox {
     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         // Draw solid color rectangle
         let rect = Rect::from_min_size(flui_types::Point::ZERO, self.size);
-        let mut paint = flui_painting::Paint::default();
-        paint.color = self.color;
-        paint.style = flui_painting::PaintStyle::Fill;
+        let paint = flui_painting::Paint {
+            color: self.color,
+            style: flui_painting::PaintStyle::Fill,
+            ..Default::default()
+        };
 
         ctx.canvas().draw_rect(rect, &paint);
     }

@@ -18,9 +18,9 @@
 //!     element.handle_event(Event::Pointer(...))
 //! ```
 
+use super::hit_test_entry::{BoxHitTestEntry, HitTestEntryTrait, SliverHitTestEntry};
 use crate::ElementId;
 use flui_types::{Matrix4, Offset};
-use super::hit_test_entry::{HitTestEntryTrait, BoxHitTestEntry, SliverHitTestEntry};
 
 /// Hit test result entry for an element
 ///

@@ -284,9 +284,7 @@ fn main() {
         flui_log::Level::INFO
     };
 
-    flui_log::Logger::new()
-        .with_level(log_level)
-        .init();
+    flui_log::Logger::new().with_level(log_level).init();
 
     // Dispatch command
     let result = match cli.command {
@@ -335,7 +333,14 @@ fn main() {
             split_per_abi,
             optimize_wasm,
             universal,
-        } => commands::build::execute(platform, release, output, split_per_abi, optimize_wasm, universal),
+        } => commands::build::execute(
+            platform,
+            release,
+            output,
+            split_per_abi,
+            optimize_wasm,
+            universal,
+        ),
 
         Commands::Test {
             filter,

@@ -297,41 +297,52 @@ fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4) -> Pointer
 
     match event {
         PointerEvent::Down(data) => {
-            let mut new_data = PointerEventData::new(transform_offset(data.position), data.device_kind);
+            let mut new_data =
+                PointerEventData::new(transform_offset(data.position), data.device_kind);
             new_data.device = data.device;
             PointerEvent::Down(new_data)
         }
         PointerEvent::Up(data) => {
-            let mut new_data = PointerEventData::new(transform_offset(data.position), data.device_kind);
+            let mut new_data =
+                PointerEventData::new(transform_offset(data.position), data.device_kind);
             new_data.device = data.device;
             PointerEvent::Up(new_data)
         }
         PointerEvent::Move(data) => {
-            let mut new_data = PointerEventData::new(transform_offset(data.position), data.device_kind);
+            let mut new_data =
+                PointerEventData::new(transform_offset(data.position), data.device_kind);
             new_data.device = data.device;
             PointerEvent::Move(new_data)
         }
         PointerEvent::Hover(data) => {
-            let mut new_data = PointerEventData::new(transform_offset(data.position), data.device_kind);
+            let mut new_data =
+                PointerEventData::new(transform_offset(data.position), data.device_kind);
             new_data.device = data.device;
             PointerEvent::Hover(new_data)
         }
         PointerEvent::Enter(data) => {
-            let mut new_data = PointerEventData::new(transform_offset(data.position), data.device_kind);
+            let mut new_data =
+                PointerEventData::new(transform_offset(data.position), data.device_kind);
             new_data.device = data.device;
             PointerEvent::Enter(new_data)
         }
         PointerEvent::Exit(data) => {
-            let mut new_data = PointerEventData::new(transform_offset(data.position), data.device_kind);
+            let mut new_data =
+                PointerEventData::new(transform_offset(data.position), data.device_kind);
             new_data.device = data.device;
             PointerEvent::Exit(new_data)
         }
         PointerEvent::Cancel(data) => {
-            let mut new_data = PointerEventData::new(transform_offset(data.position), data.device_kind);
+            let mut new_data =
+                PointerEventData::new(transform_offset(data.position), data.device_kind);
             new_data.device = data.device;
             PointerEvent::Cancel(new_data)
         }
-        PointerEvent::Scroll { device, position, scroll_delta } => PointerEvent::Scroll {
+        PointerEvent::Scroll {
+            device,
+            position,
+            scroll_delta,
+        } => PointerEvent::Scroll {
             device: *device,
             position: transform_offset(*position),
             scroll_delta: *scroll_delta, // Don't transform delta (it's a vector, not a point)

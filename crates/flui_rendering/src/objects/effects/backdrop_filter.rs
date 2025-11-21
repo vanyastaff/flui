@@ -4,9 +4,7 @@
 //! behind it in the paint order. Common use case is frosted glass effect.
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{painting::BlendMode, painting::ImageFilter, Size};
 

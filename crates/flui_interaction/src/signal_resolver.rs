@@ -138,11 +138,7 @@ impl PointerSignalResolver {
             callback: Arc::new(callback),
         };
 
-        inner
-            .handlers
-            .entry(pointer_id)
-            .or_default()
-            .push(handler);
+        inner.handlers.entry(pointer_id).or_default().push(handler);
 
         handler_id
     }
@@ -183,18 +179,16 @@ impl PointerSignalResolver {
         };
 
         // Find highest priority handler
-        let winner = handlers
-            .iter()
-            .max_by(|a, b| {
-                // First compare by priority
-                match a.priority.cmp(&b.priority) {
-                    std::cmp::Ordering::Equal => {
-                        // If same priority, later registration wins
-                        a.id.cmp(&b.id)
-                    }
-                    other => other,
+        let winner = handlers.iter().max_by(|a, b| {
+            // First compare by priority
+            match a.priority.cmp(&b.priority) {
+                std::cmp::Ordering::Equal => {
+                    // If same priority, later registration wins
+                    a.id.cmp(&b.id)
                 }
-            });
+                other => other,
+            }
+        });
 
         // Invoke winner's callback
         if let Some(handler) = winner {
@@ -218,12 +212,12 @@ impl PointerSignalResolver {
             return false;
         };
 
-        let winner = handlers.iter().max_by(|a, b| {
-            match a.priority.cmp(&b.priority) {
+        let winner = handlers
+            .iter()
+            .max_by(|a, b| match a.priority.cmp(&b.priority) {
                 std::cmp::Ordering::Equal => a.id.cmp(&b.id),
                 other => other,
-            }
-        });
+            });
 
         if let Some(handler) = winner {
             let callback = handler.callback.clone();

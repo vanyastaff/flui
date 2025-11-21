@@ -75,8 +75,6 @@ pub mod sliver_geometry;
 pub mod styling;
 pub mod typography;
 
-
-
 // Re-exports for convenience - Most commonly used types
 pub use constraints::BoxConstraints;
 pub use events::{Event, KeyEvent, PointerEvent, Theme, WindowEvent};
@@ -116,5 +114,3 @@ pub mod prelude {
     // Events - Common
     pub use crate::events::{KeyEvent, PointerEvent, WindowEvent};
 }
-
-

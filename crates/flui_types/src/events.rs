@@ -128,7 +128,9 @@ impl PointerEvent {
             | PointerEvent::Enter(data)
             | PointerEvent::Exit(data)
             | PointerEvent::Cancel(data) => Some(data),
-            PointerEvent::Added { .. } | PointerEvent::Removed { .. } | PointerEvent::Scroll { .. } => None,
+            PointerEvent::Added { .. }
+            | PointerEvent::Removed { .. }
+            | PointerEvent::Scroll { .. } => None,
         }
     }
 
@@ -144,7 +146,9 @@ impl PointerEvent {
             | PointerEvent::Enter(data)
             | PointerEvent::Exit(data)
             | PointerEvent::Cancel(data) => Some(data),
-            PointerEvent::Added { .. } | PointerEvent::Removed { .. } | PointerEvent::Scroll { .. } => None,
+            PointerEvent::Added { .. }
+            | PointerEvent::Removed { .. }
+            | PointerEvent::Scroll { .. } => None,
         }
     }
 
@@ -168,7 +172,9 @@ impl PointerEvent {
 
     /// Get position in local widget coordinates
     pub fn local_position(&self) -> Offset {
-        self.data().map(|d| d.local_position).unwrap_or(Offset::ZERO)
+        self.data()
+            .map(|d| d.local_position)
+            .unwrap_or(Offset::ZERO)
     }
 
     /// Set local position (used during hit testing)

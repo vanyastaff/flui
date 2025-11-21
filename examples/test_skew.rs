@@ -38,10 +38,22 @@ fn main() {
     println!("\n5. Converting to Matrix4:");
     let matrix: flui_types::geometry::Matrix4 = italic.into();
     println!("   Skew matrix:");
-    println!("   [ {:.3}  {:.3}  {:.3}  {:.3} ]", matrix.m[0], matrix.m[4], matrix.m[8], matrix.m[12]);
-    println!("   [ {:.3}  {:.3}  {:.3}  {:.3} ]", matrix.m[1], matrix.m[5], matrix.m[9], matrix.m[13]);
-    println!("   [ {:.3}  {:.3}  {:.3}  {:.3} ]", matrix.m[2], matrix.m[6], matrix.m[10], matrix.m[14]);
-    println!("   [ {:.3}  {:.3}  {:.3}  {:.3} ]", matrix.m[3], matrix.m[7], matrix.m[11], matrix.m[15]);
+    println!(
+        "   [ {:.3}  {:.3}  {:.3}  {:.3} ]",
+        matrix.m[0], matrix.m[4], matrix.m[8], matrix.m[12]
+    );
+    println!(
+        "   [ {:.3}  {:.3}  {:.3}  {:.3} ]",
+        matrix.m[1], matrix.m[5], matrix.m[9], matrix.m[13]
+    );
+    println!(
+        "   [ {:.3}  {:.3}  {:.3}  {:.3} ]",
+        matrix.m[2], matrix.m[6], matrix.m[10], matrix.m[14]
+    );
+    println!(
+        "   [ {:.3}  {:.3}  {:.3}  {:.3} ]",
+        matrix.m[3], matrix.m[7], matrix.m[11], matrix.m[15]
+    );
 
     println!("\n=== Test Complete ===");
     println!("\nNote: Skew is fully implemented in:");

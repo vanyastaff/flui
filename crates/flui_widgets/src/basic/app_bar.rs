@@ -171,7 +171,7 @@ impl<S: State> AppBarBuilder<S> {
 impl View for AppBar {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: Add elevation support when PhysicalModel is available
-        use crate::{ColoredBox, Padding, Row, SizedBox};
+        use crate::{ColoredBox, Row, SizedBox};
         use flui_types::{Alignment, EdgeInsets};
 
         // Build the content row

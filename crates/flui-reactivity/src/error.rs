@@ -70,10 +70,7 @@ pub enum SignalError {
 
     /// Deadlock detected (lock acquisition timeout)
     #[error("Potential deadlock detected in {resource}: failed to acquire lock within {timeout_secs} seconds. This likely indicates circular dependencies across threads.")]
-    DeadlockDetected {
-        resource: String,
-        timeout_secs: u64,
-    },
+    DeadlockDetected { resource: String, timeout_secs: u64 },
 }
 
 /// Errors related to hook operations.

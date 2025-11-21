@@ -12,13 +12,13 @@ use std::sync::Arc;
 pub enum BudgetPolicy {
     /// Continue work (may drop frames)
     Continue,
-    
+
     /// Skip low-priority work (Idle tasks)
     SkipIdle,
-    
+
     /// Skip low and normal priority work (Idle + Build)
     SkipIdleAndBuild,
-    
+
     /// Stop all work immediately
     StopAll,
 }
@@ -28,7 +28,7 @@ pub enum BudgetPolicy {
 pub struct PhaseStats {
     /// Time spent in this phase (ms)
     pub duration_ms: f64,
-    
+
     /// Percentage of frame budget used
     pub budget_percent: f64,
 }
@@ -40,25 +40,25 @@ pub struct PhaseStats {
 pub struct FrameBudget {
     /// Target frame duration (ms)
     target_duration_ms: f64,
-    
+
     /// Frame start time
     frame_start: Option<Instant>,
-    
+
     /// Policy for handling over-budget situations
     policy: BudgetPolicy,
-    
+
     /// Phase statistics
     build_time_ms: f64,
     layout_time_ms: f64,
     paint_time_ms: f64,
     composite_time_ms: f64,
-    
+
     /// Total frame time of last frame
     last_frame_time_ms: f64,
-    
+
     /// Average frame time (rolling window)
     avg_frame_time_ms: f64,
-    
+
     /// Frame time history (last 60 frames)
     frame_times: Vec<f64>,
 }
@@ -151,7 +151,8 @@ impl FrameBudget {
             self.frame_times.remove(0);
         }
 
-        self.avg_frame_time_ms = self.frame_times.iter().sum::<f64>() / self.frame_times.len() as f64;
+        self.avg_frame_time_ms =
+            self.frame_times.iter().sum::<f64>() / self.frame_times.len() as f64;
     }
 
     /// Get build phase stats
@@ -311,7 +312,7 @@ mod tests {
 
         // Simulate work
         std::thread::sleep(std::time::Duration::from_millis(20));
-        
+
         assert!(budget.is_over_budget());
         assert!(budget.remaining_ms() == 0.0);
     }
@@ -319,7 +320,7 @@ mod tests {
     #[test]
     fn test_avg_frame_time() {
         let mut budget = FrameBudget::new(60);
-        
+
         budget.record_frame_time(16.0);
         budget.record_frame_time(17.0);
         budget.record_frame_time(15.0);

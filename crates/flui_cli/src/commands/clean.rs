@@ -11,7 +11,11 @@ pub fn execute(deep: bool, platform: Option<String>) -> Result<()> {
     }
 
     if let Some(platform) = platform {
-        println!("  {} Cleaning platform: {}", style("→").cyan(), style(&platform).cyan());
+        println!(
+            "  {} Cleaning platform: {}",
+            style("→").cyan(),
+            style(&platform).cyan()
+        );
         clean_platform(&platform)?;
     } else {
         // Clean using cargo

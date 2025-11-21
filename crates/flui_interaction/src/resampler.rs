@@ -223,12 +223,18 @@ impl PointerEventResampler {
 
                                 let interpolated_event = match &next_event.event {
                                     PointerEvent::Move(data) => {
-                                        let mut new_data = PointerEventData::new(interpolated_pos, data.device_kind);
+                                        let mut new_data = PointerEventData::new(
+                                            interpolated_pos,
+                                            data.device_kind,
+                                        );
                                         new_data.device = data.device;
                                         PointerEvent::Move(new_data)
                                     }
                                     PointerEvent::Hover(data) => {
-                                        let mut new_data = PointerEventData::new(interpolated_pos, data.device_kind);
+                                        let mut new_data = PointerEventData::new(
+                                            interpolated_pos,
+                                            data.device_kind,
+                                        );
                                         new_data.device = data.device;
                                         PointerEvent::Hover(new_data)
                                     }

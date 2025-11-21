@@ -4,9 +4,7 @@
 //! ancestors or the system (e.g., system UI overlay styling).
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 

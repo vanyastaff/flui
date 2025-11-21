@@ -101,7 +101,11 @@ impl PlatformBuilder for WebBuilder {
         })
     }
 
-    fn build_platform(&self, ctx: &BuilderContext, artifacts: &BuildArtifacts) -> Result<FinalArtifacts> {
+    fn build_platform(
+        &self,
+        ctx: &BuilderContext,
+        artifacts: &BuildArtifacts,
+    ) -> Result<FinalArtifacts> {
         // Copy HTML and other web assets to dist
         let web_dir = self.workspace_root.join("platforms").join("web");
         let dist_dir = web_dir.join("dist");

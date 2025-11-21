@@ -248,13 +248,12 @@ impl RenderBox<Leaf> for RenderParagraph {
 
     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         // Draw text using Canvas API
-
-        let mut paint = Paint::default();
-
-        paint.color = self.data.color;
+        let paint = Paint {
+            color: self.data.color,
+            ..Default::default()
+        };
 
         // Get the offset from context - this is where we should draw
-
         let offset = ctx.offset;
 
         // Approximate intrinsic text width (placeholder until real shaping metrics available)

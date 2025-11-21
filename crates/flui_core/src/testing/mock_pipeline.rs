@@ -129,10 +129,7 @@ impl crate::pipeline::Pipeline for MockPipeline {
         *self.dirty_count.lock() = 0;
     }
 
-    fn flush_layout(
-        &self,
-        _constraints: BoxConstraints,
-    ) -> Result<Option<Size>, PipelineError> {
+    fn flush_layout(&self, _constraints: BoxConstraints) -> Result<Option<Size>, PipelineError> {
         // Mock: return fixed size (800x600)
         Ok(Some(Size::new(800.0, 600.0)))
     }

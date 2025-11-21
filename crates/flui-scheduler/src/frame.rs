@@ -71,13 +71,13 @@ impl fmt::Display for FramePhase {
 pub struct FrameTiming {
     /// Frame identifier
     pub id: FrameId,
-    
+
     /// When the frame started (vsync time)
     pub start_time: Instant,
-    
+
     /// Target frame duration (e.g., 16.67ms for 60fps)
     pub target_duration_ms: f64,
-    
+
     /// Current phase
     pub phase: FramePhase,
 }

@@ -4,9 +4,7 @@
 //! to its child, controlling which parts are visible.
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{painting::BlendMode, styling::Color32, Size};
 

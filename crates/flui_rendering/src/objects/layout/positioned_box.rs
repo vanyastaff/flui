@@ -1,9 +1,7 @@
 //! RenderPositionedBox - positions child with explicit coordinates
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{Offset, Size};
 

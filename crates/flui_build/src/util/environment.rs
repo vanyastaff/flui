@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 
 /// Check if a command exists in PATH
 pub fn check_command_exists(command: &str) -> Result<PathBuf> {
-    which::which(command)
-        .with_context(|| format!("{} not found in PATH", command))
+    which::which(command).with_context(|| format!("{} not found in PATH", command))
 }
 
 /// Get environment variable with error context
@@ -31,13 +30,9 @@ pub fn resolve_android_home() -> Result<PathBuf> {
             PathBuf::from("C:\\Android\\Sdk"),
         ]
     } else if cfg!(target_os = "macos") {
-        vec![
-            PathBuf::from(env::var("HOME").unwrap_or_default()).join("Library/Android/sdk"),
-        ]
+        vec![PathBuf::from(env::var("HOME").unwrap_or_default()).join("Library/Android/sdk")]
     } else {
-        vec![
-            PathBuf::from(env::var("HOME").unwrap_or_default()).join("Android/Sdk"),
-        ]
+        vec![PathBuf::from(env::var("HOME").unwrap_or_default()).join("Android/Sdk")]
     };
 
     for path in common_paths {
