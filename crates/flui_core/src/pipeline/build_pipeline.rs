@@ -263,7 +263,10 @@ impl BuildPipeline {
             return;
         }
 
-        tracing::info!(count = rebuilds.len(), "Flushing rebuild queue to dirty_elements");
+        tracing::info!(
+            count = rebuilds.len(),
+            "Flushing rebuild queue to dirty_elements"
+        );
 
         // Add all pending rebuilds to dirty_elements
         for (element_id, depth) in rebuilds {
@@ -492,10 +495,17 @@ impl BuildPipeline {
             };
 
             // Dispatch rebuild based on element type
-            tracing::info!(?element_id, ?element_type, "Dispatching rebuild for element");
+            tracing::info!(
+                ?element_id,
+                ?element_type,
+                "Dispatching rebuild for element"
+            );
             match element_type {
                 Some(ElementType::Component) => {
-                    tracing::info!(?element_id, "Element is Component - calling rebuild_component");
+                    tracing::info!(
+                        ?element_id,
+                        "Element is Component - calling rebuild_component"
+                    );
                     if self.rebuild_component(tree, element_id, depth) {
                         rebuilt_count += 1;
                     }
@@ -650,7 +660,7 @@ impl BuildPipeline {
         element_id: ElementId,
         _depth: usize,
     ) -> bool {
-        crate::trace_hot_path!("Rebuilding component", ?element_id);
+        // Hot path - trace disabled for performance
 
         // Stage 1: Check dirty flag, extract component data and prepare hook context (write lock)
         let (old_child_id, hook_context) = {
@@ -736,7 +746,7 @@ impl BuildPipeline {
         element_id: ElementId,
         _depth: usize,
     ) -> bool {
-        crate::trace_hot_path!("Rebuilding provider", ?element_id);
+        // Hot path - trace disabled for performance
 
         // Phase 1: Check dirty flag and get dependents list
         let dependents = {
