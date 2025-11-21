@@ -245,17 +245,44 @@ impl Drop for BuildContextGuard {
     }
 }
 
+// Thread-local storage for auto-created test context
+thread_local! {
+    static AUTO_TEST_CONTEXT: std::cell::RefCell<Option<BuildContext>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Returns the current thread-local build context.
 ///
 /// # Panics
 ///
 /// Panics if called outside of a build phase.
+///
+/// Note: When the `testing` feature is enabled, automatically creates a test
+/// context if none exists. This is useful for unit tests.
 pub fn current_build_context() -> &'static BuildContext {
     CURRENT_BUILD_CONTEXT.with(|cell| {
-        let ptr = cell
-            .get()
-            .expect("No BuildContext - must be called during build phase");
-        unsafe { &*ptr }
+        if let Some(ptr) = cell.get() {
+            unsafe { &*ptr }
+        } else {
+            #[cfg(feature = "testing")]
+            {
+                // Auto-create test context for convenience in tests
+                AUTO_TEST_CONTEXT.with(|refcell| {
+                    let mut borrow = refcell.borrow_mut();
+                    if borrow.is_none() {
+                        let tree = Arc::new(RwLock::new(crate::pipeline::ElementTree::new()));
+                        *borrow = Some(BuildContext::new(tree, ElementId::new(1)));
+                    }
+                    let ctx = borrow.as_ref().unwrap();
+                    let ptr = ctx as *const BuildContext;
+                    cell.set(Some(ptr));
+                    unsafe { &*ptr }
+                })
+            }
+            #[cfg(not(feature = "testing"))]
+            {
+                panic!("No BuildContext - must be called during build phase")
+            }
+        }
     })
 }
 

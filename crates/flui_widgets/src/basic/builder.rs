@@ -126,25 +126,26 @@ mod tests {
 
     #[test]
     fn test_builder_new() {
-        let widget = Builder::new(|_ctx| Box::new(crate::SizedBox::new()));
+        let widget = Builder::new(|_ctx| crate::SizedBox::new().into_element());
         assert!(widget.key.is_none());
     }
 
     #[test]
     fn test_builder_with_key() {
-        let widget = Builder::new(|_ctx| Box::new(crate::SizedBox::new())).with_key("test".into());
+        let widget =
+            Builder::new(|_ctx| crate::SizedBox::new().into_element()).with_key("test".into());
         assert_eq!(widget.key, Some("test".into()));
     }
 
     #[test]
     fn test_builder_macro() {
-        let widget = builder!(|_ctx| Box::new(crate::SizedBox::new()));
+        let widget = builder!(|_ctx| crate::SizedBox::new().into_element());
         assert!(widget.key.is_none());
     }
 
     #[test]
     fn test_builder_clone() {
-        let widget1 = Builder::new(|_ctx| Box::new(crate::SizedBox::new()));
+        let widget1 = Builder::new(|_ctx| crate::SizedBox::new().into_element());
         let widget2 = widget1.clone();
         assert!(widget2.key.is_none());
     }

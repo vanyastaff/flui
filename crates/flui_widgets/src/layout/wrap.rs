@@ -8,6 +8,7 @@ use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
+use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
 use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
@@ -238,8 +239,8 @@ where
     S::Children: IsUnset,
 {
     /// Sets the children widgets (works in builder chain).
-    pub fn children(self, children: Vec<Element>) -> WrapBuilder<SetChildren<S>> {
-        self.children_internal(children)
+    pub fn children(self, children: impl Into<Children>) -> WrapBuilder<SetChildren<S>> {
+        self.children_internal(children.into().into_inner())
     }
 }
 
@@ -269,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_wrap_new() {
-        let children = vec![MockView.into_element(), Box::new(MockView)];
+        let children = vec![MockView.into_element(), MockView.into_element()];
         let wrap = Wrap::new(children);
         assert_eq!(wrap.direction, Axis::Horizontal);
         assert_eq!(wrap.alignment, WrapAlignment::Start);
@@ -300,7 +301,7 @@ mod tests {
             .run_spacing(5.0)
             .alignment(WrapAlignment::Center)
             .cross_alignment(WrapCrossAlignment::End)
-            .children(vec![Box::new(MockView), Box::new(MockView)])
+            .children(vec![MockView, MockView])
             .build();
 
         assert_eq!(wrap.direction, Axis::Vertical);
@@ -321,8 +322,8 @@ mod tests {
     #[test]
     fn test_wrap_add_child() {
         let mut wrap = Wrap::default();
-        wrap.child(MockView);
-        wrap.child(MockView);
+        wrap.add_child(MockView);
+        wrap.add_child(MockView);
         assert_eq!(wrap.children.len(), 2);
     }
 
@@ -330,9 +331,9 @@ mod tests {
     fn test_wrap_set_children() {
         let mut wrap = Wrap::default();
         wrap.set_children(vec![
-            Box::new(MockView),
-            Box::new(MockView),
-            Box::new(MockView),
+            MockView.into_element(),
+            MockView.into_element(),
+            MockView.into_element(),
         ]);
         assert_eq!(wrap.children.len(), 3);
     }

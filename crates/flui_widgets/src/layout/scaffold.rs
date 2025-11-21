@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_scaffold_with_body() {
-        let body = Box::new(crate::SizedBox::new());
+        let body = crate::SizedBox::new().into_element();
         let widget = Scaffold::with_body(body);
         assert!(widget.body.is_some());
     }
@@ -300,15 +300,13 @@ mod tests {
 
     #[test]
     fn test_scaffold_builder() {
-        let widget = Scaffold::builder().build_scaffold();
+        let widget = Scaffold::builder().build();
         assert_eq!(widget.background_color, Color::WHITE);
     }
 
     #[test]
     fn test_scaffold_builder_with_body() {
-        let widget = Scaffold::builder()
-            .body(crate::SizedBox::new())
-            .build_scaffold();
+        let widget = Scaffold::builder().body(crate::SizedBox::new()).build();
         assert!(widget.body.is_some());
     }
 
@@ -316,7 +314,7 @@ mod tests {
     fn test_scaffold_builder_with_background() {
         let widget = Scaffold::builder()
             .background_color(Color::rgb(240, 240, 240))
-            .build_scaffold();
+            .build();
         assert_eq!(widget.background_color, Color::rgb(240, 240, 240));
     }
 

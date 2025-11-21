@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn test_column_macro_empty() {
         let column = column!();
-        assert_eq!(column.children.count(), 0);
+        assert_eq!(column.children.len(), 0);
     }
 
     #[test]

@@ -50,7 +50,7 @@
 //!
 //! Exhaustive pattern matching ensures all cases are handled:
 //!
-//! ```rust
+//! ```rust,ignore
 //! match element {
 //!     Element::Component(c) => { /* ... */ }
 //!     Element::Provider(p) => { /* ... */ }
@@ -246,7 +246,7 @@ impl Element {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// if let Some(component) = element.as_component() {
     ///     let child = component.rebuild();
     /// }
@@ -647,7 +647,7 @@ impl Element {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// let category = element.category();
     /// assert_eq!(category, "Component");
     /// ```

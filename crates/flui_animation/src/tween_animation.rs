@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 /// An animation that applies a Tween to a parent animation.
 ///
-/// Takes an Animation<f32> (0.0 to 1.0) and applies a Tween to transform
-/// it into an Animation<T> for any type T that implements `Animatable`.
+/// Takes an `Animation<f32>` (0.0 to 1.0) and applies a Tween to transform
+/// it into an `Animation<T>` for any type T that implements `Animatable`.
 ///
 /// # Type Parameters
 ///

@@ -226,7 +226,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::centered(Axis::Horizontal, vec![child1, child2]);
     /// ```
-    pub fn centered(direction: Axis, children: Vec<Element>) -> Self {
+    pub fn centered(direction: Axis, children: impl Into<Children>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::Center)
@@ -244,17 +244,20 @@ impl Flex {
     /// // Vertical layout with 16px spacing
     /// let flex = Flex::spaced(Axis::Vertical, 16.0, vec![child1, child2]);
     /// ```
-    pub fn spaced(direction: Axis, spacing: f32, children: Vec<Element>) -> Self {
-        if children.is_empty() {
+    pub fn spaced(direction: Axis, spacing: f32, children: impl Into<Children>) -> Self {
+        let children: Children = children.into();
+        let children_vec = children.into_inner();
+
+        if children_vec.is_empty() {
             return Self::builder()
                 .direction(direction)
-                .children(vec![])
+                .children(Vec::<Element>::new())
                 .build();
         }
 
-        let mut spaced_children = Vec::with_capacity(children.len() * 2 - 1);
+        let mut spaced_children = Vec::with_capacity(children_vec.len() * 2 - 1);
 
-        for (i, child) in children.into_iter().enumerate() {
+        for (i, child) in children_vec.into_iter().enumerate() {
             if i > 0 {
                 // Add spacer between children
                 let spacer: Element = match direction {
@@ -280,7 +283,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::start(Axis::Horizontal, vec![child1, child2]);
     /// ```
-    pub fn start(direction: Axis, children: Vec<Element>) -> Self {
+    pub fn start(direction: Axis, children: impl Into<Children>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::Start)
@@ -296,7 +299,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::end(Axis::Horizontal, vec![child1, child2]);
     /// ```
-    pub fn end(direction: Axis, children: Vec<Element>) -> Self {
+    pub fn end(direction: Axis, children: impl Into<Children>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::End)
@@ -312,7 +315,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::space_between(Axis::Horizontal, vec![child1, child2, child3]);
     /// ```
-    pub fn space_between(direction: Axis, children: Vec<Element>) -> Self {
+    pub fn space_between(direction: Axis, children: impl Into<Children>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -328,7 +331,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::space_around(Axis::Horizontal, vec![child1, child2, child3]);
     /// ```
-    pub fn space_around(direction: Axis, children: Vec<Element>) -> Self {
+    pub fn space_around(direction: Axis, children: impl Into<Children>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::SpaceAround)
@@ -344,7 +347,7 @@ impl Flex {
     /// ```rust,ignore
     /// let flex = Flex::space_evenly(Axis::Horizontal, vec![child1, child2, child3]);
     /// ```
-    pub fn space_evenly(direction: Axis, children: Vec<Element>) -> Self {
+    pub fn space_evenly(direction: Axis, children: impl Into<Children>) -> Self {
         Self::builder()
             .direction(direction)
             .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
@@ -387,6 +390,8 @@ macro_rules! flex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::testing::test_build_context;
+    use flui_core::view::build_context::with_build_context;
 
     #[test]
     fn test_flex_new() {
@@ -429,81 +434,104 @@ mod tests {
 
     #[test]
     fn test_flex_chainable_child() {
-        let widget = Flex::builder()
-            .direction(Axis::Horizontal)
-            .child(crate::SizedBox::new())
-            .child(crate::SizedBox::new())
-            .child(crate::SizedBox::new())
-            .build();
-        assert_eq!(widget.direction, Axis::Horizontal);
-        assert_eq!(widget.children.len(), 3);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::builder()
+                .direction(Axis::Horizontal)
+                .children(vec![
+                    crate::SizedBox::new(),
+                    crate::SizedBox::new(),
+                    crate::SizedBox::new(),
+                ])
+                .build();
+            assert_eq!(widget.direction, Axis::Horizontal);
+            assert_eq!(widget.children.len(), 3);
+        });
     }
 
     #[test]
     fn test_flex_centered() {
-        let widget = Flex::centered(
-            Axis::Horizontal,
-            vec![
-                Box::new(crate::SizedBox::new()),
-                Box::new(crate::SizedBox::new()),
-            ],
-        );
-        assert_eq!(widget.direction, Axis::Horizontal);
-        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::Center);
-        assert_eq!(widget.cross_axis_alignment, CrossAxisAlignment::Center);
-        assert_eq!(widget.children.len(), 2);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::centered(
+                Axis::Horizontal,
+                vec![crate::SizedBox::new(), crate::SizedBox::new()],
+            );
+            assert_eq!(widget.direction, Axis::Horizontal);
+            assert_eq!(widget.main_axis_alignment, MainAxisAlignment::Center);
+            assert_eq!(widget.cross_axis_alignment, CrossAxisAlignment::Center);
+            assert_eq!(widget.children.len(), 2);
+        });
     }
 
     #[test]
     fn test_flex_spaced() {
-        let widget = Flex::spaced(
-            Axis::Vertical,
-            16.0,
-            vec![
-                Box::new(crate::SizedBox::new()),
-                Box::new(crate::SizedBox::new()),
-                Box::new(crate::SizedBox::new()),
-            ],
-        );
-        assert_eq!(widget.direction, Axis::Vertical);
-        // 3 children + 2 spacers = 5 total
-        assert_eq!(widget.children.len(), 5);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::spaced(
+                Axis::Vertical,
+                16.0,
+                vec![
+                    crate::SizedBox::new(),
+                    crate::SizedBox::new(),
+                    crate::SizedBox::new(),
+                ],
+            );
+            assert_eq!(widget.direction, Axis::Vertical);
+            // 3 children + 2 spacers = 5 total
+            assert_eq!(widget.children.len(), 5);
+        });
     }
 
     #[test]
     fn test_flex_spaced_empty() {
-        let widget = Flex::spaced(Axis::Horizontal, 16.0, vec![]);
+        let widget = Flex::spaced(Axis::Horizontal, 16.0, Vec::<Element>::new());
         assert_eq!(widget.children.len(), 0);
     }
 
     #[test]
     fn test_flex_start() {
-        let widget = Flex::start(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
-        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::Start);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::start(Axis::Horizontal, vec![crate::SizedBox::new()]);
+            assert_eq!(widget.main_axis_alignment, MainAxisAlignment::Start);
+        });
     }
 
     #[test]
     fn test_flex_end() {
-        let widget = Flex::end(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
-        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::End);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::end(Axis::Horizontal, vec![crate::SizedBox::new()]);
+            assert_eq!(widget.main_axis_alignment, MainAxisAlignment::End);
+        });
     }
 
     #[test]
     fn test_flex_space_between() {
-        let widget = Flex::space_between(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
-        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceBetween);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::space_between(Axis::Horizontal, vec![crate::SizedBox::new()]);
+            assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceBetween);
+        });
     }
 
     #[test]
     fn test_flex_space_around() {
-        let widget = Flex::space_around(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
-        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceAround);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::space_around(Axis::Horizontal, vec![crate::SizedBox::new()]);
+            assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceAround);
+        });
     }
 
     #[test]
     fn test_flex_space_evenly() {
-        let widget = Flex::space_evenly(Axis::Horizontal, vec![Box::new(crate::SizedBox::new())]);
-        assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceEvenly);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = Flex::space_evenly(Axis::Horizontal, vec![crate::SizedBox::new()]);
+            assert_eq!(widget.main_axis_alignment, MainAxisAlignment::SpaceEvenly);
+        });
     }
 
     #[test]

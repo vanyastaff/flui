@@ -29,3 +29,4 @@ default = []
 serde = ["flui_core/serde", "flui_types/serde", "flui_rendering/serde"]
 
 [dev-dependencies]
+flui_core = { path = "../flui_core", features = ["testing"] }

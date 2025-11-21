@@ -35,7 +35,7 @@ use crate::types::AssetHandle;
 pub struct AssetRegistry {
     /// Type-erased caches for different asset types.
     /// Key: TypeId of the Asset type
-    /// Value: Box<dyn Any> containing AssetCache<T>
+    /// Value: `Box<dyn Any>` containing `AssetCache<T>`
     caches: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
 
     /// Default cache capacity in bytes.

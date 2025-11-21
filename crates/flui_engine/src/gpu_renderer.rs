@@ -81,7 +81,7 @@ impl GpuRenderer {
     ///
     /// # Arguments
     ///
-    /// * `window` - Window handle (Arc<Window> from winit)
+    /// * `window` - Window handle (`Arc<Window>` from winit)
     /// * `width` - Initial surface width in pixels
     /// * `height` - Initial surface height in pixels
     ///

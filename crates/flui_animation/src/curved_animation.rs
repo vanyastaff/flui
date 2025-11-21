@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 /// An animation that applies a curve to another animation.
 ///
-/// Takes an Animation<f32> (typically an AnimationController) and applies
+/// Takes an `Animation<f32>` (typically an AnimationController) and applies
 /// an easing curve to transform the linear 0.0..1.0 progression into a
 /// non-linear progression.
 ///

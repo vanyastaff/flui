@@ -5,7 +5,7 @@
 //!
 //! ## Premultiplied Alpha
 //!
-//! Unlike [`Color`](super::Color) which uses separate alpha, `Color32` uses
+//! Unlike [`Color`] which uses separate alpha, `Color32` uses
 //! premultiplied alpha where RGB values are already multiplied by alpha.
 //!
 //! Benefits of premultiplied alpha:
@@ -22,7 +22,7 @@
 //! - Perceptually more even for UI colors
 //! - Standard for web and most UI frameworks
 //!
-//! For physically correct color operations, convert to [`Color`](super::Color) first.
+//! For physically correct color operations, convert to [`Color`] first.
 
 use super::Color;
 
@@ -347,7 +347,7 @@ impl Color32 {
 
     /// Multiplies color by a factor in gamma space (fast, perceptually even).
     ///
-    /// This is faster than [`Self::linear_multiply`] and looks better for UI.
+    /// This is faster than `linear_multiply` and looks better for UI.
     ///
     /// # Examples
     ///

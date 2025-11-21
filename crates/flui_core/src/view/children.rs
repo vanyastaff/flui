@@ -220,9 +220,14 @@ impl From<Children> for Vec<Element> {
     }
 }
 
-impl From<Vec<Element>> for Children {
-    fn from(elements: Vec<Element>) -> Self {
-        Children { inner: elements }
+// Allow Vec<V> where V: IntoElement to be converted to Children
+// This enables: .children(vec![Text::new("A"), Text::new("B")])
+// Also works for Vec<Element> since Element: IntoElement
+impl<V: IntoElement> From<Vec<V>> for Children {
+    fn from(views: Vec<V>) -> Self {
+        Children {
+            inner: views.into_iter().map(|v| v.into_element()).collect(),
+        }
     }
 }
 

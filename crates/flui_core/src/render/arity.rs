@@ -219,7 +219,7 @@ impl Arity for Optional {
     }
 }
 
-/// Optional child accessor (like Option<T>)
+/// Optional child accessor (like `Option<T>`)
 #[derive(Debug, Clone, Copy)]
 pub struct OptionalChild<'a> {
     children: &'a [std::num::NonZeroUsize],
@@ -330,7 +330,7 @@ impl<const N: usize> Arity for Exact<N> {
     }
 }
 
-/// Fixed children accessor (for Exact<N>)
+/// Fixed children accessor (for `Exact<N>`)
 #[derive(Debug, Clone, Copy)]
 pub struct FixedChildren<'a, const N: usize> {
     children: &'a [std::num::NonZeroUsize; N],

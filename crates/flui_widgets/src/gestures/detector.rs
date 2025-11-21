@@ -265,8 +265,7 @@ mod tests {
 
     #[test]
     fn test_gesture_detector_new() {
-        let child = Box::new(MockWidget);
-        let detector = GestureDetector::new(child);
+        let detector = GestureDetector::new(MockWidget.into_element());
 
         assert!(detector.on_tap.is_none());
     }

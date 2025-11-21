@@ -219,28 +219,28 @@ mod tests {
 
     #[test]
     fn test_rotated_box_new() {
-        let widget = RotatedBox::new(QuarterTurns::One, Box::new(crate::SizedBox::new()));
+        let widget = RotatedBox::new(QuarterTurns::One, crate::SizedBox::new());
         assert_eq!(widget.quarter_turns, QuarterTurns::One);
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_rotated_box_rotate_90() {
-        let widget = RotatedBox::rotate_90(Box::new(crate::SizedBox::new()));
+        let widget = RotatedBox::rotate_90(crate::SizedBox::new());
         assert_eq!(widget.quarter_turns, QuarterTurns::One);
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_rotated_box_rotate_180() {
-        let widget = RotatedBox::rotate_180(Box::new(crate::SizedBox::new()));
+        let widget = RotatedBox::rotate_180(crate::SizedBox::new());
         assert_eq!(widget.quarter_turns, QuarterTurns::Two);
         assert!(widget.child.is_some());
     }
 
     #[test]
     fn test_rotated_box_rotate_270() {
-        let widget = RotatedBox::rotate_270(Box::new(crate::SizedBox::new()));
+        let widget = RotatedBox::rotate_270(crate::SizedBox::new());
         assert_eq!(widget.quarter_turns, QuarterTurns::Three);
         assert!(widget.child.is_some());
     }
@@ -266,7 +266,7 @@ mod tests {
         let mut widget = RotatedBox::default();
         assert!(widget.child.is_none());
 
-        widget.set_child(Box::new(crate::SizedBox::new()));
+        widget.set_child(crate::SizedBox::new().into_element());
         assert!(widget.child.is_some());
     }
 

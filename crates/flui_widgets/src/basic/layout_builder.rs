@@ -138,29 +138,31 @@ macro_rules! layout_builder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::view::IntoElement;
 
     #[test]
     fn test_layout_builder_new() {
-        let widget = LayoutBuilder::new(|_ctx, _constraints| Box::new(crate::SizedBox::new()));
+        let widget = LayoutBuilder::new(|_ctx, _constraints| crate::SizedBox::new().into_element());
         assert!(widget.key.is_none());
     }
 
     #[test]
     fn test_layout_builder_with_key() {
-        let widget = LayoutBuilder::new(|_ctx, _constraints| Box::new(crate::SizedBox::new()))
+        let widget = LayoutBuilder::new(|_ctx, _constraints| crate::SizedBox::new().into_element())
             .with_key("test".into());
         assert_eq!(widget.key, Some("test".into()));
     }
 
     #[test]
     fn test_layout_builder_macro() {
-        let widget = layout_builder!(|_ctx, _constraints| Box::new(crate::SizedBox::new()));
+        let widget = layout_builder!(|_ctx, _constraints| crate::SizedBox::new().into_element());
         assert!(widget.key.is_none());
     }
 
     #[test]
     fn test_layout_builder_clone() {
-        let widget1 = LayoutBuilder::new(|_ctx, _constraints| Box::new(crate::SizedBox::new()));
+        let widget1 =
+            LayoutBuilder::new(|_ctx, _constraints| crate::SizedBox::new().into_element());
         let widget2 = widget1.clone();
         assert!(widget2.key.is_none());
     }

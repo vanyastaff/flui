@@ -302,17 +302,15 @@ mod tests {
     }
 
     #[test]
-    fn test_spacer_create_parent_data() {
+    fn test_spacer_flex_value() {
         let spacer = Spacer::new();
-        let parent_data = spacer.create_parent_data();
-        assert_eq!(parent_data.flex, Some(1));
+        assert_eq!(spacer.flex, 1);
     }
 
     #[test]
-    fn test_spacer_create_parent_data_custom_flex() {
+    fn test_spacer_flex_value_custom() {
         let spacer = Spacer::with_flex(4);
-        let parent_data = spacer.create_parent_data();
-        assert_eq!(parent_data.flex, Some(4));
+        assert_eq!(spacer.flex, 4);
     }
 
     #[test]

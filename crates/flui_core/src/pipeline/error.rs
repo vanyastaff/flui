@@ -434,11 +434,13 @@ impl PipelineError {
     ///
     /// ```rust
     /// use flui_core::pipeline::PipelineError;
+    /// use flui_core::ElementId;
     ///
-    /// let error = PipelineError::layout_error(42, "Constraint violation").unwrap();
+    /// let id = ElementId::new(42);
+    /// let error = PipelineError::layout_error(id, "Constraint violation").unwrap();
     ///
     /// // ❌ Invalid: empty message
-    /// assert!(PipelineError::layout_error(42, "").is_err());
+    /// assert!(PipelineError::layout_error(id, "").is_err());
     /// ```
     pub fn layout_error(
         element_id: crate::element::ElementId,

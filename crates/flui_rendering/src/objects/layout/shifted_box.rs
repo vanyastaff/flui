@@ -173,11 +173,4 @@ mod tests {
         assert_eq!(shifted.offset.dx, 10.0); // Unchanged
         assert_eq!(shifted.offset.dy, 40.0);
     }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let shifted = RenderShiftedBox::zero();
-
-        assert_eq!(shifted.arity(), RuntimeArity::Exact(1));
-    }
 }

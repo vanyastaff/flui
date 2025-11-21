@@ -411,9 +411,7 @@ mod tests {
 
     #[test]
     fn test_row_builder_children() {
-        let row = Row::builder()
-            .children(vec![Box::new(MockView), Box::new(MockView)])
-            .build();
+        let row = Row::builder().children(vec![MockView, MockView]).build();
 
         assert_eq!(row.children.len(), 2);
     }
@@ -422,8 +420,8 @@ mod tests {
     #[allow(deprecated)]
     fn test_row_add_child() {
         let mut row = Row::new();
-        row.child(MockView);
-        row.child(MockView);
+        row.add_child(MockView);
+        row.add_child(MockView);
         assert_eq!(row.children.len(), 2);
     }
 
@@ -431,7 +429,7 @@ mod tests {
     #[allow(deprecated)]
     fn test_row_set_children() {
         let mut row = Row::new();
-        row.set_children(vec![Box::new(MockView), Box::new(MockView)]);
+        row.set_children(vec![MockView, MockView]);
         assert_eq!(row.children.len(), 2);
     }
 
@@ -490,11 +488,7 @@ mod tests {
     #[test]
     fn test_row_multi_child() {
         let row = Row::builder()
-            .children(vec![
-                Box::new(MockView),
-                Box::new(MockView),
-                Box::new(MockView),
-            ])
+            .children(vec![MockView, MockView, MockView])
             .build();
 
         assert_eq!(row.children.len(), 3);

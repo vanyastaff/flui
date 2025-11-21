@@ -375,8 +375,8 @@ mod tests {
     #[allow(deprecated)]
     fn test_stack_add_child() {
         let mut widget = Stack::new();
-        widget.child(MockView::new("child1"));
-        widget.child(MockView::new("child2"));
+        widget.add_child(MockView::new("child1"));
+        widget.add_child(MockView::new("child2"));
         assert_eq!(widget.children.len(), 2);
     }
 
@@ -385,9 +385,9 @@ mod tests {
     fn test_stack_set_children() {
         let mut widget = Stack::new();
         widget.set_children(vec![
-            Box::new(MockView::new("child1")),
-            Box::new(MockView::new("child2")),
-            Box::new(MockView::new("child3")),
+            MockView::new("child1"),
+            MockView::new("child2"),
+            MockView::new("child3"),
         ]);
         assert_eq!(widget.children.len(), 3);
     }
@@ -406,10 +406,7 @@ mod tests {
     #[test]
     fn test_stack_builder_with_children() {
         let widget = Stack::builder()
-            .children(vec![
-                Box::new(MockView::new("child1")),
-                Box::new(MockView::new("child2")),
-            ])
+            .children(vec![MockView::new("child1"), MockView::new("child2")])
             .build();
 
         assert_eq!(widget.children.len(), 2);
@@ -503,7 +500,7 @@ mod tests {
     fn test_stack_many_children() {
         let mut widget = Stack::new();
         for i in 0..10 {
-            widget.child(MockView::new(&format!("child{}", i)));
+            widget.add_child(MockView::new(&format!("child{}", i)));
         }
         assert_eq!(widget.children.len(), 10);
     }
@@ -513,9 +510,9 @@ mod tests {
         let widget = Stack::builder()
             .alignment(Alignment::CENTER)
             .children(vec![
-                Box::new(MockView::new("background")),
-                Box::new(MockView::new("middle")),
-                Box::new(MockView::new("foreground")),
+                MockView::new("background"),
+                MockView::new("middle"),
+                MockView::new("foreground"),
             ])
             .build();
 

@@ -15,11 +15,13 @@ use crate::ElementId;
 ///
 /// ```rust
 /// use flui_core::element::dependency::DependencyInfo;
+/// use flui_core::ElementId;
 ///
-/// let info = DependencyInfo::new(0, None);
+/// let id = ElementId::new(1);
+/// let info = DependencyInfo::new(id, None);
 /// assert!(!info.has_aspect());
 ///
-/// let simple = DependencyInfo::simple(0);
+/// let simple = DependencyInfo::simple(id);
 /// assert_eq!(info, simple); // Aspects are ignored in comparison
 /// ```
 #[derive(Debug)]
@@ -130,9 +132,10 @@ impl Hash for DependencyInfo {
 ///
 /// ```rust
 /// use flui_core::element::dependency::DependencyTracker;
+/// use flui_core::ElementId;
 ///
 /// let mut tracker = DependencyTracker::new();
-/// let id = 42;
+/// let id = ElementId::new(42);
 ///
 /// tracker.add_dependent(id, None);
 /// assert_eq!(tracker.len(), 1);
@@ -193,8 +196,9 @@ impl DependencyTracker {
     ///
     /// ```rust
     /// # use flui_core::element::dependency::DependencyTracker;
+    /// # use flui_core::ElementId;
     /// let mut tracker = DependencyTracker::new();
-    /// let id = 42;
+    /// let id = ElementId::new(42);
     ///
     /// tracker.add_dependent(id, None);
     /// assert!(tracker.has_dependent(id));
@@ -223,8 +227,9 @@ impl DependencyTracker {
     ///
     /// ```rust
     /// # use flui_core::element::dependency::DependencyTracker;
+    /// # use flui_core::ElementId;
     /// let mut tracker = DependencyTracker::new();
-    /// let id = 42;
+    /// let id = ElementId::new(42);
     ///
     /// tracker.add_dependent(id, None);
     /// assert!(tracker.remove_dependent(id));
@@ -240,9 +245,10 @@ impl DependencyTracker {
     ///
     /// ```rust
     /// # use flui_core::element::dependency::DependencyTracker;
+    /// # use flui_core::ElementId;
     /// let mut tracker = DependencyTracker::new();
-    /// tracker.add_dependent(1, None);
-    /// tracker.add_dependent(2, None);
+    /// tracker.add_dependent(ElementId::new(1), None);
+    /// tracker.add_dependent(ElementId::new(2), None);
     ///
     /// tracker.clear();
     /// assert!(tracker.is_empty());
@@ -261,8 +267,9 @@ impl DependencyTracker {
     ///
     /// ```rust
     /// # use flui_core::element::dependency::DependencyTracker;
+    /// # use flui_core::ElementId;
     /// let mut tracker = DependencyTracker::new();
-    /// let id = 42;
+    /// let id = ElementId::new(42);
     ///
     /// assert!(!tracker.has_dependent(id));
     /// tracker.add_dependent(id, None);
@@ -298,9 +305,10 @@ impl DependencyTracker {
     ///
     /// ```rust
     /// # use flui_core::element::dependency::DependencyTracker;
+    /// # use flui_core::ElementId;
     /// let mut tracker = DependencyTracker::new();
-    /// tracker.add_dependent(1, None);
-    /// tracker.add_dependent(2, None);
+    /// tracker.add_dependent(ElementId::new(1), None);
+    /// tracker.add_dependent(ElementId::new(2), None);
     ///
     /// let count = tracker.dependents().count();
     /// assert_eq!(count, 2);
@@ -318,9 +326,10 @@ impl DependencyTracker {
     ///
     /// ```rust
     /// # use flui_core::element::dependency::DependencyTracker;
+    /// # use flui_core::ElementId;
     /// let mut tracker = DependencyTracker::new();
-    /// let id1 = 1;
-    /// let id2 = 2;
+    /// let id1 = ElementId::new(1);
+    /// let id2 = ElementId::new(2);
     ///
     /// tracker.add_dependent(id1, None);
     /// tracker.add_dependent(id2, None);
@@ -356,8 +365,9 @@ impl DependencyTracker {
     ///
     /// ```rust
     /// # use flui_core::element::dependency::DependencyTracker;
+    /// # use flui_core::ElementId;
     /// let mut tracker = DependencyTracker::with_capacity(100);
-    /// tracker.add_dependent(1, None);
+    /// tracker.add_dependent(ElementId::new(1), None);
     ///
     /// tracker.shrink_to_fit();
     /// // Capacity reduced to fit 1 element

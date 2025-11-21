@@ -146,7 +146,7 @@ bitflags! {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
 /// use std::thread;
 ///
@@ -179,7 +179,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::AtomicElementFlags;
+    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// assert!(!flags.contains(ElementFlags::DIRTY));

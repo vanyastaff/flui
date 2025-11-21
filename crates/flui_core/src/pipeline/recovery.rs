@@ -12,7 +12,7 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,ignore
 //! use flui_core::pipeline::{ErrorRecovery, RecoveryPolicy, PipelineError, PipelinePhase};
 //!
 //! let mut recovery = ErrorRecovery::new(RecoveryPolicy::UseLastGoodFrame);

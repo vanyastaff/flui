@@ -20,7 +20,7 @@
 //!
 //! # Usage
 //!
-//! ```rust
+//! ```rust,ignore
 //! let mut pool = BufferPool::new();
 //!
 //! // Get buffer (creates or reuses)

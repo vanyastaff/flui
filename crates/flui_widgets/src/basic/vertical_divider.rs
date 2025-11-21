@@ -163,6 +163,16 @@ impl Default for VerticalDivider {
     }
 }
 
+// bon Builder Extensions
+use vertical_divider_builder::State;
+
+impl<S: State> VerticalDividerBuilder<S> {
+    /// Builds the VerticalDivider widget.
+    pub fn build(self) -> VerticalDivider {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for VerticalDivider {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
@@ -235,7 +245,7 @@ mod tests {
             .indent(10.0)
             .end_indent(10.0)
             .color(Color::RED)
-            .build_vertical_divider();
+            .build();
 
         assert_eq!(divider.thickness, 2.0);
         assert_eq!(divider.indent, 10.0);
@@ -254,7 +264,7 @@ mod tests {
         let divider = VerticalDivider::builder()
             .width(20.0)
             .thickness(2.0)
-            .build_vertical_divider();
+            .build();
 
         assert_eq!(divider.width, Some(20.0));
         assert_eq!(divider.thickness, 2.0);

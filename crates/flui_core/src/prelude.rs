@@ -21,12 +21,11 @@
 //! - [`Signal`] - Reactive value handle (cheap to clone)
 //!
 //! ## Render System
-//! - [`Render`] - Trait for custom render objects
 //! - Protocol-based contexts (see `render::protocol` module):
 //!   - `BoxLayoutContext<A>`, `BoxPaintContext<A>` for box renders
 //!   - `SliverLayoutContext<A>`, `SliverPaintContext<A>` for sliver renders
-//! - [`Arity`] - Child count specification
-//! - [`Children`] - Unified child representation
+//! - `Arity` - Child count specification
+//! - `Children` - Unified child representation
 //!
 //! ## Foundation Types
 //! - [`Key`] - Compile-time view identifier

@@ -245,7 +245,7 @@ mod tests {
             .indent(10.0)
             .end_indent(10.0)
             .color(Color::RED)
-            .build_divider();
+            .build();
 
         assert_eq!(divider.thickness, 2.0);
         assert_eq!(divider.indent, 10.0);
@@ -261,10 +261,7 @@ mod tests {
 
     #[test]
     fn test_divider_height() {
-        let divider = Divider::builder()
-            .height(20.0)
-            .thickness(2.0)
-            .build_divider();
+        let divider = Divider::builder().height(20.0).thickness(2.0).build();
 
         assert_eq!(divider.height, Some(20.0));
         assert_eq!(divider.thickness, 2.0);

@@ -17,7 +17,7 @@ use crate::ElementId;
 ///
 /// # Architecture
 ///
-/// ```rust
+/// ```rust,ignore
 /// pub struct ProviderElement {
 ///     base: ElementBase,              // Common fields
 ///     provided: Box<dyn Any>,         // The data being provided

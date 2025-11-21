@@ -123,8 +123,8 @@ impl Curve for SawTooth {
     }
 }
 
-/// A curve that is 0.0 until [begin], then curved from 0.0 to 1.0 at [begin]
-/// and [end], then 1.0 after [end].
+/// A curve that is 0.0 until `begin`, then curved from 0.0 to 1.0 at `begin`
+/// and `end`, then 1.0 after `end`.
 ///
 /// Similar to Flutter's `Interval`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -186,7 +186,7 @@ impl<C: Curve + Copy> Curve for Interval<C> {
     }
 }
 
-/// A curve that is 0.0 until [threshold], then jumps to 1.0.
+/// A curve that is 0.0 until `threshold`, then jumps to 1.0.
 ///
 /// Similar to Flutter's `Threshold`.
 #[derive(Debug, Clone, Copy, PartialEq)]

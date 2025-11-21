@@ -471,26 +471,27 @@ macro_rules! positioned {
 }
 
 #[cfg(test)]
-#[cfg(feature = "disabled_tests")] // TODO: Update tests to new Widget API
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
-    // Mock widget for testing
-    #[derive(Debug, Clone)]
-    struct MockWidget {
+    // Mock view for testing
+    #[derive(Debug)]
+    struct MockView {
         #[allow(dead_code)]
         id: String,
     }
 
-    impl MockWidget {
+    impl MockView {
         fn new(id: &str) -> Self {
             Self { id: id.to_string() }
         }
     }
 
-    impl Widget for MockWidget {
-        fn create_element(&self) -> Box<dyn flui_core::Element> {
-            unimplemented!("MockWidget is for testing only")
+    impl View for MockView {
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -516,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_positioned_fill() {
-        let widget = Positioned::fill(MockWidget::new("child"));
+        let widget = Positioned::fill(MockView::new("child"));
         assert_eq!(widget.left, Some(0.0));
         assert_eq!(widget.top, Some(0.0));
         assert_eq!(widget.right, Some(0.0));
@@ -529,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_positioned_from_rect() {
-        let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, MockWidget::new("child"));
+        let widget = Positioned::from_rect(10.0, 20.0, 100.0, 50.0, MockView::new("child"));
         assert_eq!(widget.left, Some(10.0));
         assert_eq!(widget.top, Some(20.0));
         assert_eq!(widget.width, Some(100.0));
@@ -546,7 +547,7 @@ mod tests {
             Some(20.0),
             Some(30.0),
             Some(40.0),
-            MockWidget::new("child"),
+            MockView::new("child"),
         );
         assert_eq!(widget.left, Some(10.0));
         assert_eq!(widget.top, Some(20.0));
@@ -574,7 +575,7 @@ mod tests {
         let widget = Positioned::builder()
             .left(10.0)
             .top(20.0)
-            .child(MockWidget::new("child"))
+            .child(MockView::new("child"))
             .build();
 
         assert!(widget.child.is_some());
@@ -616,7 +617,7 @@ mod tests {
         assert!(widget.validate().is_ok());
 
         // Fill
-        let widget = Positioned::fill(MockWidget::new("child"));
+        let widget = Positioned::fill(MockView::new("child"));
         assert!(widget.validate().is_ok());
     }
 
@@ -693,7 +694,7 @@ mod tests {
         let mut widget = Positioned::new();
         assert!(widget.child.is_none());
 
-        widget.set_child(MockWidget::new("child"));
+        widget.set_child(MockView::new("child").into_element());
         assert!(widget.child.is_some());
     }
 

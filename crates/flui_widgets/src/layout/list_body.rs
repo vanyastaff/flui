@@ -180,6 +180,16 @@ impl Default for ListBody {
     }
 }
 
+// bon Builder Extensions
+use list_body_builder::State;
+
+impl<S: State> ListBodyBuilder<S> {
+    /// Builds the ListBody widget.
+    pub fn build(self) -> ListBody {
+        self.build_internal()
+    }
+}
+
 // Implement View trait
 impl View for ListBody {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
@@ -197,8 +207,8 @@ mod tests {
     #[test]
     fn test_list_body_new() {
         let children = vec![
-            Box::new(crate::SizedBox::new()) as Element,
-            Box::new(crate::SizedBox::new()) as Element,
+            crate::SizedBox::new().into_element(),
+            crate::SizedBox::new().into_element(),
         ];
         let list = ListBody::new(Axis::Vertical, children);
         assert_eq!(list.main_axis, Axis::Vertical);
@@ -208,21 +218,21 @@ mod tests {
 
     #[test]
     fn test_list_body_vertical() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Element];
+        let children = vec![crate::SizedBox::new().into_element()];
         let list = ListBody::vertical(children);
         assert_eq!(list.main_axis, Axis::Vertical);
     }
 
     #[test]
     fn test_list_body_horizontal() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Element];
+        let children = vec![crate::SizedBox::new().into_element()];
         let list = ListBody::horizontal(children);
         assert_eq!(list.main_axis, Axis::Horizontal);
     }
 
     #[test]
     fn test_list_body_with_spacing() {
-        let children = vec![Box::new(crate::SizedBox::new()) as Element];
+        let children = vec![crate::SizedBox::new().into_element()];
         let list = ListBody::vertical_with_spacing(8.0, children);
         assert_eq!(list.spacing, 8.0);
     }
@@ -232,7 +242,7 @@ mod tests {
         let list = ListBody::builder()
             .main_axis(Axis::Horizontal)
             .spacing(16.0)
-            .build_list_body();
+            .build();
         assert_eq!(list.main_axis, Axis::Horizontal);
         assert_eq!(list.spacing, 16.0);
     }

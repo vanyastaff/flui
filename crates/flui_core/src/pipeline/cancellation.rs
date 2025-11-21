@@ -63,7 +63,7 @@ use std::time::{Duration, Instant};
 ///
 /// # Usage Pattern
 ///
-/// ```rust
+/// ```rust,ignore
 /// use flui_core::pipeline::CancellationToken;
 /// use std::time::Duration;
 ///

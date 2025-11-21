@@ -34,6 +34,7 @@ use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
+use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
@@ -319,8 +320,8 @@ where
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(self, children: Vec<Element>) -> IndexedStackBuilder<SetChildren<S>> {
-        self.children_internal(children)
+    pub fn children(self, children: impl Into<Children>) -> IndexedStackBuilder<SetChildren<S>> {
+        self.children_internal(children.into().into_inner())
     }
 }
 
@@ -371,6 +372,8 @@ macro_rules! indexed_stack {
 mod tests {
     use super::*;
     use flui_core::render::RenderBoxExt;
+    use flui_core::testing::test_build_context;
+    use flui_core::view::build_context::with_build_context;
     use flui_rendering::RenderEmpty;
 
     // Mock view for testing
@@ -425,21 +428,27 @@ mod tests {
 
     #[test]
     fn test_indexed_stack_add_child() {
-        let mut widget = IndexedStack::new(Some(0));
-        widget.child(MockView::new("child1"));
-        widget.child(MockView::new("child2"));
-        assert_eq!(widget.children.len(), 2);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let mut widget = IndexedStack::new(Some(0));
+            widget.add_child(MockView::new("child1"));
+            widget.add_child(MockView::new("child2"));
+            assert_eq!(widget.children.len(), 2);
+        });
     }
 
     #[test]
     fn test_indexed_stack_set_children() {
-        let mut widget = IndexedStack::new(Some(0));
-        widget.set_children(vec![
-            Box::new(MockView::new("child1")),
-            Box::new(MockView::new("child2")),
-            Box::new(MockView::new("child3")),
-        ]);
-        assert_eq!(widget.children.len(), 3);
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let mut widget = IndexedStack::new(Some(0));
+            widget.set_children(vec![
+                MockView::new("child1").into_element(),
+                MockView::new("child2").into_element(),
+                MockView::new("child3").into_element(),
+            ]);
+            assert_eq!(widget.children.len(), 3);
+        });
     }
 
     #[test]
@@ -457,15 +466,15 @@ mod tests {
 
     #[test]
     fn test_indexed_stack_builder_with_children() {
-        let widget = IndexedStack::builder()
-            .index(0)
-            .children(vec![
-                Box::new(MockView::new("child1")),
-                Box::new(MockView::new("child2")),
-            ])
-            .build();
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = IndexedStack::builder()
+                .index(0)
+                .children(vec![MockView::new("child1"), MockView::new("child2")])
+                .build();
 
-        assert_eq!(widget.children.len(), 2);
+            assert_eq!(widget.children.len(), 2);
+        });
     }
 
     #[test]
@@ -512,25 +521,31 @@ mod tests {
         let widget = IndexedStack::new(None);
         assert!(widget.validate().is_ok());
 
-        // Index within bounds
-        let mut widget = IndexedStack::new(Some(1));
-        widget.child(MockView::new("child1"));
-        widget.child(MockView::new("child2"));
-        widget.child(MockView::new("child3"));
-        assert!(widget.validate().is_ok());
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            // Index within bounds
+            let mut widget = IndexedStack::new(Some(1));
+            widget.add_child(MockView::new("child1"));
+            widget.add_child(MockView::new("child2"));
+            widget.add_child(MockView::new("child3"));
+            assert!(widget.validate().is_ok());
 
-        // Index 0 with children
-        let mut widget = IndexedStack::new(Some(0));
-        widget.child(MockView::new("child1"));
-        assert!(widget.validate().is_ok());
+            // Index 0 with children
+            let mut widget = IndexedStack::new(Some(0));
+            widget.add_child(MockView::new("child1"));
+            assert!(widget.validate().is_ok());
+        });
     }
 
     #[test]
     fn test_indexed_stack_validate_out_of_bounds() {
-        let mut widget = IndexedStack::new(Some(5));
-        widget.child(MockView::new("child1"));
-        widget.child(MockView::new("child2"));
-        assert!(widget.validate().is_err());
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let mut widget = IndexedStack::new(Some(5));
+            widget.add_child(MockView::new("child1"));
+            widget.add_child(MockView::new("child2"));
+            assert!(widget.validate().is_err());
+        });
     }
 
     #[test]
@@ -575,41 +590,50 @@ mod tests {
 
     #[test]
     fn test_indexed_stack_many_children() {
-        let mut widget = IndexedStack::new(Some(5));
-        for i in 0..10 {
-            widget.child(MockView::new(&format!("child{}", i)));
-        }
-        assert_eq!(widget.children.len(), 10);
-        assert!(widget.validate().is_ok());
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let mut widget = IndexedStack::new(Some(5));
+            for i in 0..10 {
+                widget.add_child(MockView::new(&format!("child{}", i)));
+            }
+            assert_eq!(widget.children.len(), 10);
+            assert!(widget.validate().is_ok());
+        });
     }
 
     #[test]
     fn test_indexed_stack_index_change() {
-        let mut widget = IndexedStack::new(Some(0));
-        widget.child(MockView::new("child1"));
-        widget.child(MockView::new("child2"));
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let mut widget = IndexedStack::new(Some(0));
+            widget.add_child(MockView::new("child1"));
+            widget.add_child(MockView::new("child2"));
 
-        assert_eq!(widget.index, Some(0));
-        assert!(widget.validate().is_ok());
+            assert_eq!(widget.index, Some(0));
+            assert!(widget.validate().is_ok());
 
-        widget.index = Some(1);
-        assert_eq!(widget.index, Some(1));
-        assert!(widget.validate().is_ok());
+            widget.index = Some(1);
+            assert_eq!(widget.index, Some(1));
+            assert!(widget.validate().is_ok());
+        });
     }
 
     #[test]
     fn test_indexed_stack_multi_child() {
-        let widget = IndexedStack::builder()
-            .index(Some(1))
-            .children(vec![
-                Box::new(MockView::new("page1")),
-                Box::new(MockView::new("page2")),
-                Box::new(MockView::new("page3")),
-            ])
-            .build();
+        let ctx = test_build_context();
+        with_build_context(&ctx, || {
+            let widget = IndexedStack::builder()
+                .index(1)
+                .children(vec![
+                    MockView::new("page1"),
+                    MockView::new("page2"),
+                    MockView::new("page3"),
+                ])
+                .build();
 
-        assert_eq!(widget.children.len(), 3);
-        assert_eq!(widget.index, Some(1));
+            assert_eq!(widget.children.len(), 3);
+            assert_eq!(widget.index, Some(1));
+        });
     }
 }
 

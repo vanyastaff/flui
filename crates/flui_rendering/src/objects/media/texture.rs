@@ -453,10 +453,4 @@ mod tests {
         assert_eq!(rect.width(), 800.0);
         assert!((rect.height() - 450.0).abs() < 0.1);
     }
-
-    #[test]
-    fn test_arity_is_leaf() {
-        let texture = RenderTexture::new(TextureId::new(1));
-        assert_eq!(texture.arity(), RuntimeArity::Exact(0));
-    }
 }

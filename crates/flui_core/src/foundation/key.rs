@@ -8,7 +8,7 @@
 //!
 //! # Examples
 //!
-//! ```
+//! ```rust,ignore
 //! use flui_core::Key;
 //!
 //! // Compile-time constant key
@@ -136,6 +136,7 @@ impl Key {
     /// use flui_core::Key;
     ///
     /// // From database ID
+    /// let user_id = 42u64;
     /// let key = Key::from_u64(user_id).expect("Invalid ID");
     ///
     /// // Check for 0

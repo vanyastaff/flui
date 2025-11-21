@@ -1,7 +1,7 @@
 //! Material Design color palette.
 //!
 //! Provides all Material Design colors with their various shades.
-//! See: https://m3.material.io/styles/color/the-color-system/color-roles
+//! See: <https://m3.material.io/styles/color/the-color-system/color-roles>
 
 use super::color::Color;
 

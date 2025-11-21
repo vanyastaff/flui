@@ -37,6 +37,7 @@
 //! ```rust,no_run
 //! # use flui::prelude::*;
 //! #
+//! #[derive(Clone)]
 //! struct MyApp;
 //!
 //! impl View for MyApp {

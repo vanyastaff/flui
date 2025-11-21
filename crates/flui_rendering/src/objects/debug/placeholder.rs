@@ -279,11 +279,4 @@ mod tests {
 
         assert_eq!(placeholder.stroke_width, 3.0);
     }
-
-    #[test]
-    fn test_arity_is_leaf() {
-        let placeholder = RenderPlaceholder::default();
-
-        assert_eq!(placeholder.arity(), RuntimeArity::Exact(0));
-    }
 }

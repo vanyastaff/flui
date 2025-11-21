@@ -25,7 +25,7 @@
 //!
 //! ```rust
 //! # use flui_core::{CoreError, ElementId};
-//! let id = 0; // ElementId
+//! let id = ElementId::new(1);
 //! let err = CoreError::not_mounted(id);
 //! match err {
 //!     CoreError::NotMounted(eid) => assert_eq!(eid, id),
@@ -211,7 +211,7 @@ impl CoreError {
     /// ```rust
     /// use flui_core::{CoreError, ElementId};
     ///
-    /// let id = 0; // ElementId
+    /// let id = ElementId::new(1);
     ///
     /// // Static string - zero allocation!
     /// let err1 = CoreError::rebuild_failed(id, "static reason");

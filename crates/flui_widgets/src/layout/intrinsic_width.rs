@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_intrinsic_width_new() {
-        let widget = IntrinsicWidth::new(Box::new(crate::SizedBox::new()));
+        let widget = IntrinsicWidth::new(crate::SizedBox::new().into_element());
         assert!(widget.child.is_some());
         assert_eq!(widget.step_width, None);
         assert_eq!(widget.step_height, None);
@@ -208,14 +208,14 @@ mod tests {
 
     #[test]
     fn test_intrinsic_width_with_step_width() {
-        let widget = IntrinsicWidth::with_step_width(50.0, Box::new(crate::SizedBox::new()));
+        let widget = IntrinsicWidth::with_step_width(50.0, crate::SizedBox::new().into_element());
         assert_eq!(widget.step_width, Some(50.0));
         assert_eq!(widget.step_height, None);
     }
 
     #[test]
     fn test_intrinsic_width_with_steps() {
-        let widget = IntrinsicWidth::with_steps(10.0, 20.0, Box::new(crate::SizedBox::new()));
+        let widget = IntrinsicWidth::with_steps(10.0, 20.0, crate::SizedBox::new().into_element());
         assert_eq!(widget.step_width, Some(10.0));
         assert_eq!(widget.step_height, Some(20.0));
     }

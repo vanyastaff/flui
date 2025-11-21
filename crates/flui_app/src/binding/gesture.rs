@@ -19,7 +19,7 @@ use std::sync::Arc;
 ///
 /// # Thread-Safety
 ///
-/// Uses Arc<RwLock<EventRouter>> for thread-safe event routing.
+/// Uses `Arc<RwLock<EventRouter>>` for thread-safe event routing.
 /// Multiple readers can access the router concurrently, but writes are exclusive.
 pub struct GestureBinding {
     /// Event router for dispatching events to layer tree

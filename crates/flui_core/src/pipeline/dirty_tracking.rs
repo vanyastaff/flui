@@ -23,7 +23,7 @@
 //! let dirty_set = LockFreeDirtySet::new(1000);
 //!
 //! // Mark element dirty (from any thread)
-//! let id = ElementId::new(42).unwrap();
+//! let id = ElementId::new(42);
 //! dirty_set.mark_dirty(id);
 //!
 //! // Check if dirty
@@ -120,7 +120,7 @@ impl LockFreeDirtySet {
     /// use flui_core::element::ElementId;
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
-    /// let id = ElementId::new(42).unwrap();
+    /// let id = ElementId::new(42);
     ///
     /// dirty_set.mark_dirty(id);
     /// assert!(dirty_set.is_dirty(id));
@@ -159,7 +159,7 @@ impl LockFreeDirtySet {
     /// use flui_core::element::ElementId;
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
-    /// let id = ElementId::new(42).unwrap();
+    /// let id = ElementId::new(42);
     ///
     /// assert!(!dirty_set.is_dirty(id));
     /// dirty_set.mark_dirty(id);
@@ -196,7 +196,7 @@ impl LockFreeDirtySet {
     /// use flui_core::element::ElementId;
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
-    /// let id = ElementId::new(42).unwrap();
+    /// let id = ElementId::new(42);
     ///
     /// dirty_set.mark_dirty(id);
     /// assert!(dirty_set.is_dirty(id));
@@ -241,9 +241,9 @@ impl LockFreeDirtySet {
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
     ///
-    /// dirty_set.mark_dirty(ElementId::new(10).unwrap());
-    /// dirty_set.mark_dirty(ElementId::new(20).unwrap());
-    /// dirty_set.mark_dirty(ElementId::new(30).unwrap());
+    /// dirty_set.mark_dirty(ElementId::new(10));
+    /// dirty_set.mark_dirty(ElementId::new(20));
+    /// dirty_set.mark_dirty(ElementId::new(30));
     ///
     /// let dirty = dirty_set.collect_dirty();
     /// assert_eq!(dirty.len(), 3);
@@ -285,8 +285,8 @@ impl LockFreeDirtySet {
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
     ///
-    /// dirty_set.mark_dirty(ElementId::new(10).unwrap());
-    /// dirty_set.mark_dirty(ElementId::new(20).unwrap());
+    /// dirty_set.mark_dirty(ElementId::new(10));
+    /// dirty_set.mark_dirty(ElementId::new(20));
     ///
     /// assert_eq!(dirty_set.dirty_count(), 2);
     ///
@@ -342,8 +342,8 @@ impl LockFreeDirtySet {
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
     ///
-    /// dirty_set.mark_dirty(ElementId::new(10).unwrap());
-    /// dirty_set.mark_dirty(ElementId::new(20).unwrap());
+    /// dirty_set.mark_dirty(ElementId::new(10));
+    /// dirty_set.mark_dirty(ElementId::new(20));
     ///
     /// assert_eq!(dirty_set.dirty_count(), 2);
     /// ```
@@ -372,7 +372,7 @@ impl LockFreeDirtySet {
     ///
     /// assert!(!dirty_set.has_dirty());
     ///
-    /// dirty_set.mark_dirty(ElementId::new(42).unwrap());
+    /// dirty_set.mark_dirty(ElementId::new(42));
     /// assert!(dirty_set.has_dirty());
     /// ```
     pub fn has_dirty(&self) -> bool {
@@ -411,9 +411,10 @@ impl LockFreeDirtySet {
     ///
     /// ```rust
     /// use flui_core::pipeline::LockFreeDirtySet;
+    /// use flui_core::element::ElementId;
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
-    /// dirty_set.mark_dirty(42);
+    /// dirty_set.mark_dirty(ElementId::new(42));
     ///
     /// let dirty = dirty_set.drain();
     /// assert_eq!(dirty.len(), 1);
@@ -433,11 +434,12 @@ impl LockFreeDirtySet {
     ///
     /// ```rust
     /// use flui_core::pipeline::LockFreeDirtySet;
+    /// use flui_core::element::ElementId;
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
     /// assert_eq!(dirty_set.len(), 0);
     ///
-    /// dirty_set.mark_dirty(42);
+    /// dirty_set.mark_dirty(ElementId::new(42));
     /// assert_eq!(dirty_set.len(), 1);
     /// ```
     #[inline]
@@ -451,11 +453,12 @@ impl LockFreeDirtySet {
     ///
     /// ```rust
     /// use flui_core::pipeline::LockFreeDirtySet;
+    /// use flui_core::element::ElementId;
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
     /// assert!(dirty_set.is_empty());
     ///
-    /// dirty_set.mark_dirty(42);
+    /// dirty_set.mark_dirty(ElementId::new(42));
     /// assert!(!dirty_set.is_empty());
     /// ```
     #[inline]
@@ -471,9 +474,10 @@ impl LockFreeDirtySet {
     ///
     /// ```rust
     /// use flui_core::pipeline::LockFreeDirtySet;
+    /// use flui_core::element::ElementId;
     ///
     /// let dirty_set = LockFreeDirtySet::new(1000);
-    /// dirty_set.mark_dirty(42);
+    /// dirty_set.mark_dirty(ElementId::new(42));
     ///
     /// dirty_set.clear();
     /// assert!(dirty_set.is_empty());

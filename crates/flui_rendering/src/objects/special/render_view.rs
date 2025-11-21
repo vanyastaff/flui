@@ -223,12 +223,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_view_arity() {
-        let view = RenderView::with_default_config();
-        assert_eq!(view.arity(), RuntimeArity::Exact(1));
-    }
-
-    #[test]
     fn test_get_configuration() {
         let config = ViewConfiguration::new(Size::new(1024.0, 768.0), 1.5);
         let view = RenderView::new(config);

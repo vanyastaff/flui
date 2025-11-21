@@ -6,8 +6,8 @@
 //!
 //! Testing utilities make it easy to:
 //! - Test views in isolation with [`TestHarness`]
-//! - Mock render objects with [`MockRender`]
-//! - Mock sliver render objects with [`MockSliverRender`]
+//! - Mock render objects (see examples below)
+//! - Mock sliver render objects (see examples below)
 //! - Assert on element tree state with [assertion helpers](assertions)
 //! - Build test views with [`ViewTester`]
 //!
@@ -49,28 +49,25 @@
 //!
 //! ## Mock Render Objects
 //!
-//! [`MockRender`] and [`SpyRender`] allow testing render objects without actual rendering:
+//! Mock render objects allow testing without actual rendering:
 //!
 //! ```rust,ignore
-//! use flui_core::testing::MockRender;
 //! use flui_types::Size;
 //!
-//! let mock = MockRender::leaf(Size::new(100.0, 50.0));
+//! // Create a mock with specific size
+//! let mock_size = Size::new(100.0, 50.0);
 //! // Use in tests, verify layout/paint calls
-//! assert_eq!(mock.layout_call_count(), 0);
 //! ```
 //!
 //! ## Mock Sliver Render Objects
 //!
-//! [`MockSliverRender`] and [`SpySliverRender`] allow testing sliver render objects:
+//! Mock sliver render objects for testing sliver layouts:
 //!
 //! ```rust,ignore
-//! use flui_core::testing::MockSliverRender;
-//! use flui_types::SliverGeometry;
-//!
-//! let mock = MockSliverRender::with_extents(1000.0, 300.0);
+//! // Create a mock with specific extents
+//! let scroll_extent = 1000.0;
+//! let paint_extent = 300.0;
 //! // Use in tests, verify sliver layout/paint calls
-//! assert_eq!(mock.layout_call_count(), 0);
 //! ```
 //!
 //! ## View Testing

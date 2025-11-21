@@ -268,7 +268,7 @@ macro_rules! positioned_directional {
         $crate::PositionedDirectional::new()
     };
     (fill: $child:expr) => {
-        $crate::PositionedDirectional::fill(Box::new($child))
+        $crate::PositionedDirectional::fill($child)
     };
 }
 

@@ -268,16 +268,14 @@ mod tests {
 
     #[test]
     fn test_app_bar_builder() {
-        let widget = AppBar::builder().build_app_bar();
+        let widget = AppBar::builder().build();
         assert!(widget.title.is_none());
         assert_eq!(widget.height, 56.0);
     }
 
     #[test]
     fn test_app_bar_builder_with_title() {
-        let widget = AppBar::builder()
-            .title(crate::Text::new("Test"))
-            .build_app_bar();
+        let widget = AppBar::builder().title(crate::Text::new("Test")).build();
         assert!(widget.title.is_some());
     }
 
@@ -287,7 +285,7 @@ mod tests {
             .height(64.0)
             .elevation(8.0)
             .background_color(Color::rgb(255, 0, 0))
-            .build_app_bar();
+            .build();
         assert_eq!(widget.height, 64.0);
         assert_eq!(widget.elevation, 8.0);
         assert_eq!(widget.background_color, Color::rgb(255, 0, 0));

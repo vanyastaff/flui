@@ -58,8 +58,8 @@ pub struct BorderSide {
     /// The style of this side of the border.
     pub style: BorderStyle,
 
-    /// The relative position of the stroke on a [BorderSide] in an
-    /// [OutlinedBorder] or [Border].
+    /// The relative position of the stroke on a `BorderSide` in an
+    /// `OutlinedBorder` or `Border`.
     ///
     /// Values typically range from 0.0 (inside) to 1.0 (outside).
     /// 0.5 represents the stroke centered on the border.

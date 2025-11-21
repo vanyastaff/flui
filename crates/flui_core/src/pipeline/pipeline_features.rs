@@ -45,7 +45,7 @@ use std::sync::Arc;
 /// # Thread-Safety
 ///
 /// All features are designed for single-threaded access (pipeline runs on main thread).
-/// Thread-safe coordination happens at a higher level (via Arc<RwLock<PipelineOwner>>).
+/// Thread-safe coordination happens at a higher level (via `Arc<RwLock<PipelineOwner>>`).
 #[derive(Default)]
 pub struct PipelineFeatures {
     /// Performance metrics (optional)
