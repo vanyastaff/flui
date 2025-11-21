@@ -164,13 +164,15 @@ where
         .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info,counter=debug")
         .init();
 
-    tracing::info!("Starting FLUI app");
+    let _app_span = tracing::info_span!("flui_app").entered();
 
     // 1. Initialize bindings
     let binding = AppBinding::ensure_initialized();
 
     // 2. Attach root widget
     binding.attach_root_widget(app);
+
+    tracing::info!("Entering event loop");
 
     // Application state for winit 0.30+ ApplicationHandler
     struct AppState {
@@ -180,15 +182,14 @@ where
 
     impl ApplicationHandler for AppState {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-            tracing::info!("Resumed event received");
             if self.embedder.is_none() {
-                tracing::info!("Creating DesktopEmbedder after Resumed event");
+                let _span = tracing::info_span!("create_embedder").entered();
                 // Safe to create window and surface now
                 self.embedder = Some(pollster::block_on(DesktopEmbedder::new(
                     self.binding.clone(),
                     event_loop,
                 )));
-                tracing::info!("DesktopEmbedder created successfully");
+                tracing::info!("Desktop embedder ready");
             }
         }
 
@@ -236,8 +237,6 @@ where
 
     // 3. Create event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
-
-    tracing::info!("FLUI app initialized, entering event loop");
 
     // 4. Create app state and run
     let mut app_state = AppState {

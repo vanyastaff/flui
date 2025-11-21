@@ -81,7 +81,7 @@ impl AppBinding {
     pub fn ensure_initialized() -> Arc<Self> {
         Self::instance_internal()
             .get_or_init(|| {
-                tracing::info!("Initializing AppBinding");
+                let _span = tracing::info_span!("init_bindings").entered();
 
                 // Create shared pipeline_owner - single source of truth
                 let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
@@ -103,7 +103,7 @@ impl AppBinding {
                 // Wire up frame callbacks with Weak reference to avoid circular refs
                 binding.wire_up(Arc::downgrade(&pipeline_owner), needs_redraw);
 
-                tracing::info!("AppBinding initialized");
+                tracing::info!("Bindings initialized");
                 Arc::new(binding)
             })
             .clone()

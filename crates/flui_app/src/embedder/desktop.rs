@@ -78,8 +78,6 @@ impl DesktopEmbedder {
         binding: Arc<AppBinding>,
         event_loop: &winit::event_loop::ActiveEventLoop,
     ) -> Self {
-        tracing::info!("Initializing desktop embedder");
-
         // 1. Create window using ActiveEventLoop (NEW winit 0.30+ API)
         // This avoids the deprecated EventLoop::create_window()
         let window_attributes = Window::default_attributes()
@@ -92,8 +90,6 @@ impl DesktopEmbedder {
                 .expect("Failed to create window"),
         );
 
-        tracing::debug!("Window created");
-
         let size = window.inner_size();
 
         // 2. Initialize GPU renderer with window (using raw_window_handle)
@@ -103,9 +99,10 @@ impl DesktopEmbedder {
             GpuRenderer::new_async_with_window(Arc::clone(&window), size.width, size.height).await;
 
         tracing::info!(
-            size = ?renderer.size(),
+            width = size.width,
+            height = size.height,
             format = ?renderer.format(),
-            "Desktop embedder initialized"
+            "GPU initialized"
         );
 
         Self {

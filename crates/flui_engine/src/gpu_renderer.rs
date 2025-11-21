@@ -242,11 +242,11 @@ impl GpuRenderer {
             (config.width, config.height),
         );
 
-        tracing::info!(
+        tracing::debug!(
             width = config.width,
             height = config.height,
             format = ?config.format,
-            "GPU renderer initialized"
+            "GPU renderer created"
         );
 
         Self {
@@ -325,11 +325,11 @@ impl GpuRenderer {
             (config.width, config.height),
         );
 
-        tracing::info!(
+        tracing::debug!(
             width = config.width,
             height = config.height,
             format = ?config.format,
-            "GPU renderer initialized"
+            "GPU renderer created"
         );
 
         Self {
