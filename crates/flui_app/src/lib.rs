@@ -165,6 +165,7 @@ where
         .init();
 
     let _app_span = tracing::info_span!("flui_app").entered();
+    tracing::info!("Starting FLUI app");
 
     // 1. Initialize bindings
     let binding = AppBinding::ensure_initialized();
