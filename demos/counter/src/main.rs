@@ -47,10 +47,10 @@ impl View for CounterApp {
                             .into_element(),
                         Button::builder("Increment")
                             .on_tap(move || {
-                                tracing::info!("🔵 BUTTON CLICKED! Updating count...");
+                                tracing::debug!("Button clicked, updating count");
                                 count.update_mut(|c| {
                                     *c += 1;
-                                    tracing::info!("🔵 Count updated to: {}", *c);
+                                    tracing::debug!(count = *c, "Count updated");
                                 });
                             })
                             .build()

@@ -93,7 +93,7 @@ impl EventRouter {
                 let mut result = HitTestResult::new();
                 root.hit_test(position, &mut result);
 
-                tracing::info!(
+                tracing::debug!(
                     position = ?position,
                     hit_count = result.entries().len(),
                     has_handlers = result.entries().iter().any(|e| e.handler.is_some()),
