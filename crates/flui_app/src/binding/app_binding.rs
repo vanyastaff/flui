@@ -123,10 +123,10 @@ impl AppBinding {
             .add_persistent_frame_callback(Arc::new(move |_timing| {
                 if let Some(pipeline) = pipeline_weak.upgrade() {
                     let mut owner = pipeline.write();
-                    owner.flush_rebuild_queue();
-                    // Always mark for redraw after frame callback
-                    // (the actual rendering will be skipped if nothing changed)
-                    needs_redraw.store(true, Ordering::Relaxed);
+                    // Only mark for redraw if there were actual changes
+                    if owner.flush_rebuild_queue() {
+                        needs_redraw.store(true, Ordering::Relaxed);
+                    }
                 } else {
                     tracing::warn!("Pipeline dropped during frame callback");
                 }
@@ -176,7 +176,9 @@ impl AppBinding {
         V: View + Clone + Send + Sync + 'static,
     {
         let mut pipeline = self.pipeline_owner.write();
-        pipeline.attach(widget);
+        pipeline
+            .attach(widget)
+            .expect("Failed to attach root widget");
         self.request_redraw();
     }
 

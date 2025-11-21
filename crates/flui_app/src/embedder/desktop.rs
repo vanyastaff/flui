@@ -176,6 +176,9 @@ impl DesktopEmbedder {
                     pipeline_write.request_layout(root_id);
                     tracing::debug!("Requested layout for root after resize");
                 }
+
+                // Request redraw after resize
+                self.binding.request_redraw();
             }
 
             WindowEvent::CursorMoved { position, .. } => {
