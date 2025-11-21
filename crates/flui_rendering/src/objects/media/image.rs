@@ -5,8 +5,7 @@ use flui_painting::Paint;
 use flui_types::{painting::Image, Rect, Size};
 
 /// How an image should be inscribed into the allocated space
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ImageFit {
     /// Fill the entire space, distorting aspect ratio if needed
     Fill,
@@ -20,7 +19,6 @@ pub enum ImageFit {
     /// Scale down to fit if too large, otherwise use intrinsic size
     ScaleDown,
 }
-
 
 /// RenderObject that displays a raster image
 ///
@@ -158,8 +156,6 @@ impl RenderBox<Leaf> for RenderImage {
         // If we have specific size constraints, use them
         let is_tight = constraints.min_width == constraints.max_width
             && constraints.min_height == constraints.max_height;
-
-        
 
         if is_tight {
             Size::new(constraints.max_width, constraints.max_height)
