@@ -317,7 +317,7 @@ impl PipelineOwner {
         use crate::element::{ComponentElement, Element};
         use crate::view::IntoElement;
 
-        tracing::info!("Attaching root view to pipeline");
+        tracing::debug!("Attaching root view to pipeline");
 
         // Check if root already exists
         if self.root_element_id().is_some() {
@@ -331,13 +331,11 @@ impl PipelineOwner {
         // This enables proper rebuild support when signals change
         let view_clone = widget.clone();
         let builder: crate::view::BuildFn = Box::new(move || {
-            tracing::info!("ComponentElement builder invoked - about to build root view");
+            tracing::trace!("ComponentElement builder invoked");
             // Clone the view for each rebuild
             let view = view_clone.clone();
             // Convert view to element using the current BuildContext
-            let element = view.into_element();
-            tracing::info!("ComponentElement builder completed - element created");
-            element
+            view.into_element()
         });
 
         // Create ComponentElement with the builder
@@ -354,7 +352,7 @@ impl PipelineOwner {
         // This sets both the dirty set AND RenderState.needs_layout flag
         self.request_layout(root_id);
 
-        tracing::info!(root_id = ?root_id, "Root view attached to pipeline");
+        tracing::debug!(root_id = ?root_id, "Root view attached to pipeline");
 
         Ok(root_id)
     }
@@ -379,7 +377,7 @@ impl PipelineOwner {
     /// ```
     pub fn teardown(&mut self) -> bool {
         if let Some(root_id) = self.root_element_id() {
-            tracing::info!(root_id = ?root_id, "Tearing down root widget");
+            tracing::debug!(root_id = ?root_id, "Tearing down root widget");
 
             // Remove from tree
             {
@@ -393,7 +391,7 @@ impl PipelineOwner {
             // Drain rebuild queue to clear it
             let _ = self.rebuild_queue.drain();
 
-            tracing::info!("Root widget torn down successfully");
+            tracing::debug!("Root widget torn down successfully");
             true
         } else {
             tracing::warn!("teardown() called but no root attached");
@@ -603,7 +601,7 @@ impl PipelineOwner {
             return false;
         }
 
-        tracing::info!(
+        tracing::trace!(
             count = rebuilds.len(),
             "flush_rebuild_queue: processing pending rebuilds"
         );
@@ -617,7 +615,7 @@ impl PipelineOwner {
             // This happens because signals created during initial build capture the placeholder ID
             let actual_id = if element_id == ElementId::new(1) {
                 if let Some(root) = root_id {
-                    tracing::info!(
+                    tracing::trace!(
                         placeholder_id = ?element_id,
                         actual_root_id = ?root,
                         "flush_rebuild_queue: translating placeholder to root"
@@ -630,15 +628,12 @@ impl PipelineOwner {
                 element_id
             };
 
-            tracing::info!(element_id = ?actual_id, depth, "flush_rebuild_queue: scheduling element for rebuild");
-
             // Mark the element's dirty flag so rebuild_component will process it
             {
                 let mut tree_guard = self.tree.write();
                 if let Some(element) = tree_guard.get_mut(actual_id) {
                     if let Some(component) = element.as_component_mut() {
                         component.mark_dirty();
-                        tracing::info!(element_id = ?actual_id, "flush_rebuild_queue: marked component as dirty");
                     }
                 }
             }

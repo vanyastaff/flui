@@ -215,21 +215,16 @@ impl DesktopEmbedder {
                     }
                 };
 
-                tracing::info!(
+                tracing::trace!(
                     position = ?self.last_cursor_position,
                     state = ?state,
                     button = ?button,
-                    has_scene = self.last_scene.is_some(),
-                    "MouseInput event received"
+                    "MouseInput event"
                 );
 
                 // Route event using cached scene for hit testing
                 if let Some(ref scene) = self.last_scene {
                     if let Some(layer) = scene.root_layer() {
-                        tracing::info!(
-                            "Routing mouse event to layer - hit regions count: {}",
-                            layer.display_list().hit_regions().len()
-                        );
                         // SAFETY: Safe for same reasons as pointer move event above
                         let layer_ptr = Arc::as_ptr(layer) as *mut flui_engine::CanvasLayer;
                         unsafe {

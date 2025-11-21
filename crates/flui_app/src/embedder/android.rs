@@ -279,7 +279,7 @@ impl AndroidEmbedder {
     ///
     /// Skips rendering if suspended to save battery.
     pub fn render_frame(&mut self) {
-        tracing::info!("render_frame: START");
+        tracing::trace!("render_frame: START");
 
         // Skip rendering if suspended (battery optimization)
         if self.is_suspended {
@@ -288,9 +288,7 @@ impl AndroidEmbedder {
         }
 
         // 1. Begin frame (scheduler callbacks)
-        tracing::info!("render_frame: calling begin_frame");
         let _frame_id = self.binding.scheduler.scheduler().begin_frame();
-        tracing::info!("render_frame: begin_frame completed");
 
         // 1.5. Process coalesced pointer move events (if any)
         if let Some(data) = self.pending_pointer_move.take() {
@@ -309,30 +307,18 @@ impl AndroidEmbedder {
 
         // 2. Draw frame (build + layout + paint → Scene)
         let (width, height) = self.renderer.size();
-        tracing::info!("render_frame: renderer size = {}x{}", width, height);
         let constraints = BoxConstraints::tight(Size::new(width as f32, height as f32));
-        tracing::info!("render_frame: calling draw_frame with constraints");
 
         let scene = self.binding.draw_frame(constraints);
-        tracing::info!("render_frame: draw_frame completed");
 
         // 3. Cache scene for hit testing (Arc clone is cheap!)
-        tracing::info!("render_frame: checking scene content");
         if scene.has_content() {
             self.last_scene = Some(scene.clone());
-            tracing::info!(
-                "Scene cached for hit testing (frame {})",
-                scene.frame_number()
-            );
-        } else {
-            tracing::info!("Scene is empty, no content");
+            tracing::trace!(frame = scene.frame_number(), "Scene cached for hit testing");
         }
 
         // 4. Render scene to GPU (Vulkan on Android)
-        tracing::info!("render_frame: getting root_layer");
         if let Some(layer) = scene.root_layer() {
-            tracing::info!("render_frame: calling renderer.render() on GPU");
-
             // Wrap render call with panic catch for debugging
             let render_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.renderer.render(layer.as_ref())
@@ -340,7 +326,7 @@ impl AndroidEmbedder {
 
             match render_result {
                 Ok(Ok(())) => {
-                    tracing::info!("Frame {} rendered successfully", scene.frame_number());
+                    tracing::trace!(frame = scene.frame_number(), "Frame rendered successfully");
                 }
                 Ok(Err(flui_engine::RenderError::SurfaceLost))
                 | Ok(Err(flui_engine::RenderError::SurfaceOutdated)) => {
@@ -354,7 +340,7 @@ impl AndroidEmbedder {
                 }
             }
         } else {
-            tracing::info!("Empty scene, skipping render");
+            tracing::trace!("Empty scene, skipping render");
         }
 
         // 5. Post-frame callbacks

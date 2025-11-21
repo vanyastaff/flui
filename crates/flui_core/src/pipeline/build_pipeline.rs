@@ -238,7 +238,7 @@ impl BuildPipeline {
             return;
         }
 
-        tracing::info!(
+        tracing::debug!(
             count = rebuilds.len(),
             "Flushing rebuild queue to dirty_elements"
         );
@@ -424,17 +424,10 @@ impl BuildPipeline {
         let mut dirty = std::mem::take(&mut self.dirty_elements);
         let mut rebuilt_count = 0;
 
-        tracing::info!(dirty_count = dirty.len(), dirty_elements = ?dirty, "Processing dirty elements");
+        tracing::trace!(dirty_count = dirty.len(), "Processing dirty elements");
 
         // Rebuild each element
         for (element_id, depth) in dirty.drain(..) {
-            #[cfg(debug_assertions)]
-            tracing::trace!(
-                "rebuild_dirty: Processing element {:?} at depth {}",
-                element_id,
-                depth
-            );
-
             // Determine element type (read-only scope)
             let element_type = {
                 let tree_guard = tree.read();
@@ -461,17 +454,8 @@ impl BuildPipeline {
             };
 
             // Dispatch rebuild based on element type
-            tracing::info!(
-                ?element_id,
-                ?element_type,
-                "Dispatching rebuild for element"
-            );
             match element_type {
                 Some(ElementType::Component) => {
-                    tracing::info!(
-                        ?element_id,
-                        "Element is Component - calling rebuild_component"
-                    );
                     if self.rebuild_component(tree, element_id, depth) {
                         rebuilt_count += 1;
                     }
@@ -479,7 +463,6 @@ impl BuildPipeline {
 
                 Some(ElementType::Render) => {
                     // RenderElements don't rebuild - they only relayout
-                    tracing::info!(?element_id, "Element is Render - skipping rebuild");
                 }
 
                 Some(ElementType::Provider) => {
@@ -492,8 +475,6 @@ impl BuildPipeline {
                     tracing::warn!(?element_id, "Element type is None - skipping");
                 }
             }
-
-            tracing::trace!(element_id = ?element_id, "Processed element");
         }
 
         tracing::debug!(

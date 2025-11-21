@@ -234,7 +234,7 @@ impl LayoutPipeline {
             } else {
                 0.0
             };
-            tracing::info!(
+            tracing::trace!(
                 cache_hits,
                 cache_misses,
                 total,

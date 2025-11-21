@@ -178,8 +178,12 @@ impl FrameCoordinator {
                         Some(crate::element::Element::Render(_)) => {
                             // Use the ElementTree method to paint this RenderElement
                             // This properly handles re-entrancy checks and paints the full subtree
-                            if let Some(canvas) = tree_guard.paint_render_object(current_id, crate::Offset::ZERO) {
-                                return Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)));
+                            if let Some(canvas) =
+                                tree_guard.paint_render_object(current_id, crate::Offset::ZERO)
+                            {
+                                return Some(Box::new(flui_engine::CanvasLayer::from_canvas(
+                                    canvas,
+                                )));
                             } else {
                                 return Some(Box::new(flui_engine::CanvasLayer::new()));
                             }
@@ -309,7 +313,7 @@ impl FrameCoordinator {
         }
 
         if total_build_count > 0 {
-            tracing::info!(
+            tracing::debug!(
                 total = total_build_count,
                 iterations,
                 "Build phase complete"
@@ -363,7 +367,7 @@ impl FrameCoordinator {
             }
 
             if !laid_out_ids.is_empty() {
-                tracing::info!(count = laid_out_ids.len(), "Layout complete");
+                tracing::debug!(count = laid_out_ids.len(), "Layout complete");
             }
 
             // Get root element's computed size
@@ -391,7 +395,7 @@ impl FrameCoordinator {
             let count = self.paint.generate_layers(&mut tree_guard)?;
 
             if count > 0 {
-                tracing::info!(count, "Paint complete");
+                tracing::debug!(count, "Paint complete");
             }
 
             // Get root element's layer
@@ -476,7 +480,7 @@ impl FrameCoordinator {
         }
 
         if total_build_count > 0 {
-            tracing::info!(
+            tracing::debug!(
                 total = total_build_count,
                 iterations,
                 "Build phase complete"
@@ -530,7 +534,7 @@ impl FrameCoordinator {
             }
 
             if !laid_out_ids.is_empty() {
-                tracing::info!(count = laid_out_ids.len(), "Layout complete");
+                tracing::debug!(count = laid_out_ids.len(), "Layout complete");
             }
 
             // Get root element's computed size
@@ -558,7 +562,7 @@ impl FrameCoordinator {
             let count = self.paint.generate_layers(&mut tree_guard)?;
 
             if count > 0 {
-                tracing::info!(count, "Paint complete");
+                tracing::debug!(count, "Paint complete");
             }
 
             // Get root element's layer
@@ -628,7 +632,7 @@ impl FrameCoordinator {
                 }
             }
         }
-        tracing::info!(
+        tracing::trace!(
             total_elements = all_ids.len(),
             marked_for_layout = marked_count,
             "flush_layout: scanned elements for needs_layout flag"

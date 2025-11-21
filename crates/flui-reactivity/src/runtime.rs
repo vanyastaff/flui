@@ -539,9 +539,7 @@ impl Drop for SignalRuntime {
 /// All signals are stored in this single global instance.
 /// DashMap provides lock-free concurrent access for maximum performance.
 static SIGNAL_RUNTIME: Lazy<SignalRuntime> = Lazy::new(|| {
-    #[cfg(debug_assertions)]
-    tracing::info!("[SIGNAL_RUNTIME] Initializing global SignalRuntime");
-
+    tracing::debug!("Initializing global SignalRuntime");
     SignalRuntime::new()
 });
 

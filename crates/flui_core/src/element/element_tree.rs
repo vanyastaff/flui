@@ -325,13 +325,13 @@ impl ElementTree {
             Element::Component(_) => "Component".to_string(),
             Element::Provider(_) => "Provider".to_string(),
         };
-        tracing::info!(element_type = %element_type, "ElementTree::insert() - inserting element");
+        tracing::trace!(element_type = %element_type, "ElementTree::insert()");
 
         // First, check if there are unmounted children and mount them
         let child_ids = match &mut element {
             Element::Render(render_elem) => {
                 if let Some(unmounted) = render_elem.take_unmounted_children() {
-                    tracing::info!(
+                    tracing::trace!(
                         unmounted_count = unmounted.len(),
                         "ElementTree::insert() - processing unmounted children"
                     );

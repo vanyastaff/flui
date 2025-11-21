@@ -17,11 +17,7 @@ use super::{
     vertex::Vertex,
 };
 use flui_painting::{Paint, PaintStyle};
-use flui_types::{
-    geometry::RRect,
-    painting::Path,
-    Offset, Point, Rect,
-};
+use flui_types::{geometry::RRect, painting::Path, Offset, Point, Rect};
 use wgpu::util::DeviceExt;
 
 /// GPU painter for hardware-accelerated 2D rendering
@@ -679,7 +675,7 @@ impl WgpuPainter {
         let circle_count = self.circle_batch.len();
         let buffer_stats = self.buffer_pool.stats();
 
-        tracing::info!(
+        tracing::trace!(
             vertices = self.vertices.len(),
             indices = self.indices.len(),
             text_count,
