@@ -49,6 +49,8 @@ pub use flui_reactivity::{
     batch,
     create_root,
     is_batching,
+    // Hook implementations
+    signal::SignalHook,
     with_owner,
     BatchGuard,
     // Computed
@@ -116,9 +118,13 @@ pub fn use_signal<T>(ctx: &BuildContext, initial: T) -> Signal<T>
 where
     T: Clone + Send + 'static,
 {
-    let signal = Signal::new(initial);
+    // Use HookContext to store signal state across rebuilds
+    let signal = ctx.with_hook_context_mut(|hook_ctx| {
+        hook_ctx.use_hook::<flui_reactivity::signal::SignalHook<T>>(initial)
+    });
 
     // Subscribe to trigger rebuilds when signal changes
+    // Note: We subscribe on every build, but Signal handles duplicate subscriptions
     let element_id = ctx.element_id();
     let rebuild_queue = ctx.rebuild_queue().clone();
 
