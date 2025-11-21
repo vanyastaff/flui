@@ -4,7 +4,7 @@
 //! It automatically tracks the state of the async operation and updates when dependencies change.
 
 use crate::context::HookContext;
-use crate::signal::{Signal, SignalHook};
+use crate::signal::Signal;
 use crate::traits::{DependencyId, Hook};
 use std::future::Future;
 use std::marker::PhantomData;
@@ -117,7 +117,7 @@ where
     pub fn refetch(&self) {
         self.state_signal.set(ResourceState::Loading);
 
-        let state_signal = self.state_signal;
+        let state_signal = self.state_signal.clone();
         let fetcher = Arc::clone(&self.fetcher);
 
         // Spawn the async task

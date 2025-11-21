@@ -19,6 +19,8 @@
 macro_rules! trace_hot_path {
     ($($arg:tt)*) => {
         #[cfg(feature = "trace-hot-paths")]
-        ::tracing::trace!($($arg)*);
+        {
+            ::tracing::trace!($($arg)*);
+        }
     };
 }

@@ -470,10 +470,11 @@ mod tests {
     #[cfg(feature = "parallel")]
     #[test]
     fn test_rebuild_parallel_small_tree() {
+        use crate::ElementId;
         let tree = create_test_tree();
 
         // Small tree should fall back to sequential
-        let dirty = vec![(0, 0), (1, 1)];
+        let dirty = vec![(ElementId::new(1), 0), (ElementId::new(2), 1)];
 
         let count = rebuild_dirty_parallel(&tree, dirty);
 

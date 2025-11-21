@@ -990,7 +990,7 @@ impl ElementTree {
     /// Alias for `paint_render_object` - used by SingleRender/MultiRender traits
     #[inline]
     pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> flui_painting::Canvas {
-        crate::trace_hot_path!("paint_child", ?child_id);
+        // Hot path - trace disabled for performance
 
         // Walk down through ComponentElements to find the first RenderElement
         let render_id = self.find_render_element(child_id);
@@ -1101,7 +1101,7 @@ impl ElementTree {
         child_id: ElementId,
         _offset: crate::Offset,
     ) -> flui_painting::Canvas {
-        crate::trace_hot_path!("paint_sliver_child", ?child_id);
+        // Hot path - trace disabled for performance
 
         // Walk down through ComponentElements to find the first SliverElement
         let sliver_id = self.find_sliver_element(child_id);

@@ -311,15 +311,16 @@ where
 /// }
 /// ```
 #[cfg(feature = "async")]
-pub fn use_resource<T, F, Fut>(
+pub fn use_resource<T, E, F, Fut>(
     ctx: &BuildContext,
     deps: Vec<DependencyId>,
     fetcher: F,
-) -> flui_reactivity::Resource<T>
+) -> flui_reactivity::Resource<T, E>
 where
     T: Clone + Send + 'static,
+    E: Clone + Send + 'static,
     F: Fn() -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = T> + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
 {
     ctx.with_hook_context_mut(|hook_ctx| {
         flui_reactivity::use_resource(hook_ctx, deps, move || Box::pin(fetcher()))
@@ -344,7 +345,12 @@ mod tests {
     fn create_test_context() -> BuildContext {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
         let element_id = ElementId::new(1);
-        BuildContext::new(tree, element_id)
+        let ctx = BuildContext::new(tree, element_id);
+        // Begin component rendering so hooks can be called
+        ctx.with_hook_context_mut(|hook_ctx| {
+            hook_ctx.begin_component(ComponentId(element_id.get() as u64));
+        });
+        ctx
     }
 
     #[test]
