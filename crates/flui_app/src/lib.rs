@@ -193,9 +193,16 @@ where
         }
 
         fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-            // On-demand rendering: only redraw when dirty
+            // On-demand rendering: only redraw when dirty or has pending rebuilds
             if let Some(ref emb) = self.embedder {
-                if self.binding.needs_redraw() {
+                // Check if needs_redraw OR if there are pending signal updates
+                let has_pending = {
+                    let pipeline = self.binding.pipeline();
+                    let owner = pipeline.read();
+                    owner.has_pending_rebuilds()
+                };
+
+                if self.binding.needs_redraw() || has_pending {
                     emb.window().request_redraw();
                 }
             }

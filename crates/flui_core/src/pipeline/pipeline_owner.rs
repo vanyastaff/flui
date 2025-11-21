@@ -639,11 +639,28 @@ impl PipelineOwner {
             };
 
             tracing::info!(element_id = ?actual_id, depth, "flush_rebuild_queue: scheduling element for rebuild");
-            // Mark element dirty via build pipeline
+
+            // Mark the element's dirty flag so rebuild_component will process it
+            {
+                let mut tree_guard = self.tree.write();
+                if let Some(element) = tree_guard.get_mut(actual_id) {
+                    if let Some(component) = element.as_component_mut() {
+                        component.mark_dirty();
+                        tracing::info!(element_id = ?actual_id, "flush_rebuild_queue: marked component as dirty");
+                    }
+                }
+            }
+
+            // Schedule element for rebuild via build pipeline
             self.coordinator.build_mut().schedule(actual_id, depth);
         }
 
         true
+    }
+
+    /// Check if there are any pending rebuilds in the queue
+    pub fn has_pending_rebuilds(&self) -> bool {
+        !self.rebuild_queue.is_empty()
     }
 
     /// Check if there are any dirty layout elements
