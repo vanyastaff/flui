@@ -170,7 +170,7 @@ impl DesktopEmbedder {
                 self.renderer.resize(size.width, size.height);
 
                 // Request layout for the entire tree with new window size
-                let pipeline = self.binding.pipeline.pipeline_owner();
+                let pipeline = self.binding.pipeline();
                 let mut pipeline_write = pipeline.write();
                 if let Some(root_id) = pipeline_write.root_element_id() {
                     pipeline_write.request_layout(root_id);
@@ -199,8 +199,9 @@ impl DesktopEmbedder {
 
             WindowEvent::MouseInput { state, button, .. } => {
                 // Use last tracked cursor position
-                let data = PointerEventData::new(self.last_cursor_position, PointerDeviceKind::Mouse)
-                    .with_button(convert_mouse_button(button));
+                let data =
+                    PointerEventData::new(self.last_cursor_position, PointerDeviceKind::Mouse)
+                        .with_button(convert_mouse_button(button));
 
                 let event = match state {
                     ElementState::Pressed => {
@@ -211,17 +212,31 @@ impl DesktopEmbedder {
                     }
                 };
 
+                tracing::info!(
+                    position = ?self.last_cursor_position,
+                    state = ?state,
+                    button = ?button,
+                    has_scene = self.last_scene.is_some(),
+                    "MouseInput event received"
+                );
+
                 // Route event using cached scene for hit testing
                 if let Some(ref scene) = self.last_scene {
                     if let Some(layer) = scene.root_layer() {
+                        tracing::info!(
+                            "Routing mouse event to layer - hit regions count: {}",
+                            layer.display_list().hit_regions().len()
+                        );
                         // SAFETY: Safe for same reasons as pointer move event above
                         let layer_ptr = Arc::as_ptr(layer) as *mut flui_engine::CanvasLayer;
                         unsafe {
                             self.binding.gesture.handle_event(event, &mut *layer_ptr);
                         }
+                    } else {
+                        tracing::warn!("Scene has no root layer for hit testing");
                     }
                 } else {
-                    tracing::trace!(
+                    tracing::warn!(
                         "Mouse button event (no scene cached): {:?} {:?}",
                         state,
                         button
@@ -263,15 +278,12 @@ impl DesktopEmbedder {
         let (width, height) = self.renderer.size();
         let constraints = BoxConstraints::tight(Size::new(width as f32, height as f32));
 
-        let scene = self.binding.renderer.draw_frame(constraints);
+        let scene = self.binding.draw_frame(constraints);
 
         // 3. Cache scene for hit testing (Arc clone is cheap!)
         if scene.has_content() {
             self.last_scene = Some(scene.clone());
-            tracing::trace!(
-                frame = scene.frame_number(),
-                "Scene cached for hit testing"
-            );
+            tracing::trace!(frame = scene.frame_number(), "Scene cached for hit testing");
         }
 
         // 4. Render scene to GPU

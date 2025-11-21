@@ -12,11 +12,7 @@ use flui_types::{
     Offset, Size,
 };
 use std::sync::Arc;
-use winit::{
-    event::*,
-    event_loop::ActiveEventLoop,
-    window::Window,
-};
+use winit::{event::*, event_loop::ActiveEventLoop, window::Window};
 
 /// Android embedder for FLUI apps
 ///
@@ -183,20 +179,12 @@ impl AndroidEmbedder {
     /// Handle window event (called from external event loop)
     ///
     /// This is public because Android uses an external event loop in android_main().
-    pub fn handle_event(
-        &mut self,
-        event: WindowEvent,
-        elwt: &ActiveEventLoop,
-    ) {
+    pub fn handle_event(&mut self, event: WindowEvent, elwt: &ActiveEventLoop) {
         self.handle_window_event(event, elwt);
     }
 
     /// Handle window events
-    fn handle_window_event(
-        &mut self,
-        event: WindowEvent,
-        elwt: &ActiveEventLoop,
-    ) {
+    fn handle_window_event(&mut self, event: WindowEvent, elwt: &ActiveEventLoop) {
         // STEP 1: Update WindowStateTracker FIRST (before user callbacks)
         match &event {
             WindowEvent::Focused(focused) => {
@@ -226,7 +214,7 @@ impl AndroidEmbedder {
                 self.renderer.resize(size.width, size.height);
 
                 // Request layout for the entire tree with new window size
-                let pipeline = self.binding.pipeline.pipeline_owner();
+                let pipeline = self.binding.pipeline();
                 let mut pipeline_write = pipeline.write();
                 if let Some(root_id) = pipeline_write.root_element_id() {
                     pipeline_write.request_layout(root_id);
@@ -255,8 +243,9 @@ impl AndroidEmbedder {
 
             WindowEvent::MouseInput { state, button, .. } => {
                 // On Android, this handles touch down/up events
-                let data = PointerEventData::new(self.last_cursor_position, PointerDeviceKind::Touch)
-                    .with_button(convert_mouse_button(button));
+                let data =
+                    PointerEventData::new(self.last_cursor_position, PointerDeviceKind::Touch)
+                        .with_button(convert_mouse_button(button));
 
                 let event = match state {
                     ElementState::Pressed => {
@@ -324,14 +313,17 @@ impl AndroidEmbedder {
         let constraints = BoxConstraints::tight(Size::new(width as f32, height as f32));
         tracing::info!("render_frame: calling draw_frame with constraints");
 
-        let scene = self.binding.renderer.draw_frame(constraints);
+        let scene = self.binding.draw_frame(constraints);
         tracing::info!("render_frame: draw_frame completed");
 
         // 3. Cache scene for hit testing (Arc clone is cheap!)
         tracing::info!("render_frame: checking scene content");
         if scene.has_content() {
             self.last_scene = Some(scene.clone());
-            tracing::info!("Scene cached for hit testing (frame {})", scene.frame_number());
+            tracing::info!(
+                "Scene cached for hit testing (frame {})",
+                scene.frame_number()
+            );
         } else {
             tracing::info!("Scene is empty, no content");
         }
