@@ -21,10 +21,6 @@ smallvec = { workspace = true }
 criterion = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
-[[bench]]
-name = "performance_verification"
-harness = false
-
 [features]
 default = []
 
