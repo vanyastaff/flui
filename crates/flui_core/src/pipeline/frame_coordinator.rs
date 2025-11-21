@@ -164,25 +164,51 @@ impl FrameCoordinator {
     /// Extract root element's layer after paint
     ///
     /// Helper method to retrieve the painted layer from a RenderElement.
-    /// Returns empty CanvasLayer if root is a ComponentElement.
+    /// Walks down through ComponentElements to find the first RenderElement child.
     fn extract_root_layer(
         tree_guard: &ElementTree,
         root_id: Option<ElementId>,
     ) -> Option<Box<flui_engine::CanvasLayer>> {
         match root_id {
             Some(id) => {
-                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    let offset = render_state.offset();
-                    drop(render_state);
-
-                    // Convert Canvas → CanvasLayer
-                    let canvas = render_elem.paint_render(tree_guard, offset);
-                    Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
-                } else {
-                    // Root is ComponentElement or ProviderElement - return empty picture
-                    Some(Box::new(flui_engine::CanvasLayer::new()))
+                // Walk down through Component/Provider elements to find RenderElement
+                let mut current_id = id;
+                loop {
+                    match tree_guard.get(current_id) {
+                        Some(crate::element::Element::Render(_)) => {
+                            // Use the ElementTree method to paint this RenderElement
+                            // This properly handles re-entrancy checks and paints the full subtree
+                            if let Some(canvas) = tree_guard.paint_render_object(current_id, crate::Offset::ZERO) {
+                                return Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)));
+                            } else {
+                                return Some(Box::new(flui_engine::CanvasLayer::new()));
+                            }
+                        }
+                        Some(crate::element::Element::Component(comp_elem)) => {
+                            // Walk down to child
+                            if let Some(child_id) = comp_elem.child() {
+                                current_id = child_id;
+                                continue;
+                            } else {
+                                // ComponentElement has no child - return empty
+                                return Some(Box::new(flui_engine::CanvasLayer::new()));
+                            }
+                        }
+                        Some(crate::element::Element::Provider(prov_elem)) => {
+                            // Walk down to child
+                            if let Some(child_id) = prov_elem.child() {
+                                current_id = child_id;
+                                continue;
+                            } else {
+                                // ProviderElement has no child - return empty
+                                return Some(Box::new(flui_engine::CanvasLayer::new()));
+                            }
+                        }
+                        None => {
+                            // Element not found
+                            return Some(Box::new(flui_engine::CanvasLayer::new()));
+                        }
+                    }
                 }
             }
             None => None,
@@ -244,6 +270,10 @@ impl FrameCoordinator {
         let mut iterations = 0;
         let mut total_build_count = 0;
         loop {
+            // Flush rebuild queue from signals to dirty_elements
+            // This is critical: signal.set() adds to rebuild_queue, this moves to dirty_elements
+            self.build.flush_rebuild_queue();
+
             // Flush any batched builds to dirty_elements
             // This is critical: schedule() adds to batcher, flush_batch moves to dirty_elements
             self.build.flush_batch();
@@ -304,6 +334,27 @@ impl FrameCoordinator {
             let _layout_guard = layout_span.enter();
 
             let mut tree_guard = tree.write();
+
+            // Scan for RenderElements with needs_layout flag and add to dirty set
+            // This ensures newly created elements (from build phase) get laid out
+            let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
+            let mut marked_count = 0usize;
+            for id in all_ids.iter().copied() {
+                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
+                    let render_state_lock = render_elem.render_state();
+                    let render_state = render_state_lock.read();
+                    if render_state.needs_layout() {
+                        self.layout.mark_dirty(id);
+                        marked_count += 1;
+                    }
+                }
+            }
+            tracing::debug!(
+                total_elements = all_ids.len(),
+                marked_for_layout = marked_count,
+                "Scanned elements for needs_layout flag"
+            );
+
             let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
 
             // Mark all laid out elements for paint
@@ -386,6 +437,10 @@ impl FrameCoordinator {
         let mut iterations = 0;
         let mut total_build_count = 0;
         loop {
+            // Flush rebuild queue from signals to dirty_elements
+            // This is critical: signal.set() adds to rebuild_queue, this moves to dirty_elements
+            self.build.flush_rebuild_queue();
+
             // Flush any batched builds to dirty_elements
             // This is critical: schedule() adds to batcher, flush_batch moves to dirty_elements
             self.build.flush_batch();
@@ -446,6 +501,27 @@ impl FrameCoordinator {
             let _layout_guard = layout_span.enter();
 
             let mut tree_guard = tree.write();
+
+            // Scan for RenderElements with needs_layout flag and add to dirty set
+            // This ensures newly created elements (from build phase) get laid out
+            let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
+            let mut marked_count = 0usize;
+            for id in all_ids.iter().copied() {
+                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
+                    let render_state_lock = render_elem.render_state();
+                    let render_state = render_state_lock.read();
+                    if render_state.needs_layout() {
+                        self.layout.mark_dirty(id);
+                        marked_count += 1;
+                    }
+                }
+            }
+            tracing::debug!(
+                total_elements = all_ids.len(),
+                marked_for_layout = marked_count,
+                "Scanned elements for needs_layout flag"
+            );
+
             let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
 
             // Mark all laid out elements for paint
@@ -537,6 +613,26 @@ impl FrameCoordinator {
         constraints: BoxConstraints,
     ) -> Result<Option<flui_types::Size>, PipelineError> {
         let mut tree_guard = tree.write();
+
+        // Scan for RenderElements with needs_layout flag and add to dirty set
+        // This ensures newly created elements (from build phase) get laid out
+        let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
+        let mut marked_count = 0usize;
+        for id in all_ids.iter().copied() {
+            if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
+                let render_state_lock = render_elem.render_state();
+                let render_state = render_state_lock.read();
+                if render_state.needs_layout() {
+                    self.layout.mark_dirty(id);
+                    marked_count += 1;
+                }
+            }
+        }
+        tracing::info!(
+            total_elements = all_ids.len(),
+            marked_for_layout = marked_count,
+            "flush_layout: scanned elements for needs_layout flag"
+        );
 
         // Process all dirty render objects
         let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;

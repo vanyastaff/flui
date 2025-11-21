@@ -197,13 +197,11 @@ impl RenderBox<Single> for RenderPointerListener {
         let handler: flui_painting::HitRegionHandler = std::sync::Arc::new(move |event| {
             match event {
                 flui_types::events::PointerEvent::Down(_) => {
-                    tracing::info!("HitRegion handler: Down event received");
                     if let Some(callback) = &callbacks.on_pointer_down {
                         callback(event);
                     }
                 }
                 flui_types::events::PointerEvent::Up(_) => {
-                    tracing::info!("HitRegion handler: Up event received");
                     if let Some(callback) = &callbacks.on_pointer_up {
                         callback(event);
                     }

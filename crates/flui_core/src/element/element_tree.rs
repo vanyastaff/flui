@@ -319,10 +319,22 @@ impl ElementTree {
     /// let root_id = tree.insert(Element::Render(render_elem));
     /// ```
     pub fn insert(&mut self, mut element: Element) -> ElementId {
+        // Log element type being inserted
+        let element_type = match &element {
+            Element::Render(r) => format!("Render({})", r.render_object().debug_name()),
+            Element::Component(_) => "Component".to_string(),
+            Element::Provider(_) => "Provider".to_string(),
+        };
+        tracing::info!(element_type = %element_type, "ElementTree::insert() - inserting element");
+
         // First, check if there are unmounted children and mount them
         let child_ids = match &mut element {
             Element::Render(render_elem) => {
                 if let Some(unmounted) = render_elem.take_unmounted_children() {
+                    tracing::info!(
+                        unmounted_count = unmounted.len(),
+                        "ElementTree::insert() - processing unmounted children"
+                    );
                     // Recursively insert each unmounted child
                     let mut ids = Vec::with_capacity(unmounted.len());
                     for child in unmounted {
@@ -331,6 +343,7 @@ impl ElementTree {
                     }
                     Some(ids)
                 } else {
+                    tracing::trace!("ElementTree::insert() - no unmounted children");
                     None
                 }
             }

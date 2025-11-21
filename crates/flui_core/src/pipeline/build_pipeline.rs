@@ -252,6 +252,25 @@ impl BuildPipeline {
         self.dirty_elements.len()
     }
 
+    /// Flush the rebuild queue by moving pending elements to dirty_elements
+    ///
+    /// This processes all pending rebuilds from signals and other reactive primitives.
+    /// Should be called at the start of each frame's build phase.
+    pub fn flush_rebuild_queue(&mut self) {
+        let rebuilds = self.rebuild_queue.drain();
+
+        if rebuilds.is_empty() {
+            return;
+        }
+
+        tracing::info!(count = rebuilds.len(), "Flushing rebuild queue to dirty_elements");
+
+        // Add all pending rebuilds to dirty_elements
+        for (element_id, depth) in rebuilds {
+            self.dirty_elements.push((element_id, depth));
+        }
+    }
+
     /// Check if currently in build scope
     pub fn is_in_build_scope(&self) -> bool {
         self.in_build_scope

@@ -250,27 +250,63 @@ impl RenderBox<Leaf> for RenderParagraph {
 
     fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         // Draw text using Canvas API
+
         let mut paint = Paint::default();
+
         paint.color = self.data.color;
 
         // Get the offset from context - this is where we should draw
+
         let offset = ctx.offset;
 
-        // Calculate text position based on alignment (relative to our bounds)
-        let x = match self.data.text_align {
+        // Approximate intrinsic text width (placeholder until real shaping metrics available)
+        let char_width = self.data.font_size * 0.6;
+        let text_width = (self.data.text.len() as f32) * char_width;
+
+        // Local x before applying global offset
+        let mut x_local = match self.data.text_align {
             TextAlign::Left | TextAlign::Start => 0.0,
+
             TextAlign::Center => self.size.width / 2.0,
+
             TextAlign::Right | TextAlign::End => self.size.width,
+
             TextAlign::Justify => 0.0,
         };
 
-        // Add offset to position - this is critical for correct placement!
-        let position = flui_types::Offset::new(offset.dx + x, offset.dy);
+        // Adjust for alignment by shifting anchor from left edge to center/right edge
+        if matches!(self.data.text_align, TextAlign::Center) {
+            x_local -= text_width / 2.0;
+        } else if matches!(self.data.text_align, TextAlign::Right | TextAlign::End) {
+            x_local -= text_width;
+        }
+
+        // Clamp to avoid negative draw positions (prevents drawing outside left boundary)
+        x_local = x_local.max(0.0);
+
+        // Final position (local + parent offset)
+        let position = flui_types::Offset::new(offset.dx + x_local, offset.dy);
 
         // Create TextStyle
+
         let text_style = TextStyle::default()
             .with_font_size(self.data.font_size as f64)
             .with_color(self.data.color);
+
+        // Instrumentation for debugging missing text (only in debug builds)
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            target: "render_paragraph",
+            text = %self.data.text,
+            font_size = self.data.font_size,
+            paragraph_size = ?self.size,
+            alignment = ?self.data.text_align,
+            measured_width = text_width,
+            offset = ?offset,
+            draw_x_local = x_local,
+            draw_position = ?position,
+            "RenderParagraph::paint"
+        );
 
         // Draw the text
         ctx.canvas()
