@@ -352,20 +352,16 @@ impl PipelineOwner {
 
         // Create ComponentElement with the builder
         // Hook context will be created by extract_or_create_hook_context during build
-        let mut component = ComponentElement::new(builder);
-        component.mark_dirty(); // Mark for initial build
+        let component = ComponentElement::new(builder);
 
         // Wrap in Element enum
         let element = Element::Component(component);
 
-        // Set as pipeline root
+        // Set as pipeline root (this calls schedule_build_for internally)
         let root_id = self.set_root(element);
 
-        // Schedule initial build for the component
-        self.coordinator.build_mut().schedule(root_id, 0);
-
         // CRITICAL: Request layout for the entire tree after attaching root
-        // Without this, the UI won't layout/paint until an external trigger
+        // This sets both the dirty set AND RenderState.needs_layout flag
         self.request_layout(root_id);
 
         tracing::info!(root_id = ?root_id, "Root view attached to pipeline");
@@ -574,7 +570,10 @@ impl PipelineOwner {
             return;
         }
 
-        tracing::info!(count = rebuilds.len(), "flush_rebuild_queue: processing pending rebuilds");
+        tracing::info!(
+            count = rebuilds.len(),
+            "flush_rebuild_queue: processing pending rebuilds"
+        );
 
         // Get root ID for placeholder translation
         let root_id = self.root_mgr.root_id();
