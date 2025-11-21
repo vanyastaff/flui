@@ -121,6 +121,7 @@ impl PaintPipeline {
     ///
     /// Layer optimization (merging compatible layers, batching operations) will be
     /// implemented in a future update. Currently, layers are generated but not optimized.
+    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty.len()))]
     pub fn generate_layers(&mut self, tree: &mut ElementTree) -> PaintResult<usize> {
         let dirty_ids = self.dirty.drain();
         let count = dirty_ids.len();

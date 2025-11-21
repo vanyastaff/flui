@@ -142,6 +142,7 @@ impl LayoutPipeline {
     ///
     /// Currently implemented as sequential layout. Parallel layout will be added
     /// in a future update using rayon for independent subtrees.
+    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty.len()))]
     pub fn compute_layout(
         &mut self,
         tree: &mut ElementTree,

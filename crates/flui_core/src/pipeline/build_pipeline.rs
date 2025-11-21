@@ -400,19 +400,13 @@ impl BuildPipeline {
     /// reconciling the element tree.
     ///
     /// Returns the number of elements rebuilt.
+    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty_elements.len()))]
     pub fn rebuild_dirty(&mut self, tree: &Arc<parking_lot::RwLock<ElementTree>>) -> usize {
         if self.dirty_elements.is_empty() {
             return 0;
         }
 
         self.build_count += 1;
-        let build_num = self.build_count;
-
-        tracing::debug!(
-            build_num = build_num,
-            dirty_count = self.dirty_elements.len(),
-            "Starting rebuild_dirty"
-        );
 
         // Sort by depth (parents before children)
         self.dirty_elements.sort_by_key(|(_, depth)| *depth);
@@ -476,12 +470,6 @@ impl BuildPipeline {
                 }
             }
         }
-
-        tracing::debug!(
-            build_num = build_num,
-            rebuilt_count = rebuilt_count,
-            "Completed rebuild_dirty"
-        );
 
         rebuilt_count
     }
@@ -598,14 +586,13 @@ impl BuildPipeline {
     /// 1. Check dirty flag and extract component data - minimize lock time
     /// 2. Build new child element (outside locks) - this is the expensive part
     /// 3. Reconcile old/new children in tree - update tree atomically
+    #[tracing::instrument(skip(self, tree), level = "trace")]
     fn rebuild_component(
         &mut self,
         tree: &Arc<parking_lot::RwLock<ElementTree>>,
         element_id: ElementId,
         _depth: usize,
     ) -> bool {
-        // Hot path - trace disabled for performance
-
         // Stage 1: Check dirty flag, extract component data and prepare hook context (write lock)
         let (old_child_id, hook_context) = {
             let mut tree_guard = tree.write();
@@ -776,6 +763,7 @@ impl BuildPipeline {
     /// - Otherwise: sequential execution
     ///
     /// Returns the number of elements rebuilt.
+    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty_elements.len()))]
     pub fn rebuild_dirty_parallel(
         &mut self,
         tree: &std::sync::Arc<parking_lot::RwLock<super::ElementTree>>,
@@ -785,13 +773,6 @@ impl BuildPipeline {
         }
 
         self.build_count += 1;
-        let build_num = self.build_count;
-
-        tracing::debug!(
-            build_num = build_num,
-            dirty_count = self.dirty_elements.len(),
-            "Starting rebuild_dirty_parallel"
-        );
 
         // Sort by depth (parents before children)
         self.dirty_elements.sort_by_key(|(_, depth)| *depth);
@@ -855,12 +836,6 @@ impl BuildPipeline {
                 }
             }
         }
-
-        tracing::debug!(
-            build_num = build_num,
-            rebuilt_count = rebuilt_count,
-            "Completed rebuild_dirty_parallel"
-        );
 
         rebuilt_count
     }

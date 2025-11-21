@@ -254,6 +254,7 @@ impl FrameCoordinator {
     ///     compositor.present(layer);
     /// }
     /// ```
+    #[tracing::instrument(skip(self, tree), level = "debug")]
     pub fn build_frame(
         &mut self,
         tree: &Arc<RwLock<ElementTree>>,
@@ -598,6 +599,7 @@ impl FrameCoordinator {
     /// - Multiple independent subtrees exist
     ///
     /// Falls back to sequential execution otherwise.
+    #[tracing::instrument(skip(self, tree), level = "trace")]
     pub fn flush_build(&mut self, tree: &Arc<RwLock<ElementTree>>) {
         // Use parallel build (automatically falls back to sequential if appropriate)
         self.build.rebuild_dirty_parallel(tree);
@@ -610,6 +612,7 @@ impl FrameCoordinator {
     /// # Returns
     ///
     /// The size of the root render object, or None if no root element exists
+    #[tracing::instrument(skip(self, tree), level = "trace")]
     pub fn flush_layout(
         &mut self,
         tree: &Arc<RwLock<ElementTree>>,
@@ -686,6 +689,7 @@ impl FrameCoordinator {
     /// # Returns
     ///
     /// The root layer for composition, or None if no root element exists.
+    #[tracing::instrument(skip(self, tree), level = "trace")]
     pub fn flush_paint(
         &mut self,
         tree: &Arc<RwLock<ElementTree>>,
