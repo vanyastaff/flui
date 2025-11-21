@@ -151,7 +151,7 @@ use winit::event_loop::EventLoop;
 #[cfg(not(target_os = "android"))]
 pub fn run_app<V>(app: V) -> !
 where
-    V: View + 'static,
+    V: View + Clone + Send + Sync + 'static,
 {
     use crate::embedder::DesktopEmbedder;
     use winit::event::{Event, WindowEvent};
@@ -159,7 +159,7 @@ where
 
     // Initialize cross-platform logging
     flui_log::Logger::default()
-        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info")
+        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info,counter=debug")
         .init();
 
     tracing::info!("Starting FLUI app");

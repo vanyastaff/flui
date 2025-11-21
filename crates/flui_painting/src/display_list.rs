@@ -11,14 +11,56 @@
 //! ```
 
 use flui_types::{
+    events::PointerEvent,
     geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
 };
+use std::sync::Arc;
 
 // Re-export types that are part of the public API
 pub use flui_types::painting::{BlendMode, Paint, PointMode, Shader};
+
+/// Handler for pointer events in a hit region
+///
+/// Unlike flui_interaction's handler which returns EventPropagation,
+/// this is a simpler callback that just receives the event.
+pub type HitRegionHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
+
+/// A hit-testable region with an event handler
+///
+/// HitRegions are added to DisplayList to enable event handling for
+/// specific areas. When hit testing occurs, regions are checked in
+/// reverse order (last added = topmost).
+#[derive(Clone)]
+pub struct HitRegion {
+    /// Bounds of the hit-testable area
+    pub bounds: Rect,
+    /// Handler to call when pointer events occur in this region
+    pub handler: HitRegionHandler,
+}
+
+impl HitRegion {
+    /// Create a new hit region
+    pub fn new(bounds: Rect, handler: HitRegionHandler) -> Self {
+        Self { bounds, handler }
+    }
+
+    /// Check if a point is inside this region
+    pub fn contains(&self, point: Point) -> bool {
+        self.bounds.contains(point)
+    }
+}
+
+impl std::fmt::Debug for HitRegion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HitRegion")
+            .field("bounds", &self.bounds)
+            .field("handler", &"<handler>")
+            .finish()
+    }
+}
 
 /// A recorded sequence of drawing commands
 ///
@@ -78,6 +120,9 @@ pub struct DisplayList {
 
     /// Cached bounds of all drawing
     bounds: Rect,
+
+    /// Hit-testable regions with event handlers
+    hit_regions: Vec<HitRegion>,
 }
 
 impl DisplayList {
@@ -86,7 +131,20 @@ impl DisplayList {
         Self {
             commands: Vec::new(),
             bounds: Rect::ZERO,
+            hit_regions: Vec::new(),
         }
+    }
+
+    /// Add a hit-testable region with an event handler
+    ///
+    /// Regions are tested in reverse order (last added = topmost).
+    pub fn add_hit_region(&mut self, region: HitRegion) {
+        self.hit_regions.push(region);
+    }
+
+    /// Get all hit regions
+    pub fn hit_regions(&self) -> &[HitRegion] {
+        &self.hit_regions
     }
 
     /// Adds a command to the display list (internal)
@@ -122,10 +180,11 @@ impl DisplayList {
         self.commands.is_empty()
     }
 
-    /// Clears all commands (for pooling/reuse)
+    /// Clears all commands and hit regions (for pooling/reuse)
     pub fn clear(&mut self) {
         self.commands.clear();
         self.bounds = Rect::ZERO;
+        self.hit_regions.clear();
     }
 
     /// Appends all commands from another DisplayList (zero-copy move)
@@ -163,7 +222,12 @@ impl DisplayList {
                 self.bounds = self.bounds.union(&other.bounds);
             }
         }
-        // other.commands is now empty (moved), will be dropped
+
+        // Also append hit regions
+        if !other.hit_regions.is_empty() {
+            self.hit_regions.append(&mut other.hit_regions);
+        }
+        // other.commands and hit_regions are now empty (moved), will be dropped
     }
 
     /// Apply opacity to all commands in this DisplayList
@@ -199,6 +263,7 @@ impl DisplayList {
         Self {
             commands,
             bounds: self.bounds, // Bounds don't change with opacity
+            hit_regions: self.hit_regions.clone(), // Copy hit regions
         }
     }
 }

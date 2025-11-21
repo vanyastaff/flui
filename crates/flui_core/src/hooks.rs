@@ -124,6 +124,7 @@ where
 
     // Ignore subscription errors (e.g., too many subscribers)
     let _ = signal.subscribe(move || {
+        tracing::info!(element_id = ?element_id, "Signal subscription triggered - pushing to rebuild queue");
         rebuild_queue.push(element_id, 0);
     });
 

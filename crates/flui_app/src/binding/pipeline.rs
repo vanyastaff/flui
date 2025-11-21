@@ -74,7 +74,7 @@ impl PipelineBinding {
     /// ```
     pub fn attach_root_widget<V>(&self, widget: V)
     where
-        V: View + 'static,
+        V: View + Clone + Send + Sync + 'static,
     {
         // Delegate to PipelineOwner::attach()
         // This keeps all the View → Element conversion logic in flui-core
