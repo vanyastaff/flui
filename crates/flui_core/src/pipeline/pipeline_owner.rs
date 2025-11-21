@@ -49,13 +49,6 @@ use std::time::Duration;
 use super::{ElementTree, FrameCoordinator, PipelineError, RebuildQueue, RootManager};
 use crate::element::{Element, ElementId};
 
-#[cfg(debug_assertions)]
-use crate::debug_println;
-
-// Debug print prefixes
-#[cfg(debug_assertions)]
-const PRINT_BUILD_SCOPE: &str = "[BUILD_SCOPE]";
-
 /// PipelineOwner - orchestrates the three-phase rendering pipeline
 ///
 /// PipelineOwner is the main entry point for FLUI's rendering system. It coordinates
@@ -491,8 +484,7 @@ impl PipelineOwner {
     pub fn finalize_tree(&mut self) {
         self.lock_state(|owner| {
             if !owner.coordinator.build().has_dirty() {
-                #[cfg(debug_assertions)]
-                debug_println!("{} finalize_tree: tree is clean", PRINT_BUILD_SCOPE);
+                tracing::trace!("finalize_tree: tree is clean");
             } else {
                 tracing::warn!(
                     dirty_count = owner.dirty_count(),
@@ -726,17 +718,12 @@ impl PipelineOwner {
         let root_id = match self.root_mgr.root_id() {
             Some(id) => id,
             None => {
-                #[cfg(debug_assertions)]
-                debug_println!("{} reassemble_tree: no root element", PRINT_BUILD_SCOPE);
+                tracing::trace!("reassemble_tree: no root element");
                 return 0;
             }
         };
 
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} reassemble_tree: hot reload triggered",
-            PRINT_BUILD_SCOPE
-        );
+        tracing::debug!("reassemble_tree: hot reload triggered");
 
         // Collect all element IDs to process with their depths
         let element_ids = {
@@ -744,12 +731,7 @@ impl PipelineOwner {
             self.collect_all_elements(&tree, root_id)
         };
 
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} reassemble_tree: found {} elements",
-            PRINT_BUILD_SCOPE,
-            element_ids.len()
-        );
+        tracing::debug!(count = element_ids.len(), "reassemble_tree: found elements");
 
         // Process each element
         let reassembled_count = 0;
@@ -766,11 +748,9 @@ impl PipelineOwner {
             self.schedule_build_for(element_id, depth);
         }
 
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} reassemble_tree: complete ({} stateful elements reassembled)",
-            PRINT_BUILD_SCOPE,
-            reassembled_count
+        tracing::debug!(
+            reassembled_count = reassembled_count,
+            "reassemble_tree: complete"
         );
 
         reassembled_count

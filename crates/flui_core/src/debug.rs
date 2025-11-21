@@ -33,13 +33,3 @@ pub fn disable_debug() {
 pub fn is_debug_enabled() -> bool {
     DEBUG_ENABLED.load(Ordering::Relaxed)
 }
-
-/// Debug print macro - only prints if debug is enabled
-#[macro_export]
-macro_rules! debug_println {
-    ($($arg:tt)*) => {
-        if $crate::debug::is_debug_enabled() {
-            println!($($arg)*);
-        }
-    };
-}

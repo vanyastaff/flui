@@ -49,15 +49,6 @@ use std::time::{Duration, Instant};
 use crate::element::ElementId;
 use crate::element::ElementTree;
 
-// Debug print prefixes
-#[cfg(debug_assertions)]
-const PRINT_SCHEDULE_BUILD: &str = "[SCHEDULE_BUILD]";
-#[cfg(debug_assertions)]
-const PRINT_BUILD_SCOPE: &str = "[BUILD_SCOPE]";
-
-#[cfg(debug_assertions)]
-use crate::debug_println;
-
 /// Element type classification for rebuild dispatch
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ElementType {
@@ -108,19 +99,9 @@ impl BuildBatcher {
         // Track if this is a duplicate (saved build)
         if self.pending.insert(element_id, depth).is_some() {
             self.builds_saved += 1;
-            #[cfg(debug_assertions)]
-            debug_println!(
-                "{} Build batched: element {:?} already in batch (saved 1 build)",
-                PRINT_SCHEDULE_BUILD,
-                element_id
-            );
+            tracing::trace!(element_id = ?element_id, "Build batched: element already in batch (saved 1 build)");
         } else {
-            #[cfg(debug_assertions)]
-            debug_println!(
-                "{} Build batched: added element {:?} to batch",
-                PRINT_SCHEDULE_BUILD,
-                element_id
-            );
+            tracing::trace!(element_id = ?element_id, "Build batched: added element to batch");
         }
     }
 
@@ -231,13 +212,7 @@ impl BuildPipeline {
         // Add directly to dirty elements
         // Note: Duplicates are allowed and will be deduplicated during rebuild_dirty()
         // This is more efficient than O(n) check on every schedule()
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} Scheduling element {:?} for rebuild (depth {})",
-            PRINT_SCHEDULE_BUILD,
-            element_id,
-            depth
-        );
+        tracing::trace!(element_id = ?element_id, depth = depth, "Scheduling element for rebuild");
 
         self.dirty_elements.push((element_id, depth));
     }
@@ -305,8 +280,7 @@ impl BuildPipeline {
     /// }
     /// ```
     pub fn enable_batching(&mut self, batch_duration: Duration) {
-        #[cfg(debug_assertions)]
-        println!("Enabling build batching with duration {:?}", batch_duration);
+        tracing::debug!(duration = ?batch_duration, "Enabling build batching");
         self.batcher = Some(BuildBatcher::new(batch_duration));
     }
 
@@ -314,10 +288,10 @@ impl BuildPipeline {
     pub fn disable_batching(&mut self) {
         if let Some(ref batcher) = self.batcher {
             let (batches, saved) = batcher.stats();
-            #[cfg(debug_assertions)]
-            println!(
-                "Disabling build batching (flushed {} batches, saved {} builds)",
-                batches, saved
+            tracing::debug!(
+                batches_flushed = batches,
+                builds_saved = saved,
+                "Disabling build batching"
             );
         }
         self.batcher = None;
@@ -343,12 +317,7 @@ impl BuildPipeline {
         if let Some(ref mut batcher) = self.batcher {
             let pending = batcher.take_pending();
             if !pending.is_empty() {
-                #[cfg(debug_assertions)]
-                debug_println!(
-                    "{} Flushing batch: {} elements",
-                    PRINT_SCHEDULE_BUILD,
-                    pending.len()
-                );
+                tracing::trace!(count = pending.len(), "Flushing batch");
 
                 for (element_id, depth) in pending {
                     // Add to dirty elements (bypass batching)
@@ -438,14 +407,11 @@ impl BuildPipeline {
 
         self.build_count += 1;
         let build_num = self.build_count;
-        let dirty_count = self.dirty_elements.len();
 
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} rebuild_dirty #{}: rebuilding {} dirty elements",
-            PRINT_BUILD_SCOPE,
-            build_num,
-            dirty_count
+        tracing::debug!(
+            build_num = build_num,
+            dirty_count = self.dirty_elements.len(),
+            "Starting rebuild_dirty"
         );
 
         // Sort by depth (parents before children)
@@ -527,16 +493,13 @@ impl BuildPipeline {
                 }
             }
 
-            #[cfg(debug_assertions)]
-            tracing::trace!("Processed element {:?}", element_id);
+            tracing::trace!(element_id = ?element_id, "Processed element");
         }
 
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} rebuild_dirty #{}: complete ({} elements rebuilt)",
-            PRINT_BUILD_SCOPE,
-            build_num,
-            rebuilt_count
+        tracing::debug!(
+            build_num = build_num,
+            rebuilt_count = rebuilt_count,
+            "Completed rebuild_dirty"
         );
 
         rebuilt_count
@@ -842,14 +805,11 @@ impl BuildPipeline {
 
         self.build_count += 1;
         let build_num = self.build_count;
-        let dirty_count = self.dirty_elements.len();
 
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} rebuild_dirty_parallel #{}: rebuilding {} dirty elements",
-            PRINT_BUILD_SCOPE,
-            build_num,
-            dirty_count
+        tracing::debug!(
+            build_num = build_num,
+            dirty_count = self.dirty_elements.len(),
+            "Starting rebuild_dirty_parallel"
         );
 
         // Sort by depth (parents before children)
@@ -915,12 +875,10 @@ impl BuildPipeline {
             }
         }
 
-        #[cfg(debug_assertions)]
-        debug_println!(
-            "{} rebuild_dirty_parallel #{}: complete ({} elements rebuilt)",
-            PRINT_BUILD_SCOPE,
-            build_num,
-            rebuilt_count
+        tracing::debug!(
+            build_num = build_num,
+            rebuilt_count = rebuilt_count,
+            "Completed rebuild_dirty_parallel"
         );
 
         rebuilt_count
