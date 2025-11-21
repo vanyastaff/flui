@@ -193,9 +193,11 @@ where
         }
 
         fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-            // Request redraw every frame (for animations)
+            // On-demand rendering: only redraw when dirty
             if let Some(ref emb) = self.embedder {
-                emb.window().request_redraw();
+                if self.binding.needs_redraw() {
+                    emb.window().request_redraw();
+                }
             }
         }
 
@@ -210,6 +212,8 @@ where
                     WindowEvent::RedrawRequested => {
                         tracing::trace!("RedrawRequested event, rendering frame");
                         emb.render_frame();
+                        // Clear dirty flag after rendering
+                        self.binding.mark_rendered();
                     }
                     WindowEvent::CloseRequested => {
                         tracing::info!("Window close requested");

@@ -46,7 +46,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{ElementTree, FrameCoordinator, RebuildQueue, RootManager};
+use super::{ElementTree, FrameCoordinator, PipelineError, RebuildQueue, RootManager};
 use crate::element::{Element, ElementId};
 
 #[cfg(debug_assertions)]
@@ -317,7 +317,7 @@ impl PipelineOwner {
     /// let mut owner = PipelineOwner::new();
     /// let root_id = owner.attach(MyApp);
     /// ```
-    pub fn attach<V>(&mut self, widget: V) -> ElementId
+    pub fn attach<V>(&mut self, widget: V) -> Result<ElementId, PipelineError>
     where
         V: crate::view::View + Clone + Send + Sync + 'static,
     {
@@ -328,13 +328,10 @@ impl PipelineOwner {
 
         // Check if root already exists
         if self.root_element_id().is_some() {
-            panic!(
-                "Root widget already attached to PipelineOwner!\n\
-                \n\
-                Only one root widget is supported at a time.\n\
-                \n\
-                If you need to replace the root widget, call remove_root() first."
-            );
+            return Err(PipelineError::invalid_state(
+                "Root widget already attached. Call teardown() first.",
+            )
+            .expect("Invalid error message"));
         }
 
         // Create a ComponentElement wrapper around the view
@@ -366,7 +363,7 @@ impl PipelineOwner {
 
         tracing::info!(root_id = ?root_id, "Root view attached to pipeline");
 
-        root_id
+        Ok(root_id)
     }
 
     /// Teardown the current root widget
@@ -605,11 +602,13 @@ impl PipelineOwner {
     ///
     /// This processes all pending rebuilds from signals and other reactive primitives.
     /// Should be called before flush_build() to ensure signal changes trigger rebuilds.
-    pub fn flush_rebuild_queue(&mut self) {
+    ///
+    /// Returns `true` if there were any pending rebuilds, `false` otherwise.
+    pub fn flush_rebuild_queue(&mut self) -> bool {
         let rebuilds = self.rebuild_queue.drain();
 
         if rebuilds.is_empty() {
-            return;
+            return false;
         }
 
         tracing::info!(
@@ -643,6 +642,8 @@ impl PipelineOwner {
             // Mark element dirty via build pipeline
             self.coordinator.build_mut().schedule(actual_id, depth);
         }
+
+        true
     }
 
     /// Check if there are any dirty layout elements
