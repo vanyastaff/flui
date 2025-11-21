@@ -288,8 +288,19 @@ impl RenderBox<Optional> for RenderDecoratedBox {
             // Layout child and use its size
             ctx.layout_child(child_id, constraints)
         } else {
-            // No child - use max constraints for decoration size
-            Size::new(constraints.max_width, constraints.max_height)
+            // No child - use constrained size for decoration
+            // Handle infinity by using min constraints as fallback
+            let width = if constraints.max_width.is_finite() {
+                constraints.max_width
+            } else {
+                constraints.min_width
+            };
+            let height = if constraints.max_height.is_finite() {
+                constraints.max_height
+            } else {
+                constraints.min_height
+            };
+            Size::new(width, height)
         };
 
         // Store size for paint

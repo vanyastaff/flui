@@ -55,6 +55,8 @@
 
 use bon::Builder;
 use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::constraints::BoxConstraints;
@@ -158,8 +160,8 @@ pub struct Container {
     /// The child contained by the container.
     ///
     /// If null, the container will size itself according to other properties.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Element>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for Container {
@@ -177,7 +179,7 @@ impl std::fmt::Debug for Container {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<Element>"
+                    "<child>"
                 } else {
                     "None"
                 },
@@ -207,7 +209,7 @@ impl Container {
             width: None,
             height: None,
             constraints: None,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -374,8 +376,8 @@ impl View for Container {
         // Key insight: When alignment is set, decoration must be OUTSIDE alignment
         // so that decoration receives tight constraints and expands to full size.
 
-        let mut current: Element = if let Some(child) = self.child {
-            child
+        let mut current: Element = if self.child.is_some() {
+            self.child.into_element()
         } else {
             // No child - use empty SizedBox
             crate::SizedBox::new().into_element()
@@ -431,11 +433,9 @@ impl View for Container {
 
         // Apply width/height constraints
         if self.width.is_some() || self.height.is_some() {
-            current = crate::SizedBox::builder()
-                .width(self.width.unwrap_or(0.0))
-                .height(self.height.unwrap_or(0.0))
-                .child(current)
-                .build()
+            // Use RenderSizedBox directly with Option values to preserve None semantics
+            current = flui_rendering::RenderSizedBox::new(self.width, self.height)
+                .maybe_child(Some(current))
                 .into_element();
         }
 
@@ -456,7 +456,7 @@ where
     ///
     /// Accepts anything that implements `IntoElement`.
     pub fn child(self, child: impl IntoElement) -> ContainerBuilder<SetChild<S>> {
-        self.child_internal(Some(child.into_element()))
+        self.child_internal(Child::new(child))
     }
 }
 

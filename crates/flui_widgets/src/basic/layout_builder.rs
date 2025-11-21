@@ -21,6 +21,7 @@
 //! })
 //! ```
 
+use flui_core::element::Element;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::BoxConstraints;
@@ -28,7 +29,7 @@ use std::sync::Arc;
 
 /// Type for layout builder function that creates a widget from BuildContext and constraints
 pub type LayoutWidgetBuilder =
-    Arc<dyn Fn(&BuildContext, BoxConstraints) -> Box<dyn > + Send + Sync>;
+    Arc<dyn Fn(&BuildContext, BoxConstraints) -> Element + Send + Sync>;
 
 /// A widget that calls a builder function with BoxConstraints.
 ///
@@ -102,7 +103,7 @@ impl LayoutBuilder {
     /// ```
     pub fn new<F>(builder: F) -> Self
     where
-        F: Fn(&BuildContext, BoxConstraints) -> Box<dyn > + Send + Sync + 'static,
+        F: Fn(&BuildContext, BoxConstraints) -> Element + Send + Sync + 'static,
     {
         Self {
             key: None,
@@ -119,7 +120,7 @@ impl LayoutBuilder {
 
 // Implement View trait
 impl View for LayoutBuilder {
-    fn build(&self, ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
         // In a simplified implementation, we call the builder with unconstrained constraints
         // A full implementation would need a special RenderObject that rebuilds during layout
         let constraints = BoxConstraints::UNCONSTRAINED;

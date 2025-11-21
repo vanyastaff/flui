@@ -467,13 +467,34 @@ impl Canvas {
     /// * `style` - Text style (font, size, etc.)
     /// * `paint` - Paint style (color)
     pub fn draw_text(&mut self, text: &str, offset: Offset, style: &TextStyle, paint: &Paint) {
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            target: "canvas",
+            text = %text,
+            offset = ?offset,
+            font_size = ?style.font_size,
+            color = ?paint.color,
+            transform_depth = ?self.transform,
+            "Canvas::draw_text push"
+        );
         self.display_list.push(DrawCommand::DrawText {
             text: text.to_string(),
+
             offset,
+
             style: style.clone(),
+
             paint: paint.clone(),
+
             transform: self.transform,
         });
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            target: "canvas",
+            commands_len = self.display_list.len(),
+            "Canvas::draw_text complete"
+        );
     }
 
     /// Draws an image
@@ -736,6 +757,30 @@ impl Canvas {
             let modified_display_list = other.display_list.with_opacity(opacity);
             self.display_list.append(modified_display_list);
         }
+    }
+
+    // ===== Hit Testing =====
+
+    /// Add a hit-testable region with an event handler
+    ///
+    /// This registers an area that will respond to pointer events.
+    /// Used by RenderPointerListener to connect gestures to UI elements.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use flui_painting::{Canvas, HitRegion};
+    /// use flui_types::Rect;
+    /// use std::sync::Arc;
+    ///
+    /// let mut canvas = Canvas::new();
+    /// let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    /// canvas.add_hit_region(HitRegion::new(bounds, Arc::new(|event| {
+    ///     println!("Clicked!");
+    /// })));
+    /// ```
+    pub fn add_hit_region(&mut self, region: crate::display_list::HitRegion) {
+        self.display_list.add_hit_region(region);
     }
 
     // ===== Finalization =====

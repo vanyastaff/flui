@@ -1,6 +1,6 @@
 //! CustomPaint widget for drawing custom graphics
 
-use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, Render};
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox, RenderBoxExt};
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_painting::Canvas;
@@ -69,34 +69,32 @@ impl Debug for CustomPaint {
 }
 
 impl View for CustomPaint {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderCustomPaint {
-                painter: self.painter,
-                size: self.size.unwrap_or(Size::ZERO),
-            },
-            (),
-        )
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderCustomPaintLeaf {
+            painter: self.painter,
+            size: self.size.unwrap_or(Size::ZERO),
+        }
+        .leaf()
     }
 }
 
-/// RenderObject for CustomPaint
-pub struct RenderCustomPaint {
+/// RenderObject for CustomPaint (leaf version with callback)
+pub struct RenderCustomPaintLeaf {
     painter: Option<PainterCallback>,
     size: Size,
 }
 
-impl Debug for RenderCustomPaint {
+impl Debug for RenderCustomPaintLeaf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RenderCustomPaint")
+        f.debug_struct("RenderCustomPaintLeaf")
             .field("has_painter", &self.painter.is_some())
             .field("size", &self.size)
             .finish()
     }
 }
 
-impl Render for RenderCustomPaint {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Leaf> for RenderCustomPaintLeaf {
+    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
 
         // Use provided size if available, otherwise use max constraints
@@ -107,22 +105,11 @@ impl Render for RenderCustomPaint {
         }
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let mut canvas = Canvas::new();
-
+    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
         if let Some(ref painter) = self.painter {
-            painter(&mut canvas, self.size, ctx.offset);
+            let offset = ctx.offset;
+            painter(ctx.canvas(), self.size, offset);
         }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(0)
     }
 }
 

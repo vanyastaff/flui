@@ -4,6 +4,8 @@
 //! Similar to Flutter's FittedBox widget.
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFittedBox;
@@ -99,8 +101,8 @@ pub struct FittedBox {
     pub alignment: Alignment,
 
     /// The child widget to scale and position.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for FittedBox {
@@ -109,26 +111,8 @@ impl std::fmt::Debug for FittedBox {
             .field("key", &self.key)
             .field("fit", &self.fit)
             .field("alignment", &self.alignment)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for FittedBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            fit: self.fit,
-            alignment: self.alignment,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -140,12 +124,12 @@ impl FittedBox {
     /// ```rust,ignore
     /// let widget = FittedBox::new(BoxFit::Cover, child);
     /// ```
-    pub fn new(fit: BoxFit, child: impl View + 'static) -> Self {
+    pub fn new(fit: BoxFit, child: impl IntoElement) -> Self {
         Self {
             key: None,
             fit,
             alignment: Alignment::CENTER,
-            child: Some(Box::new(child)),
+            child: Child::new(child),
         }
     }
 
@@ -160,18 +144,18 @@ impl FittedBox {
     ///     child
     /// );
     /// ```
-    pub fn with_alignment(fit: BoxFit, alignment: Alignment, child: impl View + 'static) -> Self {
+    pub fn with_alignment(fit: BoxFit, alignment: Alignment, child: impl IntoElement) -> Self {
         Self {
             key: None,
             fit,
             alignment,
-            child: Some(Box::new(child)),
+            child: Child::new(child),
         }
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 }
 
@@ -181,18 +165,15 @@ impl Default for FittedBox {
             key: None,
             fit: BoxFit::Contain,
             alignment: Alignment::CENTER,
-            child: None,
+            child: Child::none(),
         }
     }
 }
 
 // Implement View for FittedBox - New architecture
 impl View for FittedBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderFittedBox::with_alignment(self.fit, self.alignment),
-            self.child,
-        )
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderFittedBox::with_alignment(self.fit, self.alignment).child_opt(self.child)
     }
 }
 
@@ -204,8 +185,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> FittedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> FittedBoxBuilder<SetChild<S>> {
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -221,14 +202,15 @@ impl<S: State> FittedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive(Debug, Clone)]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 

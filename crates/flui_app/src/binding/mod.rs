@@ -14,8 +14,7 @@
 //! - **GestureBinding**: Routes platform events to EventRouter
 //! - **SchedulerBinding**: Wraps flui-scheduler for framework integration
 //! - **RendererBinding**: Coordinates rendering
-//! - **PipelineBinding**: Manages pipeline and widget tree lifecycle
-//! - **AppBinding**: Combined singleton binding
+//! - **AppBinding**: Combined singleton binding with pipeline ownership
 //!
 //! # Usage
 //!
@@ -23,13 +22,12 @@
 //! use flui_app::binding::AppBinding;
 //!
 //! let binding = AppBinding::ensure_initialized();
-//! binding.pipeline.attach_root_widget(MyApp::new());
+//! binding.attach_root_widget(MyApp::new());
 //! ```
 
 mod app_binding;
 mod base;
 mod gesture;
-mod pipeline;
 mod renderer;
 mod scheduler;
 
@@ -37,6 +35,5 @@ mod scheduler;
 pub use app_binding::AppBinding;
 pub use base::BindingBase;
 pub use gesture::GestureBinding;
-pub use pipeline::PipelineBinding;
 pub use renderer::RendererBinding;
 pub use scheduler::SchedulerBinding;

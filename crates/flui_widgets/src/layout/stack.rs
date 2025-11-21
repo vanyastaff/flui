@@ -30,6 +30,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderStack;
@@ -151,8 +153,8 @@ pub struct Stack {
     /// Can be set via:
     /// - `.children(vec![...])` to set all at once
     /// - `.child(widget)` repeatedly to add one at a time (chainable)
-    #[builder(field)]
-    pub children: Vec<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = children_internal))]
+    pub children: Children,
 
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -196,17 +198,6 @@ impl std::fmt::Debug for Stack {
     }
 }
 
-impl Clone for Stack {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            alignment: self.alignment,
-            fit: self.fit,
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Stack {
     /// Creates a new Stack widget.
     ///
@@ -220,20 +211,27 @@ impl Stack {
             key: None,
             alignment: Alignment::TOP_LEFT,
             fit: StackFit::Loose,
-            children: Vec::new(),
+            children: Children::default(),
         }
     }
 
     /// Adds a child widget.
     #[deprecated(note = "Use builder pattern with chainable .child() instead")]
     pub fn add_child(&mut self, child: impl View + 'static) {
-        self.children.push(Box::new(child));
+        self.children.push(child);
+    }
+
+    /// Adds a child widget.
+    ///
+    /// Alias for `add_child()` for better ergonomics.
+    pub fn child(&mut self, child: impl View + 'static) {
+        self.children.push(child);
     }
 
     /// Sets the children widgets.
     #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: Vec<Box<dyn >>) {
-        self.children = children;
+    pub fn set_children(&mut self, children: impl Into<Children>) {
+        self.children = children.into();
     }
 
     /// Validates Stack configuration.
@@ -252,16 +250,21 @@ impl Default for Stack {
 
 // Implement View for Stack - New architecture
 impl View for Stack {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
 
-        (render_stack, self.children)
+        render_stack.children(self.children.into_inner())
     }
 }
 
 // bon Builder Extensions - Custom builder methods for StackBuilder
-impl<S: stack_builder::State> StackBuilder<S> {
+use stack_builder::{IsUnset, SetChildren, State};
+
+impl<S: State> StackBuilder<S>
+where
+    S::Children: IsUnset,
+{
     /// Sets all children at once.
     ///
     /// # Examples
@@ -275,27 +278,12 @@ impl<S: stack_builder::State> StackBuilder<S> {
     ///     ])
     ///     .build()
     /// ```
-    pub fn children(mut self, children: Vec<Box<dyn >>) -> Self {
-        self.children = children;
-        self
+    pub fn children(self, children: impl Into<Children>) -> StackBuilder<SetChildren<S>> {
+        self.children_internal(children.into())
     }
+}
 
-    /// Adds a single child widget (chainable).
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// Stack::builder()
-    ///     .alignment(Alignment::CENTER)
-    ///     .child(Container::new())
-    ///     .child(Text::new("Overlay"))
-    ///     .build()
-    /// ```
-    pub fn child(mut self, child: impl  + 'static) -> Self {
-        self.children.push(Box::new(child));
-        self
-    }
-
+impl<S: State> StackBuilder<S> {
     /// Builds the Stack with optional validation.
     pub fn build(self) -> Stack {
         let stack = self.build_internal();
@@ -345,6 +333,8 @@ macro_rules! stack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
@@ -360,8 +350,8 @@ mod tests {
     }
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 

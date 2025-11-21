@@ -1,5 +1,6 @@
 //! Empty widget - a placeholder that renders nothing
 
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{BuildContext, IntoElement, View};
 use flui_rendering::objects::RenderEmpty;
 
@@ -19,8 +20,8 @@ use flui_rendering::objects::RenderEmpty;
 pub struct Empty;
 
 impl View for Empty {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Returns a leaf render that does nothing
-        (RenderEmpty, ())
+        RenderEmpty.leaf()
     }
 }

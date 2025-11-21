@@ -151,15 +151,17 @@ use winit::event_loop::EventLoop;
 #[cfg(not(target_os = "android"))]
 pub fn run_app<V>(app: V) -> !
 where
-    V: View + 'static,
+    V: View + Clone + Send + Sync + 'static,
 {
     use crate::embedder::DesktopEmbedder;
-    use winit::event::{Event, WindowEvent};
-    use winit::event_loop::ControlFlow;
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::ActiveEventLoop;
+    use winit::window::WindowId;
 
     // Initialize cross-platform logging
     flui_log::Logger::default()
-        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info")
+        .with_filter("info,wgpu=warn,flui_core=debug,flui_app=info,counter=debug")
         .init();
 
     tracing::info!("Starting FLUI app");
@@ -168,63 +170,72 @@ where
     let binding = AppBinding::ensure_initialized();
 
     // 2. Attach root widget
-    binding.pipeline.attach_root_widget(app);
+    binding.attach_root_widget(app);
+
+    // Application state for winit 0.30+ ApplicationHandler
+    struct AppState {
+        binding: std::sync::Arc<AppBinding>,
+        embedder: Option<DesktopEmbedder>,
+    }
+
+    impl ApplicationHandler for AppState {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            tracing::info!("Resumed event received");
+            if self.embedder.is_none() {
+                tracing::info!("Creating DesktopEmbedder after Resumed event");
+                // Safe to create window and surface now
+                self.embedder = Some(pollster::block_on(DesktopEmbedder::new(
+                    self.binding.clone(),
+                    event_loop,
+                )));
+                tracing::info!("DesktopEmbedder created successfully");
+            }
+        }
+
+        fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+            // Request redraw every frame (for animations)
+            if let Some(ref emb) = self.embedder {
+                emb.window().request_redraw();
+            }
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            _window_id: WindowId,
+            event: WindowEvent,
+        ) {
+            if let Some(ref mut emb) = self.embedder {
+                match event {
+                    WindowEvent::RedrawRequested => {
+                        tracing::trace!("RedrawRequested event, rendering frame");
+                        emb.render_frame();
+                    }
+                    WindowEvent::CloseRequested => {
+                        tracing::info!("Window close requested");
+                        event_loop.exit();
+                    }
+                    other => {
+                        emb.handle_window_event(other, event_loop);
+                    }
+                }
+            }
+        }
+    }
 
     // 3. Create event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
     tracing::info!("FLUI app initialized, entering event loop");
 
-    // 4. Create embedder inside event loop (NEW winit 0.30+ pattern)
-    // Window/surface creation must happen after Resumed event
-    let mut embedder: Option<DesktopEmbedder> = None;
+    // 4. Create app state and run
+    let mut app_state = AppState {
+        binding,
+        embedder: None,
+    };
 
     event_loop
-        .run(move |event, elwt| {
-            elwt.set_control_flow(ControlFlow::Poll);
-
-            match event {
-                Event::Resumed => {
-                    tracing::info!("Resumed event received");
-                    if embedder.is_none() {
-                        tracing::info!("Creating DesktopEmbedder after Resumed event");
-                        // Safe to create window and surface now
-                        embedder = Some(pollster::block_on(DesktopEmbedder::new(
-                            binding.clone(),
-                            elwt,
-                        )));
-                        tracing::info!("DesktopEmbedder created successfully");
-                    }
-                }
-
-                Event::AboutToWait => {
-                    // Request redraw every frame (for animations)
-                    if let Some(ref emb) = embedder {
-                        emb.window().request_redraw();
-                    }
-                }
-
-                Event::WindowEvent { event, .. } => {
-                    if let Some(ref mut emb) = embedder {
-                        match event {
-                            WindowEvent::RedrawRequested => {
-                                tracing::trace!("RedrawRequested event, rendering frame");
-                                emb.render_frame();
-                            }
-                            WindowEvent::CloseRequested => {
-                                tracing::info!("Window close requested");
-                                elwt.exit();
-                            }
-                            other => {
-                                emb.handle_window_event(other, elwt);
-                            }
-                        }
-                    }
-                }
-
-                _ => {}
-            }
-        })
+        .run_app(&mut app_state)
         .expect("Event loop error");
 
     // Unreachable, but needed to satisfy return type !
@@ -290,7 +301,7 @@ pub extern "C" fn android_main(app: android_activity::AndroidApp) {
     let binding = AppBinding::ensure_initialized();
 
     // 2. Attach root widget
-    binding.pipeline.attach_root_widget(AndroidDemo);
+    binding.attach_root_widget(AndroidDemo);
 
     // 3. Create event loop with Android app
     let mut event_loop_builder = EventLoop::builder();

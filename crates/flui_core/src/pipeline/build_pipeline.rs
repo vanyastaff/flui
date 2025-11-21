@@ -436,6 +436,8 @@ impl BuildPipeline {
         let mut dirty = std::mem::take(&mut self.dirty_elements);
         let mut rebuilt_count = 0;
 
+        tracing::info!(dirty_count = dirty.len(), dirty_elements = ?dirty, "Processing dirty elements");
+
         // Rebuild each element
         for (element_id, depth) in dirty.drain(..) {
             #[cfg(debug_assertions)]
@@ -471,8 +473,10 @@ impl BuildPipeline {
             };
 
             // Dispatch rebuild based on element type
+            tracing::info!(?element_id, ?element_type, "Dispatching rebuild for element");
             match element_type {
                 Some(ElementType::Component) => {
+                    tracing::info!(?element_id, "Element is Component - calling rebuild_component");
                     if self.rebuild_component(tree, element_id, depth) {
                         rebuilt_count += 1;
                     }
@@ -480,11 +484,7 @@ impl BuildPipeline {
 
                 Some(ElementType::Render) => {
                     // RenderElements don't rebuild - they only relayout
-                    #[cfg(debug_assertions)]
-                    tracing::trace!(
-                        "Render element {:?} skipped (rebuilds via layout)",
-                        element_id
-                    );
+                    tracing::info!(?element_id, "Element is Render - skipping rebuild");
                 }
 
                 Some(ElementType::Provider) => {
@@ -494,7 +494,7 @@ impl BuildPipeline {
                 }
 
                 None => {
-                    // Element not found or unrecognized type
+                    tracing::warn!(?element_id, "Element type is None - skipping");
                 }
             }
 
@@ -830,20 +830,71 @@ impl BuildPipeline {
         self.dirty_elements.dedup_by_key(|(id, _)| *id);
 
         // Take the dirty list to avoid borrow conflicts
-        let dirty = std::mem::take(&mut self.dirty_elements);
+        let mut dirty = std::mem::take(&mut self.dirty_elements);
+        let mut rebuilt_count = 0;
 
-        // Call parallel build implementation
-        let count = super::parallel_build::rebuild_dirty_parallel(tree, dirty);
+        // For now, use the same sequential logic as rebuild_dirty since the
+        // parallel_build module doesn't properly invoke component builders.
+        // TODO: Implement proper parallel component rebuild with BuildContext
+        for (element_id, depth) in dirty.drain(..) {
+            // Determine element type (read-only scope)
+            let element_type = {
+                let tree_guard = tree.read();
+                match tree_guard.get(element_id) {
+                    Some(elem) => {
+                        if elem.as_component().is_some() {
+                            Some(ElementType::Component)
+                        } else if elem.as_provider().is_some() {
+                            Some(ElementType::Provider)
+                        } else if elem.as_render().is_some() {
+                            Some(ElementType::Render)
+                        } else {
+                            None
+                        }
+                    }
+                    None => {
+                        tracing::error!(
+                            element_id = ?element_id,
+                            "Element marked dirty but not found in tree during rebuild"
+                        );
+                        None
+                    }
+                }
+            };
+
+            // Dispatch rebuild based on element type
+            match element_type {
+                Some(ElementType::Component) => {
+                    if self.rebuild_component(tree, element_id, depth) {
+                        rebuilt_count += 1;
+                    }
+                }
+
+                Some(ElementType::Render) => {
+                    // RenderElements don't rebuild - they only relayout
+                }
+
+                Some(ElementType::Provider) => {
+                    if self.rebuild_provider(tree, element_id, depth) {
+                        rebuilt_count += 1;
+                    }
+                }
+
+                None => {
+                    tracing::warn!(?element_id, "Element type is None - skipping rebuild");
+                }
+            }
+        }
 
         #[cfg(debug_assertions)]
         debug_println!(
-            "{} rebuild_dirty_parallel #{}: complete ({} elements processed)",
+            "{} rebuild_dirty_parallel #{}: complete ({} elements rebuilt)",
             PRINT_BUILD_SCOPE,
             build_num,
-            count
+            rebuilt_count
         );
 
-        count
+        rebuilt_count
     }
 
     /// Clears all dirty elements without rebuilding.

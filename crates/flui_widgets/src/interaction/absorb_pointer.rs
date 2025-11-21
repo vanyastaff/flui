@@ -9,7 +9,7 @@
 //! ```rust,ignore
 //! AbsorbPointer {
 //!     absorbing: true,
-//!     child: Some(Box::new(some_widget)),
+//!     child: Child::new(some_widget),
 //!     ..Default::default()
 //! }
 //! ```
@@ -23,6 +23,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAbsorbPointer;
@@ -77,8 +79,8 @@ pub struct AbsorbPointer {
     pub absorbing: bool,
 
     /// The child widget.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for AbsorbPointer {
@@ -89,22 +91,12 @@ impl std::fmt::Debug for AbsorbPointer {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<>"
+                    "<child>"
                 } else {
                     "None"
                 },
             )
             .finish()
-    }
-}
-
-impl Clone for AbsorbPointer {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            absorbing: self.absorbing,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -118,7 +110,7 @@ impl AbsorbPointer {
         Self {
             key: None,
             absorbing,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -134,8 +126,8 @@ impl AbsorbPointer {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Box<dyn >) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 }
 
@@ -156,8 +148,8 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> AbsorbPointerBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> AbsorbPointerBuilder<SetChild<S>> {
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -234,7 +226,7 @@ mod tests {
     #[test]
     fn test_absorb_pointer_set_child() {
         let mut widget = AbsorbPointer::new(true);
-        widget.set_child(Box::new(crate::SizedBox::new()));
+        widget.set_child(crate::SizedBox::new());
         assert!(widget.child.is_some());
     }
 
@@ -253,7 +245,7 @@ mod tests {
 
 // Implement View trait
 impl View for AbsorbPointer {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderAbsorbPointer::new(self.absorbing), self.child)
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderAbsorbPointer::new(self.absorbing).child_opt(self.child.into_inner())
     }
 }

@@ -34,10 +34,11 @@
 //!     ])
 //! ```
 
-pub mod scrollable;
-pub mod viewport;
-pub mod custom_scroll_view;
+// TODO: Re-enable after sliver migration is complete
+// pub mod scrollable;
+// pub mod viewport;
+// pub mod custom_scroll_view;
 
-pub use scrollable::Scrollable;
-pub use viewport::Viewport;
-pub use custom_scroll_view::CustomScrollView;
+// pub use scrollable::Scrollable;
+// pub use viewport::Viewport;
+// pub use custom_scroll_view::CustomScrollView;

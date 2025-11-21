@@ -105,10 +105,6 @@ name = "counter_demo_simple"
 path = "examples/counter_demo_simple.rs"
 
 [[example]]
-name = "android_minimal"
-path = "examples/android_minimal.rs"
-
-[[example]]
 name = "android_empty"
 path = "examples/android_empty.rs"
 

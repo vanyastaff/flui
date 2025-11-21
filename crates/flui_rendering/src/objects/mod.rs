@@ -19,10 +19,14 @@ pub mod special;
 /// Text render objects (paragraph, editable text)
 pub mod text;
 
+/// Debug render objects (error box, placeholder, performance overlay)
+pub mod debug;
+
+/// Media render objects (images, textures)
+pub mod media;
+
 // TODO: Re-enable after migration
 // pub mod basic;
-// pub mod debug;
-// pub mod media;
 // pub mod sliver;
 // pub mod viewport;
 
@@ -32,32 +36,62 @@ pub mod text;
 
 // Layout objects ✅
 pub use layout::{
+    // Additional layout exports
+    FlexItemMetadata,
+    PositionedMetadata,
     // Optional arity
     RenderAlign,
     // Single arity
     RenderAspectRatio,
     RenderBaseline,
+    RenderConstrainedBox,
     // Leaf arity
     RenderEmpty,
     // Variable arity
     RenderFlex,
+    RenderFlexItem,
     RenderFractionallySizedBox,
+    RenderIndexedStack,
     RenderIntrinsicHeight,
     RenderIntrinsicWidth,
+    RenderLimitedBox,
+    RenderListBody,
+    RenderOverflowBox,
     RenderPadding,
+    RenderPositioned,
     RenderPositionedBox,
     RenderRotatedBox,
+    RenderScrollView,
     RenderShiftedBox,
     RenderSizedBox,
     RenderSizedOverflowBox,
     RenderStack,
+    RenderWrap,
+    WrapAlignment,
+    WrapCrossAlignment,
 };
 
 // Visual Effects Single objects (13 objects from effects) ✅
 pub use effects::{
-    DecorationPosition, RenderAnimatedOpacity, RenderBackdropFilter, RenderClipOval,
-    RenderClipPath, RenderClipRRect, RenderClipRect, RenderCustomPaint, RenderDecoratedBox,
-    RenderOffstage, RenderOpacity, RenderRepaintBoundary, RenderShaderMask, RenderTransform,
+    DecorationPosition,
+    // Additional effects exports
+    PhysicalShape,
+    RRectShape,
+    RectShape,
+    RenderAnimatedOpacity,
+    RenderBackdropFilter,
+    RenderClipOval,
+    RenderClipPath,
+    RenderClipRRect,
+    RenderClipRect,
+    RenderCustomPaint,
+    RenderDecoratedBox,
+    RenderOffstage,
+    RenderOpacity,
+    RenderPhysicalModel,
+    RenderRepaintBoundary,
+    RenderShaderMask,
+    RenderTransform,
     RenderVisibility,
 };
 
@@ -70,27 +104,24 @@ pub use interaction::{
 // Semantics Single objects (6 objects) ✅
 pub use special::{
     RenderAnnotatedRegion, RenderBlockSemantics, RenderColoredBox, RenderExcludeSemantics,
-    RenderMergeSemantics, RenderMetaData, RenderView,
+    RenderFittedBox, RenderMergeSemantics, RenderMetaData, RenderView,
 };
 
 // Text Leaf objects (1 object) ✅
 pub use text::{ParagraphData, RenderParagraph};
 
+// Debug objects (3 objects) ✅
+pub use debug::{RenderErrorBox, RenderPerformanceOverlay, RenderPlaceholder};
+
+// Media objects (2 objects) ✅
+pub use media::{FilterQuality, ImageFit, RenderImage, RenderTexture, TextureId};
+
 // ============================================================================
 // TODO: Re-enable after migration
 // ============================================================================
 
-// // Debug objects
-// pub use debug::{RenderErrorBox, RenderPlaceholder};
-//
-// // Media objects
-// pub use media::*;
-//
 // // Sliver objects
 // pub use sliver::*;
-//
-// // Text objects
-// pub use text::*;
 //
 // // Viewport objects
 // pub use viewport::*;

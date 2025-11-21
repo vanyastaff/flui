@@ -3,9 +3,7 @@
 //! Applies a translation transformation before painting, where the translation
 //! is specified as a fraction of the child's size rather than absolute pixels.
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Offset, Size};
 
 /// RenderObject that translates its child by a fraction of the child's size
@@ -122,12 +120,12 @@ impl RenderFractionalTranslation {
     }
 }
 
-impl LegacyRender for RenderFractionalTranslation {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Single> for RenderFractionalTranslation {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Layout child with same constraints
-        let child_size = ctx.tree.layout_child(child_id, ctx.constraints);
+        let child_size = ctx.layout_child(child_id, ctx.constraints);
 
         // Cache child size for paint phase
         self.last_child_size = child_size;
@@ -136,7 +134,7 @@ impl LegacyRender for RenderFractionalTranslation {
         child_size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate actual pixel offset from fractional translation
@@ -144,15 +142,7 @@ impl LegacyRender for RenderFractionalTranslation {
 
         // Paint child at translated position
         let translated_offset = ctx.offset + pixel_offset;
-        ctx.tree.paint_child(child_id, translated_offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+        ctx.paint_child(child_id, translated_offset);
     }
 }
 
@@ -231,12 +221,6 @@ mod tests {
         let pixel_offset = render.calculate_pixel_offset(child_size);
 
         assert_eq!(pixel_offset, Offset::ZERO);
-    }
-
-    #[test]
-    fn test_arity() {
-        let render = RenderFractionalTranslation::new(Offset::ZERO);
-        assert_eq!(render.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]

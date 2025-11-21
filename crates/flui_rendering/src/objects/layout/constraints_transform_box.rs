@@ -8,9 +8,7 @@
 //!
 //! The parent tries to match the child's size but respects its own constraints.
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Offset, Size};
 use std::fmt::Debug;
 
@@ -142,7 +140,9 @@ impl RenderConstraintsTransformBox {
     ///
     /// Converts tight constraints (min == max) to loose (min = 0, same max).
     pub fn loosen() -> Self {
-        Self::new(BoxConstraintsTransform::new(|constraints| constraints.loosen()))
+        Self::new(BoxConstraintsTransform::new(|constraints| {
+            constraints.loosen()
+        }))
     }
 
     /// Create a transform that tightens to biggest size
@@ -155,15 +155,15 @@ impl RenderConstraintsTransformBox {
     }
 }
 
-impl LegacyRender for RenderConstraintsTransformBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Single> for RenderConstraintsTransformBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Apply transform to parent constraints
         let child_constraints = self.constraints_transform.apply(ctx.constraints);
 
         // Layout child with transformed constraints
-        let child_size = ctx.tree.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints);
         self.cached_child_size = child_size;
 
         // Parent tries to match child size, but respects its own constraints
@@ -173,7 +173,7 @@ impl LegacyRender for RenderConstraintsTransformBox {
         parent_size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate child offset based on alignment (if sizes differ)
@@ -186,15 +186,7 @@ impl LegacyRender for RenderConstraintsTransformBox {
 
         // Paint child at calculated offset
         // Note: Child may overflow if transformed constraints allowed larger size
-        ctx.tree.paint_child(child_id, ctx.offset + child_offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset + child_offset);
     }
 }
 
@@ -270,14 +262,9 @@ mod tests {
 
     #[test]
     fn test_with_alignment() {
-        let transform_box = RenderConstraintsTransformBox::loosen().with_alignment(Alignment::TOP_LEFT);
+        let transform_box =
+            RenderConstraintsTransformBox::loosen().with_alignment(Alignment::TOP_LEFT);
 
         assert_eq!(transform_box.alignment, Alignment::TOP_LEFT);
-    }
-
-    #[test]
-    fn test_arity() {
-        let transform_box = RenderConstraintsTransformBox::loosen();
-        assert_eq!(transform_box.arity(), RuntimeArity::Exact(1));
     }
 }

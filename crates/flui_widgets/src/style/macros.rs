@@ -33,13 +33,42 @@
 /// Import this to get all macros and minimal builders.
 pub mod prelude {
     // Re-export all widget types (for type annotations)
+    // TODO: Re-enable visual_effects after fixing Box<dyn> syntax and builder issues
     pub use crate::{
-        Align, Baseline, Button, Card, Center, ClipOval, ClipRRect, ClipRect, ColoredBox, Column,
-        Container, Divider, Expanded, Flex, Flexible, FractionallySizedBox, IndexedStack,
-        IntrinsicHeight, IntrinsicWidth, ListBody, Material, Offstage, Opacity, OverflowBox,
-        Padding, PhysicalModel, Positioned, PositionedDirectional, RepaintBoundary, RotatedBox,
-        Row, Scaffold, ScrollController, SingleChildScrollView, SizedBox, SizedOverflowBox, Spacer,
-        Stack, Text, Transform, Viewport, Visibility, Wrap,
+        Align,
+        Baseline,
+        Button,
+        Card,
+        Center, // ClipOval, ClipRRect, ClipRect,
+        ColoredBox,
+        Column,
+        Container,
+        Divider,
+        Expanded,
+        Flex,
+        Flexible,
+        FractionallySizedBox,
+        IndexedStack,
+        IntrinsicHeight,
+        IntrinsicWidth,
+        ListBody, // Material,
+        // Offstage, Opacity,
+        OverflowBox,
+        Padding, // PhysicalModel,
+        Positioned,
+        PositionedDirectional, // RepaintBoundary,
+        RotatedBox,
+        Row,
+        Scaffold,
+        ScrollController,
+        SingleChildScrollView,
+        SizedBox,
+        SizedOverflowBox,
+        Spacer,
+        Stack,
+        Text, // Transform,
+        // Visibility,
+        Wrap,
     };
 
     // Re-export common types

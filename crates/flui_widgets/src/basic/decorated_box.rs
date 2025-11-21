@@ -4,15 +4,13 @@
 //! Similar to Flutter's DecoratedBox widget.
 
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
 use flui_types::Color;
-
-pub use flui_rendering::DecorationPosition;
 
 /// A widget that paints a Decoration either before or after its child paints.
 ///
@@ -48,8 +46,8 @@ pub struct DecoratedBox {
     pub position: DecorationPosition,
 
     /// The child widget.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Element>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for DecoratedBox {
@@ -61,7 +59,7 @@ impl std::fmt::Debug for DecoratedBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<Element>"
+                    "<child>"
                 } else {
                     "None"
                 },
@@ -77,7 +75,7 @@ impl DecoratedBox {
             key: None,
             decoration: BoxDecoration::default(),
             position: DecorationPosition::Background,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -145,7 +143,7 @@ impl Default for DecoratedBox {
 // Implement View for DecoratedBox
 impl View for DecoratedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderDecoratedBox::with_position(self.decoration, self.position).child_opt(self.child)
+        RenderDecoratedBox::with_position(self.decoration, self.position).maybe_child(self.child)
     }
 }
 
@@ -158,7 +156,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl IntoElement) -> DecoratedBoxBuilder<SetChild<S>> {
-        self.child_internal(Some(child.into_element()))
+        self.child_internal(Child::new(child))
     }
 }
 

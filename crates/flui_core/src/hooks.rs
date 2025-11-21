@@ -124,6 +124,7 @@ where
 
     // Ignore subscription errors (e.g., too many subscribers)
     let _ = signal.subscribe(move || {
+        tracing::info!(element_id = ?element_id, "Signal subscription triggered - pushing to rebuild queue");
         rebuild_queue.push(element_id, 0);
     });
 
@@ -272,6 +273,7 @@ where
 /// let (count, dispatch) = use_reducer(ctx, 0, reducer);
 /// dispatch.send(Action::Increment);
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn use_reducer<S, A>(
     ctx: &BuildContext,
     initial: S,

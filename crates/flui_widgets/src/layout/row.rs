@@ -32,6 +32,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
@@ -77,8 +79,8 @@ pub struct Row {
     /// Can be set via:
     /// - `.children(vec![...])` to set all at once
     /// - `.child(widget)` repeatedly to add one at a time (chainable)
-    #[builder(field)]
-    pub children: Vec<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = children_internal))]
+    pub children: Children,
 
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -117,32 +119,20 @@ impl std::fmt::Debug for Row {
     }
 }
 
-impl Clone for Row {
-    fn clone(&self) -> Self {
-        Self {
-            children: self.children.clone(),
-            key: self.key.clone(),
-            main_axis_alignment: self.main_axis_alignment,
-            cross_axis_alignment: self.cross_axis_alignment,
-            main_axis_size: self.main_axis_size,
-        }
+// bon Builder Extensions - Custom builder methods for RowBuilder
+use row_builder::{IsUnset, SetChildren, State};
+
+impl<S: State> RowBuilder<S>
+where
+    S::Children: IsUnset,
+{
+    /// Sets all children at once.
+    pub fn children(self, children: impl Into<Children>) -> RowBuilder<SetChildren<S>> {
+        self.children_internal(children.into())
     }
 }
 
-// Custom builder methods for RowBuilder
-impl<S: row_builder::State> RowBuilder<S> {
-    /// Sets all children at once.
-    pub fn children(mut self, children: Vec<Box<dyn >>) -> Self {
-        self.children = children;
-        self
-    }
-
-    /// Adds a single child widget (chainable).
-    pub fn child(mut self, child: impl  + 'static) -> Self {
-        self.children.push(Box::new(child));
-        self
-    }
-
+impl<S: State> RowBuilder<S> {
     /// Builds the Row with optional validation.
     pub fn build(self) -> Row {
         let row = self.build_internal();
@@ -162,7 +152,7 @@ impl Row {
     /// Creates a new empty Row with default values.
     pub fn new() -> Self {
         Self {
-            children: Vec::new(),
+            children: Children::default(),
             key: None,
             main_axis_alignment: MainAxisAlignment::Start,
             cross_axis_alignment: CrossAxisAlignment::Center,
@@ -177,7 +167,7 @@ impl Row {
     /// Creates a Row with centered alignment.
     ///
     /// Both main axis and cross axis are centered.
-    pub fn centered(children: Vec<Box<dyn >>) -> Self {
+    pub fn centered(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::Center)
             .cross_axis_alignment(CrossAxisAlignment::Center)
@@ -188,24 +178,25 @@ impl Row {
     /// Creates a Row with spacing between children.
     ///
     /// Automatically inserts SizedBox spacers between children.
-    pub fn spaced(spacing: f32, children: Vec<Box<dyn >>) -> Self {
+    pub fn spaced(spacing: f32, children: impl Into<Children>) -> Self {
+        let children: Children = children.into();
         if children.is_empty() {
-            return Self::builder().children(vec![]).build();
+            return Self::builder().children(Children::default()).build();
         }
 
-        let mut spaced_children = Vec::with_capacity(children.len() * 2 - 1);
-        for (i, child) in children.into_iter().enumerate() {
+        let mut spaced_children = Children::default();
+        for (i, child) in children.into_inner().into_iter().enumerate() {
             if i > 0 {
-                spaced_children.push(Box::new(SizedBox::h_space(spacing)) as Box<dyn >);
+                spaced_children.push(SizedBox::h_space(spacing));
             }
-            spaced_children.push(child);
+            spaced_children.push_element(child);
         }
 
         Self::builder().children(spaced_children).build()
     }
 
     /// Creates a Row with start alignment.
-    pub fn start(children: Vec<Box<dyn >>) -> Self {
+    pub fn start(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::Start)
             .children(children)
@@ -213,7 +204,7 @@ impl Row {
     }
 
     /// Creates a Row with end alignment.
-    pub fn end(children: Vec<Box<dyn >>) -> Self {
+    pub fn end(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::End)
             .children(children)
@@ -221,7 +212,7 @@ impl Row {
     }
 
     /// Creates a Row with space-between alignment.
-    pub fn space_between(children: Vec<Box<dyn >>) -> Self {
+    pub fn space_between(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .children(children)
@@ -229,7 +220,7 @@ impl Row {
     }
 
     /// Creates a Row with space-around alignment.
-    pub fn space_around(children: Vec<Box<dyn >>) -> Self {
+    pub fn space_around(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceAround)
             .children(children)
@@ -237,7 +228,7 @@ impl Row {
     }
 
     /// Creates a Row with space-evenly alignment.
-    pub fn space_evenly(children: Vec<Box<dyn >>) -> Self {
+    pub fn space_evenly(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
             .children(children)
@@ -251,13 +242,20 @@ impl Row {
     /// Adds a child widget to the row.
     #[deprecated(note = "Use builder pattern with chainable .child() instead")]
     pub fn add_child(&mut self, child: impl View + 'static) {
-        self.children.push(Box::new(child));
+        self.children.push(child);
+    }
+
+    /// Adds a child widget to the row.
+    ///
+    /// Alias for `add_child()` for better ergonomics.
+    pub fn child(&mut self, child: impl View + 'static) {
+        self.children.push(child);
     }
 
     /// Sets all children at once.
     #[deprecated(note = "Use builder pattern with .children() instead")]
-    pub fn set_children(&mut self, children: Vec<Box<dyn >>) {
-        self.children = children;
+    pub fn set_children(&mut self, children: impl Into<Children>) {
+        self.children = children.into();
     }
 
     /// Validates row configuration.
@@ -276,13 +274,13 @@ impl Default for Row {
 
 // Implement View for Row - New architecture
 impl View for Row {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render_flex = RenderFlex::row()
             .with_main_axis_alignment(self.main_axis_alignment)
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        (render_flex, self.children)
+        render_flex.children(self.children.into_inner())
     }
 }
 
@@ -349,14 +347,16 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive(Clone)]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 
@@ -381,7 +381,7 @@ mod tests {
     fn test_row_struct_literal() {
         let row = Row {
             main_axis_alignment: MainAxisAlignment::Center,
-            children: vec![Box::new(MockView)],
+            children: vec![MockView.into_element()].into(),
             ..Default::default()
         };
         assert_eq!(row.main_axis_alignment, MainAxisAlignment::Center);

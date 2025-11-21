@@ -3,6 +3,7 @@
 //! Similar to Flutter's ScrollController, allows programmatic control
 //! of scroll position.
 
+use flui_core::element::Element;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

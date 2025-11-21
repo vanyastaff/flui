@@ -32,8 +32,8 @@
 //! ```
 
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Children;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
@@ -76,8 +76,8 @@ pub struct Column {
     /// The widgets to display in this column.
     ///
     /// Children are laid out vertically (top-to-bottom) in the order they appear in the vector.
-    #[builder(field)]
-    pub children: Vec<Element>,
+    #[builder(default, setters(vis = "", name = children_internal))]
+    pub children: Children,
 
     /// Optional key for widget identification
     pub key: Option<String>,
@@ -116,20 +116,20 @@ impl std::fmt::Debug for Column {
     }
 }
 
-// Custom builder methods for ColumnBuilder
-impl<S: column_builder::State> ColumnBuilder<S> {
+// bon Builder Extensions - Custom builder methods for ColumnBuilder
+use column_builder::{IsUnset, SetChildren, State};
+
+impl<S: State> ColumnBuilder<S>
+where
+    S::Children: IsUnset,
+{
     /// Sets all children at once.
-    pub fn children(mut self, children: Vec<Element>) -> Self {
-        self.children = children;
-        self
+    pub fn children(self, children: impl Into<Children>) -> ColumnBuilder<SetChildren<S>> {
+        self.children_internal(children.into())
     }
+}
 
-    /// Adds a single child widget (chainable).
-    pub fn child(mut self, child: impl IntoElement) -> Self {
-        self.children.push(child.into_element());
-        self
-    }
-
+impl<S: State> ColumnBuilder<S> {
     /// Builds the Column with optional validation.
     pub fn build(self) -> Column {
         let column = self.build_internal();
@@ -149,7 +149,7 @@ impl Column {
     /// Creates a new empty Column with default values.
     pub fn new() -> Self {
         Self {
-            children: Vec::new(),
+            children: Children::default(),
             key: None,
             main_axis_alignment: MainAxisAlignment::Start,
             cross_axis_alignment: CrossAxisAlignment::Center,
@@ -164,7 +164,7 @@ impl Column {
     /// Creates a Column with centered alignment.
     ///
     /// Both main axis and cross axis are centered.
-    pub fn centered(children: Vec<Element>) -> Self {
+    pub fn centered(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::Center)
             .cross_axis_alignment(CrossAxisAlignment::Center)
@@ -175,24 +175,25 @@ impl Column {
     /// Creates a Column with spacing between children.
     ///
     /// Automatically inserts SizedBox spacers between children.
-    pub fn spaced(spacing: f32, children: Vec<Element>) -> Self {
+    pub fn spaced(spacing: f32, children: impl Into<Children>) -> Self {
+        let children: Children = children.into();
         if children.is_empty() {
-            return Self::builder().children(vec![]).build();
+            return Self::builder().children(Children::default()).build();
         }
 
-        let mut spaced_children = Vec::with_capacity(children.len() * 2 - 1);
-        for (i, child) in children.into_iter().enumerate() {
+        let mut spaced_children = Children::default();
+        for (i, child) in children.into_inner().into_iter().enumerate() {
             if i > 0 {
-                spaced_children.push(SizedBox::v_space(spacing).into_element());
+                spaced_children.push(SizedBox::v_space(spacing));
             }
-            spaced_children.push(child);
+            spaced_children.push_element(child);
         }
 
         Self::builder().children(spaced_children).build()
     }
 
     /// Creates a Column with start alignment.
-    pub fn start(children: Vec<Element>) -> Self {
+    pub fn start(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::Start)
             .children(children)
@@ -200,7 +201,7 @@ impl Column {
     }
 
     /// Creates a Column with end alignment.
-    pub fn end(children: Vec<Element>) -> Self {
+    pub fn end(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::End)
             .children(children)
@@ -208,7 +209,7 @@ impl Column {
     }
 
     /// Creates a Column with space-between alignment.
-    pub fn space_between(children: Vec<Element>) -> Self {
+    pub fn space_between(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .children(children)
@@ -216,7 +217,7 @@ impl Column {
     }
 
     /// Creates a Column with space-around alignment.
-    pub fn space_around(children: Vec<Element>) -> Self {
+    pub fn space_around(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceAround)
             .children(children)
@@ -224,7 +225,7 @@ impl Column {
     }
 
     /// Creates a Column with space-evenly alignment.
-    pub fn space_evenly(children: Vec<Element>) -> Self {
+    pub fn space_evenly(children: impl Into<Children>) -> Self {
         Self::builder()
             .main_axis_alignment(MainAxisAlignment::SpaceEvenly)
             .children(children)
@@ -253,7 +254,7 @@ impl View for Column {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size);
 
-        render_flex.children(self.children)
+        render_flex.children(self.children.into_inner())
     }
 }
 
@@ -380,7 +381,7 @@ mod tests {
     #[test]
     fn test_column_macro_empty() {
         let column = column!();
-        assert_eq!(column.children.len(), 0);
+        assert_eq!(column.children.count(), 0);
     }
 
     #[test]

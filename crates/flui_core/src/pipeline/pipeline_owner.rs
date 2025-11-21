@@ -319,9 +319,10 @@ impl PipelineOwner {
     /// ```
     pub fn attach<V>(&mut self, widget: V) -> ElementId
     where
-        V: crate::view::View + 'static,
+        V: crate::view::View + Clone + Send + Sync + 'static,
     {
-        use crate::view::{BuildContext, IntoElement};
+        use crate::element::{ComponentElement, Element};
+        use crate::view::IntoElement;
 
         tracing::info!("Attaching root view to pipeline");
 
@@ -336,61 +337,78 @@ impl PipelineOwner {
             );
         }
 
-        // Create BuildContext for root widget initialization
-        // NOTE: We use a placeholder ElementId since the root doesn't exist yet.
-        // This is safe because the BuildContext is only used during View::build(),
-        // and the real ElementId is assigned immediately after via set_root().
-        //
-        // This matches Flutter's approach where root widgets are built in a
-        // temporary context before being mounted to the element tree.
-        const ROOT_PLACEHOLDER: usize = 1;
-        let temp_id = ElementId::new(ROOT_PLACEHOLDER);
-
-        // CRITICAL: Create HookContext for root widget (matches old working code)
-        // Without this, hooks will panic with "Hook called outside component render"
-        let hook_context = Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
-        let rebuild_queue = self.rebuild_queue().clone();
-        let ctx = BuildContext::with_hook_context_and_queue(
-            self.tree.clone(),
-            temp_id,
-            hook_context.clone(),
-            rebuild_queue,
-        );
-
-        // Set up ComponentId for hooks (hooks use u64, ElementId is usize)
-        let component_id = crate::hooks::ComponentId(temp_id.get() as u64);
-
-        // Build scope: Lock state during View → Element conversion
-        // This matches Flutter's buildScope() pattern for state safety
-        self.coordinator.build_mut().set_build_scope(true);
-
-        // Begin component rendering for hook context (CRITICAL for hooks!)
-        ctx.with_hook_context_mut(|hook_ctx| {
-            hook_ctx.begin_component(component_id);
+        // Create a ComponentElement wrapper around the view
+        // This enables proper rebuild support when signals change
+        let view_clone = widget.clone();
+        let builder: crate::view::BuildFn = Box::new(move || {
+            tracing::info!("ComponentElement builder invoked - about to build root view");
+            // Clone the view for each rebuild
+            let view = view_clone.clone();
+            // Convert view to element using the current BuildContext
+            let element = view.into_element();
+            tracing::info!("ComponentElement builder completed - element created");
+            element
         });
 
-        // Build the view within a context guard (sets up thread-local)
-        // Using with_build_context() ensures the guard lives for the entire closure execution
-        let element = crate::view::with_build_context(&ctx, || widget.into_element());
+        // Create ComponentElement with the builder
+        // Hook context will be created by extract_or_create_hook_context during build
+        let component = ComponentElement::new(builder);
 
-        // End component rendering for hook context
-        ctx.with_hook_context_mut(|hook_ctx| {
-            hook_ctx.end_component();
-        });
+        // Wrap in Element enum
+        let element = Element::Component(component);
 
-        // Clear build scope
-        self.coordinator.build_mut().set_build_scope(false);
-
-        // Set as pipeline root (automatically schedules initial build)
+        // Set as pipeline root (this calls schedule_build_for internally)
         let root_id = self.set_root(element);
 
         // CRITICAL: Request layout for the entire tree after attaching root
-        // Without this, the UI won't layout/paint until an external trigger
+        // This sets both the dirty set AND RenderState.needs_layout flag
         self.request_layout(root_id);
 
         tracing::info!(root_id = ?root_id, "Root view attached to pipeline");
 
         root_id
+    }
+
+    /// Teardown the current root widget
+    ///
+    /// Removes the root element and clears all dirty sets. This is useful for:
+    /// - Hot reload (replace root with new implementation)
+    /// - Testing (clean state between tests)
+    /// - Graceful shutdown
+    ///
+    /// # Returns
+    ///
+    /// `true` if a root was removed, `false` if no root was attached
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Hot reload pattern
+    /// owner.teardown();
+    /// owner.attach(NewApp);
+    /// ```
+    pub fn teardown(&mut self) -> bool {
+        if let Some(root_id) = self.root_element_id() {
+            tracing::info!(root_id = ?root_id, "Tearing down root widget");
+
+            // Remove from tree
+            {
+                let mut tree = self.tree.write();
+                tree.remove(root_id);
+            }
+
+            // Clear root manager
+            self.root_mgr.clear_root();
+
+            // Drain rebuild queue to clear it
+            let _ = self.rebuild_queue.drain();
+
+            tracing::info!("Root widget torn down successfully");
+            true
+        } else {
+            tracing::warn!("teardown() called but no root attached");
+            false
+        }
     }
 
     // =========================================================================
@@ -594,12 +612,36 @@ impl PipelineOwner {
             return;
         }
 
-        crate::trace_hot_path!("flush_rebuild_queue: {} pending", rebuilds.len());
+        tracing::info!(
+            count = rebuilds.len(),
+            "flush_rebuild_queue: processing pending rebuilds"
+        );
+
+        // Get root ID for placeholder translation
+        let root_id = self.root_mgr.root_id();
 
         // Mark each element dirty for rebuild
         for (element_id, depth) in rebuilds {
+            // Translate placeholder ID (1) to actual root ID
+            // This happens because signals created during initial build capture the placeholder ID
+            let actual_id = if element_id == ElementId::new(1) {
+                if let Some(root) = root_id {
+                    tracing::info!(
+                        placeholder_id = ?element_id,
+                        actual_root_id = ?root,
+                        "flush_rebuild_queue: translating placeholder to root"
+                    );
+                    root
+                } else {
+                    element_id
+                }
+            } else {
+                element_id
+            };
+
+            tracing::info!(element_id = ?actual_id, depth, "flush_rebuild_queue: scheduling element for rebuild");
             // Mark element dirty via build pipeline
-            self.coordinator.build_mut().schedule(element_id, depth);
+            self.coordinator.build_mut().schedule(actual_id, depth);
         }
     }
 

@@ -40,19 +40,28 @@ pub mod table;
 pub mod wrap;
 
 // ============================================================================
+// Optional Arity (Migrated)
+// ============================================================================
+pub mod constrained_box;
+pub mod constrained_overflow_box;
+pub mod limited_box;
+pub mod overflow_box;
+
+// ============================================================================
+// Single Arity (Migrated - Metadata Providers)
+// ============================================================================
+pub mod constraints_transform_box;
+pub mod flex_item;
+pub mod fractional_translation;
+pub mod positioned;
+
+pub mod custom_single_child_layout_box;
+
+// ============================================================================
 // TODO: Uncomment after migration
 // ============================================================================
-// pub mod constrained_box;                 // Optional arity
-// pub mod constrained_overflow_box;        // Optional arity
-// pub mod constraints_transform_box;       // Single arity
-// pub mod custom_single_child_layout_box;  // Single arity
 // pub mod editable_line;                   // Optional arity
-// pub mod flex_item;                       // Single arity (metadata provider)
-// pub mod fractional_translation;          // Single arity
-// pub mod limited_box;                     // Optional arity
-// pub mod overflow_box;                    // Optional arity
-// pub mod positioned;                      // Single arity (metadata provider)
-// pub mod scroll_view;                     // Single arity
+pub mod scroll_view; // Single arity
 
 // ============================================================================
 // Re-exports - Single Arity (Migrated)
@@ -90,22 +99,23 @@ pub use stack::RenderStack;
 pub use table::{RenderTable, TableCellVerticalAlignment, TableColumnWidth};
 pub use wrap::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 
+// Optional arity
+pub use constrained_box::RenderConstrainedBox;
+pub use constrained_overflow_box::RenderConstrainedOverflowBox;
+pub use limited_box::RenderLimitedBox;
+pub use overflow_box::RenderOverflowBox;
+
+// Single arity
+pub use constraints_transform_box::{BoxConstraintsTransform, RenderConstraintsTransformBox};
+pub use custom_single_child_layout_box::{
+    CenterDelegate, FixedSizeDelegate, RenderCustomSingleChildLayoutBox, SingleChildLayoutDelegate,
+};
+pub use flex_item::{FlexItemMetadata, RenderFlexItem};
+pub use fractional_translation::RenderFractionalTranslation;
+pub use positioned::{PositionedMetadata, RenderPositioned};
+
 // ============================================================================
 // TODO: Uncomment after migration
 // ============================================================================
-// // Optional arity
-// pub use constrained_box::RenderConstrainedBox;
-// pub use constrained_overflow_box::RenderConstrainedOverflowBox;
-// pub use limited_box::RenderLimitedBox;
-// pub use overflow_box::RenderOverflowBox;
 // pub use editable_line::{RenderEditableLine, TextSelection};
-//
-// // Single arity
-// pub use constraints_transform_box::{BoxConstraintsTransform, RenderConstraintsTransformBox};
-// pub use custom_single_child_layout_box::{
-//     CenterDelegate, FixedSizeDelegate, RenderCustomSingleChildLayoutBox, SingleChildLayoutDelegate,
-// };
-// pub use flex_item::{FlexItemMetadata, RenderFlexItem};
-// pub use fractional_translation::RenderFractionalTranslation;
-// pub use positioned::{PositionedMetadata, RenderPositioned};
-// pub use scroll_view::RenderScrollView;
+pub use scroll_view::RenderScrollView;

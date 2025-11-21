@@ -9,9 +9,7 @@
 //! - Allowing children to exceed parent boundaries with specific size limits
 //! - Transforming constraints passed to children
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Alignment, BoxConstraints, Size};
 
 /// A render object that imposes different constraints on its child than it gets from its parent,
@@ -141,8 +139,8 @@ impl Default for RenderConstrainedOverflowBox {
     }
 }
 
-impl LegacyRender for RenderConstrainedOverflowBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
+impl RenderBox<Single> for RenderConstrainedOverflowBox {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
         let child_id = ctx.children.single();
 
         // Parent sizes itself according to its incoming constraints
@@ -153,7 +151,7 @@ impl LegacyRender for RenderConstrainedOverflowBox {
         let child_constraints = self.create_child_constraints(ctx.constraints);
 
         // Layout child with custom constraints (may overflow parent)
-        let child_size = ctx.tree.layout_child(child_id, child_constraints);
+        let child_size = ctx.layout_child(child_id, child_constraints);
         self.cached_child_size = child_size;
         self.cached_parent_size = parent_size;
 
@@ -161,7 +159,7 @@ impl LegacyRender for RenderConstrainedOverflowBox {
         parent_size
     }
 
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
 
         // Calculate child offset based on alignment
@@ -171,15 +169,7 @@ impl LegacyRender for RenderConstrainedOverflowBox {
             .calculate_offset(self.cached_child_size, self.cached_parent_size);
 
         // Paint child at aligned offset (may paint outside parent bounds)
-        ctx.tree.paint_child(child_id, ctx.offset + child_offset)
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1)
+        ctx.paint_child(child_id, ctx.offset + child_offset);
     }
 }
 
@@ -215,8 +205,12 @@ mod tests {
 
     #[test]
     fn test_with_constraints() {
-        let overflow_box =
-            RenderConstrainedOverflowBox::new().with_constraints(Some(10.0), Some(100.0), Some(20.0), Some(80.0));
+        let overflow_box = RenderConstrainedOverflowBox::new().with_constraints(
+            Some(10.0),
+            Some(100.0),
+            Some(20.0),
+            Some(80.0),
+        );
 
         assert_eq!(overflow_box.min_width, Some(10.0));
         assert_eq!(overflow_box.max_width, Some(100.0));
@@ -270,12 +264,6 @@ mod tests {
         assert_eq!(child.max_width, 300.0); // Overridden
         assert_eq!(child.min_height, 0.0); // Overridden
         assert_eq!(child.max_height, 150.0); // From parent
-    }
-
-    #[test]
-    fn test_arity() {
-        let overflow_box = RenderConstrainedOverflowBox::new();
-        assert_eq!(overflow_box.arity(), RuntimeArity::Exact(1));
     }
 
     #[test]

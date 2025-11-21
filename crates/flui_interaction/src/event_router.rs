@@ -93,6 +93,13 @@ impl EventRouter {
                 let mut result = HitTestResult::new();
                 root.hit_test(position, &mut result);
 
+                tracing::info!(
+                    position = ?position,
+                    hit_count = result.entries().len(),
+                    has_handlers = result.entries().iter().any(|e| e.handler.is_some()),
+                    "EventRouter: hit test complete for Down event"
+                );
+
                 // Store pointer state for drag tracking
                 self.pointer_state.write().insert(
                     pointer_id,

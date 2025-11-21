@@ -186,16 +186,54 @@ impl RenderBox<Single> for RenderPointerListener {
 
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         let child_id = ctx.children.single();
+        let offset = ctx.offset;
+
+        // Register hit region for pointer event handling
+        // This connects the GestureDetector callbacks to the hit test system
+        let bounds = flui_types::Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
+
+        // Create unified handler from our callbacks
+        let callbacks = self.callbacks.clone();
+        let handler: flui_painting::HitRegionHandler = std::sync::Arc::new(move |event| {
+            match event {
+                flui_types::events::PointerEvent::Down(_) => {
+                    tracing::info!("HitRegion handler: Down event received");
+                    if let Some(callback) = &callbacks.on_pointer_down {
+                        callback(event);
+                    }
+                }
+                flui_types::events::PointerEvent::Up(_) => {
+                    tracing::info!("HitRegion handler: Up event received");
+                    if let Some(callback) = &callbacks.on_pointer_up {
+                        callback(event);
+                    }
+                }
+                flui_types::events::PointerEvent::Move(_) => {
+                    if let Some(callback) = &callbacks.on_pointer_move {
+                        callback(event);
+                    }
+                }
+                flui_types::events::PointerEvent::Cancel(_) => {
+                    if let Some(callback) = &callbacks.on_pointer_cancel {
+                        callback(event);
+                    }
+                }
+                _ => {}
+            }
+        });
+
+        // Add hit region to canvas
+        ctx.canvas().add_hit_region(flui_painting::HitRegion::new(bounds, handler));
+
+        tracing::info!(
+            bounds = ?bounds,
+            has_down = self.callbacks.on_pointer_down.is_some(),
+            has_up = self.callbacks.on_pointer_up.is_some(),
+            "RenderPointerListener: registered hit region"
+        );
 
         // Paint child
-        // TODO: Integrate pointer event handling with Canvas architecture
-        // The old PointerListenerLayer approach doesn't work with Canvas-only system
-        // This needs to be refactored to use a different event handling mechanism,
-        // possibly through:
-        // 1. Hit-test metadata attached to RenderObjects
-        // 2. Event propagation through element tree
-        // 3. Separate event handling layer above the Canvas system
-        ctx.paint_child(child_id, ctx.offset);
+        ctx.paint_child(child_id, offset);
     }
 }
 

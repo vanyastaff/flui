@@ -244,6 +244,10 @@ impl FrameCoordinator {
         let mut iterations = 0;
         let mut total_build_count = 0;
         loop {
+            // Flush any batched builds to dirty_elements
+            // This is critical: schedule() adds to batcher, flush_batch moves to dirty_elements
+            self.build.flush_batch();
+
             let build_count = self.build.dirty_count();
 
             if build_count == 0 {
@@ -382,6 +386,10 @@ impl FrameCoordinator {
         let mut iterations = 0;
         let mut total_build_count = 0;
         loop {
+            // Flush any batched builds to dirty_elements
+            // This is critical: schedule() adds to batcher, flush_batch moves to dirty_elements
+            self.build.flush_batch();
+
             let build_count = self.build.dirty_count();
 
             if build_count == 0 {

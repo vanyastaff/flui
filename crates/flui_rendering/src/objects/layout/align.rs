@@ -135,8 +135,18 @@ impl RenderBox<Optional> for RenderAlign {
 
             size
         } else {
-            // No child - just take max size
-            Size::new(constraints.max_width, constraints.max_height)
+            // No child - take max size but handle infinity
+            let width = if constraints.max_width.is_finite() {
+                constraints.max_width
+            } else {
+                constraints.min_width
+            };
+            let height = if constraints.max_height.is_finite() {
+                constraints.max_height
+            } else {
+                constraints.min_height
+            };
+            Size::new(width, height)
         }
     }
 

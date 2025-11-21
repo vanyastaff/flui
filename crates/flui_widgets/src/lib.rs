@@ -78,14 +78,15 @@ pub use layout::{
     RotatedBox, Row, Scaffold, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer,
     Stack, Wrap,
 };
-pub use scrolling::{CustomScrollView, Scrollable, Viewport};
-pub use visual_effects::{
-    BackdropFilter, ClipOval, ClipRRect, ClipRect, Material, Offstage, Opacity, PhysicalModel,
-    RepaintBoundary, Transform, Visibility,
-};
+// TODO: Re-enable after sliver migration is complete
+// pub use scrolling::{CustomScrollView, Scrollable, Viewport};
+// TODO: Re-enable visual_effects after fixing Box<dyn> syntax and builder issues
+// pub use visual_effects::{
+//     BackdropFilter, ClipOval, ClipRRect, ClipRect, Material, Offstage, Opacity, PhysicalModel,
+//     RepaintBoundary, Transform, Visibility,
+// };
 
 // Re-export commonly used types
-pub use flui_core::view::AnyView;
 pub use flui_rendering::DecorationPosition;
 pub use flui_types::layout::{FlexFit, StackFit};
 pub use flui_types::styling::{BorderRadius, BoxDecoration, Radius};
@@ -112,11 +113,13 @@ pub mod prelude {
         RotatedBox, Row, ScrollController, SingleChildScrollView, SizedOverflowBox, Spacer, Stack,
         Wrap,
     };
-    pub use crate::scrolling::{CustomScrollView, Scrollable, Viewport};
-    pub use crate::visual_effects::{
-        BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
-        RepaintBoundary, Transform, Visibility,
-    };
+    // TODO: Re-enable after sliver migration is complete
+    // pub use crate::scrolling::{CustomScrollView, Scrollable, Viewport};
+    // TODO: Re-enable visual_effects after fixing Box<dyn> syntax and builder issues
+    // pub use crate::visual_effects::{
+    //     BackdropFilter, ClipOval, ClipRRect, ClipRect, Offstage, Opacity, PhysicalModel,
+    //     RepaintBoundary, Transform, Visibility,
+    // };
 
     // Re-export core types
     pub use flui_core::BuildContext;

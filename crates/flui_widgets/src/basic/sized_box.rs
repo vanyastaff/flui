@@ -37,8 +37,8 @@
 //! sized_box!(child: widget, width: 100.0, height: 50.0)
 //! ```
 use bon::Builder;
-use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::objects::RenderSizedBox;
@@ -97,8 +97,8 @@ pub struct SizedBox {
     /// The child widget to constrain.
     ///
     /// If null, the box will be empty with the specified dimensions.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Element>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for SizedBox {
@@ -110,7 +110,7 @@ impl std::fmt::Debug for SizedBox {
             .field(
                 "child",
                 &if self.child.is_some() {
-                    "<Element>"
+                    "<child>"
                 } else {
                     "None"
                 },
@@ -123,12 +123,12 @@ impl SizedBox {
     /// Creates a new empty SizedBox with no constraints.
     ///
     /// Note: Prefer using convenience methods like `SizedBox::square()` for most cases.
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             key: None,
             width: None,
             height: None,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -221,7 +221,7 @@ impl SizedBox {
             key: None,
             width: Some(0.0),
             height: Some(0.0),
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -242,7 +242,7 @@ impl SizedBox {
             key: None,
             width: Some(width),
             height: None,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -263,7 +263,7 @@ impl SizedBox {
             key: None,
             width: None,
             height: Some(height),
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -307,7 +307,7 @@ where
 {
     /// Sets the child widget (works in builder chain).
     pub fn child(self, child: impl IntoElement) -> SizedBoxBuilder<SetChild<S>> {
-        self.child_internal(Some(child.into_element()))
+        self.child_internal(Child::new(child))
     }
 }
 
@@ -361,7 +361,7 @@ macro_rules! sized_box {
 // Implement View for SizedBox
 impl View for SizedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        RenderSizedBox::new(self.width, self.height).child_opt(self.child)
+        RenderSizedBox::new(self.width, self.height).maybe_child(self.child)
     }
 }
 

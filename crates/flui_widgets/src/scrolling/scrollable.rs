@@ -4,6 +4,7 @@
 //! It delegates visual rendering to a Viewport child.
 
 use crate::layout::ScrollController;
+use flui_core::view::children::Child;
 use flui_core::view::{BuildContext, IntoElement, View};
 use flui_types::layout::AxisDirection;
 
@@ -37,10 +38,9 @@ use flui_types::layout::AxisDirection;
 ///     .axis_direction(AxisDirection::TopToBottom)
 ///     .controller(controller)
 /// ```
-#[derive(Clone)]
 pub struct Scrollable {
     /// The viewport child that renders scrollable content
-    pub child: Box<dyn >,
+    pub child: Child,
 
     /// Scroll axis direction
     pub axis_direction: AxisDirection,
@@ -58,7 +58,14 @@ pub struct Scrollable {
 impl std::fmt::Debug for Scrollable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Scrollable")
-            .field("child", &"<dyn >")
+            .field(
+                "child",
+                &if self.child.is_some() {
+                    "<child>"
+                } else {
+                    "None"
+                },
+            )
             .field("axis_direction", &self.axis_direction)
             .field("controller", &self.controller)
             .field("physics_enabled", &self.physics_enabled)
@@ -69,9 +76,9 @@ impl std::fmt::Debug for Scrollable {
 
 impl Scrollable {
     /// Create new Scrollable with a viewport child
-    pub fn new(child: impl View + 'static) -> Self {
+    pub fn new(child: impl IntoElement) -> Self {
         Self {
-            child: Box::new(child),
+            child: Child::new(child),
             axis_direction: AxisDirection::TopToBottom,
             controller: None,
             physics_enabled: true,
@@ -105,7 +112,7 @@ impl Scrollable {
 }
 
 impl View for Scrollable {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: Implement gesture detection and physics
         // For now, just pass through to child (Viewport)
         // In full implementation:

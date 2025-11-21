@@ -12,6 +12,7 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_types::prelude::Color;
@@ -64,14 +65,14 @@ pub struct AppBar {
 
     /// The primary widget displayed in the app bar (typically Text)
     #[builder(setters(vis = "", name = title_internal))]
-    pub title: Option<Box<dyn >>,
+    pub title: Option<Element>,
 
     /// Widget to display before the title (typically back button or menu icon)
-    pub leading: Option<Box<dyn >>,
+    pub leading: Option<Element>,
 
     /// Widgets to display after the title (typically icon buttons)
     #[builder(default = vec![])]
-    pub actions: Vec<Box<dyn >>,
+    pub actions: Vec<Element>,
 
     /// Background color of the app bar
     #[builder(default = Color::rgb(33, 150, 243))] // Material Blue 500
@@ -100,20 +101,6 @@ impl std::fmt::Debug for AppBar {
     }
 }
 
-impl Clone for AppBar {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            title: self.title.clone(),
-            leading: self.leading.clone(),
-            actions: self.actions.clone(),
-            background_color: self.background_color,
-            elevation: self.elevation,
-            height: self.height,
-        }
-    }
-}
-
 impl AppBar {
     /// Creates a new AppBar with the given title text.
     ///
@@ -129,7 +116,7 @@ impl AppBar {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             key: None,
-            title: Some(Box::new(crate::Text::new(title.into()))),
+            title: Some(crate::Text::new(title.into()).into_element()),
             leading: None,
             actions: vec![],
             background_color: Color::rgb(33, 150, 243),
@@ -167,8 +154,8 @@ where
     S::Title: IsUnset,
 {
     /// Sets the title widget (works in builder chain).
-    pub fn title(self, title: impl View + 'static) -> AppBarBuilder<SetTitle<S>> {
-        self.title_internal(Box::new(title))
+    pub fn title(self, title: impl IntoElement) -> AppBarBuilder<SetTitle<S>> {
+        self.title_internal(title.into_element())
     }
 }
 
@@ -182,50 +169,46 @@ impl<S: State> AppBarBuilder<S> {
 
 // Implement View trait
 impl View for AppBar {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        use crate::{Align, ColoredBox, Padding, PhysicalModel, Row, SizedBox};
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        // TODO: Add elevation support when PhysicalModel is available
+        use crate::{ColoredBox, Padding, Row, SizedBox};
         use flui_types::{Alignment, EdgeInsets};
 
         // Build the content row
-        let mut row_children: Vec<Box<dyn >> = Vec::new();
+        let mut row_children: Vec<Element> = Vec::new();
 
         // Add leading widget (with padding)
         if let Some(leading) = self.leading {
-            let padding_widget = Padding {
-                key: None,
-                padding: EdgeInsets::symmetric(8.0, 0.0),
-                child: Some(leading),
-            };
-            row_children.push(Box::new(padding_widget));
+            let padding_widget = crate::Padding::builder()
+                .padding(EdgeInsets::symmetric(8.0, 0.0))
+                .child(leading)
+                .build();
+            row_children.push(padding_widget.into_element());
         } else {
             // Add horizontal spacing if no leading widget
-            row_children.push(Box::new(SizedBox::builder().width(16.0).build()));
+            row_children.push(SizedBox::builder().width(16.0).build().into_element());
         }
 
         // Add title (aligned to start, takes up remaining space)
         if let Some(title) = self.title {
-            let align_widget = Align {
-                key: None,
-                alignment: Alignment::CENTER_LEFT,
-                width_factor: None,
-                height_factor: None,
-                child: Some(title),
-            };
-            row_children.push(Box::new(crate::Expanded::new(align_widget)));
+            let align_widget = crate::Align::builder()
+                .alignment(Alignment::CENTER_LEFT)
+                .child(title)
+                .build();
+            row_children.push(crate::Expanded::new(align_widget).into_element());
         }
 
         // Add actions (with padding between each)
         for action in self.actions {
-            let padding_widget = Padding {
-                key: None,
-                padding: EdgeInsets::symmetric(8.0, 0.0),
-                child: Some(action),
-            };
-            row_children.push(Box::new(padding_widget));
+            let padding_widget = crate::Padding::builder()
+                .padding(EdgeInsets::symmetric(8.0, 0.0))
+                .child(action)
+                .build();
+            row_children.push(padding_widget.into_element());
         }
 
         // Add trailing spacing
-        row_children.push(Box::new(SizedBox::builder().width(8.0).build()));
+        row_children.push(SizedBox::builder().width(8.0).build().into_element());
 
         // Create the row
         let row = Row::builder()
@@ -237,17 +220,11 @@ impl View for AppBar {
         let sized = SizedBox::builder().height(self.height).child(row).build();
 
         // Wrap in colored background
-        let colored = ColoredBox::builder()
+        ColoredBox::builder()
             .color(self.background_color)
             .child(sized)
-            .build();
-
-        // Always wrap in PhysicalModel (elevation=0 if no shadow needed)
-        PhysicalModel::builder()
-            .elevation(self.elevation)
-            .color(self.background_color)
-            .child(colored)
             .build()
+        // TODO: Add elevation with PhysicalModel when available
     }
 }
 

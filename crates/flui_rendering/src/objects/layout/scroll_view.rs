@@ -3,12 +3,10 @@
 //! This render object provides simple box-based scrolling for a single child.
 //! Used by SingleChildScrollView for straightforward scroll scenarios without slivers.
 
-// TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
-use flui_painting::Canvas;
-use flui_types::prelude::*;
+use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::layout::Axis;
 use flui_types::painting::Paint;
+use flui_types::prelude::*;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -150,12 +148,8 @@ impl RenderScrollView {
     /// Calculate scroll offset based on child and viewport sizes
     fn calculate_max_scroll_offset(&self) -> f32 {
         match self.axis {
-            Axis::Vertical => {
-                (self.child_size.height - self.viewport_size.height).max(0.0)
-            }
-            Axis::Horizontal => {
-                (self.child_size.width - self.viewport_size.width).max(0.0)
-            }
+            Axis::Vertical => (self.child_size.height - self.viewport_size.height).max(0.0),
+            Axis::Horizontal => (self.child_size.width - self.viewport_size.width).max(0.0),
         }
     }
 
@@ -163,97 +157,16 @@ impl RenderScrollView {
     fn paint_offset(&self) -> Offset {
         let offset = *self.scroll_offset.lock();
 
-        let offset = if self.reverse {
-            -offset
-        } else {
-            offset
-        };
+        let offset = if self.reverse { -offset } else { offset };
 
         match self.axis {
             Axis::Vertical => Offset::new(0.0, -offset),
             Axis::Horizontal => Offset::new(-offset, 0.0),
         }
     }
-}
 
-impl Default for RenderScrollView {
-    fn default() -> Self {
-        Self::new(Axis::Vertical, false)
-    }
-}
-
-impl LegacyRender for RenderScrollView {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let viewport_constraints = &ctx.constraints;
-
-        // Store viewport size
-        self.viewport_size = Size::new(
-            viewport_constraints.max_width,
-            viewport_constraints.max_height,
-        );
-
-        // Layout child with relaxed constraints
-        if let Some(child_id) = ctx.children.try_single() {
-            let child_constraints = self.child_constraints(viewport_constraints);
-            self.child_size = ctx.tree.layout_child(child_id, child_constraints);
-        } else {
-            self.child_size = Size::ZERO;
-        }
-
-        // Calculate and update max scroll offset
-        let max_offset = self.calculate_max_scroll_offset();
-        *self.max_scroll_offset.lock() = max_offset;
-
-        // Clamp current scroll offset to valid range
-        let current_offset = *self.scroll_offset.lock();
-        *self.scroll_offset.lock() = current_offset.max(0.0).min(max_offset);
-
-        // Return viewport size (not child size!)
-        self.viewport_size
-    }
-
-    fn paint(&self, ctx: &PaintContext) -> Canvas {
-        let mut canvas = Canvas::new();
-
-        // Paint child with scroll offset if present
-        if let Some(child_id) = ctx.children.try_single() {
-            // Apply clipping to viewport bounds
-            canvas.save();
-            canvas.clip_rect(Rect::from_min_size(Point::ZERO, self.viewport_size));
-
-            // Calculate paint offset
-            let paint_offset = ctx.offset + self.paint_offset();
-
-            // Paint child at scrolled position
-            let child_canvas = ctx.tree.paint_child(child_id, paint_offset);
-
-            // Composite child canvas onto our canvas
-            canvas.translate(paint_offset.dx, paint_offset.dy);
-            canvas.append_canvas(child_canvas);
-
-            canvas.restore();
-
-            // Paint scrollbar if enabled
-            if self.show_scrollbar && self.max_scroll_offset() > 0.0 {
-                self.paint_scrollbar(&mut canvas);
-            }
-        }
-
-        canvas
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn arity(&self) -> RuntimeArity {
-        RuntimeArity::Exact(1) // Single child
-    }
-}
-
-impl RenderScrollView {
-    /// Paint scrollbar indicator
-    fn paint_scrollbar(&self, canvas: &mut Canvas) {
+    /// Paint scrollbar indicator on canvas
+    fn paint_scrollbar_on_canvas(&self, canvas: &mut flui_painting::Canvas) {
         let max_offset = self.max_scroll_offset();
         if max_offset <= 0.0 {
             return;
@@ -292,7 +205,8 @@ impl RenderScrollView {
                     self.scrollbar_thickness,
                     handle_height,
                 );
-                canvas.draw_rect(handle_rect, &Paint::fill(Color::rgba(0, 0, 0, 128))); // ~0.5 alpha
+                canvas.draw_rect(handle_rect, &Paint::fill(Color::rgba(0, 0, 0, 128)));
+                // ~0.5 alpha
             }
             Axis::Horizontal => {
                 // Horizontal scrollbar on bottom edge
@@ -324,8 +238,65 @@ impl RenderScrollView {
                     handle_width,
                     self.scrollbar_thickness,
                 );
-                canvas.draw_rect(handle_rect, &Paint::fill(Color::rgba(0, 0, 0, 128))); // ~0.5 alpha
+                canvas.draw_rect(handle_rect, &Paint::fill(Color::rgba(0, 0, 0, 128)));
+                // ~0.5 alpha
             }
+        }
+    }
+}
+
+impl Default for RenderScrollView {
+    fn default() -> Self {
+        Self::new(Axis::Vertical, false)
+    }
+}
+
+impl RenderBox<Single> for RenderScrollView {
+    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+        let viewport_constraints = &ctx.constraints;
+
+        // Store viewport size
+        self.viewport_size = Size::new(
+            viewport_constraints.max_width,
+            viewport_constraints.max_height,
+        );
+
+        // Layout child with relaxed constraints
+        let child_id = ctx.children.single();
+        let child_constraints = self.child_constraints(viewport_constraints);
+        self.child_size = ctx.layout_child(child_id, child_constraints);
+
+        // Calculate and update max scroll offset
+        let max_offset = self.calculate_max_scroll_offset();
+        *self.max_scroll_offset.lock() = max_offset;
+
+        // Clamp current scroll offset to valid range
+        let current_offset = *self.scroll_offset.lock();
+        *self.scroll_offset.lock() = current_offset.max(0.0).min(max_offset);
+
+        // Return viewport size (not child size!)
+        self.viewport_size
+    }
+
+    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+        let child_id = ctx.children.single();
+
+        // Apply clipping to viewport bounds
+        ctx.canvas().save();
+        ctx.canvas()
+            .clip_rect(Rect::from_min_size(Point::ZERO, self.viewport_size));
+
+        // Calculate paint offset
+        let paint_offset = ctx.offset + self.paint_offset();
+
+        // Paint child at scrolled position
+        ctx.paint_child(child_id, paint_offset);
+
+        ctx.canvas().restore();
+
+        // Paint scrollbar if enabled
+        if self.show_scrollbar && self.max_scroll_offset() > 0.0 {
+            self.paint_scrollbar_on_canvas(ctx.canvas());
         }
     }
 }
@@ -462,11 +433,5 @@ mod tests {
 
         let offset = scroll_view.paint_offset();
         assert_eq!(offset, Offset::new(0.0, 100.0)); // Positive when reversed
-    }
-
-    #[test]
-    fn test_arity_is_single_child() {
-        let scroll_view = RenderScrollView::new(Axis::Vertical, false);
-        assert_eq!(scroll_view.arity(), RuntimeArity::Exact(1));
     }
 }

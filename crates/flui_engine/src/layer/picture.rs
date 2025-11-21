@@ -96,50 +96,69 @@ impl CanvasLayer {
 
 /// Hit testing implementation for CanvasLayer
 ///
-/// Checks if a point hits any drawing commands in the canvas by testing
-/// against the display list bounds. This is a basic implementation that
-/// checks the overall bounds - precise hit testing (e.g., path containment)
-/// can be added later.
+/// Checks if a point hits any registered hit regions in the display list.
+/// Hit regions are added by RenderPointerListener during paint phase.
 ///
 /// # Hit Testing Strategy
 ///
-/// 1. Get bounds from DisplayList (union of all command bounds)
-/// 2. Check if position is within bounds
-/// 3. If hit, add entry to HitTestResult (no handler by default)
+/// 1. Check hit regions in reverse order (last added = topmost)
+/// 2. For each hit, call the registered handler
+/// 3. Fall back to bounds check if no regions registered
 ///
-/// # Future Enhancements
-///
-/// - Region-based event handlers attached to specific drawing commands
-/// - Path-based hit detection for precise containment checks
-/// - Layer-specific event routing (e.g., button clicks, hover)
+/// This connects GestureDetector callbacks to actual pointer events.
 impl HitTestable for CanvasLayer {
     fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
         use flui_interaction::HitTestEntry;
         use flui_types::geometry::Point;
 
-        // Get bounds from DisplayList
-        let bounds = self.display_list().bounds();
-
-        // Convert Offset to Point for bounds check
         let point = Point::new(position.dx, position.dy);
+        let display_list = self.display_list();
+        let hit_regions = display_list.hit_regions();
 
-        // Check if position is within bounds
-        if bounds.contains(point) {
-            // Add entry to result (no handler - just marks the hit)
-            // In the future, this could include event handlers attached to specific regions
-            // Using 0 as temporary element_id (will be replaced with actual element ID system)
-            let entry = HitTestEntry::new(0, position, bounds);
-            result.add(entry);
+        // Check hit regions in reverse order (topmost first)
+        let mut any_hit = false;
+        for region in hit_regions.iter().rev() {
+            if region.contains(point) {
+                // Create handler that wraps the region's handler
+                let region_handler = region.handler.clone();
+                let handler: flui_interaction::hit_test::PointerEventHandler =
+                    std::sync::Arc::new(move |event| {
+                        region_handler(event);
+                        flui_interaction::EventPropagation::Stop
+                    });
 
-            tracing::trace!(
-                position = ?position,
-                bounds = ?bounds,
-                "CanvasLayer hit"
-            );
+                // Add entry with handler
+                let entry = HitTestEntry::with_handler(0, position, region.bounds, handler);
+                result.add(entry);
 
-            true
-        } else {
-            false
+                tracing::trace!(
+                    position = ?position,
+                    bounds = ?region.bounds,
+                    "HitRegion hit - handler registered"
+                );
+
+                any_hit = true;
+                // Don't break - add all overlapping regions for proper event bubbling
+            }
         }
+
+        // Fall back to overall bounds check if no regions
+        if !any_hit {
+            let bounds = display_list.bounds();
+            if bounds.contains(point) {
+                let entry = HitTestEntry::new(0, position, bounds);
+                result.add(entry);
+
+                tracing::trace!(
+                    position = ?position,
+                    bounds = ?bounds,
+                    "CanvasLayer bounds hit (no handler)"
+                );
+
+                any_hit = true;
+            }
+        }
+
+        any_hit
     }
 }

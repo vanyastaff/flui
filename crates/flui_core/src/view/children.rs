@@ -220,6 +220,12 @@ impl From<Children> for Vec<Element> {
     }
 }
 
+impl From<Vec<Element>> for Children {
+    fn from(elements: Vec<Element>) -> Self {
+        Children { inner: elements }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

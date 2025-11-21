@@ -15,6 +15,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
@@ -86,8 +88,8 @@ pub struct SafeArea {
     pub minimum: EdgeInsets,
 
     /// The child widget to inset
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 impl std::fmt::Debug for SafeArea {
@@ -99,29 +101,8 @@ impl std::fmt::Debug for SafeArea {
             .field("left", &self.left)
             .field("right", &self.right)
             .field("minimum", &self.minimum)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for SafeArea {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            top: self.top,
-            bottom: self.bottom,
-            left: self.left,
-            right: self.right,
-            minimum: self.minimum,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -135,12 +116,12 @@ impl SafeArea {
             left: true,
             right: true,
             minimum: EdgeInsets::ZERO,
-            child: None,
+            child: Child::none(),
         }
     }
 
     /// Creates a SafeArea that only avoids vertical system UI (top and bottom).
-    pub fn vertical(child: Box<dyn >) -> Self {
+    pub fn vertical(child: impl IntoElement) -> Self {
         Self {
             key: None,
             top: true,
@@ -148,12 +129,12 @@ impl SafeArea {
             left: false,
             right: false,
             minimum: EdgeInsets::ZERO,
-            child: Some(child),
+            child: Child::new(child),
         }
     }
 
     /// Creates a SafeArea that only avoids horizontal system UI (left and right).
-    pub fn horizontal(child: Box<dyn >) -> Self {
+    pub fn horizontal(child: impl IntoElement) -> Self {
         Self {
             key: None,
             top: false,
@@ -161,13 +142,13 @@ impl SafeArea {
             left: true,
             right: true,
             minimum: EdgeInsets::ZERO,
-            child: Some(child),
+            child: Child::new(child),
         }
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: Box<dyn >) {
-        self.child = Some(child);
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 
     /// Calculate the safe area insets.
@@ -180,7 +161,7 @@ impl SafeArea {
 
         let top_inset: f32 = if self.top { 44.0 } else { 0.0 }; // Status bar height
         let bottom_inset: f32 = if self.bottom { 34.0 } else { 0.0 }; // Home indicator
-        // Usually 0 unless curved display
+                                                                      // Usually 0 unless curved display
         let left_inset: f32 = 0.0;
         let right_inset: f32 = 0.0;
 
@@ -208,17 +189,25 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> SafeAreaBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> SafeAreaBuilder<SetChild<S>> {
+        self.child_internal(Child::new(child))
+    }
+}
+
+// Build wrapper
+impl<S: State> SafeAreaBuilder<S> {
+    /// Builds the SafeArea widget.
+    pub fn build(self) -> SafeArea {
+        self.build_internal()
     }
 }
 
 // Implement View trait
 impl View for SafeArea {
-    fn build(&self, ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, ctx: &BuildContext) -> impl IntoElement {
         let insets = self.calculate_insets(ctx);
 
-        (RenderPadding::new(insets), self.child)
+        RenderPadding::new(insets).child_opt(self.child)
     }
 }
 
@@ -229,10 +218,10 @@ macro_rules! safe_area {
         $crate::SafeArea::new()
     };
     (vertical: $child:expr) => {
-        $crate::SafeArea::vertical(Box::new($child))
+        $crate::SafeArea::vertical($child)
     };
     (horizontal: $child:expr) => {
-        $crate::SafeArea::horizontal(Box::new($child))
+        $crate::SafeArea::horizontal($child)
     };
 }
 
@@ -254,8 +243,7 @@ mod tests {
 
     #[test]
     fn test_safe_area_vertical() {
-        let child = Box::new(crate::SizedBox::new());
-        let widget = SafeArea::vertical(child);
+        let widget = SafeArea::vertical(crate::SizedBox::new());
         assert!(widget.top);
         assert!(widget.bottom);
         assert!(!widget.left);
@@ -265,8 +253,7 @@ mod tests {
 
     #[test]
     fn test_safe_area_horizontal() {
-        let child = Box::new(crate::SizedBox::new());
-        let widget = SafeArea::horizontal(child);
+        let widget = SafeArea::horizontal(crate::SizedBox::new());
         assert!(!widget.top);
         assert!(!widget.bottom);
         assert!(widget.left);
@@ -283,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_safe_area_builder() {
-        let widget = SafeArea::builder().build_safe_area();
+        let widget = SafeArea::builder().build();
         assert!(widget.top); // Default is true
     }
 
@@ -293,7 +280,7 @@ mod tests {
             .top(false)
             .bottom(true)
             .child(crate::SizedBox::new())
-            .build_safe_area();
+            .build();
         assert!(!widget.top);
         assert!(widget.bottom);
         assert!(widget.child.is_some());
@@ -302,7 +289,7 @@ mod tests {
     #[test]
     fn test_safe_area_set_child() {
         let mut widget = SafeArea::new();
-        widget.set_child(Box::new(crate::SizedBox::new()));
+        widget.set_child(crate::SizedBox::new());
         assert!(widget.child.is_some());
     }
 

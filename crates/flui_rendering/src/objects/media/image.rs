@@ -1,9 +1,7 @@
 //! RenderImage - Displays a raster image
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::traits::Render;
-use flui_core::render::Leaf;
-use flui_painting::{Canvas, Paint};
+use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
+use flui_painting::Paint;
 use flui_types::{painting::Image, Rect, Size};
 
 /// How an image should be inscribed into the allocated space

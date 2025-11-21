@@ -2,9 +2,11 @@
 //!
 //! This widget creates a RenderViewport and manages sliver layout.
 
+use flui_core::view::children::Children;
 use flui_core::view::{BuildContext, IntoElement, View};
-use flui_rendering::objects::{ClipBehavior, RenderViewport};
+use flui_rendering::RenderEmpty;
 use flui_types::layout::AxisDirection;
+use flui_types::painting::ClipBehavior;
 
 /// Viewport widget for displaying sliver children
 ///
@@ -38,7 +40,6 @@ use flui_types::layout::AxisDirection;
 ///         Box::new(SliverGrid::new()),
 ///     ])
 /// ```
-#[derive(Clone)]
 pub struct Viewport {
     /// Scroll axis direction
     pub axis_direction: AxisDirection,
@@ -53,7 +54,7 @@ pub struct Viewport {
     pub clip_behavior: ClipBehavior,
 
     /// Sliver children
-    pub slivers: Vec<Box<dyn >>,
+    pub slivers: Children,
 }
 
 impl std::fmt::Debug for Viewport {
@@ -76,7 +77,7 @@ impl Viewport {
             scroll_offset: 0.0,
             cache_extent: 250.0,
             clip_behavior: ClipBehavior::HardEdge,
-            slivers: Vec::new(),
+            slivers: Children::new(),
         }
     }
 
@@ -104,15 +105,21 @@ impl Viewport {
         self
     }
 
+    /// Set sliver children from a vector
+    pub fn slivers_vec(mut self, slivers: Vec<impl IntoElement>) -> Self {
+        self.slivers = slivers.into_iter().collect();
+        self
+    }
+
     /// Set sliver children
-    pub fn slivers(mut self, slivers: Vec<Box<dyn >>) -> Self {
+    pub fn slivers(mut self, slivers: Children) -> Self {
         self.slivers = slivers;
         self
     }
 
     /// Add a single sliver child
-    pub fn add_sliver(mut self, sliver: impl View + 'static) -> Self {
-        self.slivers.push(Box::new(sliver));
+    pub fn add_sliver(mut self, sliver: impl IntoElement) -> Self {
+        self.slivers.push(sliver);
         self
     }
 }
@@ -124,24 +131,11 @@ impl Default for Viewport {
 }
 
 impl View for Viewport {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        // Calculate viewport main axis extent from scroll offset
-        // In a real implementation, this would come from parent constraints
-        let viewport_main_axis_extent = 600.0; // Placeholder
-
-        // Create RenderViewport
-        let mut render_viewport = RenderViewport::new(
-            self.axis_direction,
-            viewport_main_axis_extent,
-            self.scroll_offset,
-        );
-
-        // Configure viewport
-        render_viewport.set_cache_extent(self.cache_extent);
-        render_viewport.set_clip_behavior(self.clip_behavior);
-
-        // Return render object with sliver children
-        (render_viewport, self.slivers)
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        // TODO: RenderViewport not yet implemented
+        // Placeholder using RenderEmpty until RenderViewport is available
+        use flui_core::render::RenderBoxExt;
+        RenderEmpty.leaf()
     }
 }
 

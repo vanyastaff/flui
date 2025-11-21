@@ -4,6 +4,8 @@
 //! Similar to Flutter's Baseline widget.
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderBaseline;
@@ -86,7 +88,7 @@ pub struct Baseline {
 
     /// The child widget to position.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for Baseline {
@@ -95,26 +97,8 @@ impl std::fmt::Debug for Baseline {
             .field("key", &self.key)
             .field("baseline", &self.baseline)
             .field("baseline_type", &self.baseline_type)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for Baseline {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            baseline: self.baseline,
-            baseline_type: self.baseline_type,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -131,7 +115,7 @@ impl Baseline {
             key: None,
             baseline: Some(baseline),
             baseline_type,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -163,7 +147,7 @@ impl Baseline {
 
     /// Sets the child widget.
     pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+        self.child = Some(child.into_element());
     }
 
     /// Validates Baseline configuration.
@@ -193,13 +177,10 @@ impl Default for Baseline {
 
 // Implement View for Baseline - New architecture
 impl View for Baseline {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let baseline = self.baseline.unwrap_or(0.0);
 
-        (
-            RenderBaseline::new(baseline, self.baseline_type),
-            self.child,
-        )
+        RenderBaseline::new(baseline, self.baseline_type).child_opt(self.child)
     }
 }
 
@@ -222,7 +203,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> BaselineBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -246,14 +227,16 @@ impl<S: State> BaselineBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 

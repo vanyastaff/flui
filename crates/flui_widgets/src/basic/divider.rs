@@ -175,46 +175,42 @@ impl<S: State> DividerBuilder<S> {
 
 // Implement View trait
 impl View for Divider {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate effective height (use height if specified, otherwise thickness)
         let effective_height = self.height.unwrap_or(self.thickness);
 
         // Build the child view
-        let child: Box<dyn > = if self.indent > 0.0 || self.end_indent > 0.0 {
+        if self.indent > 0.0 || self.end_indent > 0.0 {
             // If we have indents, we need to wrap in a Container with padding
-            Box::new(
-                Container::builder()
-                    .height(effective_height)
-                    .padding(flui_types::EdgeInsets {
-                        left: self.indent,
-                        right: self.end_indent,
-                        top: 0.0,
-                        bottom: 0.0,
-                    })
-                    .child(
-                        ColoredBox::builder()
-                            .color(self.color)
-                            .child(SizedBox::builder().height(self.thickness).build())
-                            .build(),
-                    )
-                    .build(),
-            )
+            Container::builder()
+                .height(effective_height)
+                .padding(flui_types::EdgeInsets {
+                    left: self.indent,
+                    right: self.end_indent,
+                    top: 0.0,
+                    bottom: 0.0,
+                })
+                .child(
+                    ColoredBox::builder()
+                        .color(self.color)
+                        .child(SizedBox::builder().height(self.thickness).build())
+                        .build(),
+                )
+                .build()
+                .into_element()
         } else {
             // Simple case: just a colored box with height
-            Box::new(
-                SizedBox::builder()
-                    .height(effective_height)
-                    .child(
-                        ColoredBox::builder()
-                            .color(self.color)
-                            .child(SizedBox::builder().height(self.thickness).build())
-                            .build(),
-                    )
-                    .build(),
-            )
-        };
-
-        child
+            SizedBox::builder()
+                .height(effective_height)
+                .child(
+                    ColoredBox::builder()
+                        .color(self.color)
+                        .child(SizedBox::builder().height(self.thickness).build())
+                        .build(),
+                )
+                .build()
+                .into_element()
+        }
     }
 }
 

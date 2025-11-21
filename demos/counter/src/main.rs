@@ -1,8 +1,8 @@
 use flui_app::run_app;
 use flui_core::prelude::*;
-use flui_widgets::*;
+use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment};
 use flui_types::{Color, EdgeInsets};
-use flui_types::layout::{MainAxisAlignment, CrossAxisAlignment};
+use flui_widgets::*;
 
 fn main() {
     run_app(CounterApp);
@@ -27,14 +27,13 @@ impl View for CounterApp {
                 Column::builder()
                     .main_axis_alignment(MainAxisAlignment::Center)
                     .cross_axis_alignment(CrossAxisAlignment::Center)
-                    .child(
+                    .children(vec![
                         Text::builder()
                             .data("FLUI Counter Demo")
                             .size(32.0)
                             .color(Color::rgb(50, 50, 50))
-                            .build(),
-                    )
-                    .child(
+                            .build()
+                            .into_element(),
                         Container::builder()
                             .padding(EdgeInsets::all(20.0))
                             .child(
@@ -44,19 +43,21 @@ impl View for CounterApp {
                                     .color(Color::rgb(0, 120, 200))
                                     .build(),
                             )
-                            .build(),
-                    )
-                    .child(Button::builder("Increment")
-                        .on_tap(move || {
-                            tracing::info!("🔵 BUTTON CLICKED! Updating count...");
-                            count.update_mut(|c| {
-                                *c += 1;
-                                tracing::info!("🔵 Count updated to: {}", *c);
-                            });
-                        })
-                        .build()
-                    )
-                    .build()
-            ).build()
+                            .build()
+                            .into_element(),
+                        Button::builder("Increment")
+                            .on_tap(move || {
+                                tracing::info!("🔵 BUTTON CLICKED! Updating count...");
+                                count.update_mut(|c| {
+                                    *c += 1;
+                                    tracing::info!("🔵 Count updated to: {}", *c);
+                                });
+                            })
+                            .build()
+                            .into_element(),
+                    ])
+                    .build(),
+            )
+            .build()
     }
 }

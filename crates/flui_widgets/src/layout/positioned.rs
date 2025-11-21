@@ -10,7 +10,7 @@
 //! Positioned {
 //!     left: Some(10.0),
 //!     top: Some(20.0),
-//!     child: Some(Box::new(widget)),
+//!     child: Some(widget.into_element()),
 //!     ..Default::default()
 //! }
 //! ```
@@ -33,6 +33,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::{IntoElement, View};
 
 use flui_core::BuildContext;
@@ -181,7 +183,7 @@ pub struct Positioned {
 
     /// The child widget.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 // Manual Debug implementation since  doesn't implement Debug
@@ -195,31 +197,8 @@ impl std::fmt::Debug for Positioned {
             .field("bottom", &self.bottom)
             .field("width", &self.width)
             .field("height", &self.height)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-// Manual Clone implementation since  doesn't implement Clone
-impl Clone for Positioned {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            left: self.left,
-            top: self.top,
-            right: self.right,
-            bottom: self.bottom,
-            width: self.width,
-            height: self.height,
-            child: self.child.clone(), // Widgets aren't cloned deeply
-        }
     }
 }
 
@@ -262,7 +241,7 @@ impl Positioned {
             bottom: Some(0.0),
             width: None,
             height: None,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -295,7 +274,7 @@ impl Positioned {
             bottom: None,
             width: Some(width),
             height: Some(height),
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -325,13 +304,13 @@ impl Positioned {
             bottom,
             width: None,
             height: None,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
     /// Sets the child widget.
     #[deprecated(note = "Use builder pattern with .child() instead")]
-    pub fn set_child(&mut self, child: Box<dyn >) {
+    pub fn set_child(&mut self, child: Element) {
         self.child = Some(child);
     }
 
@@ -411,10 +390,10 @@ impl Default for Positioned {
 
 // Implement View trait - Simplified API
 impl View for Positioned {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let metadata = self.create_metadata();
 
-        (RenderPositioned::new(metadata), self.child)
+        RenderPositioned::new(metadata).child_opt(self.child)
     }
 }
 
@@ -438,7 +417,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> PositionedBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 

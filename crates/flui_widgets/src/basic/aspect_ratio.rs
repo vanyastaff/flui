@@ -29,6 +29,8 @@
 //! ```
 
 use bon::Builder;
+use flui_core::render::RenderBoxExt;
+use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
 use flui_rendering::RenderAspectRatio;
@@ -102,8 +104,8 @@ pub struct AspectRatio {
     pub aspect_ratio: f32,
 
     /// The child widget.
-    #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    #[builder(default, setters(vis = "", name = child_internal))]
+    pub child: Child,
 }
 
 // Manual Debug implementation since  doesn't implement Debug
@@ -112,26 +114,8 @@ impl std::fmt::Debug for AspectRatio {
         f.debug_struct("AspectRatio")
             .field("key", &self.key)
             .field("aspect_ratio", &self.aspect_ratio)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-// Manual Clone implementation since  doesn't implement Clone
-impl Clone for AspectRatio {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            aspect_ratio: self.aspect_ratio,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -155,7 +139,7 @@ impl AspectRatio {
         Self {
             key: None,
             aspect_ratio,
-            child: None,
+            child: Child::none(),
         }
     }
 
@@ -193,8 +177,8 @@ impl AspectRatio {
     /// let mut widget = AspectRatio::new(16.0 / 9.0);
     /// widget.set_child(Image::network(url));
     /// ```
-    pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+    pub fn set_child(&mut self, child: impl IntoElement) {
+        self.child = Child::new(child);
     }
 
     /// Validates AspectRatio configuration.
@@ -227,8 +211,8 @@ impl Default for AspectRatio {
 
 // Implement View for AspectRatio - New architecture
 impl View for AspectRatio {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (RenderAspectRatio::new(self.aspect_ratio), self.child)
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderAspectRatio::new(self.aspect_ratio).child_opt(self.child)
     }
 }
 
@@ -250,8 +234,8 @@ where
     ///     .child(video_player)
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> AspectRatioBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+    pub fn child(self, child: impl IntoElement) -> AspectRatioBuilder<SetChild<S>> {
+        self.child_internal(Child::new(child))
     }
 }
 

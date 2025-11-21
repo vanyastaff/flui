@@ -4,6 +4,8 @@
 //! Similar to Flutter's FractionallySizedBox widget.
 
 use bon::Builder;
+use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
 use flui_core::view::{IntoElement, View};
@@ -82,7 +84,7 @@ pub struct FractionallySizedBox {
 
     /// The child widget to size.
     #[builder(setters(vis = "", name = child_internal))]
-    pub child: Option<Box<dyn >>,
+    pub child: Option<Element>,
 }
 
 impl std::fmt::Debug for FractionallySizedBox {
@@ -91,26 +93,8 @@ impl std::fmt::Debug for FractionallySizedBox {
             .field("key", &self.key)
             .field("width_factor", &self.width_factor)
             .field("height_factor", &self.height_factor)
-            .field(
-                "child",
-                &if self.child.is_some() {
-                    "<>"
-                } else {
-                    "None"
-                },
-            )
+            .field("child", &if self.child.is_some() { "<>" } else { "None" })
             .finish()
-    }
-}
-
-impl Clone for FractionallySizedBox {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone(),
-            width_factor: self.width_factor,
-            height_factor: self.height_factor,
-            child: self.child.clone(),
-        }
     }
 }
 
@@ -135,7 +119,7 @@ impl FractionallySizedBox {
             key: None,
             width_factor,
             height_factor,
-            child: Some(Box::new(child)),
+            child: Some(child.into_element()),
         }
     }
 
@@ -177,7 +161,7 @@ impl FractionallySizedBox {
 
     /// Sets the child widget.
     pub fn set_child(&mut self, child: impl View + 'static) {
-        self.child = Some(Box::new(child));
+        self.child = Some(child.into_element());
     }
 
     /// Validates FractionallySizedBox configuration.
@@ -208,11 +192,8 @@ impl FractionallySizedBox {
 
 // Implement View for FractionallySizedBox - Simplified API
 impl View for FractionallySizedBox {
-    fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-        (
-            RenderFractionallySizedBox::new(self.width_factor, self.height_factor),
-            self.child,
-        )
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        RenderFractionallySizedBox::new(self.width_factor, self.height_factor).child_opt(self.child)
     }
 }
 
@@ -235,7 +216,7 @@ where
     ///     .build()
     /// ```
     pub fn child(self, child: impl View + 'static) -> FractionallySizedBoxBuilder<SetChild<S>> {
-        self.child_internal(Box::new(child))
+        self.child_internal(child.into_element())
     }
 }
 
@@ -252,14 +233,16 @@ impl<S: State> FractionallySizedBoxBuilder<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_core::render::RenderBoxExt;
+    use flui_rendering::RenderEmpty;
 
     // Mock view for testing
     #[derive()]
     struct MockView;
 
     impl View for MockView {
-        fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
-            (RenderPadding::new(EdgeInsets::ZERO), ())
+        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+            RenderEmpty.leaf()
         }
     }
 

@@ -41,7 +41,7 @@ pub mod error;
 
 // Re-export Canvas API (primary interface)
 pub use canvas::Canvas;
-pub use display_list::{DisplayList, DrawCommand};
+pub use display_list::{DisplayList, DrawCommand, HitRegion, HitRegionHandler};
 
 // Re-export types from flui_types for convenience
 // These are the fundamental painting types that users need
