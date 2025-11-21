@@ -467,13 +467,34 @@ impl Canvas {
     /// * `style` - Text style (font, size, etc.)
     /// * `paint` - Paint style (color)
     pub fn draw_text(&mut self, text: &str, offset: Offset, style: &TextStyle, paint: &Paint) {
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            target: "canvas",
+            text = %text,
+            offset = ?offset,
+            font_size = ?style.font_size,
+            color = ?paint.color,
+            transform_depth = ?self.transform,
+            "Canvas::draw_text push"
+        );
         self.display_list.push(DrawCommand::DrawText {
             text: text.to_string(),
+
             offset,
+
             style: style.clone(),
+
             paint: paint.clone(),
+
             transform: self.transform,
         });
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            target: "canvas",
+            commands_len = self.display_list.len(),
+            "Canvas::draw_text complete"
+        );
     }
 
     /// Draws an image

@@ -273,6 +273,7 @@ where
 /// let (count, dispatch) = use_reducer(ctx, 0, reducer);
 /// dispatch.send(Action::Increment);
 /// ```
+#[allow(clippy::type_complexity)]
 pub fn use_reducer<S, A>(
     ctx: &BuildContext,
     initial: S,
