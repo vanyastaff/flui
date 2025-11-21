@@ -100,9 +100,17 @@ impl GpuRenderer {
             backends: wgpu::Backends::VULKAN, // Vulkan mandatory for Android
             #[cfg(all(feature = "ios", not(feature = "webgpu")))]
             backends: wgpu::Backends::METAL, // Metal mandatory for iOS
-            #[cfg(all(feature = "desktop", not(any(feature = "webgpu", feature = "android", feature = "ios"))))]
+            #[cfg(all(
+                feature = "desktop",
+                not(any(feature = "webgpu", feature = "android", feature = "ios"))
+            ))]
             backends: wgpu::Backends::all(), // Auto-detect on desktop
-            #[cfg(not(any(feature = "desktop", feature = "android", feature = "ios", feature = "webgpu")))]
+            #[cfg(not(any(
+                feature = "desktop",
+                feature = "android",
+                feature = "ios",
+                feature = "webgpu"
+            )))]
             backends: wgpu::Backends::all(), // Fallback
             ..Default::default()
         });
@@ -145,9 +153,17 @@ impl GpuRenderer {
             backends: wgpu::Backends::VULKAN, // Vulkan mandatory for Android
             #[cfg(all(feature = "ios", not(feature = "webgpu")))]
             backends: wgpu::Backends::METAL, // Metal mandatory for iOS
-            #[cfg(all(feature = "desktop", not(any(feature = "webgpu", feature = "android", feature = "ios"))))]
+            #[cfg(all(
+                feature = "desktop",
+                not(any(feature = "webgpu", feature = "android", feature = "ios"))
+            ))]
             backends: wgpu::Backends::all(), // Auto-detect on desktop
-            #[cfg(not(any(feature = "desktop", feature = "android", feature = "ios", feature = "webgpu")))]
+            #[cfg(not(any(
+                feature = "desktop",
+                feature = "android",
+                feature = "ios",
+                feature = "webgpu"
+            )))]
             backends: wgpu::Backends::all(), // Fallback
             ..Default::default()
         });
@@ -172,8 +188,8 @@ impl GpuRenderer {
             .await
             .expect("Failed to find suitable GPU adapter");
 
-        tracing::info!("GPU Adapter info: {:?}", adapter.get_info());
-        tracing::info!("GPU Backend: {:?}", adapter.get_info().backend);
+        tracing::debug!(adapter_info = ?adapter.get_info(), "GPU Adapter initialized");
+        tracing::debug!(backend = ?adapter.get_info().backend, "GPU Backend");
 
         // Request device and queue (async)
         let (device, queue) = adapter
@@ -227,10 +243,10 @@ impl GpuRenderer {
         );
 
         tracing::info!(
-            "GPU renderer initialized (async): {}x{}, format={:?}",
-            config.width,
-            config.height,
-            config.format
+            width = config.width,
+            height = config.height,
+            format = ?config.format,
+            "GPU renderer initialized"
         );
 
         Self {
@@ -310,10 +326,10 @@ impl GpuRenderer {
         );
 
         tracing::info!(
-            "GPU renderer initialized: {}x{}, format={:?}",
-            config.width,
-            config.height,
-            config.format
+            width = config.width,
+            height = config.height,
+            format = ?config.format,
+            "GPU renderer initialized"
         );
 
         Self {
@@ -344,7 +360,7 @@ impl GpuRenderer {
                 painter.resize(width, height);
             }
 
-            tracing::info!("GPU renderer resized to {}x{}", width, height);
+            tracing::debug!(width = width, height = height, "GPU renderer resized");
         }
     }
 
@@ -375,10 +391,9 @@ impl GpuRenderer {
     /// }
     /// ```
     pub fn render(&mut self, layer: &CanvasLayer) -> Result<(), RenderError> {
-        tracing::info!("GpuRenderer::render() START");
+        tracing::trace!("GpuRenderer::render() START");
 
         // Get current frame
-        tracing::info!("GpuRenderer: getting current texture");
         let frame = self.surface.get_current_texture().map_err(|e| match e {
             wgpu::SurfaceError::Lost => {
                 tracing::warn!("Surface lost, reconfiguring...");
@@ -403,12 +418,10 @@ impl GpuRenderer {
                 RenderError::PainterError("Unknown surface error".to_string())
             }
         })?;
-        tracing::info!("GpuRenderer: texture acquired");
 
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        tracing::info!("GpuRenderer: texture view created");
 
         // Create command encoder
         let mut encoder = self
@@ -416,10 +429,8 @@ impl GpuRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("FLUI Render Encoder"),
             });
-        tracing::info!("GpuRenderer: command encoder created");
 
         // Clear screen
-        tracing::info!("GpuRenderer: beginning clear pass");
         {
             let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Clear Pass"),
@@ -441,33 +452,25 @@ impl GpuRenderer {
                 occlusion_query_set: None,
             });
         }
-        tracing::info!("GpuRenderer: clear pass completed");
 
         // CRITICAL: Zero-allocation rendering via painter reuse!
         // Take ownership temporarily (field becomes None, zero allocation)
-        tracing::info!("GpuRenderer: taking painter");
         let painter = self
             .painter
             .take()
             .expect("Painter should always exist during render");
 
         // Create renderer wrapper (stack allocation, just one pointer field)
-        tracing::info!("GpuRenderer: creating renderer wrapper");
         let mut renderer_wrapper = WgpuRendererWrapper::new(painter);
 
-        tracing::info!("GpuRenderer: calling layer.render()");
         layer.render(&mut renderer_wrapper);
-        tracing::info!("GpuRenderer: layer.render() completed");
 
         // Extract painter and render accumulated commands to GPU
-        tracing::info!("GpuRenderer: extracting painter");
         let mut painter = renderer_wrapper.into_painter();
 
-        tracing::info!("GpuRenderer: calling painter.render()");
         painter
             .render(&view, &mut encoder)
             .map_err(|e| RenderError::PainterError(e.to_string()))?;
-        tracing::info!("GpuRenderer: painter.render() completed");
 
         // Put painter back (zero allocation, just moves Option)
         self.painter = Some(painter);

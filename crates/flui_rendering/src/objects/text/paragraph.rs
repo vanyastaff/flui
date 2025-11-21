@@ -181,11 +181,10 @@ impl RenderParagraph {
 impl RenderBox<Leaf> for RenderParagraph {
     fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
         let constraints = ctx.constraints;
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "RenderParagraph::layout: text='{}', constraints={:?}",
-            self.data.text,
-            constraints
+        tracing::trace!(
+            text = %self.data.text,
+            constraints = ?constraints,
+            "RenderParagraph::layout"
         );
 
         // Calculate text size
@@ -238,11 +237,10 @@ impl RenderBox<Leaf> for RenderParagraph {
         // Cache the size for painting
         self.size = size;
 
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "RenderParagraph::layout: text='{}' -> size={:?}",
-            self.data.text,
-            size
+        tracing::trace!(
+            text = %self.data.text,
+            size = ?size,
+            "RenderParagraph::layout complete"
         );
 
         size
@@ -293,9 +291,8 @@ impl RenderBox<Leaf> for RenderParagraph {
             .with_font_size(self.data.font_size as f64)
             .with_color(self.data.color);
 
-        // Instrumentation for debugging missing text (only in debug builds)
-        #[cfg(debug_assertions)]
-        tracing::debug!(
+        // Instrumentation for debugging missing text
+        tracing::trace!(
             target: "render_paragraph",
             text = %self.data.text,
             font_size = self.data.font_size,

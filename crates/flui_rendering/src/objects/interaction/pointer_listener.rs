@@ -4,9 +4,7 @@
 //! calling the appropriate callbacks when events occur.
 
 use flui_core::render::{
-    {BoxProtocol, LayoutContext, PaintContext},
-    RenderBox,
-    Single,
+    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::events::{PointerEvent, PointerEventHandler};
 use flui_types::Size;
@@ -190,12 +188,13 @@ impl RenderBox<Single> for RenderPointerListener {
 
         // Register hit region for pointer event handling
         // This connects the GestureDetector callbacks to the hit test system
-        let bounds = flui_types::Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
+        let bounds =
+            flui_types::Rect::from_xywh(offset.dx, offset.dy, self.size.width, self.size.height);
 
         // Create unified handler from our callbacks
         let callbacks = self.callbacks.clone();
-        let handler: flui_painting::HitRegionHandler = std::sync::Arc::new(move |event| {
-            match event {
+        let handler: flui_painting::HitRegionHandler =
+            std::sync::Arc::new(move |event| match event {
                 flui_types::events::PointerEvent::Down(_) => {
                     if let Some(callback) = &callbacks.on_pointer_down {
                         callback(event);
@@ -217,13 +216,13 @@ impl RenderBox<Single> for RenderPointerListener {
                     }
                 }
                 _ => {}
-            }
-        });
+            });
 
         // Add hit region to canvas
-        ctx.canvas().add_hit_region(flui_painting::HitRegion::new(bounds, handler));
+        ctx.canvas()
+            .add_hit_region(flui_painting::HitRegion::new(bounds, handler));
 
-        tracing::info!(
+        tracing::trace!(
             bounds = ?bounds,
             has_down = self.callbacks.on_pointer_down.is_some(),
             has_up = self.callbacks.on_pointer_up.is_some(),

@@ -58,12 +58,11 @@ impl RenderBox<Optional> for RenderConstrainedBox {
         // Enforce additional constraints by intersecting with incoming constraints
         let child_constraints = constraints.enforce(self.additional_constraints);
 
-        #[cfg(debug_assertions)]
-        tracing::debug!(
-            "RenderConstrainedBox::layout: incoming={:?}, additional={:?}, child_constraints={:?}",
-            constraints,
-            self.additional_constraints,
-            child_constraints
+        tracing::trace!(
+            incoming = ?constraints,
+            additional = ?self.additional_constraints,
+            child_constraints = ?child_constraints,
+            "RenderConstrainedBox::layout"
         );
 
         let size = if let Some(child_id) = ctx.children.get() {
@@ -74,8 +73,7 @@ impl RenderBox<Optional> for RenderConstrainedBox {
             Size::new(child_constraints.min_width, child_constraints.min_height)
         };
 
-        #[cfg(debug_assertions)]
-        tracing::debug!("RenderConstrainedBox::layout: result size={:?}", size);
+        tracing::trace!(size = ?size, "RenderConstrainedBox::layout complete");
 
         size
     }
