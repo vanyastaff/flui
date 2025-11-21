@@ -369,6 +369,48 @@ impl PipelineOwner {
         root_id
     }
 
+    /// Teardown the current root widget
+    ///
+    /// Removes the root element and clears all dirty sets. This is useful for:
+    /// - Hot reload (replace root with new implementation)
+    /// - Testing (clean state between tests)
+    /// - Graceful shutdown
+    ///
+    /// # Returns
+    ///
+    /// `true` if a root was removed, `false` if no root was attached
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Hot reload pattern
+    /// owner.teardown();
+    /// owner.attach(NewApp);
+    /// ```
+    pub fn teardown(&mut self) -> bool {
+        if let Some(root_id) = self.root_element_id() {
+            tracing::info!(root_id = ?root_id, "Tearing down root widget");
+
+            // Remove from tree
+            {
+                let mut tree = self.tree.write();
+                tree.remove(root_id);
+            }
+
+            // Clear root manager
+            self.root_mgr.clear_root();
+
+            // Drain rebuild queue to clear it
+            let _ = self.rebuild_queue.drain();
+
+            tracing::info!("Root widget torn down successfully");
+            true
+        } else {
+            tracing::warn!("teardown() called but no root attached");
+            false
+        }
+    }
+
     // =========================================================================
     // Build Scheduling (Delegation to FrameCoordinator)
     // =========================================================================
