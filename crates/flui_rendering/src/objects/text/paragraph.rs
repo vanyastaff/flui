@@ -5,7 +5,7 @@
 
 use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
 use flui_core::render::{Leaf, RenderBox};
-use flui_painting::{Canvas, Paint};
+use flui_painting::Paint;
 use flui_types::{
     styling::Color,
     typography::{TextAlign, TextDirection, TextOverflow, TextStyle},
@@ -253,7 +253,10 @@ impl RenderBox<Leaf> for RenderParagraph {
         let mut paint = Paint::default();
         paint.color = self.data.color;
 
-        // Calculate text position based on alignment
+        // Get the offset from context - this is where we should draw
+        let offset = ctx.offset;
+
+        // Calculate text position based on alignment (relative to our bounds)
         let x = match self.data.text_align {
             TextAlign::Left | TextAlign::Start => 0.0,
             TextAlign::Center => self.size.width / 2.0,
@@ -261,7 +264,8 @@ impl RenderBox<Leaf> for RenderParagraph {
             TextAlign::Justify => 0.0,
         };
 
-        let position = flui_types::Offset::new(x, 0.0);
+        // Add offset to position - this is critical for correct placement!
+        let position = flui_types::Offset::new(offset.dx + x, offset.dy);
 
         // Create TextStyle
         let text_style = TextStyle::default()

@@ -55,6 +55,7 @@
 
 use bon::Builder;
 use flui_core::element::Element;
+use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
 use flui_core::view::{IntoElement, View};
 use flui_core::BuildContext;
@@ -432,11 +433,9 @@ impl View for Container {
 
         // Apply width/height constraints
         if self.width.is_some() || self.height.is_some() {
-            current = crate::SizedBox::builder()
-                .width(self.width.unwrap_or(0.0))
-                .height(self.height.unwrap_or(0.0))
-                .child(current)
-                .build()
+            // Use RenderSizedBox directly with Option values to preserve None semantics
+            current = flui_rendering::RenderSizedBox::new(self.width, self.height)
+                .maybe_child(Some(current))
                 .into_element();
         }
 
