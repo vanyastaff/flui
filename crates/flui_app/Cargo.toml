@@ -94,20 +94,3 @@ console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 flui_widgets = { path = "../flui_widgets" }
-
-# Example definition
-[[example]]
-name = "counter_demo"
-path = "examples/counter_demo.rs"
-
-[[example]]
-name = "counter_demo_simple"
-path = "examples/counter_demo_simple.rs"
-
-[[example]]
-name = "android_empty"
-path = "examples/android_empty.rs"
-
-[[example]]
-name = "counter_demo_working"
-path = "examples/counter_demo_working.rs"

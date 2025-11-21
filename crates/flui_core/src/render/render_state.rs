@@ -81,10 +81,12 @@ pub struct RenderState<P: Protocol> {
 }
 
 impl<P: Protocol> RenderState<P> {
-    /// Create new RenderState with empty flags
+    /// Create new RenderState with NEEDS_LAYOUT and NEEDS_PAINT flags
+    ///
+    /// New render objects always need initial layout and paint.
     pub fn new() -> Self {
         Self {
-            flags: AtomicRenderFlags::empty(),
+            flags: AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT),
             geometry: RwLock::new(None),
             constraints: RwLock::new(None),
             offset: RwLock::new(Offset::ZERO),
@@ -305,8 +307,9 @@ mod tests {
     #[test]
     fn test_render_state_creation() {
         let state = BoxRenderState::new();
-        assert!(!state.needs_layout());
-        assert!(!state.needs_paint());
+        // New render states need layout and paint by default
+        assert!(state.needs_layout());
+        assert!(state.needs_paint());
         assert!(!state.has_geometry());
     }
 
@@ -347,12 +350,14 @@ mod tests {
     fn test_reset() {
         let state = BoxRenderState::new();
 
-        state.mark_needs_layout();
+        // New state already has needs_layout, set geometry
         state.set_geometry(Size::new(50.0, 50.0));
 
         state.reset();
 
+        // After reset, all flags should be cleared
         assert!(!state.needs_layout());
+        assert!(!state.needs_paint());
         assert!(!state.has_geometry());
         assert_eq!(state.geometry(), None);
     }
