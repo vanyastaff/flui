@@ -119,24 +119,24 @@ pub mod prelude {
     // RENDERING (for custom render objects)
     // ============================================================
     pub use flui_rendering::{
-        // Core render traits from flui_core (re-exported by flui_rendering)
-        Render,
         Arity,
+        DecorationPosition,
         LayoutContext,
         PaintContext,
 
-        // Common render objects
-        RenderPadding,
-        RenderConstrainedBox,
-        RenderTransform,
-        RenderOpacity,
-        RenderClipRRect,
         RenderAlign,
-        RenderFlex,
-
+        // Core render traits from flui_core (re-exported by flui_rendering)
+        RenderBox,
+        RenderClipRRect,
+        RenderConstrainedBox,
         // Decoration
         RenderDecoratedBox,
-        DecorationPosition,
+        RenderFlex,
+
+        RenderOpacity,
+        // Common render objects
+        RenderPadding,
+        RenderTransform,
     };
 
     // ============================================================
@@ -147,33 +147,28 @@ pub mod prelude {
         Animation,
         AnimationController,
 
+        CurvedAnimation,
         // Tween animation
         TweenAnimation,
-        CurvedAnimation,
     };
 
     // Re-export animation types from flui_types
-    pub use flui_types::animation::{
-        Curve,
-        Curves,
-        Tween,
-        ColorTween,
-    };
+    pub use flui_types::animation::{ColorTween, Curve, Curves, Tween};
 
     // ============================================================
     // INTERACTION (event routing, gestures, focus)
     // ============================================================
     pub use flui_interaction::{
+        DragGestureRecognizer,
         // Event routing and hit testing
         EventRouter,
-        HitTestable,
         FocusManager,
 
-        // Gesture recognizers
-        TapGestureRecognizer,
-        DragGestureRecognizer,
+        HitTestable,
         LongPressGestureRecognizer,
         ScaleGestureRecognizer,
+        // Gesture recognizers
+        TapGestureRecognizer,
     };
 
     // GestureDetector widget is in flui_widgets
@@ -181,21 +176,13 @@ pub mod prelude {
 
     // Re-export gesture types from flui_types
     pub use flui_types::gestures::{
-        TapDownDetails,
-        TapUpDetails,
-        DragStartDetails,
-        DragUpdateDetails,
-        DragEndDetails,
+        DragEndDetails, DragStartDetails, DragUpdateDetails, TapDownDetails, TapUpDetails,
     };
 
     // ============================================================
     // ENGINE (Scene, Layer - for advanced rendering)
     // ============================================================
-    pub use flui_engine::{
-        Scene,
-        CanvasLayer,
-        GpuRenderer,
-    };
+    pub use flui_engine::{CanvasLayer, GpuRenderer, Scene};
 }
 
 /// Version information
