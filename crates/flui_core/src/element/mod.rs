@@ -36,10 +36,10 @@
 
 // Modules
 pub mod dependency;
-#[allow(clippy::module_inception)] // element/element.rs is intentional for main Element enum
+#[allow(clippy::module_inception)] // element/element.rs is intentional for main Element struct
 pub mod element;
 pub mod element_base;
-pub mod element_new;
+pub mod element_legacy;
 pub mod element_tree;
 pub mod hit_test;
 pub mod hit_test_entry;
@@ -55,7 +55,10 @@ pub use crate::view::ViewElement;
 // Keep ComponentElement as alias for backwards compatibility
 pub use crate::view::ViewElement as ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
-pub use element::Element;
+// Legacy Element enum - currently in use, will be replaced by new struct
+pub use element_legacy::Element;
+// New Element struct - future replacement
+pub use element::Element as ElementNew;
 // ElementBase is internal - used by framework only
 pub(crate) use element_base::ElementBase;
 pub use element_tree::ElementTree; // Moved from pipeline to break circular dependency
