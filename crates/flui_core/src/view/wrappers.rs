@@ -88,7 +88,7 @@ where
 impl<V, S> ViewObject for StatefulViewWrapper<V, S>
 where
     V: StatefulView<S>,
-    S: ViewState,
+    S: ViewState + Default,
 {
     fn build(&mut self, ctx: &BuildContext) -> Element {
         let state = self.state.as_mut().expect("State not initialized");
@@ -96,7 +96,8 @@ where
     }
 
     fn init(&mut self, ctx: &BuildContext) {
-        self.state = Some(self.view.create_state());
+        // For now, require Default. Later we can add create_state to trait
+        self.state = Some(Default::default());
         if let Some(state) = &mut self.state {
             self.view.init_state(state, ctx);
         }
@@ -110,10 +111,10 @@ where
 
     fn did_update(&mut self, new_view: &dyn Any, ctx: &BuildContext) {
         if let Some(new) = new_view.downcast_ref::<V>() {
-            if let Some(state) = &mut self.state {
-                self.view.did_update_view(&new.clone(), state, ctx);
-            }
             self.view = new.clone();
+            if let Some(state) = &mut self.state {
+                self.view.did_update(state, ctx);
+            }
         }
     }
 
@@ -159,10 +160,10 @@ where
 impl<V, L> AnimatedViewWrapper<V, L>
 where
     V: AnimatedView<L>,
-    L: Listenable,
+    L: Listenable + Clone,
 {
     pub fn new(view: V) -> Self {
-        let listenable = view.listenable();
+        let listenable = view.listenable().clone();
         Self {
             view,
             listenable,
@@ -174,10 +175,10 @@ where
 impl<V, L> ViewObject for AnimatedViewWrapper<V, L>
 where
     V: AnimatedView<L>,
-    L: Listenable + Send + 'static,
+    L: Listenable + Clone + Send + 'static,
 {
     fn build(&mut self, ctx: &BuildContext) -> Element {
-        self.view.build(&self.listenable, ctx).into_element()
+        self.view.build(ctx).into_element()
     }
 
     fn init(&mut self, _ctx: &BuildContext) {
@@ -189,7 +190,7 @@ where
     fn did_update(&mut self, new_view: &dyn Any, _ctx: &BuildContext) {
         if let Some(new) = new_view.downcast_ref::<V>() {
             self.view = new.clone();
-            self.listenable = new.listenable();
+            self.listenable = new.listenable().clone();
             // TODO: resubscribe
         }
     }
@@ -229,10 +230,10 @@ where
 impl<V, T> ProviderViewWrapper<V, T>
 where
     V: ProviderView<T>,
-    T: Send + 'static,
+    T: Clone + Send + 'static,
 {
     pub fn new(view: V) -> Self {
-        let value = Arc::new(view.provide());
+        let value = Arc::new(view.value().clone());
         Self { view, value }
     }
 }
@@ -240,24 +241,23 @@ where
 impl<V, T> ViewObject for ProviderViewWrapper<V, T>
 where
     V: ProviderView<T>,
-    T: Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     fn build(&mut self, ctx: &BuildContext) -> Element {
-        self.view.build(&self.value, ctx).into_element()
+        self.view.build(ctx).into_element()
     }
 
-    fn init(&mut self, ctx: &BuildContext) {
-        ctx.register_provider(&*self.value);
+    fn init(&mut self, _ctx: &BuildContext) {
+        // TODO: register provider in context
     }
 
     fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
 
-    fn did_update(&mut self, new_view: &dyn Any, ctx: &BuildContext) {
+    fn did_update(&mut self, new_view: &dyn Any, _ctx: &BuildContext) {
         if let Some(new) = new_view.downcast_ref::<V>() {
-            let new_value = Arc::new(new.provide());
+            let new_value = Arc::new(new.value().clone());
             if !Arc::ptr_eq(&self.value, &new_value) {
-                ctx.unregister_provider::<T>();
-                ctx.register_provider(&*new_value);
+                // TODO: notify dependents
                 self.value = new_value;
             }
             self.view = new.clone();
@@ -266,8 +266,8 @@ where
 
     fn deactivate(&mut self, _ctx: &BuildContext) {}
 
-    fn dispose(&mut self, ctx: &BuildContext) {
-        ctx.unregister_provider::<T>();
+    fn dispose(&mut self, _ctx: &BuildContext) {
+        // TODO: unregister provider
     }
 
     fn mode(&self) -> ViewMode {
@@ -299,7 +299,10 @@ impl<V: ProxyView> ProxyViewWrapper<V> {
 
 impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
     fn build(&mut self, ctx: &BuildContext) -> Element {
-        self.view.build(ctx).into_element()
+        self.view.before_child_build(ctx);
+        let child = self.view.build_child(ctx).into_element();
+        self.view.after_child_build(ctx);
+        child
     }
 
     fn init(&mut self, _ctx: &BuildContext) {}
@@ -361,6 +364,7 @@ where
 impl<V, P, A> ViewObject for RenderViewWrapper<V, P, A>
 where
     V: RenderView<P, A>,
+    V::RenderObject: RenderObject,
     P: Protocol,
     A: Arity,
 {
@@ -372,7 +376,7 @@ where
 
     fn init(&mut self, _ctx: &BuildContext) {
         // Create render object on mount
-        self.render_object = Some(self.view.create_render_object());
+        self.render_object = Some(self.view.create());
     }
 
     fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
@@ -382,7 +386,7 @@ where
             self.view = new_config.clone();
 
             if let Some(render) = &mut self.render_object {
-                let result = self.view.update_render_object(render);
+                let result = self.view.update(render);
 
                 match result {
                     UpdateResult::Unchanged => {
@@ -410,7 +414,7 @@ where
 
     fn dispose(&mut self, _ctx: &BuildContext) {
         if let Some(render) = &mut self.render_object {
-            self.view.did_unmount(render);
+            self.view.dispose(render);
         }
         self.render_object = None;
     }

@@ -117,7 +117,7 @@ pub trait AnimatedView<L: Listenable>: Clone + Send + 'static {
 impl<V, L> View<Animated<L>> for V
 where
     V: AnimatedView<L>,
-    L: Listenable,
+    L: Listenable + 'static,
 {
     fn _build(&mut self, ctx: &BuildContext) -> crate::element::Element {
         self.build(ctx).into_element()

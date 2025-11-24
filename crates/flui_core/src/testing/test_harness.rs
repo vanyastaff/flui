@@ -6,8 +6,7 @@ use crate::{
     element::{ElementId, ElementTree},
     foundation::Key,
     pipeline::{PipelineBuilder, PipelineOwner},
-    view::{BuildContext, IntoElement},
-    View,
+    view::{BuildContext, IntoElement, StatelessView},
 };
 use flui_types::{BoxConstraints, Size};
 use parking_lot::RwLock;
@@ -56,14 +55,14 @@ impl TestHarness {
         }
     }
 
-    /// Mount a view as the root of the test tree
+    /// Mount a stateless view as the root of the test tree
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// harness.mount(MyView::new());
+    /// harness.mount_stateless(MyView::new());
     /// ```
-    pub fn mount<V: View>(&mut self, view: V) -> ElementId {
+    pub fn mount_stateless<V: StatelessView>(&mut self, view: V) -> ElementId {
         let tree = self.tree.clone();
         let element_id = {
             let mut tree_guard = tree.write();

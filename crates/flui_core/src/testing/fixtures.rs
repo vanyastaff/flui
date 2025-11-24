@@ -5,8 +5,7 @@
 use crate::{
     element::{ElementId, ElementTree},
     pipeline::PipelineOwner,
-    view::BuildContext,
-    View,
+    view::{BuildContext, StatelessView},
 };
 use flui_types::{BoxConstraints, Size};
 use parking_lot::RwLock;
@@ -131,9 +130,9 @@ impl Default for TestHarnessBuilder {
 /// ```rust,ignore
 /// let (harness, root_id) = quick_test(MyView::new());
 /// ```
-pub fn quick_test<V: View>(view: V) -> (TestHarness, ElementId) {
+pub fn quick_test<V: StatelessView>(view: V) -> (TestHarness, ElementId) {
     let mut harness = TestHarness::new();
-    let root_id = harness.mount(view);
+    let root_id = harness.mount_stateless(view);
     (harness, root_id)
 }
 
@@ -145,9 +144,9 @@ pub fn quick_test<V: View>(view: V) -> (TestHarness, ElementId) {
 /// let (harness, root_id) = quick_test_pump(MyView::new());
 /// // Pipeline has been pumped, ready to assert
 /// ```
-pub fn quick_test_pump<V: View>(view: V) -> (TestHarness, ElementId) {
+pub fn quick_test_pump<V: StatelessView>(view: V) -> (TestHarness, ElementId) {
     let mut harness = TestHarness::new();
-    let root_id = harness.mount(view);
+    let root_id = harness.mount_stateless(view);
     harness.pump();
     (harness, root_id)
 }

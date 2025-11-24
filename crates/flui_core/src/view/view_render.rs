@@ -207,7 +207,7 @@ pub struct RenderViewWithOptionalChild<V, C> {
 }
 
 /// Wrapper for render view with multiple children.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RenderViewWithChildren<V> {
     pub view: V,
     pub children: Vec<Element>,

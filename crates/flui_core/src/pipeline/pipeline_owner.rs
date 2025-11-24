@@ -312,10 +312,10 @@ impl PipelineOwner {
     /// ```
     pub fn attach<V>(&mut self, widget: V) -> Result<ElementId, PipelineError>
     where
-        V: crate::view::View + Clone + Send + Sync + 'static,
+        V: crate::view::StatelessView + Sync,
     {
         use crate::element::{ComponentElement, Element};
-        use crate::view::IntoElement;
+        use crate::view::{build_context::current_build_context, IntoElement};
 
         tracing::debug!("Attaching root view to pipeline");
 
@@ -334,8 +334,9 @@ impl PipelineOwner {
             tracing::trace!("ComponentElement builder invoked");
             // Clone the view for each rebuild
             let view = view_clone.clone();
-            // Convert view to element using the current BuildContext
-            view.into_element()
+            // Get BuildContext and build view
+            let ctx = current_build_context();
+            view.build(ctx).into_element()
         });
 
         // Create ComponentElement with the builder
