@@ -148,7 +148,7 @@ use winit::event_loop::EventLoop;
 #[cfg(not(target_os = "android"))]
 pub fn run_app<V>(app: V) -> !
 where
-    V: flui_core::view::StatelessView + Sync,
+    V: flui_core::view::StatelessView + Clone + Sync,
 {
     use crate::embedder::DesktopEmbedder;
     use winit::application::ApplicationHandler;

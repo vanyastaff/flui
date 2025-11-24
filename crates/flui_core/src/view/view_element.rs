@@ -23,7 +23,7 @@ pub type BuildFn = Box<dyn Fn() -> Element + Send + Sync>;
 /// ViewElement {
 ///     base: ElementBase,         // 16 bytes
 ///     builder: BuildFn,          // 16 bytes
-///     state: Box<dyn Any>,       // 16 bytes (HookContext)
+///     state: Box<dyn Any + Send>, // 16 bytes (HookContext)
 ///     child: Option<ElementId>,  // 8 bytes (niche-optimized)
 /// }
 /// // Total: 56 bytes
@@ -33,7 +33,7 @@ pub type BuildFn = Box<dyn Fn() -> Element + Send + Sync>;
 pub struct ViewElement {
     base: ElementBase,
     builder: BuildFn,
-    state: Box<dyn Any>,
+    state: Box<dyn Any + Send>,
     child: Option<ElementId>,
 }
 
@@ -76,7 +76,7 @@ impl ViewElement {
 
     /// Replaces the state.
     #[inline]
-    pub fn set_state(&mut self, state: Box<dyn Any>) {
+    pub fn set_state(&mut self, state: Box<dyn Any + Send>) {
         self.state = state;
     }
 

@@ -173,7 +173,7 @@ impl AppBinding {
     /// ```
     pub fn attach_root_widget<V>(&self, widget: V)
     where
-        V: flui_core::view::StatelessView + Sync,
+        V: flui_core::view::StatelessView + Clone + Sync,
     {
         let mut pipeline = self.pipeline_owner.write();
         pipeline

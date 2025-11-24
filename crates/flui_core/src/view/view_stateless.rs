@@ -43,7 +43,7 @@ use crate::view::{BuildContext, Stateless, View};
 /// - Need to store state → Use `StatefulView`
 /// - Need subscriptions → Use `AnimatedView`
 /// - Need lifecycle → Use `StatefulView` or `ProxyView`
-pub trait StatelessView: Clone + Send + 'static {
+pub trait StatelessView: Send + 'static {
     /// Build UI from this view.
     ///
     /// View is consumed (moved) during build. Cannot be called again.

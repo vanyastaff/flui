@@ -312,7 +312,7 @@ impl PipelineOwner {
     /// ```
     pub fn attach<V>(&mut self, widget: V) -> Result<ElementId, PipelineError>
     where
-        V: crate::view::StatelessView + Sync,
+        V: crate::view::StatelessView + Clone + Sync,
     {
         use crate::element::{ComponentElement, Element};
         use crate::view::{build_context::current_build_context, IntoElement};

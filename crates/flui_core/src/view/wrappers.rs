@@ -39,10 +39,9 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
 
     fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
 
-    fn did_update(&mut self, new_view: &dyn Any, _ctx: &BuildContext) {
-        if let Some(new) = new_view.downcast_ref::<V>() {
-            self.view = Some(new.clone());
-        }
+    fn did_update(&mut self, _new_view: &dyn Any, _ctx: &BuildContext) {
+        // StatelessView is consumed on build and cannot be updated.
+        // A new wrapper will be created with the new view.
     }
 
     fn deactivate(&mut self, _ctx: &BuildContext) {}
