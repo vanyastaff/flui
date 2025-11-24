@@ -44,9 +44,6 @@ pub(crate) mod sealed_into_element {
 
     // Implement Sealed for all types that have IntoElement implementations
 
-    // All Views can be converted to elements
-    impl<V: crate::view::View> Sealed for V {}
-
     // Optional elements
     impl<T: Sealed> Sealed for Option<T> {}
 
@@ -208,40 +205,25 @@ pub trait IntoElement: sealed_into_element::Sealed + Sized + 'static {
 // Automatic implementations
 // ============================================================================
 
-/// Blanket implementation for all Views.
-///
-/// Enables any View to be used as `impl IntoElement`. Uses thread-local
-/// BuildContext to call View::build() and convert the result.
-impl<V: crate::view::View> IntoElement for V {
-    fn into_element(self) -> Element {
-        use crate::view::build_context::current_build_context;
-
-        // Get BuildContext from thread-local
-        let ctx = current_build_context();
-
-        // Call view's build() method
-        let element_like = self.build(ctx);
-
-        // Convert result to Element
-        element_like.into_element()
-    }
-}
+// Note: Views are NOT converted via IntoElement directly.
+// Instead, they use ViewObject wrappers (StatelessViewWrapper, etc.)
+// which handle lifecycle and type erasure.
 
 /// Identity implementation for Element itself.
-///
-/// Enables Element to be returned directly from build():
-///
-/// ```rust,ignore
-/// fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-///     // Can return Element directly
-///     some_view.into_element()
-/// }
-/// ```
-impl IntoElement for Element {
-    fn into_element(self) -> Element {
-        self
-    }
-}
+        ///
+        /// Enables Element to be returned directly from build():
+        ///
+        /// ```rust,ignore
+        /// fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        ///     // Can return Element directly
+        ///     some_view.into_element()
+        /// }
+        /// ```
+        impl IntoElement for Element {
+            fn into_element(self) -> Element {
+                self
+            }
+        }
 
 /// Implementation for optional elements.
 ///

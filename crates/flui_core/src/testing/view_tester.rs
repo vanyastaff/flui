@@ -2,7 +2,10 @@
 //!
 //! Provides utilities for testing individual views in isolation.
 
-use crate::{element::ElementId, view::BuildContext, View};
+use crate::{
+    element::ElementId,
+    view::{BuildContext, IntoElement, StatelessView},
+};
 
 use super::test_harness::TestHarness;
 
@@ -46,8 +49,8 @@ impl ViewTester {
     /// let tester = ViewTester::new()
     ///     .with_view(MyView { text: "Hello".to_string() });
     /// ```
-    pub fn with_view<V: View>(mut self, view: V) -> ViewTestResult {
-        let root_id = self.harness.mount(view);
+    pub fn with_view<V: StatelessView>(mut self, view: V) -> ViewTestResult {
+        let root_id = self.harness.mount_stateless(view);
         self.harness.pump_build();
 
         ViewTestResult {
@@ -150,17 +153,17 @@ impl TestView {
     }
 }
 
-impl View for TestView {
-    fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
+impl StatelessView for TestView {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Return None for minimal testing (terminates tree)
-        Option::<TestView>::None
+        Option::<crate::element::Element>::None
     }
 }
 
-impl View for TestWidget {
-    fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
+impl StatelessView for TestWidget {
+    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Return None to terminate tree
-        Option::<TestWidget>::None
+        Option::<crate::element::Element>::None
     }
 }
 

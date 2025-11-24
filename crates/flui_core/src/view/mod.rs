@@ -9,26 +9,27 @@
 //! View (immutable) → Element (mutable) → RenderObject (layout/paint)
 //! ```
 //!
-//! # Components
+//! # View Types
 //!
-//! - [`View`] - Core trait for UI components
-//! - [`BuildContext`] - Context for hooks and tree queries
-//! - [`IntoElement`] - Conversion trait for element tree insertion
-//! - [`Child`] / [`Children`] - Ergonomic child wrappers
-//! - [`ViewElement`] - Element managing view lifecycle
+//! - [`StatelessView`] - Simple views without state
+//! - [`StatefulView<S>`] - Views with persistent state
+//! - [`AnimatedView<L>`] - Views driven by animations
+//! - [`ProviderView<T>`] - Views that provide data to descendants
+//! - [`ProxyView`] - Views that wrap single child
+//! - [`RenderView<P, A>`] - Views that create render objects
 //!
 //! # Examples
 //!
 //! ## Simple widget
 //!
 //! ```rust,ignore
-//! #[derive(Debug)]
+//! #[derive(Clone)]
 //! struct Greeting {
 //!     name: String,
 //! }
 //!
-//! impl View for Greeting {
-//!     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
+//! impl StatelessView for Greeting {
+//!     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
 //!         Text::new(format!("Hello, {}!", self.name))
 //!     }
 //! }
@@ -37,31 +38,79 @@
 //! ## Stateful widget
 //!
 //! ```rust,ignore
-//! #[derive(Debug)]
-//! struct Counter;
+//! #[derive(Clone)]
+//! struct Counter {
+//!     initial: i32,
+//! }
 //!
-//! impl View for Counter {
-//!     fn build(&self, ctx: &BuildContext) -> impl IntoElement {
-//!         let count = use_signal(ctx, 0);
+//! struct CounterState {
+//!     count: i32,
+//! }
 //!
+//! impl StatefulView<CounterState> for Counter {
+//!     fn create_state(&self) -> CounterState {
+//!         CounterState { count: self.initial }
+//!     }
+//!
+//!     fn build(&mut self, state: &mut CounterState, ctx: &BuildContext) -> impl IntoElement {
 //!         Column::new()
-//!             .child(Text::new(format!("Count: {}", count.get())))
-//!             .child(Button::new("+").on_click(move || count.update(|n| n + 1)))
+//!             .child(Text::new(format!("Count: {}", state.count)))
+//!             .child(Button::new("+").on_click(move || {
+//!                 state.count += 1;
+//!                 ctx.mark_dirty();
+//!             }))
 //!     }
 //! }
 //! ```
 
+// Core modules
 pub mod build_context;
 pub mod children;
+pub mod protocol;
+pub mod update_result;
 #[allow(clippy::module_inception)]
 pub mod view;
 pub mod view_element;
+pub mod view_object;
+pub mod view_state;
 
+// View type modules
+pub mod view_animated;
+pub mod view_provider;
+pub mod view_proxy;
+pub mod view_render;
+pub mod view_stateful;
+pub mod view_stateless;
+
+// Wrappers for ViewObject
+pub mod wrappers;
+
+// Re-exports
 pub use build_context::{
     current_build_context, with_build_context, BuildContext, BuildContextGuard,
 };
 pub use children::{Child, Children};
+pub use protocol::{
+    Animated, Provider, Proxy, RenderBox, RenderSliver, Stateful, Stateless, ViewMode, ViewProtocol,
+};
+pub use update_result::UpdateResult;
 pub use view::View;
 pub use view_element::{BuildFn, ViewElement};
+pub use view_object::ViewObject;
+pub use view_state::ViewState;
+
+// View traits
+pub use view_animated::AnimatedView;
+pub use view_provider::ProviderView;
+pub use view_proxy::ProxyView;
+pub use view_render::{RenderView, RenderViewExt};
+pub use view_stateful::StatefulView;
+pub use view_stateless::StatelessView;
+
+// Wrappers
+pub use wrappers::{
+    AnimatedViewWrapper, ProviderViewWrapper, ProxyViewWrapper, RenderViewWrapper,
+    StatefulViewWrapper, StatelessViewWrapper,
+};
 
 pub use crate::element::IntoElement;
