@@ -254,12 +254,24 @@ pub struct SliverWithChildren<S, C> {
 }
 
 // ============================================================================
+// SEALED TRAIT IMPLEMENTATIONS
+// ============================================================================
+
+impl<S> crate::element::into_element::sealed::Sealed for SliverWithLeaf<S> {}
+
+impl<S, C> crate::element::into_element::sealed::Sealed for SliverWithChild<S, C> {}
+
+impl<S, C> crate::element::into_element::sealed::Sealed for SliverWithOptionalChild<S, C> {}
+
+impl<S, C> crate::element::into_element::sealed::Sealed for SliverWithChildren<S, C> {}
+
+// ============================================================================
 // INTO ELEMENT IMPLEMENTATIONS
 // ============================================================================
 
 impl<S: SliverRender<Leaf>> IntoElement for SliverWithLeaf<S> {
     fn into_element(self) -> Element {
-        Element::Render(RenderElement::sliver::<Leaf, _>(self.render))
+        Element::from_render_element(RenderElement::sliver::<Leaf, _>(self.render))
     }
 }
 
@@ -268,7 +280,7 @@ impl<S: SliverRender<Single>, C: IntoElement> IntoElement for SliverWithChild<S,
         let child = self.child.into_element();
         let mut elem = RenderElement::sliver::<Single, _>(self.render);
         elem.set_unmounted_children(vec![child]);
-        Element::Render(elem)
+        Element::from_render_element(elem)
     }
 }
 
@@ -279,7 +291,7 @@ impl<S: SliverRender<Single>, C: IntoElement> IntoElement for SliverWithOptional
         if !children.is_empty() {
             elem.set_unmounted_children(children);
         }
-        Element::Render(elem)
+        Element::from_render_element(elem)
     }
 }
 
@@ -294,6 +306,6 @@ impl<S: SliverRender<Variable>, C: IntoElement> IntoElement for SliverWithChildr
         if !children.is_empty() {
             elem.set_unmounted_children(children);
         }
-        Element::Render(elem)
+        Element::from_render_element(elem)
     }
 }

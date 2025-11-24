@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderIntrinsicHeight;
 
@@ -182,7 +182,7 @@ impl<S: State> IntrinsicHeightBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl View for IntrinsicHeight {
+impl StatelessView for IntrinsicHeight {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render = match (self.step_width, self.step_height) {
             (Some(w), Some(h)) => RenderIntrinsicHeight::with_steps(w, h),

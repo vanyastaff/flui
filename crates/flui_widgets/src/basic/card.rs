@@ -5,7 +5,7 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::styling::BorderRadius;
 use flui_types::{Color, EdgeInsets};
@@ -193,7 +193,7 @@ impl<S: State> CardBuilder<S> {
 }
 
 // Implement View trait
-impl View for Card {
+impl StatelessView for Card {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: Add elevation/shadow support when Material widget is available
         // For now, create a simple card with color and border radius

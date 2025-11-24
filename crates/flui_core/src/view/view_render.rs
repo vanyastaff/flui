@@ -189,27 +189,34 @@ impl<T> RenderViewExt for T where T: Sized {}
 /// Wrapper for leaf render view (no children).
 #[derive(Debug, Clone)]
 pub struct RenderViewLeaf<V> {
+    /// The view configuration
     pub view: V,
 }
 
 /// Wrapper for render view with single child.
 #[derive(Debug, Clone)]
 pub struct RenderViewWithChild<V, C> {
+    /// The view configuration
     pub view: V,
+    /// The single child element
     pub child: C,
 }
 
 /// Wrapper for render view with optional child.
 #[derive(Debug, Clone)]
 pub struct RenderViewWithOptionalChild<V, C> {
+    /// The view configuration
     pub view: V,
+    /// Optional child element
     pub child: Option<C>,
 }
 
 /// Wrapper for render view with multiple children.
 #[derive(Debug)]
 pub struct RenderViewWithChildren<V> {
+    /// The view configuration
     pub view: V,
+    /// Child elements
     pub children: Vec<Element>,
 }
 
@@ -226,25 +233,13 @@ pub struct RenderViewWithChildren<V> {
 // ============================================================================
 
 /// Leaf box render view
-pub type LeafBoxRenderView = dyn RenderView<
-    BoxProtocol,
-    crate::render::arity::Leaf,
-    RenderObject = dyn RenderBox<crate::render::arity::Leaf>,
->;
+pub type LeafBoxRenderView = dyn RenderView<BoxProtocol, crate::render::arity::Leaf>;
 
 /// Single-child box render view
-pub type SingleChildBoxRenderView = dyn RenderView<
-    BoxProtocol,
-    crate::render::arity::Single,
-    RenderObject = dyn RenderBox<crate::render::arity::Single>,
->;
+pub type SingleChildBoxRenderView = dyn RenderView<BoxProtocol, crate::render::arity::Single>;
 
 /// Multi-child box render view
-pub type MultiChildBoxRenderView = dyn RenderView<
-    BoxProtocol,
-    crate::render::arity::Variable,
-    RenderObject = dyn RenderBox<crate::render::arity::Variable>,
->;
+pub type MultiChildBoxRenderView = dyn RenderView<BoxProtocol, crate::render::arity::Variable>;
 
 #[cfg(test)]
 mod tests {

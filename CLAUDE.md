@@ -176,7 +176,9 @@ cargo fmt --all
 
 **Element Tree (Mutable):**
 - Stored in `Slab` arena at `crates/flui_core/src/element/element_tree.rs`
-- Three variants: `Component`, `Render`, `Provider`
+- **Unified Element struct** - single type for all element variants (v0.7.0 migration completed)
+- All type-specific behavior delegated to `Box<dyn ViewObject>`
+- ViewObject variants: `StatelessViewWrapper`, `StatefulViewWrapper`, `AnimatedViewWrapper`, `ProviderViewWrapper`, `ProxyViewWrapper`, `RenderViewWrapper`
 - ElementId uses `NonZeroUsize` for niche optimization (Option<ElementId> = 8 bytes)
 - **CRITICAL:** Slab indices are 0-based but ElementId is 1-based (+1 offset in insert, -1 in get)
 - Lifecycle: Initial → Active → Inactive → Defunct
@@ -186,6 +188,74 @@ cargo fmt --all
 - Uses GAT (Generic Associated Types) for type-safe metadata
 - `RenderNode` enum at `crates/flui_core/src/render/render_node.rs`
 - Located in: `crates/flui_rendering/src/objects/`
+
+### Element Architecture (v0.7.0)
+
+**Unified Element Struct:**
+```rust
+pub struct Element {
+    // Tree position
+    parent: Option<ElementId>,
+    children: Vec<ElementId>,
+    slot: Option<Slot>,
+    
+    // Lifecycle
+    lifecycle: ElementLifecycle,
+    
+    // Type-erased behavior
+    view_object: Box<dyn ViewObject>,
+}
+```
+
+**Key Benefits:**
+- ✅ Single struct instead of enum - no dispatch overhead
+- ✅ All type-specific behavior in ViewObject trait
+- ✅ Extensible - add new view types without changing Element
+- ✅ Flutter-like architecture with Rust idioms
+
+**ViewObject Trait:**
+```rust
+pub trait ViewObject: Send {
+    // Core lifecycle
+    fn mode(&self) -> ViewMode;
+    fn build(&mut self, ctx: &BuildContext) -> Element;
+    fn init(&mut self, ctx: &BuildContext) {}
+    fn did_update(&mut self, new_view: &dyn Any, ctx: &BuildContext) {}
+    fn dispose(&mut self, ctx: &BuildContext) {}
+    
+    // Render-specific (default: None)
+    fn render_object(&self) -> Option<&dyn RenderObject> { None }
+    fn render_state(&self) -> Option<&RenderState> { None }
+    fn protocol(&self) -> Option<LayoutProtocol> { None }
+    fn arity(&self) -> Option<RuntimeArity> { None }
+    
+    // Provider-specific (default: None)
+    fn provided_value(&self) -> Option<&(dyn Any + Send + Sync)> { None }
+    fn dependents(&self) -> Option<&[ElementId]> { None }
+    
+    // Downcasting
+    fn as_any(&self) -> &dyn Any;
+}
+```
+
+**Element Access Patterns:**
+```rust
+// Check element type
+if element.is_render() {
+    let render = element.render_object().unwrap();
+    let state = element.render_state().unwrap();
+}
+
+if element.is_provider() {
+    let value = element.provided_value().unwrap();
+    let deps = element.dependents().unwrap();
+}
+
+// Children access (unified for all types)
+element.children()
+element.add_child(child_id)
+element.remove_child(child_id)
+```
 
 ### Pipeline Architecture
 

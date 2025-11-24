@@ -18,7 +18,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::{MouseCallbacks, RenderMouseRegion};
 use flui_types::events::{PointerEvent, PointerEventHandler};
@@ -266,7 +266,7 @@ mod tests {
 }
 
 // Implement View trait
-impl View for MouseRegion {
+impl StatelessView for MouseRegion {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create RenderMouseRegion
         // TODO: RenderMouseRegion currently uses fn() callbacks as placeholders

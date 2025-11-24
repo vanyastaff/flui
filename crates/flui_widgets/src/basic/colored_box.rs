@@ -7,7 +7,7 @@ use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderColoredBox;
 use flui_types::Color;
@@ -147,7 +147,7 @@ impl<S: State> ColoredBoxBuilder<S> {
 }
 
 // Implement View for ColoredBox
-impl View for ColoredBox {
+impl StatelessView for ColoredBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // RenderColoredBox is a Leaf render (no children)
         // If we have a child, we need to use a Stack to layer them
@@ -177,7 +177,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

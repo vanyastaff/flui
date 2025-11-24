@@ -48,6 +48,7 @@ use std::time::{Duration, Instant};
 
 use crate::element::ElementId;
 use crate::element::ElementTree;
+use crate::hooks::HookContext;
 
 /// Element type classification for rebuild dispatch
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +152,8 @@ pub struct BuildPipeline {
     batcher: Option<BuildBatcher>,
     /// Rebuild queue for deferred rebuilds from signals
     rebuild_queue: super::RebuildQueue,
+    /// Hook contexts for each component element (persisted across rebuilds)
+    hook_contexts: HashMap<ElementId, Arc<parking_lot::Mutex<HookContext>>>,
 }
 
 impl BuildPipeline {
@@ -163,6 +166,7 @@ impl BuildPipeline {
             build_locked: false,
             batcher: None,
             rebuild_queue,
+            hook_contexts: HashMap::new(),
         }
     }
 
@@ -427,11 +431,11 @@ impl BuildPipeline {
                 let tree_guard = tree.read();
                 match tree_guard.get(element_id) {
                     Some(elem) => {
-                        if elem.as_component().is_some() {
+                        if elem.is_component() {
                             Some(ElementType::Component)
-                        } else if elem.as_provider().is_some() {
+                        } else if elem.is_provider() {
                             Some(ElementType::Provider)
-                        } else if elem.as_render().is_some() {
+                        } else if elem.is_render() {
                             Some(ElementType::Render)
                         } else {
                             None
@@ -501,10 +505,15 @@ impl BuildPipeline {
         parent_id: ElementId,
         child_id: Option<ElementId>,
     ) {
-        if let Some(crate::element::Element::Component(component)) = tree_guard.get_mut(parent_id) {
-            match child_id {
-                Some(id) => component.set_child(id),
-                None => component.clear_child(),
+        if let Some(element) = tree_guard.get_mut(parent_id) {
+            if element.is_component() {
+                match child_id {
+                    Some(id) => {
+                        element.clear_children();
+                        element.add_child(id);
+                    }
+                    None => element.clear_children(),
+                }
             }
         }
     }
@@ -560,22 +569,14 @@ impl BuildPipeline {
     /// Extract existing HookContext or create new one
     ///
     /// HookContext persists across rebuilds to maintain hook state.
-    fn extract_or_create_hook_context(
-        component: &mut crate::element::ComponentElement,
-    ) -> std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>> {
-        if let Some(ctx) = component
-            .state_mut()
-            .downcast_mut::<std::sync::Arc<parking_lot::Mutex<crate::hooks::HookContext>>>()
-        {
-            // Reuse existing HookContext (preserves hook state across rebuilds!)
-            ctx.clone()
-        } else {
-            // First build - create new HookContext and store it
-            let ctx =
-                std::sync::Arc::new(parking_lot::Mutex::new(crate::hooks::HookContext::new()));
-            component.set_state(Box::new(ctx.clone()));
-            ctx
-        }
+    fn get_or_create_hook_context(
+        &mut self,
+        element_id: ElementId,
+    ) -> Arc<parking_lot::Mutex<HookContext>> {
+        self.hook_contexts
+            .entry(element_id)
+            .or_insert_with(|| Arc::new(parking_lot::Mutex::new(HookContext::new())))
+            .clone()
     }
 
     // ========== Component Rebuild ==========
@@ -593,33 +594,31 @@ impl BuildPipeline {
         element_id: ElementId,
         _depth: usize,
     ) -> bool {
-        // Stage 1: Check dirty flag, extract component data and prepare hook context (write lock)
-        let (old_child_id, hook_context) = {
+        // Stage 1: Check dirty flag and extract component data (write lock)
+        let old_child_id = {
             let mut tree_guard = tree.write();
             let element = match tree_guard.get_mut(element_id) {
                 Some(e) => e,
                 None => return false,
             };
 
-            let component = match element.as_component_mut() {
-                Some(c) => c,
-                None => return false,
-            };
+            // Check if it's a component
+            if !element.is_component() {
+                return false;
+            }
 
             // Skip rebuild if not dirty
-            if !component.is_dirty() {
+            if !element.is_dirty() {
                 #[cfg(debug_assertions)]
                 tracing::trace!("Skipping rebuild for {:?} - not dirty", element_id);
                 return false;
             }
 
-            let old_child = component.child();
-
-            // Extract or create hook context (helper method)
-            let hook_context = Self::extract_or_create_hook_context(component);
-
-            (old_child, hook_context)
+            element.first_child()
         };
+
+        // Get or create hook context for this element
+        let hook_context = self.get_or_create_hook_context(element_id);
 
         // Stage 2: Build new child view (read lock for view access)
         let ctx = crate::view::BuildContext::with_hook_context_and_queue(
@@ -638,12 +637,13 @@ impl BuildPipeline {
             hook_ctx.begin_component(component_id);
         }
 
-        // Build with thread-local BuildContext (read lock for builder access)
+        // Build with thread-local BuildContext (write lock for builder access)
         let new_element = {
-            let tree_guard = tree.read();
-            let element = tree_guard.get(element_id).expect("element should exist");
-            let component = element.as_component().expect("should be component");
-            crate::view::with_build_context(&ctx, || component.build())
+            let mut tree_guard = tree.write();
+            let element = tree_guard
+                .get_mut(element_id)
+                .expect("element should exist");
+            crate::view::with_build_context(&ctx, || element.view_object_mut().build(&ctx))
         };
 
         // End component rendering
@@ -659,8 +659,8 @@ impl BuildPipeline {
 
             // Clear dirty flag after successful rebuild
             if let Some(element) = tree_guard.get_mut(element_id) {
-                if let Some(component) = element.as_component_mut() {
-                    component.clear_dirty();
+                if element.is_component() {
+                    element.clear_dirty();
                 }
             }
         }
@@ -687,23 +687,23 @@ impl BuildPipeline {
                 None => return false,
             };
 
-            let provider = match element.as_provider_mut() {
-                Some(p) => p,
-                None => return false,
-            };
+            // Check if it's a provider
+            if !element.is_provider() {
+                return false;
+            }
 
             // Skip rebuild if not dirty
-            if !provider.is_dirty() {
+            if !element.is_dirty() {
                 #[cfg(debug_assertions)]
                 tracing::trace!("Skipping provider rebuild for {:?} - not dirty", element_id);
                 return false;
             }
 
             // Copy dependents list
-            let deps = provider.dependents().iter().copied().collect::<Vec<_>>();
+            let deps = element.dependents().map(|d| d.to_vec()).unwrap_or_default();
 
             // Clear dirty flag
-            provider.clear_dirty();
+            element.clear_dirty();
 
             deps
         };
@@ -793,11 +793,11 @@ impl BuildPipeline {
                 let tree_guard = tree.read();
                 match tree_guard.get(element_id) {
                     Some(elem) => {
-                        if elem.as_component().is_some() {
+                        if elem.is_component() {
                             Some(ElementType::Component)
-                        } else if elem.as_provider().is_some() {
+                        } else if elem.is_provider() {
                             Some(ElementType::Provider)
-                        } else if elem.as_render().is_some() {
+                        } else if elem.is_render() {
                             Some(ElementType::Render)
                         } else {
                             None

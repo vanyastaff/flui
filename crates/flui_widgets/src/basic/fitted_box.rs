@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderFittedBox;
 use flui_types::Alignment;
@@ -171,7 +171,7 @@ impl Default for FittedBox {
 }
 
 // Implement View for FittedBox - New architecture
-impl View for FittedBox {
+impl StatelessView for FittedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderFittedBox::with_alignment(self.fit, self.alignment).child_opt(self.child)
     }
@@ -208,7 +208,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

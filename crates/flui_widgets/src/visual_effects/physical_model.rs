@@ -3,7 +3,7 @@
 //! A widget that renders Material Design elevation effects with shadows.
 
 use bon::Builder;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::{PhysicalShape, RenderPhysicalModel};
 use flui_types::Color;
@@ -235,7 +235,7 @@ impl<S: State> PhysicalModelBuilder<S> {
 }
 
 // Implement View trait
-impl View for PhysicalModel {
+impl StatelessView for PhysicalModel {
     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Create RenderPhysicalModel with custom properties
         let mut render = RenderPhysicalModel::new(self.shape, self.elevation, self.color);

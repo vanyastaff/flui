@@ -39,7 +39,11 @@
       "Bash(adb:*)",
       "Bash(cp:*)",
       "mcp__filesystem__create_directory",
-      "mcp__filesystem__write_file"
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__read_multiple_files",
+      "WebFetch(domain:flutter.dev)",
+      "mcp__filesystem__edit_file",
+      "mcp__filesystem__read_text_file"
     ],
     "deny": [],
     "ask": []

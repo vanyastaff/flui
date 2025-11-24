@@ -4,7 +4,7 @@
 //! repainting from its ancestors for performance optimization.
 
 use bon::Builder;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderRepaintBoundary;
 
@@ -136,7 +136,7 @@ impl<S: State> RepaintBoundaryBuilder<S> {
 }
 
 // Implement View trait
-impl View for RepaintBoundary {
+impl StatelessView for RepaintBoundary {
     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderRepaintBoundary::new(), self.child)
     }

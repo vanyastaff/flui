@@ -14,7 +14,7 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::prelude::Color;
 
@@ -178,7 +178,7 @@ impl<S: State> ScaffoldBuilder<S> {
 }
 
 // Implement View trait
-impl View for Scaffold {
+impl StatelessView for Scaffold {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         use crate::{ColoredBox, Column, Stack};
 

@@ -32,7 +32,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderStack;
 use flui_types::layout::{Alignment, StackFit};
@@ -249,7 +249,7 @@ impl Default for Stack {
 }
 
 // Implement View for Stack - New architecture
-impl View for Stack {
+impl StatelessView for Stack {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render_stack = RenderStack::with_alignment(self.alignment);
         render_stack.fit = self.fit;
@@ -349,7 +349,7 @@ mod tests {
         }
     }
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

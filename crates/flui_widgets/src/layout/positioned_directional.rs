@@ -18,7 +18,7 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::prelude::TextDirection;
 
@@ -251,7 +251,7 @@ impl<S: State> PositionedDirectionalBuilder<S> {
 }
 
 // Implement View trait
-impl View for PositionedDirectional {
+impl StatelessView for PositionedDirectional {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Get text direction from context or use default
         let text_direction = self.text_direction.unwrap_or(TextDirection::Ltr);

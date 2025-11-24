@@ -123,7 +123,7 @@ use crate::element::{Element, ElementId};
 /// let mut owner = PipelineOwner::new();
 ///
 /// // Set root element
-/// let root_element = Element::Render(RenderElement::new(my_render));
+/// let root_element = Element::from_render_element(RenderElement::new(my_render));
 /// let root_id = owner.set_root(root_element);
 ///
 /// // Mark element dirty (triggers rebuild on next frame)
@@ -314,8 +314,7 @@ impl PipelineOwner {
     where
         V: crate::view::StatelessView + Clone + Sync,
     {
-        use crate::element::{ComponentElement, Element};
-        use crate::view::{build_context::current_build_context, IntoElement};
+        use crate::view::wrappers::StatelessViewWrapper;
 
         tracing::debug!("Attaching root view to pipeline");
 
@@ -327,24 +326,12 @@ impl PipelineOwner {
             .expect("Invalid error message"));
         }
 
-        // Create a ComponentElement wrapper around the view
+        // Wrap the StatelessView in a ViewObject wrapper
         // This enables proper rebuild support when signals change
-        let view_clone = widget.clone();
-        let builder: crate::view::BuildFn = Box::new(move || {
-            tracing::trace!("ComponentElement builder invoked");
-            // Clone the view for each rebuild
-            let view = view_clone.clone();
-            // Get BuildContext and build view
-            let ctx = current_build_context();
-            view.build(ctx).into_element()
-        });
+        let wrapper = StatelessViewWrapper::new(widget);
 
-        // Create ComponentElement with the builder
-        // Hook context will be created by extract_or_create_hook_context during build
-        let component = ComponentElement::new(builder);
-
-        // Wrap in Element enum
-        let element = Element::Component(component);
+        // Create Element with the ViewObject wrapper
+        let element = Element::new(Box::new(wrapper));
 
         // Set as pipeline root (this calls schedule_build_for internally)
         let root_id = self.set_root(element);
@@ -540,14 +527,16 @@ impl PipelineOwner {
 
         // Also set needs_layout flag in RenderState AND clear cached constraints
         let tree = self.tree.read();
-        if let Some(crate::element::Element::Render(render_elem)) = tree.get(node_id) {
-            let render_state_lock = render_elem.render_state();
-            let render_state = render_state_lock.write();
-            render_state.mark_needs_layout();
+        if let Some(element) = tree.get(node_id) {
+            if let Some(render_elem) = element.as_render() {
+                let render_state_lock = render_elem.render_state();
+                let render_state = render_state_lock.write();
+                render_state.mark_needs_layout();
 
-            // IMPORTANT: Clear cached constraints so layout_pipeline uses fresh constraints
-            // This is critical for window resize - otherwise old constraints are used!
-            render_state.clear_constraints();
+                // IMPORTANT: Clear cached constraints so layout_pipeline uses fresh constraints
+                // This is critical for window resize - otherwise old constraints are used!
+                render_state.clear_constraints();
+            }
         }
     }
 
@@ -777,7 +766,7 @@ impl PipelineOwner {
         // Get element and traverse children
         if let Some(element) = tree.get(element_id) {
             for child_id in element.children() {
-                self.collect_elements_recursive(tree, child_id, depth + 1, result);
+                self.collect_elements_recursive(tree, *child_id, depth + 1, result);
             }
         }
     }
@@ -1113,7 +1102,35 @@ impl Default for PipelineOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::element::{ComponentElement, Element};
+    use std::any::Any;
+
+    /// Mock ViewObject for testing
+    struct MockViewObject;
+
+    impl crate::view::ViewObject for MockViewObject {
+        fn mode(&self) -> crate::view::ViewMode {
+            crate::view::ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &crate::view::BuildContext) -> Element {
+            // Return another mock element for child
+            Element::new(Box::new(MockViewObject))
+        }
+
+        fn init(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn did_change_dependencies(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn did_update(&mut self, _new_view: &dyn Any, _ctx: &crate::view::BuildContext) {}
+        fn deactivate(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn dispose(&mut self, _ctx: &crate::view::BuildContext) {}
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
 
     #[test]
     fn test_build_owner_creation() {
@@ -1342,15 +1359,9 @@ mod tests {
     #[test]
     fn test_set_root() {
         let mut owner = PipelineOwner::new();
-        // Create a BuildFn that captures the view
-        let builder: crate::view::BuildFn = Box::new(|| {
-            // Return a minimal element for testing
-            Element::Component(ComponentElement::new(Box::new(|| {
-                panic!("nested build not called in test")
-            })))
-        });
-        let component = ComponentElement::new(builder);
-        let root = Element::Component(component);
+
+        // Create a mock element for testing
+        let root = Element::new(Box::new(MockViewObject));
 
         let root_id = owner.set_root(root);
 

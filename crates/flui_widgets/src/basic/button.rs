@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::styling::{BorderRadius, BoxDecoration, BoxShadow};
 use flui_types::{Color, EdgeInsets};
@@ -75,7 +75,7 @@ impl Button {
     }
 }
 
-impl View for Button {
+impl StatelessView for Button {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate intrinsic size based on text + padding
         // Text width is approximately char_count * font_size * 0.6

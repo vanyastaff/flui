@@ -8,7 +8,7 @@ use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_rendering::RenderFractionallySizedBox;
 
 /// A widget that sizes its child to a fraction of the total available space.
@@ -191,7 +191,7 @@ impl FractionallySizedBox {
 }
 
 // Implement View for FractionallySizedBox - Simplified API
-impl View for FractionallySizedBox {
+impl StatelessView for FractionallySizedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderFractionallySizedBox::new(self.width_factor, self.height_factor).child_opt(self.child)
     }
@@ -240,7 +240,7 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

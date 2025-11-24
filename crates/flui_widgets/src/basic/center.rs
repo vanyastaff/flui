@@ -33,7 +33,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderAlign;
 use flui_types::Alignment;
@@ -271,7 +271,7 @@ macro_rules! center {
 }
 
 // Implement View for Center
-impl View for Center {
+impl StatelessView for Center {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderAlign::with_factors(Alignment::CENTER, self.width_factor, self.height_factor)
             .maybe_child(self.child)
@@ -287,7 +287,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

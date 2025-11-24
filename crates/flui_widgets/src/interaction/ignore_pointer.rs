@@ -25,7 +25,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderIgnorePointer;
 
@@ -244,7 +244,7 @@ mod tests {
 }
 
 // Implement View trait
-impl View for IgnorePointer {
+impl StatelessView for IgnorePointer {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderIgnorePointer::new(self.ignoring).child_opt(self.child.into_inner())
     }

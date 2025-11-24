@@ -206,7 +206,7 @@ impl IntoIterator for Children {
     }
 }
 
-impl crate::element::into_element::sealed_into_element::Sealed for Child {}
+impl crate::element::into_element::sealed::Sealed for Child {}
 
 impl From<Child> for Option<Element> {
     fn from(child: Child) -> Self {

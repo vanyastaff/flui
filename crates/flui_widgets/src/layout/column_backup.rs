@@ -33,7 +33,7 @@
 
 use flui_core::element::Element;
 use bon::Builder;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
@@ -276,7 +276,7 @@ impl Default for Row {
 }
 
 // Implement View for Row - New architecture
-impl View for Row {
+impl StatelessView for Row {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render_flex = RenderFlex::row()
             .with_main_axis_alignment(self.main_axis_alignment)
@@ -318,7 +318,7 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())}
     }

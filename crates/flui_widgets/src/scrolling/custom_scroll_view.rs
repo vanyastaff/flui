@@ -5,7 +5,7 @@
 use super::{Scrollable, Viewport};
 use crate::layout::ScrollController;
 use flui_core::view::children::Children;
-use flui_core::view::{BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, StatelessView};
 use flui_types::layout::AxisDirection;
 use flui_types::painting::ClipBehavior;
 
@@ -154,7 +154,7 @@ impl Default for CustomScrollView {
     }
 }
 
-impl View for CustomScrollView {
+impl StatelessView for CustomScrollView {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Get scroll offset from controller if present
         let scroll_offset = self

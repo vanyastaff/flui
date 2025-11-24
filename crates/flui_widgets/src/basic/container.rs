@@ -57,7 +57,7 @@ use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::constraints::BoxConstraints;
 use flui_types::styling::{BorderRadius, BorderSide, BorderStyle, BoxDecoration, BoxShadow};
@@ -368,7 +368,7 @@ impl Default for Container {
 //
 // Container composes other Views (Padding, Align, DecoratedBox, SizedBox, etc.) into a tree.
 
-impl View for Container {
+impl StatelessView for Container {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Build widget tree from inside out:
         // Flutter order: constraints -> margin -> decoration -> alignment -> padding -> child
@@ -523,7 +523,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

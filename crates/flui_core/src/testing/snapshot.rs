@@ -2,7 +2,7 @@
 //!
 //! Provides utilities for capturing and comparing element tree snapshots.
 
-use crate::element::{Element, ElementId, ElementTree};
+use crate::element::{ElementId, ElementTree};
 use std::fmt;
 
 /// Snapshot of an element tree for testing
@@ -40,24 +40,15 @@ impl ElementTreeSnapshot {
         for i in 0..tree.len() {
             let id = ElementId::new(i + 1);
             if let Some(element) = tree.get(id) {
-                match element {
-                    Element::Component(_) => {
-                        component_count += 1;
-                        structure.push_str(&format!("  Component({})\n", id.get()));
-                    }
-                    Element::Render(_) => {
-                        render_count += 1;
-                        structure.push_str(&format!("  Render({})\n", id.get()));
-                    }
-                    // TODO: Re-enable after sliver migration
-                    // Element::Sliver(_) => {
-                    //     render_count += 1;
-                    //     structure.push_str(&format!("  Sliver({})\n", id.get()));
-                    // }
-                    Element::Provider(_) => {
-                        provider_count += 1;
-                        structure.push_str(&format!("  Provider({})\n", id.get()));
-                    }
+                if element.is_component() {
+                    component_count += 1;
+                    structure.push_str(&format!("  Component({})\n", id.get()));
+                } else if element.is_render_view() {
+                    render_count += 1;
+                    structure.push_str(&format!("  Render({})\n", id.get()));
+                } else if element.is_provider() {
+                    provider_count += 1;
+                    structure.push_str(&format!("  Provider({})\n", id.get()));
                 }
             }
         }

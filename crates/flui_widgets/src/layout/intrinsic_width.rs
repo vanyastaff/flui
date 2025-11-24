@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderIntrinsicWidth;
 
@@ -181,7 +181,7 @@ impl<S: State> IntrinsicWidthBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl View for IntrinsicWidth {
+impl StatelessView for IntrinsicWidth {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render = match (self.step_width, self.step_height) {
             (Some(w), Some(h)) => RenderIntrinsicWidth::with_steps(w, h),

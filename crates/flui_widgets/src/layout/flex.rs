@@ -42,7 +42,7 @@ use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{Axis, CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
@@ -363,7 +363,7 @@ impl Default for Flex {
 }
 
 // Implement View trait
-impl View for Flex {
+impl StatelessView for Flex {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderFlex::new(self.direction)
             .with_main_axis_alignment(self.main_axis_alignment)

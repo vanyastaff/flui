@@ -71,6 +71,7 @@ pub enum ViewMode {
 // ============================================================================
 
 /// Stateless protocol - simple views without state.
+#[derive(Debug)]
 pub struct Stateless;
 
 impl ViewProtocol for Stateless {
@@ -80,6 +81,7 @@ impl ViewProtocol for Stateless {
 }
 
 /// Stateful protocol - views with persistent mutable state.
+#[derive(Debug)]
 pub struct Stateful<S: ViewState>(PhantomData<S>);
 
 impl<S: ViewState> ViewProtocol for Stateful<S> {
@@ -89,6 +91,7 @@ impl<S: ViewState> ViewProtocol for Stateful<S> {
 }
 
 /// Animated protocol - views that subscribe to animations.
+#[derive(Debug)]
 pub struct Animated<L: Listenable>(PhantomData<L>);
 
 impl<L: Listenable + 'static> ViewProtocol for Animated<L> {
@@ -98,6 +101,7 @@ impl<L: Listenable + 'static> ViewProtocol for Animated<L> {
 }
 
 /// Provider protocol - views that provide data to descendants.
+#[derive(Debug)]
 pub struct Provider<T: Send + 'static>(PhantomData<T>);
 
 impl<T: Send + 'static> ViewProtocol for Provider<T> {
@@ -107,6 +111,7 @@ impl<T: Send + 'static> ViewProtocol for Provider<T> {
 }
 
 /// Proxy protocol - views that wrap single child.
+#[derive(Debug)]
 pub struct Proxy;
 
 impl ViewProtocol for Proxy {
@@ -116,6 +121,7 @@ impl ViewProtocol for Proxy {
 }
 
 /// Render Box protocol - views that create box render objects.
+#[derive(Debug)]
 pub struct RenderBox<A: Arity>(PhantomData<A>);
 
 impl<A: Arity> ViewProtocol for RenderBox<A> {
@@ -125,6 +131,7 @@ impl<A: Arity> ViewProtocol for RenderBox<A> {
 }
 
 /// Render Sliver protocol - views that create sliver render objects.
+#[derive(Debug)]
 pub struct RenderSliver<A: Arity>(PhantomData<A>);
 
 impl<A: Arity> ViewProtocol for RenderSliver<A> {

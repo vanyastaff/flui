@@ -6,7 +6,7 @@
 use super::scroll_controller::ScrollController;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, StatelessView};
 use flui_types::layout::Axis;
 
 /// A scrollable widget with a single child
@@ -240,7 +240,7 @@ mod tests {
         assert!(scroll_view.padding.is_some());
     }
 }
-impl View for SingleChildScrollView {
+impl StatelessView for SingleChildScrollView {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Apply padding if specified
         let child: Element = match self.padding {

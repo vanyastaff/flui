@@ -35,7 +35,7 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
 use flui_rendering::{PositionedMetadata, RenderPositioned};
@@ -389,7 +389,7 @@ impl Default for Positioned {
 }
 
 // Implement View trait - Simplified API
-impl View for Positioned {
+impl StatelessView for Positioned {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let metadata = self.create_metadata();
 
@@ -489,7 +489,7 @@ mod tests {
         }
     }
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

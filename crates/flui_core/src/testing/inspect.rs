@@ -2,7 +2,7 @@
 //!
 //! Provides utilities for inspecting and debugging element state during tests.
 
-use crate::element::{Element, ElementId, ElementTree};
+use crate::element::{ElementId, ElementTree};
 use std::fmt;
 
 /// Inspector for examining element tree state
@@ -31,11 +31,12 @@ impl<'a> TreeInspector<'a> {
         for i in 0..self.tree.len() {
             let id = ElementId::new(i + 1);
             if let Some(element) = self.tree.get(id) {
-                match element {
-                    Element::Component(_) => summary.component_count += 1,
-                    Element::Render(_) => summary.render_count += 1,
-                    // Element::Sliver(_) => summary.render_count += 1, // TODO: Re-enable after sliver migration
-                    Element::Provider(_) => summary.provider_count += 1,
+                if element.is_component() {
+                    summary.component_count += 1;
+                } else if element.is_render_view() {
+                    summary.render_count += 1;
+                } else if element.is_provider() {
+                    summary.provider_count += 1;
                 }
 
                 if element.is_dirty() {
@@ -54,7 +55,7 @@ impl<'a> TreeInspector<'a> {
         for i in 0..self.tree.len() {
             let id = ElementId::new(i + 1);
             if let Some(element) = self.tree.get(id) {
-                if element.as_component().is_some() {
+                if element.is_component() {
                     components.push(id);
                 }
             }
@@ -68,7 +69,7 @@ impl<'a> TreeInspector<'a> {
         for i in 0..self.tree.len() {
             let id = ElementId::new(i + 1);
             if let Some(element) = self.tree.get(id) {
-                if element.as_render().is_some() {
+                if element.is_render_view() {
                     renders.push(id);
                 }
             }
@@ -82,7 +83,7 @@ impl<'a> TreeInspector<'a> {
         for i in 0..self.tree.len() {
             let id = ElementId::new(i + 1);
             if let Some(element) = self.tree.get(id) {
-                if element.as_provider().is_some() {
+                if element.is_provider() {
                     providers.push(id);
                 }
             }
@@ -111,11 +112,14 @@ impl<'a> TreeInspector<'a> {
         for i in 0..self.tree.len() {
             let id = ElementId::new(i + 1);
             if let Some(element) = self.tree.get(id) {
-                let type_name = match element {
-                    Element::Component(_) => "Component",
-                    Element::Render(_) => "Render",
-                    // Element::Sliver(_) => "Sliver", // TODO: Re-enable after sliver migration
-                    Element::Provider(_) => "Provider ",
+                let type_name = if element.is_component() {
+                    "Component"
+                } else if element.is_render_view() {
+                    "Render"
+                } else if element.is_provider() {
+                    "Provider"
+                } else {
+                    "Unknown"
                 };
                 let dirty = if element.is_dirty() { " [DIRTY]" } else { "" };
                 println!("  {} (ID: {}){}", type_name, id.get(), dirty);

@@ -175,7 +175,7 @@ impl LayoutPipeline {
             };
 
             // Only layout RenderElements
-            let crate::element::Element::Render(render_elem) = element else {
+            let Some(render_elem) = element.as_render() else {
                 #[cfg(debug_assertions)]
                 tracing::trace!("Element {:?} is not a RenderElement, skipping", id);
                 continue;
@@ -199,7 +199,11 @@ impl LayoutPipeline {
             tracing::trace!("Layout: Processing render object {:?}", id);
 
             // Use stored constraints if available, otherwise use provided constraints
-            let layout_constraints = render_state.constraints().unwrap_or(constraints);
+            // RenderState stores Constraints enum, but layout_render expects BoxConstraints
+            let layout_constraints = render_state
+                .constraints()
+                .map(|c| *c.as_box())
+                .unwrap_or(constraints);
 
             // Drop read guard before acquiring write lock
             drop(render_state);
@@ -212,7 +216,9 @@ impl LayoutPipeline {
             let render_state_lock = render_elem.render_state();
             let render_state = render_state_lock.write();
             render_state.set_size(computed_size);
-            render_state.set_constraints(layout_constraints);
+            render_state.set_constraints(crate::render::render_object::Constraints::Box(
+                layout_constraints,
+            ));
             render_state.clear_needs_layout();
             // After layout completes, mark for paint
             render_state.mark_needs_paint();

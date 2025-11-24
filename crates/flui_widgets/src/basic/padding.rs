@@ -33,7 +33,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
@@ -271,7 +271,7 @@ macro_rules! padding {
 }
 
 // Implement View for Padding
-impl View for Padding {
+impl StatelessView for Padding {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderPadding::new(self.padding).child_opt(self.child)
     }
@@ -286,7 +286,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

@@ -17,7 +17,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderPadding;
 use flui_types::EdgeInsets;
@@ -203,7 +203,7 @@ impl<S: State> SafeAreaBuilder<S> {
 }
 
 // Implement View trait
-impl View for SafeArea {
+impl StatelessView for SafeArea {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
         let insets = self.calculate_insets(ctx);
 

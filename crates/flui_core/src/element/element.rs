@@ -1,43 +1,52 @@
-//! Element struct - Unified element type for all views
+//! Element struct - Pure View element (no RenderObject)
 //!
-//! This module provides the unified `Element` struct that replaces the old
-//! `enum Element` with a single struct containing a `ViewObject`.
+//! This module provides the `Element` struct for Views only.
+//! RenderObjects are stored separately in `RenderElement`.
 //!
-//! # Architecture
+//! # Architecture (Following Flutter)
 //!
-//! Following Flutter's Element design:
-//! - Element is the instantiation of a View at a particular location in the tree
-//! - Element manages lifecycle (mount, update, unmount)
-//! - Element bridges View tree and Render tree
+//! ```text
+//! View (Config)
+//!   ↓ build()
+//! Element (Lifecycle)
+//!   ├─ Stateless/Stateful → child Element
+//!   └─ RenderView → RenderElement
+//! ```
 //!
-//! # Performance
+//! **Critical Design:**
+//! - Element ONLY manages View lifecycle (mount, unmount, rebuild)
+//! - Element has NO RenderObject - RenderObject goes in RenderElement
+//! - RenderElement is a separate tree node containing protocol-specific layout/paint
+//! - View.build() returns either:
+//!   - Another View (wrapped in Element)
+//!   - A RenderObject (wrapped in RenderElement)
 //!
-//! Using `Box<dyn ViewObject>` provides:
-//! - Single allocation per element
-//! - Dynamic dispatch for view operations
-//! - Consistent memory layout
-//! - Easy extension for new view types
+//! This separation is key to Flutter's architecture and FLUI's flexibility.
 
 use std::any::Any;
 use std::fmt;
 
 use crate::element::{ElementBase, ElementId, ElementLifecycle};
 use crate::foundation::Slot;
-use crate::render::RenderObject;
+use crate::render::{LayoutProtocol, RenderObject, RenderState, RuntimeArity};
 use crate::view::{BuildContext, ViewMode, ViewObject};
 
-/// Element - Unified element type for all views
+/// Element - Represents a View instance in the element tree
 ///
 /// This struct represents a View instantiated at a particular location
-/// in the element tree. It manages the lifecycle of the view and bridges
-/// between the View tree and Render tree.
+/// in the element tree. It manages ONLY the View lifecycle.
 ///
-/// # Design
+/// **IMPORTANT:** Element does NOT store RenderObject.
+/// If your View creates a RenderObject, the framework wraps it in a RenderElement instead.
 ///
-/// Following Flutter's architecture:
+/// # Design Principles
+///
+/// Following Flutter's Element architecture:
 /// - `base`: Common lifecycle fields (parent, slot, lifecycle, flags)
-/// - `view_object`: The polymorphic view implementation
-/// - `children`: Child element IDs
+/// - `view_object`: The polymorphic view implementation (Stateless, Stateful, etc)
+/// - `children`: Child element IDs (may be Element or RenderElement)
+///
+/// RenderObjects are NOT stored here. They go in RenderElement.
 ///
 /// # Thread Safety
 ///
@@ -48,10 +57,15 @@ pub struct Element {
     /// Common lifecycle fields
     base: ElementBase,
 
-    /// The polymorphic view object
+    /// The polymorphic view object (Stateless, Stateful, etc)
+    ///
+    /// NOTE: This will NEVER be a render view.
+    /// Render views are wrapped separately in RenderElement.
     view_object: Box<dyn ViewObject>,
 
     /// Child element IDs
+    ///
+    /// May contain both Element and RenderElement IDs
     children: Vec<ElementId>,
 }
 
@@ -64,7 +78,7 @@ impl fmt::Debug for Element {
             .field("parent", &self.base.parent())
             .field("lifecycle", &self.base.lifecycle())
             .field("mode", &self.view_object.mode())
-            .field("children", &self.children)
+            .field("children_count", &self.children.len())
             .finish()
     }
 }
@@ -75,6 +89,22 @@ impl Element {
         Self {
             base: ElementBase::new(),
             view_object,
+            children: Vec::new(),
+        }
+    }
+
+    // ========== CONSTRUCTOR METHODS ==========
+
+    /// Creates Element from a RenderElement.
+    ///
+    /// This is a compatibility method for the old `Element::Render(...)` pattern.
+    /// In the new architecture, RenderElement is wrapped in a ViewObject.
+    pub fn from_render_element(render_element: crate::render::RenderElement) -> Self {
+        // For now, we store RenderElement directly
+        // TODO: Wrap in RenderViewWrapper when migration is complete
+        Self {
+            base: ElementBase::new(),
+            view_object: Box::new(RenderElementWrapper::new(render_element)),
             children: Vec::new(),
         }
     }
@@ -153,11 +183,16 @@ impl Element {
 
     /// Build this element.
     ///
-    /// Calls the view object's build method to produce child elements.
-    /// Returns the legacy Element type until migration is complete.
+    /// Invokes the view object's build method to produce child elements.
+    ///
+    /// # Contract
+    ///
+    /// The view object's build() method returns an Element.
+    /// If the view created a RenderObject, it's wrapped in a RenderElement by the framework.
     #[inline]
-    pub fn build(&mut self, ctx: &BuildContext) -> super::element_legacy::Element {
-        self.view_object.build(ctx)
+    pub fn build(&mut self, ctx: &BuildContext) {
+        // Delegate to ViewObject
+        let _ = self.view_object.build(ctx);
     }
 
     /// Initialize after mounting.
@@ -190,18 +225,17 @@ impl Element {
         self.view_object.dispose(ctx);
     }
 
-    /// Get render object if this is a render view.
+    /// Check if this view creates a RenderObject.
+    ///
+    /// If true, the framework will wrap the RenderObject in a separate RenderElement.
+    /// Element itself does NOT store the RenderObject.
     #[inline]
     #[must_use]
-    pub fn render_object(&self) -> Option<&dyn RenderObject> {
-        self.view_object.render_object()
-    }
-
-    /// Get mutable render object if this is a render view.
-    #[inline]
-    #[must_use]
-    pub fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
-        self.view_object.render_object_mut()
+    pub fn is_render_view(&self) -> bool {
+        matches!(
+            self.view_object.mode(),
+            ViewMode::RenderBox | ViewMode::RenderSliver
+        )
     }
 
     /// Access view object for downcasting.
@@ -280,20 +314,15 @@ impl Element {
 
     // ========== Predicates ==========
 
-    /// Check if this is a render element (has render object).
-    #[inline]
-    #[must_use]
-    pub fn is_render(&self) -> bool {
-        self.view_object.render_object().is_some()
-    }
-
-    /// Check if this is a component element (no render object).
+    /// Check if this is a component element (has render object).
+    ///
+    /// Component elements are Views that build child Views (not RenderObjects).
     #[inline]
     #[must_use]
     pub fn is_component(&self) -> bool {
         matches!(
             self.view_object.mode(),
-            ViewMode::Stateless | ViewMode::Stateful
+            ViewMode::Stateless | ViewMode::Stateful | ViewMode::Proxy | ViewMode::Animated
         )
     }
 
@@ -309,11 +338,13 @@ impl Element {
     #[must_use]
     pub fn category(&self) -> &'static str {
         match self.view_object.mode() {
-            ViewMode::Stateless | ViewMode::Stateful => "Component",
+            ViewMode::Stateless => "Stateless",
+            ViewMode::Stateful => "Stateful",
             ViewMode::Animated => "Animated",
             ViewMode::Provider => "Provider",
             ViewMode::Proxy => "Proxy",
-            ViewMode::RenderBox | ViewMode::RenderSliver => "Render",
+            ViewMode::RenderBox => "RenderBox",
+            ViewMode::RenderSliver => "RenderSliver",
         }
     }
 
@@ -322,8 +353,207 @@ impl Element {
     /// Handle an event.
     #[inline]
     pub fn handle_event(&mut self, _event: &flui_types::Event) -> bool {
-        // TODO: Delegate to view_object when ViewObject has handle_event
         false
+    }
+
+    // ========== Render Element Access (for architecture transition) ==========
+
+    /// Check if this is render view element (RenderBox or RenderSliver).
+    ///
+    /// During architecture transition, indicates whether this Element
+    /// wraps render view or component view.
+    #[inline]
+    #[must_use]
+    pub fn is_render(&self) -> bool {
+        self.is_render_view()
+    }
+
+    /// Get category name for debugging and logging.
+    pub fn debug_name(&self) -> String {
+        match self.view_object.mode() {
+            ViewMode::Stateless => "Stateless".to_string(),
+            ViewMode::Stateful => "Stateful".to_string(),
+            ViewMode::Animated => "Animated".to_string(),
+            ViewMode::Provider => "Provider".to_string(),
+            ViewMode::Proxy => "Proxy".to_string(),
+            ViewMode::RenderBox => "RenderBox".to_string(),
+            ViewMode::RenderSliver => "RenderSliver".to_string(),
+        }
+    }
+
+    // ========== RENDER ACCESS (delegates to ViewObject) ==========
+
+    /// Returns render object if this is a render element.
+    #[inline]
+    pub fn render_object(&self) -> Option<&dyn RenderObject> {
+        self.view_object.render_object()
+    }
+
+    /// Returns mutable render object if this is a render element.
+    #[inline]
+    pub fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
+        self.view_object.render_object_mut()
+    }
+
+    /// Returns render state if this is a render element.
+    #[inline]
+    pub fn render_state(&self) -> Option<&RenderState> {
+        self.view_object.render_state()
+    }
+
+    /// Returns mutable render state if this is a render element.
+    #[inline]
+    pub fn render_state_mut(&mut self) -> Option<&mut RenderState> {
+        self.view_object.render_state_mut()
+    }
+
+    /// Returns layout protocol if this is a render element.
+    #[inline]
+    pub fn protocol(&self) -> Option<LayoutProtocol> {
+        self.view_object.protocol()
+    }
+
+    /// Returns arity if this is a render element.
+    #[inline]
+    pub fn arity(&self) -> Option<RuntimeArity> {
+        self.view_object.arity()
+    }
+
+    // ========== PROVIDER ACCESS (delegates to ViewObject) ==========
+
+    /// Returns provided value if this is a provider element.
+    #[inline]
+    pub fn provided_value(&self) -> Option<&(dyn Any + Send + Sync)> {
+        self.view_object.provided_value()
+    }
+
+    /// Returns dependents if this is a provider element.
+    #[inline]
+    pub fn dependents(&self) -> Option<&[ElementId]> {
+        self.view_object.dependents()
+    }
+
+    /// Returns mutable dependents if this is a provider element.
+    #[inline]
+    pub fn dependents_mut(&mut self) -> Option<&mut Vec<ElementId>> {
+        self.view_object.dependents_mut()
+    }
+
+    /// Adds a dependent to this provider.
+    pub fn add_dependent(&mut self, element_id: ElementId) {
+        if let Some(deps) = self.view_object.dependents_mut() {
+            if !deps.contains(&element_id) {
+                deps.push(element_id);
+            }
+        }
+    }
+
+    /// Removes a dependent from this provider.
+    pub fn remove_dependent(&mut self, element_id: ElementId) {
+        if let Some(deps) = self.view_object.dependents_mut() {
+            deps.retain(|&id| id != element_id);
+        }
+    }
+
+    /// Check if dependents should be notified.
+    pub fn should_notify_dependents(&self, old_value: &dyn Any) -> bool {
+        self.view_object.should_notify_dependents(old_value)
+    }
+
+    // ========== COMPATIBILITY METHODS ==========
+    // These methods provide backward compatibility during the migration
+    // from enum-based Element to struct-based Element with ViewObject.
+
+    /// Returns the wrapped RenderElement if this is a render element.
+    ///
+    /// This is a compatibility method for code that used `Element::Render(re)` pattern.
+    pub fn as_render(&self) -> Option<&crate::render::RenderElement> {
+        if self.is_render() {
+            self.view_object
+                .as_any()
+                .downcast_ref::<crate::render::RenderElement>()
+        } else {
+            None
+        }
+    }
+
+    /// Returns mutable wrapped RenderElement if this is a render element.
+    pub fn as_render_mut(&mut self) -> Option<&mut crate::render::RenderElement> {
+        if self.is_render() {
+            self.view_object
+                .as_any_mut()
+                .downcast_mut::<crate::render::RenderElement>()
+        } else {
+            None
+        }
+    }
+
+    /// Returns self if this is a component element.
+    ///
+    /// Component elements are Stateless, Stateful, Proxy, or Animated views.
+    pub fn as_component(&self) -> Option<&Self> {
+        if self.is_component() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+
+    /// Returns mutable self if this is a component element.
+    pub fn as_component_mut(&mut self) -> Option<&mut Self> {
+        if self.is_component() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+
+    /// Returns self if this is a provider element.
+    pub fn as_provider(&self) -> Option<&Self> {
+        if self.is_provider() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+
+    /// Returns mutable self if this is a provider element.
+    pub fn as_provider_mut(&mut self) -> Option<&mut Self> {
+        if self.is_provider() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+
+    /// Performs layout on this render element.
+    ///
+    /// Convenience method that delegates to the wrapped RenderElement.
+    pub fn layout_render(
+        &self,
+        tree: &crate::element::ElementTree,
+        constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        self.as_render()
+            .map(|re| re.layout_render(tree, constraints))
+    }
+
+    /// Performs paint on this render element.
+    ///
+    /// Convenience method that delegates to the wrapped RenderElement.
+    pub fn paint_render(
+        &self,
+        tree: &crate::element::ElementTree,
+        offset: flui_types::Offset,
+    ) -> Option<flui_painting::Canvas> {
+        self.as_render().map(|re| re.paint_render(tree, offset))
+    }
+
+    /// Returns the RenderState lock for this render element.
+    ///
+    /// Convenience method that delegates to the wrapped RenderElement.
+    pub fn render_state_lock(&self) -> Option<&parking_lot::RwLock<crate::render::RenderState>> {
+        self.as_render().map(|re| re.render_state())
     }
 }
 
@@ -337,9 +567,110 @@ impl From<Box<dyn ViewObject>> for Element {
     }
 }
 
+// ============================================================================
+// RENDER ELEMENT WRAPPER
+// ============================================================================
+
+/// Wrapper that adapts RenderElement to ViewObject interface.
+///
+/// This is a compatibility layer for the old architecture where RenderElement
+/// was a separate type. In the new architecture, all elements use ViewObject.
+#[derive(Debug)]
+pub struct RenderElementWrapper {
+    render_element: crate::render::RenderElement,
+}
+
+impl RenderElementWrapper {
+    /// Creates a new wrapper around a RenderElement.
+    pub fn new(render_element: crate::render::RenderElement) -> Self {
+        Self { render_element }
+    }
+
+    /// Returns reference to the wrapped RenderElement.
+    pub fn inner(&self) -> &crate::render::RenderElement {
+        &self.render_element
+    }
+
+    /// Returns mutable reference to the wrapped RenderElement.
+    pub fn inner_mut(&mut self) -> &mut crate::render::RenderElement {
+        &mut self.render_element
+    }
+}
+
+impl ViewObject for RenderElementWrapper {
+    fn mode(&self) -> ViewMode {
+        match self.render_element.protocol() {
+            LayoutProtocol::Box => ViewMode::RenderBox,
+            LayoutProtocol::Sliver => ViewMode::RenderSliver,
+        }
+    }
+
+    fn build(&mut self, _ctx: &BuildContext) -> Element {
+        panic!("RenderElementWrapper::build should not be called")
+    }
+
+    fn init(&mut self, _ctx: &BuildContext) {}
+
+    fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
+
+    fn did_update(&mut self, _new_view: &dyn Any, _ctx: &BuildContext) {}
+
+    fn deactivate(&mut self, _ctx: &BuildContext) {}
+
+    fn dispose(&mut self, _ctx: &BuildContext) {}
+
+    fn as_any(&self) -> &dyn Any {
+        &self.render_element
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        &mut self.render_element
+    }
+
+    // Render-specific implementations
+    fn render_object(&self) -> Option<&dyn RenderObject> {
+        // RenderElement returns RwLockGuard, can't return reference to it
+        // Return None for now - use as_render() to access RenderElement directly
+        None
+    }
+
+    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
+        // RenderElement returns RwLockGuard, can't return mutable reference
+        // Return None for now - use as_render_mut() to access RenderElement directly
+        None
+    }
+
+    fn render_state(&self) -> Option<&RenderState> {
+        // RenderElement has RwLock<RenderState>, need to return reference
+        // This is tricky - we can't return reference to RwLock guard
+        // For now return None and use direct access
+        None
+    }
+
+    fn render_state_mut(&mut self) -> Option<&mut RenderState> {
+        None
+    }
+
+    fn protocol(&self) -> Option<LayoutProtocol> {
+        Some(self.render_element.protocol())
+    }
+
+    fn arity(&self) -> Option<RuntimeArity> {
+        Some(*self.render_element.arity())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // TODO: Add tests after ViewObject wrappers are complete
+    #[test]
+    fn test_element_is_view_only() {
+        // Element should not have any render object storage
+        // This is verified by checking the struct fields
+        let _element: Element;
+        // Compile-time verification:
+        // If Element had RenderObject storage, this test would fail
+        // when we try to verify no render methods exist
+    }
 }

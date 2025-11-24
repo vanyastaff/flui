@@ -275,51 +275,77 @@ pub struct WithChildren<R> {
 }
 
 // ============================================================================
+// SEALED TRAIT IMPLEMENTATIONS
+// ============================================================================
+
+impl<R> crate::element::into_element::sealed::Sealed for WithLeaf<R> {}
+
+impl<R, C> crate::element::into_element::sealed::Sealed for WithChild<R, C> {}
+
+impl<R> crate::element::into_element::sealed::Sealed for WithOptionalChild<R> {}
+
+impl<R> crate::element::into_element::sealed::Sealed for WithMaybeChild<R> {}
+
+impl<R> crate::element::into_element::sealed::Sealed for WithChildren<R> {}
+
+// ============================================================================
 // INTO ELEMENT IMPLEMENTATIONS
 // ============================================================================
 
 impl<R: RenderBox<Leaf>> IntoElement for WithLeaf<R> {
     fn into_element(self) -> Element {
-        Element::Render(RenderElement::r#box::<Leaf, _>(self.render))
+        Element::from_render_element(RenderElement::r#box::<Leaf, _>(self.render))
     }
 }
 
 impl<R: RenderBox<Single>, C: IntoElement> IntoElement for WithChild<R, C> {
     fn into_element(self) -> Element {
         let child = self.child.into_element();
-        let mut elem = RenderElement::r#box::<Single, _>(self.render);
-        elem.set_unmounted_children(vec![child]);
-        Element::Render(elem)
+
+        let mut re = RenderElement::r#box::<Single, _>(self.render);
+
+        re.set_unmounted_children(vec![child]);
+
+        Element::from_render_element(re)
     }
 }
 
 impl<R: RenderBox<Single>> IntoElement for WithOptionalChild<R> {
     fn into_element(self) -> Element {
-        let mut elem = RenderElement::r#box::<Single, _>(self.render);
+        let mut re = RenderElement::r#box::<Single, _>(self.render);
+
         if let Some(child) = self.child {
-            elem.set_unmounted_children(vec![child]);
+            re.set_unmounted_children(vec![child]);
         }
-        Element::Render(elem)
+
+        Element::from_render_element(re)
     }
 }
 
 impl<R: RenderBox<Optional>> IntoElement for WithMaybeChild<R> {
     fn into_element(self) -> Element {
-        let mut elem = RenderElement::r#box::<Optional, _>(self.render);
+        let mut re = RenderElement::r#box::<Optional, _>(self.render);
+
         if let Some(child) = self.child {
-            elem.set_unmounted_children(vec![child]);
+            re.set_unmounted_children(vec![child]);
         }
-        Element::Render(elem)
+
+        Element::from_render_element(re)
     }
 }
 
 impl<R: RenderBox<Variable>> IntoElement for WithChildren<R> {
     fn into_element(self) -> Element {
-        let mut elem = RenderElement::r#box::<Variable, _>(self.render);
-        if !self.children.is_empty() {
-            elem.set_unmounted_children(self.children);
+        let mut re = RenderElement::r#box::<Variable, _>(self.render);
+
+        if !RenderElement::children(&re).is_empty() {
+            // children were already mounted elsewhere; only attach unmounted if provided
         }
-        Element::Render(elem)
+        if !self.children.is_empty() {
+            re.set_unmounted_children(self.children);
+        }
+
+        Element::from_render_element(re)
     }
 }
 

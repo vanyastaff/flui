@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_rendering::RenderClipOval;
 use flui_types::painting::Clip;
 
@@ -163,7 +163,7 @@ impl Default for ClipOval {
 }
 
 // Implement View for ClipOval - New architecture
-impl View for ClipOval {
+impl StatelessView for ClipOval {
     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderClipOval::with_clip(self.clip_behavior), self.child)
     }
@@ -199,7 +199,7 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
             (RenderPadding::new(EdgeInsets::ZERO), ())
         }

@@ -31,7 +31,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderAspectRatio;
 
@@ -210,7 +210,7 @@ impl Default for AspectRatio {
 }
 
 // Implement View for AspectRatio - New architecture
-impl View for AspectRatio {
+impl StatelessView for AspectRatio {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderAspectRatio::new(self.aspect_ratio).child_opt(self.child)
     }

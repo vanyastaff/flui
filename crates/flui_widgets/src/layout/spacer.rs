@@ -26,7 +26,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
 use flui_rendering::{FlexItemMetadata, RenderFlexItem};
@@ -220,7 +220,7 @@ impl Default for Spacer {
 }
 
 // Implement View trait - Simplified API
-impl View for Spacer {
+impl StatelessView for Spacer {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Build zero-sized SizedBox as child
         let sized_box = crate::SizedBox::builder().width(0.0).height(0.0).build();

@@ -178,11 +178,12 @@ impl Drop for TestHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::StatelessView;
 
     #[derive(Clone, Debug)]
     struct TestView;
 
-    impl View for TestView {
+    impl StatelessView for TestView {
         fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
             // Return None for minimal testing (terminates tree)
             Option::<TestView>::None

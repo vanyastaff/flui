@@ -94,7 +94,8 @@ pub use protocol::{
     Animated, Provider, Proxy, RenderBox, RenderSliver, Stateful, Stateless, ViewMode, ViewProtocol,
 };
 pub use update_result::UpdateResult;
-pub use view::View;
+// View trait is internal - users should use StatelessView, StatefulView, etc.
+pub(crate) use view::View;
 pub use view_element::{BuildFn, ViewElement};
 pub use view_object::ViewObject;
 pub use view_state::ViewState;

@@ -9,7 +9,7 @@ use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
 use flui_core::view::children::Children;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_rendering::{RenderWrap, WrapAlignment, WrapCrossAlignment};
 use flui_types::Axis;
 
@@ -218,7 +218,7 @@ impl Default for Wrap {
 }
 
 // Implement View for Wrap - New architecture
-impl View for Wrap {
+impl StatelessView for Wrap {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render_wrap = RenderWrap::new(self.direction);
         render_wrap.alignment = self.alignment;
@@ -262,7 +262,7 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

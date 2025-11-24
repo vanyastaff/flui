@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderConstrainedBox;
 use flui_types::BoxConstraints;
@@ -131,7 +131,7 @@ impl<S: State> ConstrainedBoxBuilder<S> {
 }
 
 // Implement View for ConstrainedBox - New architecture
-impl View for ConstrainedBox {
+impl StatelessView for ConstrainedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let constraints = self.constraints.unwrap_or(BoxConstraints::UNCONSTRAINED);
         RenderConstrainedBox::new(constraints).maybe_child(self.child)

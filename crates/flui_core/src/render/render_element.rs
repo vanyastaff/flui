@@ -54,11 +54,12 @@ use crate::render::RuntimeArity;
 ///
 /// Use `begin_children_update()` / `commit_children_update()` for batch operations.
 pub struct RenderElement {
-    base: ElementBase,
+    /// Base element data (lifecycle, parent, slot)
+    pub base: ElementBase,
     protocol: LayoutProtocol,
     arity: RuntimeArity,
     render_object: RwLock<Box<dyn RenderObject>>,
-    render_state: RwLock<RenderState<BoxProtocol>>,
+    render_state: RwLock<RenderState>,
     offset: flui_types::Offset,
     children: Vec<ElementId>,
     updating_children: bool,
@@ -189,7 +190,7 @@ impl RenderElement {
 
     /// Returns reference to the render state lock.
     #[inline]
-    pub fn render_state(&self) -> &RwLock<RenderState<BoxProtocol>> {
+    pub fn render_state(&self) -> &RwLock<RenderState> {
         &self.render_state
     }
 
@@ -323,6 +324,7 @@ impl RenderElement {
     }
 
     /// Removes child without arity validation (used during unmount).
+    #[allow(dead_code)]
     pub(crate) fn forget_child(&mut self, child_id: ElementId) {
         self.children.retain(|&id| id != child_id);
     }

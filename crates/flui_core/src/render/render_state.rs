@@ -1,8 +1,14 @@
 //! RenderState - per-render state storage.
 //!
-//! Generic state storage for render objects, parameterized by Protocol.
-//! Provides lock-free flag checks for hot paths while using RwLock for
-//! actual data storage.
+//! **CRITICAL FIX (v2024-12-19)**: Refactored to use type-erased Geometry enum
+//! instead of generic Protocol parameter. This fixes the bug where `RenderElement`
+//! stored `RenderState<BoxProtocol>` but could contain Sliver render objects.
+//!
+//! # Why Type-Erased?
+//!
+//! The element tree must store render state without knowing the protocol type
+//! at compile time (protocol is a runtime `LayoutProtocol` enum). Type erasure
+//! via the `Geometry` and `Constraints` enums enables this cleanly.
 //!
 //! # Performance Design
 //!
@@ -13,12 +19,12 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! let state = RenderState::<BoxProtocol>::new();
+//! let state = RenderState::new();
 //!
 //! // Lock-free checks (fast!)
 //! if state.needs_layout() {
 //!     // Perform layout...
-//!     state.set_geometry(computed_size);
+//!     state.set_geometry(Geometry::Box(computed_size));
 //!     state.clear_needs_layout();
 //! }
 //! ```
@@ -26,33 +32,33 @@
 use flui_types::Offset;
 use parking_lot::RwLock;
 
-use crate::render::Protocol;
-
 use super::render_flags::{AtomicRenderFlags, RenderFlags};
+use super::render_object::{Geometry, Constraints};
 
-/// State for a Render
+/// State for a Render object using type-erased geometry and constraints.
 ///
 /// **Performance Critical Design**:
 /// - Atomic flags for lock-free checks (10x faster than RwLock)
 /// - RwLock for actual data (geometry, constraints, offset)
 /// - Separate locks to minimize contention
 ///
-/// # Type Parameters
+/// # Type Erasure
 ///
-/// - `P`: Protocol (BoxProtocol or SliverProtocol)
+/// Uses `Geometry` and `Constraints` enums instead of generic Protocol parameter.
+/// This enables storage in `RenderElement` which has runtime protocol dispatch.
 ///
 /// # Memory Layout
 ///
 /// ```text
-/// RenderState<P> {
-///     flags: 4 bytes (atomic)           ← Lock-free!
-///     geometry: RwLock<Option<...>>     ← Protocol::Geometry + lock
-///     constraints: RwLock<Option<...>>  ← Protocol::Constraints + lock
-///     offset: RwLock<Offset>            ← 8 bytes + lock
+/// RenderState {
+///     flags: 4 bytes (atomic)                           ← Lock-free!
+///     geometry: RwLock<Option<Geometry>>                ← Type-erased
+///     constraints: RwLock<Option<Constraints>>          ← Type-erased
+///     offset: RwLock<Offset>                            ← 8 bytes
 /// }
 /// ```
 #[derive(Debug)]
-pub struct RenderState<P: Protocol> {
+pub struct RenderState {
     /// Atomic flags for lock-free state checks
     ///
     /// **Critical for performance**: checking `needs_layout()` happens
@@ -60,19 +66,17 @@ pub struct RenderState<P: Protocol> {
     /// than RwLock for these hot paths.
     pub flags: AtomicRenderFlags,
 
-    /// Computed geometry after layout
+    /// Computed geometry after layout (type-erased)
     ///
     /// `None` if layout hasn't been computed yet.
-    /// For BoxProtocol: Size
-    /// For SliverProtocol: SliverGeometry
-    pub geometry: RwLock<Option<P::Geometry>>,
+    /// Can be either `Geometry::Box(Size)` or `Geometry::Sliver(SliverGeometry)`.
+    pub geometry: RwLock<Option<Geometry>>,
 
-    /// Constraints used for last layout
+    /// Constraints used for last layout (type-erased)
     ///
     /// Used for cache validation and relayout decisions.
-    /// For BoxProtocol: BoxConstraints
-    /// For SliverProtocol: SliverConstraints
-    pub constraints: RwLock<Option<P::Constraints>>,
+    /// Can be either `Constraints::Box(BoxConstraints)` or `Constraints::Sliver(SliverConstraints)`.
+    pub constraints: RwLock<Option<Constraints>>,
 
     /// Offset in parent's coordinate space
     ///
@@ -80,7 +84,7 @@ pub struct RenderState<P: Protocol> {
     pub offset: RwLock<Offset>,
 }
 
-impl<P: Protocol> RenderState<P> {
+impl RenderState {
     /// Create new RenderState with NEEDS_LAYOUT and NEEDS_PAINT flags
     ///
     /// New render objects always need initial layout and paint.
@@ -197,14 +201,14 @@ impl<P: Protocol> RenderState<P> {
 
     // ========== Geometry & Constraints ==========
 
-    /// Get computed geometry
+    /// Get computed geometry (type-erased)
     #[inline]
-    pub fn geometry(&self) -> Option<P::Geometry> {
+    pub fn geometry(&self) -> Option<Geometry> {
         self.geometry.read().clone()
     }
 
     /// Set computed geometry
-    pub fn set_geometry(&self, geometry: P::Geometry) {
+    pub fn set_geometry(&self, geometry: Geometry) {
         *self.geometry.write() = Some(geometry);
         self.flags.set(RenderFlags::HAS_GEOMETRY);
     }
@@ -215,14 +219,14 @@ impl<P: Protocol> RenderState<P> {
         self.flags.contains(RenderFlags::HAS_GEOMETRY)
     }
 
-    /// Get constraints
+    /// Get constraints (type-erased)
     #[inline]
-    pub fn constraints(&self) -> Option<P::Constraints> {
+    pub fn constraints(&self) -> Option<Constraints> {
         self.constraints.read().clone()
     }
 
     /// Set constraints
-    pub fn set_constraints(&self, constraints: P::Constraints) {
+    pub fn set_constraints(&self, constraints: Constraints) {
         *self.constraints.write() = Some(constraints);
     }
 
@@ -259,33 +263,35 @@ impl<P: Protocol> RenderState<P> {
     }
 }
 
-impl<P: Protocol> Default for RenderState<P> {
+impl Default for RenderState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// Specialized methods for BoxProtocol
-impl RenderState<crate::render::BoxProtocol> {
-    /// Get computed size (BoxProtocol convenience method)
+// Convenience methods for Box protocol
+impl RenderState {
+    /// Get computed size for Box protocol (panics if Sliver)
     #[inline]
     pub fn size(&self) -> flui_types::Size {
-        self.geometry().unwrap_or_default()
+        self.geometry()
+            .map(|g| g.as_box())
+            .unwrap_or_default()
     }
 
-    /// Set computed size (BoxProtocol convenience method)
+    /// Set computed size for Box protocol
     pub fn set_size(&self, size: flui_types::Size) {
-        self.set_geometry(size);
+        self.set_geometry(Geometry::Box(size));
     }
 
-    /// Check if size has been computed (BoxProtocol convenience method)
+    /// Check if size (box geometry) has been computed
     #[inline]
     pub fn has_size(&self) -> bool {
         self.has_geometry()
     }
 }
 
-impl<P: Protocol> Clone for RenderState<P> {
+impl Clone for RenderState {
     fn clone(&self) -> Self {
         Self {
             flags: self.flags.clone(),
@@ -299,14 +305,11 @@ impl<P: Protocol> Clone for RenderState<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::BoxProtocol;
     use flui_types::Size;
-
-    type BoxRenderState = RenderState<BoxProtocol>;
 
     #[test]
     fn test_render_state_creation() {
-        let state = BoxRenderState::new();
+        let state = RenderState::new();
         // New render states need layout and paint by default
         assert!(state.needs_layout());
         assert!(state.needs_paint());
@@ -315,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_layout_flags() {
-        let state = BoxRenderState::new();
+        let state = RenderState::new();
 
         state.mark_needs_layout();
         assert!(state.needs_layout());
@@ -325,18 +328,19 @@ mod tests {
     }
 
     #[test]
-    fn test_geometry_management() {
-        let state = BoxRenderState::new();
+    fn test_box_geometry_management() {
+        let state = RenderState::new();
         assert!(!state.has_geometry());
 
-        state.set_geometry(Size::new(100.0, 100.0));
+        let size = Size::new(100.0, 100.0);
+        state.set_geometry(Geometry::Box(size));
         assert!(state.has_geometry());
-        assert_eq!(state.geometry(), Some(Size::new(100.0, 100.0)));
+        assert_eq!(state.geometry(), Some(Geometry::Box(size)));
     }
 
     #[test]
     fn test_relayout_boundary() {
-        let state = BoxRenderState::new();
+        let state = RenderState::new();
         assert!(!state.is_relayout_boundary());
 
         state.set_relayout_boundary(true);
@@ -348,10 +352,10 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let state = BoxRenderState::new();
+        let state = RenderState::new();
 
         // New state already has needs_layout, set geometry
-        state.set_geometry(Size::new(50.0, 50.0));
+        state.set_geometry(Geometry::Box(Size::new(50.0, 50.0)));
 
         state.reset();
 
@@ -360,5 +364,16 @@ mod tests {
         assert!(!state.needs_paint());
         assert!(!state.has_geometry());
         assert_eq!(state.geometry(), None);
+    }
+
+    #[test]
+    fn test_size_convenience_methods() {
+        let state = RenderState::new();
+
+        let size = Size::new(200.0, 150.0);
+        state.set_size(size);
+
+        assert!(state.has_size());
+        assert_eq!(state.size(), size);
     }
 }

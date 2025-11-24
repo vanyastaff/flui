@@ -57,8 +57,13 @@
 // CORE VIEW SYSTEM (always needed)
 // ============================================================
 
-/// The main trait for creating UI components
-pub use crate::view::View;
+pub use crate::view::AnimatedView;
+pub use crate::view::ProviderView;
+pub use crate::view::ProxyView;
+pub use crate::view::RenderView;
+pub use crate::view::StatefulView;
+/// Specialized view traits (users implement these, not View directly)
+pub use crate::view::StatelessView;
 
 /// Context provided during view building
 pub use crate::view::BuildContext;
@@ -66,7 +71,7 @@ pub use crate::view::BuildContext;
 /// Trait for converting tuples to elements
 pub use crate::view::IntoElement;
 
-/// Element enum (Component/Render/Provider)
+/// Unified Element struct
 pub use crate::element::Element;
 
 // ============================================================

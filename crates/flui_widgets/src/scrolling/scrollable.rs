@@ -5,7 +5,7 @@
 
 use crate::layout::ScrollController;
 use flui_core::view::children::Child;
-use flui_core::view::{BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, StatelessView};
 use flui_types::layout::AxisDirection;
 
 /// Scrollable widget that handles gestures and scroll physics
@@ -111,7 +111,7 @@ impl Scrollable {
     }
 }
 
-impl View for Scrollable {
+impl StatelessView for Scrollable {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: Implement gesture detection and physics
         // For now, just pass through to child (Viewport)

@@ -35,7 +35,7 @@ use flui_core::render::RenderBoxExt;
 use flui_core::BuildContext;
 
 use flui_core::view::children::Children;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_rendering::RenderIndexedStack;
 use flui_types::layout::{Alignment, StackFit};
 
@@ -293,7 +293,7 @@ impl Default for IndexedStack {
 }
 
 // Implement View for IndexedStack - New architecture
-impl View for IndexedStack {
+impl StatelessView for IndexedStack {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderIndexedStack::with_alignment(self.index, self.alignment).children(self.children)
     }
@@ -389,7 +389,7 @@ mod tests {
         }
     }
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

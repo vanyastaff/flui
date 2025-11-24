@@ -31,7 +31,8 @@ pub type BuildFn = Box<dyn Fn() -> Element + Send + Sync>;
 ///
 /// [`View`]: crate::view::View
 pub struct ViewElement {
-    base: ElementBase,
+    /// Base element data (lifecycle, parent, slot)
+    pub base: ElementBase,
     builder: BuildFn,
     state: Box<dyn Any + Send>,
     child: Option<ElementId>,
@@ -190,20 +191,40 @@ impl ViewElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::BuildContext;
+    use std::any::Any;
+
+    // Mock ViewObject for testing
+    struct MockViewObject;
+
+    impl crate::view::ViewObject for MockViewObject {
+        fn mode(&self) -> crate::view::ViewMode {
+            crate::view::ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &BuildContext) -> crate::element::Element {
+            // Return a simple element
+            crate::element::Element::new(Box::new(MockViewObject))
+        }
+
+        fn init(&mut self, _ctx: &BuildContext) {}
+        fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
+        fn did_update(&mut self, _new_view: &dyn Any, _ctx: &BuildContext) {}
+        fn deactivate(&mut self, _ctx: &BuildContext) {}
+        fn dispose(&mut self, _ctx: &BuildContext) {}
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
 
     #[test]
     fn test_view_element_creation() {
-        let builder: BuildFn = Box::new(|| {
-            crate::element::Element::Provider(crate::element::ProviderElement::new(
-                Box::new(()),
-                Box::new(|| {
-                    crate::element::Element::Provider(crate::element::ProviderElement::new(
-                        Box::new(()),
-                        Box::new(|| panic!("not called")),
-                    ))
-                }),
-            ))
-        });
+        let builder: BuildFn = Box::new(|| crate::element::Element::new(Box::new(MockViewObject)));
 
         let component = ViewElement::new(builder);
         assert_eq!(component.child(), None);

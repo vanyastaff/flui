@@ -85,7 +85,7 @@ pub mod prelude {
     };
 
     // Re-export View trait
-    pub use flui_core::view::{IntoElement, View};
+    pub use flui_core::view::{IntoElement, StatelessView};
     pub use flui_core::BuildContext;
 
     // Re-export commonly used macros

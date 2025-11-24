@@ -142,7 +142,7 @@ impl PaintPipeline {
             };
 
             // Only paint RenderElements
-            let crate::element::Element::Render(render_elem) = element else {
+            let Some(render_elem) = element.as_render() else {
                 #[cfg(debug_assertions)]
                 tracing::trace!("Element {:?} is not a RenderElement, skipping", id);
                 continue;

@@ -4,7 +4,7 @@
 //! shadows, and shape.
 
 use bon::Builder;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::styling::BorderRadius;
 use flui_types::Color;
@@ -218,7 +218,7 @@ impl<S: State> MaterialBuilder<S> {
 }
 
 // Implement View trait
-impl View for Material {
+impl StatelessView for Material {
     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Get uniform border radius (use top_left as uniform)
         let radius = self.border_radius.top_left.x;

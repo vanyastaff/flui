@@ -23,7 +23,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::Color;
 
@@ -174,7 +174,7 @@ impl<S: State> DividerBuilder<S> {
 }
 
 // Implement View trait
-impl View for Divider {
+impl StatelessView for Divider {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Calculate effective height (use height if specified, otherwise thickness)
         let effective_height = self.height.unwrap_or(self.thickness);

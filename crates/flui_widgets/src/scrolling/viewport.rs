@@ -3,7 +3,7 @@
 //! This widget creates a RenderViewport and manages sliver layout.
 
 use flui_core::view::children::Children;
-use flui_core::view::{BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, StatelessView};
 use flui_rendering::RenderEmpty;
 use flui_types::layout::AxisDirection;
 use flui_types::painting::ClipBehavior;
@@ -130,7 +130,7 @@ impl Default for Viewport {
     }
 }
 
-impl View for Viewport {
+impl StatelessView for Viewport {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: RenderViewport not yet implemented
         // Placeholder using RenderEmpty until RenderViewport is available

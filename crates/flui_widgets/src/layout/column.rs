@@ -34,7 +34,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Children;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderFlex;
 use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
@@ -247,7 +247,7 @@ impl Default for Column {
 }
 
 // Implement View for Column
-impl View for Column {
+impl StatelessView for Column {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render_flex = RenderFlex::column()
             .with_main_axis_alignment(self.main_axis_alignment)
@@ -298,7 +298,7 @@ mod tests {
     #[derive(Clone)]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

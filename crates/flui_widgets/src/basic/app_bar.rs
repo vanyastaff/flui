@@ -13,7 +13,7 @@
 
 use bon::Builder;
 use flui_core::element::Element;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::prelude::Color;
 
@@ -168,7 +168,7 @@ impl<S: State> AppBarBuilder<S> {
 }
 
 // Implement View trait
-impl View for AppBar {
+impl StatelessView for AppBar {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // TODO: Add elevation support when PhysicalModel is available
         use crate::{ColoredBox, Row, SizedBox};

@@ -22,7 +22,7 @@
 //! ```
 
 use flui_core::element::Element;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_types::BoxConstraints;
 use std::sync::Arc;
@@ -118,7 +118,7 @@ impl LayoutBuilder {
 }
 
 // Implement View trait
-impl View for LayoutBuilder {
+impl StatelessView for LayoutBuilder {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
         // In a simplified implementation, we call the builder with unconstrained constraints
         // A full implementation would need a special RenderObject that rebuilds during layout

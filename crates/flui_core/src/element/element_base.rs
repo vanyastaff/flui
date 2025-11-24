@@ -70,7 +70,7 @@ use crate::foundation::{AtomicElementFlags, ElementFlags, Slot};
 /// - `mark_dirty()` - Request rebuild (thread-safe!)
 /// - `parent()` - Get parent element ID
 #[derive(Debug)]
-pub(crate) struct ElementBase {
+pub struct ElementBase {
     /// Parent element ID (None for root)
     parent: Option<ElementId>,
 

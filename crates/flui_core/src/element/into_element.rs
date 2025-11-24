@@ -1,248 +1,214 @@
-//! Universal interface for element conversion.
+//! IntoElement trait - Convert views/renders into Element nodes.
 //!
-//! Provides the `IntoElement` trait for converting any type into an `Element`.
+//! # Overview
 //!
-//! Similar to GPUI's `IntoElement` and Xilem's element conversion protocols.
+//! The `IntoElement` trait provides a way to convert various types (Views, ViewObjects,
+//! Elements, etc.) into Element nodes that can be inserted into the element tree.
 //!
-//! # Design
+//! # Sealed Trait
 //!
-//! ```text
-//! View ─────────┐
-//!               ├──→ IntoElement ──→ Element
-//! Renderer ─────┘
-//! ```
+//! This is a sealed trait - only types explicitly defined here can implement it.
+//! This prevents external code from creating arbitrary Element-convertible types
+//! and maintains control over the element creation protocol.
 //!
-//! Both Views and renderers (via RenderBoxExt) implement `IntoElement`,
-//! allowing them to be used interchangeably in the widget tree.
-//!
-//! # Example
+//! # Examples
 //!
 //! ```rust,ignore
-//! // Views implement IntoElement automatically
-//! impl View for Button {
-//!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         // Compose views - Container is also a View
-//!         Container::new()
-//!             .child(Text::new(self.label))
-//!     }
-//! }
+//! use flui_core::element::{Element, IntoElement};
+//! use flui_core::view::StatelessView;
 //!
-//! // Renderers use RenderBoxExt API
-//! impl View for Padding {
-//!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         RenderPadding::new(self.padding).maybe_child(self.child)
-//!     }
-//! }
+//! let view = MyStatelessView { text: "Hello".to_string() };
+//! let element: Element = view.into_element();
 //! ```
 
 use crate::element::Element;
+use crate::view::ViewObject;
 
-/// Sealed trait module - prevents external implementation of IntoElement
-pub(crate) mod sealed_into_element {
-    /// Sealed trait - only types in flui-core can implement IntoElement
-    pub trait Sealed {}
-
-    // Implement Sealed for all types that have IntoElement implementations
-
-    // Optional elements
-    impl<T: Sealed> Sealed for Option<T> {}
-
-    // Element types
-    impl Sealed for crate::element::Element {}
-    impl Sealed for crate::element::RenderElement {}
-    impl Sealed for crate::element::ComponentElement {}
-    impl Sealed for crate::element::ProviderElement {}
-
-    // RenderBoxExt wrapper types
-    impl<R: crate::render::RenderBox<crate::render::Leaf>> Sealed for crate::render::WithLeaf<R> {}
-    impl<R: crate::render::RenderBox<crate::render::Single>, C: crate::view::IntoElement> Sealed
-        for crate::render::WithChild<R, C>
-    {
-    }
-    impl<R: crate::render::RenderBox<crate::render::Single>> Sealed
-        for crate::render::WithOptionalChild<R>
-    {
-    }
-    impl<R: crate::render::RenderBox<crate::render::Optional>> Sealed
-        for crate::render::WithMaybeChild<R>
-    {
-    }
-    impl<R: crate::render::RenderBox<crate::render::Variable>> Sealed
-        for crate::render::WithChildren<R>
-    {
-    }
-
-    // SliverExt wrapper types
-    impl<S: crate::render::SliverRender<crate::render::Leaf>> Sealed
-        for crate::render::SliverWithLeaf<S>
-    {
-    }
-    impl<S: crate::render::SliverRender<crate::render::Single>, C: crate::view::IntoElement> Sealed
-        for crate::render::SliverWithChild<S, C>
-    {
-    }
-    impl<S: crate::render::SliverRender<crate::render::Single>, C: crate::view::IntoElement> Sealed
-        for crate::render::SliverWithOptionalChild<S, C>
-    {
-    }
-    impl<S: crate::render::SliverRender<crate::render::Variable>, C: crate::view::IntoElement>
-        Sealed for crate::render::SliverWithChildren<S, C>
-    {
-    }
-}
-
-/// Universal interface for converting types into Elements.
+/// Converts a type into an Element.
 ///
-/// Enables FLUI's flexible composition system where Views, RenderObjects,
-/// and various helper types can be used interchangeably.
-///
-/// # Purpose
-///
-/// Bridges the View tree (immutable configuration) and Element tree (mutable state):
-///
-/// 1. Automatic conversion: `View → Element`
-/// 2. RenderBoxExt API: `RenderObject.leaf()` / `.child()` / `.children()`
-/// 3. Flexible composition: Mix different types in the same tree
+/// This sealed trait enables automatic conversion of Views, ViewObjects,
+/// and other types into Element nodes for insertion into the element tree.
 ///
 /// # Sealed Trait
 ///
-/// This trait is sealed. Only flui-core provides implementations.
+/// This is a sealed trait - only the types explicitly implemented below
+/// can implement this trait. This ensures type safety and prevents misuse.
 ///
-/// To use:
-/// - Implement `View` trait for composable widgets
-/// - Use `RenderBoxExt` for render objects
-/// - Framework provides `IntoElement` automatically
-///
-/// # Automatic Implementations
-///
-/// The framework provides implementations for:
-///
-/// | Type | Description | Example |
-/// |------|-------------|---------|
-/// | `impl View` | All views automatically | `Text::new("Hello")` |
-/// | `WithLeaf<R>` | Leaf render (no children) | `render.leaf()` |
-/// | `WithChild<R, C>` | Single child | `render.child(child)` |
-/// | `WithOptionalChild<R, C>` | Optional child | `render.maybe_child(child)` |
-/// | `WithChildren<R, C>` | Multiple children | `render.children(vec![...])` |
-/// | `AnyElement` | Type-erased element | `AnyElement::new(view)` |
-/// | `Option<T>` | Optional element | `Some(view)` or `None` |
-///
-/// # Design Rationale
-///
-/// IntoElement unifies different widget patterns under a single interface:
-///
-/// ```text
-/// View ────────┐
-///              ├──→ IntoElement ──→ Element ──→ ElementTree
-/// RenderObject ┘
-/// ```
-///
-/// This is similar to:
-/// - **GPUI**: `IntoElement` trait for unified element creation
-/// - **Xilem**: Element conversion protocols
-/// - **React**: JSX transpiles to `React.createElement()`
-///
-/// # Usage
-///
-/// ## Views (Automatic)
-///
-/// ```rust,ignore
-/// impl View for MyWidget {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         // Return another View - IntoElement impl is automatic!
-///         Column::new()
-///             .child(Text::new(self.title))
-///             .child(Text::new(self.body))
-///     }
-/// }
-/// ```
-///
-/// ## RenderBoxExt API
-///
-/// ```rust,ignore
-/// impl View for Padding {
-///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-///         RenderPadding::new(self.padding).maybe_child(self.child)
-///     }
-/// }
-/// ```
-///
-/// # Not Object-Safe
-///
-/// Like GPUI's `IntoElement`, this trait is not object-safe due to:
-/// - `Sized` bound
-/// - `impl Trait` return type
-///
-/// For dynamic dispatch, use `AnyElement` instead.
-pub trait IntoElement: sealed_into_element::Sealed + Sized + 'static {
-    /// Converts this type into an Element.
-    ///
-    /// Called by the framework to build the element tree. Converts children
-    /// recursively and returns the final Element.
-    ///
-    /// # Implementation
-    ///
-    /// Most types do not implement this directly:
-    /// - Views use the blanket implementation
-    /// - Renderers use `RenderBoxExt`: `.leaf()`, `.child()`, etc.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Automatic via View:
-    /// impl<V: View> IntoElement for V {
-    ///     fn into_element(self) -> Element {
-    ///         let ctx = current_build_context();
-    ///         let element_like = self.build(ctx);
-    ///         element_like.into_element()
-    ///     }
-    /// }
-    /// ```
+/// If you need to convert a custom type to Element, it should go through
+/// the appropriate View trait (StatelessView, StatefulView, RenderView, etc).
+pub trait IntoElement: sealed::Sealed + Sized + 'static {
+    /// Convert this value into an Element.
     fn into_element(self) -> Element;
 }
 
+/// Sealed trait marker - prevents external implementations.
+pub(crate) mod sealed {
+    /// Marker trait to seal IntoElement.
+    pub trait Sealed {}
+}
+
 // ============================================================================
-// Automatic implementations
+// IMPLEMENTATIONS FOR ELEMENT
 // ============================================================================
 
-// Note: Views are NOT converted via IntoElement directly.
-// Instead, they use ViewObject wrappers (StatelessViewWrapper, etc.)
-// which handle lifecycle and type erasure.
+impl sealed::Sealed for Element {}
 
-/// Identity implementation for Element itself.
-        ///
-        /// Enables Element to be returned directly from build():
-        ///
-        /// ```rust,ignore
-        /// fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        ///     // Can return Element directly
-        ///     some_view.into_element()
-        /// }
-        /// ```
-        impl IntoElement for Element {
-            fn into_element(self) -> Element {
-                self
-            }
-        }
+impl IntoElement for Element {
+    /// Element already is an Element, so conversion is identity.
+    #[inline]
+    fn into_element(self) -> Element {
+        self
+    }
+}
 
-/// Implementation for optional elements.
-///
-/// Enables optional children:
-///
-/// ```rust,ignore
-/// Container::new()
-///     .child(self.child)  // child: Option<impl IntoElement>
-/// ```
+// ============================================================================
+// IMPLEMENTATIONS FOR VIEWOBJECT
+// ============================================================================
+
+impl sealed::Sealed for Box<dyn ViewObject> {}
+
+impl IntoElement for Box<dyn ViewObject> {
+    /// Wrap ViewObject in an Element.
+    #[inline]
+    fn into_element(self) -> Element {
+        Element::new(self)
+    }
+}
+
+// ============================================================================
+// IMPLEMENTATIONS FOR OPTION
+// ============================================================================
+
+impl<T: IntoElement> sealed::Sealed for Option<T> {}
+
 impl<T: IntoElement> IntoElement for Option<T> {
+    /// Convert Option into Element.
+    ///
+    /// Some(value) converts to the inner element.
+    /// None will panic - use Option only when you're sure it's Some.
     fn into_element(self) -> Element {
         match self {
             Some(element) => element.into_element(),
             None => {
-                // Return empty render element with zero size
-                use crate::render::{EmptyRender, RenderBoxExt};
-
-                EmptyRender.leaf().into_element()
+                panic!(
+                    "Option::None cannot be converted to Element. \
+                     Use `.map(|x| x.into_element())` or provide a default view."
+                )
             }
         }
+    }
+}
+
+// ============================================================================
+// IMPLEMENTATIONS FOR TUPLE (MULTI-CHILD)
+// ============================================================================
+
+/// Tuple types can be converted to Elements for multi-child containers.
+/// For example: (RenderColumn, vec![child1, child2])
+
+impl<T0: IntoElement, T1: IntoElement> sealed::Sealed for (T0, T1) {}
+
+impl<T0: IntoElement, T1: IntoElement> IntoElement for (T0, T1) {
+    fn into_element(self) -> Element {
+        // Framework handles tuple conversion specially.
+        // This is a placeholder - actual logic is in pipeline.
+        unimplemented!(
+            "Tuple conversion is handled by framework's IntoElement machinery, \
+             not directly through this impl"
+        )
+    }
+}
+
+// ============================================================================
+// IMPLEMENTATIONS FOR VEC (MULTI-CHILD SEQUENCES)
+// ============================================================================
+
+impl<T: IntoElement> sealed::Sealed for Vec<T> {}
+
+impl<T: IntoElement> IntoElement for Vec<T> {
+    fn into_element(self) -> Element {
+        // Framework handles Vec<Element> specially for multi-child containers.
+        // This is a placeholder - actual logic is in pipeline.
+        unimplemented!(
+            "Vec<T> conversion is handled by framework's IntoElement machinery, \
+             not directly through this impl"
+        )
+    }
+}
+
+// ============================================================================
+// IMPLEMENTATIONS FOR UNIT (EMPTY/PLACEHOLDER)
+// ============================================================================
+
+impl sealed::Sealed for () {}
+
+impl IntoElement for () {
+    fn into_element(self) -> Element {
+        unimplemented!(
+            "() cannot be converted to Element. \
+             Use a proper empty/placeholder view instead."
+        )
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::view::ViewMode;
+    use std::any::Any;
+
+    struct MockViewObject;
+
+    impl ViewObject for MockViewObject {
+        fn build(&mut self, _ctx: &crate::view::BuildContext) -> Element {
+            Element::new(Box::new(MockViewObject))
+        }
+        fn init(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn did_change_dependencies(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn did_update(&mut self, _new_view: &dyn Any, _ctx: &crate::view::BuildContext) {}
+        fn deactivate(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn dispose(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn mode(&self) -> ViewMode {
+            ViewMode::Stateless
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn test_element_into_element() {
+        let element = Element::new(Box::new(MockViewObject));
+        let result = element.into_element();
+        assert_eq!(result.mode(), ViewMode::Stateless);
+    }
+
+    #[test]
+    fn test_box_view_object_into_element() {
+        let view_object: Box<dyn ViewObject> = Box::new(MockViewObject);
+        let element = view_object.into_element();
+        assert_eq!(element.mode(), ViewMode::Stateless);
+    }
+
+    #[test]
+    fn test_option_some_into_element() {
+        let view_object = Box::new(MockViewObject);
+        let option: Option<Box<dyn ViewObject>> = Some(view_object);
+        let element = option.into_element();
+        assert_eq!(element.mode(), ViewMode::Stateless);
+    }
+
+    #[test]
+    #[should_panic(expected = "Option::None cannot be converted")]
+    fn test_option_none_into_element_panics() {
+        let option: Option<Element> = None;
+        let _ = option.into_element();
     }
 }

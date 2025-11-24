@@ -34,7 +34,7 @@ use crate::ElementId;
 /// - Only registered dependents are rebuilt (efficient selective updates)
 pub struct ProviderElement {
     /// Common element data (parent, slot, lifecycle, dirty)
-    base: ElementBase,
+    pub base: ElementBase,
 
     /// The data being provided to descendants
     provided: Box<dyn Any + Send + Sync>,
@@ -203,6 +203,7 @@ impl ProviderElement {
     }
 
     /// Forget child element
+    #[allow(dead_code)]
     pub(crate) fn forget_child(&mut self, child_id: ElementId) {
         if self.child == Some(child_id) {
             self.child = None;
@@ -210,6 +211,7 @@ impl ProviderElement {
     }
 
     /// Update slot for child (no-op for single child)
+    #[allow(dead_code)]
     pub(crate) fn update_slot_for_child(&mut self, _child_id: ElementId, _new_slot: usize) {
         // ProviderElement always has exactly one child at slot 0
     }

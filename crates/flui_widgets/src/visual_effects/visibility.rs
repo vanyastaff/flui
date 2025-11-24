@@ -16,7 +16,7 @@
 //! ```
 
 use bon::Builder;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderVisibility;
 
@@ -310,7 +310,7 @@ impl<S: State> VisibilityBuilder<S> {
 }
 
 // Implement View trait
-impl View for Visibility {
+impl StatelessView for Visibility {
     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         // Determine which child to show
         let child = if self.visible {

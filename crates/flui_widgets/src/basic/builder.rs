@@ -13,7 +13,7 @@
 //! ```
 
 use flui_core::element::Element;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use std::sync::Arc;
 
@@ -105,7 +105,7 @@ impl Builder {
 }
 
 // Implement View trait
-impl View for Builder {
+impl StatelessView for Builder {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
         // Call the builder function with the context
         (self.builder)(ctx)

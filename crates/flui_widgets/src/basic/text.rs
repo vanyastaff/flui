@@ -43,7 +43,7 @@
 
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::{ParagraphData, RenderParagraph};
 use flui_types::{
@@ -299,7 +299,7 @@ impl<S: State> TextBuilder<S> {
 }
 
 // Implement View for Text - Simplified API
-impl View for Text {
+impl StatelessView for Text {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create paragraph data
         let data = ParagraphData::new(&self.data)

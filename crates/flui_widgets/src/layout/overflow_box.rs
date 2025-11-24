@@ -7,7 +7,7 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderOverflowBox;
@@ -256,7 +256,7 @@ impl<S: State> OverflowBoxBuilder<S> {
 }
 
 // Implement View trait - Simplified API
-impl View for OverflowBox {
+impl StatelessView for OverflowBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let render = RenderOverflowBox::with_constraints(
             self.min_width,

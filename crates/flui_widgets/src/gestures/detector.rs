@@ -4,7 +4,7 @@
 //! callbacks for various pointer events.
 
 use flui_core::element::Element;
-use flui_core::view::{BuildContext, IntoElement, View};
+use flui_core::view::{BuildContext, IntoElement, StatelessView};
 use flui_rendering::objects::PointerCallbacks;
 use flui_types::events::{PointerEvent, PointerEventData};
 use std::sync::Arc;
@@ -64,7 +64,7 @@ impl GestureDetector {
     }
 }
 
-impl View for GestureDetector {
+impl StatelessView for GestureDetector {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Create PointerCallbacks from our simpler callbacks
         let mut callbacks = PointerCallbacks::new();
@@ -247,7 +247,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockWidget;
 
-    impl View for MockWidget {
+    impl StatelessView for MockWidget {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

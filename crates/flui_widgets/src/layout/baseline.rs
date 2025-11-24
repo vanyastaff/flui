@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderBaseline;
 use flui_types::typography::TextBaseline;
@@ -176,7 +176,7 @@ impl Default for Baseline {
 }
 
 // Implement View for Baseline - New architecture
-impl View for Baseline {
+impl StatelessView for Baseline {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let baseline = self.baseline.unwrap_or(0.0);
 
@@ -234,7 +234,7 @@ mod tests {
     #[derive()]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

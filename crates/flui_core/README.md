@@ -1,638 +1,322 @@
 # flui_core
 
-[![Crates.io](https://img.shields.io/crates/v/flui_core.svg)](https://crates.io/crates/flui_core)
-[![Documentation](https://docs.rs/flui_core/badge.svg)](https://docs.rs/flui_core)
-[![License](https://img.shields.io/crates/l/flui_core.svg)](https://github.com/yourusername/flui/blob/main/LICENSE)
+Core reactive UI framework for FLUI - implements the three-tree architecture (View → Element → Render) with Flutter-inspired lifecycle management.
 
-**Core framework for FLUI - A reactive UI framework for Rust inspired by Flutter**
+## Overview
 
-FLUI provides a declarative, view-based API for building high-performance user interfaces in Rust with automatic state management and efficient rendering.
+`flui_core` is the heart of FLUI, providing:
 
-## Features
-
-- 🎯 **Type-Safe View System** - Compile-time view type checking with zero runtime overhead
-- 🚀 **High Performance** - Enum-based dispatch (3-4x faster than Box<dyn> trait objects)
-- ♻️ **Automatic Reactivity** - Smart rebuilding only when state actually changes with hooks
-- 🎨 **Flexible Rendering** - Clean separation between views, state, and rendering
-- 🔧 **Modern Hooks API** - Use signals, effects, and memos for reactive state
-- 🏗️ **Component-Based** - Composable views with clean interfaces
-- 📦 **Efficient Memory** - Slab-based element tree with O(1) access
-- 🔌 **Provider Pattern** - Efficient data propagation with automatic dependency tracking
-
-## Quick Start
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-flui_core = "0.1"
-```
-
-### Hello World
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Debug, Clone)]
-struct HelloWorld;
-
-impl View for HelloWorld {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        Text::new("Hello, World!")
-    }
-}
-```
-
-Views are composable UI components that build UIs from other views or renderers. They can manage state using hooks.
-
-### Counter with State
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Debug, Clone)]
-struct Counter {
-    initial: i32,
-}
-
-impl View for Counter {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        // Reactive state with hooks
-        let count = use_signal(ctx, self.initial);
-
-        // No clone needed - Signal is Copy!
-        Column {
-            children: vec![
-                Box::new(Text::new(format!("Count: {}", count.get()))),
-                Box::new(Button {
-                    label: "Increment".to_string(),
-                    on_press: Some(Box::new(move || {
-                        count.update(|c| *c += 1);
-                    })),
-                }),
-            ],
-        }
-    }
-}
-```
-
-### Tuple Syntax for Renderers
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Debug, Clone)]
-struct Padding {
-    padding: f32,
-    child: Option<Box<dyn AnyView>>,
-}
-
-impl View for Padding {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        // Tuple syntax: (Renderer, Option<child>)
-        (RenderPadding::new(self.padding), self.child)
-    }
-}
-```
+- **View System** - Declarative UI descriptions with specialized traits
+- **Element Tree** - Mutable element lifecycle management with unified architecture
+- **Render Protocol** - Layout and paint abstraction layer
+- **Pipeline** - Coordinated build/layout/paint phases
+- **Hooks** - React-like state management (thread-safe)
 
 ## Architecture
 
-FLUI uses a **three-tree architecture** for optimal performance:
+### Three-Tree System
 
-```text
-┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│  View Tree      │      │  Element Tree   │      │  Render Tree    │
-│                 │      │                 │      │                 │
-│  (Immutable     │ ───> │  (Mutable       │ ───> │  (Layout &      │
-│   Configuration)│      │   State)        │      │   Paint)        │
-└─────────────────┘      └─────────────────┘      └─────────────────┘
+```
+View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
+     └─ Views                 └─ Elements              └─ RenderObjects
+        StatelessView            ViewObject              LeafRender
+        StatefulView             RenderViewWrapper       SingleRender
+        RenderView               ProviderViewWrapper     MultiRender
 ```
 
-### View Tree (Immutable Configuration)
+### Unified Element (v0.7.0)
 
-Views are lightweight, immutable descriptions of what the UI should look like:
-
-```rust
-pub trait View: 'static {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement;
-}
-
-// Views return one of:
-// - Another View (composition)
-// - Tuple of (Renderer, children) for custom rendering
-// - Element (via IntoElement trait)
-```
-
-### Element Tree (Mutable State)
-
-Elements hold the living state and lifecycle of views. They persist across rebuilds:
+FLUI uses a **unified Element struct** where all type-specific behavior is delegated to `ViewObject`:
 
 ```rust
-pub enum Element {
-    Component(ComponentElement),      // Component view instance with optional state
-    Provider(InheritedElement),       // Provider for data propagation
-    Render(RenderElement),            // Bridge to render tree
+pub struct Element {
+    parent: Option<ElementId>,
+    children: Vec<ElementId>,
+    lifecycle: ElementLifecycle,
+    view_object: Box<dyn ViewObject>,
 }
 ```
 
-### Render Tree (Layout & Paint)
+**Benefits:**
+- Single struct instead of enum - no dispatch overhead
+- Extensible - add new view types without changing Element
+- Flutter-like architecture with Rust idioms
+- Clean separation of concerns
 
-Renderers perform layout calculations and produce visual output:
+### ViewObject Trait
+
+The `ViewObject` trait provides dynamic dispatch for view lifecycle:
 
 ```rust
-pub trait Render: Send + Sync + Debug + 'static {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size;
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer;
-    fn arity(&self) -> Arity { Arity::Variable }
+pub trait ViewObject: Send {
+    // Core lifecycle
+    fn build(&mut self, ctx: &BuildContext) -> Element;
+    fn mode(&self) -> ViewMode;
+    
+    // Optional lifecycle hooks
+    fn init(&mut self, ctx: &BuildContext) {}
+    fn did_update(&mut self, new_view: &dyn Any, ctx: &BuildContext) {}
+    fn dispose(&mut self, ctx: &BuildContext) {}
+    
+    // Type-specific methods (default: None)
+    fn render_object(&self) -> Option<&dyn RenderObject> { None }
+    fn render_state(&self) -> Option<&RenderState> { None }
+    fn provided_value(&self) -> Option<&(dyn Any + Send + Sync)> { None }
+    fn dependents(&self) -> Option<&[ElementId]> { None }
 }
-
-// Context structs provide access to children and tree:
-// - LayoutContext: constraints, children, tree access for layout
-// - PaintContext: offset, children, tree access for painting
 ```
 
-## View Patterns
+**ViewObject Implementations:**
+- `StatelessViewWrapper<V>` - Wraps `StatelessView`
+- `StatefulViewWrapper<V, S>` - Wraps `StatefulView<S>`
+- `AnimatedViewWrapper<V, L>` - Wraps `AnimatedView<L>`
+- `ProviderViewWrapper<V, T>` - Wraps `ProviderView<T>`, stores value + dependents
+- `ProxyViewWrapper<V>` - Wraps `ProxyView`
+- `RenderViewWrapper<V, P, A>` - Wraps `RenderView<P, A>`, stores render object + state
 
-FLUI provides a unified View trait with different implementation patterns:
+## View Types
 
-### Composable Views
+### StatelessView - Simple Views
 
-Views that build UIs from other views:
+For views without internal state:
 
 ```rust
-use flui_core::prelude::*;
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Greeting {
     name: String,
 }
 
-impl View for Greeting {
+impl StatelessView for Greeting {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         Text::new(format!("Hello, {}!", self.name))
     }
 }
+```
 
-// With state using hooks:
-#[derive(Debug, Clone)]
-struct Toggle {
-    initial: bool,
+### StatefulView - Persistent State
+
+For views with mutable state that persists across rebuilds:
+
+```rust
+#[derive(Debug)]
+struct Counter;
+
+#[derive(Debug)]
+struct CounterState {
+    count: i32,
 }
 
-impl View for Toggle {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        let enabled = use_signal(ctx, self.initial);
-
-        Checkbox {
-            value: enabled.get(),
-            on_change: Some(Box::new(move |val| enabled.set(val))),
-        }
+impl StatefulView<CounterState> for Counter {
+    fn build(&self, state: &CounterState, _ctx: &BuildContext) -> impl IntoElement {
+        Column::new()
+            .child(Text::new(format!("Count: {}", state.count)))
+            .child(Button::new("Increment"))
+    }
+    
+    fn init_state(&self) -> CounterState {
+        CounterState { count: 0 }
     }
 }
 ```
 
-**When to use**: Display components, user interactions, animations, form inputs, most UI composition.
+### RenderView - Custom Layout/Paint
 
-**State management**:
-- Hooks: `use_signal`, `use_effect`, `use_memo` for reactive state
-
-### Provider Pattern
-
-Efficient data propagation with automatic dependency tracking:
+For views that need custom layout and paint logic:
 
 ```rust
-use flui_core::prelude::*;
-
-#[derive(Debug, Clone)]
-struct Theme {
-    color: Color,
-    child: Box<dyn AnyView>,
-}
-
-impl View for Theme {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        // Providers are implemented via Element::Provider variant
-        // This provides theme data to descendants
-        Element::Provider(ProviderElement::new(self, self.child))
-    }
-}
-
-// Access from descendants:
-let theme = ctx.get_provider::<Theme>()?;
-let color = theme.color;
-```
-
-**When to use**: Themes, localization, configuration, app-wide state.
-
-**Key features**:
-- Automatic dependency tracking
-- Only rebuilds dependents when data changes
-- Type-safe access via generics
-
-### Custom Renderers
-
-Direct control over layout and painting using tuple syntax:
-
-```rust
-use flui_core::prelude::*;
-
-// View that wraps a custom renderer
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct CustomBox {
-    width: f32,
-    height: f32,
     color: Color,
+    size: Size,
 }
 
-impl View for CustomBox {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        // Tuple syntax: (Renderer, ())
-        // The () indicates no children (leaf renderer)
-        (RenderCustomBox {
-            width: self.width,
-            height: self.height,
+#[derive(Debug)]
+struct CustomBoxRender {
+    color: Color,
+    size: Size,
+}
+
+impl RenderBox<Leaf> for CustomBoxRender {
+    fn layout(&mut self, _ctx: LayoutContext<Leaf, BoxProtocol>) -> Size {
+        self.size
+    }
+    
+    fn paint(&self, ctx: &mut PaintContext<Leaf>) {
+        ctx.canvas.draw_rect(Rect::from_size(self.size), self.color);
+    }
+}
+
+impl RenderView<BoxProtocol, Leaf> for CustomBox {
+    type RenderObject = CustomBoxRender;
+    
+    fn create(&self) -> CustomBoxRender {
+        CustomBoxRender {
             color: self.color,
-        }, ())
-    }
-}
-
-// Implement the Render trait
-#[derive(Debug)]
-struct RenderCustomBox {
-    width: f32,
-    height: f32,
-    color: Color,
-}
-
-impl Render for RenderCustomBox {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        ctx.constraints.constrain(Size::new(self.width, self.height))
-    }
-
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
-        Box::new(PictureLayer::new(/* draw at ctx.offset */))
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)  // No children
-    }
-}
-```
-
-**When to use**: Custom layouts, complex drawing, performance-critical rendering.
-
-## Render Patterns
-
-The Render trait handles all child counts through context structs:
-
-### Leaf Renderer (No Children)
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Debug)]
-struct RenderCircle {
-    radius: f32,
-    color: Color,
-}
-
-impl Render for RenderCircle {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let size = self.radius * 2.0;
-        ctx.constraints.constrain(Size::new(size, size))
-    }
-
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
-        // Draw circle at ctx.offset
-        Box::new(PictureLayer::circle(ctx.offset, self.radius, self.color))
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(0)  // No children
-    }
-}
-```
-
-### Single Child Renderer
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Debug)]
-struct RenderOpacity {
-    opacity: f32,
-}
-
-impl Render for RenderOpacity {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        // Get single child from context
-        let child_id = ctx.children.single();
-        // Layout child with same constraints
-        ctx.layout_child(child_id, ctx.constraints)
-    }
-
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
-        let child_id = ctx.children.single();
-        let child_layer = ctx.paint_child(child_id, ctx.offset);
-        Box::new(OpacityLayer::new(child_layer, self.opacity))
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Exact(1)  // Exactly one child
-    }
-}
-```
-
-### Multiple Children Renderer
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Debug)]
-struct RenderRow {
-    spacing: f32,
-}
-
-impl Render for RenderRow {
-    fn layout(&mut self, ctx: &LayoutContext) -> Size {
-        let mut x = 0.0;
-        let mut max_height = 0.0;
-
-        // Iterate over children
-        for &child_id in ctx.children.as_slice() {
-            let child_size = ctx.layout_child(child_id, ctx.constraints);
-            x += child_size.width + self.spacing;
-            max_height = max_height.max(child_size.height);
+            size: self.size,
         }
-
-        Size::new(x, max_height)
     }
-
-    fn paint(&self, ctx: &PaintContext) -> BoxedLayer {
-        let mut container = ContainerLayer::new();
-        let mut x = 0.0;
-
-        for &child_id in ctx.children.as_slice() {
-            let offset = Offset::new(x, 0.0);
-            let layer = ctx.paint_child(child_id, ctx.offset + offset);
-            container.add_child(layer);
-            x += ctx.get_size(child_id).width + self.spacing;
+    
+    fn update(&self, render: &mut CustomBoxRender) -> UpdateResult {
+        if render.color != self.color || render.size != self.size {
+            render.color = self.color;
+            render.size = self.size;
+            UpdateResult::NeedsLayout
+        } else {
+            UpdateResult::Unchanged
         }
-
-        Box::new(container)
-    }
-
-    fn arity(&self) -> Arity {
-        Arity::Variable  // Any number of children
     }
 }
 ```
 
-## Key Features Explained
+## Hooks
 
-### 🎯 Unified View Trait
+FLUI provides React-like hooks for state management. **All hooks are thread-safe** using `Arc`/`Mutex`.
 
-FLUI uses a single unified View trait for all UI components:
-
-```rust
-pub trait View: 'static {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement;
-}
-
-// All views implement this single trait:
-// - Composable views return other views
-// - Custom renderers return tuples (Renderer, children)
-// - Providers create Element::Provider directly
-```
-
-**Benefits**:
-- Single trait to learn (no Component/Provider/Render distinctions)
-- Compile-time type checking via impl IntoElement
-- Thread-local BuildContext (no &mut needed)
-- Zero-cost abstractions with inline expansion
-
-### 🏗️ Tuple Syntax for Renderers
-
-FLUI uses tuple syntax to connect views with custom renderers:
+### use_signal - Reactive State
 
 ```rust
-// Leaf renderer (no children): (Renderer, ())
-impl View for MyLeaf {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        (MyLeafRenderer::new(), ())
-    }
-}
-
-// Single child: (Renderer, Option<child>)
-impl View for MyPadding {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        (MyPaddingRenderer::new(), self.child)
-    }
-}
-
-// Multiple children: (Renderer, Vec<child>)
-impl View for MyColumn {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        (MyColumnRenderer::new(), self.children)
-    }
-}
-```
-
-The tuple syntax provides clear, type-safe connection between views and renderers.
-
-### 🎯 Object-Safe Traits
-
-All traits are object-safe and work with dynamic dispatch:
-
-```rust
-// ✅ AnyView for heterogeneous view storage
-let views: Vec<Box<dyn AnyView>> = vec![
-    Box::new(Text::new("Hello")),
-    Box::new(Button { /* ... */ }),
-];
-
-// ✅ Render trait is object-safe
-let renderer: Box<dyn Render> = Box::new(RenderCircle { /* ... */ });
-```
-
-### 🚀 Enum-Based Dispatch
-
-Using enums instead of `Box<dyn>` provides **3-4x performance improvement**:
-
-```rust
-// Match-based dispatch (fast!)
-match element {
-    Element::Component(c) => c.build(),
-    Element::Provider(p) => p.propagate(),
-    Element::Render(r) => r.layout(),
-}
-
-// Compiler can heavily optimize enum dispatch with:
-// - Inline optimizations
-// - Better cache locality
-// - No virtual function overhead
-```
-
-### 🔧 Modern Hooks API
-
-FLUI provides React-like hooks for reactive state management:
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Debug, Clone)]
-struct MyCounter;
-
-impl View for MyCounter {
+impl StatelessView for Counter {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        // Reactive state
         let count = use_signal(ctx, 0);
-
-        // Side effects (Signal is Copy - no clone needed!)
-        use_effect(ctx, move || {
-            println!("Count changed: {}", count.get());
-            None  // No cleanup
-        });
-
-        // Memoized computation (Signal is Copy - no clone needed!)
-        let doubled = use_memo(ctx, move || count.get() * 2);
-
-        // Signal is Copy - no clone needed!
-        Column {
-            children: vec![
-                Box::new(Text::new(format!("Count: {} (doubled: {})", count.get(), doubled))),
-                Box::new(Button {
-                    label: "Increment".to_string(),
-                    on_press: Some(Box::new(move || count.update(|c| *c += 1))),
-                }),
-            ],
-        }
+        let count_clone = count.clone(); // Clone before moving into closure
+        
+        Column::new()
+            .child(Text::new(format!("Count: {}", count.get())))
+            .child(Button::new("Increment")
+                .on_pressed(move || count_clone.update(|c| *c += 1)))
     }
 }
 ```
 
-**Key features**:
-- **Signal is Copy** - No need to clone before moving into closures!
-- Thread-safe (uses thread-local signal runtime)
-- Automatic rebuild scheduling when signal changes
-- Composable and reusable
-- Must follow hook rules (same order, no conditionals)
+### use_memo - Derived State
 
-### 📦 Slab-Based Element Tree
+```rust
+let count = use_signal(ctx, 0);
+let doubled = use_memo(ctx, move |_| count.get() * 2);
 
-Efficient memory layout with O(1) access:
+println!("Doubled: {}", doubled.get());
+```
+
+### use_effect - Side Effects
+
+```rust
+use_effect(ctx, move || {
+    println!("Component mounted");
+    
+    Some(Box::new(move || {
+        println!("Component unmounted");
+    }))
+});
+```
+
+**Hook Rules (CRITICAL):**
+1. ✅ Always call hooks in the same order
+2. ❌ Never call hooks conditionally
+3. ❌ Never call hooks in loops with variable iterations
+4. ✅ Clone signals before moving into closures
+
+Breaking these rules causes **panics**. See `src/hooks/RULES.md` for details.
+
+## Element Tree
+
+Elements are stored in a `Slab` arena:
 
 ```rust
 pub struct ElementTree {
-    nodes: Slab<ElementNode>,  // Contiguous memory allocation
+    nodes: Slab<ElementNode>,
+    roots: Vec<ElementId>,
 }
-
-// Fast access by ID
-let element = tree.get(element_id)?;  // O(1)
 ```
 
-## Performance
+**Key Points:**
+- ElementId uses `NonZeroUsize` for niche optimization (Option<ElementId> = 8 bytes)
+- **CRITICAL:** Slab indices are 0-based but ElementId is 1-based (+1 offset in insert, -1 in get)
+- Lifecycle states: Initial → Active → Inactive → Defunct
 
-FLUI is designed for high performance:
+**Element Access:**
+```rust
+// Get element
+let element = tree.get(element_id)?;
 
-| Operation | Complexity | Notes |
-|-----------|------------|-------|
-| Element lookup | O(1) | Slab-based indexing |
-| Element dispatch | O(1) | Enum match (inline-able) |
-| State updates | O(affected) | Only rebuilds dirty subtree |
-| Layout cache | O(1) | Constraint-based memoization |
+// Check type
+if element.is_render() {
+    let render = element.render_object().unwrap();
+    let state = element.render_state().unwrap();
+}
 
-**Benchmark results** (vs trait objects):
-- Element dispatch: **3-4x faster**
-- Memory usage: **30% less**
-- Binary size: **20% smaller**
+// Children (unified API for all types)
+for child_id in element.children() {
+    // Process child
+}
+```
+
+## Pipeline
+
+The rendering pipeline has three coordinated phases:
+
+```rust
+pub struct PipelineOwner {
+    tree: ElementTree,
+    coordinator: FrameCoordinator,
+}
+
+impl PipelineOwner {
+    // Phase 1: Build - Rebuild dirty elements
+    pub fn flush_build(&mut self) { /* ... */ }
+    
+    // Phase 2: Layout - Compute sizes
+    pub fn flush_layout(&mut self, constraints: BoxConstraints) { /* ... */ }
+    
+    // Phase 3: Paint - Generate display list
+    pub fn flush_paint(&mut self) -> Canvas { /* ... */ }
+}
+```
+
+**Frame Rendering:**
+```rust
+// 1. Mark elements dirty
+pipeline.mark_needs_build(element_id);
+
+// 2. Flush all phases
+pipeline.flush_build();
+pipeline.flush_layout(constraints);
+let canvas = pipeline.flush_paint();
+
+// 3. Render canvas to screen
+renderer.render(canvas);
+```
+
+## Thread Safety
+
+FLUI is **fully thread-safe**:
+
+- All hooks use `Arc<Mutex<T>>` (parking_lot)
+- ViewObject is `Send`
+- Element is `Send`
+- RwLock used for render objects (concurrent reads)
+
+**Performance:**
+- `parking_lot::Mutex` is 2-3x faster than `std::sync::Mutex`
+- `parking_lot::RwLock` is 2-3x faster than `std::sync::RwLock`
+- No poisoning on panic
 
 ## Examples
 
-See the [examples](examples/) directory for complete applications:
-
-- **[simplified_view](examples/simplified_view.rs)** - Modern View API demonstration
-- **[thread_safe_hooks](examples/thread_safe_hooks.rs)** - Thread-safe hooks example
-
-### View Composition Example
-
-```rust
-use flui_core::prelude::*;
-
-#[derive(Clone)]
-struct MyApp;
-
-impl View for MyApp {
-    fn build(self, _ctx: &BuildContext) -> impl IntoElement {
-        Column {
-            children: vec![
-                Box::new(Text::new("Title")),
-                Box::new(Padding {
-                    padding: 20.0,
-                    child: Some(Box::new(Text::new("Subtitle"))),
-                }),
-            ],
-        }
-    }
-}
-```
-
-## Testing
-
-Run the test suite:
-
-```bash
-cargo test -p flui_core
-```
-
-Run integration tests:
-
-```bash
-cargo test -p flui_core --test render_architecture_test
-```
+See `examples/` directory:
+- `simplified_view.rs` - Modern View API demo
+- `thread_safe_hooks.rs` - Thread-safe hooks demonstration
 
 ## Documentation
 
-Generate and open the documentation:
+- `CLAUDE.md` - Full architecture guide
+- `docs/API_GUIDE.md` - Comprehensive API documentation
+- `docs/PIPELINE_ARCHITECTURE.md` - Pipeline deep dive
+- `src/hooks/RULES.md` - Hook usage rules (MUST READ)
 
-```bash
-cargo doc -p flui_core --open
-```
+## Features
 
-## Contributing
-
-Contributions are welcome! Please read the [Contributing Guide](../../CONTRIBUTING.md) first.
+- `parallel` - Enable rayon-based parallel build (thread-safe, stable)
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
-
-## Related Crates
-
-- **[flui_engine](../flui_engine)** - Low-level rendering engine with layer compositing
-- **[flui_types](../flui_types)** - Common types (Size, Offset, Color, etc.)
-- **[flui_painting](../flui_painting)** - Painting and styling primitives
-- **[flui_rendering](../flui_rendering)** - Built-in render objects (Text, Image, Flex, etc.)
-
-## Comparison with Flutter
-
-| Feature | Flutter | FLUI |
-|---------|---------|------|
-| Language | Dart | Rust |
-| View tree | Runtime Widget tree | Enum-based compile-time |
-| State | StatefulWidget | Hooks (use_signal, use_memo, use_effect) |
-| Rendering | Skia | wgpu (GPU-accelerated) |
-| Hot reload | ✅ Yes | 🚧 Planned |
-| Thread safety | Single-threaded | ✅ Thread-safe (Arc/Mutex) |
-| FFI | C/C++ | Native Rust |
-
-FLUI takes inspiration from Flutter's three-tree architecture but leverages:
-- Rust's type system for compile-time safety
-- Modern hooks API inspired by React
-- Thread-safe state management with Arc/Mutex
-- wgpu for native GPU acceleration
+MIT OR Apache-2.0

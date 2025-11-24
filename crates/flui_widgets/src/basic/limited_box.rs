@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::RenderLimitedBox;
 
@@ -147,7 +147,7 @@ impl<S: State> LimitedBoxBuilder<S> {
 }
 
 // Implement View for LimitedBox - New architecture
-impl View for LimitedBox {
+impl StatelessView for LimitedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderLimitedBox::new(self.max_width, self.max_height).maybe_child(self.child)
     }

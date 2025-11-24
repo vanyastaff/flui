@@ -2,8 +2,9 @@
 //!
 //! Provides convenient assertion functions for testing FLUI applications.
 
+use crate::element::Element;
 use crate::{
-    element::{Element, ElementId, ElementTree},
+    element::{ElementId, ElementTree},
     foundation::Key,
 };
 use flui_types::Size;
@@ -265,11 +266,14 @@ pub fn assert_is_clean(tree: &ElementTree, id: ElementId) {
 
 /// Get a human-readable element type name
 fn element_type_name(element: &Element) -> &'static str {
-    match element {
-        Element::Component(_) => "Component",
-        Element::Render(_) => "Render",
-        // Element::Sliver(_) => "Sliver", // TODO: Re-enable after sliver migration
-        Element::Provider(_) => "Provider",
+    if element.is_render() {
+        "Render"
+    } else if element.is_provider() {
+        "Provider"
+    } else if element.is_component() {
+        "Component"
+    } else {
+        "Unknown"
     }
 }
 

@@ -246,69 +246,54 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
     };
 
     // Dispatch rebuild based on element type
-    match element {
-        crate::element::Element::Component(comp) => {
-            // ComponentElement rebuild: call view.build() and update child
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "Component element {:?} rebuilding via view.build()",
-                element_id
-            );
+    if element.is_component() {
+        // ComponentElement rebuild: call view.build() and update child
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "Component element {:?} rebuilding via view.build()",
+            element_id
+        );
 
-            // ComponentElement rebuild is deferred to the View system
-            // The actual rebuild logic depends on:
-            // 1. View::build() being called (which consumes self)
-            // 2. BuildContext being properly set up
-            // 3. Reconciliation of old vs new child elements
-            //
-            // For now, we just mark the component as processed and ensure
-            // its child is marked for layout if it exists
+        // ComponentElement rebuild is deferred to the View system
+        // The actual rebuild logic depends on:
+        // 1. View::build() being called (which consumes self)
+        // 2. BuildContext being properly set up
+        // 3. Reconciliation of old vs new child elements
+        //
+        // For now, we just mark the component as processed and ensure
+        // its child is marked for layout if it exists
 
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "Component element {:?} processed (full rebuild requires View system)",
-                element_id
-            );
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "Component element {:?} processed (full rebuild requires View system)",
+            element_id
+        );
 
-            // Mark child for layout if exists
-            if let Some(child_id) = comp.child() {
-                if let Some(crate::element::Element::Render(render_elem)) =
-                    tree_guard.get_mut(child_id)
-                {
-                    render_elem.render_state().write().mark_needs_layout();
+        // Mark child for layout if exists
+        if let Some(child_id) = element.first_child() {
+            if let Some(child_elem) = tree_guard.get_mut(child_id) {
+                if let Some(render_state) = child_elem.render_state_lock() {
+                    render_state.write().mark_needs_layout();
                 }
             }
         }
+    } else if element.is_render() {
+        // RenderElements don't rebuild - they only relayout
+        #[cfg(debug_assertions)]
+        tracing::trace!(
+            "Render element {:?} skipped (rebuilds via layout)",
+            element_id
+        );
+    } else if element.is_provider() {
+        // Provider rebuild - propagate changes to descendants
+        #[cfg(debug_assertions)]
+        tracing::debug!(
+            "Provider element {:?} rebuild (change propagation)",
+            element_id
+        );
 
-        crate::element::Element::Render(_render) => {
-            // RenderElements don't rebuild - they only relayout
-            #[cfg(debug_assertions)]
-            tracing::trace!(
-                "Render element {:?} skipped (rebuilds via layout)",
-                element_id
-            );
-        }
-
-        // TODO: Re-enable after sliver migration
-        // crate::element::Element::Sliver(_sliver) => {
-        //     // SliverElements don't rebuild - they only relayout
-        //     #[cfg(debug_assertions)]
-        //     tracing::trace!(
-        //         "Sliver element {:?} skipped (rebuilds via layout)",
-        //         element_id
-        //     );
-        // }
-        crate::element::Element::Provider(_provider) => {
-            // Provider rebuild - propagate changes to descendants
-            #[cfg(debug_assertions)]
-            tracing::debug!(
-                "Provider element {:?} rebuild (change propagation)",
-                element_id
-            );
-
-            // Note: Provider change propagation is handled by BuildPipeline::rebuild_provider()
-            // in the sequential build path. Parallel build currently skips this for safety.
-        }
+        // Note: Provider change propagation is handled by BuildPipeline::rebuild_provider()
+        // in the sequential build path. Parallel build currently skips this for safety.
     }
 
     drop(tree_guard);
@@ -320,13 +305,55 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::element::{Element, RenderElement};
+    use crate::element::Element;
     use crate::render::{
-        contexts::LayoutContext, contexts::PaintContext, BoxProtocol, Leaf, RenderBox,
+        contexts::LayoutContext, contexts::PaintContext, BoxProtocol, Constraints, Geometry, Leaf,
+        RenderBox, RenderObject,
     };
+    use crate::view::{wrappers::RenderViewWrapper, RenderView, UpdateResult};
+    use crate::{element::ElementTree, ElementId};
+    use flui_types::Offset;
 
     #[derive(Debug)]
     struct MockRender;
+
+    impl RenderObject for MockRender {
+        fn layout(
+            &mut self,
+            _tree: &ElementTree,
+            _children: &[ElementId],
+            _constraints: &Constraints,
+        ) -> Geometry {
+            Geometry::Box(flui_types::Size::new(100.0, 100.0))
+        }
+
+        fn paint(
+            &self,
+            _tree: &ElementTree,
+            _children: &[ElementId],
+            _offset: Offset,
+        ) -> flui_painting::Canvas {
+            flui_painting::Canvas::new(100.0, 100.0)
+        }
+
+        fn hit_test(
+            &self,
+            _tree: &ElementTree,
+            _children: &[ElementId],
+            _position: Offset,
+            _geometry: &Geometry,
+        ) -> bool {
+            false
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
 
     impl RenderBox<Leaf> for MockRender {
         fn layout(&mut self, _ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> flui_types::Size {
@@ -334,6 +361,21 @@ mod tests {
         }
 
         fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
+    }
+
+    #[derive(Clone, Debug)]
+    struct MockRenderView;
+
+    impl RenderView<BoxProtocol, Leaf> for MockRenderView {
+        type RenderObject = MockRender;
+
+        fn create(&self) -> MockRender {
+            MockRender
+        }
+
+        fn update(&self, _render: &mut MockRender) -> UpdateResult {
+            UpdateResult::Unchanged
+        }
     }
 
     fn create_test_tree() -> Arc<RwLock<ElementTree>> {
@@ -347,13 +389,15 @@ mod tests {
         // 4       5
         //
         // Note: For testing subtree partitioning, we just need a tree structure.
-        // We'll create RenderElements since they're simpler (no view/state requirements).
+        // We'll create Elements with RenderViewWrapper.
 
         let mut tree_guard = tree.write();
 
-        // Helper to create a simple render element
+        // Helper to create a simple render element using RenderView
         fn create_render_elem() -> Element {
-            Element::Render(RenderElement::r#box::<Leaf, _>(MockRender))
+            let wrapper =
+                RenderViewWrapper::<MockRenderView, BoxProtocol, Leaf>::new(MockRenderView);
+            Element::new(Box::new(wrapper))
         }
 
         // Root

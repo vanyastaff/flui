@@ -290,15 +290,23 @@ pub use foundation::{
 
 // Re-export element types
 pub use element::{
-    ComponentElement, DependencyInfo, DependencyTracker, Element, ElementTree, ProviderElement,
+    // Unified Element struct (legacy enum removed)
+    ComponentElement,
+    DependencyInfo,
+    DependencyTracker,
+    Element,
+    ElementTree,
+    ProviderElement,
     RenderElement,
 };
 
 // Re-export view types
 pub use view::BuildContext;
 
-// Re-export simplified API (View, IntoElement, tuple syntax)
-pub use view::{IntoElement, View};
+// Re-export simplified API (IntoElement and specialized view traits)
+pub use view::{
+    AnimatedView, IntoElement, ProviderView, ProxyView, RenderView, StatefulView, StatelessView,
+};
 
 // Re-export pipeline types
 pub use pipeline::{PipelineBuilder, PipelineOwner};

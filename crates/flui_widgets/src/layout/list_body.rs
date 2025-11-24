@@ -7,7 +7,7 @@
 use bon::Builder;
 use flui_core::element::Element;
 use flui_core::render::RenderBoxExt;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 
 use flui_core::BuildContext;
 use flui_rendering::RenderListBody;
@@ -191,7 +191,7 @@ impl<S: State> ListBodyBuilder<S> {
 }
 
 // Implement View trait
-impl View for ListBody {
+impl StatelessView for ListBody {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         let mut render = RenderListBody::new(self.main_axis);
         render.set_spacing(self.spacing);

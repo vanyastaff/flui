@@ -33,7 +33,7 @@ use flui_core::BuildContext;
 
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_rendering::RenderTransform;
 use flui_types::Matrix4;
 
@@ -309,7 +309,7 @@ impl Default for Transform {
 }
 
 // Implement View for Transform - New architecture
-impl View for Transform {
+impl StatelessView for Transform {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Use from_matrix for backward compatibility
         RenderTransform::from_matrix(self.transform).child_opt(self.child.into_inner())

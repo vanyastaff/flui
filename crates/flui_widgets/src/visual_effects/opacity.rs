@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::BuildContext;
 
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_rendering::RenderOpacity;
 
 /// A widget that makes its child partially transparent.
@@ -147,7 +147,7 @@ impl Default for Opacity {
 }
 
 // Implement View for Opacity - New architecture
-impl View for Opacity {
+impl StatelessView for Opacity {
     fn build(&self, _ctx: &BuildContext) -> impl IntoElement {
         (RenderOpacity::new(self.opacity), self.child)
     }

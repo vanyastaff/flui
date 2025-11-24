@@ -145,11 +145,15 @@ impl FrameCoordinator {
     ) -> Option<flui_types::Size> {
         match root_id {
             Some(id) => {
-                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    if render_state.has_size() {
-                        Some(render_state.size())
+                if let Some(element) = tree_guard.get(id) {
+                    if let Some(render_elem) = element.as_render() {
+                        let render_state_lock = render_elem.render_state();
+                        let render_state = render_state_lock.read();
+                        if render_state.has_size() {
+                            Some(render_state.size())
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -174,8 +178,8 @@ impl FrameCoordinator {
                 // Walk down through Component/Provider elements to find RenderElement
                 let mut current_id = id;
                 loop {
-                    match tree_guard.get(current_id) {
-                        Some(crate::element::Element::Render(_)) => {
+                    if let Some(element) = tree_guard.get(current_id) {
+                        if element.as_render().is_some() {
                             // Use the ElementTree method to paint this RenderElement
                             // This properly handles re-entrancy checks and paints the full subtree
                             if let Some(canvas) =
@@ -187,31 +191,31 @@ impl FrameCoordinator {
                             } else {
                                 return Some(Box::new(flui_engine::CanvasLayer::new()));
                             }
-                        }
-                        Some(crate::element::Element::Component(comp_elem)) => {
+                        } else if element.as_component().is_some() {
                             // Walk down to child
-                            if let Some(child_id) = comp_elem.child() {
+                            if let Some(&child_id) = element.children().first() {
                                 current_id = child_id;
                                 continue;
                             } else {
                                 // ComponentElement has no child - return empty
                                 return Some(Box::new(flui_engine::CanvasLayer::new()));
                             }
-                        }
-                        Some(crate::element::Element::Provider(prov_elem)) => {
+                        } else if element.as_provider().is_some() {
                             // Walk down to child
-                            if let Some(child_id) = prov_elem.child() {
+                            if let Some(&child_id) = element.children().first() {
                                 current_id = child_id;
                                 continue;
                             } else {
                                 // ProviderElement has no child - return empty
                                 return Some(Box::new(flui_engine::CanvasLayer::new()));
                             }
-                        }
-                        None => {
-                            // Element not found
+                        } else {
+                            // Unknown element type - return empty
                             return Some(Box::new(flui_engine::CanvasLayer::new()));
                         }
+                    } else {
+                        // Element not found
+                        return Some(Box::new(flui_engine::CanvasLayer::new()));
                     }
                 }
             }
@@ -345,12 +349,14 @@ impl FrameCoordinator {
             let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
             let mut marked_count = 0usize;
             for id in all_ids.iter().copied() {
-                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    if render_state.needs_layout() {
-                        self.layout.mark_dirty(id);
-                        marked_count += 1;
+                if let Some(element) = tree_guard.get(id) {
+                    if let Some(render_elem) = element.as_render() {
+                        let render_state_lock = render_elem.render_state();
+                        let render_state = render_state_lock.read();
+                        if render_state.needs_layout() {
+                            self.layout.mark_dirty(id);
+                            marked_count += 1;
+                        }
                     }
                 }
             }
@@ -512,12 +518,14 @@ impl FrameCoordinator {
             let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
             let mut marked_count = 0usize;
             for id in all_ids.iter().copied() {
-                if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    if render_state.needs_layout() {
-                        self.layout.mark_dirty(id);
-                        marked_count += 1;
+                if let Some(element) = tree_guard.get(id) {
+                    if let Some(render_elem) = element.as_render() {
+                        let render_state_lock = render_elem.render_state();
+                        let render_state = render_state_lock.read();
+                        if render_state.needs_layout() {
+                            self.layout.mark_dirty(id);
+                            marked_count += 1;
+                        }
                     }
                 }
             }
@@ -626,12 +634,14 @@ impl FrameCoordinator {
         let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
         let mut marked_count = 0usize;
         for id in all_ids.iter().copied() {
-            if let Some(crate::element::Element::Render(render_elem)) = tree_guard.get(id) {
-                let render_state_lock = render_elem.render_state();
-                let render_state = render_state_lock.read();
-                if render_state.needs_layout() {
-                    self.layout.mark_dirty(id);
-                    marked_count += 1;
+            if let Some(element) = tree_guard.get(id) {
+                if let Some(render_elem) = element.as_render() {
+                    let render_state_lock = render_elem.render_state();
+                    let render_state = render_state_lock.read();
+                    if render_state.needs_layout() {
+                        self.layout.mark_dirty(id);
+                        marked_count += 1;
+                    }
                 }
             }
         }
@@ -655,22 +665,31 @@ impl FrameCoordinator {
                 // Try direct size from RenderElement
                 if let Some(size_opt) = Self::extract_root_size(&tree_guard, root_id) {
                     Some(size_opt)
-                } else if let Some(crate::element::Element::Component(comp)) = tree_guard.get(id) {
-                    // Root is ComponentElement - use its child's size
-                    match comp.child() {
-                        Some(child_id) => match tree_guard.get(child_id) {
-                            Some(crate::element::Element::Render(child_render)) => {
-                                let render_state_lock = child_render.render_state();
-                                let render_state = render_state_lock.read();
-                                if render_state.has_size() {
-                                    Some(render_state.size())
+                } else if let Some(element) = tree_guard.get(id) {
+                    if element.as_component().is_some() {
+                        // Root is ComponentElement - use its child's size
+                        match element.children().first().copied() {
+                            Some(child_id) => {
+                                if let Some(child_element) = tree_guard.get(child_id) {
+                                    if let Some(child_render) = child_element.as_render() {
+                                        let render_state_lock = child_render.render_state();
+                                        let render_state = render_state_lock.read();
+                                        if render_state.has_size() {
+                                            Some(render_state.size())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
                                 }
                             }
-                            _ => None,
-                        },
-                        None => None,
+                            None => None,
+                        }
+                    } else {
+                        None
                     }
                 } else {
                     None
@@ -703,10 +722,8 @@ impl FrameCoordinator {
         // Get root element's layer
         let layer = match root_id {
             Some(id) => {
-                let element_opt = tree_guard.get(id);
-
-                match element_opt {
-                    Some(crate::element::Element::Render(render_elem)) => {
+                if let Some(element) = tree_guard.get(id) {
+                    if let Some(render_elem) = element.as_render() {
                         let render_state_lock = render_elem.render_state();
                         let render_state = render_state_lock.read();
                         let offset = render_state.offset();
@@ -715,30 +732,37 @@ impl FrameCoordinator {
                         // Convert Canvas → CanvasLayer
                         let canvas = render_elem.paint_render(&tree_guard, offset);
                         Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
-                    }
-                    Some(crate::element::Element::Component(comp)) => {
+                    } else if element.as_component().is_some() {
                         // Root is ComponentElement - paint its child
-                        match comp.child() {
-                            Some(child_id) => match tree_guard.get(child_id) {
-                                Some(crate::element::Element::Render(child_render)) => {
-                                    let render_state_lock = child_render.render_state();
-                                    let render_state = render_state_lock.read();
-                                    let offset = render_state.offset();
-                                    drop(render_state);
+                        match element.children().first().copied() {
+                            Some(child_id) => {
+                                if let Some(child_element) = tree_guard.get(child_id) {
+                                    if let Some(child_render) = child_element.as_render() {
+                                        let render_state_lock = child_render.render_state();
+                                        let render_state = render_state_lock.read();
+                                        let offset = render_state.offset();
+                                        drop(render_state);
 
-                                    // Convert Canvas → CanvasLayer
-                                    let canvas = child_render.paint_render(&tree_guard, offset);
-                                    Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
+                                        // Convert Canvas → CanvasLayer
+                                        let canvas = child_render.paint_render(&tree_guard, offset);
+                                        Some(Box::new(flui_engine::CanvasLayer::from_canvas(
+                                            canvas,
+                                        )))
+                                    } else {
+                                        Some(Box::new(flui_engine::CanvasLayer::new()))
+                                    }
+                                } else {
+                                    Some(Box::new(flui_engine::CanvasLayer::new()))
                                 }
-                                _ => Some(Box::new(flui_engine::CanvasLayer::new())),
-                            },
+                            }
                             None => Some(Box::new(flui_engine::CanvasLayer::new())),
                         }
-                    }
-                    _ => {
+                    } else {
                         // Root is ProviderElement or other type
                         Some(Box::new(flui_engine::CanvasLayer::new()))
                     }
+                } else {
+                    Some(Box::new(flui_engine::CanvasLayer::new()))
                 }
             }
             None => None,

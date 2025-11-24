@@ -6,7 +6,7 @@
 use bon::Builder;
 use flui_core::render::RenderBoxExt;
 use flui_core::view::children::Child;
-use flui_core::view::{IntoElement, View};
+use flui_core::view::{IntoElement, StatelessView};
 use flui_core::BuildContext;
 use flui_rendering::{DecorationPosition, RenderDecoratedBox};
 use flui_types::styling::BoxDecoration;
@@ -141,7 +141,7 @@ impl Default for DecoratedBox {
 }
 
 // Implement View for DecoratedBox
-impl View for DecoratedBox {
+impl StatelessView for DecoratedBox {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         RenderDecoratedBox::with_position(self.decoration, self.position).maybe_child(self.child)
     }
@@ -215,7 +215,7 @@ mod tests {
     #[derive(Debug, Clone)]
     struct MockView;
 
-    impl View for MockView {
+    impl StatelessView for MockView {
         fn build(self, _ctx: &BuildContext) -> impl IntoElement {
             RenderEmpty.leaf()
         }

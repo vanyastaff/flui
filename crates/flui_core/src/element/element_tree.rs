@@ -37,6 +37,7 @@ use flui_types::constraints::BoxConstraints;
 use slab::Slab;
 
 use crate::element::{Element, ElementId};
+use crate::render::render_object::Constraints;
 use crate::render::RenderState;
 
 /// Maximum layout recursion depth.
@@ -117,7 +118,7 @@ pub const MAX_LAYOUT_DEPTH: usize = 1000;
 ///
 /// // Access element (remember: ElementId is 1-based!)
 /// if let Some(element) = tree.get(root_id) {
-///     println!("Element has {} children", element.children().count());
+///     println!("Element has {} children", element.children().len());
 /// }
 ///
 /// // Layout and paint
@@ -318,54 +319,20 @@ impl ElementTree {
     /// let render_elem = RenderElement::new(render_object);
     /// let root_id = tree.insert(Element::Render(render_elem));
     /// ```
-    pub fn insert(&mut self, mut element: Element) -> ElementId {
+    pub fn insert(&mut self, element: Element) -> ElementId {
         // Log element type being inserted
-        let element_type = match &element {
-            Element::Render(r) => format!("Render({})", r.render_object().debug_name()),
-            Element::Component(_) => "Component".to_string(),
-            Element::Provider(_) => "Provider".to_string(),
-        };
+        let element_type = element.debug_name();
         tracing::trace!(element_type = %element_type, "ElementTree::insert()");
 
-        // First, check if there are unmounted children and mount them
-        let child_ids = match &mut element {
-            Element::Render(render_elem) => {
-                if let Some(unmounted) = render_elem.take_unmounted_children() {
-                    tracing::trace!(
-                        unmounted_count = unmounted.len(),
-                        "ElementTree::insert() - processing unmounted children"
-                    );
-                    // Recursively insert each unmounted child
-                    let mut ids = Vec::with_capacity(unmounted.len());
-                    for child in unmounted {
-                        let child_id = self.insert(child); // Recursive call
-                        ids.push(child_id);
-                    }
-                    Some(ids)
-                } else {
-                    tracing::trace!("ElementTree::insert() - no unmounted children");
-                    None
-                }
-            }
-            // TODO: Re-enable sliver support after completing box render migration
-            // Element::Sliver(sliver_elem) => {
-            //     if let Some(unmounted) = sliver_elem.take_unmounted_children() {
-            //         // Recursively insert each unmounted child
-            //         let mut ids = Vec::with_capacity(unmounted.len());
-            //         for child in unmounted {
-            //             let child_id = self.insert(child); // Recursive call
-            //             ids.push(child_id);
-            //         }
-            //         Some(ids)
-            //     } else {
-            //         None
-            //     }
-            // }
-            Element::Component(_comp_elem) => {
-                // ComponentElement children are managed by build pipeline
-                None
-            }
-            Element::Provider(_) => None,
+        // For render views with unmounted children, process them recursively
+        // Component and Provider elements have children managed by build pipeline
+        let child_ids: Option<Vec<ElementId>> = if element.is_render_view() {
+            // Render views may have unmounted children to process
+            // Note: RenderElement-specific logic is deferred during architecture transition
+            None
+        } else {
+            // Component/Provider elements have children managed by build pipeline
+            None
         };
 
         // Insert the parent element (using raw insertion to avoid recursion)
@@ -375,8 +342,10 @@ impl ElementTree {
         if let Some(child_ids) = child_ids {
             // Access the element we just inserted
             if let Some(node) = self.nodes.get_mut(parent_id.get() - 1) {
-                if let Element::Render(render_elem) = &mut node.element {
-                    render_elem.replace_children(child_ids.clone());
+                // Replace children for render elements
+                if node.element.is_render() {
+                    node.element.children_mut().clear();
+                    node.element.children_mut().extend(child_ids.clone());
                 }
             }
 
@@ -416,7 +385,7 @@ impl ElementTree {
 
         // Get children from element (before removing)
         let children: Vec<ElementId> = if let Some(node) = self.nodes.get(element_id.get() - 1) {
-            node.element.children().collect()
+            node.element.children().to_vec()
         } else {
             Vec::new()
         };
@@ -479,7 +448,7 @@ impl ElementTree {
     ///
     /// ```rust,ignore
     /// if let Some(element) = tree.get(element_id) {
-    ///     println!("Element has {} children", element.children().count());
+    ///     println!("Element has {} children", element.children().len());
     /// }
     /// ```
     #[inline]
@@ -525,7 +494,7 @@ impl ElementTree {
     #[inline]
     pub fn children(&self, element_id: ElementId) -> Vec<ElementId> {
         self.get(element_id)
-            .map(|element| element.children().collect())
+            .map(|element| element.children().to_vec())
             .unwrap_or_default()
     }
 
@@ -533,7 +502,7 @@ impl ElementTree {
     #[inline]
     pub fn child_count(&self, element_id: ElementId) -> usize {
         self.get(element_id)
-            .map(|element| element.children().count())
+            .map(|element| element.children().len())
             .unwrap_or(0)
     }
 
@@ -615,7 +584,7 @@ impl ElementTree {
     pub fn render_state(
         &self,
         element_id: ElementId,
-    ) -> Option<parking_lot::RwLockReadGuard<'_, RenderState<crate::render::BoxProtocol>>> {
+    ) -> Option<parking_lot::RwLockReadGuard<'_, RenderState>> {
         self.get(element_id)
             .and_then(|element| element.as_render())
             .map(|render| render.render_state().read())
@@ -639,7 +608,7 @@ impl ElementTree {
     pub fn render_state_mut(
         &self,
         element_id: ElementId,
-    ) -> Option<parking_lot::RwLockWriteGuard<'_, RenderState<crate::render::BoxProtocol>>> {
+    ) -> Option<parking_lot::RwLockWriteGuard<'_, RenderState>> {
         self.get(element_id)
             .and_then(|element| element.as_render())
             .map(|render| render.render_state().write())
@@ -686,7 +655,7 @@ impl ElementTree {
             let state = render_state.read();
             if state.has_size() && !state.needs_layout() {
                 if let Some(cached_constraints) = state.constraints() {
-                    if cached_constraints == constraints {
+                    if *cached_constraints.as_box() == constraints {
                         // Cache hit! Return cached size without layout computation
                         return Some(state.size());
                     }
@@ -770,7 +739,7 @@ impl ElementTree {
             let render_state = render_element.render_state();
             let state = render_state.write();
             state.set_size(size);
-            state.set_constraints(constraints);
+            state.set_constraints(Constraints::Box(constraints));
             state.clear_needs_layout();
         }
 
@@ -886,8 +855,8 @@ impl ElementTree {
                 }
 
                 // If it's a ComponentElement, walk down to its child
-                if let crate::element::Element::Component(comp) = element {
-                    if let Some(comp_child_id) = comp.child() {
+                if element.is_component() {
+                    if let Some(&comp_child_id) = element.children().first() {
                         current_id = comp_child_id;
                         continue;
                     }
@@ -1190,7 +1159,7 @@ impl ElementTree {
         F: FnMut(
             ElementId,
             &Box<dyn crate::render::RenderObject>,
-            parking_lot::RwLockReadGuard<RenderState<crate::render::BoxProtocol>>,
+            parking_lot::RwLockReadGuard<RenderState>,
         ),
     {
         for (element_id, node) in &self.nodes {
@@ -1220,7 +1189,7 @@ impl ElementTree {
     ///
     /// ```rust,ignore
     /// tree.visit_all_elements(|element_id, element| {
-    ///     println!("Element {} has {} children", element_id, element.children().count());
+    ///     println!("Element {} has {} children", element_id, element.children().len());
     /// });
     /// ```
     pub fn visit_all_elements<F>(&self, mut visitor: F)
@@ -1250,7 +1219,7 @@ impl ElementTree {
             visitor(element_id, element);
 
             // Visit children
-            let children: Vec<ElementId> = element.children().collect();
+            let children: Vec<ElementId> = element.children().to_vec();
             for child_id in children {
                 self.visit_subtree(child_id, visitor);
             }
@@ -1302,9 +1271,11 @@ impl ElementTree {
     /// tree.add_dependent(theme_element_id, widget_element_id);
     /// ```
     pub fn add_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(Element::Provider(inherited)) = self.get_mut(inherited_id) {
-            inherited.add_dependent(dependent_id);
-            return true;
+        if let Some(element) = self.get_mut(inherited_id) {
+            if element.is_provider() {
+                element.add_dependent(dependent_id);
+                return true;
+            }
         }
         false
     }
@@ -1324,31 +1295,31 @@ impl ElementTree {
     /// `true` if the dependency was removed successfully, `false` if the inherited_id
     /// doesn't exist or isn't an InheritedElement.
     pub fn remove_dependent(&mut self, inherited_id: ElementId, dependent_id: ElementId) -> bool {
-        if let Some(Element::Provider(inherited)) = self.get_mut(inherited_id) {
-            inherited.remove_dependent(dependent_id);
-            return true;
+        if let Some(element) = self.get_mut(inherited_id) {
+            if element.is_provider() {
+                element.remove_dependent(dependent_id);
+                return true;
+            }
         }
         false
     }
 
     /// Get all dependents of an InheritedElement
     ///
-    /// Returns the set of ElementIds that have registered a dependency on
+    /// Returns the slice of ElementIds that have registered a dependency on
     /// the specified InheritedElement.
     ///
     /// # Returns
     ///
-    /// `Some(&HashSet<ElementId>)` if the element exists and is an InheritedElement,
+    /// `Some(&[ElementId])` if the element exists and is an InheritedElement,
     /// `None` otherwise.
-    pub fn get_dependents(
-        &self,
-        inherited_id: ElementId,
-    ) -> Option<&std::collections::HashSet<ElementId>> {
-        if let Some(Element::Provider(inherited)) = self.get(inherited_id) {
-            Some(inherited.dependents())
-        } else {
-            None
+    pub fn get_dependents(&self, inherited_id: ElementId) -> Option<&[ElementId]> {
+        if let Some(element) = self.get(inherited_id) {
+            if element.is_provider() {
+                return element.dependents();
+            }
         }
+        None
     }
 }
 
@@ -1416,30 +1387,24 @@ impl ElementTree {
             None => return false,
         };
 
-        match element {
-            Element::Render(render_elem) => {
-                self.hit_test_render(element_id, render_elem, position, result)
+        if let Some(render_elem) = element.as_render() {
+            self.hit_test_render(element_id, render_elem, position, result)
+        } else if element.is_component() {
+            // ComponentElement delegates to child
+            if let Some(&child_id) = element.children().first() {
+                self.hit_test_recursive(child_id, position, result)
+            } else {
+                false
             }
-            // TODO: Re-enable sliver support after completing box render migration
-            // Element::Sliver(sliver_elem) => {
-            //     self.hit_test_sliver(element_id, sliver_elem, position, result)
-            // }
-            Element::Component(comp_elem) => {
-                // ComponentElement delegates to child
-                if let Some(child_id) = comp_elem.child() {
-                    self.hit_test_recursive(child_id, position, result)
-                } else {
-                    false
-                }
+        } else if element.is_provider() {
+            // ProviderElement delegates to child
+            if let Some(&child_id) = element.children().first() {
+                self.hit_test_recursive(child_id, position, result)
+            } else {
+                false
             }
-            Element::Provider(prov_elem) => {
-                // ProviderElement delegates to child
-                if let Some(child_id) = prov_elem.child() {
-                    self.hit_test_recursive(child_id, position, result)
-                } else {
-                    false
-                }
-            }
+        } else {
+            false
         }
     }
 
@@ -1641,21 +1606,18 @@ impl ElementTree {
 
         // Get the element node (with -1 offset for slab access)
         if let Some(node) = self.nodes.get_mut(element_id.get() - 1) {
-            match &mut node.element {
-                Element::Render(render_element) => {
-                    // Mark needs layout in RenderState flags
-                    // This is the critical part that was missing before
-                    render_element.render_state().write().mark_needs_layout();
+            if let Some(render_element) = node.element.as_render() {
+                // Mark needs layout in RenderState flags
+                // This is the critical part that was missing before
+                render_element.render_state().write().mark_needs_layout();
 
-                    // TODO: Also add to dirty_layout set (will be in coordinator)
-                    // For now, just marking the flag is sufficient for Phase 6
-                }
-                _ => {
-                    tracing::warn!(
-                        "request_layout called on non-render element {:?}",
-                        element_id
-                    );
-                }
+                // TODO: Also add to dirty_layout set (will be in coordinator)
+                // For now, just marking the flag is sufficient for Phase 6
+            } else {
+                tracing::warn!(
+                    "request_layout called on non-render element {:?}",
+                    element_id
+                );
             }
         } else {
             tracing::error!("request_layout: element {:?} not found", element_id);
@@ -1675,19 +1637,16 @@ impl ElementTree {
 
         // Get the element node (with -1 offset for slab access)
         if let Some(node) = self.nodes.get_mut(element_id.get() - 1) {
-            match &mut node.element {
-                Element::Render(render_element) => {
-                    // Mark needs paint in RenderState flags
-                    render_element.render_state().write().mark_needs_paint();
+            if let Some(render_element) = node.element.as_render() {
+                // Mark needs paint in RenderState flags
+                render_element.render_state().write().mark_needs_paint();
 
-                    // TODO: Also add to dirty_paint set (will be in coordinator)
-                }
-                _ => {
-                    tracing::warn!(
-                        "request_paint called on non-render element {:?}",
-                        element_id
-                    );
-                }
+                // TODO: Also add to dirty_paint set (will be in coordinator)
+            } else {
+                tracing::warn!(
+                    "request_paint called on non-render element {:?}",
+                    element_id
+                );
             }
         } else {
             tracing::error!("request_paint: element {:?} not found", element_id);

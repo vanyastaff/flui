@@ -13,7 +13,9 @@ use crate::view::protocol::ViewProtocol;
 
 /// Base View trait with protocol type parameter.
 ///
-/// This is an internal trait. Users should implement one of:
+/// **INTERNAL TRAIT** - Do not implement this directly!
+///
+/// Users should implement one of the specialized traits:
 /// - [`StatelessView`] - Simple views without state
 /// - [`StatefulView<S>`] - Views with persistent state
 /// - [`AnimatedView<L>`] - Views driven by animations
@@ -29,10 +31,12 @@ use crate::view::protocol::ViewProtocol;
 /// [`ProviderView<T>`]: crate::view::ProviderView
 /// [`ProxyView`]: crate::view::ProxyView
 /// [`RenderView<P, A>`]: crate::view::RenderView
-pub trait View<P: ViewProtocol>: Send + 'static {
+pub(crate) trait View<P: ViewProtocol>: Send + 'static {
     /// Internal build method.
     ///
     /// Called by the framework through ViewObject wrappers.
     /// Users should not call this directly.
     fn _build(&mut self, ctx: &BuildContext) -> Element;
 }
+
+// IntoElement implementations are defined in element::into_element module
