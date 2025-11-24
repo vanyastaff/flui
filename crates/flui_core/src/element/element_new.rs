@@ -21,8 +21,8 @@
 use std::any::Any;
 use std::fmt;
 
-use crate::element::{ElementId, ElementLifecycle};
-use crate::foundation::{AtomicElementFlags, ElementFlags, Slot};
+use crate::element::{ElementBase, ElementId, ElementLifecycle};
+use crate::foundation::Slot;
 use crate::render::RenderObject;
 use crate::view::{BuildContext, ViewMode, ViewObject};
 
@@ -35,9 +35,9 @@ use crate::view::{BuildContext, ViewMode, ViewObject};
 /// # Design
 ///
 /// Following Flutter's architecture:
+/// - `base`: Common lifecycle fields (parent, slot, lifecycle, flags)
 /// - `view_object`: The polymorphic view implementation
 /// - `children`: Child element IDs
-/// - Base fields for lifecycle management
 ///
 /// # Thread Safety
 ///
@@ -45,20 +45,9 @@ use crate::view::{BuildContext, ViewMode, ViewObject};
 /// - `ViewObject` requires `Send`
 /// - All internal fields are thread-safe
 pub struct Element {
-    // ========== Lifecycle Fields ==========
-    /// Parent element ID (None for root)
-    parent: Option<ElementId>,
+    /// Common lifecycle fields
+    base: ElementBase,
 
-    /// Slot position in parent's child list
-    slot: Option<Slot>,
-
-    /// Current lifecycle state
-    lifecycle: ElementLifecycle,
-
-    /// Atomic flags for lock-free dirty tracking
-    flags: AtomicElementFlags,
-
-    // ========== View Fields ==========
     /// The polymorphic view object
     view_object: Box<dyn ViewObject>,
 
@@ -72,9 +61,8 @@ unsafe impl Send for Element {}
 impl fmt::Debug for Element {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Element")
-            .field("parent", &self.parent)
-            .field("slot", &self.slot)
-            .field("lifecycle", &self.lifecycle)
+            .field("parent", &self.base.parent())
+            .field("lifecycle", &self.base.lifecycle())
             .field("mode", &self.view_object.mode())
             .field("children", &self.children)
             .finish()
@@ -85,82 +73,43 @@ impl Element {
     /// Creates a new Element with the given view object.
     pub fn new(view_object: Box<dyn ViewObject>) -> Self {
         Self {
-            parent: None,
-            slot: None,
-            lifecycle: ElementLifecycle::Initial,
-            flags: AtomicElementFlags::new(),
+            base: ElementBase::new(),
             view_object,
             children: Vec::new(),
         }
     }
 
-    // ========== Lifecycle Methods ==========
+    // ========== Lifecycle Methods (delegated to ElementBase) ==========
 
     /// Mount element to tree.
-    ///
-    /// Called when element is first added to the element tree.
-    /// Sets parent, slot, and transitions to Active lifecycle state.
     #[inline]
     pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>) {
-        debug_assert!(
-            matches!(self.lifecycle, ElementLifecycle::Initial),
-            "Cannot mount element in {:?} state",
-            self.lifecycle
-        );
-
-        self.parent = parent;
-        self.slot = slot;
-        self.lifecycle = ElementLifecycle::Active;
-        self.flags.insert(ElementFlags::MOUNTED);
-        self.flags.insert(ElementFlags::ACTIVE);
+        self.base.mount(parent, slot);
     }
 
     /// Unmount element from tree.
-    ///
-    /// Called when element is being permanently removed from the tree.
-    /// Transitions to Defunct lifecycle state and cleans up resources.
     #[inline]
     pub fn unmount(&mut self) {
-        self.lifecycle = ElementLifecycle::Defunct;
-        self.flags.remove(ElementFlags::MOUNTED);
-        self.flags.remove(ElementFlags::ACTIVE);
+        self.base.unmount();
     }
 
     /// Activate element.
-    ///
-    /// Called when element is reactivated after being deactivated.
     #[inline]
     pub fn activate(&mut self) {
-        debug_assert!(
-            matches!(self.lifecycle, ElementLifecycle::Inactive),
-            "Cannot activate element in {:?} state",
-            self.lifecycle
-        );
-
-        self.lifecycle = ElementLifecycle::Active;
-        self.flags.insert(ElementFlags::ACTIVE);
+        self.base.activate();
     }
 
     /// Deactivate element.
-    ///
-    /// Called when element is temporarily deactivated (e.g., moved to cache).
     #[inline]
     pub fn deactivate(&mut self) {
-        debug_assert!(
-            matches!(self.lifecycle, ElementLifecycle::Active),
-            "Cannot deactivate element in {:?} state",
-            self.lifecycle
-        );
-
-        self.lifecycle = ElementLifecycle::Inactive;
-        self.flags.remove(ElementFlags::ACTIVE);
+        self.base.deactivate();
     }
 
     /// Get current lifecycle state.
     #[inline]
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
-        self.lifecycle
+        self.base.lifecycle()
     }
 
     // ========== Parent/Slot Accessors ==========
@@ -169,85 +118,28 @@ impl Element {
     #[inline]
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
-        self.parent
+        self.base.parent()
     }
 
-    /// Set parent element ID.
-    #[inline]
-    pub fn set_parent(&mut self, parent: Option<ElementId>) {
-        self.parent = parent;
-    }
-
-    /// Get slot position.
-    #[inline]
-    #[must_use]
-    pub fn slot(&self) -> Option<Slot> {
-        self.slot
-    }
-
-    /// Set slot position.
-    #[inline]
-    pub fn set_slot(&mut self, slot: Option<Slot>) {
-        self.slot = slot;
-    }
-
-    // ========== Dirty Tracking ==========
+    // ========== Dirty Tracking (delegated to ElementBase) ==========
 
     /// Check if element needs rebuild.
     #[inline]
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.flags.contains(ElementFlags::DIRTY)
+        self.base.is_dirty()
     }
 
     /// Mark element as needing rebuild.
     #[inline]
     pub fn mark_dirty(&mut self) {
-        self.flags.insert(ElementFlags::DIRTY);
+        self.base.mark_dirty();
     }
 
     /// Clear dirty flag.
     #[inline]
     pub fn clear_dirty(&mut self) {
-        self.flags.remove(ElementFlags::DIRTY);
-    }
-
-    /// Check if element needs layout.
-    #[inline]
-    #[must_use]
-    pub fn needs_layout(&self) -> bool {
-        self.flags.contains(ElementFlags::NEEDS_LAYOUT)
-    }
-
-    /// Mark element as needing layout.
-    #[inline]
-    pub fn mark_needs_layout(&mut self) {
-        self.flags.insert(ElementFlags::NEEDS_LAYOUT);
-    }
-
-    /// Clear needs layout flag.
-    #[inline]
-    pub fn clear_needs_layout(&mut self) {
-        self.flags.remove(ElementFlags::NEEDS_LAYOUT);
-    }
-
-    /// Check if element needs paint.
-    #[inline]
-    #[must_use]
-    pub fn needs_paint(&self) -> bool {
-        self.flags.contains(ElementFlags::NEEDS_PAINT)
-    }
-
-    /// Mark element as needing paint.
-    #[inline]
-    pub fn mark_needs_paint(&mut self) {
-        self.flags.insert(ElementFlags::NEEDS_PAINT);
-    }
-
-    /// Clear needs paint flag.
-    #[inline]
-    pub fn clear_needs_paint(&mut self) {
-        self.flags.remove(ElementFlags::NEEDS_PAINT);
+        self.base.clear_dirty();
     }
 
     // ========== View Object Access ==========
@@ -428,9 +320,6 @@ impl Element {
     // ========== Event Handling ==========
 
     /// Handle an event.
-    ///
-    /// Default implementation returns false (event not handled).
-    /// Override in specific view types for custom behavior.
     #[inline]
     pub fn handle_event(&mut self, _event: &flui_types::Event) -> bool {
         // TODO: Delegate to view_object when ViewObject has handle_event
