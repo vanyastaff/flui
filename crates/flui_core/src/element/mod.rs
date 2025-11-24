@@ -39,6 +39,7 @@ pub mod dependency;
 #[allow(clippy::module_inception)] // element/element.rs is intentional for main Element enum
 pub mod element;
 pub mod element_base;
+pub mod element_new;
 pub mod element_tree;
 pub mod hit_test;
 pub mod hit_test_entry;
