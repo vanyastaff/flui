@@ -44,15 +44,23 @@
 
 #![warn(missing_docs)]
 
+pub mod cancellation;
 pub mod dirty;
 pub mod error;
 pub mod layout;
+pub mod metrics;
 pub mod paint;
+pub mod recovery;
+pub mod triple_buffer;
 
-pub use dirty::DirtySet;
-pub use error::{PipelineError, PipelineResult};
+pub use cancellation::CancellationToken;
+pub use dirty::{DirtySet, LockFreeDirtySet};
+pub use error::{PipelineError, PipelinePhase, PipelineResult};
 pub use layout::LayoutPipeline;
+pub use metrics::PipelineMetrics;
 pub use paint::PaintPipeline;
+pub use recovery::{ErrorRecovery, RecoveryAction, RecoveryPolicy};
+pub use triple_buffer::TripleBuffer;
 
 /// Crate version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
