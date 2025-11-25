@@ -92,18 +92,9 @@ impl RendererBinding {
         };
 
         // Extract size from root element or use constraints as fallback
-        let size = owner
-            .root_element_id()
-            .and_then(|root_id| {
-                let tree = owner.tree();
-                let tree_guard = tree.read();
-                tree_guard
-                    .get(root_id)
-                    .and_then(|element| element.render_state())
-                    .filter(|state| state.has_size())
-                    .map(|state| state.size())
-            })
-            .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
+        // TODO: Phase 5 - Get size from RenderState once Element properly supports it
+        // Currently render_state() returns None (stub), so we use constraints as fallback
+        let size = Size::new(constraints.max_width, constraints.max_height);
 
         // Create scene using flui_engine::Scene API
         let scene = if let Some(layer) = layer {

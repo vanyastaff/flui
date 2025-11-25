@@ -5,6 +5,7 @@
 use std::any::Any;
 
 use flui_element::{Element, IntoElement};
+use flui_foundation::RenderStateAccessor;
 use flui_types::Event;
 
 use crate::context::BuildContext;
@@ -19,15 +20,12 @@ use crate::traits::ProxyView;
 pub struct ProxyViewWrapper<V: ProxyView> {
     /// The proxy view
     view: V,
-
-    /// Cached child element from last build
-    child: Option<Element>,
 }
 
 impl<V: ProxyView> ProxyViewWrapper<V> {
     /// Create a new wrapper
     pub fn new(view: V) -> Self {
-        Self { view, child: None }
+        Self { view }
     }
 
     /// Get reference to view
@@ -48,9 +46,7 @@ impl<V: ProxyView> ProxyViewWrapper<V> {
 
 impl<V: ProxyView> std::fmt::Debug for ProxyViewWrapper<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProxyViewWrapper")
-            .field("has_child", &self.child.is_some())
-            .finish()
+        f.debug_struct("ProxyViewWrapper").finish()
     }
 }
 
@@ -65,13 +61,11 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
 
         // Build the child
         let child = self.view.build_child(ctx).into_element();
-        self.child = Some(child);
 
         // Call lifecycle hooks
         self.view.after_child_build(ctx);
 
-        // Return the cached child or empty
-        self.child.take().unwrap_or_else(Element::empty)
+        child
     }
 
     fn init(&mut self, ctx: &dyn BuildContext) {
@@ -80,13 +74,23 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
 
     fn dispose(&mut self, ctx: &dyn BuildContext) {
         self.view.dispose(ctx);
-        self.child = None;
     }
 
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
+impl<V: ProxyView> RenderStateAccessor for ProxyViewWrapper<V> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -126,11 +130,11 @@ mod tests {
     }
 
     impl ProxyView for TestProxyView {
-        fn build_child(&mut self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build_child(&mut self, _ctx: &dyn BuildContext) -> impl IntoElement {
             std::mem::replace(&mut self.child, Element::empty())
         }
 
-        fn handle_event(&mut self, _event: &Event, _ctx: &BuildContext) -> bool {
+        fn handle_event(&mut self, _event: &Event, _ctx: &dyn BuildContext) -> bool {
             self.events_handled
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             true // Consume all events

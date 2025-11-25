@@ -799,7 +799,7 @@ mod tests {
         }
 
         fn insert(&mut self, parent: Option<ElementId>, is_render: bool) -> ElementId {
-            let id = ElementId::new(self.nodes.len() as u64 + 1);
+            let id = ElementId::new(self.nodes.len() + 1);
             self.nodes.push(Some(TestNode {
                 parent,
                 children: Vec::new(),

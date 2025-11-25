@@ -144,7 +144,8 @@ struct DescendantStack {
 impl DescendantStack {
     fn new() -> Self {
         Self {
-            inline: [ElementId::new(0); INLINE_STACK_SIZE],
+            // Use dummy value (1) since inline_len tracks valid elements
+            inline: [ElementId::new(1); INLINE_STACK_SIZE],
             inline_len: 0,
             overflow: Vec::new(),
         }
@@ -186,7 +187,8 @@ struct DescendantStackWithDepth {
 impl DescendantStackWithDepth {
     fn new() -> Self {
         Self {
-            inline: [(ElementId::new(0), 0); INLINE_STACK_SIZE],
+            // Use dummy value (1) since inline_len tracks valid elements
+            inline: [(ElementId::new(1), 0); INLINE_STACK_SIZE],
             inline_len: 0,
             overflow: Vec::new(),
         }
@@ -242,7 +244,7 @@ mod tests {
         }
 
         fn insert(&mut self, parent: Option<ElementId>) -> ElementId {
-            let id = ElementId::new(self.nodes.len() as u64 + 1);
+            let id = ElementId::new(self.nodes.len() + 1);
             self.nodes.push(Some(TestNode {
                 parent,
                 children: Vec::new(),

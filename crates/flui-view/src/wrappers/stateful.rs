@@ -5,6 +5,7 @@
 use std::any::Any;
 
 use flui_element::{Element, IntoElement};
+use flui_foundation::RenderStateAccessor;
 
 use crate::context::BuildContext;
 use crate::object::ViewObject;
@@ -20,19 +21,12 @@ pub struct StatefulViewWrapper<V: StatefulView> {
 
     /// The mutable state (created lazily)
     state: Option<V::State>,
-
-    /// Cached child element from last build
-    child: Option<Element>,
 }
 
 impl<V: StatefulView> StatefulViewWrapper<V> {
     /// Create a new wrapper
     pub fn new(view: V) -> Self {
-        Self {
-            view,
-            state: None,
-            child: None,
-        }
+        Self { view, state: None }
     }
 
     /// Get reference to view
@@ -55,7 +49,6 @@ impl<V: StatefulView> std::fmt::Debug for StatefulViewWrapper<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StatefulViewWrapper")
             .field("has_state", &self.state.is_some())
-            .field("has_child", &self.child.is_some())
             .finish()
     }
 }
@@ -73,12 +66,10 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
 
         // Build with state
         if let Some(ref mut state) = self.state {
-            let child = self.view.build(state, ctx).into_element();
-            self.child = Some(child);
+            self.view.build(state, ctx).into_element()
+        } else {
+            Element::empty()
         }
-
-        // Return the cached child or empty
-        self.child.take().unwrap_or_else(Element::empty)
     }
 
     fn init(&mut self, _ctx: &dyn BuildContext) {
@@ -97,13 +88,23 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
     fn dispose(&mut self, _ctx: &dyn BuildContext) {
         // Clean up state
         self.state = None;
-        self.child = None;
     }
 
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
+impl<V: StatefulView> RenderStateAccessor for StatefulViewWrapper<V> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -136,7 +137,6 @@ impl<V: StatefulView> IntoElement for Stateful<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::ViewState;
 
     struct TestStatefulView {
         initial: i32,
@@ -155,7 +155,7 @@ mod tests {
             }
         }
 
-        fn build(&self, state: &mut Self::State, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoElement {
             state.count += 1;
             ()
         }

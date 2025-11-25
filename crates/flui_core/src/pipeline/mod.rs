@@ -17,6 +17,7 @@
 // =============================================================================
 
 mod build_pipeline;
+mod dirty_tracker;
 mod frame_coordinator;
 mod layout_pipeline;
 mod paint_pipeline;

@@ -9,6 +9,7 @@
 //! - [`TreeNav`] - Parent/child navigation
 //! - [`TreeWrite`] - Mutable tree operations
 //! - [`TreeWriteNav`] - Tree structure modifications
+//! - [`RenderTreeAccess`] - Render-specific data access (stub implementation)
 
 use flui_foundation::{ElementId, Slot};
 use flui_tree::error::{TreeError, TreeResult};
@@ -184,6 +185,49 @@ impl TreeWriteNav for ElementTree {
         }
 
         Ok(())
+    }
+}
+
+// ============================================================================
+// RenderTreeAccess Implementation
+// ============================================================================
+
+impl flui_tree::RenderTreeAccess for ElementTree {
+    /// Returns the render object for an element (stub: always None).
+    ///
+    /// The actual render object is stored in ViewObject wrappers in flui-view.
+    /// This stub implementation keeps flui-element independent of render types.
+    #[inline]
+    fn render_object(&self, id: ElementId) -> Option<&dyn std::any::Any> {
+        // Delegate to Element's stub method (always None)
+        // Phase 5 will implement proper delegation to ViewObject
+        let _ = id; // suppress unused warning
+        None
+    }
+
+    /// Returns a mutable render object (stub: always None).
+    #[inline]
+    fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn std::any::Any> {
+        let _ = id;
+        None
+    }
+
+    /// Returns the render state for an element (delegates to Element::render_state).
+    #[inline]
+    fn render_state(&self, id: ElementId) -> Option<&dyn std::any::Any> {
+        self.get(id)?.render_state()
+    }
+
+    /// Returns a mutable render state (delegates to Element::render_state_mut).
+    #[inline]
+    fn render_state_mut(&mut self, id: ElementId) -> Option<&mut dyn std::any::Any> {
+        self.get_mut(id)?.render_state_mut()
+    }
+
+    /// Returns true if the element is a render element.
+    #[inline]
+    fn is_render_element(&self, id: ElementId) -> bool {
+        self.get(id).map(|e| e.is_render()).unwrap_or(false)
     }
 }
 

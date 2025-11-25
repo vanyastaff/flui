@@ -44,6 +44,7 @@ devtools = ["flui_engine/devtools"]
 [dependencies]
 # Flui crates
 flui_core = { path = "../flui_core" }
+flui-view = { path = "../flui-view" }
 flui_types = { path = "../flui_types" }
 flui_widgets = { path = "../flui_widgets", optional = true }
 flui_interaction = { path = "../flui_interaction" }

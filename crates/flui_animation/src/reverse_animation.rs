@@ -1,7 +1,7 @@
 //! ReverseAnimation - inverts another animation's values.
 
 use crate::animation::{Animation, StatusCallback};
-use flui_core::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_types::animation::AnimationStatus;
 use parking_lot::Mutex;
 use std::fmt;

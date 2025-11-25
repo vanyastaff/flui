@@ -1223,8 +1223,6 @@ version = "0.1.0"
 dependencies = [
  "flui-foundation",
  "flui-tree",
- "flui_engine",
- "flui_interaction",
  "flui_types",
  "parking_lot",
  "serde",
@@ -1317,6 +1315,7 @@ dependencies = [
 name = "flui_animation"
 version = "0.1.0"
 dependencies = [
+ "flui-foundation",
  "flui-scheduler",
  "flui_core",
  "flui_types",
@@ -1333,6 +1332,7 @@ dependencies = [
  "android-activity",
  "console_error_panic_hook",
  "flui-scheduler",
+ "flui-view",
  "flui_core",
  "flui_engine",
  "flui_interaction",
@@ -1542,6 +1542,7 @@ dependencies = [
  "flui_types",
  "moka",
  "parking_lot",
+ "quickcheck",
  "serde",
  "slab",
  "thiserror 2.0.17",

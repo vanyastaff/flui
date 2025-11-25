@@ -1,7 +1,7 @@
 //! TweenAnimation - maps f32 animations to any type T.
 
 use crate::animation::{Animation, StatusCallback};
-use flui_core::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_types::animation::{Animatable, AnimationStatus};
 use parking_lot::Mutex;
 use std::fmt;

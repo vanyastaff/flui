@@ -154,6 +154,28 @@ pub trait DirtyTracking: Send + Sync {
         self.clear_needs_layout(id);
         self.clear_needs_paint(id);
     }
+
+    // ========================================================================
+    // ENUMERATION (override for implementations that track dirty sets)
+    // ========================================================================
+
+    /// Returns all elements that need layout.
+    ///
+    /// Default returns empty vector. Override in implementations
+    /// that maintain dirty sets.
+    #[inline]
+    fn elements_needing_layout(&self) -> Vec<ElementId> {
+        Vec::new()
+    }
+
+    /// Returns all elements that need paint.
+    ///
+    /// Default returns empty vector. Override in implementations
+    /// that maintain dirty sets.
+    #[inline]
+    fn elements_needing_paint(&self) -> Vec<ElementId> {
+        Vec::new()
+    }
 }
 
 // ============================================================================
@@ -188,39 +210,14 @@ pub trait DirtyTracking: Send + Sync {
 /// ```
 pub trait DirtyTrackingExt: DirtyTracking {
     // ========================================================================
-    // ENUMERATION
+    // ENUMERATION (delegates to DirtyTracking methods)
     // ========================================================================
-
-    /// Returns all elements that need layout.
-    ///
-    /// # Returns
-    ///
-    /// A vector of element IDs that have the needs-layout flag set.
-    ///
-    /// # Note
-    ///
-    /// Default implementation returns empty vector. Implementations
-    /// that maintain dirty sets should override.
-    #[inline]
-    fn elements_needing_layout(&self) -> Vec<ElementId> {
-        Vec::new()
-    }
-
-    /// Returns all elements that need paint.
-    ///
-    /// # Returns
-    ///
-    /// A vector of element IDs that have the needs-paint flag set.
-    #[inline]
-    fn elements_needing_paint(&self) -> Vec<ElementId> {
-        Vec::new()
-    }
 
     /// Returns all dirty elements (needing layout or paint).
     #[inline]
     fn elements_dirty(&self) -> Vec<ElementId> {
-        let mut result = self.elements_needing_layout();
-        for id in self.elements_needing_paint() {
+        let mut result = DirtyTracking::elements_needing_layout(self);
+        for id in DirtyTracking::elements_needing_paint(self) {
             if !result.contains(&id) {
                 result.push(id);
             }
@@ -235,13 +232,13 @@ pub trait DirtyTrackingExt: DirtyTracking {
     /// Returns the count of elements needing layout.
     #[inline]
     fn layout_dirty_count(&self) -> usize {
-        self.elements_needing_layout().len()
+        DirtyTracking::elements_needing_layout(self).len()
     }
 
     /// Returns the count of elements needing paint.
     #[inline]
     fn paint_dirty_count(&self) -> usize {
-        self.elements_needing_paint().len()
+        DirtyTracking::elements_needing_paint(self).len()
     }
 
     /// Returns the total count of dirty elements.
@@ -343,7 +340,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     /// Clears all layout dirty flags.
     #[inline]
     fn clear_all_layout(&self) {
-        for id in self.elements_needing_layout() {
+        for id in DirtyTracking::elements_needing_layout(self) {
             self.clear_needs_layout(id);
         }
     }
@@ -351,7 +348,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     /// Clears all paint dirty flags.
     #[inline]
     fn clear_all_paint(&self) {
-        for id in self.elements_needing_paint() {
+        for id in DirtyTracking::elements_needing_paint(self) {
             self.clear_needs_paint(id);
         }
     }
@@ -374,7 +371,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     /// followed by `clear_all_layout()`.
     #[inline]
     fn drain_needing_layout(&self) -> Vec<ElementId> {
-        let elements = self.elements_needing_layout();
+        let elements = DirtyTracking::elements_needing_layout(self);
         self.clear_many_layout(elements.iter().copied());
         elements
     }
@@ -382,7 +379,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     /// Returns and clears all elements needing paint.
     #[inline]
     fn drain_needing_paint(&self) -> Vec<ElementId> {
-        let elements = self.elements_needing_paint();
+        let elements = DirtyTracking::elements_needing_paint(self);
         self.clear_many_paint(elements.iter().copied());
         elements
     }
@@ -433,7 +430,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     where
         F: FnMut(&ElementId) -> bool,
     {
-        self.elements_needing_layout()
+        DirtyTracking::elements_needing_layout(self)
             .into_iter()
             .filter(predicate)
             .collect()
@@ -445,7 +442,7 @@ pub trait DirtyTrackingExt: DirtyTracking {
     where
         F: FnMut(&ElementId) -> bool,
     {
-        self.elements_needing_paint()
+        DirtyTracking::elements_needing_paint(self)
             .into_iter()
             .filter(predicate)
             .collect()
@@ -1140,10 +1137,7 @@ mod tests {
         fn needs_paint(&self, id: ElementId) -> bool {
             self.paint_dirty.lock().unwrap().contains(&id)
         }
-    }
 
-    // Override the default implementation for testing
-    impl DirtyTrackingExt for TestDirtyTracker {
         fn elements_needing_layout(&self) -> Vec<ElementId> {
             self.layout_dirty.lock().unwrap().iter().copied().collect()
         }
@@ -1152,6 +1146,8 @@ mod tests {
             self.paint_dirty.lock().unwrap().iter().copied().collect()
         }
     }
+
+    // Note: TestDirtyTracker automatically gets DirtyTrackingExt via blanket impl
 
     #[test]
     fn test_dirty_tracking_ext_batch_mark() {

@@ -1,7 +1,7 @@
 //! CurvedAnimation - applies easing curves to animations.
 
 use crate::animation::{Animation, StatusCallback};
-use flui_core::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_types::animation::{AnimationStatus, Curve};
 use parking_lot::Mutex;
 use std::fmt;

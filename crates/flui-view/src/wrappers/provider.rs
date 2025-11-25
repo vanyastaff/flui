@@ -5,9 +5,10 @@
 use std::any::Any;
 
 use flui_element::{Element, ElementId, IntoElement};
+use flui_foundation::RenderStateAccessor;
 
 use crate::context::BuildContext;
-use crate::object::ViewObject;
+use crate::object::{ProviderViewObject, ViewObject};
 use crate::protocol::ViewMode;
 use crate::traits::ProviderView;
 
@@ -22,9 +23,6 @@ where
 {
     /// The provider view
     view: V,
-
-    /// Cached child element from last build
-    child: Option<Element>,
 
     /// Elements that depend on this provider's value
     dependents: Vec<ElementId>,
@@ -42,7 +40,6 @@ where
     pub fn new(view: V) -> Self {
         Self {
             view,
-            child: None,
             dependents: Vec::new(),
             _marker: std::marker::PhantomData,
         }
@@ -83,7 +80,6 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProviderViewWrapper")
-            .field("has_child", &self.child.is_some())
             .field("dependents_count", &self.dependents.len())
             .finish()
     }
@@ -100,11 +96,7 @@ where
 
     fn build(&mut self, ctx: &dyn BuildContext) -> Element {
         // Build the child
-        let child = self.view.build(ctx).into_element();
-        self.child = Some(child);
-
-        // Return the cached child or empty
-        self.child.take().unwrap_or_else(Element::empty)
+        self.view.build(ctx).into_element()
     }
 
     fn init(&mut self, ctx: &dyn BuildContext) {
@@ -128,7 +120,6 @@ where
 
     fn dispose(&mut self, ctx: &dyn BuildContext) {
         self.view.dispose(ctx);
-        self.child = None;
         self.dependents.clear();
     }
 
@@ -143,19 +134,42 @@ where
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
 
-    // ========== PROVIDER-SPECIFIC ==========
-
-    fn provided_value(&self) -> Option<&(dyn Any + Send + Sync)> {
-        Some(self.view.value())
+// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
+impl<V, T> RenderStateAccessor for ProviderViewWrapper<V, T>
+where
+    V: ProviderView<T>,
+    T: Send + Sync + 'static,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
-    fn dependents(&self) -> Option<&[ElementId]> {
-        Some(&self.dependents)
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// ============================================================================
+// ProviderViewObject IMPLEMENTATION
+// ============================================================================
+
+impl<V, T> ProviderViewObject for ProviderViewWrapper<V, T>
+where
+    V: ProviderView<T>,
+    T: Send + Sync + 'static,
+{
+    fn provided_value(&self) -> &(dyn Any + Send + Sync) {
+        self.view.value()
     }
 
-    fn dependents_mut(&mut self) -> Option<&mut Vec<ElementId>> {
-        Some(&mut self.dependents)
+    fn dependents(&self) -> &[ElementId] {
+        &self.dependents
+    }
+
+    fn dependents_mut(&mut self) -> &mut Vec<ElementId> {
+        &mut self.dependents
     }
 
     fn should_notify_dependents(&self, old_value: &dyn Any) -> bool {
@@ -219,7 +233,7 @@ mod tests {
     }
 
     impl ProviderView<TestTheme> for TestThemeProvider {
-        fn build(&mut self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoElement {
             std::mem::replace(&mut self.child, Element::empty())
         }
 
@@ -255,10 +269,10 @@ mod tests {
 
         let id = ElementId::new(1);
         wrapper.add_dependent(id);
-        assert_eq!(wrapper.dependents().unwrap().len(), 1);
+        assert_eq!(ProviderViewObject::dependents(&wrapper).len(), 1);
 
         wrapper.remove_dependent(id);
-        assert_eq!(wrapper.dependents().unwrap().len(), 0);
+        assert_eq!(ProviderViewObject::dependents(&wrapper).len(), 0);
     }
 
     #[test]
@@ -269,7 +283,7 @@ mod tests {
             },
             child: Element::empty(),
         };
-        let element = Provider(view).into_element();
+        let element = Provider::new(view).into_element();
         assert!(element.has_view_object());
     }
 }

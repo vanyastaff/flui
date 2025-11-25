@@ -312,26 +312,23 @@ impl ElementTree {
     /// Stub: Paint a render object (returns None - not implemented).
     ///
     /// Actual painting should be performed through the pipeline system.
+    /// Returns `true` if the element was painted, `false` otherwise.
     #[inline]
-    pub fn paint_render_object(
-        &self,
-        _id: ElementId,
-        _offset: flui_types::Offset,
-    ) -> Option<flui_engine::CanvasLayer> {
+    pub fn paint_render_object(&self, _id: ElementId, _offset: flui_types::Offset) -> bool {
         // TODO: Implement proper paint delegation
-        None
+        // This stub allows flui-element to remain independent of flui_engine
+        false
     }
 
-    /// Stub: Hit test at position (returns empty result).
+    /// Stub: Hit test at position (returns empty Vec).
     ///
     /// Actual hit testing should be performed through the interaction layer.
+    /// Returns element IDs that were hit, in front-to-back order.
     #[inline]
-    pub fn hit_test(
-        &self,
-        _root_id: ElementId,
-        _position: flui_types::Offset,
-    ) -> flui_interaction::HitTestResult {
-        flui_interaction::HitTestResult::new()
+    pub fn hit_test(&self, _root_id: ElementId, _position: flui_types::Offset) -> Vec<ElementId> {
+        // TODO: Implement proper hit test delegation
+        // This stub allows flui-element to remain independent of flui_interaction
+        Vec::new()
     }
 }
 

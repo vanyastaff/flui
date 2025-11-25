@@ -1,6 +1,6 @@
 //! Core animation trait and types.
 
-use flui_core::foundation::{Listenable, ListenerId};
+use flui_foundation::{Listenable, ListenerId};
 use flui_types::animation::AnimationStatus;
 use std::fmt;
 use std::sync::Arc;

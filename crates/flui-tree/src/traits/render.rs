@@ -316,7 +316,9 @@ pub trait RenderTreeExt: RenderTreeAccess {
     where
         Self: Sized,
     {
-        self.render_ancestors_iter(id).nth(1)
+        // Use from_parent to start from parent, avoiding nth(1) issues
+        // when the element itself is not a render element
+        crate::iter::RenderAncestors::from_parent(self, id).next()
     }
 
     /// Counts the render children of an element.
@@ -761,7 +763,7 @@ mod tests {
         }
 
         fn insert(&mut self, mut node: TestNode, parent: Option<ElementId>) -> ElementId {
-            let id = ElementId::new(self.nodes.len() as u64 + 1);
+            let id = ElementId::new(self.nodes.len() + 1);
             node.parent = parent;
             self.nodes.push(Some(node));
 
@@ -1096,7 +1098,7 @@ mod tests {
         let child1 = tree.insert_render(Some(parent));
         let child2 = tree.insert_render(Some(parent));
 
-        let ids: Vec<u64> = tree.map_render_children(parent, |id| id.get());
+        let ids: Vec<usize> = tree.map_render_children(parent, |id| id.get());
         assert_eq!(ids, vec![child1.get(), child2.get()]);
     }
 

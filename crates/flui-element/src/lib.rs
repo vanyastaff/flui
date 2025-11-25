@@ -117,7 +117,7 @@ pub use into_element::IntoElement;
 pub use flui_foundation::{ElementId, Slot, ViewMode};
 
 // Re-export tree traits for convenience
-pub use flui_tree::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};
+pub use flui_tree::{RenderTreeAccess, TreeNav, TreeRead, TreeWrite, TreeWriteNav};
 
 // ============================================================================
 // PRELUDE
@@ -133,5 +133,5 @@ pub mod prelude {
     pub use crate::into_element::IntoElement;
     pub use crate::tree::ElementTree;
     pub use flui_foundation::ElementId;
-    pub use flui_tree::{TreeNav, TreeRead, TreeWrite};
+    pub use flui_tree::{RenderTreeAccess, TreeNav, TreeRead, TreeWrite};
 }

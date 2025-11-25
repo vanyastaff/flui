@@ -29,10 +29,15 @@ use crate::core::{Geometry, LayoutProtocol, RenderObject, RenderState, RuntimeAr
 /// - `RenderObjectWrapper` - For raw RenderObject instances
 pub trait RenderViewObject: Send + 'static {
     /// Get the render object.
-    fn render_object(&self) -> &dyn RenderObject;
+    ///
+    /// Returns `None` if the render object hasn't been created yet
+    /// (i.e., `create_render_object()` hasn't been called).
+    fn render_object(&self) -> Option<&dyn RenderObject>;
 
     /// Get mutable render object.
-    fn render_object_mut(&mut self) -> &mut dyn RenderObject;
+    ///
+    /// Returns `None` if the render object hasn't been created yet.
+    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject>;
 
     /// Get the render state (cached size, offset, dirty flags).
     fn render_state(&self) -> &RenderState;

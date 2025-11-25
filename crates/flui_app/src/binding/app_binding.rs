@@ -8,9 +8,10 @@
 //! It provides a global singleton accessed via `ensure_initialized()`.
 
 use super::{BindingBase, GestureBinding, RendererBinding, SchedulerBinding};
-use flui_core::{pipeline::PipelineOwner, view::StatelessView};
+use flui_core::pipeline::PipelineOwner;
 use flui_engine::Scene;
 use flui_types::constraints::BoxConstraints;
+use flui_view::StatelessView;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -173,7 +174,7 @@ impl AppBinding {
     /// ```
     pub fn attach_root_widget<V>(&self, widget: V)
     where
-        V: flui_core::view::StatelessView + Clone + Sync,
+        V: flui_view::StatelessView + Clone + Sync,
     {
         let mut pipeline = self.pipeline_owner.write();
         pipeline

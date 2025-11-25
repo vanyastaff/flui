@@ -21,9 +21,10 @@
 //! let layers = paint.generate_layers(&tree);
 //! ```
 
+use super::dirty_tracker::DirtyTracker;
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
-use flui_pipeline::{LockFreeDirtySet, PipelineError};
+use flui_pipeline::PipelineError;
 
 /// Result type for paint operations
 pub type PaintResult<T> = Result<T, PipelineError>;
@@ -32,15 +33,12 @@ pub type PaintResult<T> = Result<T, PipelineError>;
 ///
 /// Tracks which render objects need repainting and generates
 /// the layer tree for the compositor.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PaintPipeline {
-    /// Set of render objects that need repainting.
-    dirty: LockFreeDirtySet,
+    /// Dirty tracking (composed)
+    dirty: DirtyTracker,
 
     /// Whether to enable layer optimization.
-    ///
-    /// Layer optimization merges compatible layers and removes
-    /// redundant operations. Can be disabled for debugging.
     optimize_layers: bool,
 }
 
@@ -50,7 +48,7 @@ impl PaintPipeline {
     /// Layer optimization is enabled by default.
     pub fn new() -> Self {
         Self {
-            dirty: LockFreeDirtySet::default(),
+            dirty: DirtyTracker::new(),
             optimize_layers: true,
         }
     }
@@ -58,34 +56,37 @@ impl PaintPipeline {
     /// Creates a paint pipeline with layer optimization disabled.
     pub fn new_unoptimized() -> Self {
         Self {
-            dirty: LockFreeDirtySet::default(),
+            dirty: DirtyTracker::new(),
             optimize_layers: false,
         }
     }
 
     /// Marks a render object as needing repaint.
-    ///
-    /// The render object will be painted on the next call to [`PaintPipeline::generate_layers`].
+    #[inline]
     pub fn mark_dirty(&self, id: ElementId) {
         self.dirty.mark_dirty(id);
     }
 
     /// Checks if any render objects are dirty.
+    #[inline]
     pub fn has_dirty(&self) -> bool {
         self.dirty.has_dirty()
     }
 
     /// Checks if a specific render object is dirty.
+    #[inline]
     pub fn is_dirty(&self, id: ElementId) -> bool {
         self.dirty.is_dirty(id)
     }
 
     /// Enables or disables layer optimization.
+    #[inline]
     pub fn set_optimize_layers(&mut self, enabled: bool) {
         self.optimize_layers = enabled;
     }
 
     /// Returns true if layer optimization is enabled.
+    #[inline]
     pub fn is_optimized(&self) -> bool {
         self.optimize_layers
     }
@@ -120,7 +121,7 @@ impl PaintPipeline {
     ///
     /// Layer optimization (merging compatible layers, batching operations) will be
     /// implemented in a future update. Currently, layers are generated but not optimized.
-    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty.len()))]
+    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty_count()))]
     pub fn generate_layers(&mut self, tree: &mut ElementTree) -> PaintResult<usize> {
         let dirty_ids = self.dirty.drain();
         let count = dirty_ids.len();
@@ -131,21 +132,22 @@ impl PaintPipeline {
 
         // Process each dirty render object
         for id in dirty_ids {
-            // Get element from tree
-            let Some(element) = tree.get(id) else {
+            // Check if element exists in tree
+            use flui_element::RenderTreeAccess;
+            if tree.get(id).is_none() {
                 tracing::error!(
                     element_id = ?id,
                     "Element marked dirty but not found in tree during paint"
                 );
                 continue;
-            };
+            }
 
-            // Only paint render elements
-            if !element.is_render() {
+            // Only paint render elements (uses trait method for abstraction)
+            if !tree.is_render_element(id) {
                 #[cfg(debug_assertions)]
                 tracing::trace!("Element {:?} is not a render element, skipping", id);
                 continue;
-            };
+            }
 
             // TODO: Re-enable render_state checks once Element properly supports RenderViewObject
             // Currently Element::render_state() returns None (stub) so we skip the check
@@ -160,17 +162,9 @@ impl PaintPipeline {
             let offset = flui_types::Offset::ZERO;
 
             // Perform paint using ElementTree method
-            // This properly handles the unified Element architecture and state updates
-            let _layer = tree.paint_render_object(id, offset);
-
-            // ElementTree.paint_render_object() handles:
-            // 1. Calling ViewObject.paint_render()
-            // 2. Clearing needs_paint flag
-            // 3. Future: Building layer tree for composition
-
-            // Future enhancement: Store layer for composition
-            // For now, we just generate and discard layers
-            // In the future, we'll build a layer tree and return it
+            // Note: This is a stub that returns false - actual paint happens elsewhere
+            // TODO: Phase 5 - Implement proper paint delegation
+            let _painted = tree.paint_render_object(id, offset);
 
             #[cfg(debug_assertions)]
             tracing::trace!("Paint: Element {:?} painted successfully", id);
@@ -189,19 +183,15 @@ impl PaintPipeline {
     }
 
     /// Clears all dirty render objects without painting.
+    #[inline]
     pub fn clear_dirty(&mut self) {
         self.dirty.clear();
     }
 
     /// Returns the number of dirty render objects.
+    #[inline]
     pub fn dirty_count(&self) -> usize {
         self.dirty.len()
-    }
-}
-
-impl Default for PaintPipeline {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

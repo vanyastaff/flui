@@ -168,52 +168,16 @@ impl FrameCoordinator {
         }
     }
 
-    /// Build a complete frame
+    /// Internal implementation of frame building logic.
     ///
-    /// Orchestrates the three phases: build → layout → paint.
-    ///
-    /// # Parameters
-    ///
-    /// - `tree`: The element tree to operate on
-    /// - `root_id`: Root element ID (for determining size)
-    /// - `constraints`: Root layout constraints (typically screen size)
-    ///
-    /// # Returns
-    ///
-    /// The root layer for the compositor, or None if no root element exists.
-    ///
-    /// # Pipeline Flow
-    ///
-    /// 1. **Build Phase**: Rebuilds all dirty widgets (ComponentElements)
-    /// 2. **Layout Phase**: Computes sizes for all dirty RenderElements
-    /// 3. **Paint Phase**: Generates paint layers for all dirty RenderElements
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_types::{Size, constraints::BoxConstraints};
-    ///
-    /// let mut tree = ElementTree::new();
-    /// let mut coordinator = FrameCoordinator::new();
-    ///
-    /// // Build complete frame at 800x600
-    /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-    /// if let Some(layer) = coordinator.build_frame(&mut tree, Some(root_id), constraints)? {
-    ///     // Compositor can now render the layer
-    ///     compositor.present(layer);
-    /// }
-    /// ```
-    #[tracing::instrument(skip(self, tree), level = "debug")]
-    pub fn build_frame(
+    /// This method contains the actual build→layout→paint pipeline.
+    /// It's called by both `build_frame` and `build_frame_no_span`.
+    fn build_frame_impl(
         &mut self,
         tree: &Arc<RwLock<ElementTree>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
-        // Create frame span for hierarchical logging
-        let frame_span = tracing::info_span!("frame", ?constraints);
-        let _frame_guard = frame_span.enter();
-
         // Start frame and reset budget
         self.budget.lock().reset();
 
@@ -370,6 +334,55 @@ impl FrameCoordinator {
         Ok(layer)
     }
 
+    /// Build a complete frame
+    ///
+    /// Orchestrates the three phases: build → layout → paint.
+    ///
+    /// # Parameters
+    ///
+    /// - `tree`: The element tree to operate on
+    /// - `root_id`: Root element ID (for determining size)
+    /// - `constraints`: Root layout constraints (typically screen size)
+    ///
+    /// # Returns
+    ///
+    /// The root layer for the compositor, or None if no root element exists.
+    ///
+    /// # Pipeline Flow
+    ///
+    /// 1. **Build Phase**: Rebuilds all dirty widgets (ComponentElements)
+    /// 2. **Layout Phase**: Computes sizes for all dirty RenderElements
+    /// 3. **Paint Phase**: Generates paint layers for all dirty RenderElements
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::{Size, constraints::BoxConstraints};
+    ///
+    /// let mut tree = ElementTree::new();
+    /// let mut coordinator = FrameCoordinator::new();
+    ///
+    /// // Build complete frame at 800x600
+    /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
+    /// if let Some(layer) = coordinator.build_frame(&mut tree, Some(root_id), constraints)? {
+    ///     // Compositor can now render the layer
+    ///     compositor.present(layer);
+    /// }
+    /// ```
+    #[tracing::instrument(skip(self, tree), level = "debug")]
+    pub fn build_frame(
+        &mut self,
+        tree: &Arc<RwLock<ElementTree>>,
+        root_id: Option<ElementId>,
+        constraints: BoxConstraints,
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+        // Create frame span for hierarchical logging
+        let frame_span = tracing::info_span!("frame", ?constraints);
+        let _frame_guard = frame_span.enter();
+
+        self.build_frame_impl(tree, root_id, constraints)
+    }
+
     /// Build a complete frame without creating frame span (for custom logging)
     ///
     /// This variant doesn't create a frame span, allowing the caller to manage spans.
@@ -380,159 +393,7 @@ impl FrameCoordinator {
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
-        // Start frame and reset budget
-        self.budget.lock().reset();
-
-        // Phase 1: Build (rebuild dirty widgets)
-        // IMPORTANT: Keep flushing build until tree is fully built (no more dirty elements)
-        // This is critical because rebuilding one component can mark other components as dirty
-        // (e.g., when signals change during rebuild, they schedule more rebuilds)
-        let mut iterations = 0;
-        let mut total_build_count = 0;
-        loop {
-            // Flush rebuild queue from signals to dirty_elements
-            // This is critical: signal.set() adds to rebuild_queue, this moves to dirty_elements
-            self.build.flush_rebuild_queue();
-
-            // Flush any batched builds to dirty_elements
-            // This is critical: schedule() adds to batcher, flush_batch moves to dirty_elements
-            self.build.flush_batch();
-
-            let build_count = self.build.dirty_count();
-
-            if build_count == 0 {
-                break;
-            }
-
-            let build_span = tracing::info_span!("build_iteration", iteration = iterations);
-            let _build_guard = build_span.enter();
-
-            // Use parallel build (automatically falls back to sequential if appropriate)
-            self.build.rebuild_dirty_parallel(tree);
-            total_build_count += build_count;
-
-            tracing::debug!(
-                count = build_count,
-                iteration = iterations,
-                "Build iteration complete"
-            );
-
-            iterations += 1;
-
-            // Safety check: prevent infinite loops
-            if iterations > 100 {
-                tracing::warn!(
-                    "Build loop exceeded 100 iterations, breaking (possible rebuild cycle)"
-                );
-                break;
-            }
-        }
-
-        if total_build_count > 0 {
-            tracing::debug!(
-                total = total_build_count,
-                iterations,
-                "Build phase complete"
-            );
-        }
-
-        // Check if we're approaching deadline after build phase
-        #[cfg(debug_assertions)]
-        {
-            let budget = self.budget.lock();
-            if budget.is_deadline_near() {
-                tracing::warn!(
-                    "Approaching deadline after build, remaining {:.2}ms",
-                    budget.remaining_ms()
-                );
-            }
-        }
-
-        // Phase 2: Layout (compute sizes and positions)
-        let _root_size = {
-            let layout_span = tracing::info_span!("layout");
-            let _layout_guard = layout_span.enter();
-
-            let mut tree_guard = tree.write();
-
-            // Scan for RenderElements and mark them for layout
-            // TODO: Re-enable render_state.needs_layout() check once Element supports RenderViewObject
-            let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
-            let mut marked_count = 0usize;
-            for id in all_ids.iter().copied() {
-                if let Some(element) = tree_guard.get(id) {
-                    if element.is_render() {
-                        self.layout.mark_dirty(id);
-                        marked_count += 1;
-                    }
-                }
-            }
-            tracing::debug!(
-                total_elements = all_ids.len(),
-                marked_for_layout = marked_count,
-                "Marked all render elements for layout"
-            );
-
-            let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
-
-            // Mark all laid out elements for paint
-            for id in &laid_out_ids {
-                self.paint.mark_dirty(*id);
-            }
-
-            if !laid_out_ids.is_empty() {
-                tracing::debug!(count = laid_out_ids.len(), "Layout complete");
-            }
-
-            // Get root element's computed size
-            Self::extract_root_size(&tree_guard, root_id)
-        };
-
-        // Check if we're approaching deadline after layout phase
-        #[cfg(debug_assertions)]
-        {
-            let budget = self.budget.lock();
-            if budget.is_deadline_near() {
-                tracing::warn!(
-                    "Approaching deadline after layout, remaining {:.2}ms",
-                    budget.remaining_ms()
-                );
-            }
-        }
-
-        // Phase 3: Paint (generate layer tree)
-        let layer = {
-            let paint_span = tracing::info_span!("paint");
-            let _paint_guard = paint_span.enter();
-
-            let mut tree_guard = tree.write();
-            let count = self.paint.generate_layers(&mut tree_guard)?;
-
-            if count > 0 {
-                tracing::debug!(count, "Paint complete");
-            }
-
-            // Get root element's layer
-            Self::extract_root_layer(&tree_guard, root_id)
-        };
-
-        // Finish frame and update metrics
-        self.budget.lock().finish_frame();
-
-        // Log frame completion with timing info
-        #[cfg(debug_assertions)]
-        {
-            let budget = self.budget.lock();
-            if layer.is_some() && budget.is_over_budget() {
-                tracing::warn!(
-                    elapsed_ms = budget.last_frame_time_ms(),
-                    target_ms = budget.target_duration_ms(),
-                    "Frame deadline missed"
-                );
-            }
-        }
-
-        Ok(layer)
+        self.build_frame_impl(tree, root_id, constraints)
     }
 
     /// Flush the build phase
@@ -620,16 +481,15 @@ impl FrameCoordinator {
         let _count = self.paint.generate_layers(&mut tree_guard)?;
 
         // Get root element's layer
-        // TODO: Re-implement once Element properly supports RenderViewObject
-        // Currently we can't access render_state for offset, so we use Offset::ZERO
+        // TODO: Phase 5 - Re-implement once Element properly supports RenderViewObject
+        // Currently paint_render_object is a stub that returns false, so we return an empty layer.
         let layer = match root_id {
             Some(id) => {
                 let offset = flui_types::Offset::ZERO;
-                if let Some(canvas_layer) = tree_guard.paint_render_object(id, offset) {
-                    Some(Box::new(canvas_layer))
-                } else {
-                    Some(Box::new(flui_engine::CanvasLayer::new()))
-                }
+                // paint_render_object returns bool (stub: always false)
+                // Future: This should return the actual painted layer
+                let _painted = tree_guard.paint_render_object(id, offset);
+                Some(Box::new(flui_engine::CanvasLayer::new()))
             }
             None => None,
         };

@@ -98,15 +98,19 @@ pub use embedder::WgpuEmbedder;
 
 // Re-export commonly used types from flui_core
 pub use flui_core::{
-    // Element system
-    element::Element,
+    // View system (now at top level)
+    BuildContext,
+    // Element system (now at top level)
+    Element,
 
-    // Foundation types
-    foundation::{ElementId, Key, Slot},
-
-    // View system (new API)
-    view::{BuildContext, StatelessView},
+    // Foundation types (now at top level)
+    ElementId,
+    Key,
+    Slot,
 };
+
+// StatelessView is in flui-view
+pub use flui_view::StatelessView;
 
 use winit::event_loop::EventLoop;
 
@@ -148,7 +152,7 @@ use winit::event_loop::EventLoop;
 #[cfg(not(target_os = "android"))]
 pub fn run_app<V>(app: V) -> !
 where
-    V: flui_core::view::StatelessView + Clone + Sync,
+    V: flui_view::StatelessView + Clone + Sync,
 {
     use crate::embedder::DesktopEmbedder;
     use winit::application::ApplicationHandler;

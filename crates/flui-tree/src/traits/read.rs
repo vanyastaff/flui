@@ -208,7 +208,7 @@ mod tests {
         }
 
         fn insert(&mut self, value: String) -> ElementId {
-            let id = ElementId::new(self.nodes.len() as u64 + 1);
+            let id = ElementId::new(self.nodes.len() + 1);
             self.nodes.push(Some(value));
             id
         }

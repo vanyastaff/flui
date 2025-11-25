@@ -2,9 +2,10 @@
 //!
 //! Wraps a RenderView and its created RenderObject, implementing RenderViewObject.
 
+use std::any::Any;
 use std::marker::PhantomData;
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, RenderStateAccessor};
 use flui_painting::Canvas;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
@@ -190,16 +191,14 @@ where
     V::RenderObject: RenderObject,
     A: ArityToRuntime,
 {
-    fn render_object(&self) -> &dyn RenderObject {
-        self.render_object
-            .as_ref()
-            .expect("render_object called before create_render_object")
+    fn render_object(&self) -> Option<&dyn RenderObject> {
+        self.render_object.as_ref().map(|r| r as &dyn RenderObject)
     }
 
-    fn render_object_mut(&mut self) -> &mut dyn RenderObject {
+    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
         self.render_object
             .as_mut()
-            .expect("render_object_mut called before create_render_object")
+            .map(|r| r as &mut dyn RenderObject)
     }
 
     fn render_state(&self) -> &RenderState {
@@ -224,10 +223,10 @@ where
         constraints: BoxConstraints,
         layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> Size,
     ) -> Size {
-        let render = self
-            .render_object
-            .as_mut()
-            .expect("perform_layout called before create_render_object");
+        let Some(render) = self.render_object.as_mut() else {
+            tracing::warn!("perform_layout called before create_render_object");
+            return Size::ZERO;
+        };
 
         let type_erased = Constraints::Box(constraints);
         let geometry = render.layout(
@@ -254,10 +253,10 @@ where
         offset: Offset,
         paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
     ) -> Canvas {
-        let render = self
-            .render_object
-            .as_ref()
-            .expect("perform_paint called before create_render_object");
+        let Some(render) = self.render_object.as_ref() else {
+            tracing::warn!("perform_paint called before create_render_object");
+            return Canvas::new();
+        };
 
         render.paint(children, offset, paint_child)
     }
@@ -269,12 +268,51 @@ where
         geometry: &Geometry,
         hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
     ) -> bool {
-        let render = self
-            .render_object
-            .as_ref()
-            .expect("perform_hit_test called before create_render_object");
+        let Some(render) = self.render_object.as_ref() else {
+            tracing::warn!("perform_hit_test called before create_render_object");
+            return false;
+        };
 
         render.hit_test(children, position, geometry, hit_test_child)
+    }
+}
+
+// ============================================================================
+// RenderStateAccessor IMPLEMENTATION
+// ============================================================================
+
+impl<V, P, A> RenderStateAccessor for RenderViewWrapper<V, P, A>
+where
+    V: RenderView<P, A>,
+    P: Protocol,
+    A: Arity,
+{
+    fn render_state_any(&self) -> Option<&dyn Any> {
+        Some(&self.render_state)
+    }
+
+    fn render_state_any_mut(&mut self) -> Option<&mut dyn Any> {
+        Some(&mut self.render_state)
+    }
+
+    fn render_object_any(&self) -> Option<&dyn Any> {
+        self.render_object.as_ref().map(|r| r as &dyn Any)
+    }
+
+    fn render_object_any_mut(&mut self) -> Option<&mut dyn Any> {
+        self.render_object.as_mut().map(|r| r as &mut dyn Any)
+    }
+
+    fn is_render_accessor(&self) -> bool {
+        true
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
@@ -325,6 +363,34 @@ mod tests {
                 && position.dy >= 0.0
                 && position.dx < size.width
                 && position.dy < size.height
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    impl crate::core::RenderBox<Leaf> for TestRenderBox {
+        fn layout(
+            &mut self,
+            constraints: crate::core::protocol::BoxConstraints,
+            _children: &[ElementId],
+            _layout_child: &mut dyn FnMut(ElementId, crate::core::protocol::BoxConstraints) -> Size,
+        ) -> Size {
+            constraints.constrain(self.size)
+        }
+
+        fn paint(
+            &self,
+            _offset: Offset,
+            _children: &[ElementId],
+            _paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
+        ) -> Canvas {
+            Canvas::new()
         }
 
         fn as_any(&self) -> &dyn Any {

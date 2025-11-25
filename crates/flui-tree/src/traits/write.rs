@@ -377,7 +377,7 @@ mod tests {
 
         fn node_ids(&self) -> Option<Box<dyn Iterator<Item = ElementId> + '_>> {
             Some(Box::new(self.nodes.iter().enumerate().filter_map(
-                |(i, n)| n.as_ref().map(|_| ElementId::new(i as u64 + 1)),
+                |(i, n)| n.as_ref().map(|_| ElementId::new(i + 1)),
             )))
         }
     }
@@ -402,7 +402,7 @@ mod tests {
         }
 
         fn insert(&mut self, node: TestNode) -> ElementId {
-            let id = ElementId::new(self.nodes.len() as u64 + 1);
+            let id = ElementId::new(self.nodes.len() + 1);
             self.nodes.push(Some(node));
             id
         }

@@ -26,6 +26,7 @@ bitflags = { workspace = true }
 
 [dev-dependencies]
 criterion.workspace = true
+quickcheck = "1.0"
 
 [features]
 default = []

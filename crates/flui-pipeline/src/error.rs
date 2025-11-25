@@ -89,6 +89,10 @@ pub enum PipelineError {
     #[error("No root element attached")]
     NoRoot,
 
+    /// Root already attached
+    #[error("Root element has already been attached")]
+    RootAlreadyAttached,
+
     /// Constraint violation
     #[error("Constraint violation: {0}")]
     ConstraintViolation(String),
@@ -144,7 +148,8 @@ impl PipelineError {
             Self::ElementNotFound(_)
             | Self::InvalidState(_)
             | Self::Cancelled(_)
-            | Self::NoRoot => PipelinePhase::Build,
+            | Self::NoRoot
+            | Self::RootAlreadyAttached => PipelinePhase::Build,
         }
     }
 

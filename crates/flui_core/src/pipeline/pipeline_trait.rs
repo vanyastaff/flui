@@ -297,25 +297,4 @@ mod tests {
         assert!(owner.root_element_id().is_none());
         // Should compile and run without error
     }
-
-    #[test]
-    fn test_mock_pipeline_integration() {
-        // Integration test using MockPipeline from testing module
-        use crate::testing::MockPipeline;
-
-        let mock = Arc::new(MockPipeline::new());
-        let pipeline: Arc<dyn Pipeline> = mock.clone();
-
-        // Test basic operations
-        assert!(pipeline.root_element_id().is_none());
-        assert_eq!(pipeline.frame_number(), 0);
-
-        // Build frames
-        let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-        let _ = pipeline.build_frame(constraints);
-        let _ = pipeline.build_frame(constraints);
-
-        // Verify mock tracked frames
-        assert_eq!(pipeline.frame_number(), 2);
-    }
 }

@@ -76,7 +76,7 @@ impl From<SliverConstraints> for Constraints {
 ///
 /// Wraps either `Size` (box) or `SliverGeometry` (sliver) for use in
 /// type-erased `RenderObject::layout()` return values.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Geometry {
     /// Size for box protocol elements.
     Box(Size),

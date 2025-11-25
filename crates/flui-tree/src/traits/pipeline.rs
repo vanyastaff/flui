@@ -471,7 +471,7 @@ mod tests {
             is_render: bool,
             size: (f32, f32),
         ) -> ElementId {
-            let id = ElementId::new(self.nodes.len() as u64 + 1);
+            let id = ElementId::new(self.nodes.len() + 1);
             self.nodes.push(Some(TestNode {
                 parent,
                 children: Vec::new(),

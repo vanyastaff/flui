@@ -264,6 +264,28 @@ impl PipelineOwner {
         id
     }
 
+    /// Attach a widget as the root element
+    ///
+    /// This is a convenience method that creates an Element from a widget
+    /// and sets it as the root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a root has already been attached.
+    pub fn attach<V>(&mut self, widget: V) -> Result<ElementId, PipelineError>
+    where
+        V: flui_view::StatelessView,
+    {
+        use flui_view::IntoElement;
+
+        if self.root_mgr.root_id().is_some() {
+            return Err(PipelineError::RootAlreadyAttached);
+        }
+
+        let element = flui_view::Stateless(widget).into_element();
+        Ok(self.set_root(element))
+    }
+
     // =========================================================================
     // Build Scheduling
     // =========================================================================
@@ -281,6 +303,21 @@ impl PipelineOwner {
     /// Get number of dirty elements
     pub fn dirty_count(&self) -> usize {
         self.coordinator.build().dirty_count()
+    }
+
+    /// Check if there are pending rebuilds
+    pub fn has_pending_rebuilds(&self) -> bool {
+        self.dirty_count() > 0
+    }
+
+    /// Flush the rebuild queue and return whether any elements were rebuilt
+    pub fn flush_rebuild_queue(&mut self) -> bool {
+        let count_before = self.dirty_count();
+        if count_before == 0 {
+            return false;
+        }
+        self.flush_build();
+        true
     }
 
     /// Check if currently in build scope

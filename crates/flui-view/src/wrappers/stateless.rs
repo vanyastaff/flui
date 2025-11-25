@@ -6,6 +6,7 @@ use std::any::Any;
 use std::marker::PhantomData;
 
 use flui_element::{Element, IntoElement};
+use flui_foundation::RenderStateAccessor;
 
 use crate::context::BuildContext;
 use crate::object::ViewObject;
@@ -19,9 +20,6 @@ pub struct StatelessViewWrapper<V: StatelessView> {
     /// The view (consumed on first build)
     view: Option<V>,
 
-    /// Cached child element from last build
-    child: Option<Element>,
-
     /// Type name for debugging
     _marker: PhantomData<V>,
 }
@@ -31,7 +29,6 @@ impl<V: StatelessView> StatelessViewWrapper<V> {
     pub fn new(view: V) -> Self {
         Self {
             view: Some(view),
-            child: None,
             _marker: PhantomData,
         }
     }
@@ -41,7 +38,6 @@ impl<V: StatelessView> std::fmt::Debug for StatelessViewWrapper<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StatelessViewWrapper")
             .field("has_view", &self.view.is_some())
-            .field("has_child", &self.child.is_some())
             .finish()
     }
 }
@@ -54,18 +50,27 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
     fn build(&mut self, ctx: &dyn BuildContext) -> Element {
         // Take the view (it's consumed by build)
         if let Some(view) = self.view.take() {
-            let child = view.build(ctx).into_element();
-            self.child = Some(child);
+            view.build(ctx).into_element()
+        } else {
+            Element::empty()
         }
-
-        // Return the cached child or empty
-        self.child.take().unwrap_or_else(Element::empty)
     }
 
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
+impl<V: StatelessView> RenderStateAccessor for StatelessViewWrapper<V> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -112,7 +117,7 @@ mod tests {
     }
 
     impl StatelessView for TestView {
-        fn build(self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
             () // Returns empty element
         }
     }
@@ -127,7 +132,7 @@ mod tests {
     #[test]
     fn test_into_element() {
         let view = TestView { value: 42 };
-        let element = view.into_element();
+        let element = Stateless(view).into_element();
         assert!(element.has_view_object());
     }
 }

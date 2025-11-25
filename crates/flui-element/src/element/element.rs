@@ -1,7 +1,7 @@
 //! Element struct - Unified element with type-erased view object
 //!
 //! This module provides the unified `Element` struct that can hold any view type
-//! through type erasure using `Box<dyn Any + Send + Sync>`.
+//! through type erasure using `Box<dyn RenderStateAccessor>`.
 //!
 //! # Architecture
 //!
@@ -10,15 +10,19 @@
 //!   ↓ wrap in ViewObject
 //! Element (Lifecycle + type-erased ViewObject)
 //!   ├─ base: ElementBase (lifecycle, flags, parent/slot)
-//!   ├─ view_object: Box<dyn Any + Send + Sync> (type-erased!)
+//!   ├─ view_object: Box<dyn RenderStateAccessor> (type-erased!)
 //!   └─ children: Vec<ElementId>
 //! ```
 //!
 //! # Type Erasure
 //!
-//! Element stores `Box<dyn Any + Send + Sync>` instead of `Box<dyn ViewObject>`.
+//! Element stores `Box<dyn RenderStateAccessor>` which provides:
+//! - `as_any()` for downcasting to concrete wrapper types
+//! - `render_state_any()` for render state access (render views only)
+//! - `render_object_any()` for render object access (render views only)
+//!
 //! This breaks the dependency on ViewObject trait, allowing flui-element
-//! to be independent of flui-view.
+//! to be independent of flui-view while still supporting render state access.
 //!
 //! The actual ViewObject is stored inside and can be accessed via downcasting:
 //!
@@ -30,7 +34,7 @@
 use std::any::Any;
 use std::fmt;
 
-use flui_foundation::{ElementId, Slot, ViewMode};
+use flui_foundation::{ElementId, RenderStateAccessor, Slot, ViewMode};
 
 use super::{ElementBase, ElementLifecycle};
 
@@ -55,8 +59,11 @@ pub struct Element {
     /// Type-erased view object storage
     ///
     /// Contains the actual ViewObject wrapper (StatelessViewWrapper, etc.)
-    /// but stored as `dyn Any + Send + Sync` to break dependency on ViewObject trait.
-    view_object: Option<Box<dyn Any + Send + Sync>>,
+    /// stored as `dyn RenderStateAccessor` which provides:
+    /// - `as_any()` for downcasting to concrete types
+    /// - `render_state_any()` for render state access (render views only)
+    /// - `render_object_any()` for render object access (render views only)
+    view_object: Option<Box<dyn RenderStateAccessor>>,
 
     /// View mode - categorizes the view type (Stateless, Stateful, RenderBox, etc.)
     ///
@@ -72,7 +79,7 @@ pub struct Element {
 
 // Element is Send + Sync because:
 // - ElementBase is Send + Sync (contains only Send + Sync types)
-// - Box<dyn Any + Send + Sync> is Send + Sync by definition
+// - Box<dyn RenderStateAccessor> is Send + Sync (trait requires Send + Sync)
 // - Vec<ElementId> is Send + Sync (ElementId is Copy)
 unsafe impl Send for Element {}
 unsafe impl Sync for Element {}
@@ -103,7 +110,7 @@ impl Element {
     /// let wrapper = StatelessViewWrapper::new(my_view);
     /// let element = Element::with_mode(wrapper, ViewMode::Stateless);
     /// ```
-    pub fn with_mode<V: Any + Send + Sync + 'static>(view_object: V, mode: ViewMode) -> Self {
+    pub fn with_mode<V: RenderStateAccessor>(view_object: V, mode: ViewMode) -> Self {
         Self {
             base: ElementBase::new(),
             view_object: Some(Box::new(view_object)),
@@ -119,7 +126,7 @@ impl Element {
     ///
     /// # Arguments
     ///
-    /// * `view_object` - Any type that implements `Any + Send + Sync + 'static`
+    /// * `view_object` - Any type that implements `RenderStateAccessor`
     ///
     /// # Example
     ///
@@ -127,7 +134,7 @@ impl Element {
     /// let wrapper = StatelessViewWrapper::new(my_view);
     /// let element = Element::new(wrapper);
     /// ```
-    pub fn new<V: Any + Send + Sync + 'static>(view_object: V) -> Self {
+    pub fn new<V: RenderStateAccessor>(view_object: V) -> Self {
         Self {
             base: ElementBase::new(),
             view_object: Some(Box::new(view_object)),
@@ -216,18 +223,18 @@ impl Element {
         self.view_object.is_some()
     }
 
-    /// Get the view object as a reference to Any.
+    /// Get the view object as a reference to Any (via RenderStateAccessor::as_any).
     #[inline]
     #[must_use]
-    pub fn view_object_any(&self) -> Option<&(dyn Any + Send + Sync)> {
-        self.view_object.as_ref().map(|b| b.as_ref())
+    pub fn view_object_any(&self) -> Option<&dyn Any> {
+        self.view_object.as_ref().map(|b| b.as_any())
     }
 
-    /// Get the view object as a mutable reference to Any.
+    /// Get the view object as a mutable reference to Any (via RenderStateAccessor::as_any_mut).
     #[inline]
     #[must_use]
-    pub fn view_object_any_mut(&mut self) -> Option<&mut (dyn Any + Send + Sync)> {
-        self.view_object.as_mut().map(|b| b.as_mut())
+    pub fn view_object_any_mut(&mut self) -> Option<&mut dyn Any> {
+        self.view_object.as_mut().map(|b| b.as_any_mut())
     }
 
     /// Downcast view object to concrete type.
@@ -241,32 +248,34 @@ impl Element {
     /// ```
     #[inline]
     pub fn view_object_as<V: Any + Send + Sync + 'static>(&self) -> Option<&V> {
-        self.view_object.as_ref()?.downcast_ref::<V>()
+        self.view_object.as_ref()?.as_any().downcast_ref::<V>()
     }
 
     /// Downcast view object to concrete type (mutable).
     #[inline]
     pub fn view_object_as_mut<V: Any + Send + Sync + 'static>(&mut self) -> Option<&mut V> {
-        self.view_object.as_mut()?.downcast_mut::<V>()
+        self.view_object.as_mut()?.as_any_mut().downcast_mut::<V>()
     }
 
     /// Take the view object out of the element.
     ///
     /// Returns the boxed view object, leaving None in its place.
     #[inline]
-    pub fn take_view_object(&mut self) -> Option<Box<dyn Any + Send + Sync>> {
+    pub fn take_view_object(&mut self) -> Option<Box<dyn RenderStateAccessor>> {
         self.view_object.take()
     }
 
     /// Set a new view object.
+    ///
+    /// The view object must implement `RenderStateAccessor`.
     #[inline]
-    pub fn set_view_object<V: Any + Send + Sync + 'static>(&mut self, view_object: V) {
+    pub fn set_view_object<V: RenderStateAccessor>(&mut self, view_object: V) {
         self.view_object = Some(Box::new(view_object));
     }
 
-    /// Set view object from boxed Any.
+    /// Set view object from boxed RenderStateAccessor.
     #[inline]
-    pub fn set_view_object_boxed(&mut self, view_object: Box<dyn Any + Send + Sync>) {
+    pub fn set_view_object_boxed(&mut self, view_object: Box<dyn RenderStateAccessor>) {
         self.view_object = Some(view_object);
     }
 
@@ -469,28 +478,49 @@ impl Element {
         &mut self.base
     }
 
-    // ========== Compatibility Stubs ==========
-    // These methods provide API compatibility with the old element module.
-    // They return None/empty values since flui-element doesn't know about
-    // RenderState, ViewObject, etc. The actual implementations should be
-    // provided by wrapper types in flui-view or flui_core.
+    // ========== Render State Access ==========
+    // These methods delegate to RenderStateAccessor trait on the view_object.
+    // Render view wrappers (RenderViewWrapper) return actual render state,
+    // while non-render wrappers return None.
 
-    /// Stub: Get render state (always returns None).
+    /// Get render state (via RenderStateAccessor::render_state_any).
     ///
-    /// The actual render state is stored in ViewObject wrappers in flui-view.
-    /// Use `view_object_as::<RenderViewWrapper<...>>()` to access render state.
+    /// Returns `Some` for render elements, `None` for non-render elements.
+    /// The returned `&dyn Any` can be downcast to `&RenderState` in flui_rendering.
     #[inline]
     #[must_use]
     pub fn render_state(&self) -> Option<&dyn std::any::Any> {
-        None
+        self.view_object.as_ref()?.render_state_any()
     }
 
-    /// Stub: Get mutable render state (always returns None).
+    /// Get mutable render state (via RenderStateAccessor::render_state_any_mut).
+    ///
+    /// Returns `Some` for render elements, `None` for non-render elements.
     #[inline]
     #[must_use]
     pub fn render_state_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        None
+        self.view_object.as_mut()?.render_state_any_mut()
     }
+
+    /// Get render object (via RenderStateAccessor::render_object_any).
+    ///
+    /// Returns `Some` for render elements, `None` for non-render elements.
+    /// The returned `&dyn Any` can be downcast to the concrete RenderObject type.
+    #[inline]
+    #[must_use]
+    pub fn render_object(&self) -> Option<&dyn std::any::Any> {
+        self.view_object.as_ref()?.render_object_any()
+    }
+
+    /// Get mutable render object (via RenderStateAccessor::render_object_any_mut).
+    #[inline]
+    #[must_use]
+    pub fn render_object_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        self.view_object.as_mut()?.render_object_any_mut()
+    }
+
+    // ========== Compatibility Stubs ==========
+    // These methods provide API compatibility with the old element module.
 
     /// Stub: Get dependents list for provider elements (always returns None).
     ///

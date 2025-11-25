@@ -26,6 +26,7 @@
 //! layout.compute_layout(&tree, constraints);
 //! ```
 
+use super::dirty_tracker::DirtyTracker;
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
 use flui_pipeline::{LockFreeDirtySet, PipelineError};
@@ -38,15 +39,12 @@ pub type LayoutResult<T> = Result<T, PipelineError>;
 ///
 /// Tracks which render objects need relayout and processes them
 /// with support for parallel execution.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LayoutPipeline {
-    /// Set of render objects that need relayout.
-    dirty: LockFreeDirtySet,
+    /// Dirty tracking (composed)
+    dirty: DirtyTracker,
 
     /// Whether to enable parallel layout.
-    ///
-    /// Parallel layout uses rayon for independent subtrees.
-    /// Can be disabled for debugging or single-threaded environments.
     parallel_enabled: bool,
 }
 
@@ -56,7 +54,7 @@ impl LayoutPipeline {
     /// Parallel layout is enabled by default.
     pub fn new() -> Self {
         Self {
-            dirty: LockFreeDirtySet::default(),
+            dirty: DirtyTracker::new(),
             parallel_enabled: true,
         }
     }
@@ -64,49 +62,49 @@ impl LayoutPipeline {
     /// Creates a layout pipeline with parallel execution disabled.
     pub fn new_single_threaded() -> Self {
         Self {
-            dirty: LockFreeDirtySet::default(),
+            dirty: DirtyTracker::new(),
             parallel_enabled: false,
         }
     }
 
     /// Marks a render object as needing relayout.
-    ///
-    /// The render object will be laid out on the next call to [`LayoutPipeline::compute_layout`].
+    #[inline]
     pub fn mark_dirty(&self, id: ElementId) {
         self.dirty.mark_dirty(id);
     }
 
     /// Checks if any render objects are dirty.
+    #[inline]
     pub fn has_dirty(&self) -> bool {
         self.dirty.has_dirty()
     }
 
     /// Checks if a specific render object is dirty.
+    #[inline]
     pub fn is_dirty(&self, id: ElementId) -> bool {
         self.dirty.is_dirty(id)
     }
 
     /// Enables or disables parallel layout.
+    #[inline]
     pub fn set_parallel(&mut self, enabled: bool) {
         self.parallel_enabled = enabled;
     }
 
     /// Returns true if parallel layout is enabled.
+    #[inline]
     pub fn is_parallel(&self) -> bool {
         self.parallel_enabled
     }
 
     /// Returns a reference to the dirty set.
-    ///
-    /// Used by LayoutManager to query pending layouts.
+    #[inline]
     pub fn dirty_set(&self) -> &LockFreeDirtySet {
-        &self.dirty
+        self.dirty.inner()
     }
 
-    /// Marks all elements as dirty (for resize, theme change, etc.).
-    ///
-    /// This is expensive (O(n) where n is dirty set capacity) but rare.
-    /// Only used when the entire UI needs re-layout.
+    /// Marks all elements as dirty.
+    #[inline]
     pub fn mark_all_dirty(&self) {
         self.dirty.mark_all_dirty();
     }
@@ -141,7 +139,7 @@ impl LayoutPipeline {
     ///
     /// Currently implemented as sequential layout. Parallel layout will be added
     /// in a future update using rayon for independent subtrees.
-    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty.len()))]
+    #[tracing::instrument(skip(self, tree), fields(dirty_count = self.dirty_count()))]
     pub fn compute_layout(
         &mut self,
         tree: &mut ElementTree,
@@ -164,21 +162,22 @@ impl LayoutPipeline {
         // Process each dirty render object
         // Note: Parallel layout disabled for now - will be enabled in future update
         for id in dirty_ids {
-            // Get element from tree
-            let Some(element) = tree.get(id) else {
+            // Check if element exists in tree
+            use flui_element::RenderTreeAccess;
+            if tree.get(id).is_none() {
                 tracing::error!(
                     element_id = ?id,
                     "Element marked dirty but not found in tree during layout"
                 );
                 continue;
-            };
+            }
 
-            // Only layout render elements
-            if !element.is_render() {
+            // Only layout render elements (uses trait method for abstraction)
+            if !tree.is_render_element(id) {
                 #[cfg(debug_assertions)]
                 tracing::trace!("Element {:?} is not a render element, skipping", id);
                 continue;
-            };
+            }
 
             // TODO: Re-enable render_state checks once Element properly supports RenderViewObject
             // Currently Element::render_state() returns None (stub) so we skip the check
@@ -242,19 +241,15 @@ impl LayoutPipeline {
     }
 
     /// Clears all dirty render objects without laying out.
+    #[inline]
     pub fn clear_dirty(&mut self) {
         self.dirty.clear();
     }
 
     /// Returns the number of dirty render objects.
+    #[inline]
     pub fn dirty_count(&self) -> usize {
         self.dirty.len()
-    }
-}
-
-impl Default for LayoutPipeline {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

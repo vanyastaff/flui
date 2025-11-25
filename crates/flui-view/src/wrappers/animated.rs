@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use flui_element::{Element, IntoElement};
+use flui_foundation::RenderStateAccessor;
 
 use crate::context::BuildContext;
 use crate::object::ViewObject;
@@ -25,9 +26,6 @@ where
     /// The animated view
     view: V,
 
-    /// Cached child element from last build
-    child: Option<Element>,
-
     /// Flag indicating listener is attached
     listening: Arc<AtomicBool>,
 
@@ -44,7 +42,6 @@ where
     pub fn new(view: V) -> Self {
         Self {
             view,
-            child: None,
             listening: Arc::new(AtomicBool::new(false)),
             _marker: std::marker::PhantomData,
         }
@@ -105,7 +102,6 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedViewWrapper")
-            .field("has_child", &self.child.is_some())
             .field("listening", &self.is_listening())
             .finish()
     }
@@ -125,11 +121,7 @@ where
         self.view.on_animation_tick(ctx);
 
         // Build the child
-        let child = self.view.build(ctx).into_element();
-        self.child = Some(child);
-
-        // Return the cached child or empty
-        self.child.take().unwrap_or_else(Element::empty)
+        self.view.build(ctx).into_element()
     }
 
     fn init(&mut self, ctx: &dyn BuildContext) {
@@ -144,13 +136,27 @@ where
     fn dispose(&mut self, ctx: &dyn BuildContext) {
         self.stop_listening();
         self.view.dispose(ctx);
-        self.child = None;
     }
 
     fn debug_name(&self) -> &'static str {
         std::any::type_name::<V>()
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
+impl<V, L> RenderStateAccessor for AnimatedViewWrapper<V, L>
+where
+    V: AnimatedView<L>,
+    L: Listenable,
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -247,7 +253,7 @@ mod tests {
     }
 
     impl AnimatedView<TestAnimation> for TestAnimatedView {
-        fn build(&mut self, _ctx: &BuildContext) -> impl IntoElement {
+        fn build(&mut self, _ctx: &dyn BuildContext) -> impl IntoElement {
             // Would use animation.value() to build UI
             ()
         }
@@ -271,7 +277,7 @@ mod tests {
         let view = TestAnimatedView {
             animation: TestAnimation::new(0.5),
         };
-        let element = Animated(view).into_element();
+        let element = Animated::new(view).into_element();
         assert!(element.has_view_object());
     }
 }

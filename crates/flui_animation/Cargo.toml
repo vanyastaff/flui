@@ -12,6 +12,7 @@ categories = ["gui"]
 [dependencies]
 # Core FLUI types
 flui_types = { version = "0.1", path = "../flui_types" }
+flui-foundation = { version = "0.1", path = "../flui-foundation" }
 flui_core = { version = "0.1", path = "../flui_core" }
 flui-scheduler = { version = "0.1", path = "../flui-scheduler" }
 
