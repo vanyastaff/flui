@@ -246,9 +246,12 @@ pub type MultiChildBoxRenderView =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_rendering::core::arity::{Leaf, Single};
-    use flui_rendering::core::contexts::{LayoutContext, PaintContext};
-    use flui_types::Size;
+    use flui_foundation::ElementId;
+    use flui_painting::Canvas;
+    use flui_rendering::core::arity::Leaf;
+    use flui_rendering::core::protocol::BoxConstraints;
+    use flui_types::{Offset, Size};
+    use std::any::Any;
 
     #[derive(Clone, Debug)]
     struct MockLeafView;
@@ -257,11 +260,31 @@ mod tests {
     struct MockLeafRender;
 
     impl RenderBox<Leaf> for MockLeafRender {
-        fn layout(&mut self, _ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+        fn layout(
+            &mut self,
+            _constraints: BoxConstraints,
+            _children: &[ElementId],
+            _layout_child: &mut dyn FnMut(ElementId, BoxConstraints) -> Size,
+        ) -> Size {
             Size::new(100.0, 100.0)
         }
 
-        fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}
+        fn paint(
+            &self,
+            _offset: Offset,
+            _children: &[ElementId],
+            _paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
+        ) -> Canvas {
+            Canvas::new()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 
     impl RenderView<BoxProtocol, Leaf> for MockLeafView {

@@ -1386,6 +1386,7 @@ dependencies = [
  "bitflags 2.10.0",
  "criterion 0.7.0",
  "flui-foundation",
+ "flui-pipeline",
  "flui-reactivity",
  "flui-scheduler",
  "flui-tree",

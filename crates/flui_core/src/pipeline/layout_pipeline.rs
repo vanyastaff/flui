@@ -28,8 +28,8 @@
 
 use crate::element::ElementId;
 use crate::element::ElementTree;
-use crate::pipeline::dirty_tracking::LockFreeDirtySet;
 use crate::pipeline::PipelineError;
+use flui_pipeline::LockFreeDirtySet;
 use flui_types::constraints::BoxConstraints;
 
 /// Result type for layout operations
