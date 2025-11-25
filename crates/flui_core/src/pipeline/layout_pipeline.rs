@@ -180,31 +180,18 @@ impl LayoutPipeline {
                 continue;
             };
 
-            // Check if layout is actually needed (atomic check - very fast)
-            let render_state = match element.render_state() {
-                Some(state) => state,
-                None => continue,
-            };
-
-            if !render_state.needs_layout() {
-                #[cfg(debug_assertions)]
-                tracing::trace!("Element {:?} already laid out, skipping", id);
-                cache_hits += 1;
-                continue;
-            }
-
-            // Cache miss - element needs relayout
+            // TODO: Re-enable render_state checks once Element properly supports RenderViewObject
+            // Currently Element::render_state() returns None (stub) so we skip the check
+            // and layout all dirty render elements unconditionally.
+            //
+            // Future: Check render_state.needs_layout() for cache optimization
             cache_misses += 1;
 
             #[cfg(debug_assertions)]
             tracing::trace!("Layout: Processing render object {:?}", id);
 
-            // Use stored constraints if available, otherwise use provided constraints
-            // RenderState stores Constraints enum, but layout_render expects BoxConstraints
-            let layout_constraints = render_state
-                .constraints()
-                .map(|c| *c.as_box())
-                .unwrap_or(constraints);
+            // Use provided constraints (stored constraints not available without render_state)
+            let layout_constraints = constraints;
 
             // Perform layout using ElementTree method
             // This properly handles the unified Element architecture and state updates

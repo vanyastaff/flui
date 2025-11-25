@@ -37,7 +37,6 @@ pub use flui_pipeline::{
     has_build_context,
     with_build_context,
     BatchedExecution,
-    BuildContext,
     // Phase traits
     BuildPhase,
     CancellationToken,
@@ -54,6 +53,7 @@ pub use flui_pipeline::{
     PhaseContext,
     PhaseResult,
 
+    PipelineBuildContext as BuildContext,
     // Build context
     PipelineBuildContext,
     PipelineCoordinator,

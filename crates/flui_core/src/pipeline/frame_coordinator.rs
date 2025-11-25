@@ -1,705 +1,774 @@
-//! PipelineOwner - thin facade over focused components
+//! Frame coordination - orchestrates build→layout→paint pipeline phases
 //!
-//! This is the refactored PipelineOwner that follows Single Responsibility Principle.
-//! It delegates responsibilities to focused components:
-//! - FrameCoordinator: Orchestrates build→layout→paint phases
-//! - RootManager: Manages root element
-//! - ElementTree: Stores elements
-//! - Optional features: Metrics, ErrorRecovery, CancellationToken, TripleBuffer
+//! The FrameCoordinator is responsible for:
+//! - Coordinating the three pipeline phases (build, layout, paint)
+//! - Managing phase execution order
+//! - Collecting results from each phase
 //!
-//! # Architecture (After Refactoring)
+//! # Design
 //!
-//! ```text
-//! PipelineOwner (thin facade)
-//!   ├─ tree: Arc<RwLock<ElementTree>>      // Element storage
-//!   ├─ coordinator: FrameCoordinator        // Phase orchestration
-//!   ├─ root_mgr: RootManager               // Root management
-//!   └─ Optional features:
-//!       ├─ metrics: PipelineMetrics
-//!       ├─ recovery: ErrorRecovery
-//!       ├─ cancellation: CancellationToken
-//!       └─ frame_buffer: TripleBuffer
-//! ```
-//!
-//! # Benefits
-//!
-//! - **Single Responsibility**: Each component has ONE clear purpose
-//! - **Testability**: Easy to test components in isolation
-//! - **Maintainability**: Changes localized to specific components
-//! - **Extensibility**: New features don't bloat PipelineOwner
+//! FrameCoordinator has a SINGLE responsibility: coordinate pipeline phases.
+//! It does NOT:
+//! - Manage element tree (that's ElementTree's job)
+//! - Track dirty elements (that's pipeline's job)
+//! - Handle errors (that's ErrorRecovery's job)
+//! - Collect metrics (that's PipelineMetrics's job)
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_core::PipelineOwner;
+//! let coordinator = FrameCoordinator {
+//!     build: BuildPipeline::new(),
+//!     layout: LayoutPipeline::new(),
+//!     paint: PaintPipeline::new(),
+//! };
 //!
-//! let mut owner = PipelineOwner::new();
-//!
-//! // Set root element
-//! let root_id = owner.set_root(my_element);
-//!
-//! // Build frame
-//! let layer = owner.build_frame(constraints)?;
+//! let layer = coordinator.build_frame(&mut tree, constraints)?;
 //! ```
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
-use std::time::Duration;
 
-use super::{FrameCoordinator, RebuildQueue, RootManager};
-use flui_element::{Element, ElementTree};
+use super::{BuildPipeline, LayoutPipeline, PaintPipeline};
+use flui_element::ElementTree;
 use flui_foundation::ElementId;
 use flui_pipeline::PipelineError;
+use flui_scheduler::FrameBudget;
+use flui_types::constraints::BoxConstraints;
 
-/// PipelineOwner - orchestrates the three-phase rendering pipeline
+/// Coordinates the three pipeline phases: build → layout → paint
 ///
-/// PipelineOwner is the main entry point for FLUI's rendering system. It coordinates
-/// the three phases of frame rendering: **Build**, **Layout**, and **Paint**.
+/// This is a focused component with ONE responsibility: orchestrating
+/// the pipeline phases in the correct order.
 ///
-/// # Three-Phase Pipeline
+/// # Single Responsibility
 ///
-/// Every frame goes through three sequential phases:
+/// FrameCoordinator ONLY coordinates phase execution. It delegates:
+/// - Dirty tracking → BuildPipeline, LayoutPipeline, PaintPipeline
+/// - Element storage → ElementTree
+/// - Error handling → Caller (via Result)
+/// - Performance metrics → Caller (via FrameBudget)
 ///
-/// ```text
-/// ┌─────────┐     ┌────────┐     ┌───────┐     ┌────────────┐
-/// │  Build  │ ──> │ Layout │ ──> │ Paint │ ──> │ GPU Render │
-/// └─────────┘     └────────┘     └───────┘     └────────────┘
-///     ↓               ↓              ↓
-/// Rebuild dirty   Compute sizes  Generate layers
-/// components      and positions  for GPU
-/// ```
-///
-/// **1. Build Phase** (`flush_build`)
-/// - Rebuilds dirty components (Views marked as needing rebuild)
-/// - Calls `View::build()` to create/update Elements
-/// - Updates the Element tree with new configurations
-/// - **Output**: Updated Element tree
-///
-/// **2. Layout Phase** (`flush_layout`)
-/// - Computes sizes and positions for all dirty RenderObjects
-/// - Calls `Render::layout()` with BoxConstraints
-/// - Propagates constraints down, sizes up (like Flutter)
-/// - **Output**: Size information stored in RenderState
-///
-/// **3. Paint Phase** (`flush_paint`)
-/// - Generates layer tree for GPU rendering
-/// - Calls `Render::paint()` with computed offsets
-/// - Creates PictureLayers, TransformLayers, etc.
-/// - **Output**: BoxedLayer tree ready for compositor
-///
-/// # Architecture (Facade Pattern)
-///
-/// PipelineOwner is a facade that delegates to focused components:
-///
-/// ```text
-/// PipelineOwner (Facade)
-///   ├─ tree: Arc<RwLock<ElementTree>>   ← Element storage
-///   ├─ coordinator: FrameCoordinator     ← Phase orchestration
-///   │   ├─ build: BuildPipeline          ← Build phase logic
-///   │   ├─ layout: LayoutPipeline        ← Layout phase logic
-///   │   └─ paint: PaintPipeline          ← Paint phase logic
-///   ├─ root_mgr: RootManager            ← Root element tracking
-///   └─ rebuild_queue: RebuildQueue      ← Deferred rebuilds
-/// ```
-///
-/// **Why Facade?**
-/// - Simple API for common operations
-/// - Hides internal complexity
-/// - Easy to test (mock components)
-/// - SOLID principles (Single Responsibility)
-///
-/// # Critical Pattern: request_layout() Must Set Both Flags
-///
-/// When requesting layout, you must set **both**:
-/// 1. Dirty set flag: `coordinator.layout_mut().mark_dirty(node_id)`
-/// 2. RenderState flag: `render_state.mark_needs_layout()`
-///
-/// **Failing to set both will cause layout to skip elements!**
-///
-/// # Usage
+/// # Example
 ///
 /// ```rust,ignore
-/// use flui_core::{PipelineOwner, Element, RenderElement};
+/// let mut coordinator = FrameCoordinator::new();
 ///
-/// // Create pipeline
-/// let mut owner = PipelineOwner::new();
-///
-/// // Set root element
-/// let root_element = Element::from_render_element(RenderElement::new(my_render));
-/// let root_id = owner.set_root(root_element);
-///
-/// // Mark element dirty (triggers rebuild on next frame)
-/// owner.schedule_build_for(element_id, depth);
-///
-/// // Build complete frame (all three phases)
-/// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
-/// let layer = owner.build_frame(constraints)?;
-///
-/// // Or run phases individually:
-/// owner.flush_build()?;                          // Phase 1: Build
-/// owner.flush_layout(root_id, constraints)?;     // Phase 2: Layout
-/// let layer = owner.flush_paint(root_id)?;       // Phase 3: Paint
+/// // Build complete frame
+/// let layer = coordinator.build_frame(
+///     &mut tree,
+///     root_id,
+///     constraints
+/// )?;
 /// ```
-///
-/// # Thread Safety
-///
-/// - ElementTree: Protected by `Arc<RwLock<>>` for multi-threaded access
-/// - Build phase: Can run in parallel with `parallel` feature
-/// - Layout/Paint: Single-threaded (uses thread-local stacks)
-/// - Rebuild queue: Lock-free with atomic operations
-pub struct PipelineOwner {
-    /// The element tree (shared storage)
-    tree: Arc<RwLock<ElementTree>>,
+#[derive(Debug)]
+pub struct FrameCoordinator {
+    /// Build pipeline - manages widget rebuild phase
+    build: BuildPipeline,
 
-    /// Frame coordinator (orchestrates pipeline phases)
-    coordinator: FrameCoordinator,
+    /// Layout pipeline - manages size computation phase
+    layout: LayoutPipeline,
 
-    /// Root manager (tracks root element)
-    root_mgr: RootManager,
+    /// Paint pipeline - manages layer generation phase
+    paint: PaintPipeline,
 
-    /// Rebuild queue for deferred component rebuilds
-    /// Used by signals and other reactive primitives
-    rebuild_queue: RebuildQueue,
-
-    /// Callback when a build is scheduled (optional)
-    on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
-
-    /// Frame counter (increments each build_frame call)
-    /// Used for debugging, profiling, and scene identification
-    frame_counter: u64,
-
-    // =========================================================================
-    // Production Features (Optional)
-    // =========================================================================
-    /// Optional production features (metrics, recovery, caching, etc.)
-    ///
-    /// All optional features are grouped into PipelineFeatures for better
-    /// Single Responsibility Principle compliance. Features can be enabled/disabled
-    /// independently via `features()` and `features_mut()` accessors.
-    ///
-    /// See [`PipelineFeatures`] for available features.
-    features: super::PipelineFeatures,
+    /// Frame budget tracker - manages frame timing and budget (from flui-scheduler)
+    budget: Arc<Mutex<FrameBudget>>,
 }
 
-impl std::fmt::Debug for PipelineOwner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PipelineOwner")
-            .field("root_element_id", &self.root_mgr.root_id())
-            .field("coordinator", &self.coordinator)
-            .field("has_build_callback", &self.on_build_scheduled.is_some())
-            .field("features", &self.features)
-            .finish()
+impl FrameCoordinator {
+    /// Create a new frame coordinator with a rebuild queue
+    ///
+    /// The rebuild queue is shared with the PipelineOwner for signal-triggered rebuilds.
+    pub fn new_with_queue(rebuild_queue: super::RebuildQueue) -> Self {
+        Self {
+            build: BuildPipeline::new_with_queue(rebuild_queue),
+            layout: LayoutPipeline::new(),
+            paint: PaintPipeline::new(),
+            budget: Arc::new(Mutex::new(FrameBudget::new(60))), // Default 60 FPS
+        }
     }
-}
 
-impl PipelineOwner {
-    /// Create a new pipeline owner with default configuration
-    ///
-    /// Creates a basic pipeline without production features (no metrics, batching, etc.).
-    /// For advanced configuration, consider using [`PipelineBuilder`] instead.
+    /// Create a new frame coordinator
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Basic usage
-    /// let owner = PipelineOwner::new();
-    ///
-    /// // For advanced features, use PipelineBuilder:
-    /// let owner = PipelineBuilder::new()
-    ///     .with_metrics()
-    ///     .with_batching(Duration::from_millis(16))
-    ///     .build();
+    /// let coordinator = FrameCoordinator::new();
     /// ```
-    ///
-    /// [`PipelineBuilder`]: super::PipelineBuilder
     pub fn new() -> Self {
-        let rebuild_queue = RebuildQueue::new();
-        Self {
-            tree: Arc::new(RwLock::new(ElementTree::new())),
-            coordinator: FrameCoordinator::new_with_queue(rebuild_queue.clone()),
-            root_mgr: RootManager::new(),
-            rebuild_queue,
-            on_build_scheduled: None,
-            frame_counter: 0,
-            features: super::PipelineFeatures::new(),
+        Self::new_with_queue(super::RebuildQueue::new())
+    }
+
+    /// Get reference to build pipeline
+    pub fn build(&self) -> &BuildPipeline {
+        &self.build
+    }
+
+    /// Get mutable reference to build pipeline
+    pub fn build_mut(&mut self) -> &mut BuildPipeline {
+        &mut self.build
+    }
+
+    /// Get reference to layout pipeline
+    pub fn layout(&self) -> &LayoutPipeline {
+        &self.layout
+    }
+
+    /// Get mutable reference to layout pipeline
+    pub fn layout_mut(&mut self) -> &mut LayoutPipeline {
+        &mut self.layout
+    }
+
+    /// Get reference to paint pipeline
+    pub fn paint(&self) -> &PaintPipeline {
+        &self.paint
+    }
+
+    /// Get mutable reference to paint pipeline
+    pub fn paint_mut(&mut self) -> &mut PaintPipeline {
+        &mut self.paint
+    }
+
+    /// Get reference to frame budget
+    ///
+    /// Returns a shared reference to the thread-safe frame budget tracker.
+    pub fn budget(&self) -> &Arc<Mutex<FrameBudget>> {
+        &self.budget
+    }
+
+    /// Extract root element's computed size after layout
+    ///
+    /// Helper method to retrieve the size from a RenderElement.
+    /// Returns None if root is not a RenderElement or has no size.
+    ///
+    /// TODO: Re-implement when RenderState is accessible through Element
+    fn extract_root_size(
+        _tree_guard: &ElementTree,
+        _root_id: Option<ElementId>,
+    ) -> Option<flui_types::Size> {
+        // Stub: RenderState not accessible through type-erased Element
+        None
+    }
+
+    /// Extract root element's layer after paint
+    ///
+    /// Helper method to retrieve the painted layer from a RenderElement.
+    /// Walks down through ComponentElements to find the first RenderElement child.
+    ///
+    /// TODO: Re-implement when paint_render_object returns proper Canvas type
+    fn extract_root_layer(
+        _tree_guard: &ElementTree,
+        root_id: Option<ElementId>,
+    ) -> Option<Box<flui_engine::CanvasLayer>> {
+        // Stub: paint_render_object returns CanvasLayer, not Canvas
+        match root_id {
+            Some(_) => Some(Box::new(flui_engine::CanvasLayer::new())),
+            None => None,
         }
-    }
-
-    /// Get reference to the rebuild queue
-    pub fn rebuild_queue(&self) -> &RebuildQueue {
-        &self.rebuild_queue
-    }
-
-    /// Get current frame number
-    ///
-    /// This counter increments each time build_frame() is called.
-    /// Useful for debugging, profiling, and scene identification.
-    ///
-    /// # Returns
-    ///
-    /// The current frame counter value
-    pub fn frame_number(&self) -> u64 {
-        self.frame_counter
-    }
-
-    // =========================================================================
-    // Tree & Root Access (Delegation to RootManager)
-    // =========================================================================
-
-    /// Get the element tree
-    pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
-        self.tree.clone()
-    }
-
-    /// Get the root element ID
-    pub fn root_element_id(&self) -> Option<ElementId> {
-        self.root_mgr.root_id()
-    }
-
-    /// Set the root element
-    pub fn set_root(&mut self, element: Element) -> ElementId {
-        let id = self.root_mgr.set_root(&self.tree, element);
-        // Schedule root for initial build
-        self.schedule_build_for(id, 0);
-        id
-    }
-
-    // =========================================================================
-    // Build Scheduling
-    // =========================================================================
-
-    /// Schedule an element for rebuild
-    pub fn schedule_build_for(&mut self, element_id: ElementId, depth: usize) {
-        self.coordinator.build_mut().schedule(element_id, depth);
-
-        // Call optional callback
-        if let Some(ref callback) = self.on_build_scheduled {
-            callback();
-        }
-    }
-
-    /// Get number of dirty elements
-    pub fn dirty_count(&self) -> usize {
-        self.coordinator.build().dirty_count()
-    }
-
-    /// Check if currently in build scope
-    pub fn is_in_build_scope(&self) -> bool {
-        self.coordinator.build().is_in_build_scope()
-    }
-
-    /// Execute code within a build scope
-    pub fn build_scope<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.coordinator.build_mut().set_in_build_scope(true);
-        let result = f(self);
-        self.coordinator.build_mut().set_in_build_scope(false);
-        result
-    }
-
-    /// Execute code with state locked (no new builds allowed)
-    pub fn lock_state<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.coordinator.build_mut().set_build_locked(true);
-        let result = f(self);
-        self.coordinator.build_mut().set_build_locked(false);
-        result
-    }
-
-    // =========================================================================
-    // Batching
-    // =========================================================================
-
-    /// Enable build batching
-    pub fn enable_batching(&mut self, duration: Duration) {
-        self.coordinator.build_mut().enable_batching(duration);
-    }
-
-    /// Disable build batching
-    pub fn disable_batching(&mut self) {
-        self.coordinator.build_mut().disable_batching();
-    }
-
-    /// Check if batching is enabled
-    pub fn is_batching_enabled(&self) -> bool {
-        self.coordinator.build().is_batching_enabled()
-    }
-
-    /// Flush the current batch
-    pub fn flush_batch(&mut self) {
-        self.coordinator.build_mut().flush_batch();
-    }
-
-    /// Check if batch should be flushed
-    pub fn should_flush_batch(&self) -> bool {
-        self.coordinator.build().should_flush_batch()
-    }
-
-    /// Get batching statistics
-    pub fn batching_stats(&self) -> (usize, usize) {
-        self.coordinator.build().batching_stats()
-    }
-
-    // =========================================================================
-    // Pipeline Phases
-    // =========================================================================
-
-    /// Flush the build phase
-    pub fn flush_build(&mut self) {
-        self.coordinator.flush_build(&self.tree);
-    }
-
-    /// Flush the layout phase
-    pub fn flush_layout(
-        &mut self,
-        constraints: flui_types::constraints::BoxConstraints,
-    ) -> Result<Option<flui_types::Size>, PipelineError> {
-        let root_id = self.root_mgr.root_id();
-        self.coordinator
-            .flush_layout(&self.tree, root_id, constraints)
-    }
-
-    /// Flush the paint phase
-    pub fn flush_paint(&mut self) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
-        let root_id = self.root_mgr.root_id();
-        self.coordinator.flush_paint(&self.tree, root_id)
     }
 
     /// Build a complete frame
+    ///
+    /// Orchestrates the three phases: build → layout → paint.
+    ///
+    /// # Parameters
+    ///
+    /// - `tree`: The element tree to operate on
+    /// - `root_id`: Root element ID (for determining size)
+    /// - `constraints`: Root layout constraints (typically screen size)
+    ///
+    /// # Returns
+    ///
+    /// The root layer for the compositor, or None if no root element exists.
+    ///
+    /// # Pipeline Flow
+    ///
+    /// 1. **Build Phase**: Rebuilds all dirty widgets (ComponentElements)
+    /// 2. **Layout Phase**: Computes sizes for all dirty RenderElements
+    /// 3. **Paint Phase**: Generates paint layers for all dirty RenderElements
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use flui_types::{Size, constraints::BoxConstraints};
+    ///
+    /// let mut tree = ElementTree::new();
+    /// let mut coordinator = FrameCoordinator::new();
+    ///
+    /// // Build complete frame at 800x600
+    /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
+    /// if let Some(layer) = coordinator.build_frame(&mut tree, Some(root_id), constraints)? {
+    ///     // Compositor can now render the layer
+    ///     compositor.present(layer);
+    /// }
+    /// ```
+    #[tracing::instrument(skip(self, tree), level = "debug")]
     pub fn build_frame(
         &mut self,
-        constraints: flui_types::constraints::BoxConstraints,
+        tree: &Arc<RwLock<ElementTree>>,
+        root_id: Option<ElementId>,
+        constraints: BoxConstraints,
     ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
-        self.frame_counter += 1;
-        let root_id = self.root_mgr.root_id();
-        self.coordinator
-            .build_frame(&self.tree, root_id, constraints)
-    }
+        // Create frame span for hierarchical logging
+        let frame_span = tracing::info_span!("frame", ?constraints);
+        let _frame_guard = frame_span.enter();
 
-    // =========================================================================
-    // Dirty Tracking
-    // =========================================================================
+        // Start frame and reset budget
+        self.budget.lock().reset();
 
-    /// Request layout for an element
-    pub fn request_layout(&mut self, node_id: ElementId) {
-        self.coordinator.layout_mut().mark_dirty(node_id);
+        // Phase 1: Build (rebuild dirty widgets)
+        // IMPORTANT: Keep flushing build until tree is fully built (no more dirty elements)
+        // This is critical because rebuilding one component can mark other components as dirty
+        // (e.g., when signals change during rebuild, they schedule more rebuilds)
+        let mut iterations = 0;
+        let mut total_build_count = 0;
+        loop {
+            // Flush rebuild queue from signals to dirty_elements
+            // This is critical: signal.set() adds to rebuild_queue, this moves to dirty_elements
+            self.build.flush_rebuild_queue();
 
-        // Also mark RenderState flag
-        if let Some(element) = self.tree.write().get_mut(node_id) {
-            if let Some(render_state) = element.render_state_mut() {
-                render_state.mark_needs_layout();
+            // Flush any batched builds to dirty_elements
+            // This is critical: schedule() adds to batcher, flush_batch moves to dirty_elements
+            self.build.flush_batch();
+
+            let build_count = self.build.dirty_count();
+
+            if build_count == 0 {
+                break;
+            }
+
+            let build_span = tracing::info_span!("build_iteration", iteration = iterations);
+            let _build_guard = build_span.enter();
+
+            // Use parallel build (automatically falls back to sequential if appropriate)
+            self.build.rebuild_dirty_parallel(tree);
+            total_build_count += build_count;
+
+            tracing::debug!(
+                count = build_count,
+                iteration = iterations,
+                "Build iteration complete"
+            );
+
+            iterations += 1;
+
+            // Safety check: prevent infinite loops
+            if iterations > 100 {
+                tracing::warn!(
+                    "Build loop exceeded 100 iterations, breaking (possible rebuild cycle)"
+                );
+                break;
             }
         }
-    }
 
-    /// Request paint for an element
-    pub fn request_paint(&mut self, node_id: ElementId) {
-        self.coordinator.paint_mut().mark_dirty(node_id);
+        if total_build_count > 0 {
+            tracing::debug!(
+                total = total_build_count,
+                iterations,
+                "Build phase complete"
+            );
+        }
 
-        // Also mark RenderState flag
-        if let Some(element) = self.tree.write().get_mut(node_id) {
-            if let Some(render_state) = element.render_state_mut() {
-                render_state.mark_needs_paint();
+        // Check if we're approaching deadline after build phase
+        #[cfg(debug_assertions)]
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
+                tracing::warn!(
+                    "Approaching deadline after build, remaining {:.2}ms",
+                    budget.remaining_ms()
+                );
             }
         }
+
+        // Phase 2: Layout (compute sizes and positions)
+        let _root_size = {
+            let layout_span = tracing::info_span!("layout");
+            let _layout_guard = layout_span.enter();
+
+            let mut tree_guard = tree.write();
+
+            // Scan for RenderElements and mark them for layout
+            // TODO: Re-enable render_state.needs_layout() check once Element supports RenderViewObject
+            // Currently we mark ALL render elements for layout since render_state() returns None
+            let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
+            let mut marked_count = 0usize;
+            for id in all_ids.iter().copied() {
+                if let Some(element) = tree_guard.get(id) {
+                    if element.is_render() {
+                        self.layout.mark_dirty(id);
+                        marked_count += 1;
+                    }
+                }
+            }
+            tracing::debug!(
+                total_elements = all_ids.len(),
+                marked_for_layout = marked_count,
+                "Marked all render elements for layout"
+            );
+
+            let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
+
+            // Mark all laid out elements for paint
+            for id in &laid_out_ids {
+                self.paint.mark_dirty(*id);
+            }
+
+            if !laid_out_ids.is_empty() {
+                tracing::debug!(count = laid_out_ids.len(), "Layout complete");
+            }
+
+            // Get root element's computed size
+            Self::extract_root_size(&tree_guard, root_id)
+        };
+
+        // Check if we're approaching deadline after layout phase
+        #[cfg(debug_assertions)]
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
+                tracing::warn!(
+                    "Approaching deadline after layout, remaining {:.2}ms",
+                    budget.remaining_ms()
+                );
+            }
+        }
+
+        // Phase 3: Paint (generate layer tree)
+        let layer = {
+            let paint_span = tracing::info_span!("paint");
+            let _paint_guard = paint_span.enter();
+
+            let mut tree_guard = tree.write();
+            let count = self.paint.generate_layers(&mut tree_guard)?;
+
+            if count > 0 {
+                tracing::debug!(count, "Paint complete");
+            }
+
+            // Get root element's layer
+            Self::extract_root_layer(&tree_guard, root_id)
+        };
+
+        // Finish frame and update metrics
+        self.budget.lock().finish_frame();
+
+        // Log frame completion with timing info
+        #[cfg(debug_assertions)]
+        {
+            let budget = self.budget.lock();
+            if layer.is_some() && budget.is_over_budget() {
+                tracing::warn!(
+                    elapsed_ms = budget.last_frame_time_ms(),
+                    target_ms = budget.target_duration_ms(),
+                    "Frame deadline missed"
+                );
+            }
+        }
+
+        Ok(layer)
     }
 
-    // =========================================================================
-    // Callback
-    // =========================================================================
+    /// Build a complete frame without creating frame span (for custom logging)
+    ///
+    /// This variant doesn't create a frame span, allowing the caller to manage spans.
+    /// Useful when you want to add render phase to the same span.
+    pub fn build_frame_no_span(
+        &mut self,
+        tree: &Arc<RwLock<ElementTree>>,
+        root_id: Option<ElementId>,
+        constraints: BoxConstraints,
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+        // Start frame and reset budget
+        self.budget.lock().reset();
 
-    /// Set callback for when build is scheduled
-    pub fn set_on_build_scheduled<F>(&mut self, callback: F)
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        self.on_build_scheduled = Some(Box::new(callback));
+        // Phase 1: Build (rebuild dirty widgets)
+        // IMPORTANT: Keep flushing build until tree is fully built (no more dirty elements)
+        // This is critical because rebuilding one component can mark other components as dirty
+        // (e.g., when signals change during rebuild, they schedule more rebuilds)
+        let mut iterations = 0;
+        let mut total_build_count = 0;
+        loop {
+            // Flush rebuild queue from signals to dirty_elements
+            // This is critical: signal.set() adds to rebuild_queue, this moves to dirty_elements
+            self.build.flush_rebuild_queue();
+
+            // Flush any batched builds to dirty_elements
+            // This is critical: schedule() adds to batcher, flush_batch moves to dirty_elements
+            self.build.flush_batch();
+
+            let build_count = self.build.dirty_count();
+
+            if build_count == 0 {
+                break;
+            }
+
+            let build_span = tracing::info_span!("build_iteration", iteration = iterations);
+            let _build_guard = build_span.enter();
+
+            // Use parallel build (automatically falls back to sequential if appropriate)
+            self.build.rebuild_dirty_parallel(tree);
+            total_build_count += build_count;
+
+            tracing::debug!(
+                count = build_count,
+                iteration = iterations,
+                "Build iteration complete"
+            );
+
+            iterations += 1;
+
+            // Safety check: prevent infinite loops
+            if iterations > 100 {
+                tracing::warn!(
+                    "Build loop exceeded 100 iterations, breaking (possible rebuild cycle)"
+                );
+                break;
+            }
+        }
+
+        if total_build_count > 0 {
+            tracing::debug!(
+                total = total_build_count,
+                iterations,
+                "Build phase complete"
+            );
+        }
+
+        // Check if we're approaching deadline after build phase
+        #[cfg(debug_assertions)]
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
+                tracing::warn!(
+                    "Approaching deadline after build, remaining {:.2}ms",
+                    budget.remaining_ms()
+                );
+            }
+        }
+
+        // Phase 2: Layout (compute sizes and positions)
+        let _root_size = {
+            let layout_span = tracing::info_span!("layout");
+            let _layout_guard = layout_span.enter();
+
+            let mut tree_guard = tree.write();
+
+            // Scan for RenderElements and mark them for layout
+            // TODO: Re-enable render_state.needs_layout() check once Element supports RenderViewObject
+            let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
+            let mut marked_count = 0usize;
+            for id in all_ids.iter().copied() {
+                if let Some(element) = tree_guard.get(id) {
+                    if element.is_render() {
+                        self.layout.mark_dirty(id);
+                        marked_count += 1;
+                    }
+                }
+            }
+            tracing::debug!(
+                total_elements = all_ids.len(),
+                marked_for_layout = marked_count,
+                "Marked all render elements for layout"
+            );
+
+            let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
+
+            // Mark all laid out elements for paint
+            for id in &laid_out_ids {
+                self.paint.mark_dirty(*id);
+            }
+
+            if !laid_out_ids.is_empty() {
+                tracing::debug!(count = laid_out_ids.len(), "Layout complete");
+            }
+
+            // Get root element's computed size
+            Self::extract_root_size(&tree_guard, root_id)
+        };
+
+        // Check if we're approaching deadline after layout phase
+        #[cfg(debug_assertions)]
+        {
+            let budget = self.budget.lock();
+            if budget.is_deadline_near() {
+                tracing::warn!(
+                    "Approaching deadline after layout, remaining {:.2}ms",
+                    budget.remaining_ms()
+                );
+            }
+        }
+
+        // Phase 3: Paint (generate layer tree)
+        let layer = {
+            let paint_span = tracing::info_span!("paint");
+            let _paint_guard = paint_span.enter();
+
+            let mut tree_guard = tree.write();
+            let count = self.paint.generate_layers(&mut tree_guard)?;
+
+            if count > 0 {
+                tracing::debug!(count, "Paint complete");
+            }
+
+            // Get root element's layer
+            Self::extract_root_layer(&tree_guard, root_id)
+        };
+
+        // Finish frame and update metrics
+        self.budget.lock().finish_frame();
+
+        // Log frame completion with timing info
+        #[cfg(debug_assertions)]
+        {
+            let budget = self.budget.lock();
+            if layer.is_some() && budget.is_over_budget() {
+                tracing::warn!(
+                    elapsed_ms = budget.last_frame_time_ms(),
+                    target_ms = budget.target_duration_ms(),
+                    "Frame deadline missed"
+                );
+            }
+        }
+
+        Ok(layer)
     }
 
-    // =========================================================================
-    // Features
-    // =========================================================================
-
-    /// Get reference to features
-    pub fn features(&self) -> &super::PipelineFeatures {
-        &self.features
+    /// Flush the build phase
+    ///
+    /// Rebuilds all dirty elements in depth order (with parallel execution when enabled).
+    ///
+    /// Uses parallel execution via rayon when:
+    /// - Feature `parallel` is enabled
+    /// - Number of dirty elements >= MIN_PARALLEL_ELEMENTS (50)
+    /// - Multiple independent subtrees exist
+    ///
+    /// Falls back to sequential execution otherwise.
+    #[tracing::instrument(skip(self, tree), level = "trace")]
+    pub fn flush_build(&mut self, tree: &Arc<RwLock<ElementTree>>) {
+        // Use parallel build (automatically falls back to sequential if appropriate)
+        self.build.rebuild_dirty_parallel(tree);
     }
 
-    /// Get mutable reference to features
-    pub fn features_mut(&mut self) -> &mut super::PipelineFeatures {
-        &mut self.features
+    /// Flush the layout phase
+    ///
+    /// Performs layout on all dirty render objects.
+    ///
+    /// # Returns
+    ///
+    /// The size of the root render object, or None if no root element exists
+    #[tracing::instrument(skip(self, tree), level = "trace")]
+    pub fn flush_layout(
+        &mut self,
+        tree: &Arc<RwLock<ElementTree>>,
+        root_id: Option<ElementId>,
+        constraints: BoxConstraints,
+    ) -> Result<Option<flui_types::Size>, PipelineError> {
+        let mut tree_guard = tree.write();
+
+        // Scan for RenderElements and mark them for layout
+        // TODO: Re-enable render_state.needs_layout() check once Element supports RenderViewObject
+        let all_ids: Vec<_> = tree_guard.all_element_ids().collect();
+        let mut marked_count = 0usize;
+        for id in all_ids.iter().copied() {
+            if let Some(element) = tree_guard.get(id) {
+                if element.is_render() {
+                    self.layout.mark_dirty(id);
+                    marked_count += 1;
+                }
+            }
+        }
+        tracing::trace!(
+            total_elements = all_ids.len(),
+            marked_for_layout = marked_count,
+            "flush_layout: marked all render elements for layout"
+        );
+
+        // Process all dirty render objects
+        let laid_out_ids = self.layout.compute_layout(&mut tree_guard, constraints)?;
+
+        // Mark all laid out elements for paint
+        for id in laid_out_ids {
+            self.paint.mark_dirty(id);
+        }
+
+        // Get root element's computed size
+        // TODO: Re-implement once Element properly supports RenderViewObject
+        // Currently we can't access render_state, so we return None
+        let size = Self::extract_root_size(&tree_guard, root_id);
+
+        Ok(size)
     }
 
-    /// Enable metrics
-    pub fn enable_metrics(&mut self) {
-        self.features.enable_metrics();
-    }
+    /// Flush the paint phase
+    ///
+    /// Generates paint layers for all dirty render objects.
+    ///
+    /// # Returns
+    ///
+    /// The root layer for composition, or None if no root element exists.
+    #[tracing::instrument(skip(self, tree), level = "trace")]
+    pub fn flush_paint(
+        &mut self,
+        tree: &Arc<RwLock<ElementTree>>,
+        root_id: Option<ElementId>,
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+        let mut tree_guard = tree.write();
 
-    /// Get metrics
-    pub fn metrics(&self) -> Option<&flui_pipeline::PipelineMetrics> {
-        self.features.metrics()
-    }
+        // Process all dirty render objects
+        let _count = self.paint.generate_layers(&mut tree_guard)?;
 
-    /// Enable error recovery
-    pub fn enable_error_recovery(&mut self, policy: flui_pipeline::RecoveryPolicy) {
-        self.features.enable_recovery_with_policy(policy);
-    }
+        // Get root element's layer
+        // TODO: Re-implement once Element properly supports RenderViewObject
+        // Currently we can't access render_state for offset, so we use Offset::ZERO
+        let layer = match root_id {
+            Some(id) => {
+                let offset = flui_types::Offset::ZERO;
+                if let Some(canvas_layer) = tree_guard.paint_render_object(id, offset) {
+                    Some(Box::new(canvas_layer))
+                } else {
+                    Some(Box::new(flui_engine::CanvasLayer::new()))
+                }
+            }
+            None => None,
+        };
 
-    /// Get error recovery
-    pub fn error_recovery(&self) -> Option<&flui_pipeline::ErrorRecovery> {
-        self.features.recovery()
-    }
-
-    /// Enable cancellation
-    pub fn enable_cancellation(&mut self, timeout: Duration) {
-        self.features.enable_cancellation(timeout);
-    }
-
-    /// Get cancellation token
-    pub fn cancellation_token(&self) -> Option<&flui_pipeline::CancellationToken> {
-        self.features.cancellation()
-    }
-
-    /// Enable frame buffer
-    pub fn enable_frame_buffer(&mut self) {
-        self.features.enable_frame_buffer();
+        Ok(layer)
     }
 }
 
-impl Default for PipelineOwner {
+impl Default for FrameCoordinator {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui_foundation::ElementId;
-    use std::any::Any;
+// =============================================================================
+// Trait Implementations
+// =============================================================================
 
-    // Mock ViewObject for testing
-    struct MockViewObject;
+/// Note: PipelineCoordinator trait requires mutable Tree access, but FrameCoordinator
+/// uses Arc<RwLock<ElementTree>>. This implementation provides a simplified adapter.
+/// For full trait compliance, consider using the direct methods on FrameCoordinator.
+impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
+    type Tree = Arc<RwLock<ElementTree>>;
+    type Constraints = BoxConstraints;
+    type Size = flui_types::Size;
+    type Layer = Box<flui_engine::CanvasLayer>;
 
-    impl flui_view::ViewObject for MockViewObject {
-        fn view_mode(&self) -> flui_view::ViewMode {
-            flui_view::ViewMode::Stateless
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
+    fn config(&self) -> &flui_pipeline::CoordinatorConfig {
+        // Return a static default config - real config is in FrameBudget
+        static DEFAULT_CONFIG: std::sync::OnceLock<flui_pipeline::CoordinatorConfig> =
+            std::sync::OnceLock::new();
+        DEFAULT_CONFIG.get_or_init(|| {
+            let budget = self.budget.lock();
+            flui_pipeline::CoordinatorConfig::new(budget.target_fps())
+        })
     }
 
-    #[test]
-    fn test_build_owner_creation() {
-        let owner = PipelineOwner::new();
-        assert!(owner.root_element_id().is_none());
-        assert_eq!(owner.dirty_count(), 0);
-        assert!(!owner.is_in_build_scope());
+    fn set_config(&mut self, config: flui_pipeline::CoordinatorConfig) {
+        let mut budget = self.budget.lock();
+        budget.set_target_fps(config.target_fps);
     }
 
-    #[test]
-    fn test_schedule_build() {
-        let mut owner = PipelineOwner::new();
-        let id = ElementId::new(42);
-
-        owner.schedule_build_for(id, 0);
-        assert_eq!(owner.dirty_count(), 1);
-
-        owner.schedule_build_for(id, 0);
-        assert_eq!(owner.dirty_count(), 2);
+    fn frame_number(&self) -> u64 {
+        self.budget.lock().frame_count()
     }
 
-    #[test]
-    fn test_build_scope() {
-        let mut owner = PipelineOwner::new();
-
-        assert!(!owner.is_in_build_scope());
-
-        owner.build_scope(|o| {
-            assert!(o.is_in_build_scope());
-        });
-
-        assert!(!owner.is_in_build_scope());
+    fn has_dirty_build(&self) -> bool {
+        self.build.has_dirty()
     }
 
-    #[test]
-    fn test_lock_state() {
-        let mut owner = PipelineOwner::new();
-        let id = ElementId::new(42);
-
-        owner.schedule_build_for(id, 0);
-        assert_eq!(owner.dirty_count(), 1);
-
-        owner.lock_state(|o| {
-            let id2 = ElementId::new(43);
-            o.schedule_build_for(id2, 0);
-            assert_eq!(o.dirty_count(), 1);
-        });
+    fn has_dirty_layout(&self) -> bool {
+        self.layout.has_dirty()
     }
 
-    #[test]
-    fn test_depth_sorting() {
-        let mut owner = PipelineOwner::new();
-
-        let id1 = ElementId::new(1);
-        let id2 = ElementId::new(2);
-        let id3 = ElementId::new(3);
-
-        owner.schedule_build_for(id2, 2);
-        owner.schedule_build_for(id1, 1);
-        owner.schedule_build_for(id3, 0);
-
-        assert_eq!(owner.dirty_count(), 3);
+    fn has_dirty_paint(&self) -> bool {
+        self.paint.has_dirty()
     }
 
-    #[test]
-    fn test_on_build_scheduled_callback() {
-        use std::sync::{Arc, Mutex};
-
-        let mut owner = PipelineOwner::new();
-        let called = Arc::new(Mutex::new(false));
-        let called_clone = called.clone();
-
-        owner.set_on_build_scheduled(move || {
-            *called_clone.lock().unwrap() = true;
-        });
-
-        let id = ElementId::new(42);
-        owner.schedule_build_for(id, 0);
-
-        assert!(*called.lock().unwrap());
+    fn schedule_build(&mut self, id: ElementId, depth: usize) {
+        self.build.schedule(id, depth);
     }
 
-    #[test]
-    fn test_batching_disabled_by_default() {
-        let owner = PipelineOwner::new();
-        assert!(!owner.is_batching_enabled());
+    fn mark_needs_layout(&mut self, id: ElementId) {
+        self.layout.mark_dirty(id);
     }
 
-    #[test]
-    fn test_enable_disable_batching() {
-        let mut owner = PipelineOwner::new();
-
-        owner.enable_batching(Duration::from_millis(16));
-        assert!(owner.is_batching_enabled());
-
-        owner.disable_batching();
-        assert!(!owner.is_batching_enabled());
+    fn mark_needs_paint(&mut self, id: ElementId) {
+        self.paint.mark_dirty(id);
     }
 
-    #[test]
-    fn test_batching_deduplicates() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(16));
+    fn flush_build(&mut self, tree: &mut Self::Tree) -> flui_pipeline::PipelineResult<usize> {
+        // Flush queues first
+        self.build.flush_rebuild_queue();
+        self.build.flush_batch();
 
-        let id = ElementId::new(42);
-
-        owner.schedule_build_for(id, 0);
-        owner.schedule_build_for(id, 0);
-        owner.schedule_build_for(id, 0);
-
-        owner.flush_batch();
-
-        assert_eq!(owner.dirty_count(), 1);
-
-        let (batches, saved) = owner.batching_stats();
-        assert_eq!(batches, 1);
-        assert_eq!(saved, 2);
+        let count = self.build.rebuild_dirty_parallel(tree);
+        Ok(count)
     }
 
-    #[test]
-    fn test_batching_multiple_elements() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(16));
+    fn flush_layout(
+        &mut self,
+        tree: &mut Self::Tree,
+        constraints: Self::Constraints,
+    ) -> flui_pipeline::PipelineResult<Option<Self::Size>> {
+        // Get root_id from tree
+        let root_id = {
+            let tree_guard = tree.read();
+            tree_guard.root_id()
+        };
 
-        let id1 = ElementId::new(1);
-        let id2 = ElementId::new(2);
-        let id3 = ElementId::new(3);
-
-        owner.schedule_build_for(id1, 0);
-        owner.schedule_build_for(id2, 1);
-        owner.schedule_build_for(id3, 2);
-
-        owner.flush_batch();
-
-        assert_eq!(owner.dirty_count(), 3);
+        FrameCoordinator::flush_layout(self, tree, root_id, constraints).map_err(Into::into)
     }
 
-    #[test]
-    fn test_should_flush_batch_timing() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(10));
+    fn flush_paint(
+        &mut self,
+        tree: &mut Self::Tree,
+    ) -> flui_pipeline::PipelineResult<Option<Self::Layer>> {
+        // Get root_id from tree
+        let root_id = {
+            let tree_guard = tree.read();
+            tree_guard.root_id()
+        };
 
-        let id = ElementId::new(42);
-        owner.schedule_build_for(id, 0);
-
-        assert!(!owner.should_flush_batch());
-
-        std::thread::sleep(Duration::from_millis(15));
-
-        assert!(owner.should_flush_batch());
+        FrameCoordinator::flush_paint(self, tree, root_id).map_err(Into::into)
     }
 
-    #[test]
-    fn test_batching_without_enable() {
-        let mut owner = PipelineOwner::new();
+    fn execute_frame(
+        &mut self,
+        tree: &mut Self::Tree,
+        constraints: Self::Constraints,
+    ) -> flui_pipeline::PipelineResult<flui_pipeline::FrameResult<Self::Layer>> {
+        use std::time::Instant;
 
-        let id = ElementId::new(42);
-        owner.schedule_build_for(id, 0);
+        let start = Instant::now();
 
-        assert_eq!(owner.dirty_count(), 1);
+        // Get root_id
+        let root_id = {
+            let tree_guard = tree.read();
+            tree_guard.root_id()
+        };
 
-        owner.flush_batch();
-        assert_eq!(owner.dirty_count(), 1);
-    }
+        // Execute frame using existing method
+        let layer = self
+            .build_frame(tree, root_id, constraints)
+            .map_err(|e| -> flui_pipeline::PipelineError { e.into() })?;
 
-    #[test]
-    fn test_batching_stats() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(16));
+        let frame_time = start.elapsed();
+        let budget = self.budget.lock();
 
-        let id = ElementId::new(42);
-
-        assert_eq!(owner.batching_stats(), (0, 0));
-
-        owner.schedule_build_for(id, 0);
-        owner.schedule_build_for(id, 0);
-
-        owner.flush_batch();
-
-        let (batches, saved) = owner.batching_stats();
-        assert_eq!(batches, 1);
-        assert_eq!(saved, 1);
-    }
-
-    #[test]
-    fn test_build_scope_returns_result() {
-        let mut owner = PipelineOwner::new();
-
-        let result = owner.build_scope(|_| 42);
-
-        assert_eq!(result, 42);
-    }
-
-    #[test]
-    fn test_set_root() {
-        let mut owner = PipelineOwner::new();
-
-        let root = Element::new(Box::new(MockViewObject));
-
-        let root_id = owner.set_root(root);
-
-        assert_eq!(owner.root_element_id(), Some(root_id));
-        assert_eq!(owner.dirty_count(), 1);
+        Ok(flui_pipeline::FrameResult {
+            layer,
+            root_size: None, // Could extract from layout
+            frame_number: budget.frame_count(),
+            build_processed: 0,
+            build_iterations: 0,
+            layout_processed: 0,
+            paint_processed: 0,
+            frame_time,
+            over_budget: budget.is_over_budget(),
+        })
     }
 }

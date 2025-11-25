@@ -147,26 +147,17 @@ impl PaintPipeline {
                 continue;
             };
 
-            // Check if paint is needed (atomic check - very fast)
-            let render_state = match element.render_state() {
-                Some(state) => state,
-                None => continue,
-            };
-
-            if !render_state.needs_paint() {
-                #[cfg(debug_assertions)]
-                tracing::trace!("Element {:?} already painted, skipping", id);
-                continue;
-            }
+            // TODO: Re-enable render_state checks once Element properly supports RenderViewObject
+            // Currently Element::render_state() returns None (stub) so we skip the check
+            // and paint all dirty render elements unconditionally.
+            //
+            // Future: Check render_state.needs_paint() for cache optimization
 
             #[cfg(debug_assertions)]
             tracing::trace!("Paint: Processing render object {:?}", id);
 
-            // Get offset from RenderState
-            let offset = render_state.offset();
-
-            // Drop read guard before paint
-            drop(render_state);
+            // Use zero offset (stored offset not available without render_state)
+            let offset = flui_types::Offset::ZERO;
 
             // Perform paint using ElementTree method
             // This properly handles the unified Element architecture and state updates

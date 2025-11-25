@@ -59,7 +59,7 @@ pub use flui_view::{BuildContext, IntoElement, ViewObject};
 
 pub use flui_rendering::{
     core::{Arity, RenderBox, RenderState, RuntimeArity},
-    view::{RenderObjectWrapper, RenderView, RenderViewWrapper, UpdateResult},
+    view::{RenderObjectWrapper, RenderView, RenderViewObject, RenderViewWrapper, UpdateResult},
 };
 
 // =============================================================================

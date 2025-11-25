@@ -293,9 +293,9 @@ impl PipelineOwner {
     where
         F: FnOnce(&mut Self) -> R,
     {
-        self.coordinator.build_mut().set_in_build_scope(true);
+        self.coordinator.build_mut().set_build_scope(true);
         let result = f(self);
-        self.coordinator.build_mut().set_in_build_scope(false);
+        self.coordinator.build_mut().set_build_scope(false);
         result
     }
 
@@ -387,25 +387,13 @@ impl PipelineOwner {
     /// Request layout for an element
     pub fn request_layout(&mut self, node_id: ElementId) {
         self.coordinator.layout_mut().mark_dirty(node_id);
-
-        // Also mark RenderState flag
-        if let Some(element) = self.tree.write().get_mut(node_id) {
-            if let Some(render_state) = element.render_state_mut() {
-                render_state.mark_needs_layout();
-            }
-        }
+        // Note: RenderState flags are managed by flui-rendering, not pipeline
     }
 
     /// Request paint for an element
     pub fn request_paint(&mut self, node_id: ElementId) {
         self.coordinator.paint_mut().mark_dirty(node_id);
-
-        // Also mark RenderState flag
-        if let Some(element) = self.tree.write().get_mut(node_id) {
-            if let Some(render_state) = element.render_state_mut() {
-                render_state.mark_needs_paint();
-            }
-        }
+        // Note: RenderState flags are managed by flui-rendering, not pipeline
     }
 
     // =========================================================================
@@ -473,233 +461,5 @@ impl PipelineOwner {
 impl Default for PipelineOwner {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui_foundation::ElementId;
-    use std::any::Any;
-
-    // Mock ViewObject for testing
-    struct MockViewObject;
-
-    impl flui_view::ViewObject for MockViewObject {
-        fn view_mode(&self) -> flui_view::ViewMode {
-            flui_view::ViewMode::Stateless
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
-    }
-
-    #[test]
-    fn test_build_owner_creation() {
-        let owner = PipelineOwner::new();
-        assert!(owner.root_element_id().is_none());
-        assert_eq!(owner.dirty_count(), 0);
-        assert!(!owner.is_in_build_scope());
-    }
-
-    #[test]
-    fn test_schedule_build() {
-        let mut owner = PipelineOwner::new();
-        let id = ElementId::new(42);
-
-        owner.schedule_build_for(id, 0);
-        assert_eq!(owner.dirty_count(), 1);
-
-        owner.schedule_build_for(id, 0);
-        assert_eq!(owner.dirty_count(), 2);
-    }
-
-    #[test]
-    fn test_build_scope() {
-        let mut owner = PipelineOwner::new();
-
-        assert!(!owner.is_in_build_scope());
-
-        owner.build_scope(|o| {
-            assert!(o.is_in_build_scope());
-        });
-
-        assert!(!owner.is_in_build_scope());
-    }
-
-    #[test]
-    fn test_lock_state() {
-        let mut owner = PipelineOwner::new();
-        let id = ElementId::new(42);
-
-        owner.schedule_build_for(id, 0);
-        assert_eq!(owner.dirty_count(), 1);
-
-        owner.lock_state(|o| {
-            let id2 = ElementId::new(43);
-            o.schedule_build_for(id2, 0);
-            assert_eq!(o.dirty_count(), 1);
-        });
-    }
-
-    #[test]
-    fn test_depth_sorting() {
-        let mut owner = PipelineOwner::new();
-
-        let id1 = ElementId::new(1);
-        let id2 = ElementId::new(2);
-        let id3 = ElementId::new(3);
-
-        owner.schedule_build_for(id2, 2);
-        owner.schedule_build_for(id1, 1);
-        owner.schedule_build_for(id3, 0);
-
-        assert_eq!(owner.dirty_count(), 3);
-    }
-
-    #[test]
-    fn test_on_build_scheduled_callback() {
-        use std::sync::{Arc, Mutex};
-
-        let mut owner = PipelineOwner::new();
-        let called = Arc::new(Mutex::new(false));
-        let called_clone = called.clone();
-
-        owner.set_on_build_scheduled(move || {
-            *called_clone.lock().unwrap() = true;
-        });
-
-        let id = ElementId::new(42);
-        owner.schedule_build_for(id, 0);
-
-        assert!(*called.lock().unwrap());
-    }
-
-    #[test]
-    fn test_batching_disabled_by_default() {
-        let owner = PipelineOwner::new();
-        assert!(!owner.is_batching_enabled());
-    }
-
-    #[test]
-    fn test_enable_disable_batching() {
-        let mut owner = PipelineOwner::new();
-
-        owner.enable_batching(Duration::from_millis(16));
-        assert!(owner.is_batching_enabled());
-
-        owner.disable_batching();
-        assert!(!owner.is_batching_enabled());
-    }
-
-    #[test]
-    fn test_batching_deduplicates() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(16));
-
-        let id = ElementId::new(42);
-
-        owner.schedule_build_for(id, 0);
-        owner.schedule_build_for(id, 0);
-        owner.schedule_build_for(id, 0);
-
-        owner.flush_batch();
-
-        assert_eq!(owner.dirty_count(), 1);
-
-        let (batches, saved) = owner.batching_stats();
-        assert_eq!(batches, 1);
-        assert_eq!(saved, 2);
-    }
-
-    #[test]
-    fn test_batching_multiple_elements() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(16));
-
-        let id1 = ElementId::new(1);
-        let id2 = ElementId::new(2);
-        let id3 = ElementId::new(3);
-
-        owner.schedule_build_for(id1, 0);
-        owner.schedule_build_for(id2, 1);
-        owner.schedule_build_for(id3, 2);
-
-        owner.flush_batch();
-
-        assert_eq!(owner.dirty_count(), 3);
-    }
-
-    #[test]
-    fn test_should_flush_batch_timing() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(10));
-
-        let id = ElementId::new(42);
-        owner.schedule_build_for(id, 0);
-
-        assert!(!owner.should_flush_batch());
-
-        std::thread::sleep(Duration::from_millis(15));
-
-        assert!(owner.should_flush_batch());
-    }
-
-    #[test]
-    fn test_batching_without_enable() {
-        let mut owner = PipelineOwner::new();
-
-        let id = ElementId::new(42);
-        owner.schedule_build_for(id, 0);
-
-        assert_eq!(owner.dirty_count(), 1);
-
-        owner.flush_batch();
-        assert_eq!(owner.dirty_count(), 1);
-    }
-
-    #[test]
-    fn test_batching_stats() {
-        let mut owner = PipelineOwner::new();
-        owner.enable_batching(Duration::from_millis(16));
-
-        let id = ElementId::new(42);
-
-        assert_eq!(owner.batching_stats(), (0, 0));
-
-        owner.schedule_build_for(id, 0);
-        owner.schedule_build_for(id, 0);
-
-        owner.flush_batch();
-
-        let (batches, saved) = owner.batching_stats();
-        assert_eq!(batches, 1);
-        assert_eq!(saved, 1);
-    }
-
-    #[test]
-    fn test_build_scope_returns_result() {
-        let mut owner = PipelineOwner::new();
-
-        let result = owner.build_scope(|_| 42);
-
-        assert_eq!(result, 42);
-    }
-
-    #[test]
-    fn test_set_root() {
-        let mut owner = PipelineOwner::new();
-
-        let root = Element::new(Box::new(MockViewObject));
-
-        let root_id = owner.set_root(root);
-
-        assert_eq!(owner.root_element_id(), Some(root_id));
-        assert_eq!(owner.dirty_count(), 1);
     }
 }

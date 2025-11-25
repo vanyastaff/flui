@@ -270,11 +270,13 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
         );
 
         // Mark child for layout if exists
+        // TODO: Re-enable render_state.mark_needs_layout() once Element supports RenderViewObject
+        // Currently we skip this since render_state_mut() returns None
         if let Some(child_id) = element.first_child() {
             if let Some(child_elem) = tree_guard.get_mut(child_id) {
-                if let Some(render_state) = child_elem.render_state_mut() {
-                    render_state.mark_needs_layout();
-                }
+                // Child exists - layout marking would happen here
+                // For now, the layout pipeline marks all render elements anyway
+                let _ = child_elem; // suppress unused warning
             }
         }
     } else if element.is_render() {
