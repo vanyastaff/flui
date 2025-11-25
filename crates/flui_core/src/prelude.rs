@@ -10,128 +10,79 @@
 //! # What's included
 //!
 //! ## Core View System
-//! - [`View`] - The main trait for creating UI components
-//! - [`BuildContext`] - Context provided during view building
-//! - [`IntoElement`] - Trait for converting tuples to elements
+//! - View traits (StatelessView, StatefulView, etc.)
+//! - BuildContext for view building
+//! - IntoElement for element conversion
 //!
-//! ## Reactive State (Hooks)
-//! - [`use_signal`] - Create reactive state
-//! - [`use_memo`] - Create derived/computed state
-//! - [`use_effect`] - Run side effects on state changes
-//! - [`Signal`] - Reactive value handle (cheap to clone)
+//! ## Reactive State (from flui-reactivity)
+//! - Signal, Computed for reactive values
+//! - batch for batching updates
 //!
 //! ## Render System
-//! - Protocol-based contexts (see `render::protocol` module):
-//!   - `BoxLayoutContext<A>`, `BoxPaintContext<A>` for box renders
-//!   - `SliverLayoutContext<A>`, `SliverPaintContext<A>` for sliver renders
-//! - `Arity` - Child count specification
-//! - `Children` - Unified child representation
+//! - RenderBox for custom render objects
+//! - Arity types for child count validation
 //!
 //! ## Foundation Types
-//! - [`Key`] - Compile-time view identifier
-//! - [`KeyRef`] - Reference to a key
-//! - [`ElementId`] - Runtime element identifier
-//!
-//! ## External Re-exports (convenience)
-//! - [`Size`], [`Offset`] from flui_types
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_core::prelude::*;
-//!
-//! #[derive(Debug)]
-//! struct Counter;
-//!
-//! impl View for Counter {
-//!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-//!         let count = use_signal(ctx, 0);
-//!
-//!         // Use count, Size, Offset, etc. without additional imports
-//!         (MyRenderer::new(), None)
-//!     }
-//! }
-//! ```
+//! - Key, ElementId for identifiers
 
 // ============================================================
-// CORE VIEW SYSTEM (always needed)
+// CORE VIEW SYSTEM
 // ============================================================
 
-pub use crate::view::AnimatedView;
-pub use crate::view::ProviderView;
-pub use crate::view::ProxyView;
-pub use crate::view::RenderView;
-pub use crate::view::StatefulView;
-/// Specialized view traits (users implement these, not View directly)
-pub use crate::view::StatelessView;
+/// View traits
+pub use flui_view::{AnimatedView, ProviderView, ProxyView, StatefulView, StatelessView};
 
-/// Context provided during view building
-pub use crate::view::BuildContext;
+/// Render view trait
+pub use flui_rendering::view::RenderView;
 
-/// Trait for converting tuples to elements
-pub use crate::view::IntoElement;
+/// Context for view building (abstract trait)
+pub use flui_view::BuildContext;
 
-/// Unified Element struct
-pub use crate::element::Element;
+/// Concrete BuildContext implementation
+pub use flui_pipeline::context::PipelineBuildContext;
+
+/// Trait for converting to elements
+pub use flui_view::IntoElement;
+
+/// Element from flui-element
+pub use flui_element::Element;
 
 // ============================================================
-// REACTIVE STATE (HOOKS)
+// REACTIVE STATE (from flui-reactivity)
 // ============================================================
-
-/// Create reactive state that triggers rebuilds on change
-pub use crate::hooks::use_signal;
-
-/// Create derived/computed state from other state
-pub use crate::hooks::use_memo;
-
-/// Run side effects when dependencies change
-pub use crate::hooks::use_effect;
-
-/// Run side effects with explicit dependencies
-pub use crate::hooks::use_effect_with_deps;
-
-/// Create memoized callback
-pub use crate::hooks::use_callback;
-
-/// Create mutable reference (no rebuild on change)
-pub use crate::hooks::use_ref;
-
-/// Redux-style state with reducer
-pub use crate::hooks::use_reducer;
 
 /// Reactive value handle (Copy, 8 bytes)
-pub use crate::hooks::Signal;
+pub use flui_reactivity::Signal;
 
 /// Computed value with automatic dependency tracking
-pub use crate::hooks::Computed;
+pub use flui_reactivity::Computed;
 
 /// Batch multiple updates
-pub use crate::hooks::batch;
+pub use flui_reactivity::batch;
 
-/// Dependency identifier for hooks
-pub use crate::hooks::DependencyId;
+/// Dependency identifier
+pub use flui_reactivity::DependencyId;
 
 /// Hook context for managing hook state
-pub use crate::hooks::HookContext;
+pub use flui_reactivity::HookContext;
+
+/// Component identifier for hooks
+pub use flui_reactivity::ComponentId;
 
 // ============================================================
-// RENDER SYSTEM (for custom render objects)
+// RENDER SYSTEM
 // ============================================================
 
-/// Trait for custom render objects (layout + paint)
+/// Trait for custom render objects
 pub use flui_rendering::core::RenderBox;
 
-// Modern unified contexts available from flui_rendering::core:
-// - LayoutContext<A, P> and PaintContext<A> for protocol-based rendering
-// - Use with RenderBox<A> and SliverRender<A> traits for type-safe rendering
-
-/// Type-safe arity trait for compile-time child count validation
+/// Type-safe arity trait
 pub use flui_rendering::core::Arity;
 
-/// Runtime arity enum for dynamic child count validation
+/// Runtime arity enum
 pub use flui_rendering::core::RuntimeArity;
 
-/// Arity types for zero-cost abstraction
+/// Arity types
 pub use flui_rendering::core::{AtLeast, Exact, Leaf, Optional, Single, Variable};
 
 /// Children accessor types
@@ -144,16 +95,16 @@ pub use flui_rendering::core::{
 // ============================================================
 
 /// Compile-time view identifier
-pub use crate::foundation::Key;
+pub use flui_foundation::Key;
 
 /// Reference to a key
-pub use crate::foundation::KeyRef;
+pub use flui_foundation::KeyRef;
 
 /// Runtime element identifier
-pub use crate::foundation::ElementId;
+pub use flui_foundation::ElementId;
 
 // ============================================================
-// EXTERNAL RE-EXPORTS (convenience)
+// EXTERNAL RE-EXPORTS
 // ============================================================
 
 /// 2D size (width, height)
@@ -161,5 +112,3 @@ pub use flui_types::Size;
 
 /// 2D offset (dx, dy)
 pub use flui_types::Offset;
-
-// BoxedLayer removed - use Box<flui_engine::PictureLayer> directly

@@ -2,7 +2,8 @@
 //!
 //! Provides utilities for inspecting and debugging element state during tests.
 
-use crate::element::{ElementId, ElementTree};
+use flui_element::ElementTree;
+use flui_foundation::ElementId;
 use std::fmt;
 
 /// Inspector for examining element tree state

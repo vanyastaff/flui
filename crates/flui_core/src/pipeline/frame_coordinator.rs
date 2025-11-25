@@ -30,7 +30,7 @@ use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
 use super::{BuildPipeline, ElementTree, LayoutPipeline, PaintPipeline, PipelineError};
-use crate::element::ElementId;
+use flui_foundation::ElementId;
 use flui_scheduler::FrameBudget;
 use flui_types::constraints::BoxConstraints;
 
@@ -139,88 +139,29 @@ impl FrameCoordinator {
     ///
     /// Helper method to retrieve the size from a RenderElement.
     /// Returns None if root is not a RenderElement or has no size.
+    ///
+    /// TODO: Re-implement when RenderState is accessible through Element
     fn extract_root_size(
-        tree_guard: &ElementTree,
-        root_id: Option<ElementId>,
+        _tree_guard: &ElementTree,
+        _root_id: Option<ElementId>,
     ) -> Option<flui_types::Size> {
-        match root_id {
-            Some(id) => {
-                if let Some(element) = tree_guard.get(id) {
-                    if element.is_render() {
-                        if let Some(render_state) = element.render_state() {
-                            if render_state.has_size() {
-                                Some(render_state.size())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
+        // Stub: RenderState not accessible through type-erased Element
+        None
     }
 
     /// Extract root element's layer after paint
     ///
     /// Helper method to retrieve the painted layer from a RenderElement.
     /// Walks down through ComponentElements to find the first RenderElement child.
+    ///
+    /// TODO: Re-implement when paint_render_object returns proper Canvas type
     fn extract_root_layer(
-        tree_guard: &ElementTree,
+        _tree_guard: &ElementTree,
         root_id: Option<ElementId>,
     ) -> Option<Box<flui_engine::CanvasLayer>> {
+        // Stub: paint_render_object returns CanvasLayer, not Canvas
         match root_id {
-            Some(id) => {
-                // Walk down through Component/Provider elements to find RenderElement
-                let mut current_id = id;
-                loop {
-                    if let Some(element) = tree_guard.get(current_id) {
-                        if element.is_render() {
-                            // Use the ElementTree method to paint this RenderElement
-                            // This properly handles re-entrancy checks and paints the full subtree
-                            if let Some(canvas) =
-                                tree_guard.paint_render_object(current_id, crate::Offset::ZERO)
-                            {
-                                return Some(Box::new(flui_engine::CanvasLayer::from_canvas(
-                                    canvas,
-                                )));
-                            } else {
-                                return Some(Box::new(flui_engine::CanvasLayer::new()));
-                            }
-                        } else if element.as_component().is_some() {
-                            // Walk down to child
-                            if let Some(&child_id) = element.children().first() {
-                                current_id = child_id;
-                                continue;
-                            } else {
-                                // ComponentElement has no child - return empty
-                                return Some(Box::new(flui_engine::CanvasLayer::new()));
-                            }
-                        } else if element.as_provider().is_some() {
-                            // Walk down to child
-                            if let Some(&child_id) = element.children().first() {
-                                current_id = child_id;
-                                continue;
-                            } else {
-                                // ProviderElement has no child - return empty
-                                return Some(Box::new(flui_engine::CanvasLayer::new()));
-                            }
-                        } else {
-                            // Unknown element type - return empty
-                            return Some(Box::new(flui_engine::CanvasLayer::new()));
-                        }
-                    } else {
-                        // Element not found
-                        return Some(Box::new(flui_engine::CanvasLayer::new()));
-                    }
-                }
-            }
+            Some(_) => Some(Box::new(flui_engine::CanvasLayer::new())),
             None => None,
         }
     }

@@ -13,12 +13,12 @@ flui-foundation = { path = "../flui-foundation" }
 flui-pipeline = { path = "../flui-pipeline" }
 flui-tree = { path = "../flui-tree" }
 flui-view = { path = "../flui-view" }
+flui-element = { path = "../flui-element" }
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_rendering = { path = "../flui_rendering" }
 flui_interaction = { path = "../flui_interaction" }
 flui_engine = { path = "../flui_engine" }
-flui_log = { path = "../flui_log" }
 flui-scheduler = { path = "../flui-scheduler" }
 flui-reactivity = { path = "../flui-reactivity" }
 
@@ -55,7 +55,7 @@ serde = ["dep:serde", "flui_types/serde"]
 
 # === Logging ===
 # Pretty hierarchical logging for desktop development
-pretty-logs = ["flui_log/pretty"]
+# pretty-logs = ["flui_log/pretty"]  # Removed - flui_log no longer a dependency
 
 # === Profiling ===
 # TODO: Add puffin dependency if profiling is needed

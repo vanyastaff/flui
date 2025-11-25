@@ -2,11 +2,9 @@
 //!
 //! Provides convenient assertion functions for testing FLUI applications.
 
-use crate::element::Element;
-use crate::{
-    element::{ElementId, ElementTree},
-    foundation::Key,
-};
+use crate::foundation::Key;
+use flui_element::{Element, ElementTree};
+use flui_foundation::ElementId;
 use flui_types::Size;
 
 /// Assert that an element exists in the tree

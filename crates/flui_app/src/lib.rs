@@ -105,7 +105,7 @@ pub use flui_core::{
     foundation::{ElementId, Key, Slot},
 
     // View system (new API)
-    view::{BuildContext, RootView, StatelessView},
+    view::{BuildContext, StatelessView},
 };
 
 use winit::event_loop::EventLoop;

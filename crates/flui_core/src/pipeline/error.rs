@@ -212,7 +212,7 @@ pub enum InvalidError {
     /// Empty error message
     EmptyMessage,
     /// Invalid element ID
-    InvalidElementId(crate::element::ElementId),
+    InvalidElementId(flui_foundation::ElementId),
 }
 
 impl fmt::Display for InvalidError {
@@ -300,7 +300,7 @@ pub enum PipelineError {
     /// Recoverable by skipping frame or showing error widget.
     LayoutError {
         /// Element that caused the layout error
-        element_id: crate::element::ElementId,
+        element_id: flui_foundation::ElementId,
         /// Error message describing what went wrong
         message: String,
     },
@@ -311,7 +311,7 @@ pub enum PipelineError {
     /// Recoverable by using last good frame.
     PaintError {
         /// Element that caused the paint error
-        element_id: crate::element::ElementId,
+        element_id: flui_foundation::ElementId,
         /// Error message describing what went wrong
         message: String,
     },
@@ -322,7 +322,7 @@ pub enum PipelineError {
     /// Recoverable by showing error widget.
     BuildError {
         /// Element that caused the build error
-        element_id: crate::element::ElementId,
+        element_id: flui_foundation::ElementId,
         /// Error message describing what went wrong
         message: String,
     },
@@ -443,7 +443,7 @@ impl PipelineError {
     /// assert!(PipelineError::layout_error(id, "").is_err());
     /// ```
     pub fn layout_error(
-        element_id: crate::element::ElementId,
+        element_id: flui_foundation::ElementId,
         message: impl Into<String>,
     ) -> Result<Self, InvalidError> {
         let message = message.into();
@@ -467,7 +467,7 @@ impl PipelineError {
     ///
     /// Returns `InvalidError` if message is empty.
     pub fn paint_error(
-        element_id: crate::element::ElementId,
+        element_id: flui_foundation::ElementId,
         message: impl Into<String>,
     ) -> Result<Self, InvalidError> {
         let message = message.into();
@@ -491,7 +491,7 @@ impl PipelineError {
     ///
     /// Returns `InvalidError` if message is empty.
     pub fn build_error(
-        element_id: crate::element::ElementId,
+        element_id: flui_foundation::ElementId,
         message: impl Into<String>,
     ) -> Result<Self, InvalidError> {
         let message = message.into();

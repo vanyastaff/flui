@@ -31,7 +31,8 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 
 use super::ElementTree;
-use crate::element::{Element, ElementId};
+use flui_element::Element;
+use flui_foundation::{ElementId, Slot};
 
 /// Manages the root element of the element tree
 ///
@@ -122,7 +123,7 @@ impl RootManager {
         let mut tree_guard = tree.write();
 
         // Mount the element (no parent, slot 0)
-        root_element.mount(None, Some(crate::foundation::Slot::new(0)));
+        root_element.mount(None, Some(Slot::new(0)));
 
         // Insert into tree
         let id = tree_guard.insert(root_element);

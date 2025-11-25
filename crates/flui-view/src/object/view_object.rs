@@ -30,10 +30,9 @@
 use std::any::Any;
 
 use flui_element::Element;
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, ViewMode};
 
 use crate::context::BuildContext;
-use crate::protocol::ViewMode;
 
 /// ViewObject - Dynamic dispatch interface for view lifecycle
 ///
@@ -130,6 +129,99 @@ pub trait ViewObject: Send + 'static {
     fn should_notify_dependents(&self, _old_value: &dyn Any) -> bool {
         true
     }
+
+    // ========== RENDER-SPECIFIC (default: None) ==========
+    //
+    // These methods are implemented by RenderViewWrapper/RenderObjectWrapper
+    // in flui_rendering. Component views return None for all of these.
+    //
+    // Note: We use `dyn Any` instead of concrete types to avoid depending
+    // on flui_rendering from flui-view. The actual implementations in
+    // flui_rendering downcast to the correct types.
+
+    /// Get render object if this is a render view.
+    ///
+    /// Returns None for component views (Stateless, Stateful, etc.)
+    fn render_object(&self) -> Option<&dyn Any> {
+        None
+    }
+
+    /// Get mutable render object if this is a render view.
+    fn render_object_mut(&mut self) -> Option<&mut dyn Any> {
+        None
+    }
+
+    /// Get render state if this is a render view.
+    ///
+    /// RenderState contains cached size, offset, and dirty flags.
+    fn render_state(&self) -> Option<&dyn Any> {
+        None
+    }
+
+    /// Get mutable render state if this is a render view.
+    fn render_state_mut(&mut self) -> Option<&mut dyn Any> {
+        None
+    }
+
+    /// Get layout protocol if this is a render view.
+    ///
+    /// Returns the protocol discriminant as u8:
+    /// - 0: None (component view)
+    /// - 1: Box
+    /// - 2: Sliver
+    fn protocol_discriminant(&self) -> u8 {
+        0 // None/Component
+    }
+
+    /// Get arity discriminant if this is a render view.
+    ///
+    /// Returns the arity discriminant as u8:
+    /// - 0: None (component view)
+    /// - 1: Leaf
+    /// - 2: Single
+    /// - 3: Multi
+    fn arity_discriminant(&self) -> u8 {
+        0 // None/Component
+    }
+
+    // ========== RENDER OPERATIONS (default: panic) ==========
+    //
+    // These methods are implemented by RenderViewWrapper/RenderObjectWrapper
+    // in flui_rendering. Component views should never call these.
+
+    /// Perform layout on a render view.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-render view (Stateless, Stateful, etc.)
+    fn layout_render(
+        &self,
+        _tree: &dyn Any,
+        _children: &[ElementId],
+        _constraints: &dyn Any,
+    ) -> (f32, f32) {
+        panic!(
+            "layout_render called on non-render ViewObject: {}",
+            self.debug_name()
+        );
+    }
+
+    /// Perform paint on a render view.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a non-render view (Stateless, Stateful, etc.)
+    fn paint_render(
+        &self,
+        _tree: &dyn Any,
+        _children: &[ElementId],
+        _offset: (f32, f32),
+    ) -> Box<dyn Any> {
+        panic!(
+            "paint_render called on non-render ViewObject: {}",
+            self.debug_name()
+        );
+    }
 }
 
 // ============================================================================
@@ -172,8 +264,23 @@ impl dyn ViewObject {
 
 /// Extension trait for accessing ViewObject from Element
 ///
-/// Provides methods to downcast Element's type-erased view_object
-/// to concrete ViewObject implementations.
+/// Since Element now stores `view_mode` directly, type queries no longer
+/// require downcasting. For actual ViewObject access, use the specific
+/// `view_object_as::<ConcreteWrapper>()` method on Element.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use flui_view::ElementViewObjectExt;
+///
+/// // Type queries use stored view_mode (no downcasting needed)
+/// if element.is_component() {
+///     // For actual ViewObject access, downcast to concrete type:
+///     if let Some(wrapper) = element.view_object_as::<StatelessViewWrapper<MyView>>() {
+///         let child = wrapper.build(ctx);
+///     }
+/// }
+/// ```
 pub trait ElementViewObjectExt {
     /// Try to downcast view_object to a specific ViewObject implementation.
     fn view_object_downcast<V: ViewObject + Sync>(&self) -> Option<&V>;
@@ -216,5 +323,22 @@ mod tests {
         assert!(ViewMode::Provider.is_component());
         assert!(ViewMode::Proxy.is_component());
         assert!(!ViewMode::RenderBox.is_component());
+    }
+
+    #[test]
+    fn test_element_view_mode_queries() {
+        // Element now has direct view_mode field
+        let element = Element::with_mode(42i32, ViewMode::Stateless);
+        assert!(element.is_component());
+        assert!(!element.is_render());
+        assert!(!element.is_provider());
+
+        let render_element = Element::with_mode(42i32, ViewMode::RenderBox);
+        assert!(render_element.is_render());
+        assert!(!render_element.is_component());
+
+        let provider_element = Element::with_mode(42i32, ViewMode::Provider);
+        assert!(provider_element.is_provider());
+        assert!(provider_element.is_component()); // Provider is also a component
     }
 }

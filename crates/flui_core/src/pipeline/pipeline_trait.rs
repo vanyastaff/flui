@@ -31,8 +31,9 @@
 //! ```
 
 use super::{ElementTree, PipelineError, RebuildQueue};
-use crate::element::{Element, ElementId};
+use flui_element::Element;
 use flui_engine::CanvasLayer;
+use flui_foundation::ElementId;
 use flui_types::{constraints::BoxConstraints, Size};
 use parking_lot::RwLock;
 use std::sync::Arc;

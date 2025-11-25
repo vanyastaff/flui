@@ -95,7 +95,7 @@ pub struct Stateless<V: StatelessView>(pub V);
 impl<V: StatelessView> IntoElement for Stateless<V> {
     fn into_element(self) -> Element {
         let wrapper = StatelessViewWrapper::new(self.0);
-        Element::new(wrapper)
+        Element::with_mode(wrapper, ViewMode::Stateless)
     }
 }
 

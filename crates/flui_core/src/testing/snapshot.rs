@@ -2,7 +2,8 @@
 //!
 //! Provides utilities for capturing and comparing element tree snapshots.
 
-use crate::element::{ElementId, ElementTree};
+use flui_element::ElementTree;
+use flui_foundation::ElementId;
 use std::fmt;
 
 /// Snapshot of an element tree for testing

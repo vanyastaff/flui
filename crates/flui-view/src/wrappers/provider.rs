@@ -197,7 +197,7 @@ where
 {
     fn into_element(self) -> Element {
         let wrapper = ProviderViewWrapper::<V, T>::new(self.0);
-        Element::new(wrapper)
+        Element::with_mode(wrapper, ViewMode::Provider)
     }
 }
 

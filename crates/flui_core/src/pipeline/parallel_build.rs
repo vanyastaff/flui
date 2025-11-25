@@ -5,8 +5,8 @@
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-use crate::element::ElementId;
-use crate::element::ElementTree;
+use flui_element::ElementTree;
+use flui_foundation::ElementId;
 use parking_lot::RwLock;
 use std::sync::Arc;
 

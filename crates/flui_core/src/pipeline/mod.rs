@@ -81,9 +81,9 @@ pub use flui_pipeline::{
 // Core pipeline exports
 // =============================================================================
 
-pub use crate::element::ElementTree;
 pub use build_pipeline::BuildPipeline;
 pub use error::{InvalidDuration, InvalidError, PipelineError, PipelinePhase, TimeoutDuration};
+pub use flui_element::ElementTree;
 pub use frame_coordinator::FrameCoordinator;
 pub use layout_pipeline::LayoutPipeline;
 pub use paint_pipeline::PaintPipeline;

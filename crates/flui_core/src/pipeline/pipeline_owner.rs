@@ -47,7 +47,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{ElementTree, FrameCoordinator, PipelineError, RebuildQueue, RootManager};
-use crate::element::{Element, ElementId};
+use flui_element::Element;
+use flui_foundation::ElementId;
 
 /// PipelineOwner - orchestrates the three-phase rendering pipeline
 ///
@@ -359,9 +360,9 @@ impl PipelineOwner {
     /// ```
     pub fn attach<V>(&mut self, widget: V) -> Result<ElementId, PipelineError>
     where
-        V: crate::view::StatelessView + Clone + Sync,
+        V: flui_view::StatelessView + Clone + Sync,
     {
-        use crate::view::wrappers::StatelessViewWrapper;
+        use flui_view::StatelessViewWrapper;
 
         tracing::debug!("Attaching root view to pipeline");
 
@@ -567,7 +568,7 @@ impl PipelineOwner {
 
     /// Request layout for a Render
     pub fn request_layout(&mut self, node_id: ElementId) {
-        crate::trace_hot_path!("request_layout: element {:?}", node_id);
+        tracing::trace!("request_layout: element {:?}", node_id);
 
         // Mark in dirty set
         self.coordinator.layout_mut().mark_dirty(node_id);
@@ -970,20 +971,19 @@ impl PipelineOwner {
     pub fn hit_test_with_cache(
         &mut self,
         position: flui_types::Offset,
-    ) -> crate::element::ElementHitTestResult {
+    ) -> flui_interaction::HitTestResult {
         let root_id = match self.root_mgr.root_id() {
             Some(id) => id,
-            None => return crate::element::ElementHitTestResult::new(),
+            None => return flui_interaction::HitTestResult::new(),
         };
 
         // Invalidate cache on hit test (layout may have changed)
         self.features.invalidate_hit_test_cache();
 
-        // Perform hit test on tree
-        // Note: Cache is currently disabled as ElementHitTestResult and HitTestResult
-        // are different types. Future work: unify or add conversion methods.
-        let tree = self.tree.read();
-        tree.hit_test(root_id, position)
+        // TODO: Implement hit_test on ElementTree in flui-element crate
+        // For now, return empty result
+        let _ = (root_id, position);
+        flui_interaction::HitTestResult::new()
     }
 
     /// Publish a frame to the triple buffer (convenience method, delegates to features)
@@ -1029,7 +1029,7 @@ impl PipelineOwner {
     pub fn dispatch_event(&mut self, event: &flui_types::Event) {
         let mut tree = self.tree.write();
 
-        crate::trace_hot_path!("dispatch_event: {:?}", event);
+        tracing::trace!("dispatch_event: {:?}", event);
 
         // Visit all elements and dispatch the event
         tree.visit_all_elements_mut(|_element_id, element| {
@@ -1038,7 +1038,7 @@ impl PipelineOwner {
             // can return true and trigger updates
             let _handled = element.handle_event(event);
 
-            crate::trace_hot_path!(
+            tracing::trace!(
                 "element {:?} handled={} event={:?}",
                 _element_id,
                 _handled,
@@ -1087,12 +1087,12 @@ impl PipelineOwner {
         let root_id = match self.root_mgr.root_id() {
             Some(id) => id,
             None => {
-                crate::trace_hot_path!("dispatch_pointer_event: no root element");
+                tracing::trace!("dispatch_pointer_event: no root element");
                 return;
             }
         };
 
-        crate::trace_hot_path!(
+        tracing::trace!(
             "dispatch_pointer_event: pos={:?} event={:?}",
             position,
             event
@@ -1104,7 +1104,7 @@ impl PipelineOwner {
             tree.hit_test(root_id, position)
         };
 
-        crate::trace_hot_path!(
+        tracing::trace!(
             "dispatch_pointer_event: hit {} elements",
             hit_result.entries().len()
         );
@@ -1115,7 +1115,7 @@ impl PipelineOwner {
             if let Some(element) = tree.get_mut(entry.element_id) {
                 let _handled = element.handle_event(event);
 
-                crate::trace_hot_path!(
+                tracing::trace!(
                     "element {:?} handled={} at local pos={:?}",
                     entry.element_id,
                     _handled,
@@ -1140,21 +1140,21 @@ mod tests {
     /// Mock ViewObject for testing
     struct MockViewObject;
 
-    impl crate::view::ViewObject for MockViewObject {
-        fn mode(&self) -> crate::view::ViewMode {
-            crate::view::ViewMode::Stateless
+    impl flui_view::ViewObject for MockViewObject {
+        fn mode(&self) -> flui_view::ViewMode {
+            flui_view::ViewMode::Stateless
         }
 
-        fn build(&mut self, _ctx: &crate::view::BuildContext) -> Element {
+        fn build(&mut self, _ctx: &dyn flui_view::BuildContext) -> Element {
             // Return another mock element for child
             Element::new(Box::new(MockViewObject))
         }
 
-        fn init(&mut self, _ctx: &crate::view::BuildContext) {}
-        fn did_change_dependencies(&mut self, _ctx: &crate::view::BuildContext) {}
-        fn did_update(&mut self, _new_view: &dyn Any, _ctx: &crate::view::BuildContext) {}
-        fn deactivate(&mut self, _ctx: &crate::view::BuildContext) {}
-        fn dispose(&mut self, _ctx: &crate::view::BuildContext) {}
+        fn init(&mut self, _ctx: &dyn flui_view::BuildContext) {}
+        fn did_change_dependencies(&mut self, _ctx: &dyn flui_view::BuildContext) {}
+        fn did_update(&mut self, _new_view: &dyn Any, _ctx: &dyn flui_view::BuildContext) {}
+        fn deactivate(&mut self, _ctx: &dyn flui_view::BuildContext) {}
+        fn dispose(&mut self, _ctx: &dyn flui_view::BuildContext) {}
 
         fn as_any(&self) -> &dyn Any {
             self

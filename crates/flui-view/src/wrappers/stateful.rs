@@ -125,7 +125,7 @@ pub struct Stateful<V: StatefulView>(pub V);
 impl<V: StatefulView> IntoElement for Stateful<V> {
     fn into_element(self) -> Element {
         let wrapper = StatefulViewWrapper::new(self.0);
-        Element::new(wrapper)
+        Element::with_mode(wrapper, ViewMode::Stateful)
     }
 }
 

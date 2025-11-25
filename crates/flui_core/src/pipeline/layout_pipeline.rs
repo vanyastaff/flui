@@ -26,9 +26,9 @@
 //! layout.compute_layout(&tree, constraints);
 //! ```
 
-use crate::element::ElementId;
-use crate::element::ElementTree;
 use crate::pipeline::PipelineError;
+use flui_element::ElementTree;
+use flui_foundation::ElementId;
 use flui_pipeline::LockFreeDirtySet;
 use flui_types::constraints::BoxConstraints;
 
@@ -225,7 +225,7 @@ impl LayoutPipeline {
                 }
             };
 
-            crate::trace_hot_path!(
+            tracing::trace!(
                 "Layout: Stored size {:?} for element {:?}, marked for paint",
                 computed_size,
                 id

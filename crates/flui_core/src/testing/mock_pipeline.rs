@@ -19,9 +19,10 @@
 //! assert_eq!(pipeline.frame_number(), 0);
 //! ```
 
-use crate::element::{Element, ElementId};
 use crate::pipeline::{ElementTree, PipelineError, RebuildQueue};
+use flui_element::Element;
 use flui_engine::CanvasLayer;
+use flui_foundation::ElementId;
 use flui_types::{constraints::BoxConstraints, Size};
 use parking_lot::RwLock;
 use std::sync::Arc;

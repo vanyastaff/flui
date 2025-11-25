@@ -114,7 +114,7 @@ pub use tree::ElementTree;
 pub use into_element::IntoElement;
 
 // Re-export from flui-foundation for convenience
-pub use flui_foundation::{ElementId, Slot};
+pub use flui_foundation::{ElementId, Slot, ViewMode};
 
 // Re-export tree traits for convenience
 pub use flui_tree::{TreeNav, TreeRead, TreeWrite, TreeWriteNav};

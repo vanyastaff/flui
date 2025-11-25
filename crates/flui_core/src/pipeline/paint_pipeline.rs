@@ -21,9 +21,9 @@
 //! let layers = paint.generate_layers(&tree);
 //! ```
 
-use crate::element::ElementId;
-use crate::element::ElementTree;
 use crate::pipeline::PipelineError;
+use flui_element::ElementTree;
+use flui_foundation::ElementId;
 use flui_pipeline::LockFreeDirtySet;
 
 /// Result type for paint operations

@@ -30,7 +30,7 @@
 use std::any::Any;
 use std::fmt;
 
-use flui_foundation::{ElementId, Slot};
+use flui_foundation::{ElementId, Slot, ViewMode};
 
 use super::{ElementBase, ElementLifecycle};
 
@@ -57,6 +57,11 @@ pub struct Element {
     /// Contains the actual ViewObject wrapper (StatelessViewWrapper, etc.)
     /// but stored as `dyn Any + Send + Sync` to break dependency on ViewObject trait.
     view_object: Option<Box<dyn Any + Send + Sync>>,
+
+    /// View mode - categorizes the view type (Stateless, Stateful, RenderBox, etc.)
+    ///
+    /// Stored separately to allow querying without downcasting.
+    view_mode: ViewMode,
 
     /// Child element IDs
     children: Vec<ElementId>,
@@ -85,7 +90,32 @@ impl fmt::Debug for Element {
 }
 
 impl Element {
-    /// Creates a new Element with the given view object.
+    /// Creates a new Element with the given view object and mode.
+    ///
+    /// # Arguments
+    ///
+    /// * `view_object` - Any type that implements `Any + Send + Sync + 'static`
+    /// * `mode` - The ViewMode categorizing this element
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let wrapper = StatelessViewWrapper::new(my_view);
+    /// let element = Element::with_mode(wrapper, ViewMode::Stateless);
+    /// ```
+    pub fn with_mode<V: Any + Send + Sync + 'static>(view_object: V, mode: ViewMode) -> Self {
+        Self {
+            base: ElementBase::new(),
+            view_object: Some(Box::new(view_object)),
+            view_mode: mode,
+            children: Vec::new(),
+            debug_name: None,
+        }
+    }
+
+    /// Creates a new Element with the given view object (defaults to Empty mode).
+    ///
+    /// Prefer `with_mode()` when the mode is known.
     ///
     /// # Arguments
     ///
@@ -101,6 +131,7 @@ impl Element {
         Self {
             base: ElementBase::new(),
             view_object: Some(Box::new(view_object)),
+            view_mode: ViewMode::Empty,
             children: Vec::new(),
             debug_name: None,
         }
@@ -113,6 +144,7 @@ impl Element {
         Self {
             base: ElementBase::new(),
             view_object: None,
+            view_mode: ViewMode::Empty,
             children: Vec::new(),
             debug_name: Some("Empty"),
         }
@@ -128,6 +160,7 @@ impl Element {
         Self {
             base: ElementBase::new(),
             view_object: None,
+            view_mode: ViewMode::Empty,
             children: Vec::with_capacity(child_count),
             debug_name: Some("Container"),
         }
@@ -137,6 +170,41 @@ impl Element {
     pub fn with_debug_name(mut self, name: &'static str) -> Self {
         self.debug_name = Some(name);
         self
+    }
+
+    /// Sets the view mode.
+    pub fn set_view_mode(&mut self, mode: ViewMode) {
+        self.view_mode = mode;
+    }
+
+    // ========== View Mode Queries ==========
+
+    /// Get the view mode of this element.
+    #[inline]
+    #[must_use]
+    pub fn view_mode(&self) -> ViewMode {
+        self.view_mode
+    }
+
+    /// Check if this element is a component view (Stateless, Stateful, Proxy, Animated, Provider).
+    #[inline]
+    #[must_use]
+    pub fn is_component(&self) -> bool {
+        self.view_mode.is_component()
+    }
+
+    /// Check if this element is a render view (RenderBox, RenderSliver).
+    #[inline]
+    #[must_use]
+    pub fn is_render(&self) -> bool {
+        self.view_mode.is_render()
+    }
+
+    /// Check if this element is a provider view.
+    #[inline]
+    #[must_use]
+    pub fn is_provider(&self) -> bool {
+        self.view_mode.is_provider()
     }
 
     // ========== View Object Access ==========
@@ -399,6 +467,83 @@ impl Element {
     #[must_use]
     pub fn base_mut(&mut self) -> &mut ElementBase {
         &mut self.base
+    }
+
+    // ========== Compatibility Stubs ==========
+    // These methods provide API compatibility with the old element module.
+    // They return None/empty values since flui-element doesn't know about
+    // RenderState, ViewObject, etc. The actual implementations should be
+    // provided by wrapper types in flui-view or flui_core.
+
+    /// Stub: Get render state (always returns None).
+    ///
+    /// The actual render state is stored in ViewObject wrappers in flui-view.
+    /// Use `view_object_as::<RenderViewWrapper<...>>()` to access render state.
+    #[inline]
+    #[must_use]
+    pub fn render_state(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+
+    /// Stub: Get mutable render state (always returns None).
+    #[inline]
+    #[must_use]
+    pub fn render_state_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
+
+    /// Stub: Get dependents list for provider elements (always returns None).
+    ///
+    /// Provider dependents are managed by ProviderViewWrapper in flui-view.
+    #[inline]
+    #[must_use]
+    pub fn dependents(&self) -> Option<&[ElementId]> {
+        None
+    }
+
+    /// Stub: Get as component (returns Some(()) if is_component).
+    ///
+    /// For actual component data, downcast the view_object.
+    #[inline]
+    #[must_use]
+    pub fn as_component(&self) -> Option<()> {
+        if self.is_component() {
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Stub: Get as component mut (returns Some(()) if is_component).
+    #[inline]
+    #[must_use]
+    pub fn as_component_mut(&mut self) -> Option<()> {
+        if self.is_component() {
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Stub: Get as provider (returns Some(()) if is_provider).
+    ///
+    /// For actual provider data, downcast the view_object.
+    #[inline]
+    #[must_use]
+    pub fn as_provider(&self) -> Option<()> {
+        if self.is_provider() {
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Stub: Handle event (always returns false - not handled).
+    ///
+    /// Event handling should be implemented in the gesture/interaction layer.
+    #[inline]
+    pub fn handle_event(&mut self, _event: &dyn std::any::Any) -> bool {
+        false
     }
 }
 

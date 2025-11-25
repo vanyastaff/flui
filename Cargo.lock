@@ -1223,6 +1223,9 @@ version = "0.1.0"
 dependencies = [
  "flui-foundation",
  "flui-tree",
+ "flui_engine",
+ "flui_interaction",
+ "flui_types",
  "parking_lot",
  "serde",
  "slab",
@@ -1409,6 +1412,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "criterion 0.7.0",
+ "flui-element",
  "flui-foundation",
  "flui-pipeline",
  "flui-reactivity",
@@ -1417,7 +1421,6 @@ dependencies = [
  "flui-view",
  "flui_engine",
  "flui_interaction",
- "flui_log",
  "flui_painting",
  "flui_rendering",
  "flui_types",

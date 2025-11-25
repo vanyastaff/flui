@@ -108,7 +108,7 @@ pub struct Proxy<V: ProxyView>(pub V);
 impl<V: ProxyView> IntoElement for Proxy<V> {
     fn into_element(self) -> Element {
         let wrapper = ProxyViewWrapper::new(self.0);
-        Element::new(wrapper)
+        Element::with_mode(wrapper, ViewMode::Proxy)
     }
 }
 

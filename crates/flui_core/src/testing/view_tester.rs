@@ -156,14 +156,14 @@ impl TestView {
 impl StatelessView for TestView {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Return None for minimal testing (terminates tree)
-        Option::<crate::element::Element>::None
+        Option::<flui_element::Element>::None
     }
 }
 
 impl StatelessView for TestWidget {
     fn build(self, _ctx: &BuildContext) -> impl IntoElement {
         // Return None to terminate tree
-        Option::<crate::element::Element>::None
+        Option::<flui_element::Element>::None
     }
 }
 

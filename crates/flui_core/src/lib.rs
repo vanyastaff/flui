@@ -15,311 +15,70 @@
 //! Configuration  ←→  State Management  ←→  Visual Output
 //! ```
 //!
-//! ## View Tree (Immutable)
-//!
-//! Views are lightweight, immutable configuration objects that describe
-//! what the UI should look like. When configuration changes, you create
-//! new view instances.
-//!
-//! ```rust,ignore
-//! use flui_core::{Component, View, BuildContext};
-//!
-//! #[derive(Debug)]
-//! struct Greeting {
-//!     name: String,
-//! }
-//!
-//! impl Component for Greeting {
-//!     fn build(&self, context: &BuildContext) -> View {
-//!         Text::new(format!("Hello, {}!", self.name)).into()
-//!     }
-//! }
-//! ```
-//!
-//! ## Element Tree (Mutable State)
-//!
-//! Elements hold the mutable state and lifecycle of views. They persist
-//! across rebuilds and manage the view-to-render-object relationship.
-//!
-//! ## Render Tree (Layout & Paint)
-//!
-//! Renders perform layout calculations and painting. They form the
-//! actual visual representation that gets displayed.
-//!
-//! # View Types
-//!
-//! FLUI provides three core view types:
-//!
-//! ## Component Views
-//!
-//! Component views are composable, building UIs from other views.
-//! They can have optional state managed via hooks or the State type parameter.
-//!
-//! ```rust,ignore
-//! use flui_core::{Component, View, BuildContext};
-//! use flui_core::hooks::use_signal;
-//!
-//! #[derive(Debug)]
-//! struct Counter;
-//!
-//! impl Component for Counter {
-//!     fn build(&self, ctx: &BuildContext) -> View {
-//!         let count = use_signal(ctx, 0);
-//!
-//!         column![
-//!             text(format!("Count: {}", count.get())),
-//!             button("+").on_press(move || count.update(|n| n + 1))
-//!         ].into()
-//!     }
-//! }
-//! ```
-//!
-//! ## Provider Views (formerly InheritedWidget)
-//!
-//! Provider views enable efficient data propagation down the view tree with automatic
-//! dependency tracking.
-//!
-//! ```rust,ignore
-//! use flui_core::{Provider, View};
-//!
-//! #[derive(Debug, Clone)]
-//! struct Theme {
-//!     primary_color: Color,
-//! }
-//!
-//! impl Provider for Theme {
-//!     fn should_notify(&self, old: &Self) -> bool {
-//!         self.primary_color != old.primary_color
-//!     }
-//! }
-//! ```
-//!
-//! ## Render Views
-//!
-//! Render views create custom render objects for layout and painting.
-//!
-//! ```rust,ignore
-//! use flui_core::render::{Render, Arity, LayoutContext, PaintContext};
-//! use flui_types::Size;
-//!
-//! #[derive(Debug)]
-//! struct CustomBox {
-//!     width: f64,
-//!     height: f64,
-//! }
-//!
-//! impl Render for CustomBox {
-//!     fn layout(&mut self, ctx: &LayoutContext) -> Size {
-//!         Size::new(self.width, self.height)
-//!     }
-//!
-//!     fn paint(&self, ctx: &PaintContext) -> Box<flui_engine::PictureLayer> {
-//!         // Custom painting code
-//!         Box::new(flui_engine::PictureLayer::new())
-//!     }
-//!
-//!     fn as_any(&self) -> &dyn std::any::Any {
-//!         self
-//!     }
-//!
-//!     fn arity(&self) -> Arity {
-//!         Arity::Exact(0)  // Leaf render object
-//!     }
-//! }
-//! ```
-//!
-//! # Key Features
-//!
-//! ## Reactive State Management
-//!
-//! FLUI provides two powerful approaches for reactive state management:
-//!
-//! ### Fine-Grained Reactivity with `Signal<T>`
-//!
-//! Signals are Copy-able reactive primitives inspired by Leptos and SolidJS:
-//!
-//! ```rust,ignore
-//! use flui_core::Signal;
-//!
-//! // Create a signal - just 8 bytes, Copy-able!
-//! let count = Signal::new(0);
-//!
-//! // Signal is Copy, no cloning needed
-//! let count_copy = count;
-//!
-//! // Read and update
-//! println!("Count: {}", count.get());
-//! count.set(10);
-//! count.update(|v| *v += 1);
-//! count.increment();  // Convenience method
-//!
-//! // Subscribe to changes
-//! count.subscribe(Arc::new(|| {
-//!     println!("Count changed!");
-//! }));
-//!
-//! // Automatic dependency tracking
-//! let (_, result, deps) = create_scope(|| {
-//!     count.get() * 2  // Automatically tracked
-//! });
-//! ```
-//!
-//! **Benefits:**
-//! - ✅ Copy semantics (8 bytes)
-//! - ✅ Fine-grained updates (only affected parts rebuild)
-//! - ✅ Automatic dependency tracking
-//! - ✅ Zero allocations for signal handles
-//! - ✅ Thread-local arena storage
-//!
-//! ### Flutter-Style `ctx.set_state()`
-//!
-//! Familiar API for Flutter developers:
-//!
-//! ```rust,ignore
-//! button("+").on_press({
-//!     let ctx = ctx.clone();
-//!     move |_| {
-//!         ctx.set_state(|state: &mut CounterState| {
-//!             state.count += 1;
-//!         });
-//!     }
-//! })
-//! ```
-//!
-//! **Benefits:**
-//! - ✅ Familiar Flutter API
-//! - ✅ Simple mental model
-//! - ✅ Direct state access
-//! - ✅ Automatic rebuilds
-//!
-//! ## No Forced Clone
-//!
-//! Views don't require Clone, enabling use of closures and non-Clone types:
-//!
-//! ```rust,ignore
-//! #[derive(Debug)]
-//! struct Button<F> {
-//!     label: String,
-//!     on_click: F,  // FnMut - not Clone!
-//! }
-//!
-//! // Works without Clone!
-//! ```
-//!
-//! ## Compile-Time Keys
-//!
-//! View keys can be compile-time constants:
-//!
-//! ```rust
-//! use flui_core::Key;
-//!
-//! const HEADER_KEY: Key = Key::from_str("app_header");
-//! const FOOTER_KEY: Key = Key::from_str("app_footer");
-//! ```
-//!
-//! ## Memory Optimization
-//!
-//! `Option<Key>` is only 8 bytes thanks to niche optimization:
-//!
-//! ```rust
-//! use flui_core::Key;
-//! use std::mem::size_of;
-//!
-//! assert_eq!(size_of::<Option<Key>>(), 8);  // Not 16!
-//! ```
+//! This crate contains the core implementation and re-exports types from
+//! specialized crates for convenience.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// Re-export external types
-// BoxedLayer removed - use Box<flui_engine::PictureLayer> directly
-pub use flui_types::{Offset, Size};
+// =============================================================================
+// Internal Modules (not yet migrated to separate crates)
+// =============================================================================
 
-/// Debug flags, diagnostics, and validation
-pub mod context;
-pub mod debug;
-pub mod element;
-pub mod foundation;
-pub mod hooks;
-pub mod macros;
-pub mod notification;
 pub mod pipeline;
 pub mod prelude;
-pub mod testing;
 pub mod view;
 
-// Re-export debug types
-pub use debug::DebugFlags;
+// =============================================================================
+// Re-exports from flui-types
+// =============================================================================
 
-// Re-export error types from foundation
-pub use foundation::{CoreError, Result};
+pub use flui_types::{Offset, Size};
 
-// Re-export logging
-pub use flui_log;
+// =============================================================================
+// Re-exports from flui-foundation crate
+// =============================================================================
 
-// Re-export foundation types
-pub use foundation::{
-    ChangeNotifier,
-    // Diagnostics
-    DiagnosticLevel,
-    Diagnosticable,
-    DiagnosticsBuilder,
-    DiagnosticsNode,
-    DiagnosticsProperty,
-    DiagnosticsTreeStyle,
-    DynNotification,
-    ElementId,
-    FocusChangedNotification,
-    KeepAliveNotification,
-    Key,
-    KeyRef,
-    LayoutChangedNotification,
-    // Change notification
-    Listenable,
-    ListenerCallback,
-    ListenerId,
-    MergedListenable,
-    // Notifications (bubbling events)
-    Notification,
-    ScrollNotification,
-    SizeChangedNotification,
-    Slot,
-    ValueNotifier,
+pub use flui_foundation::{ElementId, Key, Slot, ViewMode};
+
+// =============================================================================
+// Re-exports from flui-element crate
+// =============================================================================
+
+pub use flui_element::{Element, ElementLifecycle, ElementTree};
+
+// =============================================================================
+// Re-exports from flui-view crate
+// =============================================================================
+
+pub use flui_view::{BuildContext, IntoElement, ViewObject};
+
+// =============================================================================
+// Re-exports from flui-rendering
+// =============================================================================
+
+pub use flui_rendering::{
+    core::{Arity, RenderBox, RenderState, RuntimeArity},
+    view::{RenderObjectWrapper, RenderView, RenderViewWrapper, UpdateResult},
 };
 
-// Re-export element types
-pub use element::{
-    // Unified Element struct with ViewObject delegation (v0.7.0)
-    DependencyInfo,
-    DependencyTracker,
-    Element,
-    ElementTree,
-};
+// =============================================================================
+// Re-exports from flui-pipeline
+// =============================================================================
 
-// Re-export view types
-pub use view::BuildContext;
+pub use flui_pipeline::context::PipelineBuildContext;
 
-// Re-export simplified API (IntoElement and specialized view traits)
-pub use view::{
-    AnimatedView, IntoElement, ProviderView, ProxyView, RenderView, StatefulView, StatelessView,
-};
+// =============================================================================
+// Re-exports from this crate's pipeline module
+// =============================================================================
 
-// Re-export pipeline types
 pub use pipeline::{PipelineBuilder, PipelineOwner};
 
-// Re-export render types from flui_rendering
-pub use flui_rendering::core::{Arity, RenderBox, RenderState};
+// =============================================================================
+// Version info
+// =============================================================================
 
-/// Prelude module for convenient imports
-///
-/// Import everything you need with:
-///
-/// ```rust
-/// use flui_core::prelude::*;
-/// ```
-// Prelude module is now in separate file (src/prelude.rs)
-// See prelude module documentation for details
 /// FLUI version string
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -332,31 +91,27 @@ pub const VERSION_MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
 /// FLUI patch version
 pub const VERSION_PATCH: &str = env!("CARGO_PKG_VERSION_PATCH");
 
+// =============================================================================
+// Tests
+// =============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_version_constants() {
-        // Check version strings are defined (use len() for const strings)
-        assert_ne!(VERSION.len(), 0);
-        assert_ne!(VERSION_MAJOR.len(), 0);
-        assert_ne!(VERSION_MINOR.len(), 0);
-        assert_ne!(VERSION_PATCH.len(), 0);
+        assert!(!VERSION.is_empty());
+        assert!(!VERSION_MAJOR.is_empty());
+        assert!(!VERSION_MINOR.is_empty());
+        assert!(!VERSION_PATCH.is_empty());
     }
 
     #[test]
-    fn test_prelude_imports() {
-        use crate::prelude::*;
-
-        // Test that all major types are available
+    fn test_reexports_available() {
+        // Test that key types are available
         let _key: Option<Key> = None;
-        let _element: Option<Element> = None;
-
-        // Test hooks are available
-        let _signal: Option<Signal<i32>> = None; // Signal from prelude
-
-        // Test render types are available
-        let _arity = RuntimeArity::Variable;
+        let _id: Option<ElementId> = None;
+        let _mode = ViewMode::Stateless;
     }
 }

@@ -268,6 +268,71 @@ impl ElementTree {
             .iter_mut()
             .map(|(idx, node)| (ElementId::new(idx + 1), &mut node.element))
     }
+
+    // ========== Compatibility Stubs ==========
+    // These methods provide API compatibility with the old element module.
+
+    /// Alias for root() - returns the root element ID.
+    #[inline]
+    #[must_use]
+    pub fn root_id(&self) -> Option<ElementId> {
+        self.root
+    }
+
+    /// Returns an iterator over all element IDs (alias for ids()).
+    pub fn all_element_ids(&self) -> impl Iterator<Item = ElementId> + '_ {
+        self.ids()
+    }
+
+    /// Visit all elements mutably with a callback.
+    ///
+    /// The callback receives (ElementId, &mut Element) for each element.
+    pub fn visit_all_elements_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(ElementId, &mut Element),
+    {
+        for (idx, node) in self.nodes.iter_mut() {
+            f(ElementId::new(idx + 1), &mut node.element);
+        }
+    }
+
+    /// Stub: Layout a render object (returns None - not implemented).
+    ///
+    /// Actual layout should be performed through the pipeline system.
+    #[inline]
+    pub fn layout_render_object(
+        &mut self,
+        _id: ElementId,
+        _constraints: flui_types::constraints::BoxConstraints,
+    ) -> Option<flui_types::Size> {
+        // TODO: Implement proper layout delegation
+        None
+    }
+
+    /// Stub: Paint a render object (returns None - not implemented).
+    ///
+    /// Actual painting should be performed through the pipeline system.
+    #[inline]
+    pub fn paint_render_object(
+        &self,
+        _id: ElementId,
+        _offset: flui_types::Offset,
+    ) -> Option<flui_engine::CanvasLayer> {
+        // TODO: Implement proper paint delegation
+        None
+    }
+
+    /// Stub: Hit test at position (returns empty result).
+    ///
+    /// Actual hit testing should be performed through the interaction layer.
+    #[inline]
+    pub fn hit_test(
+        &self,
+        _root_id: ElementId,
+        _position: flui_types::Offset,
+    ) -> flui_interaction::HitTestResult {
+        flui_interaction::HitTestResult::new()
+    }
 }
 
 impl Default for ElementTree {
