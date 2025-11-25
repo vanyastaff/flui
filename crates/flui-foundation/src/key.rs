@@ -9,7 +9,7 @@
 //! # Examples
 //!
 //! ```rust,ignore
-//! use flui_core::Key;
+//! use flui_foundation::Key;
 //!
 //! // Compile-time constant key
 //! const HEADER_KEY: Key = Key::from_str("app_header");
@@ -62,7 +62,7 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use flui_core::Key;
+    /// use flui_foundation::Key;
     ///
     /// const HEADER: Key = Key::from_str("app_header");
     /// const FOOTER: Key = Key::from_str("app_footer");
@@ -91,7 +91,7 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use flui_core::Key;
+    /// use flui_foundation::Key;
     ///
     /// let key1 = Key::new();
     /// let key2 = Key::new();
@@ -133,7 +133,7 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use flui_core::Key;
+    /// use flui_foundation::Key;
     ///
     /// // From database ID
     /// let user_id = 42u64;
@@ -155,7 +155,7 @@ impl Key {
     /// # Examples
     ///
     /// ```
-    /// use flui_core::Key;
+    /// use flui_foundation::Key;
     ///
     /// let key = Key::from_u64(42).unwrap();
     /// assert_eq!(key.as_u64(), 42);

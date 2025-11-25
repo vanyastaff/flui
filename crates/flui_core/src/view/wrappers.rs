@@ -3,16 +3,21 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::element::{Element, ElementId, IntoElement};
+use crate::element::{Element, ElementId, ElementTree, IntoElement};
+use crate::foundation::change_notifier::ListenerId;
 use crate::foundation::Listenable;
 use crate::render::arity::Arity;
 use crate::render::protocol::Protocol;
+use crate::render::render_object::Constraints as DynConstraints;
 use crate::render::{LayoutProtocol, RenderObject, RenderState, RuntimeArity};
 use crate::view::UpdateResult;
 use crate::view::{
     AnimatedView, BuildContext, ProviderView, ProxyView, RenderView, StatefulView, StatelessView,
     ViewMode, ViewObject, ViewState,
 };
+use flui_painting::Canvas;
+use flui_types::{constraints::BoxConstraints, Offset, Size};
+use parking_lot::RwLock;
 
 // ============================================================================
 // STATELESS VIEW WRAPPER
@@ -161,7 +166,7 @@ where
 {
     view: V,
     listenable: L,
-    _subscription: Option<()>, // TODO: proper subscription
+    subscription: Option<ListenerId>,
 }
 
 impl<V, L> AnimatedViewWrapper<V, L>
@@ -175,7 +180,7 @@ where
         Self {
             view,
             listenable,
-            _subscription: None,
+            subscription: None,
         }
     }
 }
@@ -189,24 +194,51 @@ where
         self.view.build(ctx).into_element()
     }
 
-    fn init(&mut self, _ctx: &BuildContext) {
-        // TODO: subscribe to listenable
+    fn init(&mut self, ctx: &BuildContext) {
+        let element_id = ctx.element_id();
+        let depth = ctx.depth();
+        let rebuild_queue = ctx.rebuild_queue().clone();
+
+        let mut listenable = self.listenable.clone();
+        let subscription = listenable.add_listener(Arc::new(move || {
+            rebuild_queue.push(element_id, depth);
+        }));
+
+        self.subscription = Some(subscription);
     }
 
     fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
 
-    fn did_update(&mut self, new_view: &dyn Any, _ctx: &BuildContext) {
+    fn did_update(&mut self, new_view: &dyn Any, ctx: &BuildContext) {
         if let Some(new) = new_view.downcast_ref::<V>() {
+            // Unsubscribe from the old listenable
+            if let Some(subscription) = self.subscription.take() {
+                self.listenable.remove_listener(subscription);
+            }
+
             self.view = new.clone();
             self.listenable = new.listenable().clone();
-            // TODO: resubscribe
+
+            // Subscribe to the new listenable
+            let element_id = ctx.element_id();
+            let depth = ctx.depth();
+            let rebuild_queue = ctx.rebuild_queue().clone();
+
+            let mut listenable = self.listenable.clone();
+            let subscription = listenable.add_listener(Arc::new(move || {
+                rebuild_queue.push(element_id, depth);
+            }));
+
+            self.subscription = Some(subscription);
         }
     }
 
     fn deactivate(&mut self, _ctx: &BuildContext) {}
 
     fn dispose(&mut self, _ctx: &BuildContext) {
-        // TODO: unsubscribe
+        if let Some(subscription) = self.subscription.take() {
+            self.listenable.remove_listener(subscription);
+        }
     }
 
     fn mode(&self) -> ViewMode {
@@ -422,7 +454,6 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
 /// Stores the view configuration AND the created render object + state.
 /// This enables unified Element architecture where all type-specific
 /// behavior is delegated to ViewObject.
-#[derive(Debug)]
 pub struct RenderViewWrapper<V, P, A>
 where
     V: RenderView<P, A>,
@@ -433,7 +464,7 @@ where
     view: V,
 
     /// Created render object (persists across rebuilds)
-    render_object: Option<V::RenderObject>,
+    render_object: RwLock<Option<V::RenderObject>>,
 
     /// Render state (size, offset, dirty flags)
     render_state: RenderState,
@@ -443,6 +474,24 @@ where
 
     /// Arity specification
     arity: RuntimeArity,
+}
+
+impl<V, P, A> std::fmt::Debug for RenderViewWrapper<V, P, A>
+where
+    V: RenderView<P, A> + std::fmt::Debug,
+    P: Protocol,
+    A: Arity,
+    V::RenderObject: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderViewWrapper")
+            .field("view", &self.view)
+            .field("render_object", &self.render_object.read())
+            .field("render_state", &self.render_state)
+            .field("protocol", &self.protocol)
+            .field("arity", &self.arity)
+            .finish()
+    }
 }
 
 impl<V, P, A> RenderViewWrapper<V, P, A>
@@ -455,7 +504,7 @@ where
     pub fn new(view: V) -> Self {
         Self {
             view,
-            render_object: None,
+            render_object: RwLock::new(None),
             render_state: RenderState::new(),
             protocol: P::ID,
             arity: A::runtime_arity(),
@@ -497,8 +546,9 @@ where
 
     fn init(&mut self, _ctx: &BuildContext) {
         // Create render object on mount (only once!)
-        if self.render_object.is_none() {
-            self.render_object = Some(self.view.create());
+        let mut render_object_guard = self.render_object.write();
+        if render_object_guard.is_none() {
+            *render_object_guard = Some(self.view.create());
 
             #[cfg(debug_assertions)]
             tracing::trace!(
@@ -516,7 +566,8 @@ where
             self.view = new_config.clone();
 
             // Update existing render object
-            if let Some(render) = &mut self.render_object {
+            let mut render_object_guard = self.render_object.write();
+            if let Some(render) = &mut *render_object_guard {
                 let result = self.view.update(render);
 
                 match result {
@@ -542,10 +593,11 @@ where
     fn deactivate(&mut self, _ctx: &BuildContext) {}
 
     fn dispose(&mut self, _ctx: &BuildContext) {
-        if let Some(render) = &mut self.render_object {
+        let mut render_object_guard = self.render_object.write();
+        if let Some(render) = &mut *render_object_guard {
             self.view.dispose(render);
         }
-        self.render_object = None;
+        *render_object_guard = None;
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -559,13 +611,11 @@ where
     // ========== RENDER-SPECIFIC IMPLEMENTATIONS ==========
 
     fn render_object(&self) -> Option<&dyn RenderObject> {
-        self.render_object.as_ref().map(|r| r as &dyn RenderObject)
+        None
     }
 
     fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
-        self.render_object
-            .as_mut()
-            .map(|r| r as &mut dyn RenderObject)
+        None
     }
 
     fn render_state(&self) -> Option<&RenderState> {
@@ -582,5 +632,179 @@ where
 
     fn arity(&self) -> Option<RuntimeArity> {
         Some(self.arity)
+    }
+
+    fn layout_render(
+        &self,
+        tree: &ElementTree,
+        children: &[ElementId],
+        constraints: BoxConstraints,
+    ) -> Size {
+        let mut render_object = self.render_object.write();
+        if let Some(render_object) = &mut *render_object {
+            let geometry = render_object.layout(tree, children, &DynConstraints::Box(constraints));
+            if let crate::render::render_object::Geometry::Box(size) = geometry {
+                return size;
+            }
+        }
+        Size::ZERO
+    }
+
+    fn paint_render(&self, tree: &ElementTree, children: &[ElementId], offset: Offset) -> Canvas {
+        let render_object = self.render_object.read();
+        if let Some(render_object) = &*render_object {
+            return render_object.paint(tree, children, offset);
+        }
+        Canvas::new()
+    }
+
+    fn hit_test_render(
+        &self,
+        tree: &ElementTree,
+        children: &[ElementId],
+        position: Offset,
+        geometry: &crate::render::render_object::Geometry,
+    ) -> bool {
+        let render_object = self.render_object.read();
+        if let Some(render_object) = &*render_object {
+            return render_object.hit_test(tree, children, position, geometry);
+        }
+        false
+    }
+}
+
+// ============================================================================
+// RENDER OBJECT WRAPPER
+// ============================================================================
+
+/// Wrapper for raw RenderObjects that implements ViewObject.
+///
+/// This is a compatibility layer to allow using existing RenderObjects
+/// in the new unified Element architecture. The preferred approach is to
+/// use RenderView with RenderViewWrapper.
+#[derive(Debug)]
+pub struct RenderObjectWrapper {
+    /// The wrapped render object
+    render_object: RwLock<Box<dyn RenderObject>>,
+
+    /// Render state (size, offset, dirty flags)
+    render_state: RenderState,
+
+    /// Layout protocol (Box or Sliver)
+    protocol: LayoutProtocol,
+
+    /// Arity specification
+    arity: RuntimeArity,
+}
+
+impl RenderObjectWrapper {
+    /// Creates a new wrapper with the given render object.
+    pub fn new(
+        render_object: Box<dyn RenderObject>,
+        protocol: LayoutProtocol,
+        arity: RuntimeArity,
+    ) -> Self {
+        Self {
+            render_object: RwLock::new(render_object),
+            render_state: RenderState::new(),
+            protocol,
+            arity,
+        }
+    }
+}
+
+impl ViewObject for RenderObjectWrapper {
+    fn mode(&self) -> ViewMode {
+        match self.protocol {
+            LayoutProtocol::Box => ViewMode::RenderBox,
+            LayoutProtocol::Sliver => ViewMode::RenderSliver,
+        }
+    }
+
+    fn build(&mut self, _ctx: &BuildContext) -> Element {
+        panic!("RenderObjectWrapper::build() should not be called")
+    }
+
+    fn init(&mut self, _ctx: &BuildContext) {
+        // Render object is already created
+    }
+
+    fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
+
+    fn did_update(&mut self, _new_view: &dyn Any, _ctx: &BuildContext) {
+        // This wrapper is for objects that don't have a separate View.
+        // We can't update from a new view.
+        // If the underlying render object needs to be replaced,
+        // a new element with a new wrapper should be created.
+    }
+
+    fn deactivate(&mut self, _ctx: &BuildContext) {}
+
+    fn dispose(&mut self, _ctx: &BuildContext) {
+        // Nothing to do, render object will be dropped.
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    // ========== RENDER-SPECIFIC IMPLEMENTATIONS ==========
+
+    fn render_object(&self) -> Option<&dyn RenderObject> {
+        None
+    }
+
+    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
+        None
+    }
+
+    fn render_state(&self) -> Option<&RenderState> {
+        Some(&self.render_state)
+    }
+
+    fn render_state_mut(&mut self) -> Option<&mut RenderState> {
+        Some(&mut self.render_state)
+    }
+
+    fn protocol(&self) -> Option<LayoutProtocol> {
+        Some(self.protocol)
+    }
+
+    fn arity(&self) -> Option<RuntimeArity> {
+        Some(self.arity)
+    }
+
+    fn layout_render(
+        &self,
+        tree: &ElementTree,
+        children: &[ElementId],
+        constraints: BoxConstraints,
+    ) -> Size {
+        let mut render_object = self.render_object.write();
+        let geometry = render_object.layout(tree, children, &DynConstraints::Box(constraints));
+        if let crate::render::render_object::Geometry::Box(size) = geometry {
+            return size;
+        }
+        Size::ZERO
+    }
+
+    fn paint_render(&self, tree: &ElementTree, children: &[ElementId], offset: Offset) -> Canvas {
+        let render_object = self.render_object.read();
+        render_object.paint(tree, children, offset)
+    }
+
+    fn hit_test_render(
+        &self,
+        tree: &ElementTree,
+        children: &[ElementId],
+        position: Offset,
+        geometry: &crate::render::render_object::Geometry,
+    ) -> bool {
+        let render_object = self.render_object.read();
+        render_object.hit_test(tree, children, position, geometry)
     }
 }

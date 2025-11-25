@@ -97,7 +97,11 @@ impl RendererBinding {
             .and_then(|root_id| {
                 let tree = owner.tree();
                 let tree_guard = tree.read();
-                tree_guard.render_state(root_id).map(|state| state.size())
+                tree_guard
+                    .get(root_id)
+                    .and_then(|element| element.render_state())
+                    .filter(|state| state.has_size())
+                    .map(|state| state.size())
             })
             .unwrap_or_else(|| Size::new(constraints.max_width, constraints.max_height));
 

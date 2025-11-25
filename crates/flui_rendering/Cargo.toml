@@ -9,12 +9,18 @@ repository.workspace = true
 
 [dependencies]
 flui_types = { path = "../flui_types" }
-flui_core = { path = "../flui_core" }
 flui_painting = { path = "../flui_painting" }
+flui_interaction = { path = "../flui_interaction" }
+flui-foundation = { path = "../flui-foundation" }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, optional = true }
+
+# Essential dependencies for render core
+moka = { workspace = true, features = ["sync"] }
+slab = "0.4"
+bitflags = { workspace = true }
 
 [dev-dependencies]
 criterion.workspace = true
@@ -24,4 +30,4 @@ default = []
 
 # === Serialization ===
 # Serde support for render objects
-serde = ["dep:serde", "flui_core/serde", "flui_types/serde"]
+serde = ["dep:serde", "flui_types/serde"]

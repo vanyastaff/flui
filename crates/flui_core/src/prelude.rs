@@ -121,9 +121,9 @@ pub use crate::hooks::HookContext;
 /// Trait for custom render objects (layout + paint)
 pub use crate::render::RenderBox;
 
-// Legacy contexts removed - use protocol-based contexts instead:
-// - BoxLayoutContext<A>, BoxPaintContext<A> from crate::render::protocol
-// - SliverLayoutContext<A>, SliverPaintContext<A> from crate::render::protocol
+// Modern unified contexts available from crate::render:
+// - LayoutContext<A, P> and PaintContext<A> for protocol-based rendering
+// - Use with RenderBox<A> and SliverRender<A> traits for type-safe rendering
 
 /// Type-safe arity trait for compile-time child count validation
 pub use crate::render::Arity;

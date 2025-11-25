@@ -53,7 +53,7 @@ use crate::element::{Element, ElementId};
 ///
 /// // Set root element
 /// let component = ComponentElement::new(MyApp);
-/// let root_id = root_mgr.set_root(&tree, Element::Component(component));
+/// let root_id = root_mgr.set_root(&tree, Element::new(Box::new(component_wrapper)));
 ///
 /// // Access root ID later
 /// assert_eq!(root_mgr.root_id(), Some(root_id));
@@ -110,8 +110,8 @@ impl RootManager {
     /// let tree = Arc::new(RwLock::new(ElementTree::new()));
     /// let mut root_mgr = RootManager::new();
     ///
-    /// let component = ComponentElement::new(MyApp);
-    /// let root = Element::Component(component);
+    /// let wrapper = StatelessViewWrapper::new(MyApp);
+    /// let root = Element::new(Box::new(wrapper));
     /// let root_id = root_mgr.set_root(&tree, root);
     /// ```
     pub fn set_root(

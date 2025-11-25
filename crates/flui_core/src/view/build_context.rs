@@ -182,29 +182,52 @@ impl BuildContext {
         None
     }
 
-    /// Dispatches a notification up the tree.
-    ///
-    /// # Note
-    ///
-    /// Currently unimplemented.
-    #[deprecated(note = "Not yet implemented")]
-    pub fn dispatch_notification(&self, _notification: &dyn crate::foundation::DynNotification) {}
-
     /// Returns the size of this element after layout.
     pub fn size(&self) -> Option<flui_types::Size> {
         let tree = self.tree.read();
 
         if let Some(element) = tree.get(self.element_id) {
-            if let Some(render_element) = element.as_render() {
-                let render_state = render_element.render_state();
-                let state = render_state.read();
-                if state.has_size() {
-                    return Some(state.size());
+            if element.is_render() {
+                if let Some(render_state) = element.render_state() {
+                    if render_state.has_size() {
+                        return Some(render_state.size());
+                    }
                 }
             }
         }
 
         None
+    }
+
+    /// Creates a minimal root build context for bootstrap purposes
+    ///
+    /// This creates a BuildContext with a dummy element ID and minimal setup,
+    /// used primarily during application bootstrap when creating the root view.
+    /// The actual element tree and proper context will be established later.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let ctx = BuildContext::root();
+    /// let root_element = root_view.build(&ctx);
+    /// ```
+    pub fn root() -> Self {
+        use crate::ElementId;
+        use parking_lot::RwLock;
+        use std::sync::Arc;
+
+        // Create minimal element tree for bootstrap
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+
+        // Use element ID 1 as placeholder for root context
+        let element_id = ElementId::new(1);
+
+        Self {
+            tree,
+            element_id,
+            hook_context: Arc::new(Mutex::new(HookContext::new())),
+            rebuild_queue: RebuildQueue::new(),
+        }
     }
 }
 

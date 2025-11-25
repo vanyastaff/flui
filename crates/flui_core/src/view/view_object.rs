@@ -153,6 +153,17 @@ pub trait ViewObject: Send {
     ) -> Canvas {
         panic!("paint_render called on non-render ViewObject")
     }
+
+    /// Performs hit testing for render views.
+    fn hit_test_render(
+        &self,
+        _tree: &ElementTree,
+        _children: &[ElementId],
+        _position: Offset,
+        _geometry: &crate::render::render_object::Geometry,
+    ) -> bool {
+        false // Default implementation for non-render objects
+    }
 }
 
 // ============================================================================

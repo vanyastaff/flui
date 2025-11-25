@@ -13,7 +13,7 @@ use std::str::FromStr;
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::DiagnosticLevel;
+/// use flui_foundation::DiagnosticLevel;
 ///
 /// let level = DiagnosticLevel::Info;
 /// assert!(level > DiagnosticLevel::Debug);
@@ -133,7 +133,7 @@ impl std::error::Error for ParseDiagnosticLevelError {}
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::DiagnosticsTreeStyle;
+/// use flui_foundation::DiagnosticsTreeStyle;
 ///
 /// let style = DiagnosticsTreeStyle::Sparse;
 /// println!("{}", style); // "sparse"
@@ -232,7 +232,7 @@ impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::DiagnosticsProperty;
+/// use flui_foundation::DiagnosticsProperty;
 ///
 /// let prop = DiagnosticsProperty::new("width", 100);
 /// assert_eq!(prop.name(), "width");
@@ -267,7 +267,7 @@ impl DiagnosticsProperty {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::DiagnosticsProperty;
+    /// use flui_foundation::DiagnosticsProperty;
     ///
     /// let prop = DiagnosticsProperty::new("width", 100);
     /// assert_eq!(prop.name(), "width");
@@ -414,7 +414,7 @@ impl fmt::Display for DiagnosticsProperty {
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::{DiagnosticsNode, DiagnosticsProperty};
+/// use flui_foundation::{DiagnosticsNode, DiagnosticsProperty};
 ///
 /// let mut node = DiagnosticsNode::new("MyView");
 /// node.add_property(DiagnosticsProperty::new("width", 100));
@@ -550,7 +550,7 @@ impl DiagnosticsNode {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::{DiagnosticsNode, DiagnosticsProperty};
+    /// use flui_foundation::{DiagnosticsNode, DiagnosticsProperty};
     ///
     /// let node = DiagnosticsNode::new("MyView")
     ///     .property("width", 100)
@@ -574,7 +574,7 @@ impl DiagnosticsNode {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::DiagnosticsNode;
+    /// use flui_foundation::DiagnosticsNode;
     ///
     /// let node = DiagnosticsNode::new("Parent")
     ///     .child(DiagnosticsNode::new("Child1"))
@@ -668,7 +668,7 @@ impl fmt::Display for DiagnosticsNode {
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::{Diagnosticable, DiagnosticsNode, DiagnosticsProperty};
+/// use flui_foundation::{Diagnosticable, DiagnosticsNode, DiagnosticsProperty};
 ///
 /// #[derive(Debug)]
 /// struct MyView {
@@ -703,7 +703,7 @@ pub trait Diagnosticable: fmt::Debug {
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::DiagnosticsBuilder;
+/// use flui_foundation::DiagnosticsBuilder;
 ///
 /// let mut builder = DiagnosticsBuilder::new();
 /// builder.add("width", 100);

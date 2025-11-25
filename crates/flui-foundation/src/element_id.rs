@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_core::foundation::ElementId;
+//! use flui_foundation::ElementId;
 //!
 //! // Option<ElementId> is same size as ElementId (8 bytes on 64-bit)
 //! assert_eq!(
@@ -44,7 +44,7 @@ use std::num::NonZeroUsize;
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::ElementId;
+/// use flui_foundation::ElementId;
 ///
 /// // Option<ElementId> is same size as ElementId (8 bytes on 64-bit)
 /// assert_eq!(
@@ -76,7 +76,7 @@ impl ElementId {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::ElementId;
+    /// use flui_foundation::ElementId;
     ///
     /// let id = ElementId::new(1);
     /// assert_eq!(id.get(), 1);
@@ -106,7 +106,7 @@ impl ElementId {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::ElementId;
+    /// use flui_foundation::ElementId;
     ///
     /// assert_eq!(ElementId::new_checked(0), None);
     /// assert_eq!(ElementId::new_checked(1).map(|id| id.get()), Some(1));
@@ -124,7 +124,7 @@ impl ElementId {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::ElementId;
+    /// use flui_foundation::ElementId;
     ///
     /// let id = ElementId::new(42);
     /// assert_eq!(id.get(), 42);
@@ -143,7 +143,7 @@ impl ElementId {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::ElementId;
+    /// use flui_foundation::ElementId;
     ///
     /// // Safe because 1 is non-zero
     /// let id = unsafe { ElementId::new_unchecked(1) };

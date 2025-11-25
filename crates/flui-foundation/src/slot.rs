@@ -13,7 +13,7 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 /// # Examples
 ///
 /// ```rust
-/// use flui_core::foundation::Slot;
+/// use flui_foundation::Slot;
 ///
 /// let slot = Slot::new(0); // First child
 /// assert_eq!(slot.index(), 0);
@@ -47,7 +47,7 @@ impl Slot {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::Slot;
+    /// use flui_foundation::Slot;
     ///
     /// let slot = Slot::new(5);
     /// assert_eq!(slot.index(), 5);
@@ -74,7 +74,7 @@ impl Slot {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::Slot;
+    /// use flui_foundation::Slot;
     ///
     /// let sibling_id = 42;
     /// let slot = Slot::with_previous_sibling(2, Some(sibling_id));
@@ -127,7 +127,7 @@ impl Slot {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::Slot;
+    /// use flui_foundation::Slot;
     ///
     /// let slot = Slot::new(0);
     /// let next = slot.next();
@@ -150,7 +150,7 @@ impl Slot {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::Slot;
+    /// use flui_foundation::Slot;
     ///
     /// let slot = Slot::new(5);
     /// assert_eq!(slot.prev().unwrap().index(), 4);
@@ -176,7 +176,7 @@ impl Slot {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_core::foundation::Slot;
+    /// use flui_foundation::Slot;
     ///
     /// let slot = Slot::new(5);
     /// let sibling_id = 42;

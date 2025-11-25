@@ -66,11 +66,13 @@
 // Core modules
 pub mod build_context;
 pub mod children;
+pub mod empty_view;
 pub mod protocol;
+pub mod root_view;
 pub mod update_result;
 #[allow(clippy::module_inception)]
 pub mod view;
-pub mod view_element;
+// view_element module removed - functionality moved to unified Element + ViewObject wrappers
 pub mod view_object;
 pub mod view_state;
 
@@ -96,14 +98,20 @@ pub use protocol::{
 pub use update_result::UpdateResult;
 // View trait is internal - users should use StatelessView, StatefulView, etc.
 pub(crate) use view::View;
-pub use view_element::{BuildFn, ViewElement};
+// BuildFn and ViewElement removed - functionality moved to unified Element + ViewObject wrappers
 pub use view_object::ViewObject;
 pub use view_state::ViewState;
 
 // View traits
 pub use view_animated::AnimatedView;
 pub use view_provider::ProviderView;
+
+// Empty view for no-content cases
+pub use empty_view::EmptyView;
 pub use view_proxy::ProxyView;
+
+// Root view for application bootstrap
+pub use root_view::{RootView, RootViewError};
 pub use view_render::{RenderView, RenderViewExt};
 pub use view_stateful::StatefulView;
 pub use view_stateless::StatelessView;

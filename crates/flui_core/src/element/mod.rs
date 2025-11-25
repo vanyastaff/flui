@@ -1,30 +1,35 @@
-//! Element system - View lifecycle and tree management
+//! Element system - Unified View lifecycle and tree management
 //!
 //! This module provides the Element layer of the three-tree architecture:
 //! - **View** → Immutable configuration (recreated each rebuild)
-//! - **Element** → Mutable state holder (persists across rebuilds)
-//! - **Render** → Layout and painting (optional, for render objects)
+//! - **Element** → Unified mutable state holder (persists across rebuilds)
+//! - **Render** → Layout and painting (delegated to ViewObject wrappers)
 //!
-//! # Element Types
+//! # Unified Element Architecture (v0.7.0)
 //!
-//! 1. **ComponentElement** - For component views (calls build())
-//! 2. **ProviderElement** - For provider views (data propagation + dependency tracking)
-//! 3. **RenderElement** - For render objects (owns Render)
+//! Single `Element` struct with `ViewObject` delegation for all view types:
+//! - **StatelessViewWrapper** - For stateless component views
+//! - **StatefulViewWrapper** - For stateful component views
+//! - **ProviderViewWrapper** - For provider views (data propagation + dependency tracking)
+//! - **RenderViewWrapper** - For render objects (layout/paint)
+//! - **AnimatedViewWrapper** - For animated views
+//! - **ProxyViewWrapper** - For proxy views
 //!
 //! # Architecture
 //!
 //! ```text
-//! View → Element → Render (optional)
+//! View → Element (unified) → ViewObject (type-specific behavior)
 //!
-//! Component View  → ComponentElement  → build() → child views
-//! Provider View   → ProviderElement   → (data + dependents) → child view
-//! Render Object   → RenderElement     → Render (type-erased)
+//! Component View  → Element + StatelessViewWrapper  → build() → child views
+//! Provider View   → Element + ProviderViewWrapper   → (data + dependents) → child view
+//! Render Object   → Element + RenderViewWrapper     → layout/paint
 //! ```
 //!
 //! # ElementTree
 //!
-//! The ElementTree currently stores unified `Element` structs that
-//! hold a `ViewObject` plus children. Legacy enum has been removed.
+//! The ElementTree stores unified `Element` structs that delegate behavior
+//! to `ViewObject` implementations. This eliminates enum dispatch overhead
+//! and provides extensible architecture.
 //!
 //! # Performance
 //!
@@ -37,44 +42,24 @@ pub mod dependency;
 #[allow(clippy::module_inception)] // element/element.rs is intentional for main Element struct
 pub mod element;
 pub mod element_base;
-// legacy removed
 pub mod element_tree;
 pub mod hit_test;
 pub mod hit_test_entry;
 pub mod into_element;
 pub mod lifecycle;
-pub mod provider;
-// TODO: Re-enable sliver support after completing box render migration
-// pub mod sliver;
-//
+
 // Re-exports
-// ViewElement (formerly ComponentElement) is in view module
-pub use crate::view::ViewElement;
-// Keep ComponentElement as alias for backwards compatibility
-pub use crate::view::ViewElement as ComponentElement;
 pub use dependency::{DependencyInfo, DependencyTracker};
-// Unified Element struct (replaces legacy enum)
+// Unified Element struct with ViewObject delegation
 pub use element::Element;
 // ElementBase is internal - used by framework only
 pub(crate) use element_base::ElementBase;
-pub use element_tree::ElementTree; // Moved from pipeline to break circular dependency
+pub use element_tree::ElementTree;
 pub use hit_test::{
     BoxHitTestResult, ElementHitTestEntry, ElementHitTestResult, SliverHitTestResult,
 };
 pub use lifecycle::ElementLifecycle;
-pub use provider::ProviderElement;
-// RenderElement is now in render module
-pub use crate::render::RenderElement;
-// TODO: Re-enable sliver support after completing box render migration
-// pub use sliver::SliverElement;
-//
-// Moved to other modules (Phase 1):
-// - BuildContext moved to view::BuildContext
-// - PipelineOwner moved to pipeline::PipelineOwner
-//
-// Moved back from pipeline (Phase 2 - Issue #21):
-// - ElementTree moved back to element module (logical home, breaks pipeline ↔ render cycle)
-//
+
 // Re-export ElementId from foundation (moved to break circular dependencies)
 // ElementId is now defined in foundation::element_id to allow:
 // - element depends on foundation (OK)
@@ -82,6 +67,6 @@ pub use crate::render::RenderElement;
 // - pipeline depends on foundation + element (OK)
 // Previously: element → render → pipeline → element (CIRCULAR!)
 pub use crate::foundation::ElementId;
-//
+
 // IntoElement trait for converting views/renders to elements
 pub use into_element::IntoElement;

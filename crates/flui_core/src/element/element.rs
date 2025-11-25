@@ -1,27 +1,27 @@
-//! Element struct - Pure View element (no RenderObject)
+//! Element struct - Unified element with ViewObject delegation
 //!
-//! This module provides the `Element` struct for Views only.
-//! RenderObjects are stored separately in `RenderElement`.
+//! This module provides the unified `Element` struct that works with all view types
+//! through ViewObject delegation pattern.
 //!
-//! # Architecture (Following Flutter)
+//! # Architecture (v0.7.0 - Unified Element)
 //!
 //! ```text
 //! View (Config)
 //!   ↓ build()
-//! Element (Lifecycle)
-//!   ├─ Stateless/Stateful → child Element
-//!   └─ RenderView → RenderElement
+//! Element (Lifecycle + ViewObject)
+//!   ├─ StatelessViewWrapper → child Element
+//!   ├─ StatefulViewWrapper → child Element
+//!   ├─ ProviderViewWrapper → child Element
+//!   └─ RenderViewWrapper → layout/paint
 //! ```
 //!
 //! **Critical Design:**
-//! - Element ONLY manages View lifecycle (mount, unmount, rebuild)
-//! - Element has NO RenderObject - RenderObject goes in RenderElement
-//! - RenderElement is a separate tree node containing protocol-specific layout/paint
-//! - View.build() returns either:
-//!   - Another View (wrapped in Element)
-//!   - A RenderObject (wrapped in RenderElement)
+//! - Single Element struct with Box<dyn ViewObject> for type-specific behavior
+//! - All element variants (component, provider, render) use same Element struct
+//! - ViewObject trait handles type-specific operations (build, layout, paint, etc.)
+//! - RenderObjects are stored in RenderViewWrapper/RenderObjectWrapper ViewObjects
 //!
-//! This separation is key to Flutter's architecture and FLUI's flexibility.
+//! This unified approach eliminates enum dispatch overhead and matches Flutter's architecture.
 
 use std::any::Any;
 use std::fmt;
@@ -31,22 +31,20 @@ use crate::foundation::Slot;
 use crate::render::{LayoutProtocol, RenderObject, RenderState, RuntimeArity};
 use crate::view::{BuildContext, ViewMode, ViewObject};
 
-/// Element - Represents a View instance in the element tree
+/// Element - Unified element struct with ViewObject delegation
 ///
-/// This struct represents a View instantiated at a particular location
-/// in the element tree. It manages ONLY the View lifecycle.
+/// This struct represents any View instance in the element tree using
+/// the ViewObject delegation pattern for type-specific behavior.
 ///
-/// **IMPORTANT:** Element does NOT store RenderObject.
-/// If your View creates a RenderObject, the framework wraps it in a RenderElement instead.
+/// # Design Principles (v0.7.0)
 ///
-/// # Design Principles
-///
-/// Following Flutter's Element architecture:
+/// Unified Element architecture:
 /// - `base`: Common lifecycle fields (parent, slot, lifecycle, flags)
-/// - `view_object`: The polymorphic view implementation (Stateless, Stateful, etc)
-/// - `children`: Child element IDs (may be Element or RenderElement)
+/// - `view_object`: Polymorphic view implementation (all view types)
+/// - `children`: Child element IDs (all using same Element struct)
 ///
-/// RenderObjects are NOT stored here. They go in RenderElement.
+/// RenderObjects are stored in RenderViewWrapper/RenderObjectWrapper ViewObjects.
+/// This eliminates enum dispatch and provides extensible architecture.
 ///
 /// # Thread Safety
 ///
@@ -59,13 +57,12 @@ pub struct Element {
 
     /// The polymorphic view object (Stateless, Stateful, etc)
     ///
-    /// NOTE: This will NEVER be a render view.
-    /// Render views are wrapped separately in RenderElement.
+    /// Contains all view types: Stateless, Stateful, Provider, Render, etc.
     view_object: Box<dyn ViewObject>,
 
     /// Child element IDs
     ///
-    /// May contain both Element and RenderElement IDs
+    /// All children use unified Element struct
     children: Vec<ElementId>,
 }
 
@@ -94,20 +91,7 @@ impl Element {
     }
 
     // ========== CONSTRUCTOR METHODS ==========
-
-    /// Creates Element from a RenderElement.
-    ///
-    /// This is a compatibility method for the old `Element::Render(...)` pattern.
-    /// In the new architecture, RenderElement is wrapped in a ViewObject.
-    pub fn from_render_element(render_element: crate::render::RenderElement) -> Self {
-        // For now, we store RenderElement directly
-        // TODO: Wrap in RenderViewWrapper when migration is complete
-        Self {
-            base: ElementBase::new(),
-            view_object: Box::new(RenderElementWrapper::new(render_element)),
-            children: Vec::new(),
-        }
-    }
+    // Note: Removed from_render_element() - use unified ViewObject wrappers instead
 
     // ========== Lifecycle Methods (delegated to ElementBase) ==========
 
@@ -184,11 +168,7 @@ impl Element {
     /// Build this element.
     ///
     /// Invokes the view object's build method to produce child elements.
-    ///
-    /// # Contract
-    ///
-    /// The view object's build() method returns an Element.
-    /// If the view created a RenderObject, it's wrapped in a RenderElement by the framework.
+    /// All ViewObject types handle their specific build logic internally.
     #[inline]
     pub fn build(&mut self, ctx: &BuildContext) {
         // Delegate to ViewObject
@@ -227,8 +207,7 @@ impl Element {
 
     /// Check if this view creates a RenderObject.
     ///
-    /// If true, the framework will wrap the RenderObject in a separate RenderElement.
-    /// Element itself does NOT store the RenderObject.
+    /// Returns true for RenderViewWrapper and RenderObjectWrapper ViewObjects.
     #[inline]
     #[must_use]
     pub fn is_render_view(&self) -> bool {
@@ -464,30 +443,6 @@ impl Element {
     // These methods provide backward compatibility during the migration
     // from enum-based Element to struct-based Element with ViewObject.
 
-    /// Returns the wrapped RenderElement if this is a render element.
-    ///
-    /// This is a compatibility method for code that used `Element::Render(re)` pattern.
-    pub fn as_render(&self) -> Option<&crate::render::RenderElement> {
-        if self.is_render() {
-            self.view_object
-                .as_any()
-                .downcast_ref::<crate::render::RenderElement>()
-        } else {
-            None
-        }
-    }
-
-    /// Returns mutable wrapped RenderElement if this is a render element.
-    pub fn as_render_mut(&mut self) -> Option<&mut crate::render::RenderElement> {
-        if self.is_render() {
-            self.view_object
-                .as_any_mut()
-                .downcast_mut::<crate::render::RenderElement>()
-        } else {
-            None
-        }
-    }
-
     /// Returns self if this is a component element.
     ///
     /// Component elements are Stateless, Stateful, Proxy, or Animated views.
@@ -525,36 +480,6 @@ impl Element {
             None
         }
     }
-
-    /// Performs layout on this render element.
-    ///
-    /// Convenience method that delegates to the wrapped RenderElement.
-    pub fn layout_render(
-        &self,
-        tree: &crate::element::ElementTree,
-        constraints: flui_types::constraints::BoxConstraints,
-    ) -> Option<flui_types::Size> {
-        self.as_render()
-            .map(|re| re.layout_render(tree, constraints))
-    }
-
-    /// Performs paint on this render element.
-    ///
-    /// Convenience method that delegates to the wrapped RenderElement.
-    pub fn paint_render(
-        &self,
-        tree: &crate::element::ElementTree,
-        offset: flui_types::Offset,
-    ) -> Option<flui_painting::Canvas> {
-        self.as_render().map(|re| re.paint_render(tree, offset))
-    }
-
-    /// Returns the RenderState lock for this render element.
-    ///
-    /// Convenience method that delegates to the wrapped RenderElement.
-    pub fn render_state_lock(&self) -> Option<&parking_lot::RwLock<crate::render::RenderState>> {
-        self.as_render().map(|re| re.render_state())
-    }
 }
 
 // ============================================================================
@@ -564,99 +489,6 @@ impl Element {
 impl From<Box<dyn ViewObject>> for Element {
     fn from(view_object: Box<dyn ViewObject>) -> Self {
         Element::new(view_object)
-    }
-}
-
-// ============================================================================
-// RENDER ELEMENT WRAPPER
-// ============================================================================
-
-/// Wrapper that adapts RenderElement to ViewObject interface.
-///
-/// This is a compatibility layer for the old architecture where RenderElement
-/// was a separate type. In the new architecture, all elements use ViewObject.
-#[derive(Debug)]
-pub struct RenderElementWrapper {
-    render_element: crate::render::RenderElement,
-}
-
-impl RenderElementWrapper {
-    /// Creates a new wrapper around a RenderElement.
-    pub fn new(render_element: crate::render::RenderElement) -> Self {
-        Self { render_element }
-    }
-
-    /// Returns reference to the wrapped RenderElement.
-    pub fn inner(&self) -> &crate::render::RenderElement {
-        &self.render_element
-    }
-
-    /// Returns mutable reference to the wrapped RenderElement.
-    pub fn inner_mut(&mut self) -> &mut crate::render::RenderElement {
-        &mut self.render_element
-    }
-}
-
-impl ViewObject for RenderElementWrapper {
-    fn mode(&self) -> ViewMode {
-        match self.render_element.protocol() {
-            LayoutProtocol::Box => ViewMode::RenderBox,
-            LayoutProtocol::Sliver => ViewMode::RenderSliver,
-        }
-    }
-
-    fn build(&mut self, _ctx: &BuildContext) -> Element {
-        panic!("RenderElementWrapper::build should not be called")
-    }
-
-    fn init(&mut self, _ctx: &BuildContext) {}
-
-    fn did_change_dependencies(&mut self, _ctx: &BuildContext) {}
-
-    fn did_update(&mut self, _new_view: &dyn Any, _ctx: &BuildContext) {}
-
-    fn deactivate(&mut self, _ctx: &BuildContext) {}
-
-    fn dispose(&mut self, _ctx: &BuildContext) {}
-
-    fn as_any(&self) -> &dyn Any {
-        &self.render_element
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        &mut self.render_element
-    }
-
-    // Render-specific implementations
-    fn render_object(&self) -> Option<&dyn RenderObject> {
-        // RenderElement returns RwLockGuard, can't return reference to it
-        // Return None for now - use as_render() to access RenderElement directly
-        None
-    }
-
-    fn render_object_mut(&mut self) -> Option<&mut dyn RenderObject> {
-        // RenderElement returns RwLockGuard, can't return mutable reference
-        // Return None for now - use as_render_mut() to access RenderElement directly
-        None
-    }
-
-    fn render_state(&self) -> Option<&RenderState> {
-        // RenderElement has RwLock<RenderState>, need to return reference
-        // This is tricky - we can't return reference to RwLock guard
-        // For now return None and use direct access
-        None
-    }
-
-    fn render_state_mut(&mut self) -> Option<&mut RenderState> {
-        None
-    }
-
-    fn protocol(&self) -> Option<LayoutProtocol> {
-        Some(self.render_element.protocol())
-    }
-
-    fn arity(&self) -> Option<RuntimeArity> {
-        Some(*self.render_element.arity())
     }
 }
 

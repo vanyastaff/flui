@@ -146,11 +146,13 @@ impl FrameCoordinator {
         match root_id {
             Some(id) => {
                 if let Some(element) = tree_guard.get(id) {
-                    if let Some(render_elem) = element.as_render() {
-                        let render_state_lock = render_elem.render_state();
-                        let render_state = render_state_lock.read();
-                        if render_state.has_size() {
-                            Some(render_state.size())
+                    if element.is_render() {
+                        if let Some(render_state) = element.render_state() {
+                            if render_state.has_size() {
+                                Some(render_state.size())
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -179,7 +181,7 @@ impl FrameCoordinator {
                 let mut current_id = id;
                 loop {
                     if let Some(element) = tree_guard.get(current_id) {
-                        if element.as_render().is_some() {
+                        if element.is_render() {
                             // Use the ElementTree method to paint this RenderElement
                             // This properly handles re-entrancy checks and paints the full subtree
                             if let Some(canvas) =
@@ -350,12 +352,12 @@ impl FrameCoordinator {
             let mut marked_count = 0usize;
             for id in all_ids.iter().copied() {
                 if let Some(element) = tree_guard.get(id) {
-                    if let Some(render_elem) = element.as_render() {
-                        let render_state_lock = render_elem.render_state();
-                        let render_state = render_state_lock.read();
-                        if render_state.needs_layout() {
-                            self.layout.mark_dirty(id);
-                            marked_count += 1;
+                    if element.is_render() {
+                        if let Some(render_state) = element.render_state() {
+                            if render_state.needs_layout() {
+                                self.layout.mark_dirty(id);
+                                marked_count += 1;
+                            }
                         }
                     }
                 }
@@ -519,12 +521,12 @@ impl FrameCoordinator {
             let mut marked_count = 0usize;
             for id in all_ids.iter().copied() {
                 if let Some(element) = tree_guard.get(id) {
-                    if let Some(render_elem) = element.as_render() {
-                        let render_state_lock = render_elem.render_state();
-                        let render_state = render_state_lock.read();
-                        if render_state.needs_layout() {
-                            self.layout.mark_dirty(id);
-                            marked_count += 1;
+                    if element.is_render() {
+                        if let Some(render_state) = element.render_state() {
+                            if render_state.needs_layout() {
+                                self.layout.mark_dirty(id);
+                                marked_count += 1;
+                            }
                         }
                     }
                 }
@@ -635,12 +637,12 @@ impl FrameCoordinator {
         let mut marked_count = 0usize;
         for id in all_ids.iter().copied() {
             if let Some(element) = tree_guard.get(id) {
-                if let Some(render_elem) = element.as_render() {
-                    let render_state_lock = render_elem.render_state();
-                    let render_state = render_state_lock.read();
-                    if render_state.needs_layout() {
-                        self.layout.mark_dirty(id);
-                        marked_count += 1;
+                if element.is_render() {
+                    if let Some(render_state) = element.render_state() {
+                        if render_state.needs_layout() {
+                            self.layout.mark_dirty(id);
+                            marked_count += 1;
+                        }
                     }
                 }
             }
@@ -671,11 +673,13 @@ impl FrameCoordinator {
                         match element.children().first().copied() {
                             Some(child_id) => {
                                 if let Some(child_element) = tree_guard.get(child_id) {
-                                    if let Some(child_render) = child_element.as_render() {
-                                        let render_state_lock = child_render.render_state();
-                                        let render_state = render_state_lock.read();
-                                        if render_state.has_size() {
-                                            Some(render_state.size())
+                                    if child_element.is_render() {
+                                        if let Some(render_state) = child_element.render_state() {
+                                            if render_state.has_size() {
+                                                Some(render_state.size())
+                                            } else {
+                                                None
+                                            }
                                         } else {
                                             None
                                         }
@@ -723,31 +727,41 @@ impl FrameCoordinator {
         let layer = match root_id {
             Some(id) => {
                 if let Some(element) = tree_guard.get(id) {
-                    if let Some(render_elem) = element.as_render() {
-                        let render_state_lock = render_elem.render_state();
-                        let render_state = render_state_lock.read();
-                        let offset = render_state.offset();
-                        drop(render_state);
+                    if element.is_render() {
+                        if let Some(render_state) = element.render_state() {
+                            let offset = render_state.offset();
 
-                        // Convert Canvas → CanvasLayer
-                        let canvas = render_elem.paint_render(&tree_guard, offset);
-                        Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
-                    } else if element.as_component().is_some() {
+                            // Use ElementTree's paint method instead of direct render method
+                            if let Some(canvas) = tree_guard.paint_render_object(id, offset) {
+                                Some(Box::new(flui_engine::CanvasLayer::from_canvas(canvas)))
+                            } else {
+                                Some(Box::new(flui_engine::CanvasLayer::new()))
+                            }
+                        } else {
+                            Some(Box::new(flui_engine::CanvasLayer::new()))
+                        }
+                    } else if element.is_component() {
                         // Root is ComponentElement - paint its child
                         match element.children().first().copied() {
                             Some(child_id) => {
                                 if let Some(child_element) = tree_guard.get(child_id) {
-                                    if let Some(child_render) = child_element.as_render() {
-                                        let render_state_lock = child_render.render_state();
-                                        let render_state = render_state_lock.read();
-                                        let offset = render_state.offset();
-                                        drop(render_state);
+                                    if child_element.is_render() {
+                                        if let Some(render_state) = child_element.render_state() {
+                                            let offset = render_state.offset();
 
-                                        // Convert Canvas → CanvasLayer
-                                        let canvas = child_render.paint_render(&tree_guard, offset);
-                                        Some(Box::new(flui_engine::CanvasLayer::from_canvas(
-                                            canvas,
-                                        )))
+                                            // Use ElementTree's paint method instead of direct render method
+                                            if let Some(canvas) =
+                                                tree_guard.paint_render_object(child_id, offset)
+                                            {
+                                                Some(Box::new(
+                                                    flui_engine::CanvasLayer::from_canvas(canvas),
+                                                ))
+                                            } else {
+                                                Some(Box::new(flui_engine::CanvasLayer::new()))
+                                            }
+                                        } else {
+                                            Some(Box::new(flui_engine::CanvasLayer::new()))
+                                        }
                                     } else {
                                         Some(Box::new(flui_engine::CanvasLayer::new()))
                                     }

@@ -159,7 +159,7 @@ mod tests {
     fn test_clone_requirements() {
         assert!(!Stateless::CLONE_STATE);
         assert!(Stateful::<()>::CLONE_STATE);
-        assert!(Animated::<()>::CLONE_STATE);
+        assert!(Animated::<crate::foundation::ChangeNotifier>::CLONE_STATE);
         assert!(Provider::<i32>::CLONE_STATE);
         assert!(Proxy::CLONE_STATE);
     }

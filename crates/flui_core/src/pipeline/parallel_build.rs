@@ -272,8 +272,8 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
         // Mark child for layout if exists
         if let Some(child_id) = element.first_child() {
             if let Some(child_elem) = tree_guard.get_mut(child_id) {
-                if let Some(render_state) = child_elem.render_state_lock() {
-                    render_state.write().mark_needs_layout();
+                if let Some(render_state) = child_elem.render_state_mut() {
+                    render_state.mark_needs_layout();
                 }
             }
         }
@@ -307,8 +307,10 @@ mod tests {
     use super::*;
     use crate::element::Element;
     use crate::render::{
-        contexts::LayoutContext, contexts::PaintContext, BoxProtocol, Constraints, Geometry, Leaf,
-        RenderBox, RenderObject,
+        contexts::LayoutContext,
+        contexts::PaintContext,
+        render_object::{Constraints, Geometry},
+        BoxProtocol, Leaf, RenderBox, RenderObject,
     };
     use crate::view::{wrappers::RenderViewWrapper, RenderView, UpdateResult};
     use crate::{element::ElementTree, ElementId};
@@ -333,7 +335,7 @@ mod tests {
             _children: &[ElementId],
             _offset: Offset,
         ) -> flui_painting::Canvas {
-            flui_painting::Canvas::new(100.0, 100.0)
+            flui_painting::Canvas::new()
         }
 
         fn hit_test(

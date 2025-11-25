@@ -243,9 +243,9 @@ pub mod element;
 pub mod foundation;
 pub mod hooks;
 pub mod macros;
+pub mod notification;
 pub mod pipeline;
 pub mod prelude;
-pub mod render;
 pub mod testing;
 pub mod view;
 
@@ -253,7 +253,7 @@ pub mod view;
 pub use debug::DebugFlags;
 
 // Re-export error types from foundation
-pub use foundation::error::{CoreError, Result};
+pub use foundation::{CoreError, Result};
 
 // Re-export logging
 pub use flui_log;
@@ -290,14 +290,11 @@ pub use foundation::{
 
 // Re-export element types
 pub use element::{
-    // Unified Element struct (legacy enum removed)
-    ComponentElement,
+    // Unified Element struct with ViewObject delegation (v0.7.0)
     DependencyInfo,
     DependencyTracker,
     Element,
     ElementTree,
-    ProviderElement,
-    RenderElement,
 };
 
 // Re-export view types
@@ -311,8 +308,8 @@ pub use view::{
 // Re-export pipeline types
 pub use pipeline::{PipelineBuilder, PipelineOwner};
 
-// Re-export render types
-pub use render::{Arity, RenderBox, RenderState};
+// Re-export render types from flui_rendering
+pub use flui_rendering::core::{Arity, RenderBox, RenderState};
 
 /// Prelude module for convenient imports
 ///

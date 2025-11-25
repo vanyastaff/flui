@@ -49,25 +49,20 @@
 //!
 //! ## Mock Render Objects
 //!
-//! Mock render objects allow testing without actual rendering:
+//! For render object testing, create inline mocks using the modern RenderBox trait:
 //!
 //! ```rust,ignore
+//! use flui_core::render::{RenderBox, LayoutContext, BoxProtocol, Leaf};
 //! use flui_types::Size;
 //!
-//! // Create a mock with specific size
-//! let mock_size = Size::new(100.0, 50.0);
-//! // Use in tests, verify layout/paint calls
-//! ```
+//! #[derive(Debug)]
+//! struct MockRender { size: Size }
 //!
-//! ## Mock Sliver Render Objects
-//!
-//! Mock sliver render objects for testing sliver layouts:
-//!
-//! ```rust,ignore
-//! // Create a mock with specific extents
-//! let scroll_extent = 1000.0;
-//! let paint_extent = 300.0;
-//! // Use in tests, verify sliver layout/paint calls
+//! impl RenderBox<Leaf> for MockRender {
+//!     fn layout(&mut self, _ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+//!         self.size
+//!     }
+//! }
 //! ```
 //!
 //! ## View Testing
@@ -210,19 +205,22 @@
 //! ## Testing Render Objects
 //!
 //! ```rust,ignore
-//! use flui_core::testing::MockRender;
-//! use flui_types::{Size, BoxConstraints};
+//! use flui_core::render::{RenderBox, LayoutContext, BoxProtocol, Leaf};
+//! use flui_types::Size;
+//!
+//! #[derive(Debug)]
+//! struct MockRender { size: Size }
+//!
+//! impl RenderBox<Leaf> for MockRender {
+//!     fn layout(&mut self, _ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+//!         self.size
+//!     }
+//! }
 //!
 //! #[test]
 //! fn test_render_layout() {
-//!     let mut mock = MockRender::leaf(Size::new(100.0, 50.0));
-//!     let constraints = BoxConstraints::tight(Size::new(200.0, 200.0));
-//!
-//!     let ctx = LayoutContext::new(constraints, Children::None);
-//!     let size = mock.layout(&ctx);
-//!
-//!     assert_eq!(size, Size::new(100.0, 50.0));
-//!     assert_eq!(mock.layout_call_count(), 1);
+//!     let mut mock = MockRender { size: Size::new(100.0, 50.0) };
+//!     // Test using ElementTree and unified Element architecture
 //! }
 //! ```
 
@@ -232,9 +230,7 @@ pub mod helpers;
 pub mod inspect;
 pub mod macros;
 pub mod mock_pipeline;
-// TODO: Re-enable after migrating to new Render<A> trait
-// pub mod mock_render;
-// pub mod mock_sliver;
+// Legacy mock_render and mock_sliver modules removed - use inline mocks with modern RenderBox trait
 pub mod snapshot;
 pub mod test_harness;
 pub mod view_tester;
@@ -245,9 +241,7 @@ pub use fixtures::*;
 pub use helpers::{test_hook_context, test_hook_context_with_id};
 pub use inspect::{print_tree, tree_summary, TreeInspector, TreeSummary};
 pub use mock_pipeline::MockPipeline;
-// TODO: Re-enable after migrating to new Render<A> trait
-// pub use mock_render::{MockRender, SpyRender};
-// pub use mock_sliver::{MockSliverRender, SpySliverRender};
+// Legacy MockRender and MockSliverRender removed - create inline mocks using RenderBox/SliverRender traits
 pub use snapshot::{assert_tree_snapshot, ElementTreeSnapshot, SnapshotDiff};
 pub use test_harness::TestHarness;
 pub use view_tester::{TestView, TestWidget, ViewTestResult, ViewTester};

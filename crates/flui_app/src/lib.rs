@@ -99,13 +99,13 @@ pub use embedder::WgpuEmbedder;
 // Re-export commonly used types from flui_core
 pub use flui_core::{
     // Element system
-    element::{ComponentElement, Element, ProviderElement, RenderElement},
+    element::Element,
 
     // Foundation types
     foundation::{ElementId, Key, Slot},
 
     // View system (new API)
-    view::{BuildContext, View, ViewElement},
+    view::{BuildContext, RootView, StatelessView},
 };
 
 use winit::event_loop::EventLoop;

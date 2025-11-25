@@ -141,16 +141,18 @@ impl PaintPipeline {
                 continue;
             };
 
-            // Only paint RenderElements
-            let Some(render_elem) = element.as_render() else {
+            // Only paint render elements
+            if !element.is_render() {
                 #[cfg(debug_assertions)]
-                tracing::trace!("Element {:?} is not a RenderElement, skipping", id);
+                tracing::trace!("Element {:?} is not a render element, skipping", id);
                 continue;
             };
 
-            // Check if paint is actually needed (atomic check - very fast)
-            let render_state_lock = render_elem.render_state();
-            let render_state = render_state_lock.read();
+            // Check if paint is needed (atomic check - very fast)
+            let render_state = match element.render_state() {
+                Some(state) => state,
+                None => continue,
+            };
 
             if !render_state.needs_paint() {
                 #[cfg(debug_assertions)]
@@ -167,18 +169,18 @@ impl PaintPipeline {
             // Drop read guard before paint
             drop(render_state);
 
-            // Perform paint using RenderElement wrapper
-            // RenderElement::paint_render() creates PaintContext internally and calls unified Render trait
-            let _layer = render_elem.paint_render(tree, offset);
+            // Perform paint using ElementTree method
+            // This properly handles the unified Element architecture and state updates
+            let _layer = tree.paint_render_object(id, offset);
+
+            // ElementTree.paint_render_object() handles:
+            // 1. Calling ViewObject.paint_render()
+            // 2. Clearing needs_paint flag
+            // 3. Future: Building layer tree for composition
 
             // Future enhancement: Store layer for composition
             // For now, we just generate and discard layers
             // In the future, we'll build a layer tree and return it
-
-            // Clear needs_paint flag
-            let render_state_lock = render_elem.render_state();
-            let render_state = render_state_lock.write();
-            render_state.clear_needs_paint();
 
             #[cfg(debug_assertions)]
             tracing::trace!("Paint: Element {:?} painted successfully", id);

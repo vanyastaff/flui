@@ -45,14 +45,16 @@
 
 #![warn(missing_docs)]
 
+pub mod core;
 pub mod error;
 pub mod objects;
 
-// Re-export from flui_core - the unified Render trait architecture
-// Note: RenderPipeline is internal to flui_core and not re-exported
-pub use flui_core::render::{
-    Arity, BoxProtocol, HitTestContext, LayoutContext, PaintContext, ParentData,
-    ParentDataWithOffset, RenderBox, RenderFlags, RenderState,
+// Re-export from core module - the unified Render trait architecture
+pub use core::{
+    Arity, AtomicRenderFlags, BoxProtocol, EmptyRender, HitTestContext, LayoutContext,
+    LayoutProtocol, PaintContext, ParentData, ParentDataWithOffset, Protocol, RenderBox,
+    RenderBoxExt, RenderFlags, RenderObject, RenderState, RuntimeArity, SliverProtocol,
+    SliverRender,
 };
 
 // Re-export from flui_types for convenience
@@ -200,7 +202,9 @@ pub use objects::{
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::{RenderBox, RenderFlags, RenderState};
+    pub use crate::core::{
+        Arity, LayoutProtocol, RenderBox, RenderFlags, RenderObject, RenderState, RuntimeArity,
+    };
 
     // pub use crate::objects::*;
 }

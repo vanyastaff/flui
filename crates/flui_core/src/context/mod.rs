@@ -34,13 +34,13 @@
 //!
 //! Context is orthogonal to Flutter's InheritedWidget. In Flui:
 //! - Context: For application data (theme, locale, etc.)
-//! - ProviderElement: For framework data (MediaQuery, Directionality)
+//! - ProviderViewWrapper: For framework data (MediaQuery, Directionality)
 //!
-//! Both use [`ProviderElement`](crate::element::ProviderElement) but serve
+//! Both use unified Element with ProviderViewWrapper but serve
 //! different purposes.
 //!
 //! # Implementation Status
 //!
 //! This module is reserved for future context system implementation.
-//! Context functionality is currently provided through ProviderElement
+//! Context functionality is currently provided through ProviderViewWrapper
 //! and dependency tracking in BuildContext.

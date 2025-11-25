@@ -29,7 +29,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+//! use flui_foundation::{AtomicElementFlags, ElementFlags};
 //!
 //! let flags = AtomicElementFlags::new();
 //!
@@ -147,7 +147,7 @@ bitflags! {
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+/// use flui_foundation::{AtomicElementFlags, ElementFlags};
 /// use std::thread;
 ///
 /// let flags = AtomicElementFlags::new();
@@ -179,7 +179,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// assert!(!flags.contains(ElementFlags::DIRTY));
@@ -196,7 +196,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::from_flags(ElementFlags::DIRTY);
     /// assert!(flags.contains(ElementFlags::DIRTY));
@@ -220,7 +220,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// flags.insert(ElementFlags::DIRTY);
@@ -252,7 +252,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     ///
@@ -283,7 +283,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// flags.insert(ElementFlags::DIRTY);
@@ -304,7 +304,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// flags.insert(ElementFlags::DIRTY | ElementFlags::MOUNTED);
@@ -327,7 +327,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// flags.store(ElementFlags::DIRTY | ElementFlags::MOUNTED);
@@ -347,7 +347,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// flags.insert(ElementFlags::DIRTY | ElementFlags::MOUNTED);
@@ -368,7 +368,7 @@ impl AtomicElementFlags {
     /// # Example
     ///
     /// ```rust
-    /// use flui_core::foundation::{AtomicElementFlags, ElementFlags};
+    /// use flui_foundation::{AtomicElementFlags, ElementFlags};
     ///
     /// let flags = AtomicElementFlags::new();
     /// assert!(!flags.is_any_set());

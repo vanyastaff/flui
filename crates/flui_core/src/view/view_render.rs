@@ -135,13 +135,13 @@ impl<A: Arity, R> RenderObjectFor<BoxProtocol, A> for R where R: RenderBox<A> {}
 impl<A: Arity, R> RenderObjectFor<SliverProtocol, A> for R where R: SliverRender<A> {}
 
 // ============================================================================
-// BUILDER PATTERN EXTENSION (deprecated - use Child/Children)
+// BUILDER PATTERN EXTENSION (modern unified architecture)
 // ============================================================================
 
 /// Extension trait for RenderView with builder methods.
 ///
-/// **Note:** Consider using `Child` and `Children` types directly in your
-/// widget structs for a more Flutter-like API.
+/// **Note:** These builders work with the unified Element + ViewObject architecture.
+/// They create RenderViewWrapper instances that delegate to the underlying RenderView.
 pub trait RenderViewExt: Sized {
     /// Wraps view as a leaf element (no children).
     fn leaf(self) -> RenderViewLeaf<Self>

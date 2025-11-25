@@ -8,7 +8,7 @@
 //! It provides a global singleton accessed via `ensure_initialized()`.
 
 use super::{BindingBase, GestureBinding, RendererBinding, SchedulerBinding};
-use flui_core::{pipeline::PipelineOwner, view::View};
+use flui_core::{pipeline::PipelineOwner, view::StatelessView};
 use flui_engine::Scene;
 use flui_types::constraints::BoxConstraints;
 use parking_lot::RwLock;

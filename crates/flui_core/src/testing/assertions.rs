@@ -88,7 +88,7 @@ pub fn assert_is_render(tree: &ElementTree, id: ElementId) {
         .unwrap_or_else(|| panic!("Element {:?} not found", id));
 
     assert!(
-        element.as_render().is_some(),
+        element.is_render(),
         "Expected element {:?} to be a Render, but it was {:?}",
         id,
         element_type_name(element)
@@ -135,11 +135,15 @@ pub fn assert_element_size(tree: &ElementTree, id: ElementId, expected: Size) {
         .get(id)
         .unwrap_or_else(|| panic!("Element {:?} not found", id));
 
-    let render = element
-        .as_render()
-        .unwrap_or_else(|| panic!("Element {:?} is not a RenderElement", id));
+    if !element.is_render() {
+        panic!("Element {:?} is not a render element", id);
+    }
 
-    let actual = render.render_state().read().size();
+    let render_state = element
+        .render_state()
+        .unwrap_or_else(|| panic!("Element {:?} has no render state", id));
+
+    let actual = render_state.size();
 
     assert_eq!(
         actual, expected,

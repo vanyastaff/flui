@@ -37,7 +37,7 @@ use flui_types::constraints::BoxConstraints;
 use slab::Slab;
 
 use crate::element::{Element, ElementId};
-use crate::render::render_object::Constraints;
+
 use crate::render::RenderState;
 
 /// Maximum layout recursion depth.
@@ -80,10 +80,10 @@ pub const MAX_LAYOUT_DEPTH: usize = 1000;
 /// }
 ///
 /// ElementNode {
-///     element: Element  ← Enum-based heterogeneous storage
-///         ├─ Element::Component(ComponentElement)  - Composable widgets
-///         ├─ Element::Provider(ProviderElement)    - Inherited data
-///         └─ Element::Render(RenderElement)        - Layout & paint
+///     element: Element  ← Unified struct with ViewObject delegation
+///         ├─ StatelessViewWrapper  - Composable widgets
+///         ├─ ProviderViewWrapper   - Inherited data
+///         └─ RenderViewWrapper     - Layout & paint
 /// }
 /// ```
 ///
@@ -108,12 +108,13 @@ pub const MAX_LAYOUT_DEPTH: usize = 1000;
 /// # Usage
 ///
 /// ```rust,ignore
-/// use flui_core::{ElementTree, Element, RenderElement};
+/// use flui_core::{ElementTree, Element};
+/// use flui_core::view::RenderViewWrapper;
 ///
 /// let mut tree = ElementTree::new();
 ///
 /// // Insert root element
-/// let root_element = Element::Render(RenderElement::new(render_object));
+/// let root_element = Element::new(Box::new(RenderViewWrapper::new(render_object)));
 /// let root_id = tree.insert(root_element);
 ///
 /// // Access element (remember: ElementId is 1-based!)
@@ -156,7 +157,7 @@ pub struct ElementTree {
 /// The Element enum contains all necessary data including:
 /// - View configuration (for ComponentElement)
 /// - Provider data (for InheritedElement)
-/// - Render + RenderState (for RenderElement)
+/// - Render + RenderState (for RenderViewWrapper)
 /// - Lifecycle state
 /// - Children management
 #[derive(Debug)]
@@ -316,8 +317,8 @@ impl ElementTree {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let render_elem = RenderElement::new(render_object);
-    /// let root_id = tree.insert(Element::Render(render_elem));
+    /// let render_wrapper = RenderViewWrapper::new(render_object);
+    /// let root_id = tree.insert(Element::new(Box::new(render_wrapper)));
     /// ```
     pub fn insert(&mut self, element: Element) -> ElementId {
         // Log element type being inserted
@@ -328,7 +329,7 @@ impl ElementTree {
         // Component and Provider elements have children managed by build pipeline
         let child_ids: Option<Vec<ElementId>> = if element.is_render_view() {
             // Render views may have unmounted children to process
-            // Note: RenderElement-specific logic is deferred during architecture transition
+            // Note: RenderViewWrapper handles this internally
             None
         } else {
             // Component/Provider elements have children managed by build pipeline
@@ -560,60 +561,6 @@ impl ElementTree {
             std::cell::RefCell::new(std::collections::HashSet::new());
     }
 
-    /// Get a read guard to the RenderState for an element
-    ///
-    /// # Returns
-    ///
-    /// `Some(RwLockReadGuard<RenderState>)` if the element is a RenderElement
-    ///
-    /// # Note
-    ///
-    /// Only RenderElements have RenderState. ComponentElements and StatefulElements
-    /// will return None.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(state) = tree.render_state(element_id) {
-    ///     if state.needs_layout() {  // Lock-free atomic check!
-    ///         // Layout needed
-    ///     }
-    /// }
-    /// ```
-    #[inline]
-    pub fn render_state(
-        &self,
-        element_id: ElementId,
-    ) -> Option<parking_lot::RwLockReadGuard<'_, RenderState>> {
-        self.get(element_id)
-            .and_then(|element| element.as_render())
-            .map(|render| render.render_state().read())
-    }
-
-    /// Get a write guard to the RenderState for an element
-    ///
-    /// # Returns
-    ///
-    /// `Some(RwLockWriteGuard<RenderState>)` if the element is a RenderElement
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(mut state) = tree.render_state_mut(element_id) {
-    ///     state.set_size(Size::new(100.0, 50.0));
-    ///     state.clear_needs_layout();
-    /// }
-    /// ```
-    #[inline]
-    pub fn render_state_mut(
-        &self,
-        element_id: ElementId,
-    ) -> Option<parking_lot::RwLockWriteGuard<'_, RenderState>> {
-        self.get(element_id)
-            .and_then(|element| element.as_render())
-            .map(|render| render.render_state().write())
-    }
-
     // ========== Layout & Paint Helpers ==========
 
     /// Perform layout on a Render
@@ -629,7 +576,7 @@ impl ElementTree {
     ///
     /// # Returns
     ///
-    /// The size computed by the Render, or None if element is not a RenderElement
+    /// The size computed by the Render, or None if element is not a render element
     ///
     /// # Panics
     ///
@@ -639,111 +586,15 @@ impl ElementTree {
         element_id: ElementId,
         constraints: BoxConstraints,
     ) -> Option<flui_types::Size> {
-        // SAFETY: Re-fetch element references after each scope to avoid use-after-free
-        // if the tree is modified during layout (Issue #3)
-
-        // Scope 1: Check cache (read-only, safe)
-        {
-            let element = self.get(element_id)?;
-            let render_element = element.as_render()?;
-
-            // **Optimization**: Check RenderState cache before computing layout
-            // This avoids expensive dyn_layout() calls when constraints haven't changed
-            let render_state = render_element.render_state();
-
-            // Try to use cached size if constraints match and no relayout needed
-            let state = render_state.read();
-            if state.has_size() && !state.needs_layout() {
-                if let Some(cached_constraints) = state.constraints() {
-                    if *cached_constraints.as_box() == constraints {
-                        // Cache hit! Return cached size without layout computation
-                        return Some(state.size());
-                    }
-                }
-            }
-        } // All borrows dropped here - safe to proceed
-
-        // Cache miss or needs relayout - compute layout
-
-        // Depth guard to prevent infinite recursion
-        #[cfg(debug_assertions)]
-        {
-            let current_depth = self.layout_depth.load(std::sync::atomic::Ordering::Relaxed);
-            if current_depth > MAX_LAYOUT_DEPTH {
-                tracing::error!(
-                    element_id = ?element_id,
-                    depth = current_depth,
-                    max_depth = MAX_LAYOUT_DEPTH,
-                    "Layout depth exceeded! Infinite recursion detected. \
-                     This usually means a render object is calling layout on itself or a circular dependency exists."
-                );
-                panic!("Layout depth limit exceeded - infinite recursion");
-            }
-            self.layout_depth
-                .store(current_depth + 1, std::sync::atomic::Ordering::Relaxed);
+        let element = self.get(element_id)?;
+        if element.is_render() {
+            let size = element
+                .view_object()
+                .layout_render(self, element.children(), constraints);
+            Some(size)
+        } else {
+            None
         }
-
-        // Check for re-entrant layout (element trying to layout itself)
-        let is_reentrant = Self::LAYOUT_STACK.with(|stack| stack.borrow().contains(&element_id));
-
-        if is_reentrant {
-            tracing::error!(
-                element_id = ?element_id,
-                "Re-entrant layout detected! Element is trying to layout itself - this is a render object bug."
-            );
-
-            #[cfg(debug_assertions)]
-            self.layout_depth.store(
-                self.layout_depth
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                    .saturating_sub(1),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-
-            // Re-fetch to get cached size safely (Issue #3)
-            let element = self.get(element_id)?;
-            let render_element = element.as_render()?;
-            let render_state = render_element.render_state();
-            let state = render_state.read();
-            return if state.has_size() {
-                Some(state.size())
-            } else {
-                None
-            };
-        }
-
-        // Push element onto layout stack with RAII guard
-        // The guard will automatically pop the element even if layout panics
-        let _guard = LayoutGuard::new(element_id);
-
-        // Scope 2: Perform layout (re-fetch element to avoid use-after-free - Issue #3)
-        let size = {
-            let element = self.get(element_id)?;
-            let render_element = element.as_render()?;
-            render_element.layout_render(self, constraints)
-        }; // Drop all borrows before guard cleanup (which happens automatically)
-
-        // Decrement depth
-        #[cfg(debug_assertions)]
-        self.layout_depth.store(
-            self.layout_depth
-                .load(std::sync::atomic::Ordering::Relaxed)
-                .saturating_sub(1),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-
-        // Scope 3: Update state (re-fetch again to be safe - Issue #3)
-        {
-            let element = self.get(element_id)?;
-            let render_element = element.as_render()?;
-            let render_state = render_element.render_state();
-            let state = render_state.write();
-            state.set_size(size);
-            state.set_constraints(Constraints::Box(constraints));
-            state.clear_needs_layout();
-        }
-
-        Some(size)
     }
 
     /// Perform paint on a Render
@@ -758,42 +609,21 @@ impl ElementTree {
     ///
     /// # Returns
     ///
-    /// The layer tree, or None if element is not a RenderElement
+    /// The layer tree, or None if element is not a render element
     pub fn paint_render_object(
         &self,
         element_id: ElementId,
         offset: crate::Offset,
     ) -> Option<flui_painting::Canvas> {
-        // Check for re-entrant paint (element trying to paint itself)
-        let is_reentrant = Self::PAINT_STACK.with(|stack| stack.borrow().contains(&element_id));
-
-        if is_reentrant {
-            tracing::error!(
-                element_id = ?element_id,
-                "Re-entrant paint detected! Element is trying to paint itself - this is a render object bug."
-            );
-            // Return None to avoid infinite recursion
-            return None;
-        }
-
-        // Push element onto paint stack with RAII guard
-        // The guard will automatically pop the element even if paint panics
-        let _guard = PaintGuard::new(element_id);
-
-        // Get render element
         let element = self.get(element_id)?;
-        let render_element = element.as_render()?;
-
-        // Call paint on render object
-        let canvas = render_element.paint_render(self, offset);
-
-        // Guards dropped here (_guard automatically)
-
-        // Note: Overflow indicators are now painted by each renderer itself
-        // (e.g., RenderFlex paints its own overflow indicators in debug mode).
-        // This is more architecturally correct than wrapping at the ElementTree level.
-
-        Some(canvas)
+        if element.is_render() {
+            let canvas = element
+                .view_object()
+                .paint_render(self, element.children(), offset);
+            Some(canvas)
+        } else {
+            None
+        }
     }
 
     // ========== Debug-Only Overflow Reporting ==========
@@ -821,10 +651,16 @@ impl ElementTree {
 
         if let Some(_element_id) = current_element {
             // TODO: Implement overflow tracking in RenderState
-            // if let Some(state) = self.render_state(element_id) {
-            //     state.set_overflow(axis, pixels);
+            // When implemented, this will track overflow in the current render element:
+            // if let Some(element) = self.get_mut(element_id) {
+            //     if let Some(render_state) = element.render_state_mut() {
+            //         render_state.set_overflow(axis, pixels);
+            //     }
             // }
-            let _ = (axis, pixels); // Suppress unused warnings
+
+            // For now, overflow tracking is not implemented
+            #[allow(unused_variables)]
+            let (_, _) = (axis, pixels);
         }
     }
 
@@ -870,17 +706,17 @@ impl ElementTree {
         }
     }
 
-    /// Find the first RenderElement by walking down through ComponentElements
+    /// Find the first render element by walking down through component elements
     ///
     /// This helper is used by both `layout_child` and `paint_child` to find
-    /// the actual RenderElement to operate on.
+    /// the actual render element to operate on.
     ///
     /// # Arguments
     /// * `start_id` - Starting element ID (may be Component or Render)
     ///
     /// # Returns
-    /// * `Some(ElementId)` - ID of the first RenderElement found
-    /// * `None` - If no RenderElement found or tree walk failed
+    /// * `Some(ElementId)` - ID of the first render element found
+    /// * `None` - If no render element found or tree walk failed
     fn find_render_element(&self, start_id: ElementId) -> Option<ElementId> {
         self.find_element_matching(start_id, |e| e.is_render())
     }
@@ -932,7 +768,7 @@ impl ElementTree {
             }
         }
 
-        // Walk down through ComponentElements to find the first RenderElement
+        // Walk down through component elements to find the first render element
         let render_id = self.find_render_element(child_id);
 
         if let Some(render_id) = render_id {
@@ -950,7 +786,7 @@ impl ElementTree {
         } else {
             tracing::warn!(
                 child_id = ?child_id,
-                "Could not find RenderElement for child. Element may be Component without child or Provider. Returning Size::ZERO."
+                "Could not find render element for child. Element may be component without child or provider. Returning Size::ZERO."
             );
             flui_types::Size::ZERO
         }
@@ -961,7 +797,7 @@ impl ElementTree {
     pub fn paint_child(&self, child_id: ElementId, offset: crate::Offset) -> flui_painting::Canvas {
         // Hot path - trace disabled for performance
 
-        // Walk down through ComponentElements to find the first RenderElement
+        // Walk down through component elements to find the first render element
         let render_id = self.find_render_element(child_id);
 
         if let Some(render_id) = render_id {
@@ -1130,22 +966,10 @@ impl ElementTree {
 
     // ========== Iteration ==========
 
-    /// Visit all RenderElements in the tree
+    /// Visit all render elements in the tree
     ///
-    /// This only visits elements that have Renders (RenderElement).
-    /// ComponentElements and StatefulElements are skipped.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// tree.visit_all_render_objects(|element_id, render_obj, state| {
-    ///     println!("Element {}: arity = {:?}", element_id, render_obj.arity());
-    /// });
-    /// ```
-    /// Visit all RenderElements in the tree
-    ///
-    /// This only visits elements that have Renders (RenderElement).
-    /// ComponentElements and StatefulElements are skipped.
+    /// This only visits elements that have render objects (RenderViewWrapper).
+    /// Component and provider elements are skipped.
     ///
     /// # Example
     ///
@@ -1154,30 +978,33 @@ impl ElementTree {
     ///     println!("Element {}: arity = {:?}", element_id, render_obj.arity());
     /// });
     /// ```
-    pub fn visit_all_render_objects<F>(&self, mut visitor: F)
+    /// Visit all render elements in the tree
+    ///
+    /// This only visits elements that have render objects (RenderViewWrapper).
+    /// Component and provider elements are skipped.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// tree.visit_all_render_elements(|element_id, element| {
+    ///     if let Some(protocol) = element.protocol() {
+    ///         println!("Element {}: protocol = {:?}", element_id, protocol);
+    ///     }
+    /// });
+    /// ```
+    pub fn visit_all_render_elements<F>(&self, mut visitor: F)
     where
-        F: FnMut(
-            ElementId,
-            &Box<dyn crate::render::RenderObject>,
-            parking_lot::RwLockReadGuard<RenderState>,
-        ),
+        F: FnMut(ElementId, &Element),
     {
         for (element_id, node) in &self.nodes {
-            // Only visit elements with Renders
-            let render_elem = match node.element.as_render() {
-                Some(re) => re,
-                None => continue,
-            };
+            // Only visit elements with render objects
+            if !node.element.is_render() {
+                continue;
+            }
 
-            // Borrow render object and state through RwLock guards
-            let render_obj_guard = render_elem.render_object();
-            let state = render_elem.render_state().read();
-
-            // Call visitor with references
-            // The guards live for the duration of the visitor call
+            // Call visitor with element reference
             // Add 1 to convert slab index (0-based) to ElementId (1-based)
-            visitor(ElementId::new(element_id + 1), &render_obj_guard, state);
-            // Guards are dropped here
+            visitor(ElementId::new(element_id + 1), &node.element);
         }
     }
 
@@ -1387,8 +1214,8 @@ impl ElementTree {
             None => return false,
         };
 
-        if let Some(render_elem) = element.as_render() {
-            self.hit_test_render(element_id, render_elem, position, result)
+        if element.is_render() {
+            self.hit_test_render(element_id, element, position, result)
         } else if element.is_component() {
             // ComponentElement delegates to child
             if let Some(&child_id) = element.children().first() {
@@ -1397,7 +1224,7 @@ impl ElementTree {
                 false
             }
         } else if element.is_provider() {
-            // ProviderElement delegates to child
+            // Provider element delegates to child
             if let Some(&child_id) = element.children().first() {
                 self.hit_test_recursive(child_id, position, result)
             } else {
@@ -1478,27 +1305,34 @@ impl ElementTree {
         self.hit_test_recursive(child_id, position, &mut temp_result)
     }
 
-    /// Hit test for RenderElement
+    /// Hit test for render element
     ///
     /// Checks if position is within element bounds and recursively tests children.
     /// Adds hit elements to result in depth-first order (children before parents).
     fn hit_test_render(
         &self,
         element_id: ElementId,
-        render_elem: &crate::element::RenderElement,
+        element: &Element,
         position: flui_types::Offset,
         result: &mut crate::element::ElementHitTestResult,
     ) -> bool {
-        // Get size from render state
-        let render_state = render_elem.render_state().read();
+        // Get size from render state via ViewObject delegation
+        let render_state = match element.render_state() {
+            Some(state) => state,
+            None => {
+                tracing::warn!("Element is not a render element");
+                return false;
+            }
+        };
+
         if !render_state.has_size() {
             return false; // No layout yet
         }
         let size = render_state.size();
-        drop(render_state);
 
-        // Get offset (position relative to parent)
-        let offset = render_elem.offset();
+        // For unified Element, offset is stored in render state or ViewObject
+        // TODO: Implement proper offset handling in RenderViewWrapper
+        let offset = flui_types::Offset::ZERO; // Placeholder until RenderViewWrapper handles offset
 
         // Transform position to local coordinates
         let local_position = position - offset;
@@ -1515,7 +1349,7 @@ impl ElementTree {
         // Test children first (front to back)
         // Continue testing all children even after finding a hit,
         // since overlapping elements should all register hits
-        for &child_id in render_elem.children() {
+        for &child_id in element.children() {
             self.hit_test_recursive(child_id, position, result);
         }
 
@@ -1606,10 +1440,10 @@ impl ElementTree {
 
         // Get the element node (with -1 offset for slab access)
         if let Some(node) = self.nodes.get_mut(element_id.get() - 1) {
-            if let Some(render_element) = node.element.as_render() {
+            if let Some(render_state) = node.element.view_object_mut().render_state_mut() {
                 // Mark needs layout in RenderState flags
                 // This is the critical part that was missing before
-                render_element.render_state().write().mark_needs_layout();
+                render_state.mark_needs_layout();
 
                 // TODO: Also add to dirty_layout set (will be in coordinator)
                 // For now, just marking the flag is sufficient for Phase 6
@@ -1637,9 +1471,9 @@ impl ElementTree {
 
         // Get the element node (with -1 offset for slab access)
         if let Some(node) = self.nodes.get_mut(element_id.get() - 1) {
-            if let Some(render_element) = node.element.as_render() {
+            if let Some(render_state) = node.element.view_object_mut().render_state_mut() {
                 // Mark needs paint in RenderState flags
-                render_element.render_state().write().mark_needs_paint();
+                render_state.mark_needs_paint();
 
                 // TODO: Also add to dirty_paint set (will be in coordinator)
             } else {

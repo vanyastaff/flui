@@ -266,6 +266,53 @@ impl PipelineOwner {
         root_id
     }
 
+    /// Attach an element as the root of the tree
+    ///
+    /// This is an alias for `set_root()` that matches Flutter's `RootWidget.attach()` naming.
+    /// Used by `RootView` during application bootstrap.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let root_id = pipeline.attach_root_element(root_element)?;
+    /// ```
+    pub fn attach_root_element(
+        &mut self,
+        root_element: Element,
+    ) -> Result<ElementId, PipelineError> {
+        let root_id = self.set_root(root_element);
+        Ok(root_id)
+    }
+
+    /// Detach the root element from the tree
+    ///
+    /// This clears the root element and performs cleanup. Used during application shutdown.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// pipeline.detach_root_element(root_id)?;
+    /// ```
+    pub fn detach_root_element(&mut self, element_id: ElementId) -> Result<(), PipelineError> {
+        // Verify this is actually the root element
+        if self.root_element_id() != Some(element_id) {
+            return Err(PipelineError::InvalidState {
+                message: "Element is not the root element".to_string(),
+            });
+        }
+
+        // Clear the root
+        self.root_mgr.clear_root();
+
+        // Remove from element tree
+        {
+            let mut tree = self.tree.write();
+            tree.remove(element_id);
+        }
+
+        Ok(())
+    }
+
     /// Attach a View as the root of the tree (matches Flutter's `attach` naming)
     ///
     /// This is a high-level method that handles View → Element conversion with proper
@@ -526,16 +573,16 @@ impl PipelineOwner {
         self.coordinator.layout_mut().mark_dirty(node_id);
 
         // Also set needs_layout flag in RenderState AND clear cached constraints
-        let tree = self.tree.read();
-        if let Some(element) = tree.get(node_id) {
-            if let Some(render_elem) = element.as_render() {
-                let render_state_lock = render_elem.render_state();
-                let render_state = render_state_lock.write();
-                render_state.mark_needs_layout();
+        let mut tree = self.tree.write();
+        if let Some(element) = tree.get_mut(node_id) {
+            if element.is_render() {
+                if let Some(render_state) = element.render_state_mut() {
+                    render_state.mark_needs_layout();
 
-                // IMPORTANT: Clear cached constraints so layout_pipeline uses fresh constraints
-                // This is critical for window resize - otherwise old constraints are used!
-                render_state.clear_constraints();
+                    // IMPORTANT: Clear cached constraints so layout_pipeline uses fresh constraints
+                    // This is critical for window resize - otherwise old constraints are used!
+                    render_state.clear_constraints();
+                }
             }
         }
     }

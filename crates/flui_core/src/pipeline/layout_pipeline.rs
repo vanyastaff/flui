@@ -174,16 +174,18 @@ impl LayoutPipeline {
                 continue;
             };
 
-            // Only layout RenderElements
-            let Some(render_elem) = element.as_render() else {
+            // Only layout render elements
+            if !element.is_render() {
                 #[cfg(debug_assertions)]
-                tracing::trace!("Element {:?} is not a RenderElement, skipping", id);
+                tracing::trace!("Element {:?} is not a render element, skipping", id);
                 continue;
             };
 
             // Check if layout is actually needed (atomic check - very fast)
-            let render_state_lock = render_elem.render_state();
-            let render_state = render_state_lock.read();
+            let render_state = match element.render_state() {
+                Some(state) => state,
+                None => continue,
+            };
 
             if !render_state.needs_layout() {
                 #[cfg(debug_assertions)]
@@ -205,23 +207,23 @@ impl LayoutPipeline {
                 .map(|c| *c.as_box())
                 .unwrap_or(constraints);
 
-            // Drop read guard before acquiring write lock
-            drop(render_state);
-
-            // Perform layout using RenderElement wrapper
-            // RenderElement::layout_render() creates LayoutContext internally and calls unified Render trait
-            let computed_size = render_elem.layout_render(tree, layout_constraints);
-
-            // Store computed size in RenderState
-            let render_state_lock = render_elem.render_state();
-            let render_state = render_state_lock.write();
-            render_state.set_size(computed_size);
-            render_state.set_constraints(crate::render::render_object::Constraints::Box(
-                layout_constraints,
-            ));
-            render_state.clear_needs_layout();
-            // After layout completes, mark for paint
-            render_state.mark_needs_paint();
+            // Perform layout using ElementTree method
+            // This properly handles the unified Element architecture and state updates
+            let computed_size = match tree.layout_render_object(id, layout_constraints) {
+                Some(size) => {
+                    // ElementTree.layout_render_object() handles:
+                    // 1. Calling ViewObject.layout_render()
+                    // 2. Storing size in RenderState
+                    // 3. Clearing needs_layout flag
+                    // 4. Marking for paint
+                    size
+                }
+                None => {
+                    #[cfg(debug_assertions)]
+                    tracing::warn!("Layout failed for element {:?}", id);
+                    flui_types::Size::ZERO
+                }
+            };
 
             crate::trace_hot_path!(
                 "Layout: Stored size {:?} for element {:?}, marked for paint",

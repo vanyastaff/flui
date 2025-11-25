@@ -185,8 +185,8 @@ mod tests {
 
     impl StatelessView for TestView {
         fn build(self, _ctx: &BuildContext) -> impl crate::IntoElement {
-            // Return None for minimal testing (terminates tree)
-            Option::<TestView>::None
+            // Return () for minimal testing (terminates tree)
+            ()
         }
     }
 
@@ -201,7 +201,7 @@ mod tests {
     fn test_mount_unmount() {
         let mut harness = TestHarness::new();
 
-        let _root_id = harness.mount(TestView);
+        let _root_id = harness.mount_stateless(TestView);
         assert!(harness.is_mounted());
 
         harness.unmount();

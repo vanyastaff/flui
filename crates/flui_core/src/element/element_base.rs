@@ -3,8 +3,8 @@
 //! This module provides the common foundation that all element types build upon.
 //!
 //! **Note**: ElementBase is typically not used directly by application code.
-//! Instead, use the high-level element types (ComponentElement, RenderElement, etc.)
-//! or the Element enum.
+//! Instead, use the high-level Element struct with appropriate ViewObject wrappers
+//! (StatelessViewWrapper, StatefulViewWrapper, RenderViewWrapper, etc.)
 //!
 //! # Architecture
 //!
@@ -43,9 +43,10 @@ use crate::foundation::{AtomicElementFlags, ElementFlags, Slot};
 /// - `flags`: Atomic flags for lock-free dirty tracking
 ///
 /// Element-specific data is stored in the element variants:
-/// - ComponentElement: stores `builder: BuildFn` + `state: Box<dyn Any>` + `child: ElementId`
-/// - RenderElement: stores `render_node: RenderNode`
-/// - ProviderElement: stores `builder: BuildFn` + `provided` + `dependencies` + `child: ElementId`
+/// - StatelessViewWrapper: stores view + build logic
+/// - StatefulViewWrapper: stores view + state + build logic
+/// - RenderViewWrapper: stores render object + render state + protocol + arity
+/// - ProviderViewWrapper: stores view + provided value + dependents
 ///
 /// # Lifecycle States
 ///

@@ -90,10 +90,11 @@ impl<T: IntoElement> IntoElement for Option<T> {
         match self {
             Some(element) => element.into_element(),
             None => {
-                panic!(
-                    "Option::None cannot be converted to Element. \
-                     Use `.map(|x| x.into_element())` or provide a default view."
-                )
+                // Use an empty ViewObject that does nothing
+                // This allows Option<T>::None to represent "no child" cleanly
+                Element::new(Box::new(crate::view::wrappers::StatelessViewWrapper::new(
+                    crate::view::EmptyView,
+                )))
             }
         }
     }
@@ -110,11 +111,13 @@ impl<T0: IntoElement, T1: IntoElement> sealed::Sealed for (T0, T1) {}
 
 impl<T0: IntoElement, T1: IntoElement> IntoElement for (T0, T1) {
     fn into_element(self) -> Element {
-        // Framework handles tuple conversion specially.
-        // This is a placeholder - actual logic is in pipeline.
-        unimplemented!(
-            "Tuple conversion is handled by framework's IntoElement machinery, \
-             not directly through this impl"
+        // Tuples are used for RenderObject + children patterns in view building.
+        // This should not be called directly - the framework handles tuple conversion
+        // during the build process through specialized machinery.
+        panic!(
+            "Direct tuple conversion not supported. \
+             Tuples are handled automatically during view building. \
+             If you see this error, there may be an issue with your view's build() method."
         )
     }
 }
@@ -127,11 +130,13 @@ impl<T: IntoElement> sealed::Sealed for Vec<T> {}
 
 impl<T: IntoElement> IntoElement for Vec<T> {
     fn into_element(self) -> Element {
-        // Framework handles Vec<Element> specially for multi-child containers.
-        // This is a placeholder - actual logic is in pipeline.
-        unimplemented!(
-            "Vec<T> conversion is handled by framework's IntoElement machinery, \
-             not directly through this impl"
+        // Vec<T> is used for multi-child containers in view building.
+        // This should not be called directly - the framework handles Vec conversion
+        // during the build process through specialized machinery.
+        panic!(
+            "Direct Vec conversion not supported. \
+             Vec<Element> is handled automatically during multi-child view building. \
+             If you see this error, there may be an issue with your view's build() method."
         )
     }
 }
@@ -144,10 +149,11 @@ impl sealed::Sealed for () {}
 
 impl IntoElement for () {
     fn into_element(self) -> Element {
-        unimplemented!(
-            "() cannot be converted to Element. \
-             Use a proper empty/placeholder view instead."
-        )
+        // Use an empty ViewObject for unit type
+        // This allows () to represent "no content" in view building
+        Element::new(Box::new(crate::view::wrappers::StatelessViewWrapper::new(
+            crate::view::EmptyView,
+        )))
     }
 }
 
