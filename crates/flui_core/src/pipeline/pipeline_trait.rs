@@ -30,10 +30,11 @@
 //! let mock: Arc<dyn Pipeline> = Arc::new(MockPipeline::new());
 //! ```
 
-use super::{ElementTree, PipelineError, RebuildQueue};
-use flui_element::Element;
+use super::RebuildQueue;
+use flui_element::{Element, ElementTree};
 use flui_engine::CanvasLayer;
 use flui_foundation::ElementId;
+use flui_pipeline::PipelineError;
 use flui_types::{constraints::BoxConstraints, Size};
 use parking_lot::RwLock;
 use std::sync::Arc;

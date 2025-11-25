@@ -26,10 +26,9 @@
 //! layout.compute_layout(&tree, constraints);
 //! ```
 
-use crate::pipeline::PipelineError;
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
-use flui_pipeline::LockFreeDirtySet;
+use flui_pipeline::{LockFreeDirtySet, PipelineError};
 use flui_types::constraints::BoxConstraints;
 
 /// Result type for layout operations
@@ -275,10 +274,10 @@ impl Default for LayoutPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     #[test]
     fn test_mark_dirty() {
-        use crate::ElementId;
         let layout = LayoutPipeline::new();
 
         assert!(!layout.has_dirty());
@@ -292,7 +291,6 @@ mod tests {
 
     #[test]
     fn test_dirty_count() {
-        use crate::ElementId;
         let layout = LayoutPipeline::new();
 
         layout.mark_dirty(ElementId::new(1));

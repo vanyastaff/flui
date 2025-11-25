@@ -21,10 +21,9 @@
 //! let layers = paint.generate_layers(&tree);
 //! ```
 
-use crate::pipeline::PipelineError;
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
-use flui_pipeline::LockFreeDirtySet;
+use flui_pipeline::{LockFreeDirtySet, PipelineError};
 
 /// Result type for paint operations
 pub type PaintResult<T> = Result<T, PipelineError>;
@@ -218,10 +217,10 @@ impl Default for PaintPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     #[test]
     fn test_mark_dirty() {
-        use crate::ElementId;
         let paint = PaintPipeline::new();
 
         assert!(!paint.has_dirty());
@@ -235,7 +234,6 @@ mod tests {
 
     #[test]
     fn test_dirty_count() {
-        use crate::ElementId;
         let paint = PaintPipeline::new();
 
         paint.mark_dirty(ElementId::new(1));
@@ -258,7 +256,6 @@ mod tests {
 
     #[test]
     fn test_clear_dirty() {
-        use crate::ElementId;
         let mut paint = PaintPipeline::new();
 
         paint.mark_dirty(ElementId::new(1));

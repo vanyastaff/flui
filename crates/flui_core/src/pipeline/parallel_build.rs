@@ -301,5 +301,3 @@ fn rebuild_element(tree: &Arc<RwLock<ElementTree>>, element_id: ElementId, depth
     #[cfg(debug_assertions)]
     tracing::trace!("Processed element {:?}", element_id);
 }
-
-// TODO: Tests removed during render module cleanup - need to rewrite with flui_rendering API

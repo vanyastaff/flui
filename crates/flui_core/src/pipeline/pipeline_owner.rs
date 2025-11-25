@@ -46,9 +46,10 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{ElementTree, FrameCoordinator, PipelineError, RebuildQueue, RootManager};
-use flui_element::Element;
+use super::{FrameCoordinator, RebuildQueue, RootManager};
+use flui_element::{Element, ElementTree};
 use flui_foundation::ElementId;
+use flui_pipeline::PipelineError;
 
 /// PipelineOwner - orchestrates the three-phase rendering pipeline
 ///
@@ -245,9 +246,9 @@ impl PipelineOwner {
     // Tree & Root Access (Delegation to RootManager)
     // =========================================================================
 
-    /// Get reference to the element tree
-    pub fn tree(&self) -> &Arc<RwLock<ElementTree>> {
-        &self.tree
+    /// Get the element tree
+    pub fn tree(&self) -> Arc<RwLock<ElementTree>> {
+        self.tree.clone()
     }
 
     /// Get the root element ID
@@ -255,211 +256,29 @@ impl PipelineOwner {
         self.root_mgr.root_id()
     }
 
-    /// Mount an element as the root of the tree
-    ///
-    /// Delegates to RootManager and schedules initial build.
-    pub fn set_root(&mut self, root_element: Element) -> ElementId {
-        let root_id = self.root_mgr.set_root(&self.tree, root_element);
-
-        // Root starts dirty
-        self.schedule_build_for(root_id, 0);
-
-        root_id
-    }
-
-    /// Attach an element as the root of the tree
-    ///
-    /// This is an alias for `set_root()` that matches Flutter's `RootWidget.attach()` naming.
-    /// Used by `RootView` during application bootstrap.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let root_id = pipeline.attach_root_element(root_element)?;
-    /// ```
-    pub fn attach_root_element(
-        &mut self,
-        root_element: Element,
-    ) -> Result<ElementId, PipelineError> {
-        let root_id = self.set_root(root_element);
-        Ok(root_id)
-    }
-
-    /// Detach the root element from the tree
-    ///
-    /// This clears the root element and performs cleanup. Used during application shutdown.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// pipeline.detach_root_element(root_id)?;
-    /// ```
-    pub fn detach_root_element(&mut self, element_id: ElementId) -> Result<(), PipelineError> {
-        // Verify this is actually the root element
-        if self.root_element_id() != Some(element_id) {
-            return Err(PipelineError::InvalidState {
-                message: "Element is not the root element".to_string(),
-            });
-        }
-
-        // Clear the root
-        self.root_mgr.clear_root();
-
-        // Remove from element tree
-        {
-            let mut tree = self.tree.write();
-            tree.remove(element_id);
-        }
-
-        Ok(())
-    }
-
-    /// Attach a View as the root of the tree (matches Flutter's `attach` naming)
-    ///
-    /// This is a high-level method that handles View → Element conversion with proper
-    /// BuildContext setup. This is the recommended way to attach root widgets from
-    /// application code (flui-app layer).
-    ///
-    /// # Architecture Note
-    ///
-    /// This method follows Flutter's pattern where `RootWidget.attach()` exists in the
-    /// framework layer (framework.dart), not the application layer (widgets binding).
-    /// The View → Element conversion is a framework responsibility.
-    ///
-    /// # BuildContext Note
-    ///
-    /// The root View's build() is called with a special BuildContext that uses a
-    /// placeholder ElementId. This is safe because:
-    /// 1. The root element doesn't exist yet (we're creating it)
-    /// 2. The BuildContext is only used during initial View → Element conversion
-    /// 3. After conversion, the real ElementId is assigned via set_root()
-    ///
-    /// This matches Flutter's approach where the root widget is built in a special
-    /// context before being mounted to the tree.
-    ///
-    /// # Parameters
-    ///
-    /// - `widget`: The root View (typically MaterialApp or similar)
-    ///
-    /// # Returns
-    ///
-    /// The ElementId of the attached root element
-    ///
-    /// # Panics
-    ///
-    /// Panics if a root is already attached. Call `remove_root()` first if you need
-    /// to replace the root widget.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_core::PipelineOwner;
-    ///
-    /// let mut owner = PipelineOwner::new();
-    /// let root_id = owner.attach(MyApp);
-    /// ```
-    pub fn attach<V>(&mut self, widget: V) -> Result<ElementId, PipelineError>
-    where
-        V: flui_view::StatelessView + Clone + Sync,
-    {
-        use flui_view::StatelessViewWrapper;
-
-        tracing::debug!("Attaching root view to pipeline");
-
-        // Check if root already exists
-        if self.root_element_id().is_some() {
-            return Err(PipelineError::invalid_state(
-                "Root widget already attached. Call teardown() first.",
-            )
-            .expect("Invalid error message"));
-        }
-
-        // Wrap the StatelessView in a ViewObject wrapper
-        // This enables proper rebuild support when signals change
-        let wrapper = StatelessViewWrapper::new(widget);
-
-        // Create Element with the ViewObject wrapper
-        let element = Element::new(Box::new(wrapper));
-
-        // Set as pipeline root (this calls schedule_build_for internally)
-        let root_id = self.set_root(element);
-
-        // CRITICAL: Request layout for the entire tree after attaching root
-        // This sets both the dirty set AND RenderState.needs_layout flag
-        self.request_layout(root_id);
-
-        tracing::debug!(root_id = ?root_id, "Root view attached to pipeline");
-
-        Ok(root_id)
-    }
-
-    /// Teardown the current root widget
-    ///
-    /// Removes the root element and clears all dirty sets. This is useful for:
-    /// - Hot reload (replace root with new implementation)
-    /// - Testing (clean state between tests)
-    /// - Graceful shutdown
-    ///
-    /// # Returns
-    ///
-    /// `true` if a root was removed, `false` if no root was attached
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Hot reload pattern
-    /// owner.teardown();
-    /// owner.attach(NewApp);
-    /// ```
-    pub fn teardown(&mut self) -> bool {
-        if let Some(root_id) = self.root_element_id() {
-            tracing::debug!(root_id = ?root_id, "Tearing down root widget");
-
-            // Remove from tree
-            {
-                let mut tree = self.tree.write();
-                tree.remove(root_id);
-            }
-
-            // Clear root manager
-            self.root_mgr.clear_root();
-
-            // Drain rebuild queue to clear it
-            let _ = self.rebuild_queue.drain();
-
-            tracing::debug!("Root widget torn down successfully");
-            true
-        } else {
-            tracing::warn!("teardown() called but no root attached");
-            false
-        }
+    /// Set the root element
+    pub fn set_root(&mut self, element: Element) -> ElementId {
+        let id = self.root_mgr.set_root(&self.tree, element);
+        // Schedule root for initial build
+        self.schedule_build_for(id, 0);
+        id
     }
 
     // =========================================================================
-    // Build Scheduling (Delegation to FrameCoordinator)
+    // Build Scheduling
     // =========================================================================
-
-    /// Set callback for when build is scheduled
-    pub fn set_on_build_scheduled<F>(&mut self, callback: F)
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        self.on_build_scheduled = Some(Box::new(callback));
-    }
 
     /// Schedule an element for rebuild
-    ///
-    /// Delegates to FrameCoordinator.build.schedule().
     pub fn schedule_build_for(&mut self, element_id: ElementId, depth: usize) {
         self.coordinator.build_mut().schedule(element_id, depth);
 
-        // Trigger callback
+        // Call optional callback
         if let Some(ref callback) = self.on_build_scheduled {
             callback();
         }
     }
 
-    /// Get count of dirty elements waiting to rebuild
+    /// Get number of dirty elements
     pub fn dirty_count(&self) -> usize {
         self.coordinator.build().dirty_count()
     }
@@ -469,34 +288,18 @@ impl PipelineOwner {
         self.coordinator.build().is_in_build_scope()
     }
 
-    // =========================================================================
-    // Build Execution (Delegation to FrameCoordinator)
-    // =========================================================================
-
-    /// Execute a build scope
-    ///
-    /// Delegates to BuildPipeline but needs full PipelineOwner access for callback.
+    /// Execute code within a build scope
     pub fn build_scope<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
-        if self.coordinator.build().is_in_build_scope() {
-            tracing::warn!("Nested build_scope detected! This may indicate incorrect usage.");
-        }
-
-        // Set scope flag
-        self.coordinator.build_mut().set_build_scope(true);
-
-        // Execute callback
+        self.coordinator.build_mut().set_in_build_scope(true);
         let result = f(self);
-
-        // Clear scope flag
-        self.coordinator.build_mut().set_build_scope(false);
-
+        self.coordinator.build_mut().set_in_build_scope(false);
         result
     }
 
-    /// Lock state changes
+    /// Execute code with state locked (no new builds allowed)
     pub fn lock_state<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -507,34 +310,13 @@ impl PipelineOwner {
         result
     }
 
-    /// Flush the build phase
-    ///
-    /// Delegates to FrameCoordinator.
-    pub fn flush_build(&mut self) {
-        self.coordinator.flush_build(&self.tree);
-    }
-
-    /// Finalize the tree after build
-    pub fn finalize_tree(&mut self) {
-        self.lock_state(|owner| {
-            if !owner.coordinator.build().has_dirty() {
-                tracing::trace!("finalize_tree: tree is clean");
-            } else {
-                tracing::warn!(
-                    dirty_count = owner.dirty_count(),
-                    "finalize_tree: dirty elements remaining after build"
-                );
-            }
-        });
-    }
-
     // =========================================================================
-    // Build Batching (Delegation to BuildPipeline)
+    // Batching
     // =========================================================================
 
     /// Enable build batching
-    pub fn enable_batching(&mut self, batch_duration: Duration) {
-        self.coordinator.build_mut().enable_batching(batch_duration);
+    pub fn enable_batching(&mut self, duration: Duration) {
+        self.coordinator.build_mut().enable_batching(duration);
     }
 
     /// Disable build batching
@@ -547,14 +329,14 @@ impl PipelineOwner {
         self.coordinator.build().is_batching_enabled()
     }
 
-    /// Check if batch is ready to flush
-    pub fn should_flush_batch(&self) -> bool {
-        self.coordinator.build().should_flush_batch()
-    }
-
     /// Flush the current batch
     pub fn flush_batch(&mut self) {
         self.coordinator.build_mut().flush_batch();
+    }
+
+    /// Check if batch should be flushed
+    pub fn should_flush_batch(&self) -> bool {
+        self.coordinator.build().should_flush_batch()
     }
 
     /// Get batching statistics
@@ -563,566 +345,128 @@ impl PipelineOwner {
     }
 
     // =========================================================================
-    // Layout & Paint Phases (Delegation to FrameCoordinator)
+    // Pipeline Phases
     // =========================================================================
 
-    /// Request layout for a Render
-    pub fn request_layout(&mut self, node_id: ElementId) {
-        tracing::trace!("request_layout: element {:?}", node_id);
-
-        // Mark in dirty set
-        self.coordinator.layout_mut().mark_dirty(node_id);
-
-        // Also set needs_layout flag in RenderState AND clear cached constraints
-        let mut tree = self.tree.write();
-        if let Some(element) = tree.get_mut(node_id) {
-            if element.is_render() {
-                if let Some(render_state) = element.render_state_mut() {
-                    render_state.mark_needs_layout();
-
-                    // IMPORTANT: Clear cached constraints so layout_pipeline uses fresh constraints
-                    // This is critical for window resize - otherwise old constraints are used!
-                    render_state.clear_constraints();
-                }
-            }
-        }
-    }
-
-    /// Request paint for a Render
-    pub fn request_paint(&mut self, node_id: ElementId) {
-        self.coordinator.paint_mut().mark_dirty(node_id);
+    /// Flush the build phase
+    pub fn flush_build(&mut self) {
+        self.coordinator.flush_build(&self.tree);
     }
 
     /// Flush the layout phase
-    ///
-    /// Delegates to FrameCoordinator.
     pub fn flush_layout(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
-    ) -> Result<Option<flui_types::Size>, super::PipelineError> {
-        let result =
-            self.coordinator
-                .flush_layout(&self.tree, self.root_mgr.root_id(), constraints);
-
-        // Invalidate hit test cache when layout changes
-        self.features.invalidate_hit_test_cache();
-
-        result
+    ) -> Result<Option<flui_types::Size>, PipelineError> {
+        let root_id = self.root_mgr.root_id();
+        self.coordinator
+            .flush_layout(&self.tree, root_id, constraints)
     }
 
     /// Flush the paint phase
-    ///
-    /// Delegates to FrameCoordinator.
-    pub fn flush_paint(
-        &mut self,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
-        let result = self
-            .coordinator
-            .flush_paint(&self.tree, self.root_mgr.root_id());
-
-        // Invalidate hit test cache when paint changes
-        self.features.invalidate_hit_test_cache();
-
-        result
-    }
-
-    /// Flush the rebuild queue by marking elements dirty
-    ///
-    /// This processes all pending rebuilds from signals and other reactive primitives.
-    /// Should be called before flush_build() to ensure signal changes trigger rebuilds.
-    ///
-    /// Returns `true` if there were any pending rebuilds, `false` otherwise.
-    pub fn flush_rebuild_queue(&mut self) -> bool {
-        let rebuilds = self.rebuild_queue.drain();
-
-        if rebuilds.is_empty() {
-            return false;
-        }
-
-        tracing::trace!(
-            count = rebuilds.len(),
-            "flush_rebuild_queue: processing pending rebuilds"
-        );
-
-        // Get root ID for placeholder translation
+    pub fn flush_paint(&mut self) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
         let root_id = self.root_mgr.root_id();
-
-        // Mark each element dirty for rebuild
-        for (element_id, depth) in rebuilds {
-            // Translate placeholder ID (1) to actual root ID
-            // This happens because signals created during initial build capture the placeholder ID
-            let actual_id = if element_id == ElementId::new(1) {
-                if let Some(root) = root_id {
-                    tracing::trace!(
-                        placeholder_id = ?element_id,
-                        actual_root_id = ?root,
-                        "flush_rebuild_queue: translating placeholder to root"
-                    );
-                    root
-                } else {
-                    element_id
-                }
-            } else {
-                element_id
-            };
-
-            // Mark the element's dirty flag so rebuild_component will process it
-            {
-                let mut tree_guard = self.tree.write();
-                if let Some(element) = tree_guard.get_mut(actual_id) {
-                    if let Some(component) = element.as_component_mut() {
-                        component.mark_dirty();
-                    }
-                }
-            }
-
-            // Schedule element for rebuild via build pipeline
-            self.coordinator.build_mut().schedule(actual_id, depth);
-        }
-
-        true
-    }
-
-    /// Check if there are any pending rebuilds in the queue
-    pub fn has_pending_rebuilds(&self) -> bool {
-        !self.rebuild_queue.is_empty()
-    }
-
-    /// Check if there are any dirty layout elements
-    pub fn has_dirty_layout(&self) -> bool {
-        self.coordinator.layout().has_dirty()
-    }
-
-    /// Check if there are any dirty paint elements
-    pub fn has_dirty_paint(&self) -> bool {
-        self.coordinator.paint().has_dirty()
+        self.coordinator.flush_paint(&self.tree, root_id)
     }
 
     /// Build a complete frame
-    ///
-    /// Delegates to FrameCoordinator.
-    ///
-    /// **Note**: RebuildQueue is now flushed by the Scheduler's persistent frame callback
-    /// (see AppBinding::wire_up). This ensures signal-driven rebuilds go through the
-    /// scheduler's task prioritization system.
     pub fn build_frame(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
-        // Increment frame counter
+    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
         self.frame_counter += 1;
-
-        // RebuildQueue is flushed by Scheduler before this is called
-        // (via AppBinding::wire_up persistent callback)
-
-        // Delegate to coordinator
+        let root_id = self.root_mgr.root_id();
         self.coordinator
-            .build_frame(&self.tree, self.root_mgr.root_id(), constraints)
-    }
-
-    /// Build a complete frame without creating a frame span (for custom logging)
-    ///
-    /// This variant doesn't create its own frame span, allowing the caller to manage spans.
-    ///
-    /// **Note**: RebuildQueue is flushed by Scheduler before this is called.
-    pub fn build_frame_no_span(
-        &mut self,
-        constraints: flui_types::constraints::BoxConstraints,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, super::PipelineError> {
-        // Increment frame counter
-        self.frame_counter += 1;
-
-        // RebuildQueue is flushed by Scheduler before this is called
-        // (via AppBinding::wire_up persistent callback)
-
-        // Delegate to coordinator without frame span
-        self.coordinator
-            .build_frame_no_span(&self.tree, self.root_mgr.root_id(), constraints)
+            .build_frame(&self.tree, root_id, constraints)
     }
 
     // =========================================================================
-    // Hot Reload Support
+    // Dirty Tracking
     // =========================================================================
 
-    /// Reassemble the entire element tree for hot reload
-    ///
-    /// Traverses all elements and marks them dirty for rebuild.
-    pub fn reassemble_tree(&mut self) -> usize {
-        let root_id = match self.root_mgr.root_id() {
-            Some(id) => id,
-            None => {
-                tracing::trace!("reassemble_tree: no root element");
-                return 0;
+    /// Request layout for an element
+    pub fn request_layout(&mut self, node_id: ElementId) {
+        self.coordinator.layout_mut().mark_dirty(node_id);
+
+        // Also mark RenderState flag
+        if let Some(element) = self.tree.write().get_mut(node_id) {
+            if let Some(render_state) = element.render_state_mut() {
+                render_state.mark_needs_layout();
             }
-        };
-
-        tracing::debug!("reassemble_tree: hot reload triggered");
-
-        // Collect all element IDs to process with their depths
-        let element_ids = {
-            let tree = self.tree.read();
-            self.collect_all_elements(&tree, root_id)
-        };
-
-        tracing::debug!(count = element_ids.len(), "reassemble_tree: found elements");
-
-        // Process each element
-        let reassembled_count = 0;
-        for (element_id, depth) in element_ids {
-            let mut tree = self.tree.write();
-
-            if let Some(element) = tree.get_mut(element_id) {
-                element.mark_dirty();
-            }
-
-            drop(tree);
-
-            // Schedule rebuild for this element
-            self.schedule_build_for(element_id, depth);
         }
-
-        tracing::debug!(
-            reassembled_count = reassembled_count,
-            "reassemble_tree: complete"
-        );
-
-        reassembled_count
     }
 
-    /// Collect all elements in tree with their depths
-    fn collect_all_elements(
-        &self,
-        tree: &ElementTree,
-        root_id: ElementId,
-    ) -> Vec<(ElementId, usize)> {
-        let mut result = Vec::new();
-        self.collect_elements_recursive(tree, root_id, 0, &mut result);
-        result
-    }
+    /// Request paint for an element
+    pub fn request_paint(&mut self, node_id: ElementId) {
+        self.coordinator.paint_mut().mark_dirty(node_id);
 
-    /// Recursive helper for collect_all_elements
-    #[allow(clippy::only_used_in_recursion)]
-    fn collect_elements_recursive(
-        &self,
-        tree: &ElementTree,
-        element_id: ElementId,
-        depth: usize,
-        result: &mut Vec<(ElementId, usize)>,
-    ) {
-        result.push((element_id, depth));
-
-        // Get element and traverse children
-        if let Some(element) = tree.get(element_id) {
-            for child_id in element.children() {
-                self.collect_elements_recursive(tree, *child_id, depth + 1, result);
+        // Also mark RenderState flag
+        if let Some(element) = self.tree.write().get_mut(node_id) {
+            if let Some(render_state) = element.render_state_mut() {
+                render_state.mark_needs_paint();
             }
         }
     }
 
     // =========================================================================
-    // Production Features (Optional)
+    // Callback
     // =========================================================================
-    //
-    // All optional features are now managed by PipelineFeatures for better SRP compliance.
-    // These methods delegate to features for backward compatibility.
 
-    /// Get reference to optional features
-    ///
-    /// Access all optional production features (metrics, recovery, caching, etc.)
-    /// via a single unified interface.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Enable metrics
-    /// owner.features_mut().enable_metrics();
-    ///
-    /// // Check if metrics enabled
-    /// if owner.features().has_metrics() {
-    ///     println!("Metrics: {:?}", owner.features().metrics());
-    /// }
-    /// ```
+    /// Set callback for when build is scheduled
+    pub fn set_on_build_scheduled<F>(&mut self, callback: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_build_scheduled = Some(Box::new(callback));
+    }
+
+    // =========================================================================
+    // Features
+    // =========================================================================
+
+    /// Get reference to features
     pub fn features(&self) -> &super::PipelineFeatures {
         &self.features
     }
 
-    /// Get mutable reference to optional features
+    /// Get mutable reference to features
     pub fn features_mut(&mut self) -> &mut super::PipelineFeatures {
         &mut self.features
     }
 
-    // Convenience methods that delegate to features (for backward compatibility)
-
-    /// Enable performance metrics (delegates to features)
+    /// Enable metrics
     pub fn enable_metrics(&mut self) {
         self.features.enable_metrics();
     }
 
-    /// Disable performance metrics (delegates to features)
-    pub fn disable_metrics(&mut self) {
-        self.features.disable_metrics();
-    }
-
-    /// Get reference to metrics (delegates to features)
-    pub fn metrics(&self) -> Option<&super::PipelineMetrics> {
+    /// Get metrics
+    pub fn metrics(&self) -> Option<&flui_pipeline::PipelineMetrics> {
         self.features.metrics()
     }
 
-    /// Get mutable reference to metrics (delegates to features)
-    pub fn metrics_mut(&mut self) -> Option<&mut super::PipelineMetrics> {
-        self.features.metrics_mut()
-    }
-
-    /// Enable error recovery with specified policy (delegates to features)
-    pub fn enable_error_recovery(&mut self, policy: super::RecoveryPolicy) {
+    /// Enable error recovery
+    pub fn enable_error_recovery(&mut self, policy: flui_pipeline::RecoveryPolicy) {
         self.features.enable_recovery_with_policy(policy);
     }
 
-    /// Disable error recovery (delegates to features)
-    pub fn disable_error_recovery(&mut self) {
-        self.features.disable_recovery();
-    }
-
-    /// Get reference to error recovery (delegates to features)
-    pub fn error_recovery(&self) -> Option<&super::ErrorRecovery> {
+    /// Get error recovery
+    pub fn error_recovery(&self) -> Option<&flui_pipeline::ErrorRecovery> {
         self.features.recovery()
     }
 
-    /// Get mutable reference to error recovery (delegates to features)
-    pub fn error_recovery_mut(&mut self) -> Option<&mut super::ErrorRecovery> {
-        self.features.recovery_mut()
-    }
-
-    /// Enable cancellation support (delegates to features)
-    pub fn enable_cancellation(&mut self, timeout: std::time::Duration) {
+    /// Enable cancellation
+    pub fn enable_cancellation(&mut self, timeout: Duration) {
         self.features.enable_cancellation(timeout);
     }
 
-    /// Disable cancellation (delegates to features)
-    pub fn disable_cancellation(&mut self) {
-        self.features.disable_cancellation();
-    }
-
-    /// Get reference to cancellation token (delegates to features)
-    pub fn cancellation_token(&self) -> Option<&super::CancellationToken> {
+    /// Get cancellation token
+    pub fn cancellation_token(&self) -> Option<&flui_pipeline::CancellationToken> {
         self.features.cancellation()
     }
 
-    /// Enable triple buffer for lock-free frame exchange (delegates to features)
+    /// Enable frame buffer
     pub fn enable_frame_buffer(&mut self) {
         self.features.enable_frame_buffer();
-    }
-
-    /// Disable frame buffer (delegates to features)
-    pub fn disable_frame_buffer(&mut self) {
-        self.features.disable_frame_buffer();
-    }
-
-    /// Get reference to frame buffer (delegates to features)
-    pub fn frame_buffer(&self) -> Option<&super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
-        self.features.frame_buffer()
-    }
-
-    /// Get mutable reference to frame buffer (delegates to features)
-    pub fn frame_buffer_mut(
-        &mut self,
-    ) -> Option<&mut super::TripleBuffer<Arc<Box<flui_engine::CanvasLayer>>>> {
-        self.features.frame_buffer_mut()
-    }
-
-    /// Enable hit test caching (delegates to features)
-    ///
-    /// Provides ~5-15% CPU savings during mouse movement by caching hit test results.
-    pub fn enable_hit_test_cache(&mut self) {
-        self.features.enable_hit_test_cache();
-    }
-
-    /// Disable hit test caching (delegates to features)
-    pub fn disable_hit_test_cache(&mut self) {
-        self.features.disable_hit_test_cache();
-    }
-
-    /// Get reference to hit test cache (delegates to features)
-    pub fn hit_test_cache(&self) -> Option<&super::HitTestCache> {
-        self.features.hit_test_cache()
-    }
-
-    /// Get mutable reference to hit test cache (delegates to features)
-    pub fn hit_test_cache_mut(&mut self) -> Option<&mut super::HitTestCache> {
-        self.features.hit_test_cache_mut()
-    }
-
-    /// Perform hit test with caching (if enabled)
-    ///
-    /// Uses cache when available for ~5-15% CPU savings.
-    /// Falls back to direct tree traversal if cache is disabled.
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// // Enable caching (optional but recommended)
-    /// owner.enable_hit_test_cache();
-    ///
-    /// // Use for hit testing
-    /// let result = owner.hit_test_with_cache(mouse_position);
-    /// for entry in result.entries() {
-    ///     println!("Hit element: {:?}", entry.element_id);
-    /// }
-    /// ```
-    pub fn hit_test_with_cache(
-        &mut self,
-        position: flui_types::Offset,
-    ) -> flui_interaction::HitTestResult {
-        let root_id = match self.root_mgr.root_id() {
-            Some(id) => id,
-            None => return flui_interaction::HitTestResult::new(),
-        };
-
-        // Invalidate cache on hit test (layout may have changed)
-        self.features.invalidate_hit_test_cache();
-
-        // TODO: Implement hit_test on ElementTree in flui-element crate
-        // For now, return empty result
-        let _ = (root_id, position);
-        flui_interaction::HitTestResult::new()
-    }
-
-    /// Publish a frame to the triple buffer (convenience method, delegates to features)
-    pub fn publish_frame(&mut self, layer: Box<flui_engine::CanvasLayer>) {
-        if let Some(buffer) = self.features.frame_buffer_mut() {
-            buffer.write(Arc::new(layer));
-        }
-    }
-
-    // =========================================================================
-    // Event Dispatching (Unified System)
-    // =========================================================================
-
-    /// Dispatch an event to all elements in the tree
-    ///
-    /// This unified method handles all types of events: window events (theme, focus, DPI),
-    /// pointer events (future), keyboard events (future), etc.
-    ///
-    /// Elements can override `handle_event()` to respond to specific event types using match:
-    ///
-    /// **Common Use Cases:**
-    /// - `ThemeProvider` → `Event::Window(WindowEvent::ThemeChanged)` to update theme
-    /// - `AnimationController` → `Event::Window(WindowEvent::VisibilityChanged)` to pause
-    /// - `Button` → `Event::Pointer(PointerEvent::Down)` for clicks (future)
-    /// - `TextField` → `Event::Key(KeyEvent::Down)` for input (future)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_types::{Event, WindowEvent, Theme};
-    ///
-    /// // Dispatch theme changed event
-    /// let event = Event::Window(WindowEvent::ThemeChanged { theme: Theme::Dark });
-    /// owner.dispatch_event(&event);
-    ///
-    /// // All elements receive this, but only ThemeProvider handles it
-    /// ```
-    ///
-    /// # Performance
-    ///
-    /// Iterates through all elements in the tree. Most elements return `false` (not handled)
-    /// quickly via match. Only specialized elements process specific event types.
-    pub fn dispatch_event(&mut self, event: &flui_types::Event) {
-        let mut tree = self.tree.write();
-
-        tracing::trace!("dispatch_event: {:?}", event);
-
-        // Visit all elements and dispatch the event
-        tree.visit_all_elements_mut(|_element_id, element| {
-            // Call handle_event on each element
-            // Most will return false (not handled), but specialized elements
-            // can return true and trigger updates
-            let _handled = element.handle_event(event);
-
-            tracing::trace!(
-                "element {:?} handled={} event={:?}",
-                _element_id,
-                _handled,
-                event
-            );
-        });
-    }
-
-    /// Dispatch a pointer event to elements under the pointer
-    ///
-    /// Uses hit testing to determine which elements are under the pointer position,
-    /// then dispatches the event only to those elements.
-    ///
-    /// This is more efficient than broadcasting to all elements and follows Flutter's
-    /// pattern where only hit elements receive pointer events.
-    ///
-    /// # Arguments
-    ///
-    /// * `event` - The pointer event to dispatch
-    /// * `position` - Position of the pointer in global (window) coordinates
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_types::{Event, PointerEvent, PointerEventData, Offset};
-    ///
-    /// let position = Offset::new(100.0, 50.0);
-    /// let pointer_event = PointerEvent::Down(PointerEventData {
-    ///     position,
-    ///     device: 0,
-    /// });
-    /// let event = Event::Pointer(pointer_event);
-    ///
-    /// owner.dispatch_pointer_event(&event, position);
-    /// ```
-    ///
-    /// # Performance
-    ///
-    /// Hit testing is performed once, then the event is dispatched to only the hit elements.
-    /// This is much more efficient than broadcasting to all elements for pointer events.
-    pub fn dispatch_pointer_event(
-        &mut self,
-        event: &flui_types::Event,
-        position: flui_types::Offset,
-    ) {
-        let root_id = match self.root_mgr.root_id() {
-            Some(id) => id,
-            None => {
-                tracing::trace!("dispatch_pointer_event: no root element");
-                return;
-            }
-        };
-
-        tracing::trace!(
-            "dispatch_pointer_event: pos={:?} event={:?}",
-            position,
-            event
-        );
-
-        // Perform hit testing
-        let hit_result = {
-            let tree = self.tree.read();
-            tree.hit_test(root_id, position)
-        };
-
-        tracing::trace!(
-            "dispatch_pointer_event: hit {} elements",
-            hit_result.entries().len()
-        );
-
-        // Dispatch event to hit elements
-        let mut tree = self.tree.write();
-        for entry in hit_result.iter() {
-            if let Some(element) = tree.get_mut(entry.element_id) {
-                let _handled = element.handle_event(event);
-
-                tracing::trace!(
-                    "element {:?} handled={} at local pos={:?}",
-                    entry.element_id,
-                    _handled,
-                    entry.local_position
-                );
-            }
-        }
     }
 }
 
@@ -1135,26 +479,16 @@ impl Default for PipelineOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
     use std::any::Any;
 
-    /// Mock ViewObject for testing
+    // Mock ViewObject for testing
     struct MockViewObject;
 
     impl flui_view::ViewObject for MockViewObject {
-        fn mode(&self) -> flui_view::ViewMode {
+        fn view_mode(&self) -> flui_view::ViewMode {
             flui_view::ViewMode::Stateless
         }
-
-        fn build(&mut self, _ctx: &dyn flui_view::BuildContext) -> Element {
-            // Return another mock element for child
-            Element::new(Box::new(MockViewObject))
-        }
-
-        fn init(&mut self, _ctx: &dyn flui_view::BuildContext) {}
-        fn did_change_dependencies(&mut self, _ctx: &dyn flui_view::BuildContext) {}
-        fn did_update(&mut self, _new_view: &dyn Any, _ctx: &dyn flui_view::BuildContext) {}
-        fn deactivate(&mut self, _ctx: &dyn flui_view::BuildContext) {}
-        fn dispose(&mut self, _ctx: &dyn flui_view::BuildContext) {}
 
         fn as_any(&self) -> &dyn Any {
             self
@@ -1175,15 +509,12 @@ mod tests {
 
     #[test]
     fn test_schedule_build() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
-        let id = ElementId::new(42); // Arbitrary ElementId
+        let id = ElementId::new(42);
 
         owner.schedule_build_for(id, 0);
         assert_eq!(owner.dirty_count(), 1);
 
-        // Scheduling same element again - dirty_count() returns raw count before deduplication
-        // Deduplication happens during flush for efficiency
         owner.schedule_build_for(id, 0);
         assert_eq!(owner.dirty_count(), 2);
     }
@@ -1203,43 +534,36 @@ mod tests {
 
     #[test]
     fn test_lock_state() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         let id = ElementId::new(42);
 
-        // Normal scheduling works
         owner.schedule_build_for(id, 0);
         assert_eq!(owner.dirty_count(), 1);
 
         owner.lock_state(|o| {
-            // Scheduling while locked should be ignored
             let id2 = ElementId::new(43);
             o.schedule_build_for(id2, 0);
-            assert_eq!(o.dirty_count(), 1); // Still 1, not 2
+            assert_eq!(o.dirty_count(), 1);
         });
     }
 
     #[test]
     fn test_depth_sorting() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
 
         let id1 = ElementId::new(1);
         let id2 = ElementId::new(2);
         let id3 = ElementId::new(3);
 
-        // Schedule in random order
         owner.schedule_build_for(id2, 2);
         owner.schedule_build_for(id1, 1);
         owner.schedule_build_for(id3, 0);
 
-        // flush_build sorts by depth before rebuilding
         assert_eq!(owner.dirty_count(), 3);
     }
 
     #[test]
     fn test_on_build_scheduled_callback() {
-        use crate::ElementId;
         use std::sync::{Arc, Mutex};
 
         let mut owner = PipelineOwner::new();
@@ -1255,8 +579,6 @@ mod tests {
 
         assert!(*called.lock().unwrap());
     }
-
-    // Build Batching Tests
 
     #[test]
     fn test_batching_disabled_by_default() {
@@ -1277,24 +599,19 @@ mod tests {
 
     #[test]
     fn test_batching_deduplicates() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(16));
 
         let id = ElementId::new(42);
 
-        // Schedule same element 3 times
         owner.schedule_build_for(id, 0);
         owner.schedule_build_for(id, 0);
         owner.schedule_build_for(id, 0);
 
-        // Flush batch
         owner.flush_batch();
 
-        // Should only have 1 dirty element
         assert_eq!(owner.dirty_count(), 1);
 
-        // Stats should show 2 builds saved
         let (batches, saved) = owner.batching_stats();
         assert_eq!(batches, 1);
         assert_eq!(saved, 2);
@@ -1302,7 +619,6 @@ mod tests {
 
     #[test]
     fn test_batching_multiple_elements() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(16));
 
@@ -1316,65 +632,51 @@ mod tests {
 
         owner.flush_batch();
 
-        // All 3 should be dirty
         assert_eq!(owner.dirty_count(), 3);
     }
 
     #[test]
     fn test_should_flush_batch_timing() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(10));
 
         let id = ElementId::new(42);
         owner.schedule_build_for(id, 0);
 
-        // Should not flush immediately
         assert!(!owner.should_flush_batch());
 
-        // Wait for batch duration
         std::thread::sleep(Duration::from_millis(15));
 
-        // Now should flush
         assert!(owner.should_flush_batch());
     }
 
     #[test]
     fn test_batching_without_enable() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
-        // Batching not enabled
 
         let id = ElementId::new(42);
         owner.schedule_build_for(id, 0);
 
-        // Should add directly to dirty elements
         assert_eq!(owner.dirty_count(), 1);
 
-        // flush_batch should be no-op
         owner.flush_batch();
         assert_eq!(owner.dirty_count(), 1);
     }
 
     #[test]
     fn test_batching_stats() {
-        use crate::ElementId;
         let mut owner = PipelineOwner::new();
         owner.enable_batching(Duration::from_millis(16));
 
         let id = ElementId::new(42);
 
-        // Initial stats
         assert_eq!(owner.batching_stats(), (0, 0));
 
-        // Schedule same element twice
         owner.schedule_build_for(id, 0);
-        owner.schedule_build_for(id, 0); // Duplicate
+        owner.schedule_build_for(id, 0);
 
-        // Flush
         owner.flush_batch();
 
-        // Should have 1 batch flushed, 1 build saved
         let (batches, saved) = owner.batching_stats();
         assert_eq!(batches, 1);
         assert_eq!(saved, 1);
@@ -1393,13 +695,11 @@ mod tests {
     fn test_set_root() {
         let mut owner = PipelineOwner::new();
 
-        // Create a mock element for testing
         let root = Element::new(Box::new(MockViewObject));
 
         let root_id = owner.set_root(root);
 
         assert_eq!(owner.root_element_id(), Some(root_id));
-        // Root should be marked dirty
         assert_eq!(owner.dirty_count(), 1);
     }
 }

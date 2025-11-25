@@ -3,7 +3,7 @@
 //! Provides a thread-safe queue for scheduling component rebuilds from signal changes.
 //! This allows signals to trigger rebuilds without direct access to BuildPipeline.
 
-use crate::ElementId;
+use flui_foundation::ElementId;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;

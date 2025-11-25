@@ -30,8 +30,7 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use super::ElementTree;
-use flui_element::Element;
+use flui_element::{Element, ElementTree};
 use flui_foundation::{ElementId, Slot};
 
 /// Manages the root element of the element tree

@@ -26,10 +26,11 @@
 //! owner.set_features(features);
 //! ```
 
-use super::{CancellationToken, ErrorRecovery, PipelineMetrics, TripleBuffer};
 use flui_engine::CanvasLayer;
-use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
+use flui_pipeline::{
+    CancellationToken, ErrorRecovery, PipelineMetrics, RecoveryPolicy, TripleBuffer,
+};
 use flui_types::Offset;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -221,11 +222,11 @@ impl PipelineFeatures {
 
     /// Enable error recovery with default policy (skip frame)
     pub fn enable_recovery(&mut self) {
-        self.recovery = Some(ErrorRecovery::new(super::RecoveryPolicy::SkipFrame));
+        self.recovery = Some(ErrorRecovery::new(RecoveryPolicy::SkipFrame));
     }
 
     /// Enable error recovery with custom policy
-    pub fn enable_recovery_with_policy(&mut self, policy: super::RecoveryPolicy) {
+    pub fn enable_recovery_with_policy(&mut self, policy: RecoveryPolicy) {
         self.recovery = Some(ErrorRecovery::new(policy));
     }
 

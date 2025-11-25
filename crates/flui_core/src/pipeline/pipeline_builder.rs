@@ -32,7 +32,8 @@
 
 use std::time::Duration;
 
-use super::{PipelineOwner, RecoveryPolicy};
+use super::PipelineOwner;
+use flui_pipeline::RecoveryPolicy;
 
 /// Builder for PipelineOwner
 ///
@@ -399,6 +400,7 @@ impl PipelineBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
 
     #[test]
     fn test_builder_default() {
@@ -522,7 +524,7 @@ mod tests {
             .build();
 
         // Trigger callback
-        owner.schedule_build_for(crate::ElementId::new(1), 0);
+        owner.schedule_build_for(ElementId::new(1), 0);
 
         assert!(*called.lock().unwrap());
     }

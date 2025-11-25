@@ -840,7 +840,7 @@ mod tests {
 
     #[test]
     fn test_schedule() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
 
         assert!(!build.has_dirty());
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn test_dirty_count() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
 
         build.schedule(ElementId::new(1), 0);
@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_clear_dirty() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
 
         build.schedule(ElementId::new(1), 0);
@@ -875,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_schedule_duplicate() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
 
         build.schedule(ElementId::new(1), 0);
@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     fn test_lock_state() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
 
         // Normal scheduling works
@@ -934,7 +934,7 @@ mod tests {
 
     #[test]
     fn test_batching_deduplicates() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(16));
 
@@ -959,7 +959,7 @@ mod tests {
 
     #[test]
     fn test_batching_multiple_elements() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(16));
 
@@ -975,7 +975,7 @@ mod tests {
 
     #[test]
     fn test_should_flush_batch_timing() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(10));
 
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn test_batching_without_enable() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
         // Batching not enabled
 
@@ -1009,7 +1009,7 @@ mod tests {
 
     #[test]
     fn test_batching_stats() {
-        use crate::ElementId;
+        use flui_foundation::ElementId;
         let mut build = BuildPipeline::new();
         build.enable_batching(Duration::from_millis(16));
 
