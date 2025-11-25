@@ -12,6 +12,7 @@ repository.workspace = true
 flui-foundation = { path = "../flui-foundation" }
 flui-pipeline = { path = "../flui-pipeline" }
 flui-tree = { path = "../flui-tree" }
+flui-view = { path = "../flui-view" }
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_rendering = { path = "../flui_rendering" }

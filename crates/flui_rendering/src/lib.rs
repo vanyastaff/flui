@@ -45,6 +45,7 @@
 
 pub mod core;
 pub mod error;
+pub mod view;
 // TODO: Migrate objects/ to use new trait-based architecture
 // pub mod objects;
 

@@ -1218,6 +1218,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-element"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-tree",
+ "parking_lot",
+ "serde",
+ "slab",
+ "tracing",
+]
+
+[[package]]
 name = "flui-foundation"
 version = "0.1.0"
 dependencies = [
@@ -1236,9 +1248,11 @@ dependencies = [
 name = "flui-pipeline"
 version = "0.1.0"
 dependencies = [
+ "flui-element",
  "flui-foundation",
  "flui-scheduler",
  "flui-tree",
+ "flui-view",
  "parking_lot",
  "rayon",
  "serde",
@@ -1288,11 +1302,11 @@ dependencies = [
 name = "flui-view"
 version = "0.1.0"
 dependencies = [
+ "flui-element",
  "flui-foundation",
  "flui-tree",
+ "flui_types",
  "parking_lot",
- "serde",
- "thiserror 2.0.17",
  "tracing",
 ]
 
@@ -1400,6 +1414,7 @@ dependencies = [
  "flui-reactivity",
  "flui-scheduler",
  "flui-tree",
+ "flui-view",
  "flui_engine",
  "flui_interaction",
  "flui_log",
@@ -1516,6 +1531,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "criterion 0.7.0",
+ "flui-element",
  "flui-foundation",
  "flui-tree",
  "flui_interaction",

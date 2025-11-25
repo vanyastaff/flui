@@ -116,6 +116,9 @@
 // Abstract traits
 pub mod traits;
 
+// Build context
+pub mod context;
+
 // Utilities
 pub mod cancellation;
 pub mod dirty;
@@ -179,6 +182,10 @@ pub use traits::{
 
 pub use build::{BuildBatcher, BuildPipeline};
 pub use cancellation::CancellationToken;
+pub use context::{
+    current_build_context, has_build_context, try_current_build_context, with_build_context,
+    BuildContextGuard, PipelineBuildContext,
+};
 pub use dirty::{DirtySet, LockFreeDirtySet};
 pub use error::{PipelineError, PipelinePhase, PipelineResult};
 pub use metrics::PipelineMetrics;
@@ -202,6 +209,12 @@ pub mod prelude {
 
     // Scheduler
     pub use crate::traits::{FrameTiming, Priority, SchedulerIntegration};
+
+    // Build context
+    pub use crate::context::{
+        current_build_context, has_build_context, with_build_context, BuildContextGuard,
+        PipelineBuildContext,
+    };
 
     // Utilities
     pub use crate::cancellation::CancellationToken;

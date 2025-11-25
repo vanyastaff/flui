@@ -14,6 +14,8 @@ categories = ["gui", "rendering"]
 flui-foundation = { path = "../flui-foundation" }
 flui-scheduler = { path = "../flui-scheduler" }
 flui-tree = { path = "../flui-tree" }
+flui-element = { path = "../flui-element" }
+flui-view = { path = "../flui-view" }
 
 
 # Core dependencies

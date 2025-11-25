@@ -65,7 +65,7 @@
 
 // Core modules
 pub mod build_context;
-pub mod children;
+// children moved to flui-view
 pub mod empty_view;
 pub mod protocol;
 pub mod root_view;
@@ -91,7 +91,8 @@ pub mod wrappers;
 pub use build_context::{
     current_build_context, with_build_context, BuildContext, BuildContextGuard,
 };
-pub use children::{Child, Children};
+// Re-export from flui-view
+pub use flui_view::children::{Child, Children};
 pub use protocol::{
     Animated, Provider, Proxy, RenderBox, RenderSliver, Stateful, Stateless, ViewMode, ViewProtocol,
 };

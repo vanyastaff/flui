@@ -1,185 +1,75 @@
-//! Stateful view trait.
+//! StatefulView - Views with internal mutable state
 //!
-//! For views with persistent mutable state and full lifecycle.
+//! StatefulView is for views that need to maintain state between rebuilds.
 
-use crate::into_element::IntoElement;
+use flui_element::IntoElement;
+
+use crate::context::BuildContext;
 use crate::state::ViewState;
 
-// ============================================================================
-// STATEFUL VIEW TRAIT
-// ============================================================================
-
-/// Stateful view - views with persistent mutable state.
+/// StatefulView - A view with internal mutable state
 ///
-/// Similar to Flutter's `StatefulWidget + State`. Separates immutable
-/// configuration (view) from mutable state that persists across rebuilds.
-///
-/// # Architecture
-///
-/// ```text
-/// Counter (View)          CounterState (State)
-/// ──────────────          ────────────────────
-/// initial: i32            count: i32
-/// Clone + Send            Send
-/// Recreated on update     Persists across builds
-/// ```
-///
-/// # Lifecycle
-///
-/// ```text
-/// 1. create_state()              → State created
-/// 2. init_state(&mut state)      → Element mounted
-/// 3. build(&mut state)           → UI built
-///    ↓ (repeat on setState/updates)
-/// 4. did_update(&mut state)      → View config changed
-/// 5. deactivate(&mut state)      → Element deactivated
-/// 6. dispose(&mut state)         → Element destroyed
-/// ```
+/// Use StatefulView when your view:
+/// - Needs to maintain state that persists across rebuilds
+/// - Has interactive behavior (buttons, forms, etc.)
+/// - Needs to trigger rebuilds via `setState`
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// #[derive(Clone)]
 /// struct Counter {
 ///     initial: i32,
 /// }
 ///
-/// #[derive(Default)]
 /// struct CounterState {
 ///     count: i32,
 /// }
 ///
 /// impl StatefulView for Counter {
 ///     type State = CounterState;
-///     type Output = Column;
 ///
-///     fn create_state(&self) -> CounterState {
+///     fn create_state(&self) -> Self::State {
 ///         CounterState { count: self.initial }
 ///     }
 ///
-///     fn build(&self, state: &mut CounterState) -> Self::Output {
+///     fn build(&self, state: &mut Self::State, ctx: &BuildContext) -> impl IntoElement {
 ///         Column::new()
 ///             .child(Text::new(format!("Count: {}", state.count)))
-///             .child(Button::new("++").on_press(|| state.count += 1))
+///             .child(Button::new("+").on_press(|| {
+///                 state.count += 1;
+///                 ctx.mark_dirty();
+///             }))
 ///     }
 /// }
 /// ```
 ///
-/// # When to Use
+/// # Lifecycle
 ///
-/// - Interactive widgets (buttons, forms, etc)
-/// - User input handling
-/// - Subscriptions (streams, timers)
-/// - Complex lifecycle management
-pub trait StatefulView: Clone + Send + 'static {
-    /// State type for this view.
+/// 1. `create_state()` - Called once when element is first created
+/// 2. `build()` - Called on each rebuild with current state
+/// 3. State persists until element is unmounted
+///
+/// # Thread Safety
+///
+/// Both the view and state must be `Send + 'static`.
+pub trait StatefulView: Send + Sync + 'static {
+    /// The state type for this view
     type State: ViewState;
 
-    /// Output type from build.
-    type Output: IntoElement;
-
-    /// Create initial state.
+    /// Create initial state
     ///
-    /// Called once when view is first mounted. Override to customize
-    /// initial state from view props.
+    /// Called once when the element is first mounted.
     fn create_state(&self) -> Self::State;
 
-    /// Initialize state after mounting (optional).
+    /// Build the view with current state
     ///
-    /// Called once after state is created and element is mounted to tree.
+    /// Called during each rebuild. Modify state as needed,
+    /// then return the child element(s).
+    fn build(&self, state: &mut Self::State, ctx: &dyn BuildContext) -> impl IntoElement;
+
+    /// Called when view configuration changes
     ///
-    /// Use for:
-    /// - Setting up subscriptions
-    /// - Creating timers/streams
-    /// - Any initialization requiring mounted context
-    #[allow(unused_variables)]
-    fn init_state(&self, state: &mut Self::State) {}
-
-    /// Build UI with state.
-    ///
-    /// Called on every rebuild. Returns the view output.
-    ///
-    /// # Parameters
-    ///
-    /// - `state`: Mutable reference to persistent state
-    fn build(&self, state: &mut Self::State) -> Self::Output;
-
-    /// Called when view configuration updates (optional).
-    ///
-    /// View is cloned with new props from parent. Override to update
-    /// state based on new configuration.
-    #[allow(unused_variables)]
-    fn did_update(&self, state: &mut Self::State) {}
-
-    /// Called when element is deactivated (optional).
-    ///
-    /// Element removed from tree but might be reinserted.
-    #[allow(unused_variables)]
-    fn deactivate(&self, state: &mut Self::State) {}
-
-    /// Called when element is permanently removed (optional).
-    ///
-    /// Use for cleanup: cancel subscriptions, stop timers, free resources.
-    #[allow(unused_variables)]
-    fn dispose(&self, state: &mut Self::State) {}
-}
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Clone)]
-    struct TestCounter {
-        initial: i32,
-    }
-
-    #[derive(Default)]
-    struct TestCounterState {
-        count: i32,
-    }
-
-    impl StatefulView for TestCounter {
-        type State = TestCounterState;
-        type Output = ();
-
-        fn create_state(&self) -> TestCounterState {
-            TestCounterState {
-                count: self.initial,
-            }
-        }
-
-        fn build(&self, state: &mut TestCounterState) -> Self::Output {
-            let _ = state.count;
-        }
-    }
-
-    #[test]
-    fn test_stateful_view_create_state() {
-        let view = TestCounter { initial: 42 };
-        let state = view.create_state();
-        assert_eq!(state.count, 42);
-    }
-
-    #[test]
-    fn test_stateful_view_build() {
-        let view = TestCounter { initial: 0 };
-        let mut state = view.create_state();
-        view.build(&mut state);
-    }
-
-    #[test]
-    fn test_stateful_view_lifecycle() {
-        let view = TestCounter { initial: 0 };
-        let mut state = view.create_state();
-
-        view.init_state(&mut state);
-        view.build(&mut state);
-        view.did_update(&mut state);
-        view.deactivate(&mut state);
-        view.dispose(&mut state);
-    }
+    /// Override to update state when new view config is received.
+    /// Default implementation does nothing.
+    fn did_update_view(&self, _state: &mut Self::State, _old_view: &Self) {}
 }

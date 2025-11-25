@@ -1,92 +1,47 @@
-//! Stateless view trait.
+//! StatelessView - Views without internal state
 //!
-//! For simple views without persistent state or lifecycle.
+//! StatelessView is for simple views that only depend on their configuration.
+//! They rebuild completely when their parent rebuilds.
 
-use crate::into_element::IntoElement;
+use flui_element::IntoElement;
 
-// ============================================================================
-// STATELESS VIEW TRAIT
-// ============================================================================
+use crate::context::BuildContext;
 
-/// Stateless view - simple views without persistent state.
+/// StatelessView - A view without internal state
 ///
-/// Similar to Flutter's `StatelessWidget`. Views are consumed during build
-/// and cannot be rebuilt. Perfect for pure composition.
-///
-/// # Lifecycle
-///
-/// - **Created**: View struct instantiated
-/// - **Build**: `build()` called once, view consumed
-/// - **Done**: No rebuild, no lifecycle hooks
+/// Use StatelessView when your view:
+/// - Only depends on configuration passed to it
+/// - Doesn't need to persist state between rebuilds
+/// - Can be recreated at any time
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// #[derive(Debug)]
 /// struct Greeting {
 ///     name: String,
 /// }
 ///
 /// impl StatelessView for Greeting {
-///     type Output = Text;
-///
-///     fn build(self) -> Self::Output {
-///         Text::new(format!("Hello, {}", self.name))
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         Text::new(format!("Hello, {}!", self.name))
 ///     }
 /// }
 /// ```
 ///
-/// # When to Use
+/// # Thread Safety
 ///
-/// - Pure UI composition
-/// - No user interaction
-/// - Props don't change
-/// - Simple leaf widgets
-///
-/// # When NOT to Use
-///
-/// - Need to store state → Use `StatefulView`
-/// - Need subscriptions → Use hooks or `AnimatedView`
-/// - Need lifecycle → Use `StatefulView` or `ProxyView`
-pub trait StatelessView: Send + 'static {
-    /// Output type from build.
-    type Output: IntoElement;
-
-    /// Build UI from this view.
+/// StatelessView requires `Send + 'static` for cross-thread element transfer.
+pub trait StatelessView: Send + Sync + 'static {
+    /// Build the view, producing child element(s)
     ///
-    /// View is consumed (moved) during build. Cannot be called again.
-    ///
-    /// # Return
-    ///
-    /// Any type implementing `IntoElement` (View, RenderObject, Element, etc)
-    fn build(self) -> Self::Output;
+    /// Called by the framework during the build phase.
+    /// Return any type that implements `IntoElement`.
+    fn build(self, ctx: &dyn BuildContext) -> impl IntoElement;
 }
 
 // ============================================================================
-// TESTS
+// BLANKET IMPLEMENTATIONS
 // ============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct TestView {
-        text: String,
-    }
-
-    impl StatelessView for TestView {
-        type Output = ();
-
-        fn build(self) -> Self::Output {
-            let _ = self.text;
-        }
-    }
-
-    #[test]
-    fn test_stateless_view_build() {
-        let view = TestView {
-            text: "Hello".to_string(),
-        };
-        view.build();
-    }
-}
+// Note: We intentionally don't provide blanket impls here.
+// Each concrete view type should implement StatelessView explicitly.

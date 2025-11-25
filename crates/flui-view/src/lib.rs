@@ -2,29 +2,23 @@
 //!
 //! View traits and abstractions for the FLUI UI framework.
 //!
-//! This crate provides the core View traits that define how declarative UI
-//! components are structured. It is designed to be independent of the concrete
-//! element tree implementation.
+//! This crate provides the view layer of FLUI's three-tree architecture,
+//! defining how declarative UI components are structured and built.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! View (immutable) → Element (mutable) → RenderObject (layout/paint)
+//! View (immutable config) → Element (mutable state) → RenderObject (layout/paint)
+//! ^^^^^^^^^^^^^^^^^^^^
+//! This crate!
 //! ```
 //!
-//! ## View Types
+//! ## Key Types
 //!
-//! - [`StatelessView`] - Simple views without state
-//! - [`StatefulView`] - Views with persistent state
-//! - [`ProxyView`] - Views that wrap single child
-//! - [`RenderView`] - Views that create render objects
-//!
-//! ## Design Philosophy
-//!
-//! 1. **Trait-based**: Views are defined by traits, not concrete types
-//! 2. **Protocol system**: Compile-time view categorization
-//! 3. **Abstract context**: BuildContext is trait-based for flexibility
-//! 4. **Thread-safe**: All views must be `Send + 'static`
+//! - [`StatelessView`] - Views without internal state
+//! - [`StatefulView`] - Views with persistent mutable state
+//! - [`ViewObject`] - Dynamic dispatch interface for all views
+//! - [`BuildContext`] - Context passed during view building
 //!
 //! ## Example
 //!
@@ -36,12 +30,21 @@
 //! }
 //!
 //! impl StatelessView for Greeting {
-//!     type Context = MyBuildContext;
-//!
-//!     fn build(self, ctx: &Self::Context) -> impl IntoElement<Self::Context> {
+//!     fn build(self, ctx: &BuildContext) -> impl IntoElement {
 //!         Text::new(format!("Hello, {}!", self.name))
 //!     }
 //! }
+//!
+//! // Use the view
+//! let element = Greeting { name: "World".into() }.into_element();
+//! ```
+//!
+//! ## Crate Dependencies
+//!
+//! ```text
+//! flui-foundation → flui-tree → flui-element → flui-view
+//!                                     ↓
+//!                               (Element, IntoElement)
 //! ```
 
 #![warn(
@@ -61,36 +64,49 @@
 // MODULES
 // ============================================================================
 
+pub mod children;
 pub mod context;
-pub mod into_element;
+pub mod object;
 pub mod protocol;
 pub mod state;
 pub mod traits;
-pub mod update;
+pub mod wrappers;
+
+mod empty;
 
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================
 
-// Context traits
-pub use context::{BuildContext, ViewContext};
+// Context
+pub use context::BuildContext;
 
-// Protocol types
-pub use protocol::{ViewMode, ViewProtocol};
+// Protocol
+pub use protocol::ViewMode;
 
-// State trait
+// State
 pub use state::ViewState;
 
-// Update result
-pub use update::UpdateResult;
-
 // View traits
-pub use traits::{ProxyView, RenderView, StatefulView, StatelessView};
+pub use traits::{AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView};
 
-// IntoElement trait
-pub use into_element::IntoElement;
+// ViewObject
+pub use object::{ElementViewObjectExt, ViewObject};
 
-// Re-export ElementId for convenience
+// Wrappers
+pub use wrappers::{
+    Animated, AnimatedViewWrapper, Provider, ProviderViewWrapper, Proxy, ProxyViewWrapper,
+    Stateful, StatefulViewWrapper, Stateless, StatelessViewWrapper,
+};
+
+// Empty view
+pub use empty::EmptyView;
+
+// Children
+pub use children::{Child, Children};
+
+// Re-export from flui-element for convenience
+pub use flui_element::{Element, ElementTree, IntoElement};
 pub use flui_foundation::ElementId;
 
 // ============================================================================
@@ -98,16 +114,17 @@ pub use flui_foundation::ElementId;
 // ============================================================================
 
 /// Commonly used types for convenient importing.
+///
+/// ```rust,ignore
+/// use flui_view::prelude::*;
+/// ```
 pub mod prelude {
-    pub use crate::{
-        BuildContext, ElementId, IntoElement, ProxyView, RenderView, StatefulView, StatelessView,
-        UpdateResult, ViewContext, ViewMode, ViewState,
+    pub use crate::context::BuildContext;
+    pub use crate::empty::EmptyView;
+    pub use crate::protocol::ViewMode;
+    pub use crate::traits::{
+        AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView,
     };
+    pub use crate::wrappers::{Animated, Provider, Proxy, Stateful, Stateless};
+    pub use flui_element::{Element, IntoElement};
 }
-
-// ============================================================================
-// VERSION
-// ============================================================================
-
-/// Crate version.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");

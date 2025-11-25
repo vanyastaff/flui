@@ -1,92 +1,92 @@
-//! Proxy view trait.
+//! ProxyView - Views that wrap single child without changing layout
 //!
-//! For views that wrap a single child without layout changes.
+//! For views that add behavior, metadata, or event handling without
+//! affecting layout.
 
-use crate::into_element::IntoElement;
+use flui_element::IntoElement;
+use flui_types::Event;
 
-// ============================================================================
-// PROXY VIEW TRAIT
-// ============================================================================
+use crate::context::BuildContext;
 
-/// Proxy view - views that wrap single child without layout changes.
+/// ProxyView - Views that wrap a single child.
 ///
-/// Similar to Flutter's `ProxyWidget`. Used for views that need to
-/// intercept the build process without creating their own render object.
+/// Similar to `RenderProxyBox` in render system. Delegates layout to child
+/// while adding behavior, metadata, or event handling.
 ///
-/// # Use Cases
+/// # Purpose
 ///
-/// - **InheritedWidget**: Providing data to descendants
-/// - **Theme**: Wrapping subtree with theme data
-/// - **MediaQuery**: Providing screen metrics
-/// - **Focus/Gesture handling**: Intercepting user input
+/// Proxy views are lightweight wrappers that:
+/// - Don't change layout (child determines size/position)
+/// - Add behavior (event handling, focus, etc)
+/// - Add metadata (semantics, accessibility)
+/// - Optimize rendering (repaint boundaries)
 ///
-/// # Example
+/// # Architecture
+///
+/// ```text
+/// ProxyView → build_child() → Child
+///     ↓ wraps                    ↓ determines layout
+/// Adds behavior               Actual UI
+/// ```
+///
+/// # Example: Event Blocking
 ///
 /// ```rust,ignore
-/// struct ThemeProvider {
-///     theme: Theme,
-///     child: Box<dyn IntoElement>,
+/// struct IgnorePointer {
+///     ignoring: bool,
+///     child: Element,
 /// }
 ///
-/// impl ProxyView for ThemeProvider {
-///     type Child = Box<dyn IntoElement>;
-///
-///     fn child(self) -> Self::Child {
-///         self.child
+/// impl ProxyView for IgnorePointer {
+///     fn build_child(&mut self, _ctx: &BuildContext) -> impl IntoElement {
+///         self.child.clone()
 ///     }
 ///
-///     fn wrap_child(&self, child_element: ElementId) -> ElementId {
-///         // Store theme data in element tree
-///         child_element
+///     fn handle_event(&mut self, _event: &Event, _ctx: &BuildContext) -> bool {
+///         self.ignoring  // Block events if ignoring
 ///     }
 /// }
 /// ```
 ///
 /// # When to Use
 ///
-/// - Need to provide data to descendants
-/// - Need to intercept without layout changes
-/// - Building inherited/provider widgets
+/// - Event interception (IgnorePointer, GestureDetector)
+/// - Accessibility (Semantics, ExcludeSemantics)
+/// - Focus management (Focus, FocusScope)
+/// - Optimization hints (RepaintBoundary)
+/// - Metadata (Tooltip, Hero)
 ///
 /// # When NOT to Use
 ///
-/// - Need layout changes → Use `RenderView`
-/// - No child → Use `StatelessView`
-/// - Multiple children → Use custom view with `Children`
-pub trait ProxyView: Send + 'static {
-    /// Child type.
-    type Child: IntoElement;
-
-    /// Returns the child view.
+/// - Custom layout → Use render object
+/// - Multiple children → Use `StatelessView` or render object
+/// - Need state → Use `StatefulView`
+pub trait ProxyView: Send + Sync + 'static {
+    /// Build the child element.
     ///
-    /// The child is extracted and built, then passed through
-    /// any proxy-specific wrapping.
-    fn child(self) -> Self::Child;
-}
+    /// Required method. Must return exactly one child element.
+    fn build_child(&mut self, ctx: &dyn BuildContext) -> impl IntoElement;
 
-// ============================================================================
-// TESTS
-// ============================================================================
+    /// Called before child builds (optional).
+    ///
+    /// Use to set up context or metadata before child tree is built.
+    fn before_child_build(&mut self, _ctx: &dyn BuildContext) {}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    /// Called after child builds (optional).
+    ///
+    /// Use to clean up context after child tree is built.
+    fn after_child_build(&mut self, _ctx: &dyn BuildContext) {}
 
-    struct TestProxy {
-        child: (),
+    /// Handle event before passing to child (optional).
+    ///
+    /// Return `true` to stop event propagation, `false` to continue.
+    fn handle_event(&mut self, _event: &Event, _ctx: &dyn BuildContext) -> bool {
+        false // Default: don't block events
     }
 
-    impl ProxyView for TestProxy {
-        type Child = ();
+    /// Initialize after element is mounted (optional).
+    fn init(&mut self, _ctx: &dyn BuildContext) {}
 
-        fn child(self) -> Self::Child {
-            self.child
-        }
-    }
-
-    #[test]
-    fn test_proxy_view_child() {
-        let proxy = TestProxy { child: () };
-        let _child = proxy.child();
-    }
+    /// Called when element is disposed (optional).
+    fn dispose(&mut self, _ctx: &dyn BuildContext) {}
 }

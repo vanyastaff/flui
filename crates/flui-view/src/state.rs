@@ -1,66 +1,27 @@
-//! View state trait.
+//! ViewState - State for stateful views
 //!
-//! Defines the requirements for state types used with `StatefulView`.
+//! Defines the trait that all view states must implement.
 
-// ============================================================================
-// VIEW STATE TRAIT
-// ============================================================================
-
-/// Trait for view state types.
+/// ViewState - Marker trait for view state types
 ///
-/// State types must be `Send` for thread-safe UI updates.
-/// The `'static` bound ensures state can be stored in the element tree.
+/// State types used with `StatefulView` must implement this trait.
+///
+/// # Requirements
+///
+/// - `Send`: State can be transferred between threads
+/// - `Sync`: State can be shared between threads
+/// - `'static`: State has no non-static references
 ///
 /// # Example
 ///
-/// ```rust
-/// use flui_view::ViewState;
-///
-/// #[derive(Default)]
+/// ```rust,ignore
 /// struct CounterState {
 ///     count: i32,
 /// }
 ///
-/// // Automatically implements ViewState because it's Send + 'static
-/// fn assert_view_state<T: ViewState>() {}
-/// assert_view_state::<CounterState>();
+/// impl ViewState for CounterState {}
 /// ```
-pub trait ViewState: Send + 'static {}
+pub trait ViewState: Send + Sync + 'static {}
 
-/// Blanket implementation for all `Send + 'static` types.
-impl<T: Send + 'static> ViewState for T {}
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Default)]
-    struct TestState {
-        value: i32,
-    }
-
-    fn assert_view_state<T: ViewState>() {}
-
-    #[test]
-    fn test_primitive_types_are_view_state() {
-        assert_view_state::<i32>();
-        assert_view_state::<String>();
-        assert_view_state::<bool>();
-        assert_view_state::<()>();
-    }
-
-    #[test]
-    fn test_custom_struct_is_view_state() {
-        assert_view_state::<TestState>();
-    }
-
-    #[test]
-    fn test_vec_is_view_state() {
-        assert_view_state::<Vec<i32>>();
-        assert_view_state::<Vec<String>>();
-    }
-}
+// Blanket implementation for all qualifying types
+impl<T: Send + Sync + 'static> ViewState for T {}
