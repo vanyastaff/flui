@@ -159,7 +159,7 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> ExpandedBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> ExpandedBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }
@@ -196,7 +196,7 @@ impl Expanded {
     /// ```rust,ignore
     /// let widget = Expanded::new(Container::new());
     /// ```
-    pub fn new(child: impl View + 'static) -> Self {
+    pub fn new(child: impl IntoElement) -> Self {
         Self {
             flex: 1,
             child: child.into_element(),

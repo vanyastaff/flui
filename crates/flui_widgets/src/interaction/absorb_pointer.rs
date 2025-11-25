@@ -121,7 +121,7 @@ impl AbsorbPointer {
     /// ```rust,ignore
     /// AbsorbPointer::with_child(true, Button::new("Disabled"))
     /// ```
-    pub fn with_child(absorbing: bool, child: impl View + 'static) -> Self {
+    pub fn with_child(absorbing: bool, child: impl IntoElement) -> Self {
         Self::builder().absorbing(absorbing).child(child).build()
     }
 

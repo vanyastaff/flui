@@ -97,7 +97,7 @@ impl Opacity {
     /// ```rust,ignore
     /// Opacity::with_child(0.5, Text::new("Semi-transparent"))
     /// ```
-    pub fn with_child(opacity: f32, child: impl View + 'static) -> Self {
+    pub fn with_child(opacity: f32, child: impl IntoElement) -> Self {
         Self::builder().opacity(opacity).child(child).build()
     }
 
@@ -117,7 +117,7 @@ impl Opacity {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
+    pub fn set_child(&mut self, child: impl IntoElement) {
         self.child = Some(Box::new(child));
     }
 
@@ -162,7 +162,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> OpacityBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> OpacityBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

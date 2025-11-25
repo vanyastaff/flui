@@ -121,7 +121,7 @@ impl IgnorePointer {
     /// ```rust,ignore
     /// IgnorePointer::with_child(true, Button::new("Disabled"))
     /// ```
-    pub fn with_child(ignoring: bool, child: impl View + 'static) -> Self {
+    pub fn with_child(ignoring: bool, child: impl IntoElement) -> Self {
         Self::builder().ignoring(ignoring).child(child).build()
     }
 

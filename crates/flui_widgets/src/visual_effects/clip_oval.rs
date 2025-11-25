@@ -123,7 +123,7 @@ impl ClipOval {
     /// ```rust,ignore
     /// let widget = ClipOval::new(Image::new("avatar.jpg"));
     /// ```
-    pub fn new(child: impl View + 'static) -> Self {
+    pub fn new(child: impl IntoElement) -> Self {
         Self {
             key: None,
             clip_behavior: Clip::AntiAlias,
@@ -138,7 +138,7 @@ impl ClipOval {
     /// ```rust,ignore
     /// let widget = ClipOval::with_clip(Clip::HardEdge, child);
     /// ```
-    pub fn with_clip(clip_behavior: Clip, child: impl View + 'static) -> Self {
+    pub fn with_clip(clip_behavior: Clip, child: impl IntoElement) -> Self {
         Self {
             key: None,
             clip_behavior,
@@ -147,7 +147,7 @@ impl ClipOval {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
+    pub fn set_child(&mut self, child: impl IntoElement) {
         self.child = Some(Box::new(child));
     }
 }
@@ -177,7 +177,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> ClipOvalBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> ClipOvalBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

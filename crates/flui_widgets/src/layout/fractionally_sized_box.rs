@@ -113,7 +113,7 @@ impl FractionallySizedBox {
     pub fn new(
         width_factor: Option<f32>,
         height_factor: Option<f32>,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -131,7 +131,7 @@ impl FractionallySizedBox {
     /// // 50% of both width and height
     /// let widget = FractionallySizedBox::both(0.5, child);
     /// ```
-    pub fn both(factor: f32, child: impl View + 'static) -> Self {
+    pub fn both(factor: f32, child: impl IntoElement) -> Self {
         Self::new(Some(factor), Some(factor), child)
     }
 
@@ -143,7 +143,7 @@ impl FractionallySizedBox {
     /// // 80% width, height unconstrained
     /// let widget = FractionallySizedBox::width(0.8, child);
     /// ```
-    pub fn width(factor: f32, child: impl View + 'static) -> Self {
+    pub fn width(factor: f32, child: impl IntoElement) -> Self {
         Self::new(Some(factor), None, child)
     }
 
@@ -155,12 +155,12 @@ impl FractionallySizedBox {
     /// // 60% height, width unconstrained
     /// let widget = FractionallySizedBox::height(0.6, child);
     /// ```
-    pub fn height(factor: f32, child: impl View + 'static) -> Self {
+    pub fn height(factor: f32, child: impl IntoElement) -> Self {
         Self::new(None, Some(factor), child)
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
+    pub fn set_child(&mut self, child: impl IntoElement) {
         self.child = Some(child.into_element());
     }
 
@@ -215,7 +215,7 @@ where
     ///     .child(some_widget)
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> FractionallySizedBoxBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> FractionallySizedBoxBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

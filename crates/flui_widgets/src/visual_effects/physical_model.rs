@@ -143,7 +143,7 @@ impl PhysicalModel {
     /// ```rust,ignore
     /// let model = PhysicalModel::rectangle(8.0, Color::WHITE, child);
     /// ```
-    pub fn rectangle(elevation: f32, color: Color, child: impl View + 'static) -> Self {
+    pub fn rectangle(elevation: f32, color: Color, child: impl IntoElement) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::Rectangle,
@@ -166,7 +166,7 @@ impl PhysicalModel {
         elevation: f32,
         border_radius: f32,
         color: Color,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -186,7 +186,7 @@ impl PhysicalModel {
     /// ```rust,ignore
     /// let model = PhysicalModel::circle(4.0, Color::BLUE, icon);
     /// ```
-    pub fn circle(elevation: f32, color: Color, child: impl View + 'static) -> Self {
+    pub fn circle(elevation: f32, color: Color, child: impl IntoElement) -> Self {
         Self {
             key: None,
             shape: PhysicalShape::Circle,
@@ -221,7 +221,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> PhysicalModelBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> PhysicalModelBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

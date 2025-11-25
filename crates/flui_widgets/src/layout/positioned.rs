@@ -232,7 +232,7 @@ impl Positioned {
     /// ```rust,ignore
     /// let widget = Positioned::fill(Container::new());
     /// ```
-    pub fn fill(child: impl View + 'static) -> Self {
+    pub fn fill(child: impl IntoElement) -> Self {
         Self {
             key: None,
             left: Some(0.0),
@@ -264,7 +264,7 @@ impl Positioned {
         top: f32,
         width: f32,
         height: f32,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -294,7 +294,7 @@ impl Positioned {
         top: Option<f32>,
         end: Option<f32>,
         bottom: Option<f32>,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -416,7 +416,7 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> PositionedBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> PositionedBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

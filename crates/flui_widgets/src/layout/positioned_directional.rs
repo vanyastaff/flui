@@ -140,7 +140,7 @@ impl PositionedDirectional {
     }
 
     /// Creates a PositionedDirectional that fills the entire Stack.
-    pub fn fill(child: impl View + 'static) -> Self {
+    pub fn fill(child: impl IntoElement) -> Self {
         Self {
             key: None,
             start: Some(0.0),
@@ -155,7 +155,7 @@ impl PositionedDirectional {
     }
 
     /// Creates a PositionedDirectional positioned from start.
-    pub fn from_start(start: f32, top: f32, child: impl View + 'static) -> Self {
+    pub fn from_start(start: f32, top: f32, child: impl IntoElement) -> Self {
         Self {
             key: None,
             start: Some(start),
@@ -170,7 +170,7 @@ impl PositionedDirectional {
     }
 
     /// Creates a PositionedDirectional positioned from end.
-    pub fn from_end(end: f32, top: f32, child: impl View + 'static) -> Self {
+    pub fn from_end(end: f32, top: f32, child: impl IntoElement) -> Self {
         Self {
             key: None,
             start: None,
@@ -237,7 +237,7 @@ where
     ///     .child(Text::new("Content"))
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> PositionedDirectionalBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> PositionedDirectionalBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

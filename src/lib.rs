@@ -109,7 +109,8 @@ pub mod prelude {
     // ============================================================
     // WIDGETS (Container, Row, Column, Text, etc.)
     // ============================================================
-    pub use flui_widgets::prelude::*;
+    // TODO: Re-enable when flui_widgets prelude is uncommented
+    // pub use flui_widgets::prelude::*;
 
     // ============================================================
     // APP FRAMEWORK (run_app)
@@ -121,24 +122,14 @@ pub mod prelude {
     // ============================================================
     pub use flui_rendering::{
         Arity,
-        DecorationPosition,
         LayoutContext,
         PaintContext,
-
-        RenderAlign,
-        // Core render traits from flui_core (re-exported by flui_rendering)
+        // Core render traits
         RenderBox,
-        RenderClipRRect,
-        RenderConstrainedBox,
-        // Decoration
-        RenderDecoratedBox,
-        RenderFlex,
-
-        RenderOpacity,
-        // Common render objects
-        RenderPadding,
-        RenderTransform,
     };
+    // TODO: Re-enable when these are exported from flui_rendering
+    // DecorationPosition, RenderAlign, RenderClipRRect, RenderConstrainedBox,
+    // RenderDecoratedBox, RenderFlex, RenderOpacity, RenderPadding, RenderTransform
 
     // ============================================================
     // ANIMATION (controllers and types)
@@ -172,8 +163,8 @@ pub mod prelude {
         TapGestureRecognizer,
     };
 
-    // GestureDetector widget is in flui_widgets
-    pub use flui_widgets::GestureDetector;
+    // TODO: Re-enable when GestureDetector is exported from flui_widgets
+    // pub use flui_widgets::GestureDetector;
 
     // Re-export gesture types from flui_types
     pub use flui_types::gestures::{

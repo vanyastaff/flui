@@ -110,7 +110,7 @@ impl Baseline {
     /// ```rust,ignore
     /// let widget = Baseline::new(20.0, TextBaseline::Alphabetic, child);
     /// ```
-    pub fn new(baseline: f32, baseline_type: TextBaseline, child: impl View + 'static) -> Self {
+    pub fn new(baseline: f32, baseline_type: TextBaseline, child: impl IntoElement) -> Self {
         Self {
             key: None,
             baseline: Some(baseline),
@@ -128,7 +128,7 @@ impl Baseline {
     /// ```rust,ignore
     /// let widget = Baseline::alphabetic(20.0, Text::new("Hello"));
     /// ```
-    pub fn alphabetic(baseline: f32, child: impl View + 'static) -> Self {
+    pub fn alphabetic(baseline: f32, child: impl IntoElement) -> Self {
         Self::new(baseline, TextBaseline::Alphabetic, child)
     }
 
@@ -141,12 +141,12 @@ impl Baseline {
     /// ```rust,ignore
     /// let widget = Baseline::ideographic(18.0, Text::new("你好"));
     /// ```
-    pub fn ideographic(baseline: f32, child: impl View + 'static) -> Self {
+    pub fn ideographic(baseline: f32, child: impl IntoElement) -> Self {
         Self::new(baseline, TextBaseline::Ideographic, child)
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
+    pub fn set_child(&mut self, child: impl IntoElement) {
         self.child = Some(child.into_element());
     }
 
@@ -202,7 +202,7 @@ where
     ///     .child(Text::new("Hello"))
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> BaselineBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> BaselineBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

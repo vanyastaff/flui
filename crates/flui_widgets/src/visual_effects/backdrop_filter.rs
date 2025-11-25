@@ -114,7 +114,7 @@ impl BackdropFilter {
     /// ```rust,ignore
     /// let filter = BackdropFilter::blur(10.0, child);
     /// ```
-    pub fn blur(radius: f32, child: impl View + 'static) -> Self {
+    pub fn blur(radius: f32, child: impl IntoElement) -> Self {
         Self {
             key: None,
             filter: ImageFilter::blur(radius),
@@ -133,7 +133,7 @@ impl BackdropFilter {
     ///     child
     /// );
     /// ```
-    pub fn new(filter: ImageFilter, child: impl View + 'static) -> Self {
+    pub fn new(filter: ImageFilter, child: impl IntoElement) -> Self {
         Self {
             key: None,
             filter,
@@ -156,7 +156,7 @@ impl BackdropFilter {
     pub fn blur_with_blend_mode(
         radius: f32,
         blend_mode: BlendMode,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -197,7 +197,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> BackdropFilterBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> BackdropFilterBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

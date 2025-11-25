@@ -244,7 +244,7 @@ impl ClipRRect {
     /// let mut widget = ClipRRect::circular(10.0);
     /// widget.set_child(Container::new());
     /// ```
-    pub fn set_child(&mut self, child: impl View + 'static) {
+    pub fn set_child(&mut self, child: impl IntoElement) {
         self.child = Some(Box::new(child));
     }
 
@@ -349,7 +349,7 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> ClipRRectBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> ClipRRectBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

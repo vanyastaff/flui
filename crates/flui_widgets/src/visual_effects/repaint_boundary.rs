@@ -93,7 +93,7 @@ impl RepaintBoundary {
     /// ```rust,ignore
     /// let boundary = RepaintBoundary::new(AnimatedWidget::new());
     /// ```
-    pub fn new(child: impl View + 'static) -> Self {
+    pub fn new(child: impl IntoElement) -> Self {
         Self {
             key: None,
             child: Some(Box::new(child)),
@@ -109,7 +109,7 @@ impl RepaintBoundary {
     /// ```rust,ignore
     /// let boundary = RepaintBoundary::wrap(animated_widget);
     /// ```
-    pub fn wrap(child: impl View + 'static) -> Self {
+    pub fn wrap(child: impl IntoElement) -> Self {
         Self::new(child)
     }
 }
@@ -122,7 +122,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> RepaintBoundaryBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> RepaintBoundaryBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

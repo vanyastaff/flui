@@ -251,7 +251,7 @@ impl Row {
 
     /// Adds a child widget to the row.
     #[deprecated(note = "Use builder pattern with chainable .child() instead")]
-    pub fn add_child(&mut self, child: impl View + 'static) {
+    pub fn add_child(&mut self, child: impl IntoElement) {
         self.children.push(child.into_element());
     }
 

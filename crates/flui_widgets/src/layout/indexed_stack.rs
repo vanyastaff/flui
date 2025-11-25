@@ -235,7 +235,7 @@ impl IndexedStack {
     /// stack.add_child(Container::new());
     /// stack.add_child(Text::new("Page 2"));
     /// ```
-    pub fn add_child(&mut self, child: impl View + 'static) {
+    pub fn add_child(&mut self, child: impl IntoElement) {
         self.children.push(child.into_element());
     }
 
@@ -250,7 +250,7 @@ impl IndexedStack {
     /// stack.child(Container::new());
     /// stack.child(Text::new("Page 2"));
     /// ```
-    pub fn child(&mut self, child: impl View + 'static) {
+    pub fn child(&mut self, child: impl IntoElement) {
         self.children.push(child.into_element());
     }
 

@@ -1,0 +1,39 @@
+[package]
+name = "flui-view"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "View traits and abstractions for FLUI framework - declarative UI composition"
+repository.workspace = true
+keywords = ["ui", "view", "declarative", "flui", "framework"]
+categories = ["gui", "data-structures"]
+
+[dependencies]
+# FLUI internal
+flui-foundation = { path = "../flui-foundation" }
+flui-tree = { path = "../flui-tree" }
+
+# Core dependencies
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+# Optional: serde support
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Testing utilities
+
+[features]
+default = []
+
+# Serialization support
+serde = ["dep:serde", "flui-foundation/serde"]
+
+# Enable all features
+full = ["serde"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

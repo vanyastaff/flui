@@ -208,7 +208,7 @@ impl Visibility {
     /// ```rust,ignore
     /// Visibility::with_child(true, Text::new("Visible text"))
     /// ```
-    pub fn with_child(visible: bool, child: impl View + 'static) -> Self {
+    pub fn with_child(visible: bool, child: impl IntoElement) -> Self {
         Self::builder().visible(visible).child(child).build()
     }
 
@@ -221,7 +221,7 @@ impl Visibility {
     /// ```rust,ignore
     /// Visibility::maintain_size(FadeTransition::new(child))
     /// ```
-    pub fn maintain_size(child: impl View + 'static) -> Self {
+    pub fn maintain_size(child: impl IntoElement) -> Self {
         Self {
             key: None,
             visible: true,
@@ -242,7 +242,7 @@ impl Visibility {
     /// ```rust,ignore
     /// Visibility::maintain_state_only(ExpensiveWidget::new())
     /// ```
-    pub fn maintain_state_only(child: impl View + 'static) -> Self {
+    pub fn maintain_state_only(child: impl IntoElement) -> Self {
         Self {
             key: None,
             visible: true,
@@ -282,7 +282,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> VisibilityBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> VisibilityBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }
@@ -295,7 +295,7 @@ where
     /// Sets the replacement widget shown when child is not visible.
     pub fn replacement(
         self,
-        replacement: impl View + 'static,
+        replacement: impl IntoElement,
     ) -> VisibilityBuilder<SetReplacement<S>> {
         self.replacement_internal(Box::new(replacement))
     }

@@ -157,7 +157,7 @@ impl SizedOverflowBox {
     /// ```rust,ignore
     /// let box = SizedOverflowBox::new(Some(100.0), Some(100.0), child);
     /// ```
-    pub fn new(width: Option<f32>, height: Option<f32>, child: impl View + 'static) -> Self {
+    pub fn new(width: Option<f32>, height: Option<f32>, child: impl IntoElement) -> Self {
         Self {
             key: None,
             width,
@@ -190,7 +190,7 @@ impl SizedOverflowBox {
         child_max_width: Option<f32>,
         child_min_height: Option<f32>,
         child_max_height: Option<f32>,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -303,7 +303,7 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> SizedOverflowBoxBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> SizedOverflowBoxBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

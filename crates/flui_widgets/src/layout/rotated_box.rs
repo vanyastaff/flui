@@ -119,7 +119,7 @@ impl RotatedBox {
     /// ```rust,ignore
     /// let widget = RotatedBox::new(QuarterTurns::One, child);
     /// ```
-    pub fn new(quarter_turns: QuarterTurns, child: impl View + 'static) -> Self {
+    pub fn new(quarter_turns: QuarterTurns, child: impl IntoElement) -> Self {
         Self {
             key: None,
             quarter_turns,
@@ -134,7 +134,7 @@ impl RotatedBox {
     /// ```rust,ignore
     /// let widget = RotatedBox::rotate_90(Text::new("Vertical"));
     /// ```
-    pub fn rotate_90(child: impl View + 'static) -> Self {
+    pub fn rotate_90(child: impl IntoElement) -> Self {
         Self::new(QuarterTurns::One, child)
     }
 
@@ -145,7 +145,7 @@ impl RotatedBox {
     /// ```rust,ignore
     /// let widget = RotatedBox::rotate_180(child);
     /// ```
-    pub fn rotate_180(child: impl View + 'static) -> Self {
+    pub fn rotate_180(child: impl IntoElement) -> Self {
         Self::new(QuarterTurns::Two, child)
     }
 
@@ -156,7 +156,7 @@ impl RotatedBox {
     /// ```rust,ignore
     /// let widget = RotatedBox::rotate_270(child);
     /// ```
-    pub fn rotate_270(child: impl View + 'static) -> Self {
+    pub fn rotate_270(child: impl IntoElement) -> Self {
         Self::new(QuarterTurns::Three, child)
     }
 
@@ -194,7 +194,7 @@ where
     ///     .child(Text::new("Rotated"))
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> RotatedBoxBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> RotatedBoxBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

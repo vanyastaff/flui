@@ -116,7 +116,7 @@ impl ClipRect {
     /// ```rust,ignore
     /// ClipRect::with_child(Clip::HardEdge, OverflowingWidget::new())
     /// ```
-    pub fn with_child(clip_behavior: Clip, child: impl View + 'static) -> Self {
+    pub fn with_child(clip_behavior: Clip, child: impl IntoElement) -> Self {
         Self::builder()
             .clip_behavior(clip_behavior)
             .child(child)
@@ -124,7 +124,7 @@ impl ClipRect {
     }
 
     /// Sets the child widget.
-    pub fn set_child(&mut self, child: impl View + 'static) {
+    pub fn set_child(&mut self, child: impl IntoElement) {
         self.child = Some(Box::new(child));
     }
 }
@@ -154,7 +154,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> ClipRectBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> ClipRectBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

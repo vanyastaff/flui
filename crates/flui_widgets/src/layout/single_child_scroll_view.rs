@@ -54,7 +54,7 @@ pub struct SingleChildScrollView {
 
 impl SingleChildScrollView {
     /// Create a new SingleChildScrollView
-    pub fn new(child: impl View + 'static) -> Self {
+    pub fn new(child: impl IntoElement) -> Self {
         Self {
             child: child.into_element(),
             direction: Axis::Vertical,
@@ -67,12 +67,12 @@ impl SingleChildScrollView {
     }
 
     /// Create a vertical SingleChildScrollView
-    pub fn vertical(child: impl View + 'static) -> Self {
+    pub fn vertical(child: impl IntoElement) -> Self {
         Self::new(child)
     }
 
     /// Create a horizontal SingleChildScrollView
-    pub fn horizontal(child: impl View + 'static) -> Self {
+    pub fn horizontal(child: impl IntoElement) -> Self {
         Self {
             child: child.into_element(),
             direction: Axis::Horizontal,
@@ -133,7 +133,7 @@ impl SingleChildScrollViewBuilder {
     }
 
     /// Set the child widget
-    pub fn child(mut self, child: impl View + 'static) -> Self {
+    pub fn child(mut self, child: impl IntoElement) -> Self {
         self.child = Some(child.into_element());
         self
     }

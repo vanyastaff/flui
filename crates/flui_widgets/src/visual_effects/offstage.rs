@@ -122,7 +122,7 @@ impl Offstage {
     /// ```rust,ignore
     /// Offstage::with_child(true, ExpensiveWidget::new())
     /// ```
-    pub fn with_child(offstage: bool, child: impl View + 'static) -> Self {
+    pub fn with_child(offstage: bool, child: impl IntoElement) -> Self {
         Self::builder().offstage(offstage).child(child).build()
     }
 
@@ -149,7 +149,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> OffstageBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> OffstageBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }

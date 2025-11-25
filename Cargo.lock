@@ -1285,6 +1285,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-view"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-tree",
+ "parking_lot",
+ "serde",
+ "thiserror 2.0.17",
+ "tracing",
+]
+
+[[package]]
 name = "flui_animation"
 version = "0.1.0"
 dependencies = [

@@ -156,7 +156,7 @@ impl OverflowBox {
         max_width: Option<f32>,
         min_height: Option<f32>,
         max_height: Option<f32>,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -176,7 +176,7 @@ impl OverflowBox {
     /// ```rust,ignore
     /// let widget = OverflowBox::with_alignment(Alignment::TOP_LEFT, child);
     /// ```
-    pub fn with_alignment(alignment: Alignment, child: impl View + 'static) -> Self {
+    pub fn with_alignment(alignment: Alignment, child: impl IntoElement) -> Self {
         Self {
             key: None,
             min_width: None,
@@ -234,7 +234,7 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> OverflowBoxBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> OverflowBoxBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

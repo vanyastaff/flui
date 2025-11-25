@@ -181,7 +181,7 @@ where
     ///     .child(Container::new())
     ///     .build()
     /// ```
-    pub fn child(self, child: impl View + 'static) -> FlexibleBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> FlexibleBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }
@@ -216,7 +216,7 @@ impl Flexible {
     /// ```rust,ignore
     /// let widget = Flexible::new(1, Container::new());
     /// ```
-    pub fn new(flex: i32, child: impl View + 'static) -> Self {
+    pub fn new(flex: i32, child: impl IntoElement) -> Self {
         Self {
             key: None,
             flex,
@@ -239,7 +239,7 @@ impl Flexible {
     /// ```rust,ignore
     /// let widget = Flexible::tight(2, Container::new());
     /// ```
-    pub fn tight(flex: i32, child: impl View + 'static) -> Self {
+    pub fn tight(flex: i32, child: impl IntoElement) -> Self {
         Self {
             key: None,
             flex,

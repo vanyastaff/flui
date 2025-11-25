@@ -168,7 +168,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> IntrinsicHeightBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> IntrinsicHeightBuilder<SetChild<S>> {
         self.child_internal(child.into_element())
     }
 }

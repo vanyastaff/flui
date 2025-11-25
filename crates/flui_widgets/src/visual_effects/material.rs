@@ -130,7 +130,7 @@ impl Material {
     /// ```rust,ignore
     /// let material = Material::new(4.0, Color::WHITE, child);
     /// ```
-    pub fn new(elevation: f32, color: Color, child: impl View + 'static) -> Self {
+    pub fn new(elevation: f32, color: Color, child: impl IntoElement) -> Self {
         Self {
             key: None,
             elevation,
@@ -152,7 +152,7 @@ impl Material {
         elevation: f32,
         border_radius: f32,
         color: Color,
-        child: impl View + 'static,
+        child: impl IntoElement,
     ) -> Self {
         Self {
             key: None,
@@ -171,7 +171,7 @@ impl Material {
     /// ```rust,ignore
     /// let material = Material::flat(Color::WHITE, child);
     /// ```
-    pub fn flat(color: Color, child: impl View + 'static) -> Self {
+    pub fn flat(color: Color, child: impl IntoElement) -> Self {
         Self {
             key: None,
             elevation: 0.0,
@@ -204,7 +204,7 @@ where
     S::Child: IsUnset,
 {
     /// Sets the child widget (works in builder chain).
-    pub fn child(self, child: impl View + 'static) -> MaterialBuilder<SetChild<S>> {
+    pub fn child(self, child: impl IntoElement) -> MaterialBuilder<SetChild<S>> {
         self.child_internal(Box::new(child))
     }
 }
