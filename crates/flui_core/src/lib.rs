@@ -23,12 +23,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 // =============================================================================
-// Internal Modules (not yet migrated to separate crates)
+// Internal Modules
 // =============================================================================
 
 pub mod pipeline;
 pub mod prelude;
-pub mod view;
 
 // =============================================================================
 // Re-exports from flui-types
