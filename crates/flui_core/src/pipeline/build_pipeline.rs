@@ -1061,3 +1061,61 @@ mod tests {
         assert_eq!(saved, 1);
     }
 }
+
+// =============================================================================
+// Trait Implementations
+// =============================================================================
+
+impl flui_pipeline::BuildPhase for BuildPipeline {
+    type Tree = Arc<parking_lot::RwLock<ElementTree>>;
+
+    fn schedule(&mut self, element_id: ElementId, depth: usize) {
+        // Delegate to existing method
+        BuildPipeline::schedule(self, element_id, depth);
+    }
+
+    fn has_dirty(&self) -> bool {
+        BuildPipeline::has_dirty(self)
+    }
+
+    fn dirty_count(&self) -> usize {
+        BuildPipeline::dirty_count(self)
+    }
+
+    fn clear_dirty(&mut self) {
+        BuildPipeline::clear_dirty(self);
+    }
+
+    fn rebuild_dirty(&mut self, tree: &Self::Tree) -> usize {
+        BuildPipeline::rebuild_dirty_parallel(self, tree)
+    }
+
+    fn flush_queues(&mut self) {
+        // Flush rebuild queue from signals
+        self.flush_rebuild_queue();
+        // Flush batch if batching enabled
+        self.flush_batch();
+    }
+}
+
+impl flui_pipeline::BatchedExecution for BuildPipeline {
+    fn enable_batching(&mut self, duration: Duration) {
+        BuildPipeline::enable_batching(self, duration);
+    }
+
+    fn disable_batching(&mut self) {
+        BuildPipeline::disable_batching(self);
+    }
+
+    fn is_batching_enabled(&self) -> bool {
+        BuildPipeline::is_batching_enabled(self)
+    }
+
+    fn flush_batch(&mut self) {
+        BuildPipeline::flush_batch(self);
+    }
+
+    fn should_flush_batch(&self) -> bool {
+        BuildPipeline::should_flush_batch(self)
+    }
+}

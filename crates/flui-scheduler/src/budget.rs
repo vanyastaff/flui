@@ -61,6 +61,9 @@ pub struct FrameBudget {
 
     /// Frame time history (last 60 frames)
     frame_times: Vec<f64>,
+
+    /// Frame counter
+    frame_count: u64,
 }
 
 impl FrameBudget {
@@ -77,6 +80,7 @@ impl FrameBudget {
             last_frame_time_ms: 0.0,
             avg_frame_time_ms: 0.0,
             frame_times: Vec::with_capacity(60),
+            frame_count: 0,
         }
     }
 
@@ -216,6 +220,43 @@ impl FrameBudget {
         self.last_frame_time_ms > self.target_duration_ms * 1.5
     }
 
+    /// Get the current frame count
+    ///
+    /// Returns the total number of frames that have been completed since creation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_scheduler::FrameBudget;
+    ///
+    /// let mut budget = FrameBudget::new(60);
+    /// assert_eq!(budget.frame_count(), 0);
+    ///
+    /// budget.reset();
+    /// budget.finish_frame();
+    /// assert_eq!(budget.frame_count(), 1);
+    /// ```
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
+    }
+
+    /// Set the target FPS
+    ///
+    /// Updates the target frame rate and recalculates the target duration.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use flui_scheduler::FrameBudget;
+    ///
+    /// let mut budget = FrameBudget::new(60);
+    /// budget.set_target_fps(120);
+    /// assert_eq!(budget.target_fps(), 120);
+    /// ```
+    pub fn set_target_fps(&mut self, target_fps: u32) {
+        self.target_duration_ms = 1000.0 / target_fps as f64;
+    }
+
     /// Check if deadline is approaching (>80% of budget used)
     ///
     /// Returns `true` if 80% or more of the frame budget has been consumed.
@@ -272,6 +313,7 @@ impl FrameBudget {
         if let Some(start) = self.frame_start {
             let total_ms = start.elapsed().as_secs_f64() * 1000.0;
             self.record_frame_time(total_ms);
+            self.frame_count += 1;
         }
         self.frame_start = None;
     }

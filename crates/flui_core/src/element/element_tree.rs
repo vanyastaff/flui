@@ -964,6 +964,32 @@ impl ElementTree {
         self.nodes.clear();
     }
 
+    /// Get the root element ID
+    ///
+    /// Returns the first element without a parent (root element).
+    /// Returns `None` if the tree is empty.
+    ///
+    /// # Complexity
+    ///
+    /// O(n) where n is the number of elements (scans for parentless element)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(root_id) = tree.root_id() {
+    ///     println!("Root element: {:?}", root_id);
+    /// }
+    /// ```
+    pub fn root_id(&self) -> Option<ElementId> {
+        // Find first element without a parent
+        for (index, node) in &self.nodes {
+            if node.element.parent().is_none() {
+                return Some(ElementId::new(index + 1));
+            }
+        }
+        None
+    }
+
     // ========== Iteration ==========
 
     /// Visit all render elements in the tree

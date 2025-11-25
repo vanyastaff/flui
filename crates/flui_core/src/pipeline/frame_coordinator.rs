@@ -791,3 +791,132 @@ impl Default for FrameCoordinator {
         Self::new()
     }
 }
+
+// =============================================================================
+// Trait Implementations
+// =============================================================================
+
+/// Note: PipelineCoordinator trait requires mutable Tree access, but FrameCoordinator
+/// uses Arc<RwLock<ElementTree>>. This implementation provides a simplified adapter.
+/// For full trait compliance, consider using the direct methods on FrameCoordinator.
+impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
+    type Tree = Arc<RwLock<ElementTree>>;
+    type Constraints = BoxConstraints;
+    type Size = flui_types::Size;
+    type Layer = Box<flui_engine::CanvasLayer>;
+
+    fn config(&self) -> &flui_pipeline::CoordinatorConfig {
+        // Return a static default config - real config is in FrameBudget
+        static DEFAULT_CONFIG: std::sync::OnceLock<flui_pipeline::CoordinatorConfig> =
+            std::sync::OnceLock::new();
+        DEFAULT_CONFIG.get_or_init(|| {
+            let budget = self.budget.lock();
+            flui_pipeline::CoordinatorConfig::new(budget.target_fps())
+        })
+    }
+
+    fn set_config(&mut self, config: flui_pipeline::CoordinatorConfig) {
+        let mut budget = self.budget.lock();
+        budget.set_target_fps(config.target_fps);
+    }
+
+    fn frame_number(&self) -> u64 {
+        self.budget.lock().frame_count()
+    }
+
+    fn has_dirty_build(&self) -> bool {
+        self.build.has_dirty()
+    }
+
+    fn has_dirty_layout(&self) -> bool {
+        self.layout.has_dirty()
+    }
+
+    fn has_dirty_paint(&self) -> bool {
+        self.paint.has_dirty()
+    }
+
+    fn schedule_build(&mut self, id: ElementId, depth: usize) {
+        self.build.schedule(id, depth);
+    }
+
+    fn mark_needs_layout(&mut self, id: ElementId) {
+        self.layout.mark_dirty(id);
+    }
+
+    fn mark_needs_paint(&mut self, id: ElementId) {
+        self.paint.mark_dirty(id);
+    }
+
+    fn flush_build(&mut self, tree: &mut Self::Tree) -> flui_pipeline::PipelineResult<usize> {
+        // Flush queues first
+        self.build.flush_rebuild_queue();
+        self.build.flush_batch();
+
+        let count = self.build.rebuild_dirty_parallel(tree);
+        Ok(count)
+    }
+
+    fn flush_layout(
+        &mut self,
+        tree: &mut Self::Tree,
+        constraints: Self::Constraints,
+    ) -> flui_pipeline::PipelineResult<Option<Self::Size>> {
+        // Get root_id from tree
+        let root_id = {
+            let tree_guard = tree.read();
+            tree_guard.root_id()
+        };
+
+        FrameCoordinator::flush_layout(self, tree, root_id, constraints).map_err(Into::into)
+    }
+
+    fn flush_paint(
+        &mut self,
+        tree: &mut Self::Tree,
+    ) -> flui_pipeline::PipelineResult<Option<Self::Layer>> {
+        // Get root_id from tree
+        let root_id = {
+            let tree_guard = tree.read();
+            tree_guard.root_id()
+        };
+
+        FrameCoordinator::flush_paint(self, tree, root_id).map_err(Into::into)
+    }
+
+    fn execute_frame(
+        &mut self,
+        tree: &mut Self::Tree,
+        constraints: Self::Constraints,
+    ) -> flui_pipeline::PipelineResult<flui_pipeline::FrameResult<Self::Layer>> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+
+        // Get root_id
+        let root_id = {
+            let tree_guard = tree.read();
+            tree_guard.root_id()
+        };
+
+        // Execute frame using existing method
+        let layer = self
+            .build_frame(tree, root_id, constraints)
+            .map_err(|e| -> flui_pipeline::PipelineError { e.into() })?;
+
+        let frame_time = start.elapsed();
+        let budget = self.budget.lock();
+
+        Ok(flui_pipeline::FrameResult {
+            layer,
+            root_size: None, // Could extract from layout
+            frame_number: budget.frame_count(),
+            build_processed: 0,
+            build_iterations: 0,
+            layout_processed: 0,
+            paint_processed: 0,
+            frame_time,
+            over_budget: budget.is_over_budget(),
+        })
+    }
+}

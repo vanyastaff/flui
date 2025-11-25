@@ -39,7 +39,13 @@
 //! ```
 
 use flui_foundation::ElementId;
+use parking_lot::RwLock;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+// ============================================================================
+// LockFreeDirtySet (Bitmap-based, for large fixed-capacity sets)
+// ============================================================================
 
 /// Lock-free dirty set using atomic bitmaps
 ///
@@ -96,12 +102,11 @@ impl LockFreeDirtySet {
     /// If the element is already marked, this is a no-op.
     #[inline]
     pub fn mark_dirty(&self, id: ElementId) {
-        // ElementId is 1-based, convert to 0-based index
         let id_val = id.get();
         if id_val > self.capacity {
             return; // Silently ignore out-of-bounds
         }
-        let index = id_val - 1;
+        let index = id_val - 1; // ElementId is 1-based
 
         let word_idx = index / 64;
         let bit_idx = index % 64;
@@ -111,8 +116,6 @@ impl LockFreeDirtySet {
     }
 
     /// Check if element is dirty (lock-free!)
-    ///
-    /// Reads the bit corresponding to this element ID using atomic load.
     #[inline]
     pub fn is_dirty(&self, id: ElementId) -> bool {
         let id_val = id.get();
@@ -130,8 +133,6 @@ impl LockFreeDirtySet {
     }
 
     /// Clear dirty flag for element (lock-free!)
-    ///
-    /// Clears the bit corresponding to this element ID using atomic AND.
     #[inline]
     pub fn clear_dirty(&self, id: ElementId) {
         let id_val = id.get();
@@ -147,10 +148,7 @@ impl LockFreeDirtySet {
         self.bitmap[word_idx].fetch_and(!mask, Ordering::Release);
     }
 
-    /// Collect all dirty element IDs (lock-free read!)
-    ///
-    /// Scans the bitmap and returns a Vec of all element IDs that are
-    /// currently marked as dirty.
+    /// Collect all dirty element IDs
     ///
     /// # Performance
     ///
@@ -161,17 +159,14 @@ impl LockFreeDirtySet {
         for (word_idx, word) in self.bitmap.iter().enumerate() {
             let bits = word.load(Ordering::Acquire);
             if bits == 0 {
-                continue; // Skip empty words
+                continue;
             }
 
-            // Find set bits using bit manipulation
             for bit_idx in 0..64 {
                 if (bits & (1u64 << bit_idx)) != 0 {
                     let index = word_idx * 64 + bit_idx;
                     if index < self.capacity {
-                        // ElementId is 1-based, so add 1 to convert from 0-based index
-                        let id = index + 1;
-                        dirty.push(ElementId::new(id));
+                        dirty.push(ElementId::new(index + 1));
                     }
                 }
             }
@@ -244,18 +239,14 @@ impl LockFreeDirtySet {
 }
 
 impl Default for LockFreeDirtySet {
-    /// Create dirty set with default capacity of 10,000 elements
     fn default() -> Self {
         Self::new(10_000)
     }
 }
 
 // ============================================================================
-// Simple DirtySet (HashSet-based, for smaller sets)
+// DirtySet (HashSet-based, for smaller dynamic sets)
 // ============================================================================
-
-use parking_lot::RwLock;
-use std::collections::HashSet;
 
 /// A simple thread-safe dirty set using HashSet.
 ///

@@ -126,6 +126,10 @@ pub mod visitor;
 
 // Core traits
 pub use traits::{
+    // Pipeline traits
+    hit_test_with_callback,
+    layout_with_callback,
+    paint_with_callback,
     AtomicDirtyFlags,
 
     DirtyTracking,
@@ -133,25 +137,68 @@ pub use traits::{
     // Combined traits
     FullTreeAccess,
 
+    HitTestVisitable,
+    HitTestVisitableExt,
+    LayoutVisitable,
+    LayoutVisitableExt,
+    PaintVisitable,
+    PaintVisitableExt,
+    PipelinePhaseCoordinator,
     // Render access
     RenderTreeAccess,
     RenderTreeAccessExt,
+    RenderTreeExt,
+    SimpleTreeVisitor as PipelineSimpleVisitor,
     TreeMut,
 
     TreeNav,
     TreeNavDyn,
+    TreeOperation,
     // Tree access
     TreeRead,
     // Object-safe variants
     TreeReadDyn,
+    TreeVisitor as PipelineTreeVisitor,
+
     TreeWrite,
     TreeWriteNav,
 };
 
 // Iterators
 pub use iter::{
-    Ancestors, AncestorsWithDepth, BreadthFirstIter, DepthFirstIter, DepthFirstOrder, Descendants,
-    DescendantsWithDepth, RenderAncestors, RenderChildren, RenderDescendants, Siblings,
+    // Utility functions
+    collect_render_children,
+    count_render_children,
+    count_render_elements,
+    find_render_ancestor,
+    find_render_root,
+    first_render_child,
+    has_render_children,
+    is_render_descendant,
+    is_render_leaf,
+    last_render_child,
+    lowest_common_render_ancestor,
+    nth_render_child,
+    render_depth,
+    render_parent,
+    Ancestors,
+    AncestorsWithDepth,
+    BreadthFirstIter,
+    DepthFirstIter,
+    DepthFirstOrder,
+    Descendants,
+    DescendantsWithDepth,
+    RenderAncestors,
+    RenderChildren,
+    RenderChildrenWithIndex,
+    RenderDescendants,
+    RenderLeaves,
+    RenderPath,
+    RenderSiblings,
+    RenderSubtree,
+    RenderSubtreeItem,
+    SiblingDirection,
+    Siblings,
     SiblingsDirection,
 };
 

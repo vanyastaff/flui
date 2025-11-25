@@ -1,476 +1,259 @@
 //! Triple buffering for lock-free frame exchange
 //!
-//! Provides a triple buffer for exchanging frames between
-//! the render thread and compositor thread with minimal contention.
+//! Provides a lock-free mechanism for exchanging frames between
+//! producer (pipeline) and consumer (renderer) threads.
 //!
-//! # Triple Buffering
-//!
-//! Triple buffering allows:
-//! - **Concurrent read/write**: Compositor reads while renderer writes
-//! - **No blocking**: Atomic index swapping
-//! - **No tearing**: Always read complete frames
-//!
-//! # How It Works
+//! # Architecture
 //!
 //! ```text
-//! [Write Buffer] ←─ Render thread writes here (protected by RwLock)
-//! [Swap Buffer]  ←─ Ready to swap (atomic rotation)
-//! [Read Buffer]  ←─ Compositor reads from here (protected by RwLock)
+//! Producer (Pipeline)          Consumer (Renderer)
+//!         │                           │
+//!    ┌────▼────┐                 ┌────▼────┐
+//!    │ Write   │                 │  Read   │
+//!    │ Buffer  │                 │ Buffer  │
+//!    └────┬────┘                 └────┬────┘
+//!         │                           │
+//!    ┌────▼────────────────────────────▼────┐
+//!    │         Shared Buffer (atomic)        │
+//!    └──────────────────────────────────────┘
 //! ```
-//!
-//! When render completes, buffers rotate atomically.
-//! When compositor needs a frame, it reads from the read buffer.
 //!
 //! # Example
 //!
 //! ```rust
 //! use flui_pipeline::TripleBuffer;
 //!
-//! // Create triple buffer with initial value
-//! let buffer = TripleBuffer::new(0);
+//! let buffer = TripleBuffer::new(0, 0, 0);
 //!
-//! // Writer thread
-//! {
-//!     let write_buf = buffer.write();
-//!     *write_buf.write() = 42;
-//! }
-//! buffer.swap();
+//! // Producer: write new frame
+//! buffer.write(42);
 //!
-//! // Reader thread
-//! {
-//!     let read_buf = buffer.read();
-//!     let value = *read_buf.read();
-//!     println!("Read: {}", value);
-//! }
+//! // Consumer: read latest frame
+//! let frame = buffer.read();
+//! assert_eq!(frame, 42);
 //! ```
 
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
-/// Triple buffer for concurrent frame data exchange
+/// Lock-free triple buffer for frame exchange
 ///
-/// Allows a single producer and single consumer to exchange data
-/// with minimal contention using three rotating buffers.
-///
-/// # Type Parameter
-///
-/// - `T`: Must implement `Clone` for buffer initialization
+/// Uses three buffers to allow concurrent read/write without blocking:
+/// - Write buffer: Producer writes here
+/// - Read buffer: Consumer reads here
+/// - Shared buffer: Used for exchange (atomic swap)
 ///
 /// # Thread Safety
 ///
-/// - Safe for one producer and one consumer thread
-/// - Uses RwLock for buffer access (readers don't block each other)
-/// - Uses atomic operations for index management
-///
-/// # Performance
-///
-/// - Read: ~50ns (RwLock read acquisition)
-/// - Write: ~50ns (RwLock write acquisition)
-/// - Swap: ~10ns (3 atomic stores)
-/// - Zero contention between read and write operations
-///
-/// # Design
-///
-/// This implementation uses parking_lot's RwLock which provides:
-/// - No writer starvation
-/// - Faster than std::sync::RwLock
-/// - Already a dependency in the project
+/// - Write operations are exclusive (single producer)
+/// - Read operations are exclusive (single consumer)
+/// - Exchange is lock-free using atomic operations
 #[derive(Debug)]
 pub struct TripleBuffer<T> {
-    /// Three buffers, each protected by RwLock
-    buffers: [Arc<RwLock<T>>; 3],
+    /// The three buffers
+    buffers: [Mutex<T>; 3],
 
-    /// Index of buffer currently being read from
-    read_idx: AtomicUsize,
+    /// Current write buffer index (0-2)
+    write_index: AtomicUsize,
 
-    /// Index of buffer currently being written to
-    write_idx: AtomicUsize,
+    /// Current read buffer index (0-2)
+    read_index: AtomicUsize,
 
-    /// Index of buffer ready to swap
-    swap_idx: AtomicUsize,
+    /// Shared buffer index for exchange
+    shared_index: AtomicUsize,
+
+    /// Flag indicating new data is available
+    new_data: AtomicUsize,
 }
 
 impl<T: Clone> TripleBuffer<T> {
-    /// Create new triple buffer with initial value
-    ///
-    /// All three buffers are initialized with clones of the initial value.
-    ///
-    /// # Parameters
-    ///
-    /// - `initial`: Initial value for all three buffers
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::TripleBuffer;
-    ///
-    /// let buffer = TripleBuffer::new(42);
-    /// ```
-    pub fn new(initial: T) -> Self {
+    /// Create a new triple buffer with initial values
+    pub fn new(a: T, b: T, c: T) -> Self {
         Self {
-            buffers: [
-                Arc::new(RwLock::new(initial.clone())),
-                Arc::new(RwLock::new(initial.clone())),
-                Arc::new(RwLock::new(initial)),
-            ],
-            read_idx: AtomicUsize::new(0),
-            write_idx: AtomicUsize::new(1),
-            swap_idx: AtomicUsize::new(2),
+            buffers: [Mutex::new(a), Mutex::new(b), Mutex::new(c)],
+            write_index: AtomicUsize::new(0),
+            read_index: AtomicUsize::new(1),
+            shared_index: AtomicUsize::new(2),
+            new_data: AtomicUsize::new(0),
         }
     }
 
-    /// Get read buffer for compositor
+    /// Write a new value to the write buffer
     ///
-    /// Returns an Arc to the RwLock-protected buffer that the compositor
-    /// should read from. The compositor can acquire a read lock without
-    /// blocking the renderer.
-    ///
-    /// # Returns
-    ///
-    /// Arc to the current read buffer's RwLock.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::TripleBuffer;
-    ///
-    /// let buffer = TripleBuffer::new(42);
-    /// let read_buf = buffer.read();
-    /// let value = *read_buf.read();
-    /// assert_eq!(value, 42);
-    /// ```
-    #[inline]
-    pub fn read(&self) -> Arc<RwLock<T>> {
-        let idx = self.read_idx.load(Ordering::Acquire);
-        Arc::clone(&self.buffers[idx])
+    /// After writing, the buffer is exchanged with the shared buffer,
+    /// making the new value available to the reader.
+    pub fn write(&self, value: T) {
+        let write_idx = self.write_index.load(Ordering::Acquire);
+
+        // Write to the write buffer
+        {
+            let mut buffer = self.buffers[write_idx].lock();
+            *buffer = value;
+        }
+
+        // Swap write and shared buffers
+        let shared_idx = self.shared_index.swap(write_idx, Ordering::AcqRel);
+        self.write_index.store(shared_idx, Ordering::Release);
+
+        // Mark new data available
+        self.new_data.store(1, Ordering::Release);
     }
 
-    /// Get write buffer for renderer
+    /// Read the latest value from the read buffer
     ///
-    /// Returns an Arc to the RwLock-protected buffer that the renderer
-    /// should write to. The renderer can acquire a write lock without
-    /// blocking the compositor.
-    ///
-    /// # Returns
-    ///
-    /// Arc to the current write buffer's RwLock.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::TripleBuffer;
-    ///
-    /// let buffer = TripleBuffer::new(0);
-    /// let write_buf = buffer.write();
-    /// *write_buf.write() = 42;
-    /// ```
-    #[inline]
-    pub fn write(&self) -> Arc<RwLock<T>> {
-        let idx = self.write_idx.load(Ordering::Acquire);
-        Arc::clone(&self.buffers[idx])
+    /// If new data is available, swaps the read and shared buffers first.
+    pub fn read(&self) -> T {
+        // Check if new data available
+        if self.new_data.swap(0, Ordering::AcqRel) != 0 {
+            // Swap read and shared buffers
+            let read_idx = self.read_index.load(Ordering::Acquire);
+            let shared_idx = self.shared_index.swap(read_idx, Ordering::AcqRel);
+            self.read_index.store(shared_idx, Ordering::Release);
+        }
+
+        let read_idx = self.read_index.load(Ordering::Acquire);
+        self.buffers[read_idx].lock().clone()
     }
 
-    /// Swap buffers atomically
-    ///
-    /// Rotates the three buffer indices:
-    /// - Write buffer becomes read buffer (new data becomes available)
-    /// - Read buffer becomes swap buffer (old data goes to reserve)
-    /// - Swap buffer becomes write buffer (reserve becomes writable)
-    ///
-    /// This operation is atomic and lock-free.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::TripleBuffer;
-    ///
-    /// let buffer = TripleBuffer::new(0);
-    ///
-    /// // Renderer writes
-    /// {
-    ///     let write_buf = buffer.write();
-    ///     *write_buf.write() = 42;
-    /// }
-    ///
-    /// // Swap to make data available
-    /// buffer.swap();
-    ///
-    /// // Compositor reads
-    /// {
-    ///     let read_buf = buffer.read();
-    ///     assert_eq!(*read_buf.read(), 42);
-    /// }
-    /// ```
-    ///
-    /// # Thread Safety
-    ///
-    /// This method uses Release ordering for stores and Acquire ordering
-    /// for loads to ensure proper memory synchronization between threads.
-    pub fn swap(&self) {
-        let read = self.read_idx.load(Ordering::Acquire);
-        let write = self.write_idx.load(Ordering::Acquire);
-        let swap = self.swap_idx.load(Ordering::Acquire);
-
-        // Rotate buffers so written data becomes readable:
-        // - Write buffer → Read buffer (new data becomes available)
-        // - Read buffer → Swap buffer (old read goes to reserve)
-        // - Swap buffer → Write buffer (reserve becomes writable)
-        self.read_idx.store(write, Ordering::Release);
-        self.swap_idx.store(read, Ordering::Release);
-        self.write_idx.store(swap, Ordering::Release);
+    /// Check if new data is available without consuming it
+    pub fn has_new_data(&self) -> bool {
+        self.new_data.load(Ordering::Acquire) != 0
     }
 
-    /// Get current read index (for debugging/testing)
+    /// Get a reference to the current read buffer value
     ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::TripleBuffer;
-    ///
-    /// let buffer = TripleBuffer::new(0);
-    /// assert_eq!(buffer.read_index(), 0);
-    /// ```
-    #[inline]
-    pub fn read_index(&self) -> usize {
-        self.read_idx.load(Ordering::Acquire)
-    }
-
-    /// Get current write index (for debugging/testing)
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::TripleBuffer;
-    ///
-    /// let buffer = TripleBuffer::new(0);
-    /// assert_eq!(buffer.write_index(), 1);
-    /// ```
-    #[inline]
-    pub fn write_index(&self) -> usize {
-        self.write_idx.load(Ordering::Acquire)
-    }
-
-    /// Get current swap index (for debugging/testing)
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::TripleBuffer;
-    ///
-    /// let buffer = TripleBuffer::new(0);
-    /// assert_eq!(buffer.swap_index(), 2);
-    /// ```
-    #[inline]
-    pub fn swap_index(&self) -> usize {
-        self.swap_idx.load(Ordering::Acquire)
+    /// Does not check for or consume new data.
+    pub fn peek(&self) -> T {
+        let read_idx = self.read_index.load(Ordering::Acquire);
+        self.buffers[read_idx].lock().clone()
     }
 }
 
-impl<T: Clone> Clone for TripleBuffer<T> {
-    fn clone(&self) -> Self {
-        Self {
-            buffers: [
-                Arc::clone(&self.buffers[0]),
-                Arc::clone(&self.buffers[1]),
-                Arc::clone(&self.buffers[2]),
-            ],
-            read_idx: AtomicUsize::new(self.read_idx.load(Ordering::Acquire)),
-            write_idx: AtomicUsize::new(self.write_idx.load(Ordering::Acquire)),
-            swap_idx: AtomicUsize::new(self.swap_idx.load(Ordering::Acquire)),
-        }
+impl<T: Clone + Default> TripleBuffer<T> {
+    /// Create a triple buffer with default values
+    pub fn with_default() -> Self {
+        Self::new(T::default(), T::default(), T::default())
+    }
+}
+
+impl<T: Clone + Default> Default for TripleBuffer<T> {
+    fn default() -> Self {
+        Self::with_default()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
 
     #[test]
-    fn test_triple_buffer_creation() {
-        let buffer = TripleBuffer::new(42);
+    fn test_basic_read_write() {
+        let buffer = TripleBuffer::new(0, 0, 0);
 
-        let read_buf = buffer.read();
-        assert_eq!(*read_buf.read(), 42);
+        buffer.write(42);
+        assert_eq!(buffer.read(), 42);
 
-        assert_eq!(buffer.read_index(), 0);
-        assert_eq!(buffer.write_index(), 1);
-        assert_eq!(buffer.swap_index(), 2);
+        buffer.write(100);
+        assert_eq!(buffer.read(), 100);
     }
 
     #[test]
-    fn test_write_and_read() {
-        let buffer = TripleBuffer::new(0);
+    fn test_new_data_flag() {
+        let buffer = TripleBuffer::new(0, 0, 0);
 
-        // Write new value
-        {
-            let write_buf = buffer.write();
-            *write_buf.write() = 42;
-        }
+        assert!(!buffer.has_new_data());
 
-        // Swap to make available
-        buffer.swap();
+        buffer.write(42);
+        assert!(buffer.has_new_data());
 
-        // Read new value
-        {
-            let read_buf = buffer.read();
-            assert_eq!(*read_buf.read(), 42);
-        }
+        buffer.read();
+        assert!(!buffer.has_new_data());
     }
 
     #[test]
-    fn test_multiple_swaps() {
-        let buffer = TripleBuffer::new(0);
+    fn test_peek() {
+        let buffer = TripleBuffer::new(0, 0, 0);
 
-        // Write 1
-        {
-            let write_buf = buffer.write();
-            *write_buf.write() = 1;
-        }
-        buffer.swap();
+        buffer.write(42);
 
-        // Write 2
-        {
-            let write_buf = buffer.write();
-            *write_buf.write() = 2;
-        }
-        buffer.swap();
+        // Peek doesn't consume new data
+        assert_eq!(buffer.peek(), 0); // Still reading old buffer
+        assert!(buffer.has_new_data());
 
-        // Write 3
-        {
-            let write_buf = buffer.write();
-            *write_buf.write() = 3;
-        }
-        buffer.swap();
-
-        // Should read latest value
-        {
-            let read_buf = buffer.read();
-            assert_eq!(*read_buf.read(), 3);
-        }
+        // Read swaps and consumes
+        assert_eq!(buffer.read(), 42);
+        assert!(!buffer.has_new_data());
     }
 
     #[test]
-    fn test_index_rotation() {
-        let buffer = TripleBuffer::new(0);
-
-        let initial_read = buffer.read_index();
-        let initial_write = buffer.write_index();
-        let initial_swap = buffer.swap_index();
-
-        buffer.swap();
-
-        // Check rotation: write → read, read → swap, swap → write
-        assert_eq!(buffer.read_index(), initial_write);
-        assert_eq!(buffer.swap_index(), initial_read);
-        assert_eq!(buffer.write_index(), initial_swap);
-    }
-
-    #[test]
-    fn test_concurrent_read_write() {
-        let buffer = TripleBuffer::new(String::from("initial"));
+    fn test_concurrent_access() {
+        let buffer = Arc::new(TripleBuffer::new(0i32, 0, 0));
+        let buffer_writer = Arc::clone(&buffer);
+        let buffer_reader = Arc::clone(&buffer);
 
         // Writer thread
-        let buffer_clone = buffer.clone();
         let writer = thread::spawn(move || {
-            for i in 1..=10 {
-                {
-                    let write_buf = buffer_clone.write();
-                    *write_buf.write() = format!("frame {}", i);
-                }
-                buffer_clone.swap();
-                thread::sleep(Duration::from_millis(10));
+            for i in 1..=1000 {
+                buffer_writer.write(i);
+                thread::yield_now();
             }
         });
 
         // Reader thread
-        let buffer_clone = buffer.clone();
         let reader = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(5)); // Offset start
-            for _ in 0..10 {
-                let read_buf = buffer_clone.read();
-                let _value = read_buf.read().clone();
-                // Just verify we can read without panicking
-                thread::sleep(Duration::from_millis(10));
+            let mut last_value = 0;
+            let mut read_count = 0;
+
+            while read_count < 100 {
+                if buffer_reader.has_new_data() {
+                    let value = buffer_reader.read();
+                    // Values should be monotonically increasing
+                    assert!(value >= last_value);
+                    last_value = value;
+                    read_count += 1;
+                }
+                thread::yield_now();
             }
+
+            last_value
         });
 
         writer.join().unwrap();
-        reader.join().unwrap();
+        let final_value = reader.join().unwrap();
+
+        // Reader should have seen some values
+        assert!(final_value > 0);
     }
 
     #[test]
-    fn test_no_read_write_interference() {
-        let buffer = TripleBuffer::new(0);
-
-        // Get read and write buffers
-        let read_buf = buffer.read();
-        let write_buf = buffer.write();
-
-        // Should be able to hold both locks simultaneously
-        let _read_guard = read_buf.read();
-        let _write_guard = write_buf.write();
-
-        // No deadlock - different buffers
+    fn test_default() {
+        let buffer: TripleBuffer<i32> = TripleBuffer::default();
+        assert_eq!(buffer.read(), 0);
     }
 
     #[test]
-    fn test_clone() {
-        let original = TripleBuffer::new(42);
+    fn test_multiple_writes() {
+        let buffer = TripleBuffer::new(0, 0, 0);
 
-        {
-            let write_buf = original.write();
-            *write_buf.write() = 100;
-        }
-        original.swap();
+        // Multiple writes before read
+        buffer.write(1);
+        buffer.write(2);
+        buffer.write(3);
 
-        let clone = original.clone();
-
-        // Clone should share the same buffers
-        {
-            let read_buf = clone.read();
-            assert_eq!(*read_buf.read(), 100);
-        }
-
-        // But have independent indices
-        assert_eq!(original.read_index(), clone.read_index());
+        // Reader should get the latest value
+        assert_eq!(buffer.read(), 3);
     }
 
     #[test]
-    fn test_rapid_swaps() {
-        let buffer = TripleBuffer::new(0);
+    fn test_string_buffer() {
+        let buffer = TripleBuffer::new(String::new(), String::new(), String::new());
 
-        // Swap many times rapidly
-        for i in 0..1000 {
-            {
-                let write_buf = buffer.write();
-                *write_buf.write() = i;
-            }
-            buffer.swap();
-        }
+        buffer.write("hello".to_string());
+        assert_eq!(buffer.read(), "hello");
 
-        // Should read latest
-        {
-            let read_buf = buffer.read();
-            assert_eq!(*read_buf.read(), 999);
-        }
-    }
-
-    #[test]
-    fn test_string_data() {
-        let buffer = TripleBuffer::new(String::from("hello"));
-
-        {
-            let write_buf = buffer.write();
-            *write_buf.write() = String::from("world");
-        }
-        buffer.swap();
-
-        {
-            let read_buf = buffer.read();
-            assert_eq!(read_buf.read().as_str(), "world");
-        }
+        buffer.write("world".to_string());
+        assert_eq!(buffer.read(), "world");
     }
 }

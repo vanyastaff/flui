@@ -93,11 +93,18 @@ pub trait RenderObject: Send + Sync + Debug {
     /// * `children` - Slice of child element IDs
     /// * `position` - Position in local coordinates
     /// * `geometry` - Computed geometry from layout
+    /// * `hit_test_child` - Callback to hit test a child: `(child_id, position) -> bool`
     ///
     /// # Returns
     ///
     /// `true` if this element or any child was hit
-    fn hit_test(&self, children: &[ElementId], position: Offset, geometry: &Geometry) -> bool;
+    fn hit_test(
+        &self,
+        children: &[ElementId],
+        position: Offset,
+        geometry: &Geometry,
+        hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
+    ) -> bool;
 
     /// Returns a debug name for this render object.
     fn debug_name(&self) -> &'static str {
@@ -143,7 +150,13 @@ mod tests {
             Canvas::new()
         }
 
-        fn hit_test(&self, _children: &[ElementId], position: Offset, geometry: &Geometry) -> bool {
+        fn hit_test(
+            &self,
+            _children: &[ElementId],
+            position: Offset,
+            geometry: &Geometry,
+            _hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
+        ) -> bool {
             let size = geometry.as_box();
             position.dx >= 0.0
                 && position.dy >= 0.0
@@ -183,8 +196,8 @@ mod tests {
 
         let geometry = Geometry::Box(Size::new(100.0, 50.0));
 
-        assert!(render.hit_test(&[], Offset::new(50.0, 25.0), &geometry));
-        assert!(!render.hit_test(&[], Offset::new(150.0, 25.0), &geometry));
-        assert!(!render.hit_test(&[], Offset::new(-10.0, 25.0), &geometry));
+        assert!(render.hit_test(&[], Offset::new(50.0, 25.0), &geometry, &mut |_, _| false));
+        assert!(!render.hit_test(&[], Offset::new(150.0, 25.0), &geometry, &mut |_, _| false));
+        assert!(!render.hit_test(&[], Offset::new(-10.0, 25.0), &geometry, &mut |_, _| false));
     }
 }

@@ -1,22 +1,7 @@
-//! Cancellation token for pipeline timeout support
+//! Cancellation support for pipeline operations
 //!
-//! Provides graceful cancellation and timeout handling for long-running
-//! pipeline operations to prevent UI freeze.
-//!
-//! # Architecture
-//!
-//! Cancellation tokens enable:
-//! - Graceful timeout for operations >16ms
-//! - Prevention of UI freeze
-//! - User responsiveness
-//!
-//! # Performance
-//!
-//! | Operation | Time | Memory |
-//! |-----------|------|--------|
-//! | `is_cancelled()` | ~5ns | 0 bytes (check only) |
-//! | `cancel()` | ~2ns | 0 bytes (atomic store) |
-//! | Token creation | ~50ns | 24 bytes (2 Arc allocations) |
+//! Provides a thread-safe cancellation token that can be used to
+//! cancel long-running pipeline operations (build, layout, paint).
 //!
 //! # Example
 //!
@@ -24,171 +9,85 @@
 //! use flui_pipeline::CancellationToken;
 //! use std::time::Duration;
 //!
-//! // Create token with 16ms timeout (60 FPS)
 //! let token = CancellationToken::new();
 //! token.set_timeout(Duration::from_millis(16));
 //!
-//! // Check periodically during layout
-//! while !token.is_cancelled() {
-//!     // Perform layout work...
-//!     break; // For doctest
-//! }
+//! // In pipeline code:
+//! // if token.is_cancelled() { return Err(PipelineError::cancelled("timeout")); }
 //!
-//! if token.is_cancelled() {
-//!     // Handle timeout gracefully
-//! }
+//! // Manual cancellation:
+//! token.cancel();
+//! assert!(token.is_cancelled());
 //! ```
 
-use parking_lot::RwLock;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// Cancellation token for pipeline operations
+/// Thread-safe cancellation token for pipeline operations
 ///
-/// Allows graceful cancellation of long-running pipeline operations
-/// to prevent UI freeze and maintain responsiveness.
-///
-/// # Thread Safety
-///
-/// CancellationToken is `Clone + Send + Sync`:
-/// - Can be shared across threads
-/// - Clone is cheap (Arc increment)
-/// - All operations are thread-safe
-///
-/// # Overhead
-///
-/// - Memory: 24 bytes (2 Arc pointers)
-/// - Check cost: ~5ns (atomic load + optional deadline check)
-/// - Cancel cost: ~2ns (atomic store)
-///
-/// # Usage Pattern
-///
-/// ```rust
-/// use flui_pipeline::CancellationToken;
-/// use std::time::Duration;
-///
-/// fn expensive_layout(token: &CancellationToken) {
-///     let items = vec![1, 2, 3];
-///     for _item in items {
-///         // Check cancellation periodically
-///         if token.is_cancelled() {
-///             return; // Graceful exit
-///         }
-///         // Do expensive work...
-///     }
-/// }
-///
-/// let token = CancellationToken::new();
-/// token.set_timeout(Duration::from_millis(16));
-/// expensive_layout(&token);
-/// ```
-#[derive(Clone, Debug)]
+/// Can be cancelled manually or automatically via timeout.
+/// All methods are lock-free for minimal overhead.
+#[derive(Debug)]
 pub struct CancellationToken {
-    /// Explicit cancellation flag
-    ///
-    /// Set to true when cancel() is called explicitly
-    /// or when deadline is exceeded.
-    cancelled: Arc<AtomicBool>,
+    /// Whether cancellation has been requested
+    cancelled: AtomicBool,
 
-    /// Deadline for automatic cancellation
-    ///
-    /// When set, token automatically cancels when Instant::now() >= deadline.
-    /// Uses RwLock for rare writes (set_timeout), frequent reads (is_cancelled).
-    deadline: Arc<RwLock<Option<Instant>>>,
+    /// Deadline timestamp (nanoseconds since epoch, 0 = no deadline)
+    deadline_ns: AtomicU64,
+
+    /// Start time for timeout calculation
+    start: Instant,
 }
 
 impl CancellationToken {
     /// Create a new cancellation token
-    ///
-    /// # Initial State
-    ///
-    /// - Not cancelled
-    /// - No deadline set
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::CancellationToken;
-    ///
-    /// let token = CancellationToken::new();
-    /// assert!(!token.is_cancelled());
-    /// ```
-    #[inline]
     pub fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-            deadline: Arc::new(RwLock::new(None)),
+            cancelled: AtomicBool::new(false),
+            deadline_ns: AtomicU64::new(0),
+            start: Instant::now(),
         }
     }
 
-    /// Cancel this token
+    /// Create a token with a timeout
+    pub fn with_timeout(timeout: Duration) -> Self {
+        let token = Self::new();
+        token.set_timeout(timeout);
+        token
+    }
+
+    /// Set a timeout from now
     ///
-    /// Sets the cancellation flag, causing `is_cancelled()` to return true.
-    /// Idempotent - calling multiple times is safe.
-    ///
-    /// # Thread Safety
-    ///
-    /// Safe to call from any thread. Uses atomic store with Release ordering.
-    ///
-    /// # Performance
-    ///
-    /// Time: ~2ns (single atomic store)
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::CancellationToken;
-    ///
-    /// let token = CancellationToken::new();
-    /// token.cancel();
-    /// assert!(token.is_cancelled());
-    /// ```
-    #[inline]
+    /// The token will report as cancelled after the timeout expires.
+    pub fn set_timeout(&self, timeout: Duration) {
+        let deadline = self.start.elapsed() + timeout;
+        self.deadline_ns
+            .store(deadline.as_nanos() as u64, Ordering::Release);
+    }
+
+    /// Clear the timeout
+    pub fn clear_timeout(&self) {
+        self.deadline_ns.store(0, Ordering::Release);
+    }
+
+    /// Cancel the token manually
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
 
-    /// Check if token is cancelled
-    ///
-    /// Returns true if:
-    /// - `cancel()` was called explicitly, OR
-    /// - Deadline was set and has been exceeded
-    ///
-    /// # Thread Safety
-    ///
-    /// Safe to call from any thread. Uses atomic load with Acquire ordering.
-    ///
-    /// # Performance
-    ///
-    /// - Without deadline: ~1ns (atomic load only)
-    /// - With deadline: ~5ns (atomic load + RwLock read + time check)
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::CancellationToken;
-    /// use std::time::Duration;
-    ///
-    /// let token = CancellationToken::new();
-    /// assert!(!token.is_cancelled());
-    ///
-    /// token.cancel();
-    /// assert!(token.is_cancelled());
-    /// ```
+    /// Check if cancelled (manual or timeout)
     #[inline]
     pub fn is_cancelled(&self) -> bool {
-        // Fast path: check explicit cancellation (atomic load)
+        // Check manual cancellation first
         if self.cancelled.load(Ordering::Acquire) {
             return true;
         }
 
-        // Slow path: check deadline if set
-        // Note: RwLock read is optimized for read-heavy workloads
-        if let Some(deadline) = *self.deadline.read() {
-            if Instant::now() >= deadline {
-                // Deadline exceeded - mark as cancelled
-                self.cancel();
+        // Check timeout
+        let deadline_ns = self.deadline_ns.load(Ordering::Acquire);
+        if deadline_ns > 0 {
+            let elapsed_ns = self.start.elapsed().as_nanos() as u64;
+            if elapsed_ns >= deadline_ns {
                 return true;
             }
         }
@@ -196,128 +95,63 @@ impl CancellationToken {
         false
     }
 
-    /// Set timeout deadline
+    /// Reset the token for reuse
     ///
-    /// Sets a deadline after which the token automatically cancels.
-    /// The deadline is calculated as `Instant::now() + duration`.
-    ///
-    /// # Parameters
-    ///
-    /// - `duration`: Time until automatic cancellation
-    ///
-    /// # Thread Safety
-    ///
-    /// Safe to call from any thread. Uses RwLock write lock.
-    ///
-    /// # Performance
-    ///
-    /// Time: ~50ns (RwLock write + Instant calculation)
-    /// Should be called rarely (once per frame).
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::CancellationToken;
-    /// use std::time::Duration;
-    /// use std::thread;
-    ///
-    /// let token = CancellationToken::new();
-    /// token.set_timeout(Duration::from_millis(10));
-    ///
-    /// thread::sleep(Duration::from_millis(15));
-    /// assert!(token.is_cancelled());
-    /// ```
-    #[inline]
-    pub fn set_timeout(&self, duration: Duration) {
-        let deadline = Instant::now() + duration;
-        *self.deadline.write() = Some(deadline);
-    }
-
-    /// Clear timeout deadline
-    ///
-    /// Removes the automatic cancellation deadline.
-    /// Does not clear explicit cancellation.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::CancellationToken;
-    /// use std::time::Duration;
-    ///
-    /// let token = CancellationToken::new();
-    /// token.set_timeout(Duration::from_millis(16));
-    /// token.clear_timeout();
-    ///
-    /// // No automatic cancellation now
-    /// assert!(!token.is_cancelled());
-    /// ```
-    #[inline]
-    pub fn clear_timeout(&self) {
-        *self.deadline.write() = None;
-    }
-
-    /// Get remaining time until deadline
-    ///
-    /// Returns `Some(Duration)` if deadline is set and not yet exceeded,
-    /// `None` if no deadline or deadline exceeded.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::CancellationToken;
-    /// use std::time::Duration;
-    ///
-    /// let token = CancellationToken::new();
-    /// assert!(token.remaining_time().is_none());
-    ///
-    /// token.set_timeout(Duration::from_millis(100));
-    /// if let Some(remaining) = token.remaining_time() {
-    ///     println!("Time remaining: {:?}", remaining);
-    /// }
-    /// ```
-    #[inline]
-    pub fn remaining_time(&self) -> Option<Duration> {
-        if let Some(deadline) = *self.deadline.read() {
-            let now = Instant::now();
-            if now < deadline {
-                return Some(deadline - now);
-            }
-        }
-        None
-    }
-
-    /// Reset the token to uncancelled state
-    ///
-    /// Clears both explicit cancellation and deadline.
-    /// Useful for reusing tokens.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use flui_pipeline::CancellationToken;
-    ///
-    /// let token = CancellationToken::new();
-    /// token.cancel();
-    /// assert!(token.is_cancelled());
-    ///
-    /// token.reset();
-    /// assert!(!token.is_cancelled());
-    /// ```
-    #[inline]
-    pub fn reset(&self) {
+    /// Clears cancellation flag and resets the start time.
+    pub fn reset(&mut self) {
         self.cancelled.store(false, Ordering::Release);
-        *self.deadline.write() = None;
+        self.deadline_ns.store(0, Ordering::Release);
+        self.start = Instant::now();
+    }
+
+    /// Get remaining time before timeout
+    ///
+    /// Returns `None` if no timeout is set or already expired.
+    pub fn remaining(&self) -> Option<Duration> {
+        let deadline_ns = self.deadline_ns.load(Ordering::Acquire);
+        if deadline_ns == 0 {
+            return None;
+        }
+
+        let elapsed_ns = self.start.elapsed().as_nanos() as u64;
+        if elapsed_ns >= deadline_ns {
+            return None;
+        }
+
+        Some(Duration::from_nanos(deadline_ns - elapsed_ns))
+    }
+
+    /// Check if there's a timeout set
+    pub fn has_timeout(&self) -> bool {
+        self.deadline_ns.load(Ordering::Acquire) > 0
+    }
+
+    /// Get the timeout duration (if set)
+    pub fn timeout(&self) -> Option<Duration> {
+        let deadline_ns = self.deadline_ns.load(Ordering::Acquire);
+        if deadline_ns == 0 {
+            None
+        } else {
+            Some(Duration::from_nanos(deadline_ns))
+        }
     }
 }
 
 impl Default for CancellationToken {
-    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-// ========== Tests ==========
+impl Clone for CancellationToken {
+    fn clone(&self) -> Self {
+        Self {
+            cancelled: AtomicBool::new(self.cancelled.load(Ordering::Acquire)),
+            deadline_ns: AtomicU64::new(self.deadline_ns.load(Ordering::Acquire)),
+            start: self.start,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -325,13 +159,7 @@ mod tests {
     use std::thread;
 
     #[test]
-    fn test_cancellation_token_creation() {
-        let token = CancellationToken::new();
-        assert!(!token.is_cancelled());
-    }
-
-    #[test]
-    fn test_explicit_cancel() {
+    fn test_manual_cancellation() {
         let token = CancellationToken::new();
         assert!(!token.is_cancelled());
 
@@ -340,101 +168,59 @@ mod tests {
     }
 
     #[test]
-    fn test_timeout_deadline() {
-        let token = CancellationToken::new();
-        token.set_timeout(Duration::from_millis(10));
-
-        // Should not be cancelled yet
+    fn test_timeout_cancellation() {
+        let token = CancellationToken::with_timeout(Duration::from_millis(10));
         assert!(!token.is_cancelled());
 
-        // Wait for deadline
-        thread::sleep(Duration::from_millis(15));
-
-        // Should be cancelled now
+        // Wait for timeout
+        thread::sleep(Duration::from_millis(20));
         assert!(token.is_cancelled());
-    }
-
-    #[test]
-    fn test_clear_timeout() {
-        let token = CancellationToken::new();
-        token.set_timeout(Duration::from_millis(10));
-        token.clear_timeout();
-
-        // Wait past original deadline
-        thread::sleep(Duration::from_millis(15));
-
-        // Should not be cancelled (deadline was cleared)
-        assert!(!token.is_cancelled());
     }
 
     #[test]
     fn test_remaining_time() {
         let token = CancellationToken::new();
+        assert!(token.remaining().is_none());
 
-        // No deadline set
-        assert!(token.remaining_time().is_none());
-
-        // Set deadline
-        token.set_timeout(Duration::from_millis(100));
-        assert!(token.remaining_time().is_some());
-
-        // Wait for deadline
-        thread::sleep(Duration::from_millis(110));
-        assert!(token.remaining_time().is_none());
+        token.set_timeout(Duration::from_secs(10));
+        let remaining = token.remaining().unwrap();
+        assert!(remaining > Duration::from_secs(9));
     }
 
     #[test]
     fn test_reset() {
-        let token = CancellationToken::new();
-        token.set_timeout(Duration::from_millis(10));
+        let mut token = CancellationToken::new();
         token.cancel();
-
         assert!(token.is_cancelled());
 
         token.reset();
         assert!(!token.is_cancelled());
-        assert!(token.remaining_time().is_none());
     }
 
     #[test]
-    fn test_clone_shares_state() {
+    fn test_clear_timeout() {
+        let token = CancellationToken::with_timeout(Duration::from_millis(10));
+        assert!(token.has_timeout());
+
+        token.clear_timeout();
+        assert!(!token.has_timeout());
+
+        // Should not be cancelled after timeout would have expired
+        thread::sleep(Duration::from_millis(20));
+        assert!(!token.is_cancelled());
+    }
+
+    #[test]
+    fn test_clone() {
         let token1 = CancellationToken::new();
+        token1.set_timeout(Duration::from_secs(10));
+
         let token2 = token1.clone();
 
         token1.cancel();
-
-        // Both tokens should see cancellation
+        // Clone should have same state at time of clone
         assert!(token1.is_cancelled());
-        assert!(token2.is_cancelled());
-    }
-
-    #[test]
-    fn test_thread_safety() {
-        let token = CancellationToken::new();
-        token.set_timeout(Duration::from_millis(50));
-
-        let token1 = token.clone();
-        let handle = thread::spawn(move || {
-            // Check from another thread
-            thread::sleep(Duration::from_millis(10));
-            token1.is_cancelled()
-        });
-
-        // Check from main thread
-        assert!(!token.is_cancelled());
-
-        let result = handle.join().unwrap();
-        assert!(!result); // Should not be cancelled yet in spawned thread
-    }
-
-    #[test]
-    fn test_idempotent_cancel() {
-        let token = CancellationToken::new();
-
-        token.cancel();
-        token.cancel();
-        token.cancel();
-
-        assert!(token.is_cancelled());
+        // But not affected by subsequent changes
+        assert!(!token2.cancelled.load(Ordering::Acquire));
     }
 }

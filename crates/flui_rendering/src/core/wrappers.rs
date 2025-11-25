@@ -126,17 +126,17 @@ where
         self.inner.paint(offset, children, paint_child)
     }
 
-    fn hit_test(&self, children: &[ElementId], position: Offset, geometry: &Geometry) -> bool {
+    fn hit_test(
+        &self,
+        children: &[ElementId],
+        position: Offset,
+        geometry: &Geometry,
+        hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
+    ) -> bool {
         let size = geometry.as_box();
 
-        // Adapter for hit test child
-        let mut hit_test_child = |_id: ElementId, _pos: Offset| -> bool {
-            // In the full implementation, this would delegate to the tree
-            false
-        };
-
         self.inner
-            .hit_test(position, size, children, &mut hit_test_child)
+            .hit_test(position, size, children, hit_test_child)
     }
 
     fn debug_name(&self) -> &'static str {
@@ -251,17 +251,17 @@ where
         self.inner.paint(offset, children, paint_child)
     }
 
-    fn hit_test(&self, children: &[ElementId], position: Offset, geometry: &Geometry) -> bool {
+    fn hit_test(
+        &self,
+        children: &[ElementId],
+        position: Offset,
+        geometry: &Geometry,
+        hit_test_child: &mut dyn FnMut(ElementId, Offset) -> bool,
+    ) -> bool {
         let sliver_geometry = geometry.as_sliver();
 
-        // Adapter for hit test child
-        let mut hit_test_child = |_id: ElementId, _pos: Offset| -> bool {
-            // In the full implementation, this would delegate to the tree
-            false
-        };
-
         self.inner
-            .hit_test(position, sliver_geometry, children, &mut hit_test_child)
+            .hit_test(position, sliver_geometry, children, hit_test_child)
     }
 
     fn debug_name(&self) -> &'static str {

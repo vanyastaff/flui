@@ -976,34 +976,20 @@ impl PipelineOwner {
             None => return crate::element::ElementHitTestResult::new(),
         };
 
-        // Try cache first
-        if let Some(cache) = self.features.hit_test_cache_mut() {
-            if let Some(cached_result) = cache.get(position, root_id) {
-                return cached_result;
-            }
+        // Invalidate cache on hit test (layout may have changed)
+        self.features.invalidate_hit_test_cache();
 
-            // Cache miss - do actual hit test and store result
-            let tree = self.tree.read();
-            let result = tree.hit_test(root_id, position);
-            drop(tree);
-
-            cache.insert(position, root_id, result.clone());
-            result
-        } else {
-            // No cache - direct hit test
-            let tree = self.tree.read();
-            tree.hit_test(root_id, position)
-        }
+        // Perform hit test on tree
+        // Note: Cache is currently disabled as ElementHitTestResult and HitTestResult
+        // are different types. Future work: unify or add conversion methods.
+        let tree = self.tree.read();
+        tree.hit_test(root_id, position)
     }
 
     /// Publish a frame to the triple buffer (convenience method, delegates to features)
     pub fn publish_frame(&mut self, layer: Box<flui_engine::CanvasLayer>) {
         if let Some(buffer) = self.features.frame_buffer_mut() {
-            let write_buf = buffer.write();
-            let mut write_guard = write_buf.write();
-            *write_guard = Arc::new(layer);
-            drop(write_guard);
-            buffer.swap();
+            buffer.write(Arc::new(layer));
         }
     }
 

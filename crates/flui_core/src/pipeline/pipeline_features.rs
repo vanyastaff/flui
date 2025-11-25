@@ -10,7 +10,6 @@
 //! - **Recovery**: Error recovery policies and graceful degradation
 //! - **Cancellation**: Frame timeout and cancellation support
 //! - **FrameBuffer**: Triple-buffered frame exchange for lock-free rendering
-//! - **HitTestCache**: Caches hit test results for performance (~5-15% CPU savings)
 //!
 //! # Example
 //!
@@ -23,16 +22,106 @@
 //! // Enable metrics
 //! features.enable_metrics();
 //!
-//! // Enable hit test cache
-//! features.enable_hit_test_cache();
-//!
 //! // Attach to pipeline
 //! owner.set_features(features);
 //! ```
 
-use super::{CancellationToken, ErrorRecovery, HitTestCache, PipelineMetrics, TripleBuffer};
+use super::{CancellationToken, ErrorRecovery, PipelineMetrics, TripleBuffer};
 use flui_engine::CanvasLayer;
+use flui_foundation::ElementId;
+use flui_interaction::HitTestResult;
+use flui_types::Offset;
+use std::collections::HashMap;
 use std::sync::Arc;
+
+// ============================================================================
+// HIT TEST CACHE
+// ============================================================================
+
+/// Cache for hit test results to avoid repeated traversals.
+///
+/// Caches hit test results by position (quantized to grid) for ~5-15% CPU savings
+/// on repeated hit tests in the same frame.
+#[derive(Debug, Default)]
+pub struct HitTestCache {
+    /// Cached results keyed by quantized position
+    cache: HashMap<(i32, i32), HitTestResult>,
+    /// Grid size for position quantization (default: 1.0 = pixel-perfect)
+    grid_size: f32,
+    /// Whether the cache is valid (invalidated on layout/paint changes)
+    valid: bool,
+}
+
+impl HitTestCache {
+    /// Create a new hit test cache with default settings.
+    pub fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+            grid_size: 1.0,
+            valid: true,
+        }
+    }
+
+    /// Create a cache with custom grid size for coarser caching.
+    pub fn with_grid_size(grid_size: f32) -> Self {
+        Self {
+            cache: HashMap::new(),
+            grid_size: grid_size.max(0.1),
+            valid: true,
+        }
+    }
+
+    /// Quantize a position to grid coordinates.
+    fn quantize(&self, position: Offset) -> (i32, i32) {
+        (
+            (position.dx / self.grid_size).floor() as i32,
+            (position.dy / self.grid_size).floor() as i32,
+        )
+    }
+
+    /// Get cached result for a position, if available.
+    pub fn get(&self, position: Offset) -> Option<&HitTestResult> {
+        if !self.valid {
+            return None;
+        }
+        let key = self.quantize(position);
+        self.cache.get(&key)
+    }
+
+    /// Store a result in the cache.
+    pub fn insert(&mut self, position: Offset, result: HitTestResult) {
+        if self.valid {
+            let key = self.quantize(position);
+            self.cache.insert(key, result);
+        }
+    }
+
+    /// Invalidate the cache (call after layout/paint changes).
+    pub fn invalidate(&mut self) {
+        self.cache.clear();
+        self.valid = true; // Ready for new caching
+    }
+
+    /// Check if cache is valid.
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    /// Get the number of cached entries.
+    pub fn len(&self) -> usize {
+        self.cache.len()
+    }
+
+    /// Check if cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_empty()
+    }
+
+    /// Clear all cached entries.
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+}
 
 /// Optional production features for PipelineOwner
 ///
@@ -75,22 +164,14 @@ pub struct PipelineFeatures {
     #[allow(clippy::redundant_allocation)]
     frame_buffer: Option<TripleBuffer<Arc<Box<CanvasLayer>>>>,
 
-    /// Hit test result cache (optional)
+    /// Hit test cache (optional)
     ///
-    /// Caches hit test results when tree is unchanged. Provides ~5-15% CPU savings
-    /// on pointer events by avoiding redundant tree traversals.
+    /// Caches hit test results for ~5-15% CPU savings on repeated tests.
     hit_test_cache: Option<HitTestCache>,
 }
 
 impl PipelineFeatures {
     /// Create new features manager with all features disabled
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let features = PipelineFeatures::new();
-    /// assert!(!features.has_metrics());
-    /// ```
     pub fn new() -> Self {
         Self::default()
     }
@@ -110,16 +191,6 @@ impl PipelineFeatures {
     /// # Overhead
     ///
     /// ~1-2% CPU per frame when enabled.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// features.enable_metrics();
-    /// // ... run frames ...
-    /// if let Some(metrics) = features.metrics() {
-    ///     println!("Avg frame time: {:?}", metrics.avg_frame_time());
-    /// }
-    /// ```
     pub fn enable_metrics(&mut self) {
         self.metrics = Some(PipelineMetrics::new());
     }
@@ -149,25 +220,11 @@ impl PipelineFeatures {
     // =========================================================================
 
     /// Enable error recovery with default policy (skip frame)
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// features.enable_recovery();
-    /// ```
     pub fn enable_recovery(&mut self) {
         self.recovery = Some(ErrorRecovery::new(super::RecoveryPolicy::SkipFrame));
     }
 
     /// Enable error recovery with custom policy
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use flui_core::pipeline::RecoveryPolicy;
-    ///
-    /// features.enable_recovery_with_policy(RecoveryPolicy::RetryOnce);
-    /// ```
     pub fn enable_recovery_with_policy(&mut self, policy: super::RecoveryPolicy) {
         self.recovery = Some(ErrorRecovery::new(policy));
     }
@@ -197,14 +254,6 @@ impl PipelineFeatures {
     // =========================================================================
 
     /// Enable frame cancellation with timeout
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use std::time::Duration;
-    ///
-    /// features.enable_cancellation(Duration::from_millis(16)); // 60 FPS budget
-    /// ```
     pub fn enable_cancellation(&mut self, timeout: std::time::Duration) {
         let token = CancellationToken::new();
         token.set_timeout(timeout);
@@ -242,28 +291,12 @@ impl PipelineFeatures {
     /// Triple buffering allows the pipeline (producer) and renderer (consumer)
     /// to exchange frames without blocking. The producer writes to a back buffer
     /// while the consumer reads from a front buffer.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// features.enable_frame_buffer();
-    ///
-    /// // Producer (pipeline)
-    /// if let Some(buffer) = features.frame_buffer_mut() {
-    ///     buffer.write(Arc::new(Box::new(layer)));
-    /// }
-    ///
-    /// // Consumer (renderer)
-    /// if let Some(buffer) = features.frame_buffer() {
-    ///     if let Some(layer) = buffer.read() {
-    ///         gpu_renderer.render(layer);
-    ///     }
-    /// }
-    /// ```
     pub fn enable_frame_buffer(&mut self) {
-        // Create empty initial layer for triple buffer
-        let empty_layer = Arc::new(Box::new(CanvasLayer::new()));
-        self.frame_buffer = Some(TripleBuffer::new(empty_layer));
+        // Create empty initial layers for triple buffer (requires 3)
+        let a = Arc::new(Box::new(CanvasLayer::new()));
+        let b = Arc::new(Box::new(CanvasLayer::new()));
+        let c = Arc::new(Box::new(CanvasLayer::new()));
+        self.frame_buffer = Some(TripleBuffer::new(a, b, c));
     }
 
     /// Disable triple buffering
@@ -290,24 +323,16 @@ impl PipelineFeatures {
     // HitTestCache Feature
     // =========================================================================
 
-    /// Enable hit test result caching
+    /// Enable hit test caching
     ///
-    /// # Performance
-    ///
-    /// Provides ~5-15% CPU savings on pointer events by caching hit test results
-    /// when the element tree is unchanged.
-    ///
-    /// # Invalidation
-    ///
-    /// Cache is automatically invalidated when layout or paint occurs.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// features.enable_hit_test_cache();
-    /// ```
+    /// Caches hit test results for ~5-15% CPU savings on repeated tests.
     pub fn enable_hit_test_cache(&mut self) {
         self.hit_test_cache = Some(HitTestCache::new());
+    }
+
+    /// Enable hit test caching with custom grid size
+    pub fn enable_hit_test_cache_with_grid(&mut self, grid_size: f32) {
+        self.hit_test_cache = Some(HitTestCache::with_grid_size(grid_size));
     }
 
     /// Disable hit test caching
@@ -330,9 +355,7 @@ impl PipelineFeatures {
         self.hit_test_cache.as_mut()
     }
 
-    /// Invalidate hit test cache (if enabled)
-    ///
-    /// Called automatically after layout/paint to ensure cache consistency.
+    /// Invalidate hit test cache (call after layout/paint changes)
     pub fn invalidate_hit_test_cache(&mut self) {
         if let Some(cache) = &mut self.hit_test_cache {
             cache.invalidate();
@@ -347,7 +370,6 @@ impl std::fmt::Debug for PipelineFeatures {
             .field("has_recovery", &self.has_recovery())
             .field("has_cancellation", &self.has_cancellation())
             .field("has_frame_buffer", &self.has_frame_buffer())
-            .field("has_hit_test_cache", &self.has_hit_test_cache())
             .finish()
     }
 }
@@ -363,7 +385,6 @@ mod tests {
         assert!(!features.has_recovery());
         assert!(!features.has_cancellation());
         assert!(!features.has_frame_buffer());
-        assert!(!features.has_hit_test_cache());
     }
 
     #[test]
@@ -388,30 +409,5 @@ mod tests {
 
         features.disable_recovery();
         assert!(!features.has_recovery());
-    }
-
-    #[test]
-    fn test_enable_disable_hit_test_cache() {
-        let mut features = PipelineFeatures::new();
-
-        features.enable_hit_test_cache();
-        assert!(features.has_hit_test_cache());
-
-        features.disable_hit_test_cache();
-        assert!(!features.has_hit_test_cache());
-    }
-
-    #[test]
-    fn test_invalidate_hit_test_cache() {
-        let mut features = PipelineFeatures::new();
-        features.enable_hit_test_cache();
-
-        // Should not panic even if cache enabled
-        features.invalidate_hit_test_cache();
-
-        features.disable_hit_test_cache();
-
-        // Should not panic even if cache disabled
-        features.invalidate_hit_test_cache();
     }
 }

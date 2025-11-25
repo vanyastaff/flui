@@ -612,6 +612,52 @@ impl fmt::Display for PipelineError {
 
 impl std::error::Error for PipelineError {}
 
+// =============================================================================
+// Conversion to flui_pipeline::PipelineError
+// =============================================================================
+
+impl From<PipelineError> for flui_pipeline::PipelineError {
+    fn from(err: PipelineError) -> Self {
+        match err {
+            PipelineError::Timeout { phase, duration } => {
+                flui_pipeline::PipelineError::Cancelled(format!(
+                    "Timeout in {:?} phase: {}ms elapsed (deadline: {}ms)",
+                    phase,
+                    duration.elapsed_ms(),
+                    duration.deadline_ms()
+                ))
+            }
+            PipelineError::LayoutError {
+                element_id,
+                message,
+            } => flui_pipeline::PipelineError::LayoutFailed {
+                element_id: flui_foundation::ElementId::new(element_id.get()),
+                message,
+            },
+            PipelineError::PaintError {
+                element_id,
+                message,
+            } => flui_pipeline::PipelineError::PaintFailed {
+                element_id: flui_foundation::ElementId::new(element_id.get()),
+                message,
+            },
+            PipelineError::BuildError {
+                element_id,
+                message,
+            } => flui_pipeline::PipelineError::BuildFailed {
+                element_id: flui_foundation::ElementId::new(element_id.get()),
+                message,
+            },
+            PipelineError::TreeCorruption { message } => {
+                flui_pipeline::PipelineError::InvalidState(format!("Tree corruption: {}", message))
+            }
+            PipelineError::InvalidState { message } => {
+                flui_pipeline::PipelineError::InvalidState(message)
+            }
+        }
+    }
+}
+
 /// Pipeline phase identifier
 ///
 /// Identifies which phase of the pipeline an error occurred in.

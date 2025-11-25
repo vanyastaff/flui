@@ -267,3 +267,35 @@ mod tests {
         assert!(!paint.has_dirty());
     }
 }
+
+// =============================================================================
+// Trait Implementations
+// =============================================================================
+
+impl flui_pipeline::PaintPhase for PaintPipeline {
+    type Tree = ElementTree;
+
+    fn mark_dirty(&self, element_id: ElementId) {
+        PaintPipeline::mark_dirty(self, element_id);
+    }
+
+    fn has_dirty(&self) -> bool {
+        PaintPipeline::has_dirty(self)
+    }
+
+    fn dirty_count(&self) -> usize {
+        PaintPipeline::dirty_count(self)
+    }
+
+    fn is_dirty(&self, element_id: ElementId) -> bool {
+        PaintPipeline::is_dirty(self, element_id)
+    }
+
+    fn clear_dirty(&mut self) {
+        PaintPipeline::clear_dirty(self);
+    }
+
+    fn generate_layers(&mut self, tree: &mut Self::Tree) -> flui_pipeline::PipelineResult<usize> {
+        PaintPipeline::generate_layers(self, tree).map_err(Into::into)
+    }
+}

@@ -15,6 +15,23 @@
 //! Contexts are generic over a tree type `T` that implements the appropriate
 //! traits from `flui-tree`. This allows the rendering layer to be independent
 //! of the concrete `ElementTree` implementation.
+//!
+//! # Integration with flui-tree
+//!
+//! These contexts work seamlessly with flui-tree iterators and utility functions:
+//!
+//! ```rust,ignore
+//! use flui_tree::{RenderChildren, first_render_child, count_render_children};
+//!
+//! // In a Multi-child render object:
+//! fn layout<T: LayoutTree>(&mut self, ctx: LayoutContext<'_, T, Multi, BoxProtocol>) -> Size {
+//!     // Use flui-tree iterators directly on the tree
+//!     let child_count = count_render_children(ctx.tree(), parent_id);
+//!
+//!     // Or use the extension methods
+//!     let sizes = ctx.tree_mut().layout_render_children(parent_id, constraints);
+//! }
+//! ```
 
 use std::fmt;
 use std::marker::PhantomData;

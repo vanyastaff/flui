@@ -6,16 +6,15 @@ authors.workspace = true
 license.workspace = true
 description = "Pipeline orchestration for FLUI - coordinates build, layout, and paint phases"
 repository.workspace = true
+keywords = ["ui", "pipeline", "rendering", "layout"]
+categories = ["gui", "rendering"]
 
 [dependencies]
 # FLUI internal
 flui-foundation = { path = "../flui-foundation" }
+flui-scheduler = { path = "../flui-scheduler" }
 flui-tree = { path = "../flui-tree" }
-flui_types = { path = "../flui_types" }
-flui_painting = { path = "../flui_painting" }
 
-# Scheduler integration (optional)
-flui-scheduler = { path = "../flui-scheduler", optional = true }
 
 # Core dependencies
 tracing.workspace = true
@@ -31,11 +30,9 @@ tracing-subscriber.workspace = true
 
 [features]
 default = []
-# Enable scheduler integration
-scheduler = ["dep:flui-scheduler"]
 # Enable parallel build
 parallel = ["dep:rayon"]
 # Enable serialization support
 serde = ["dep:serde", "flui-foundation/serde"]
 # Enable all features
-full = ["scheduler", "parallel", "serde"]
+full = ["parallel", "serde"]

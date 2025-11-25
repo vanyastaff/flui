@@ -323,3 +323,51 @@ mod tests {
         assert!(!layout.has_dirty());
     }
 }
+
+// =============================================================================
+// Trait Implementations
+// =============================================================================
+
+impl flui_pipeline::LayoutPhase for LayoutPipeline {
+    type Tree = ElementTree;
+    type Constraints = BoxConstraints;
+    type Size = flui_types::Size;
+
+    fn mark_dirty(&self, element_id: ElementId) {
+        LayoutPipeline::mark_dirty(self, element_id);
+    }
+
+    fn has_dirty(&self) -> bool {
+        LayoutPipeline::has_dirty(self)
+    }
+
+    fn dirty_count(&self) -> usize {
+        LayoutPipeline::dirty_count(self)
+    }
+
+    fn is_dirty(&self, element_id: ElementId) -> bool {
+        LayoutPipeline::is_dirty(self, element_id)
+    }
+
+    fn clear_dirty(&mut self) {
+        LayoutPipeline::clear_dirty(self);
+    }
+
+    fn compute_layout(
+        &mut self,
+        tree: &mut Self::Tree,
+        constraints: Self::Constraints,
+    ) -> flui_pipeline::PipelineResult<Vec<ElementId>> {
+        LayoutPipeline::compute_layout(self, tree, constraints).map_err(Into::into)
+    }
+}
+
+impl flui_pipeline::ParallelExecution for LayoutPipeline {
+    fn set_parallel(&mut self, enabled: bool) {
+        LayoutPipeline::set_parallel(self, enabled);
+    }
+
+    fn is_parallel(&self) -> bool {
+        LayoutPipeline::is_parallel(self)
+    }
+}

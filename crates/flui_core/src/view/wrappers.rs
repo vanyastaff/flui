@@ -679,7 +679,9 @@ where
     ) -> bool {
         let render_object = self.render_object.read();
         if let Some(render_object) = &*render_object {
-            return render_object.hit_test(children, position, geometry);
+            // TODO: Implement proper hit_test_child callback using tree
+            let mut hit_test_child = |_id: ElementId, _pos: Offset| -> bool { false };
+            return render_object.hit_test(children, position, geometry, &mut hit_test_child);
         }
         false
     }
@@ -828,6 +830,8 @@ impl ViewObject for RenderObjectWrapper {
         geometry: &flui_rendering::core::Geometry,
     ) -> bool {
         let render_object = self.render_object.read();
-        render_object.hit_test(children, position, geometry)
+        // TODO: Implement proper hit_test_child callback using tree
+        let mut hit_test_child = |_id: ElementId, _pos: Offset| -> bool { false };
+        render_object.hit_test(children, position, geometry, &mut hit_test_child)
     }
 }

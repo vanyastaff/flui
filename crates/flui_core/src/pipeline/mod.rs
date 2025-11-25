@@ -4,7 +4,7 @@
 //! build, layout, and paint. Each phase is implemented as a separate pipeline
 //! with clear responsibilities.
 //!
-//! # Architecture (After Refactoring)
+//! # Architecture
 //!
 //! ```text
 //! PipelineOwner (thin facade)
@@ -13,7 +13,7 @@
 //!   │   ├─ build: BuildPipeline        // View rebuild (with parallel support)
 //!   │   ├─ layout: LayoutPipeline      // Size computation
 //!   │   ├─ paint: PaintPipeline        // Layer generation
-//!   │   └─ budget: FrameBudget         // Frame timing & budget (from flui-scheduler)
+//!   │   └─ budget: FrameBudget         // Frame timing (from flui-scheduler)
 //!   ├─ root_mgr: RootManager           // Root element tracking
 //!   └─ Optional features (from flui-pipeline):
 //!       ├─ metrics: PipelineMetrics
@@ -25,27 +25,10 @@
 //! # Design Principles (SOLID)
 //!
 //! 1. **Single Responsibility**: Each component has ONE clear purpose
-//!    - `FrameCoordinator`: Orchestrates pipeline phases
-//!    - `RootManager`: Manages root element
-//!    - `ElementTree`: Stores elements
-//!    - `BuildPipeline`, `LayoutPipeline`, `PaintPipeline`: Phase-specific logic
-//!    - `FrameBudget` (from flui-scheduler): Manages frame timing and budget
-//!    - `parallel_build`: Parallel execution of independent subtrees
-//!
-//! 2. **Open/Closed**: Easy to extend with new features without modifying core
-//!
+//! 2. **Open/Closed**: Easy to extend without modifying core
 //! 3. **Liskov Substitution**: Components can be tested/mocked independently
-//!
 //! 4. **Interface Segregation**: Focused, minimal interfaces
-//!
-//! 5. **Dependency Inversion**: Depend on abstractions (traits), not implementations
-//!
-//! # Benefits
-//!
-//! - **Maintainability**: Changes localized to specific components
-//! - **Testability**: Each component testable in isolation
-//! - **Clarity**: Clear separation of concerns
-//! - **Extensibility**: New features don't bloat PipelineOwner
+//! 5. **Dependency Inversion**: Depend on abstractions (traits)
 //!
 //! # Example
 //!
@@ -56,22 +39,14 @@
 //! // Build complete frame
 //! let layer = owner.build_frame(constraints)?;
 //! ```
-//!
-//! # Production Features
-//!
-//! See [`PipelineOwner`] for optional production features:
-//! - Metrics (performance monitoring)
-//! - Cancellation (timeout support)
-//! - Error recovery (graceful degradation)
-//! - Frame buffer (lock-free frame exchange)
-//! - Parallel build (multi-threaded widget rebuilds)
-//! - Frame scheduling (frame budget management)
 
-// Core pipeline modules (flui_core specific)
+// =============================================================================
+// Core pipeline modules (flui-core specific)
+// =============================================================================
+
 pub mod build_pipeline;
 pub mod error;
 pub mod frame_coordinator;
-pub mod hit_test_cache;
 pub mod layout_pipeline;
 pub mod paint_pipeline;
 pub mod parallel_build;
@@ -82,22 +57,39 @@ pub mod pipeline_trait;
 pub mod rebuild_queue;
 pub mod root_manager;
 
-// Re-export from flui-pipeline (generic components)
+// =============================================================================
+// Re-exports from flui-pipeline (generic utilities)
+// =============================================================================
+
 pub use flui_pipeline::{
-    CancellationToken, DirtySet, ErrorRecovery, LockFreeDirtySet, PipelineMetrics, RecoveryAction,
-    RecoveryPolicy, TripleBuffer,
+    // Cancellation
+    CancellationToken,
+    // Dirty tracking
+    DirtySet,
+    // Error recovery
+    ErrorRecovery,
+    LockFreeDirtySet,
+    // Metrics
+    PipelineMetrics,
+    RecoveryAction,
+    RecoveryPolicy,
+    // Triple buffer
+    TripleBuffer,
 };
 
+// =============================================================================
 // Core pipeline exports
+// =============================================================================
+
 pub use crate::element::ElementTree;
 pub use build_pipeline::BuildPipeline;
 pub use error::{InvalidDuration, InvalidError, PipelineError, PipelinePhase, TimeoutDuration};
 pub use frame_coordinator::FrameCoordinator;
-pub use hit_test_cache::HitTestCache;
 pub use layout_pipeline::LayoutPipeline;
 pub use paint_pipeline::PaintPipeline;
+pub use parallel_build::{partition_subtrees, rebuild_dirty_parallel, Subtree};
 pub use pipeline_builder::PipelineBuilder;
-pub use pipeline_features::PipelineFeatures;
+pub use pipeline_features::{HitTestCache, PipelineFeatures};
 pub use pipeline_owner::PipelineOwner;
 pub use pipeline_trait::Pipeline;
 pub use rebuild_queue::RebuildQueue;
