@@ -3,208 +3,153 @@
 //! Rendering infrastructure for Flui using the Generic Three-Tree Architecture.
 //!
 //! This crate provides the RenderObject layer that handles layout and painting.
-//! It implements all 81 RenderObjects from Flutter using a generic architecture
-//! with zero-cost abstractions.
+//! It is independent of the concrete Element implementation, using trait
+//! abstractions from `flui-tree`.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! Widget (flui_widgets)
-//!     |
-//!     v
-//! Element (flui_core) - manages LayoutCache
-//!     |
-//!     v
-//! RenderObject (flui_rendering - this crate)
-//!     |
-//!     v
-//! Painting (flui_painting)
-//!     |
-//!     v
-//! egui::Painter
+//! flui-tree (traits)
+//!     │
+//!     ├── TreeRead, TreeNav, TreeWrite
+//!     ├── RenderTreeAccess, DirtyTracking
+//!     │
+//!     ▼
+//! flui-rendering (this crate)
+//!     │
+//!     ├── RenderObject (type-erased trait)
+//!     ├── RenderBox<A> (box protocol)
+//!     ├── SliverRender<A> (sliver protocol)
+//!     ├── LayoutTree, PaintTree, HitTestTree (concrete ops)
+//!     │
+//!     ▼
+//! flui-pipeline (implements traits)
 //! ```
 //!
-//! ## Unified Render Trait Architecture
+//! ## Key Types
 //!
-//! All render objects implement a single unified `Render` trait with:
+//! - **RenderObject**: Type-erased render trait for uniform storage
+//! - **RenderBox<A>**: Box protocol render trait with compile-time arity
+//! - **SliverRender<A>**: Sliver protocol render trait for scrollables
+//! - **LayoutContext/PaintContext**: Operation contexts for render methods
+//! - **Constraints/Geometry**: Type-erased layout types
 //!
-//! - **layout()**: Computes size given constraints (uses LayoutContext)
-//! - **paint()**: Generates layers for rendering (uses PaintContext)
-//! - **arity()**: Specifies child count (Exact(0), Exact(1), or Variable)
-//! - **as_any()**: Enables metadata access via downcasting
+//! ## Design Principles
 //!
-//! This unified approach provides clean abstractions while maintaining
-//! type safety and zero-cost performance.
-//!
-//! ## Key Principles
-//!
-//! 1. **Element manages caching**: LayoutCache lives in Element, not RenderObject
-//! 2. **Pure layout logic**: RenderObjects are pure functions with no side effects
+//! 1. **No concrete tree dependency**: Uses traits from `flui-tree`
+//! 2. **Callback-based operations**: Layout/paint via closures, not tree refs
 //! 3. **Zero-cost abstractions**: Generic types compile to concrete code
-//! 4. **Separation of concerns**: RenderObject (logic) vs flui_painting (rendering)
+//! 4. **Separation of concerns**: Rendering logic separate from tree management
 
 #![warn(missing_docs)]
 
 pub mod core;
 pub mod error;
-pub mod objects;
+// TODO: Migrate objects/ to use new trait-based architecture
+// pub mod objects;
 
-// Re-export from core module - the unified Render trait architecture
+// Re-export from core module
 pub use core::{
-    Arity, AtomicRenderFlags, BoxProtocol, EmptyRender, HitTestContext, LayoutContext,
-    LayoutProtocol, PaintContext, ParentData, ParentDataWithOffset, Protocol, RenderBox,
-    RenderBoxExt, RenderFlags, RenderObject, RenderState, RuntimeArity, SliverProtocol,
+    // Arity types
+    Arity,
+    AtLeast,
+    // Tree traits (re-exported from flui-tree)
+    AtomicDirtyFlags,
+    // Flags and state
+    AtomicRenderFlags,
+    // Protocol types
+    BoxConstraints,
+    // Parent data
+    BoxParentData,
+    BoxProtocol,
+    // Wrappers
+    BoxRenderWrapper,
+    ChildrenAccess,
+    // Geometry types
+    Constraints,
+    ContainerBoxParentData,
+    ContainerParentData,
+    DirtyTracking,
+    DirtyTrackingExt,
+    // From flui_foundation
+    ElementId,
+    // Render traits
+    EmptyRender,
+    Exact,
+    FixedChildren,
+    FullRenderTree,
+    Geometry,
+    // Contexts
+    HasTypedChildren,
+    // From flui_interaction
+    HitTestBehavior,
+    HitTestContext,
+    HitTestEntry,
+    HitTestResult,
+    HitTestTree,
+    HitTestable,
+    LayoutContext,
+    LayoutProtocol,
+    LayoutTree,
+    Leaf,
+    NoChildren,
+    Optional,
+    OptionalChild,
+    PaintContext,
+    PaintTree,
+    ParentData,
+    ParentDataWithOffset,
+    Protocol,
+    RenderBox,
+    RenderBoxExt,
+    RenderFlags,
+    RenderObject,
+    RenderState,
+    RenderTreeAccess,
+    RenderTreeAccessExt,
+    RuntimeArity,
+    Single,
+    SliceChildren,
+    SliverProtocol,
     SliverRender,
+    SliverRenderExt,
+    SliverRenderWrapper,
+    TreeNav,
+    TreeRead,
+    TreeWrite,
+    Variable,
 };
 
 // Re-export from flui_types for convenience
 pub use flui_types::layout::{FlexFit, StackFit};
-
-// Re-export commonly used RenderObjects from objects module
-pub use objects::{
-    // Effects (Optional)
-    DecorationPosition,
-    // Layout - Additional exports for widgets
-    FlexItemMetadata,
-    // Interaction callbacks
-    MouseCallbacks,
-    // Text (Leaf)
-    ParagraphData,
-    // Physical model
-    PhysicalShape,
-    PointerCallbacks,
-    PositionedMetadata,
-    RRectShape,
-    // Effects - Additional exports for widgets
-    RectShape,
-    // Interaction (Single) - already migrated
-    RenderAbsorbPointer,
-    // Layout (Optional) - already migrated
-    RenderAlign,
-    // Effects (Single) - already migrated
-    RenderAnimatedOpacity,
-    // Special/Semantics (Single) - already migrated
-    RenderAnnotatedRegion,
-    // Layout (Single) - already migrated
-    RenderAspectRatio,
-    RenderBackdropFilter,
-    RenderBaseline,
-    RenderBlockSemantics,
-    RenderClipOval,
-    RenderClipPath,
-    RenderClipRRect,
-    RenderClipRect,
-    // Special (Leaf)
-    RenderColoredBox,
-    RenderConstrainedBox,
-    RenderCustomPaint,
-    RenderDecoratedBox,
-    RenderEmpty,
-    RenderExcludeSemantics,
-    // Special - Additional exports for widgets
-    RenderFittedBox,
-    // Variable arity
-    RenderFlex,
-    RenderFlexItem,
-    RenderFractionallySizedBox,
-    RenderIgnorePointer,
-    RenderIndexedStack,
-    RenderIntrinsicHeight,
-    RenderIntrinsicWidth,
-    RenderLimitedBox,
-    RenderListBody,
-    RenderMergeSemantics,
-    RenderMetaData,
-    RenderMouseRegion,
-    RenderOffstage,
-    RenderOpacity,
-    RenderOverflowBox,
-    RenderPadding,
-    RenderParagraph,
-    RenderPhysicalModel,
-    RenderPointerListener,
-    RenderPositioned,
-    RenderPositionedBox,
-    RenderRepaintBoundary,
-    RenderRotatedBox,
-    RenderScrollView,
-    RenderShaderMask,
-    RenderShiftedBox,
-    RenderSizedBox,
-    RenderSizedOverflowBox,
-    RenderStack,
-    RenderTransform,
-    RenderView,
-    RenderVisibility,
-    RenderWrap,
-    WrapAlignment,
-    WrapCrossAlignment,
-};
-
-// Re-export all RenderObjects
-// pub use objects::{
-//     DecorationPosition,
-//     // Metadata types
-//     FlexItemMetadata,
-//     MouseCallbacks,
-//     ParagraphData,
-//     // Effects objects
-//     PhysicalShape,
-//     PositionedMetadata,
-//     RRectShape,
-//     RectShape,
-//     // Interaction objects
-//     RenderAbsorbPointer,
-//     // Layout objects
-//     RenderAlign,
-//     RenderAspectRatio,
-//     RenderBackdropFilter,
-//     RenderBaseline,
-//     RenderClipOval,
-//     RenderClipRRect,
-//     RenderClipRect,
-//     RenderColoredBox,
-//     RenderConstrainedBox,
-//     RenderDecoratedBox,
-//     RenderFittedBox,
-//     RenderFlex,
-//     RenderFlexItem,
-//     RenderFractionallySizedBox,
-//     RenderIgnorePointer,
-//     RenderIndexedStack,
-//     RenderIntrinsicHeight,
-//     RenderIntrinsicWidth,
-//     RenderLimitedBox,
-//     RenderListBody,
-//     RenderMouseRegion,
-//     RenderOffstage,
-//     RenderOpacity,
-//     RenderOverflowBox,
-
-//     RenderPadding,
-//     // Text objects
-//     RenderParagraph,
-//     RenderPhysicalModel,
-//     RenderPointerListener,
-//     RenderPositioned,
-//     RenderPositionedBox,
-//     RenderRepaintBoundary,
-//     RenderRotatedBox,
-//     RenderSizedBox,
-//     RenderSizedOverflowBox,
-//     RenderStack,
-//     RenderTransform,
-//     RenderVisibility,
-//     RenderWrap,
-//     WrapAlignment,
-//     WrapCrossAlignment,
-// };
+pub use flui_types::{SliverConstraints, SliverGeometry};
 
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::core::{
-        Arity, LayoutProtocol, RenderBox, RenderFlags, RenderObject, RenderState, RuntimeArity,
+        // Core traits
+        Arity,
+        BoxConstraints,
+        BoxProtocol,
+        Constraints,
+        ElementId,
+        EmptyRender,
+        Geometry,
+        LayoutProtocol,
+        LayoutTree,
+        Leaf,
+        Optional,
+        PaintTree,
+        Protocol,
+        RenderBox,
+        RenderBoxExt,
+        RenderFlags,
+        RenderObject,
+        RenderState,
+        RuntimeArity,
+        Single,
+        SliverProtocol,
+        SliverRender,
+        Variable,
     };
-
-    // pub use crate::objects::*;
 }

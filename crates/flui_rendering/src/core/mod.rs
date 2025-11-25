@@ -12,6 +12,10 @@
 //! - `RenderFlags`: Dirty tracking flags
 //! - `RenderState`: Render object lifecycle state
 //! - `ParentData`: Metadata system for parent-child communication
+//! - `RenderObject`: Type-erased render trait
+//! - `RenderBox`: Box protocol render trait
+//! - `SliverRender`: Sliver protocol render trait
+//! - `LayoutContext`, `PaintContext`, `HitTestContext`: Operation contexts
 //!
 //! **flui_interaction** (separate crate):
 //! - `HitTestResult`, `HitTestEntry`: Hit testing types
@@ -26,13 +30,19 @@
 //!                                  LayoutContext / PaintContext
 //! ```
 
-// Core modules - no element dependencies
+// Core modules
 pub mod arity;
+pub mod contexts;
 pub mod geometry;
 pub mod parent_data;
 pub mod protocol;
+pub mod render_box;
 pub mod render_flags;
+pub mod render_object;
+pub mod render_sliver;
 pub mod render_state;
+pub mod render_tree;
+pub mod wrappers;
 
 // Re-export arity types
 pub use arity::{
@@ -63,3 +73,25 @@ pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTest
 
 // Re-export ElementId from flui-foundation
 pub use flui_foundation::ElementId;
+
+// Re-export render tree traits (concrete types from this crate)
+pub use render_tree::{FullRenderTree, HitTestTree, LayoutTree, PaintTree};
+
+// Re-export base traits from flui-tree (type-erased)
+pub use render_tree::{
+    AtomicDirtyFlags, DirtyTracking, DirtyTrackingExt, RenderTreeAccess, RenderTreeAccessExt,
+};
+
+// Re-export tree navigation traits from flui-tree
+pub use flui_tree::{TreeNav, TreeRead, TreeWrite};
+
+// Re-export contexts
+pub use contexts::{HasTypedChildren, HitTestContext, LayoutContext, PaintContext};
+
+// Re-export render object traits
+pub use render_box::{EmptyRender, RenderBox, RenderBoxExt};
+pub use render_object::RenderObject;
+pub use render_sliver::{SliverRender, SliverRenderExt};
+
+// Re-export wrappers
+pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/flui_types",        # Base types - no dependencies
     "crates/flui-foundation",   # Foundation types and utilities
+    "crates/flui-tree",         # Tree abstractions
     "crates/flui_assets",       # Asset management system
     "crates/flui_log",          # Cross-platform logging
     "crates/flui_core",         # Core with foundation utilities

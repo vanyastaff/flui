@@ -38,7 +38,7 @@ use slab::Slab;
 
 use crate::element::{Element, ElementId};
 
-use crate::render::RenderState;
+use flui_rendering::core::RenderState;
 
 /// Maximum layout recursion depth.
 ///

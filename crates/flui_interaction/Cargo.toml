@@ -12,6 +12,7 @@ keywords = ["gui", "ui", "events", "gestures", "interaction"]
 [dependencies]
 # Flui dependencies
 flui_types = { path = "../flui_types" }
+flui-foundation = { path = "../flui-foundation" }
 
 # Synchronization & Concurrency
 parking_lot = { workspace = true }

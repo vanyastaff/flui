@@ -20,9 +20,9 @@
 use std::any::Any;
 
 use crate::element::{Element, ElementId, ElementTree};
-use crate::render::{LayoutProtocol, RenderObject, RenderState, RuntimeArity};
 use crate::view::{BuildContext, ViewMode};
 use flui_painting::Canvas;
+use flui_rendering::core::{LayoutProtocol, RenderObject, RenderState, RuntimeArity};
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
 /// Type-erased view object trait.
@@ -160,7 +160,7 @@ pub trait ViewObject: Send {
         _tree: &ElementTree,
         _children: &[ElementId],
         _position: Offset,
-        _geometry: &crate::render::render_object::Geometry,
+        _geometry: &flui_rendering::core::Geometry,
     ) -> bool {
         false // Default implementation for non-render objects
     }

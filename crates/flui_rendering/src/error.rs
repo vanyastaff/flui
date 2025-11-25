@@ -3,7 +3,7 @@
 //! This module defines error types for rendering operations including layout failures,
 //! paint errors, and parent data issues.
 
-use flui_core::CoreError;
+use flui_foundation::ElementId;
 use std::borrow::Cow;
 use thiserror::Error;
 
@@ -46,9 +46,20 @@ pub enum RenderError {
         details: Cow<'static, str>,
     },
 
-    /// Core error propagation
-    #[error(transparent)]
-    Core(#[from] CoreError),
+    /// Element not found
+    #[error("Element not found: {0:?}")]
+    ElementNotFound(ElementId),
+
+    /// Not a render element
+    #[error("Element {0:?} is not a render element")]
+    NotRenderElement(ElementId),
+
+    /// Hit test failed
+    #[error("Hit test failed: {reason}")]
+    HitTestFailed {
+        /// Failure reason
+        reason: Cow<'static, str>,
+    },
 }
 
 /// Result type for rendering operations
@@ -95,6 +106,26 @@ impl RenderError {
             details: details.into(),
         }
     }
+
+    /// Create an element not found error
+    #[must_use]
+    pub fn element_not_found(id: ElementId) -> Self {
+        Self::ElementNotFound(id)
+    }
+
+    /// Create a not render element error
+    #[must_use]
+    pub fn not_render_element(id: ElementId) -> Self {
+        Self::NotRenderElement(id)
+    }
+
+    /// Create a hit test failed error
+    #[must_use]
+    pub fn hit_test_failed(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self::HitTestFailed {
+            reason: reason.into(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -126,5 +157,11 @@ mod tests {
     fn test_constraint_violation() {
         let err = RenderError::constraint_violation("min width exceeds max width");
         assert!(err.to_string().contains("min width exceeds max width"));
+    }
+
+    #[test]
+    fn test_element_not_found() {
+        let err = RenderError::element_not_found(ElementId::new(42));
+        assert!(err.to_string().contains("42"));
     }
 }

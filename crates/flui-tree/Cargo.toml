@@ -1,0 +1,44 @@
+[package]
+name = "flui-tree"
+version = "0.1.0"
+edition = "2021"
+description = "Tree abstraction traits for FLUI framework - enables separation of concerns between element management and rendering"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/flui-org/flui"
+documentation = "https://docs.rs/flui-tree"
+keywords = ["ui", "gui", "tree", "flui", "framework"]
+categories = ["gui", "data-structures"]
+authors = ["FLUI Contributors"]
+
+[dependencies]
+# Internal dependencies
+flui-foundation = { path = "../flui-foundation" }
+
+# Core dependencies
+thiserror = "1.0"
+tracing = "0.1"
+
+# Optional: serde support
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[dev-dependencies]
+# Testing utilities
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[features]
+default = []
+
+# Serialization support for tree types
+serde = ["dep:serde", "flui-foundation/serde"]
+
+# Enable all features
+full = ["serde"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[bench]]
+name = "tree_traversal"
+harness = false

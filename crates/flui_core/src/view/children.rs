@@ -92,8 +92,8 @@ impl IntoElement for Child {
         match self.inner {
             Some(element) => element,
             None => {
-                use crate::render::{EmptyRender, RenderBoxExt};
-                EmptyRender.leaf().into_element()
+                // Unit type () implements IntoElement as an empty element
+                ().into_element()
             }
         }
     }

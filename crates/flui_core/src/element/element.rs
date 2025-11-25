@@ -28,8 +28,8 @@ use std::fmt;
 
 use crate::element::{ElementBase, ElementId, ElementLifecycle};
 use crate::foundation::Slot;
-use crate::render::{LayoutProtocol, RenderObject, RenderState, RuntimeArity};
 use crate::view::{BuildContext, ViewMode, ViewObject};
+use flui_rendering::core::{LayoutProtocol, RenderObject, RenderState, RuntimeArity};
 
 /// Element - Unified element struct with ViewObject delegation
 ///
@@ -133,6 +133,13 @@ impl Element {
     #[must_use]
     pub fn parent(&self) -> Option<ElementId> {
         self.base.parent()
+    }
+
+    /// Get slot position in parent's child list.
+    #[inline]
+    #[must_use]
+    pub fn slot(&self) -> Option<Slot> {
+        self.base.slot()
     }
 
     // ========== Dirty Tracking (delegated to ElementBase) ==========

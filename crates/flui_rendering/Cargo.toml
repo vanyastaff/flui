@@ -12,6 +12,7 @@ flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_interaction = { path = "../flui_interaction" }
 flui-foundation = { path = "../flui-foundation" }
+flui-tree = { path = "../flui-tree" }
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

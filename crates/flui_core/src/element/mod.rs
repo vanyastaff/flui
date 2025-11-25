@@ -48,6 +48,9 @@ pub mod hit_test_entry;
 pub mod into_element;
 pub mod lifecycle;
 
+// flui-tree trait implementations
+mod element_tree_traits;
+
 // Re-exports
 pub use dependency::{DependencyInfo, DependencyTracker};
 // Unified Element struct with ViewObject delegation

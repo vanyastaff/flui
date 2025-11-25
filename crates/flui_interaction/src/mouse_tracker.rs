@@ -49,13 +49,13 @@ use std::sync::Arc;
 use flui_types::events::PointerEvent;
 use flui_types::geometry::Offset;
 
-use crate::hit_test::HitTestResult;
+use crate::hit_test::{ElementId, HitTestResult};
 
 /// Unique identifier for a mouse device
 pub type DeviceId = i32;
 
 /// Unique identifier for a mouse region (Element ID)
-pub type RegionId = usize;
+pub type RegionId = ElementId;
 
 /// Callback for mouse enter events
 pub type MouseEnterCallback = Arc<dyn Fn(DeviceId, Offset) + Send + Sync>;

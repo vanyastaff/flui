@@ -5,8 +5,8 @@
 use std::marker::PhantomData;
 
 use crate::foundation::Listenable;
-use crate::render::arity::Arity;
 use crate::view::ViewState;
+use flui_rendering::core::Arity;
 
 // ============================================================================
 // PROTOCOL TRAIT

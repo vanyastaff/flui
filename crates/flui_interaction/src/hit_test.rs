@@ -15,11 +15,8 @@ use flui_types::{
 };
 use std::sync::Arc;
 
-/// Element ID type (placeholder until we have proper element tree integration)
-///
-/// In a full implementation, this would be imported from flui_core.
-/// For now, we use usize as a simple ID.
-pub type ElementId = usize;
+// Re-export ElementId from flui-foundation
+pub use flui_foundation::ElementId;
 
 /// Event propagation control
 ///
@@ -192,7 +189,7 @@ impl HitTestResult {
                     } else {
                         // Transform can't be inverted (degenerate), skip this entry
                         tracing::warn!(
-                            element_id = entry.element_id,
+                            element_id = entry.element_id.get(),
                             "Failed to invert transform for event dispatch"
                         );
                         continue;

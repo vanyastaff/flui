@@ -1,0 +1,51 @@
+[package]
+name = "flui-pipeline"
+version = "0.1.0"
+edition = "2021"
+authors = ["FLUI Contributors"]
+license = "MIT OR Apache-2.0"
+description = "Pipeline orchestration for FLUI - coordinates build, layout, paint, and compositing"
+repository = "https://github.com/flui-org/flui"
+documentation = "https://docs.rs/flui-pipeline"
+keywords = ["ui", "flutter", "gui", "pipeline", "rendering"]
+categories = ["gui", "rendering"]
+
+[dependencies]
+# Core dependencies
+flui-foundation = { path = "../flui-foundation" }
+flui-tree = { path = "../flui-tree" }
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", optional = true }
+
+# Error handling
+thiserror = "1.0"
+
+# Performance
+parking_lot = "0.12"
+
+# Optional features
+serde = { version = "1.0", optional = true, features = ["derive"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bench]]
+name = "pipeline_performance"
+harness = false
+
+[features]
+default = []
+# Enable serialization support
+serde = ["dep:serde", "flui-foundation/serde"]
+# Enable tracing subscriber for examples
+tracing-sub = ["dep:tracing-subscriber"]
+# Enable all features
+full = ["serde", "tracing-sub"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

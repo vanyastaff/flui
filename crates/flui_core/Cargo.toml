@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 # Internal dependencies
 flui-foundation = { path = "../flui-foundation" }
+flui-tree = { path = "../flui-tree" }
 flui_types = { path = "../flui_types" }
 flui_painting = { path = "../flui_painting" }
 flui_rendering = { path = "../flui_rendering" }

@@ -119,23 +119,25 @@ pub use crate::hooks::HookContext;
 // ============================================================
 
 /// Trait for custom render objects (layout + paint)
-pub use crate::render::RenderBox;
+pub use flui_rendering::core::RenderBox;
 
-// Modern unified contexts available from crate::render:
+// Modern unified contexts available from flui_rendering::core:
 // - LayoutContext<A, P> and PaintContext<A> for protocol-based rendering
 // - Use with RenderBox<A> and SliverRender<A> traits for type-safe rendering
 
 /// Type-safe arity trait for compile-time child count validation
-pub use crate::render::Arity;
+pub use flui_rendering::core::Arity;
 
 /// Runtime arity enum for dynamic child count validation
-pub use crate::render::RuntimeArity;
+pub use flui_rendering::core::RuntimeArity;
 
 /// Arity types for zero-cost abstraction
-pub use crate::render::{AtLeast, Exact, Leaf, Optional, Single, Variable};
+pub use flui_rendering::core::{AtLeast, Exact, Leaf, Optional, Single, Variable};
 
 /// Children accessor types
-pub use crate::render::{ChildrenAccess, FixedChildren, NoChildren, OptionalChild, SliceChildren};
+pub use flui_rendering::core::{
+    ChildrenAccess, FixedChildren, NoChildren, OptionalChild, SliceChildren,
+};
 
 // ============================================================
 // FOUNDATION (keys and IDs)

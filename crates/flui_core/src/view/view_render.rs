@@ -1,10 +1,10 @@
 //! Render view trait for creating render objects.
 
 use crate::element::{Element, IntoElement};
-use crate::render::arity::Arity;
-use crate::render::protocol::{BoxProtocol, Protocol, SliverProtocol};
-use crate::render::{RenderBox, SliverRender};
 use crate::view::UpdateResult;
+use flui_rendering::core::arity::Arity;
+use flui_rendering::core::protocol::{BoxProtocol, Protocol, SliverProtocol};
+use flui_rendering::core::{RenderBox, SliverRender};
 use std::fmt::Debug;
 
 // ============================================================================
@@ -146,7 +146,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view as a leaf element (no children).
     fn leaf(self) -> RenderViewLeaf<Self>
     where
-        Self: RenderView<BoxProtocol, crate::render::arity::Leaf>,
+        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Leaf>,
     {
         RenderViewLeaf { view: self }
     }
@@ -154,7 +154,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view with a single child.
     fn child<C: IntoElement>(self, child: C) -> RenderViewWithChild<Self, C>
     where
-        Self: RenderView<BoxProtocol, crate::render::arity::Single>,
+        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Single>,
     {
         RenderViewWithChild { view: self, child }
     }
@@ -162,7 +162,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view with an optional child.
     fn child_opt<C: IntoElement>(self, child: Option<C>) -> RenderViewWithOptionalChild<Self, C>
     where
-        Self: RenderView<BoxProtocol, crate::render::arity::Optional>,
+        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Optional>,
     {
         RenderViewWithOptionalChild { view: self, child }
     }
@@ -170,7 +170,7 @@ pub trait RenderViewExt: Sized {
     /// Wraps view with multiple children.
     fn children(self, children: impl Into<Vec<Element>>) -> RenderViewWithChildren<Self>
     where
-        Self: RenderView<BoxProtocol, crate::render::arity::Variable>,
+        Self: RenderView<BoxProtocol, flui_rendering::core::arity::Variable>,
     {
         RenderViewWithChildren {
             view: self,
@@ -233,19 +233,22 @@ pub struct RenderViewWithChildren<V> {
 // ============================================================================
 
 /// Leaf box render view
-pub type LeafBoxRenderView = dyn RenderView<BoxProtocol, crate::render::arity::Leaf>;
+pub type LeafBoxRenderView = dyn RenderView<BoxProtocol, flui_rendering::core::arity::Leaf>;
 
 /// Single-child box render view
-pub type SingleChildBoxRenderView = dyn RenderView<BoxProtocol, crate::render::arity::Single>;
+pub type SingleChildBoxRenderView =
+    dyn RenderView<BoxProtocol, flui_rendering::core::arity::Single>;
 
 /// Multi-child box render view
-pub type MultiChildBoxRenderView = dyn RenderView<BoxProtocol, crate::render::arity::Variable>;
+pub type MultiChildBoxRenderView =
+    dyn RenderView<BoxProtocol, flui_rendering::core::arity::Variable>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::arity::{Leaf, Single};
-    use crate::render::contexts::{LayoutContext, PaintContext};
+    use flui_rendering::core::arity::{Leaf, Single};
+    use flui_rendering::core::contexts::{LayoutContext, PaintContext};
+    use flui_types::Size;
 
     #[derive(Clone, Debug)]
     struct MockLeafView;
@@ -254,11 +257,8 @@ mod tests {
     struct MockLeafRender;
 
     impl RenderBox<Leaf> for MockLeafRender {
-        fn layout(
-            &mut self,
-            _ctx: LayoutContext<'_, Leaf, BoxProtocol>,
-        ) -> crate::render::protocol::Size {
-            crate::render::protocol::Size::new(100.0, 100.0)
+        fn layout(&mut self, _ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+            Size::new(100.0, 100.0)
         }
 
         fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {}

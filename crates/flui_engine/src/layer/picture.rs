@@ -3,7 +3,7 @@
 //! REFACTORED: Now uses Clean Architecture with CommandRenderer (Visitor Pattern)
 
 use crate::renderer::CommandRenderer;
-use flui_interaction::{HitTestResult, HitTestable};
+use flui_interaction::{ElementId, HitTestResult, HitTestable};
 use flui_painting::{Canvas, DisplayList};
 use flui_types::Offset;
 
@@ -128,7 +128,9 @@ impl HitTestable for CanvasLayer {
                     });
 
                 // Add entry with handler
-                let entry = HitTestEntry::with_handler(0, position, region.bounds, handler);
+                // Use placeholder ElementId(1) for canvas-level hit regions
+                let entry =
+                    HitTestEntry::with_handler(ElementId::new(1), position, region.bounds, handler);
                 result.add(entry);
 
                 tracing::trace!(
@@ -146,7 +148,8 @@ impl HitTestable for CanvasLayer {
         if !any_hit {
             let bounds = display_list.bounds();
             if bounds.contains(point) {
-                let entry = HitTestEntry::new(0, position, bounds);
+                // Use placeholder ElementId(1) for canvas-level bounds hit
+                let entry = HitTestEntry::new(ElementId::new(1), position, bounds);
                 result.add(entry);
 
                 tracing::trace!(
