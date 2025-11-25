@@ -1,0 +1,41 @@
+[package]
+name = "flui-pipeline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pipeline orchestration for FLUI - coordinates build, layout, and paint phases"
+repository.workspace = true
+
+[dependencies]
+# FLUI internal
+flui-foundation = { path = "../flui-foundation" }
+flui-tree = { path = "../flui-tree" }
+flui_types = { path = "../flui_types" }
+flui_painting = { path = "../flui_painting" }
+
+# Scheduler integration (optional)
+flui-scheduler = { path = "../flui-scheduler", optional = true }
+
+# Core dependencies
+tracing.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+
+# Optional features
+serde = { workspace = true, optional = true }
+rayon = { version = "1.10", optional = true }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[features]
+default = []
+# Enable scheduler integration
+scheduler = ["dep:flui-scheduler"]
+# Enable parallel build
+parallel = ["dep:rayon"]
+# Enable serialization support
+serde = ["dep:serde", "flui-foundation/serde"]
+# Enable all features
+full = ["scheduler", "parallel", "serde"]

@@ -1233,6 +1233,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-pipeline"
+version = "0.1.0"
+dependencies = [
+ "flui-foundation",
+ "flui-scheduler",
+ "flui-tree",
+ "flui_painting",
+ "flui_types",
+ "parking_lot",
+ "rayon",
+ "serde",
+ "thiserror 2.0.17",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flui-reactivity"
 version = "0.1.0"
 dependencies = [
