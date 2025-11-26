@@ -15,7 +15,7 @@ authors = ["FLUI Contributors"]
 flui-foundation = { path = "../flui-foundation" }
 
 # Core dependencies
-thiserror = "1.0"
+thiserror = { workspace = true }
 tracing = "0.1"
 
 # Optional: serde support

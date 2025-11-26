@@ -44,7 +44,8 @@
       "WebFetch(domain:flutter.dev)",
       "mcp__filesystem__edit_file",
       "mcp__filesystem__read_text_file",
-      "Bash(cargo nextest run:*)"
+      "Bash(cargo nextest run:*)",
+      "Bash(cargo hack check:*)"
     ],
     "deny": [],
     "ask": []

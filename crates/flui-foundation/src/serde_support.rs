@@ -163,7 +163,7 @@ pub fn to_binary<T>(value: &T) -> Result<Vec<u8>, FoundationError>
 where
     T: Serialize,
 {
-    bincode::serialize(value).map_err(|e| {
+    bincode::serde::encode_to_vec(value, bincode::config::standard()).map_err(|e| {
         FoundationError::serialization_error(format!("Binary serialization failed: {}", e))
     })
 }
@@ -173,9 +173,11 @@ pub fn from_binary<T>(data: &[u8]) -> Result<T, FoundationError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    bincode::deserialize(data).map_err(|e| {
-        FoundationError::serialization_error(format!("Binary deserialization failed: {}", e))
-    })
+    bincode::serde::decode_from_slice(data, bincode::config::standard())
+        .map(|(value, _len)| value)
+        .map_err(|e| {
+            FoundationError::serialization_error(format!("Binary deserialization failed: {}", e))
+        })
 }
 
 // ============================================================================
