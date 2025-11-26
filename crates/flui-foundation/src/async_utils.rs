@@ -3,7 +3,7 @@
 //! This module provides async-compatible versions of foundation types
 //! for use in async contexts and reactive programming patterns.
 
-use crate::{ChangeNotifier, Listenable, ListenerCallback, ListenerId, ValueNotifier};
+use crate::ChangeNotifier;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Notify};
 use tokio::time::{timeout, Duration};
@@ -41,7 +41,7 @@ pub struct AsyncChangeNotifier {
     /// Broadcast sender for async notifications
     sender: broadcast::Sender<()>,
     /// Traditional synchronous notifier for compatibility
-    sync_notifier: Arc<ChangeNotifier>,
+    sync_notifier: ChangeNotifier,
 }
 
 impl AsyncChangeNotifier {
@@ -50,7 +50,7 @@ impl AsyncChangeNotifier {
         let (sender, _) = broadcast::channel(1024);
         Self {
             sender,
-            sync_notifier: Arc::new(ChangeNotifier::new()),
+            sync_notifier: ChangeNotifier::new(),
         }
     }
 
@@ -67,26 +67,13 @@ impl AsyncChangeNotifier {
         let _ = self.sender.send(());
 
         // Also notify synchronous listeners for compatibility
-        self.sync_notifier.notify();
+        self.sync_notifier.notify_listeners();
     }
 
     /// Notifies all subscribers synchronously (for compatibility).
     pub fn notify_sync(&self) {
         let _ = self.sender.send(());
-        self.sync_notifier.notify();
-    }
-
-    /// Adds a synchronous listener for compatibility with sync code.
-    pub fn add_listener<F>(&self, callback: F) -> ListenerId
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        self.sync_notifier.add_listener(callback)
-    }
-
-    /// Removes a synchronous listener.
-    pub fn remove_listener(&self, id: ListenerId) {
-        self.sync_notifier.remove_listener(id);
+        self.sync_notifier.notify_listeners();
     }
 
     /// Waits for the next notification with a timeout.
@@ -95,7 +82,7 @@ impl AsyncChangeNotifier {
         timeout_duration: Duration,
     ) -> Result<(), tokio::time::error::Elapsed> {
         let mut receiver = self.subscribe();
-        timeout(timeout_duration, receiver.recv()).await?;
+        let _ = timeout(timeout_duration, receiver.recv()).await?;
         Ok(())
     }
 
@@ -140,8 +127,8 @@ impl Default for AsyncChangeNotifier {
 pub struct AsyncValueNotifier<T> {
     /// Watch sender for value updates
     sender: watch::Sender<T>,
-    /// Traditional synchronous value notifier for compatibility
-    sync_notifier: Arc<ValueNotifier<T>>,
+    /// Keep one receiver alive to ensure watch channel works correctly
+    _receiver: watch::Receiver<T>,
 }
 
 impl<T> AsyncValueNotifier<T>
@@ -150,10 +137,10 @@ where
 {
     /// Creates a new async value notifier with an initial value.
     pub fn new(initial_value: T) -> Self {
-        let (sender, _) = watch::channel(initial_value.clone());
+        let (sender, receiver) = watch::channel(initial_value);
         Self {
             sender,
-            sync_notifier: Arc::new(ValueNotifier::new(initial_value)),
+            _receiver: receiver,
         }
     }
 
@@ -165,16 +152,12 @@ where
     /// Sets a new value and notifies subscribers.
     pub async fn set(&self, value: T) {
         // Update the watch channel
-        let _ = self.sender.send(value.clone());
-
-        // Update the sync notifier for compatibility
-        self.sync_notifier.set(value);
+        let _ = self.sender.send(value);
     }
 
     /// Sets a new value synchronously.
     pub fn set_sync(&self, value: T) {
-        let _ = self.sender.send(value.clone());
-        self.sync_notifier.set(value);
+        let _ = self.sender.send(value);
     }
 
     /// Updates the value using a function and notifies subscribers.
@@ -192,27 +175,17 @@ where
         self.sender.subscribe()
     }
 
-    /// Adds a synchronous listener that receives the new value.
-    pub fn add_listener<F>(&self, callback: F) -> ListenerId
-    where
-        F: Fn(&T) + Send + Sync + 'static,
-    {
-        self.sync_notifier.add_listener(callback)
-    }
-
-    /// Removes a synchronous listener.
-    pub fn remove_listener(&self, id: ListenerId) {
-        self.sync_notifier.remove_listener(id);
-    }
-
     /// Waits for the value to change with a timeout.
     pub async fn wait_for_change(
         &self,
         timeout_duration: Duration,
     ) -> Result<T, tokio::time::error::Elapsed> {
         let mut receiver = self.subscribe();
-        timeout(timeout_duration, receiver.changed()).await??;
-        Ok(receiver.borrow().clone())
+        timeout(timeout_duration, receiver.changed())
+            .await?
+            .ok(); // Ignore RecvError, just care about timeout
+        let value = receiver.borrow().clone();
+        Ok(value)
     }
 
     /// Returns the number of active async subscribers.
@@ -233,6 +206,7 @@ where
 /// Async utilities for batching notifications.
 ///
 /// This helps reduce notification noise when many changes happen quickly.
+#[derive(Debug)]
 pub struct AsyncNotificationBatcher {
     notify: Arc<Notify>,
     is_pending: Arc<std::sync::atomic::AtomicBool>,

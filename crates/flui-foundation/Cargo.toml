@@ -23,7 +23,7 @@ thiserror = "1.0"
 tracing = "0.1"
 
 # Optional async support
-tokio = { version = "1.0", features = ["sync", "time"], optional = true }
+tokio = { version = "1.0", features = ["sync", "time", "rt", "macros"], optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

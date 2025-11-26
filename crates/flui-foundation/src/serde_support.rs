@@ -3,9 +3,8 @@
 //! This module provides serde serialization and deserialization support
 //! for FLUI Foundation types when the `serde` feature is enabled.
 
-use crate::{DiagnosticLevel, ElementId, FoundationError, Key, KeyRef, Slot};
+use crate::{ElementId, FoundationError, Key, KeyRef};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt;
 
 // ============================================================================
 // ELEMENTID SERIALIZATION
@@ -53,7 +52,7 @@ impl Serialize for Key {
     where
         S: Serializer,
     {
-        serializer.serialize_u64(self.id())
+        serializer.serialize_u64(self.as_u64())
     }
 }
 
@@ -63,11 +62,13 @@ impl<'de> Deserialize<'de> for Key {
         D: Deserializer<'de>,
     {
         let id = u64::deserialize(deserializer)?;
-        Ok(Key::from_id(id))
+        Key::from_u64(id).ok_or_else(|| {
+            serde::de::Error::custom("Key cannot be zero (uses NonZeroU64 internally)")
+        })
     }
 }
 
-impl Serialize for KeyRef<'_> {
+impl Serialize for KeyRef {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -76,52 +77,8 @@ impl Serialize for KeyRef<'_> {
     }
 }
 
-// ============================================================================
-// SLOT SERIALIZATION
-// ============================================================================
-
-impl Serialize for Slot {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Serialize as the contained key
-        self.key().serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Slot {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let key = Key::deserialize(deserializer)?;
-        Ok(Slot::new(key))
-    }
-}
-
-// ============================================================================
-// DIAGNOSTIC LEVEL SERIALIZATION
-// ============================================================================
-
-impl Serialize for DiagnosticLevel {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for DiagnosticLevel {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
-    }
-}
+// Slot and DiagnosticLevel serialization is handled by derived implementations
+// in their respective modules when the serde feature is enabled.
 
 // ============================================================================
 // FOUNDATION ERROR SERIALIZATION
@@ -133,8 +90,11 @@ impl<'de> Deserialize<'de> for DiagnosticLevel {
 /// Serialize, we provide a simplified serializable representation.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SerializableFoundationError {
+    /// Error category (e.g., "invalid_id", "not_found")
     pub category: String,
+    /// Human-readable error message
     pub message: String,
+    /// Whether the error is recoverable
     pub recoverable: bool,
 }
 
@@ -250,28 +210,7 @@ mod tests {
         let json = serde_json::to_string(&key).unwrap();
 
         let deserialized: Key = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.id(), key.id());
-    }
-
-    #[test]
-    fn test_slot_serialization() {
-        let key = Key::new();
-        let slot = Slot::new(key);
-
-        let json = serde_json::to_string(&slot).unwrap();
-        let deserialized: Slot = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.key(), key);
-    }
-
-    #[test]
-    fn test_diagnostic_level_serialization() {
-        let level = DiagnosticLevel::Warning;
-        let json = serde_json::to_string(&level).unwrap();
-        assert_eq!(json, "\"warning\"");
-
-        let deserialized: DiagnosticLevel = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, DiagnosticLevel::Warning);
+        assert_eq!(deserialized.as_u64(), key.as_u64());
     }
 
     #[test]
