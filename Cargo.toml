@@ -14,7 +14,6 @@ members = [
     "crates/flui_app",
     "crates/flui_painting",
     "crates/flui_engine",       # Rendering engine - Layer/Scene/Painter
-    "crates/flui_derive",
     "crates/flui_devtools",
     "crates/flui_interaction",  # Event routing, interaction, and gesture recognition
     "crates/flui_animation",    # Animation system
