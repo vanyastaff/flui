@@ -78,12 +78,12 @@ impl RendererBinding {
         let mut owner = pipeline.write();
 
         // Execute complete pipeline: build → layout → paint
-        let layer = match owner.build_frame(constraints) {
-            Ok(layer_opt) => {
-                if layer_opt.is_none() {
+        let canvas = match owner.build_frame(constraints) {
+            Ok(canvas_opt) => {
+                if canvas_opt.is_none() {
                     tracing::warn!("Pipeline returned None (empty tree or no root)");
                 }
-                layer_opt
+                canvas_opt
             }
             Err(e) => {
                 tracing::error!(error = ?e, "Pipeline build_frame failed");
@@ -97,9 +97,11 @@ impl RendererBinding {
         let size = Size::new(constraints.max_width, constraints.max_height);
 
         // Create scene using flui_engine::Scene API
-        let scene = if let Some(layer) = layer {
-            // Wrap layer in Arc for zero-copy sharing with hit testing
-            Scene::with_layer(size, Arc::new(*layer), 0)
+        let scene = if let Some(canvas) = canvas {
+            // Convert Canvas to CanvasLayer and wrap in Arc for zero-copy sharing with hit testing
+            use flui_engine::CanvasLayer;
+            let layer = CanvasLayer::from_canvas(canvas);
+            Scene::with_layer(size, Arc::new(layer), 0)
         } else {
             Scene::new(size)
         };

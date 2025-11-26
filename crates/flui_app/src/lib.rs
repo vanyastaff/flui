@@ -92,6 +92,25 @@ pub mod embedder;
 pub mod event_callbacks;
 pub mod window_state;
 
+// Platform providers
+pub mod providers;
+
+// Error handling
+pub mod error_handling;
+
+// Application widgets
+mod root_widget;
+pub mod widgets_app;
+
+// Re-export public app widgets
+pub use widgets_app::{TextDirection, WidgetsApp};
+
+// Re-export platform providers
+pub use providers::{MediaQueryData, MediaQueryProvider};
+
+// Re-export error handling types
+pub use error_handling::{ErrorBoundary, ErrorInfo, ErrorWidget};
+
 // Re-exports for convenience
 pub use binding::AppBinding;
 pub use embedder::WgpuEmbedder;
@@ -117,29 +136,51 @@ use winit::event_loop::EventLoop;
 /// Run a FLUI app
 ///
 /// This is the main entry point for FLUI applications.
-/// It initializes the framework bindings, creates a window, and starts the event loop.
+/// It initializes the framework bindings, wraps your app in RootWidget,
+/// creates a window, and starts the event loop.
 ///
 /// # Parameters
 ///
-/// - `app`: The root widget (typically an App or MaterialApp)
+/// - `app`: The root widget (typically WidgetsApp or MaterialApp)
 ///
-/// # Example
+/// # Recommended Usage
+///
+/// Use `WidgetsApp` to get framework services (MediaQuery, Navigator, etc.):
 ///
 /// ```rust,ignore
-/// use flui_app::run_app;
+/// use flui_app::{run_app, WidgetsApp};
 /// use flui_widgets::*;
 ///
-/// #[derive(Debug)]
-/// struct MyApp;
+/// #[derive(Debug, Clone)]
+/// struct Home;
 ///
-/// impl View for MyApp {
+/// impl StatelessView for Home {
 ///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
 ///         Text::new("Hello, FLUI!")
 ///     }
 /// }
 ///
 /// fn main() {
-///     run_app(MyApp);
+///     run_app(WidgetsApp::new(Home).title("My App"));
+/// }
+/// ```
+///
+/// # Direct Usage (without WidgetsApp)
+///
+/// You can also pass any StatelessView directly:
+///
+/// ```rust,ignore
+/// #[derive(Debug, Clone)]
+/// struct SimpleApp;
+///
+/// impl StatelessView for SimpleApp {
+///     fn build(self, ctx: &BuildContext) -> impl IntoElement {
+///         Text::new("Minimal app")
+///     }
+/// }
+///
+/// fn main() {
+///     run_app(SimpleApp);
 /// }
 /// ```
 ///
@@ -171,8 +212,11 @@ where
     // 1. Initialize bindings
     let binding = AppBinding::ensure_initialized();
 
-    // 2. Attach root widget
-    binding.attach_root_widget(app);
+    // 2. Wrap user app in RootWidget (internal framework wrapper)
+    let root = root_widget::RootWidget::new(app);
+
+    // 3. Attach root widget to pipeline
+    binding.attach_root_widget(root);
 
     tracing::info!("Entering event loop");
 
