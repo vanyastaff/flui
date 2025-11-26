@@ -63,7 +63,7 @@ winit.workspace = true
 # Utilities
 tracing.workspace = true
 parking_lot.workspace = true
-pollster = "0.3"
+pollster = { workspace = true }
 
 # Android dependencies
 [target.'cfg(target_os = "android")'.dependencies]

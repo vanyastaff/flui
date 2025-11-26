@@ -12,18 +12,18 @@ authors = ["FLUI Contributors"]
 
 [dependencies]
 # Core dependencies for foundation types
-parking_lot = { version = "0.12", features = ["send_guard"] }
-serde = { version = "1.0", features = ["derive"], optional = true }
-serde_json = { version = "1.0", optional = true }
+parking_lot = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 bincode = { version = "2.0", features = ["serde"], optional = true }
 
 # Utility dependencies
-bitflags = "2.0"
+bitflags = { workspace = true }
 thiserror = { workspace = true }
-tracing = "0.1"
+tracing = { workspace = true }
 
 # Optional async support
-tokio = { version = "1.0", features = ["sync", "time", "rt", "macros"], optional = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
