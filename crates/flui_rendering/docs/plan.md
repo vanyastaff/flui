@@ -68,6 +68,44 @@ No children accessor. Compile error if child accessed.
 | 8 | RenderColoredBox | Visual | Solid color rectangle | `src/objects/special/colored_box.rs` |
 | 9 | RenderEmpty | Special | Empty render object | `src/objects/layout/empty.rs` |
 
+**Example - RenderBox<Leaf>:**
+```rust
+use flui_rendering::{RenderBox, Leaf, LayoutContext, BoxProtocol, PaintContext};
+use flui_types::{Size, Color};
+
+/// Simple colored rectangle with no children
+#[derive(Debug)]
+pub struct RenderColoredBox {
+    pub color: Color,
+}
+
+impl RenderBox<Leaf> for RenderColoredBox {
+    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    where
+        T: LayoutTree,
+    {
+        // No children - just return size based on constraints
+        // ctx.children is NoChildren - compile error if you try to access!
+        ctx.constraints.biggest()
+    }
+
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
+    where
+        T: PaintTree,
+    {
+        // Paint self - no children to paint
+        let rect = Rect::from_ltrb(
+            ctx.offset.x,
+            ctx.offset.y,
+            ctx.offset.x + self.size.width,
+            ctx.offset.y + self.size.height,
+        );
+
+        ctx.canvas().draw_rect(rect, Paint::new().set_color(self.color));
+    }
+}
+```
+
 ---
 
 ## Optional (0-1 children) — 6 objects
@@ -87,20 +125,31 @@ Child is optional. Meaningful visual/layout output without child.
 
 **Example:**
 ```rust
-impl Render<Optional> for RenderSizedBox {
-    fn layout(&mut self, ctx: &mut BoxLayoutContext<'_, Optional>) -> Size {
-        ctx.children().map_or(
+impl RenderBox<Optional> for RenderSizedBox {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
+    where
+        T: LayoutTree,
+    {
+        let child = ctx.children.get();
+        match child {
             // Without child: return specified size (spacer)
-            constraints.constrain(Size::new(self.width, self.height)),
+            None => ctx.constraints.constrain(Size::new(self.width, self.height)),
             // With child: layout child with constraints
-            |child| ctx.layout_child(child, inner_constraints)
-        )
+            Some(child_id) => {
+                let inner = ctx.constraints.deflate(&self.padding);
+                ctx.layout_child(child_id, inner)
+            }
+        }
     }
-    
-    fn paint(&self, ctx: &BoxPaintContext<'_, Optional>) -> Canvas {
-        ctx.children()
-            .map(|child| ctx.paint_child(child, ctx.offset))
-            .unwrap_or_else(Canvas::new)  // Empty canvas for spacer
+
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
+    where
+        T: PaintTree,
+    {
+        if let Some(child_id) = ctx.children.get() {
+            ctx.paint_child(child_id, ctx.offset);
+        }
+        // Empty canvas handled automatically if no child
     }
 }
 ```
@@ -184,26 +233,151 @@ Child is required. No meaningful behavior without child.
 | 9 | RenderSliverConstrainedCrossAxis | Cross-axis constraints | `src/objects/sliver/constrained_cross_axis.rs` |
 | 10 | RenderSliverOverlapAbsorber | Absorbs overlap | `src/objects/sliver/overlap_absorber.rs` |
 
-**Example:**
+**Example - SliverRender<Single>:**
 ```rust
-impl Render<Single> for RenderPadding {
-    fn layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single>) -> Size {
-        let child = ctx.children().single();  // Guaranteed to exist!
-        let inner = ctx.constraints.deflate(self.padding);
-        let child_size = ctx.layout_child(child, inner);
-        
-        Size::new(
-            child_size.width + self.padding.horizontal(),
-            child_size.height + self.padding.vertical(),
-        )
+use flui_rendering::{SliverRender, Single, LayoutContext, SliverProtocol, PaintContext};
+use flui_types::{SliverGeometry, EdgeInsets};
+
+/// RenderSliver that adds padding around a child sliver
+pub struct RenderSliverPadding {
+    pub padding: EdgeInsets,
+}
+
+impl SliverRender<Single> for RenderSliverPadding {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, SliverProtocol>) -> SliverGeometry
+    where
+        T: LayoutTree,
+    {
+        let child_id = ctx.children.single();
+
+        // Adjust constraints for padding
+        let adjusted_constraints = SliverConstraints {
+            scroll_offset: (ctx.constraints.scroll_offset - self.padding.top).max(0.0),
+            overlap: ctx.constraints.overlap,
+            remaining_paint_extent: ctx.constraints.remaining_paint_extent - self.padding.vertical_total(),
+            cross_axis_extent: ctx.constraints.cross_axis_extent - self.padding.horizontal_total(),
+            ..ctx.constraints
+        };
+
+        // Layout child with adjusted constraints
+        let child_geometry = ctx.layout_child(child_id, adjusted_constraints);
+
+        // Return geometry with padding applied
+        SliverGeometry {
+            scroll_extent: child_geometry.scroll_extent + self.padding.vertical_total(),
+            paint_extent: (child_geometry.paint_extent + self.padding.vertical_total())
+                .min(ctx.constraints.remaining_paint_extent),
+            layout_extent: child_geometry.layout_extent + self.padding.vertical_total(),
+            ..child_geometry
+        }
     }
-    
-    fn paint(&self, ctx: &BoxPaintContext<'_, Single>) -> Canvas {
-        let child = ctx.children().single();
-        ctx.paint_child(child, ctx.offset + self.padding.top_left())
+
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: PaintTree,
+    {
+        let child_id = ctx.children.single();
+        // Paint child with padding offset
+        let child_offset = ctx.offset + Offset::new(self.padding.left, self.padding.top);
+        ctx.paint_child(child_id, child_offset);
     }
 }
 ```
+
+### Proxy Pattern - RenderBoxProxy Trait
+
+For render objects that simply pass constraints/painting to their child without modification, use the **`RenderBoxProxy` trait** for automatic implementation:
+
+**Using RenderBoxProxy (Recommended):**
+```rust
+use flui_rendering::RenderBoxProxy;
+
+/// Example: Wrapper that only tracks metadata - zero boilerplate!
+#[derive(Debug)]
+pub struct RenderMetadataWrapper {
+    pub label: String,
+}
+
+// Just implement the marker trait - get full RenderBox<Single> for free!
+impl RenderBoxProxy for RenderMetadataWrapper {}
+
+// That's it! Now has:
+// - layout: passes constraints to child via ctx.proxy()
+// - paint: paints child at same offset via ctx.proxy()
+// - hit_test: default implementation (no hit)
+```
+
+**Customizing Proxy Behavior:**
+```rust
+use flui_rendering::{RenderBoxProxy, LayoutContext, BoxProtocol, LayoutTree};
+use flui_types::Size;
+
+#[derive(Debug)]
+pub struct RenderLogging {
+    pub name: String,
+}
+
+impl RenderBoxProxy for RenderLogging {
+    // Override layout to add logging
+    fn proxy_layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: LayoutTree,
+    {
+        tracing::debug!("Layout: {}", self.name);
+        ctx.proxy() // Still delegates to child
+    }
+
+    // paint and hit_test use default implementations
+}
+```
+
+**Manual Proxy (if you need full control):**
+```rust
+#[derive(Debug)]
+pub struct RenderManualProxy;
+
+impl RenderBox<Single> for RenderManualProxy {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: LayoutTree,
+    {
+        ctx.proxy() // Manual use of proxy helper
+    }
+
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: PaintTree,
+    {
+        ctx.proxy(); // Manual use of proxy helper
+    }
+}
+```
+
+**RenderSliverProxy (for slivers):**
+```rust
+use flui_rendering::RenderSliverProxy;
+
+#[derive(Debug)]
+pub struct RenderSliverMetadata {
+    pub scroll_id: usize,
+}
+
+// Just implement the marker trait - get full SliverRender<Single> for free!
+impl RenderSliverProxy for RenderSliverMetadata {}
+
+// That's it! Now has:
+// - layout: passes sliver constraints to child via ctx.proxy()
+// - paint: paints child at same offset via ctx.proxy()
+// - hit_test: default implementation (no hit)
+```
+
+**When to use proxy pattern:**
+- Semantic wrappers (accessibility, debugging)
+- Event listeners that don't affect layout
+- Metadata annotations for scrollable content
+- Testing/placeholder objects
+
+**✨ Both RenderBoxProxy and RenderSliverProxy now use context-based API!**
 
 ---
 
@@ -251,28 +425,99 @@ Any number of children (0..N).
 | 14 | RenderSliver | Base trait | `src/objects/sliver/mod.rs` |
 | 15 | RenderAbstractViewport | Abstract viewport | `src/objects/viewport/abstract_viewport.rs` |
 
-**Example:**
+**Example - RenderBox<Variable>:**
 ```rust
-impl Render<Variable> for RenderFlex {
-    fn layout(&mut self, ctx: &mut BoxLayoutContext<'_, Variable>) -> Size {
+use flui_rendering::{RenderBox, Variable, LayoutContext, BoxProtocol, PaintContext};
+use flui_types::{Size, Axis};
+
+impl RenderBox<Variable> for RenderFlex {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
+    where
+        T: LayoutTree,
+    {
         let mut main_used = 0.0;
         let mut cross_max = 0.0;
-        
-        for child in ctx.children().iter() {
-            let child_size = ctx.layout_child(child, ctx.constraints);
+
+        for child_id in ctx.children.iter() {
+            let child_size = ctx.layout_child(child_id, ctx.constraints);
             main_used += child_size.main(self.direction);
             cross_max = cross_max.max(child_size.cross(self.direction));
         }
-        
+
         Size::from_main_cross(self.direction, main_used, cross_max)
     }
-    
-    fn paint(&self, ctx: &BoxPaintContext<'_, Variable>) -> Canvas {
-        let mut canvas = Canvas::new();
-        for child in ctx.children().iter() {
-            canvas.merge(ctx.paint_child(child, ctx.offset));
+
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
+    where
+        T: PaintTree,
+    {
+        let mut offset = ctx.offset;
+        for child_id in ctx.children.iter() {
+            ctx.paint_child(child_id, offset);
+            // Advance offset for next child
+            offset = offset + self.spacing;
         }
-        canvas
+    }
+}
+```
+
+**Example - SliverRender<Variable>:**
+```rust
+use flui_rendering::{SliverRender, Variable, LayoutContext, SliverProtocol, PaintContext};
+use flui_types::{SliverGeometry, SliverConstraints};
+
+/// Scrollable list of sliver children
+pub struct RenderSliverList {
+    pub item_extent: f32, // Fixed height per item
+}
+
+impl SliverRender<Variable> for RenderSliverList {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, SliverProtocol>) -> SliverGeometry
+    where
+        T: LayoutTree,
+    {
+        let mut scroll_extent = 0.0;
+        let mut paint_extent = 0.0;
+        let mut max_paint_extent = 0.0;
+
+        // Layout each child
+        for child_id in ctx.children.iter() {
+            // Create constraints for this child
+            let child_constraints = SliverConstraints {
+                scroll_offset: (ctx.constraints.scroll_offset - scroll_extent).max(0.0),
+                overlap: 0.0,
+                remaining_paint_extent: ctx.constraints.remaining_paint_extent - paint_extent,
+                cross_axis_extent: ctx.constraints.cross_axis_extent,
+                ..ctx.constraints
+            };
+
+            let child_geometry = ctx.layout_child(child_id, child_constraints);
+
+            scroll_extent += child_geometry.scroll_extent;
+            paint_extent += child_geometry.paint_extent;
+            max_paint_extent += child_geometry.max_paint_extent;
+        }
+
+        SliverGeometry {
+            scroll_extent,
+            paint_extent: paint_extent.min(ctx.constraints.remaining_paint_extent),
+            max_paint_extent,
+            layout_extent: paint_extent.min(ctx.constraints.remaining_paint_extent),
+            ..Default::default()
+        }
+    }
+
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
+    where
+        T: PaintTree,
+    {
+        let mut current_offset = ctx.offset;
+
+        for child_id in ctx.children.iter() {
+            ctx.paint_child(child_id, current_offset);
+            // Advance offset for next item
+            current_offset = current_offset + Offset::new(0.0, self.item_extent);
+        }
     }
 }
 ```
@@ -386,24 +631,40 @@ impl Render<Variable> for RenderFlex {
 
 ---
 
-## Constructor Reference
+## API Reference
 
-### RenderElement Constructors
+### Trait Implementations
 
 ```rust
-// Leaf
-RenderElement::box_leaf(render)           // Render<Leaf>
+// Box Protocol
+impl RenderBox<Leaf> for MyRender { ... }      // 0 children
+impl RenderBox<Optional> for MyRender { ... }  // 0-1 children
+impl RenderBox<Single> for MyRender { ... }    // 1 child
+impl RenderBox<Variable> for MyRender { ... }  // N children
 
-// Optional  
-RenderElement::box_optional(render)       // Render<Optional>
+// Sliver Protocol
+impl SliverRender<Single> for MyRender { ... }    // 1 child
+impl SliverRender<Variable> for MyRender { ... }  // N children
 
-// Single
-RenderElement::box_single(render)         // Render<Single>
-RenderElement::sliver_single(render)      // SliverRender<Single>
+// Proxy Traits (auto-implement RenderBox/SliverRender)
+impl RenderBoxProxy for MyWrapper { ... }     // Box with Single child
+impl RenderSliverProxy for MyWrapper { ... }  // Sliver with Single child
+```
 
-// Variable
-RenderElement::box_variable(render)       // Render<Variable>
-RenderElement::sliver_variable(render)    // SliverRender<Variable>
+### Context API
+
+```rust
+// Layout
+fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, A, P>) -> Size/SliverGeometry
+where T: LayoutTree
+
+// Paint
+fn paint<T>(&self, ctx: &mut PaintContext<'_, T, A>)
+where T: PaintTree
+
+// Hit Test
+fn hit_test<T>(&self, ctx: &HitTestContext<'_, T, A, P>, result: &mut HitTestResult) -> bool
+where T: HitTestTree
 ```
 
 ### Children Accessors

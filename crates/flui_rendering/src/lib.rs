@@ -45,9 +45,8 @@
 
 pub mod core;
 pub mod error;
+pub mod objects;
 pub mod view;
-// TODO: Migrate objects/ to use new trait-based architecture
-// pub mod objects;
 
 // Re-export from core module
 pub use core::{
@@ -63,8 +62,8 @@ pub use core::{
     // Parent data
     BoxParentData,
     BoxProtocol,
-    // Wrappers
-    BoxRenderWrapper,
+    // Wrappers (TODO: Update to new API)
+    // BoxRenderWrapper,
     ChildrenAccess,
     // Geometry types
     Constraints,
@@ -103,8 +102,10 @@ pub use core::{
     Protocol,
     RenderBox,
     RenderBoxExt,
+    RenderBoxProxy,
     RenderFlags,
     RenderObject,
+    RenderSliverProxy,
     RenderState,
     RenderTreeAccess,
     RenderTreeAccessExt,
@@ -114,7 +115,7 @@ pub use core::{
     SliverProtocol,
     SliverRender,
     SliverRenderExt,
-    SliverRenderWrapper,
+    // SliverRenderWrapper, // TODO: Update to new API
     TreeNav,
     TreeRead,
     TreeWrite,
@@ -153,4 +154,6 @@ pub mod prelude {
         SliverRender,
         Variable,
     };
+
+    pub use crate::objects::*;
 }

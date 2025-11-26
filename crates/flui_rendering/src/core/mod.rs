@@ -39,10 +39,12 @@ pub mod protocol;
 pub mod render_box;
 pub mod render_flags;
 pub mod render_object;
+pub mod render_proxy;
 pub mod render_sliver;
 pub mod render_state;
 pub mod render_tree;
-pub mod wrappers;
+// TODO: Update wrappers.rs to use new context-based API
+// pub mod wrappers;
 
 // Re-export arity types
 pub use arity::{
@@ -93,5 +95,8 @@ pub use render_box::{EmptyRender, RenderBox, RenderBoxExt};
 pub use render_object::RenderObject;
 pub use render_sliver::{SliverRender, SliverRenderExt};
 
-// Re-export wrappers
-pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
+// Re-export proxy traits
+pub use render_proxy::{RenderBoxProxy, RenderSliverProxy};
+
+// Re-export wrappers (TODO: Update to new API)
+// pub use wrappers::{BoxRenderWrapper, SliverRenderWrapper};
