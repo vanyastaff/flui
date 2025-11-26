@@ -1,6 +1,6 @@
 //! RenderSliverPadding - Adds padding around sliver content
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};

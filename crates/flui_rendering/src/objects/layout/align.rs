@@ -1,6 +1,6 @@
 //! RenderAlign - aligns child within available space
 
-use flui_core::render::{BoxProtocol, LayoutContext, Optional, PaintContext, RenderBox};
+use crate::core::{BoxProtocol, LayoutContext, Optional, PaintContext, RenderBox};
 use flui_types::{Alignment, Offset, Size};
 
 /// RenderObject that aligns its child within the available space
@@ -93,7 +93,10 @@ impl Default for RenderAlign {
 }
 
 impl RenderBox<Optional> for RenderAlign {
-    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
 
         // Check if we have a child
@@ -150,7 +153,10 @@ impl RenderBox<Optional> for RenderAlign {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
+    where
+        T: crate::core::PaintTree,
+    {
         // If we have a child, paint it at aligned position
         if let Some(child_id) = ctx.children.get() {
             let child_offset = ctx.offset + self.child_offset;

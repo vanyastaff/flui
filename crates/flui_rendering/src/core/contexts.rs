@@ -12,9 +12,9 @@
 //!
 //! # Design
 //!
-//! Contexts are generic over a tree type `T` that implements the appropriate
-//! traits from `flui-tree`. This allows the rendering layer to be independent
-//! of the concrete `ElementTree` implementation.
+//! Contexts use trait objects (`dyn LayoutTree`, `dyn PaintTree`) for tree access.
+//! This provides abstraction while keeping the API simple without generic parameters
+//! on trait methods.
 //!
 //! # Integration with flui-tree
 //!
@@ -24,7 +24,7 @@
 //! use flui_tree::{RenderChildren, first_render_child, count_render_children};
 //!
 //! // In a Multi-child render object:
-//! fn layout<T: LayoutTree>(&mut self, ctx: LayoutContext<'_, T, Multi, BoxProtocol>) -> Size {
+//! fn layout(&mut self, ctx: LayoutContext<'_, Multi, BoxProtocol>) -> Size {
 //!     // Use flui-tree iterators directly on the tree
 //!     let child_count = count_render_children(ctx.tree(), parent_id);
 //!
@@ -43,7 +43,7 @@ use flui_types::{Offset, Size, SliverConstraints, SliverGeometry};
 
 use super::arity::Arity;
 use super::protocol::{BoxConstraints, BoxProtocol, Protocol, SliverProtocol};
-use super::render_tree::{LayoutTree, PaintTree};
+use super::render_tree::{HitTestTree, LayoutTree, PaintTree};
 
 /// Trait for contexts that provide typed children access.
 ///
@@ -67,19 +67,21 @@ pub trait HasTypedChildren<'a, A: Arity> {
 /// # Type Parameters
 ///
 /// - `'a`: Lifetime of tree reference
-/// - `T`: Tree type implementing [`LayoutTree`]
 /// - `A`: Arity (child count) - determines the `children` accessor type
 /// - `P`: Protocol (BoxProtocol or SliverProtocol)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// fn layout<T: LayoutTree>(&mut self, ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size {
+/// fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
 ///     let child_size = ctx.layout_child(ctx.children.single(), ctx.constraints);
 ///     child_size
 /// }
 /// ```
-pub struct LayoutContext<'a, T, A: Arity, P: Protocol> {
+pub struct LayoutContext<'a, T, A: Arity, P: Protocol>
+where
+    T: LayoutTree,
+{
     tree: &'a mut T,
 
     /// Constraints from parent specifying allowed sizes.
@@ -91,7 +93,10 @@ pub struct LayoutContext<'a, T, A: Arity, P: Protocol> {
     _phantom: PhantomData<P>,
 }
 
-impl<'a, T, A: Arity, P: Protocol> fmt::Debug for LayoutContext<'a, T, A, P> {
+impl<'a, T, A: Arity, P: Protocol> fmt::Debug for LayoutContext<'a, T, A, P>
+where
+    T: LayoutTree,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LayoutContext")
             .field("constraints", &self.constraints)
@@ -99,7 +104,10 @@ impl<'a, T, A: Arity, P: Protocol> fmt::Debug for LayoutContext<'a, T, A, P> {
     }
 }
 
-impl<'a, T, A: Arity, P: Protocol> LayoutContext<'a, T, A, P> {
+impl<'a, T, A: Arity, P: Protocol> LayoutContext<'a, T, A, P>
+where
+    T: LayoutTree,
+{
     /// Create a new layout context
     pub fn new(tree: &'a mut T, constraints: P::Constraints, children: A::Children<'a>) -> Self {
         Self {
@@ -121,49 +129,69 @@ impl<'a, T, A: Arity, P: Protocol> LayoutContext<'a, T, A, P> {
     }
 }
 
-impl<'a, T, A: Arity, P: Protocol> HasTypedChildren<'a, A> for LayoutContext<'a, T, A, P> {
+impl<'a, T, A: Arity, P: Protocol> HasTypedChildren<'a, A> for LayoutContext<'a, T, A, P>
+where
+    T: LayoutTree,
+{
     fn children(&self) -> A::Children<'a> {
         self.children
     }
 }
 
 // Box-specific helper methods
-impl<'a, T: LayoutTree, A: Arity> LayoutContext<'a, T, A, BoxProtocol> {
+impl<'a, T, A: Arity> LayoutContext<'a, T, A, BoxProtocol>
+where
+    T: LayoutTree,
+{
     /// Layout a child element with the given constraints
     ///
     /// Returns the child's computed size.
+    ///
+    /// # Panics
+    /// Panics if layout fails (indicates a framework bug).
     #[inline]
     pub fn layout_child(
         &mut self,
         child_id: std::num::NonZeroUsize,
         constraints: BoxConstraints,
-    ) -> Result<Size, super::super::error::RenderError> {
+    ) -> Size {
         self.tree
             .perform_layout(ElementId::new(child_id.get()), constraints)
+            .expect("Layout failed - this is a framework bug")
     }
 }
 
 // Sliver-specific helper methods
-impl<'a, T: LayoutTree, A: Arity> LayoutContext<'a, T, A, SliverProtocol> {
+impl<'a, T, A: Arity> LayoutContext<'a, T, A, SliverProtocol>
+where
+    T: LayoutTree,
+{
     /// Layout a child sliver element with the given constraints
     ///
     /// Returns the child's computed sliver geometry.
+    ///
+    /// # Panics
+    /// Panics if layout fails (indicates a framework bug).
     #[inline]
     pub fn layout_child(
         &mut self,
         child_id: std::num::NonZeroUsize,
         constraints: SliverConstraints,
-    ) -> Result<SliverGeometry, super::super::error::RenderError> {
+    ) -> SliverGeometry {
         self.tree
             .perform_sliver_layout(ElementId::new(child_id.get()), constraints)
+            .expect("Sliver layout failed - this is a framework bug")
     }
 }
 
 // Box protocol proxy for Single arity
-impl<'a, T: LayoutTree> LayoutContext<'a, T, super::arity::Single, BoxProtocol> {
+impl<'a, T> LayoutContext<'a, T, super::arity::Single, BoxProtocol>
+where
+    T: LayoutTree,
+{
     /// Proxy layout - passes constraints directly to child
     #[inline]
-    pub fn proxy(&mut self) -> Result<Size, super::super::error::RenderError> {
+    pub fn proxy(&mut self) -> Size {
         let child = self.children.single();
         let constraints = self.constraints;
         self.layout_child(child, constraints)
@@ -171,10 +199,13 @@ impl<'a, T: LayoutTree> LayoutContext<'a, T, super::arity::Single, BoxProtocol> 
 }
 
 // Sliver protocol proxy for Single arity
-impl<'a, T: LayoutTree> LayoutContext<'a, T, super::arity::Single, SliverProtocol> {
+impl<'a, T> LayoutContext<'a, T, super::arity::Single, SliverProtocol>
+where
+    T: LayoutTree,
+{
     /// Proxy layout - passes constraints directly to child
     #[inline]
-    pub fn proxy(&mut self) -> Result<SliverGeometry, super::super::error::RenderError> {
+    pub fn proxy(&mut self) -> SliverGeometry {
         let child = self.children.single();
         let constraints = self.constraints;
         self.layout_child(child, constraints)
@@ -193,18 +224,20 @@ impl<'a, T: LayoutTree> LayoutContext<'a, T, super::arity::Single, SliverProtoco
 /// # Type Parameters
 ///
 /// - `'a`: Lifetime of tree reference
-/// - `T`: Tree type implementing [`PaintTree`]
 /// - `A`: Arity (child count) - determines the `children` accessor type
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// fn paint<T: PaintTree>(&self, ctx: &mut PaintContext<'_, T, Single>) {
+/// fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
 ///     ctx.canvas().draw_rect(rect, paint);
 ///     ctx.paint_child(ctx.children.single(), ctx.offset);
 /// }
 /// ```
-pub struct PaintContext<'a, T, A: Arity> {
+pub struct PaintContext<'a, T, A: Arity>
+where
+    T: PaintTree,
+{
     tree: &'a mut T,
 
     /// Offset in parent's coordinate space.
@@ -216,7 +249,10 @@ pub struct PaintContext<'a, T, A: Arity> {
     canvas: Canvas,
 }
 
-impl<'a, T, A: Arity> fmt::Debug for PaintContext<'a, T, A> {
+impl<'a, T, A: Arity> fmt::Debug for PaintContext<'a, T, A>
+where
+    T: PaintTree,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PaintContext")
             .field("offset", &self.offset)
@@ -224,7 +260,10 @@ impl<'a, T, A: Arity> fmt::Debug for PaintContext<'a, T, A> {
     }
 }
 
-impl<'a, T, A: Arity> PaintContext<'a, T, A> {
+impl<'a, T, A: Arity> PaintContext<'a, T, A>
+where
+    T: PaintTree,
+{
     /// Create a new paint context
     pub fn new(tree: &'a mut T, offset: Offset, children: A::Children<'a>) -> Self {
         Self {
@@ -254,38 +293,45 @@ impl<'a, T, A: Arity> PaintContext<'a, T, A> {
     pub fn tree_mut(&mut self) -> &mut T {
         self.tree
     }
-}
 
-impl<'a, T: PaintTree, A: Arity> PaintContext<'a, T, A> {
     /// Paint a child element at the given offset
+    ///
+    /// # Panics
+    /// Panics if paint fails (indicates a framework bug).
     #[inline]
     pub fn paint_child(
         &mut self,
         child_id: std::num::NonZeroUsize,
         offset: Offset,
-    ) -> Result<(), super::super::error::RenderError> {
+    ) {
         let child_canvas = self
             .tree
-            .perform_paint(ElementId::new(child_id.get()), offset)?;
+            .perform_paint(ElementId::new(child_id.get()), offset)
+            .expect("Paint failed - this is a framework bug");
         self.canvas.append_canvas(child_canvas);
-        Ok(())
     }
 }
 
-impl<'a, T, A: Arity> HasTypedChildren<'a, A> for PaintContext<'a, T, A> {
+impl<'a, T, A: Arity> HasTypedChildren<'a, A> for PaintContext<'a, T, A>
+where
+    T: PaintTree,
+{
     fn children(&self) -> A::Children<'a> {
         self.children
     }
 }
 
 // Paint proxy for Single arity
-impl<'a, T: PaintTree> PaintContext<'a, T, super::arity::Single> {
+impl<'a, T> PaintContext<'a, T, super::arity::Single>
+where
+    T: PaintTree,
+{
     /// Proxy paint - paints child at same offset
     #[inline]
-    pub fn proxy(&mut self) -> Result<(), super::super::error::RenderError> {
+    pub fn proxy(&mut self) {
         let child = self.children.single();
         let offset = self.offset;
-        self.paint_child(child, offset)
+        self.paint_child(child, offset);
     }
 }
 
@@ -301,14 +347,13 @@ impl<'a, T: PaintTree> PaintContext<'a, T, super::arity::Single> {
 /// # Type Parameters
 ///
 /// - `'a`: Lifetime of tree reference
-/// - `T`: Tree type (for future extension)
 /// - `A`: Arity (child count) - determines the `children` accessor type
 /// - `P`: Protocol (BoxProtocol or SliverProtocol)
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// fn hit_test<T>(&self, ctx: HitTestContext<'_, T, Single, BoxProtocol>, result: &mut HitTestResult) -> bool {
+/// fn hit_test(&self, ctx: HitTestContext<'_, Single, BoxProtocol>, result: &mut HitTestResult) -> bool {
 ///     if ctx.contains(ctx.position) {
 ///         // Add self to result and test children
 ///         true
@@ -317,7 +362,10 @@ impl<'a, T: PaintTree> PaintContext<'a, T, super::arity::Single> {
 ///     }
 /// }
 /// ```
-pub struct HitTestContext<'a, T, A: Arity, P: Protocol> {
+pub struct HitTestContext<'a, T, A: Arity, P: Protocol>
+where
+    T: HitTestTree,
+{
     #[allow(dead_code)]
     tree: &'a T,
 
@@ -336,7 +384,10 @@ pub struct HitTestContext<'a, T, A: Arity, P: Protocol> {
     _phantom: PhantomData<P>,
 }
 
-impl<'a, T, A: Arity, P: Protocol> fmt::Debug for HitTestContext<'a, T, A, P> {
+impl<'a, T, A: Arity, P: Protocol> fmt::Debug for HitTestContext<'a, T, A, P>
+where
+    T: HitTestTree,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HitTestContext")
             .field("position", &self.position)
@@ -346,7 +397,10 @@ impl<'a, T, A: Arity, P: Protocol> fmt::Debug for HitTestContext<'a, T, A, P> {
     }
 }
 
-impl<'a, T, A: Arity, P: Protocol> HitTestContext<'a, T, A, P> {
+impl<'a, T, A: Arity, P: Protocol> HitTestContext<'a, T, A, P>
+where
+    T: HitTestTree,
+{
     /// Create a new hit test context
     pub fn new(
         tree: &'a T,
@@ -386,14 +440,20 @@ impl<'a, T, A: Arity, P: Protocol> HitTestContext<'a, T, A, P> {
     }
 }
 
-impl<'a, T, A: Arity, P: Protocol> HasTypedChildren<'a, A> for HitTestContext<'a, T, A, P> {
+impl<'a, T, A: Arity, P: Protocol> HasTypedChildren<'a, A> for HitTestContext<'a, T, A, P>
+where
+    T: HitTestTree,
+{
     fn children(&self) -> A::Children<'a> {
         self.children
     }
 }
 
 // Box-specific helper methods
-impl<'a, T, A: Arity> HitTestContext<'a, T, A, BoxProtocol> {
+impl<'a, T, A: Arity> HitTestContext<'a, T, A, BoxProtocol>
+where
+    T: HitTestTree,
+{
     /// Get the size (Box protocol geometry)
     pub fn size(&self) -> Size {
         self.geometry
@@ -422,7 +482,10 @@ impl<'a, T, A: Arity> HitTestContext<'a, T, A, BoxProtocol> {
 }
 
 // Sliver-specific helper methods
-impl<'a, T, A: Arity> HitTestContext<'a, T, A, SliverProtocol> {
+impl<'a, T, A: Arity> HitTestContext<'a, T, A, SliverProtocol>
+where
+    T: HitTestTree,
+{
     /// Get main axis position (y for vertical scroll)
     pub fn main_axis_position(&self) -> f32 {
         self.position.dy

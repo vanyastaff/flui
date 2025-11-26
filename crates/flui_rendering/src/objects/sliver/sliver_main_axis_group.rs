@@ -1,6 +1,6 @@
 //! RenderSliverMainAxisGroup - Groups multiple slivers along main axis
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::{Offset, SliverGeometry};
 

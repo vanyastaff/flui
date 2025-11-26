@@ -1,6 +1,6 @@
 //! RenderSliverToBoxAdapter - Adapts box widget to sliver protocol
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};

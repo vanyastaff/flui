@@ -1,6 +1,6 @@
 //! RenderSliverPersistentHeader - Sticky header that stays visible during scroll
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 

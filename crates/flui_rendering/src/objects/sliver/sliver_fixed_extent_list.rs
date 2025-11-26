@@ -1,7 +1,7 @@
 //! RenderSliverFixedExtentList - Optimized list with fixed item size
 
-use flui_core::element::ElementTree;
-use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+
+use crate::core::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::{SliverConstraints, SliverGeometry};
 

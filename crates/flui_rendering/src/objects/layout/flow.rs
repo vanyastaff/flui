@@ -1,15 +1,18 @@
 //! RenderFlow - Custom layout with delegate pattern
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Matrix4, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 
 /// Context provided to FlowDelegate during paint
-pub struct FlowPaintContext<'a, 'b> {
+pub struct FlowPaintContext<'a, 'b, T>
+where
+    T: crate::core::PaintTree,
+{
     /// Paint context reference
-    pub paint_ctx: &'a mut PaintContext<'b, Variable>,
+    pub paint_ctx: &'a mut PaintContext<'b, T, Variable>,
     /// Number of children
     pub child_count: usize,
     /// Size of each child (after layout)
@@ -18,7 +21,10 @@ pub struct FlowPaintContext<'a, 'b> {
     pub children: &'a [NonZeroUsize],
 }
 
-impl<'a, 'b> FlowPaintContext<'a, 'b> {
+impl<'a, 'b, T> FlowPaintContext<'a, 'b, T>
+where
+    T: crate::core::PaintTree,
+{
     /// Paint a child with transformation matrix
     pub fn paint_child(&mut self, index: usize, transform: Matrix4, offset: Offset) {
         if index >= self.children.len() {
@@ -28,7 +34,7 @@ impl<'a, 'b> FlowPaintContext<'a, 'b> {
         // TODO: Apply transformation matrix when transform layers are supported
         // For now, just paint at offset
         let _ = transform; // Suppress warning
-        self.paint_ctx.paint_child(self.children[index], offset);
+        let _ = self.paint_ctx.paint_child(self.children[index], offset);
     }
 }
 
@@ -45,7 +51,9 @@ pub trait FlowDelegate: Debug + Send + Sync {
     ) -> BoxConstraints;
 
     /// Paint children with custom transformations
-    fn paint_children(&self, context: &mut FlowPaintContext, offset: Offset);
+    fn paint_children<T>(&self, context: &mut FlowPaintContext<'_, '_, T>, offset: Offset)
+    where
+        T: crate::core::PaintTree;
 
     /// Check if layout should be recomputed
     fn should_relayout(&self, old: &dyn Any) -> bool;
@@ -86,7 +94,10 @@ impl FlowDelegate for SimpleFlowDelegate {
         BoxConstraints::new(0.0, constraints.max_width, 0.0, constraints.max_height)
     }
 
-    fn paint_children(&self, context: &mut FlowPaintContext, offset: Offset) {
+    fn paint_children<T>(&self, context: &mut FlowPaintContext<'_, '_, T>, offset: Offset)
+    where
+        T: crate::core::PaintTree,
+    {
         let mut x = 0.0;
 
         for i in 0..context.child_count {
@@ -131,18 +142,18 @@ impl FlowDelegate for SimpleFlowDelegate {
 /// let delegate = Box::new(SimpleFlowDelegate::new(10.0));
 /// let flow = RenderFlow::new(delegate);
 /// ```
-pub struct RenderFlow {
+pub struct RenderFlow<D: FlowDelegate + 'static> {
     /// Layout delegate
-    delegate: Box<dyn FlowDelegate>,
+    delegate: D,
 
     // Cache for layout
     child_sizes: Vec<Size>,
     size: Size,
 }
 
-impl RenderFlow {
+impl<D: FlowDelegate> RenderFlow<D> {
     /// Create new RenderFlow with delegate
-    pub fn new(delegate: Box<dyn FlowDelegate>) -> Self {
+    pub fn new(delegate: D) -> Self {
         Self {
             delegate,
             child_sizes: Vec::new(),
@@ -151,12 +162,12 @@ impl RenderFlow {
     }
 
     /// Set new delegate
-    pub fn set_delegate(&mut self, delegate: Box<dyn FlowDelegate>) {
+    pub fn set_delegate(&mut self, delegate: D) {
         self.delegate = delegate;
     }
 }
 
-impl Debug for RenderFlow {
+impl<D: FlowDelegate> Debug for RenderFlow<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderFlow")
             .field("delegate", &"<delegate>")
@@ -166,8 +177,11 @@ impl Debug for RenderFlow {
     }
 }
 
-impl RenderBox<Variable> for RenderFlow {
-    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
+impl<D: FlowDelegate> RenderBox<Variable> for RenderFlow<D> {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -178,7 +192,8 @@ impl RenderBox<Variable> for RenderFlow {
         self.child_sizes.clear();
         for (i, child_id) in children.iter().enumerate() {
             let child_constraints = self.delegate.get_constraints_for_child(i, constraints);
-            let child_size = ctx.layout_child(child_id, child_constraints);
+            let child_size = ctx.layout_child(child_id, child_constraints)
+                ;
             self.child_sizes.push(child_size);
         }
 
@@ -186,7 +201,10 @@ impl RenderBox<Variable> for RenderFlow {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
+    where
+        T: crate::core::PaintTree,
+    {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

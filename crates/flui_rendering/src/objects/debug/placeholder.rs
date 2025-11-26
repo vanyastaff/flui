@@ -1,7 +1,7 @@
 //! RenderPlaceholder - Debug placeholder visualization
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Leaf, RenderBox};
+use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree};
+use crate::core::{Leaf, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextStyle};
 use flui_types::{Rect, Size};
@@ -116,7 +116,10 @@ impl Default for RenderPlaceholder {
 }
 
 impl RenderBox<Leaf> for RenderPlaceholder {
-    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    where
+        T: LayoutTree,
+    {
         let constraints = ctx.constraints;
 
         // Use fallback size if unconstrained, otherwise use constraints
@@ -137,7 +140,10 @@ impl RenderBox<Leaf> for RenderPlaceholder {
         size
     }
 
-    fn paint(&self, _ctx: &mut PaintContext<'_, Leaf>) {
+    fn paint<T>(&self, _ctx: &mut PaintContext<'_, T, Leaf>)
+    where
+        T: PaintTree,
+    {
         let offset = _ctx.offset;
         let mut canvas = Canvas::new();
 

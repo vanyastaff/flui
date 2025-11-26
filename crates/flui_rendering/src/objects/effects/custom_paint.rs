@@ -1,6 +1,6 @@
 //! RenderCustomPaint - custom painting with user-defined painters
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_painting::Canvas;
@@ -143,7 +143,10 @@ impl Default for RenderCustomPaint {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Single> for RenderCustomPaint {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
 
         // Single arity always has exactly one child
@@ -155,7 +158,10 @@ impl RenderBox<Single> for RenderCustomPaint {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Use the size from layout phase

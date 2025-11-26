@@ -1,6 +1,6 @@
 //! RenderAbstractViewport - Abstract interface for viewport render objects
 
-use flui_core::element::{ElementId, ElementTree};
+use crate::core::ElementId;
 use flui_types::layout::Axis;
 use flui_types::prelude::*;
 

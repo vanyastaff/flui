@@ -1,7 +1,7 @@
 //! RenderEditableLine - Single-line editable text
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Leaf, RenderBox};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext};
+use crate::core::{Leaf, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::prelude::{Color, TextAlign, TextStyle};
 use flui_types::{Rect, Size};
@@ -224,7 +224,10 @@ impl RenderEditableLine {
 }
 
 impl RenderBox<Leaf> for RenderEditableLine {
-    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
 
         // Calculate text size
@@ -244,7 +247,10 @@ impl RenderBox<Leaf> for RenderEditableLine {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
+    where
+        T: crate::core::PaintTree,
+    {
         let mut paint = Paint::default();
 
         // Draw selection highlight if not collapsed

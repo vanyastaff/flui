@@ -1,6 +1,6 @@
 //! RenderFractionallySizedBox - sizes child as fraction of parent
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
@@ -92,7 +92,10 @@ impl Default for RenderFractionallySizedBox {
 }
 
 impl RenderBox<Single> for RenderFractionallySizedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
 
         // Calculate target size based on factors
@@ -106,7 +109,10 @@ impl RenderBox<Single> for RenderFractionallySizedBox {
         ctx.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
         ctx.paint_child(child_id, ctx.offset);
     }

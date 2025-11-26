@@ -3,7 +3,7 @@
 //! Applies a translation transformation before painting, where the translation
 //! is specified as a fraction of the child's size rather than absolute pixels.
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{Offset, Size};
 
 /// RenderObject that translates its child by a fraction of the child's size
@@ -121,7 +121,10 @@ impl RenderFractionalTranslation {
 }
 
 impl RenderBox<Single> for RenderFractionalTranslation {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
 
         // Layout child with same constraints
@@ -134,7 +137,10 @@ impl RenderBox<Single> for RenderFractionalTranslation {
         child_size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Calculate actual pixel offset from fractional translation

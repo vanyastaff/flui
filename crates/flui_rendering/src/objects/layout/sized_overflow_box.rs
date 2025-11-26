@@ -1,6 +1,6 @@
 //! RenderSizedOverflowBox - fixed size with child overflow
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
@@ -121,7 +121,10 @@ impl RenderSizedOverflowBox {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Single> for RenderSizedOverflowBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
 
         // Build child constraints from override values
@@ -148,7 +151,10 @@ impl RenderBox<Single> for RenderSizedOverflowBox {
         self.size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Calculate aligned position

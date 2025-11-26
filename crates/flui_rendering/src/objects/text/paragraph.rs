@@ -3,8 +3,8 @@
 //! This is a Leaf RenderObject that renders multi-line text with styling,
 //! line breaks, and text wrapping.
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Leaf, RenderBox};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext};
+use crate::core::{Leaf, RenderBox};
 use flui_painting::Paint;
 use flui_types::{
     styling::Color,
@@ -179,7 +179,10 @@ impl RenderParagraph {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Leaf> for RenderParagraph {
-    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
         tracing::trace!(
             text = %self.data.text,
@@ -246,7 +249,10 @@ impl RenderBox<Leaf> for RenderParagraph {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
+    where
+        T: crate::core::PaintTree,
+    {
         // Draw text using Canvas API
         let paint = Paint {
             color: self.data.color,

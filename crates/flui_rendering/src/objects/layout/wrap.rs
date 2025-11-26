@@ -1,6 +1,6 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-use flui_core::render::{
+use crate::core::{
     BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
 };
 use flui_types::constraints::BoxConstraints;
@@ -117,7 +117,10 @@ impl Default for RenderWrap {
 }
 
 impl RenderBox<Variable> for RenderWrap {
-    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -209,7 +212,10 @@ impl RenderBox<Variable> for RenderWrap {
         }
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
+    where
+        T: crate::core::PaintTree,
+    {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

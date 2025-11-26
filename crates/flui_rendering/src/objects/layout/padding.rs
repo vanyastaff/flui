@@ -1,6 +1,6 @@
 //! RenderPadding - adds padding around a child
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{EdgeInsets, Size};
 
 /// RenderObject that adds padding around its child
@@ -36,7 +36,10 @@ impl RenderPadding {
 }
 
 impl RenderBox<Single> for RenderPadding {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
         let padding = self.padding;
 
@@ -44,7 +47,9 @@ impl RenderBox<Single> for RenderPadding {
         let child_constraints = ctx.constraints.deflate(&padding);
 
         // Layout child with deflated constraints
-        let child_size = ctx.layout_child(child_id, child_constraints);
+        let child_size = ctx
+            .layout_child(child_id, child_constraints)
+            ;
 
         // Add padding to child size
         Size::new(
@@ -53,7 +58,10 @@ impl RenderBox<Single> for RenderPadding {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Apply padding offset and paint child

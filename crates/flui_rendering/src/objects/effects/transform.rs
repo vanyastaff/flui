@@ -1,9 +1,11 @@
 //! RenderTransform - applies matrix transformation to child
 
-use flui_core::element::hit_test::BoxHitTestResult;
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+
+use crate::core::{
+    HitTestTree, LayoutTree, PaintTree, RenderBox, Single,
+    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
+use flui_interaction::HitTestResult;
 use flui_types::{geometry::Transform, Matrix4, Offset, Size};
 
 /// RenderObject that applies a transformation to its child
@@ -94,13 +96,19 @@ impl RenderTransform {
 }
 
 impl RenderBox<Single> for RenderTransform {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
         // Layout child with same constraints (transform doesn't affect layout)
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Read offset before taking mutable borrow
@@ -132,11 +140,14 @@ impl RenderBox<Single> for RenderTransform {
         ctx.canvas().restore();
     }
 
-    fn hit_test(
+    fn hit_test<T>(
         &self,
-        ctx: HitTestContext<'_, Single, BoxProtocol>,
-        result: &mut BoxHitTestResult,
-    ) -> bool {
+        ctx: &HitTestContext<'_, T, Single, BoxProtocol>,
+        result: &mut HitTestResult,
+    ) -> bool
+    where
+        T: HitTestTree,
+    {
         // To hit test a transformed child, we need to transform the hit position
         // by the INVERSE of our transform, then test the child with that position.
         //

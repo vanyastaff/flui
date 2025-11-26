@@ -1,6 +1,8 @@
 //! RenderTable - Table layout with configurable column widths
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Variable};
+use crate::core::{
+    BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree, RenderBox, Variable,
+};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -110,12 +112,15 @@ impl RenderTable {
 
     /// Compute column widths based on constraints and column specs
     #[allow(clippy::needless_range_loop)]
-    fn compute_column_widths(
+    fn compute_column_widths<T>(
         &self,
         children: &[NonZeroUsize],
-        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
+        ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
         constraints: BoxConstraints,
-    ) -> Vec<f32> {
+    ) -> Vec<f32>
+    where
+        T: LayoutTree,
+    {
         if self.columns == 0 {
             return Vec::new();
         }
@@ -181,13 +186,16 @@ impl RenderTable {
 
     /// Compute row heights based on column widths and cell contents
     #[allow(clippy::needless_range_loop)]
-    fn compute_row_heights(
+    fn compute_row_heights<T>(
         &self,
         children: &[NonZeroUsize],
-        ctx: &LayoutContext<'_, Variable, BoxProtocol>,
+        ctx: &mut LayoutContext<'_, T, Variable, BoxProtocol>,
         column_widths: &[f32],
         constraints: BoxConstraints,
-    ) -> Vec<f32> {
+    ) -> Vec<f32>
+    where
+        T: LayoutTree,
+    {
         if self.columns == 0 || children.is_empty() {
             return Vec::new();
         }
@@ -220,7 +228,10 @@ impl RenderTable {
 }
 
 impl RenderBox<Variable> for RenderTable {
-    fn layout(&mut self, ctx: LayoutContext<'_, Variable, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Variable, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
         let children = ctx.children;
 
@@ -235,11 +246,11 @@ impl RenderBox<Variable> for RenderTable {
         }
 
         // Compute column widths
-        self.computed_column_widths = self.compute_column_widths(&child_ids, &ctx, constraints);
+        self.computed_column_widths = self.compute_column_widths(&child_ids, &mut ctx, constraints);
 
         // Compute row heights
         self.computed_row_heights =
-            self.compute_row_heights(&child_ids, &ctx, &self.computed_column_widths, constraints);
+            self.compute_row_heights(&child_ids, &mut ctx, &self.computed_column_widths, constraints);
 
         // Calculate total size
         let total_width: f32 = self.computed_column_widths.iter().sum();
@@ -251,7 +262,10 @@ impl RenderBox<Variable> for RenderTable {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Variable>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Variable>)
+    where
+        T: crate::core::PaintTree,
+    {
         let offset = ctx.offset;
 
         // Collect child IDs first to avoid borrow checker issues

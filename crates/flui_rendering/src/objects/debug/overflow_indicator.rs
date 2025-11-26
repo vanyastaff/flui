@@ -21,7 +21,7 @@
 //! ```
 
 // TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
+// use crate::core::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 #[cfg(debug_assertions)]
 #[cfg(debug_assertions)]
 #[cfg(debug_assertions)]

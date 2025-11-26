@@ -1,7 +1,7 @@
 //! RenderAspectRatio - maintains aspect ratio
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext};
+use crate::core::{RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -45,7 +45,10 @@ impl Default for RenderAspectRatio {
 }
 
 impl RenderBox<Single> for RenderAspectRatio {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
         let aspect_ratio = self.aspect_ratio;
@@ -79,7 +82,10 @@ impl RenderBox<Single> for RenderAspectRatio {
         final_size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
         // Simply paint child - no transformation needed

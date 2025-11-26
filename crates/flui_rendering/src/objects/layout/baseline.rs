@@ -1,7 +1,7 @@
 //! RenderBaseline - aligns child based on baseline
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext};
+use crate::core::{RenderBox, Single};
 use flui_types::{typography::TextBaseline, Offset, Size};
 
 /// RenderObject that positions child based on baseline
@@ -60,12 +60,16 @@ impl RenderBaseline {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Single> for RenderBaseline {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
 
         // Layout child with same constraints
-        let child_size = ctx.layout_child(child_id, constraints);
+        let child_size = ctx.layout_child(child_id, constraints)
+            ;
 
         // Our height includes space above baseline and child height
         // For simplicity, we use child height + baseline offset
@@ -75,7 +79,10 @@ impl RenderBox<Single> for RenderBaseline {
         )
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
         let offset = ctx.offset;
 

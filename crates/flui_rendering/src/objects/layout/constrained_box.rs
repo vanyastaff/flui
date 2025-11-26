@@ -1,7 +1,7 @@
 //! RenderConstrainedBox - applies additional constraints to a child
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Optional, RenderBox};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext};
+use crate::core::{Optional, RenderBox};
 use flui_types::constraints::BoxConstraints;
 use flui_types::Size;
 
@@ -52,7 +52,10 @@ impl Default for RenderConstrainedBox {
 }
 
 impl RenderBox<Optional> for RenderConstrainedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
 
         // Enforce additional constraints by intersecting with incoming constraints
@@ -78,7 +81,10 @@ impl RenderBox<Optional> for RenderConstrainedBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
+    where
+        T: crate::core::PaintTree,
+    {
         // If we have a child, paint it at our offset
         if let Some(child_id) = ctx.children.get() {
             ctx.paint_child(child_id, ctx.offset);

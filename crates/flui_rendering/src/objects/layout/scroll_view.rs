@@ -3,7 +3,7 @@
 //! This render object provides simple box-based scrolling for a single child.
 //! Used by SingleChildScrollView for straightforward scroll scenarios without slivers.
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::layout::Axis;
 use flui_types::painting::Paint;
 use flui_types::prelude::*;
@@ -252,7 +252,10 @@ impl Default for RenderScrollView {
 }
 
 impl RenderBox<Single> for RenderScrollView {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let viewport_constraints = &ctx.constraints;
 
         // Store viewport size
@@ -278,7 +281,10 @@ impl RenderBox<Single> for RenderScrollView {
         self.viewport_size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Apply clipping to viewport bounds

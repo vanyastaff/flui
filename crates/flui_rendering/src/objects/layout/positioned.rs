@@ -10,7 +10,7 @@
 //! - Parent (RenderStack) accesses metadata via GAT-based downcast
 //! - Zero-cost when not using positioned children
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 
@@ -261,13 +261,19 @@ impl RenderPositioned {
 }
 
 impl RenderBox<Single> for RenderPositioned {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
         // Pass-through: just layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
         // Pass-through: just paint child at same offset
         ctx.paint_child(child_id, ctx.offset);

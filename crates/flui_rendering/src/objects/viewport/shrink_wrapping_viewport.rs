@@ -6,9 +6,9 @@
 //! A full implementation requires complex integration with the sliver protocol
 //! and layout system.
 
-use flui_core::element::{ElementId, ElementTree};
+use crate::core::ElementId;
 // TODO: Migrate to Render<A>
-// use flui_core::render::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
+// use crate::core::{RuntimeArity, LayoutContext, PaintContext, LegacyRender};
 use flui_painting::Canvas;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_types::prelude::*;

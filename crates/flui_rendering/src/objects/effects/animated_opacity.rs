@@ -1,9 +1,9 @@
 //! RenderAnimatedOpacity - animated opacity transitions
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
-use flui_core::ElementId;
+use crate::core::ElementId;
 use flui_types::Size;
 
 /// RenderObject that applies animated opacity to its child
@@ -69,13 +69,19 @@ impl Default for RenderAnimatedOpacity {
 }
 
 impl RenderBox<Single> for RenderAnimatedOpacity {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
         // Layout child with same constraints
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Skip painting if fully transparent
@@ -90,9 +96,11 @@ impl RenderBox<Single> for RenderAnimatedOpacity {
         }
 
         // Paint child to its own canvas
+        let offset = ctx.offset; // Read offset before mutable borrow
         let child_canvas = ctx
-            .tree()
-            .paint_child(ElementId::new(child_id.get()), ctx.offset);
+            .tree_mut()
+            .perform_paint(ElementId::new(child_id.get()), offset)
+            .expect("Paint failed - this is a framework bug");
 
         // Append child canvas with opacity
         ctx.canvas()

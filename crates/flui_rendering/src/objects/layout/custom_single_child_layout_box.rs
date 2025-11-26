@@ -8,7 +8,7 @@
 //!
 //! Similar to Flutter's RenderCustomSingleChildLayoutBox.
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext, RenderBox, Single};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
@@ -191,7 +191,10 @@ impl RenderCustomSingleChildLayoutBox {
 }
 
 impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
 
         // 1. Get parent size from delegate (cannot depend on child size)
@@ -214,7 +217,10 @@ impl RenderBox<Single> for RenderCustomSingleChildLayoutBox {
         parent_size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Paint child at the offset calculated during layout

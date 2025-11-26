@@ -2,9 +2,7 @@
 //!
 //! Used when you have a RenderObject directly without a RenderView.
 
-use std::any::Any;
-
-use flui_foundation::{ElementId, RenderStateAccessor};
+use flui_foundation::ElementId;
 use flui_painting::Canvas;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
@@ -173,40 +171,6 @@ impl RenderViewObject for RenderObjectWrapper {
     ) -> bool {
         self.render_object
             .hit_test(children, position, geometry, hit_test_child)
-    }
-}
-
-// ============================================================================
-// RenderStateAccessor IMPLEMENTATION
-// ============================================================================
-
-impl RenderStateAccessor for RenderObjectWrapper {
-    fn render_state_any(&self) -> Option<&dyn Any> {
-        Some(&self.render_state)
-    }
-
-    fn render_state_any_mut(&mut self) -> Option<&mut dyn Any> {
-        Some(&mut self.render_state)
-    }
-
-    fn render_object_any(&self) -> Option<&dyn Any> {
-        Some(self.render_object.as_any())
-    }
-
-    fn render_object_any_mut(&mut self) -> Option<&mut dyn Any> {
-        Some(self.render_object.as_any_mut())
-    }
-
-    fn is_render_accessor(&self) -> bool {
-        true
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 

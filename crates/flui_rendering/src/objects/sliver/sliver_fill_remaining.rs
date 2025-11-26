@@ -1,6 +1,6 @@
 //! RenderSliverFillRemaining - Fills remaining viewport space
 
-use flui_core::render::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
+use crate::core::{RuntimeArity, SliverLayoutContext, SliverPaintContext, LegacySliverRender};
 use flui_painting::Canvas;
 use flui_types::prelude::*;
 use flui_types::{SliverConstraints, SliverGeometry};

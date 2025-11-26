@@ -1,6 +1,6 @@
 //! RenderRotatedBox - rotates child by quarter turns (90°, 180°, 270°)
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
@@ -63,7 +63,10 @@ impl RenderRotatedBox {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Single> for RenderRotatedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
 
         // For odd quarter turns (90°, 270°), swap width and height constraints
@@ -94,7 +97,10 @@ impl RenderBox<Single> for RenderRotatedBox {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // If no rotation, just paint child directly

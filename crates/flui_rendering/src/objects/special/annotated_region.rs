@@ -3,8 +3,8 @@
 //! This widget provides metadata about the region it covers that can be read by
 //! ancestors or the system (e.g., system UI overlay styling).
 
-use flui_core::render::{
-    RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
+use crate::core::{
+    LayoutTree, PaintTree, RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::Size;
 
@@ -73,13 +73,19 @@ impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderAnnotatedRegion<T
 impl<T: Clone + Send + Sync + std::fmt::Debug + 'static> RenderBox<Single>
     for RenderAnnotatedRegion<T>
 {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<Tree>(&mut self, mut ctx: LayoutContext<'_, Tree, Single, BoxProtocol>) -> Size
+    where
+        Tree: LayoutTree,
+    {
         let child_id = ctx.children.single();
         // Layout child with same constraints (pass-through)
         ctx.layout_child(child_id, ctx.constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<Tree>(&self, ctx: &mut PaintContext<'_, Tree, Single>)
+    where
+        Tree: PaintTree,
+    {
         let child_id = ctx.children.single();
         // This is a pass-through - just paint child
         // The annotation value is used by ancestors, not painted

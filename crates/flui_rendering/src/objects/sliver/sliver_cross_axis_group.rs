@@ -1,6 +1,6 @@
 //! RenderSliverCrossAxisGroup - Groups multiple slivers along cross axis
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::{Offset, SliverGeometry};
 

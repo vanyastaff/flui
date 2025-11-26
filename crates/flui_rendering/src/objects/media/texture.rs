@@ -1,6 +1,6 @@
 //! RenderTexture - GPU texture rendering
 
-use flui_core::render::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
+use crate::core::{BoxProtocol, LayoutContext, Leaf, PaintContext, RenderBox};
 use flui_types::styling::BoxFit;
 use flui_types::{Rect, Size};
 
@@ -228,7 +228,10 @@ impl RenderTexture {
 }
 
 impl RenderBox<Leaf> for RenderTexture {
-    fn layout(&mut self, ctx: LayoutContext<'_, Leaf, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
 
         // Textures typically take up all available space
@@ -239,7 +242,10 @@ impl RenderBox<Leaf> for RenderTexture {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Leaf>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Leaf>)
+    where
+        T: crate::core::PaintTree,
+    {
         // Draw GPU texture
         // Note: Canvas API will need to support texture drawing
         // For now, we draw a placeholder rectangle to show the texture bounds

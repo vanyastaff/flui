@@ -1,6 +1,6 @@
 //! RenderIntrinsicWidth - sizes child to its intrinsic width
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::constraints::BoxConstraints;
@@ -79,7 +79,10 @@ impl Default for RenderIntrinsicWidth {
 }
 
 impl RenderBox<Single> for RenderIntrinsicWidth {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
 
         // Layout child with infinite width to get intrinsic width
@@ -109,7 +112,10 @@ impl RenderBox<Single> for RenderIntrinsicWidth {
         ctx.constraints.constrain(Size::new(width, height))
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
         ctx.paint_child(child_id, ctx.offset);
     }

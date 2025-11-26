@@ -1,6 +1,6 @@
 //! RenderSliverOffstage - Conditionally hides sliver without removing from tree
 
-use flui_core::render::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
+use crate::core::{RuntimeArity, LegacySliverRender, SliverLayoutContext, SliverPaintContext};
 use flui_painting::Canvas;
 use flui_types::SliverGeometry;
 

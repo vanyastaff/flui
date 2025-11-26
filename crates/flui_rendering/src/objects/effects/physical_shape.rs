@@ -1,7 +1,7 @@
 //! RenderPhysicalShape - Custom shape with Material Design elevation
 
-use flui_core::render::{BoxProtocol, LayoutContext, PaintContext};
-use flui_core::render::{Optional, RenderBox};
+use crate::core::{BoxProtocol, LayoutContext, PaintContext};
+use crate::core::{Optional, RenderBox};
 use flui_painting::{Canvas, Paint};
 use flui_types::{
     painting::Path,
@@ -103,7 +103,10 @@ impl std::fmt::Debug for RenderPhysicalShape {
 }
 
 impl RenderBox<Optional> for RenderPhysicalShape {
-    fn layout(&mut self, ctx: LayoutContext<'_, Optional, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Optional, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let constraints = ctx.constraints;
 
         let size = if let Some(child_id) = ctx.children.get() {
@@ -120,7 +123,10 @@ impl RenderBox<Optional> for RenderPhysicalShape {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Optional>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Optional>)
+    where
+        T: crate::core::PaintTree,
+    {
         let offset = ctx.offset;
 
         // Get the custom shape path in local coordinates

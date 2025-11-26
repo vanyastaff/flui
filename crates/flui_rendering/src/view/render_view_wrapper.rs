@@ -2,10 +2,9 @@
 //!
 //! Wraps a RenderView and its created RenderObject, implementing RenderViewObject.
 
-use std::any::Any;
 use std::marker::PhantomData;
 
-use flui_foundation::{ElementId, RenderStateAccessor};
+use flui_foundation::ElementId;
 use flui_painting::Canvas;
 use flui_types::{constraints::BoxConstraints, Offset, Size};
 
@@ -16,7 +15,7 @@ use crate::core::{
     LayoutProtocol, RenderObject, RenderState, RuntimeArity,
 };
 
-use super::{RenderObjectFor, RenderView, RenderViewObject, UpdateResult};
+use super::{RenderView, RenderViewObject, UpdateResult};
 
 // ============================================================================
 // ArityToRuntime - Convert compile-time Arity to RuntimeArity
@@ -274,45 +273,6 @@ where
         };
 
         render.hit_test(children, position, geometry, hit_test_child)
-    }
-}
-
-// ============================================================================
-// RenderStateAccessor IMPLEMENTATION
-// ============================================================================
-
-impl<V, P, A> RenderStateAccessor for RenderViewWrapper<V, P, A>
-where
-    V: RenderView<P, A>,
-    P: Protocol,
-    A: Arity,
-{
-    fn render_state_any(&self) -> Option<&dyn Any> {
-        Some(&self.render_state)
-    }
-
-    fn render_state_any_mut(&mut self) -> Option<&mut dyn Any> {
-        Some(&mut self.render_state)
-    }
-
-    fn render_object_any(&self) -> Option<&dyn Any> {
-        self.render_object.as_ref().map(|r| r as &dyn Any)
-    }
-
-    fn render_object_any_mut(&mut self) -> Option<&mut dyn Any> {
-        self.render_object.as_mut().map(|r| r as &mut dyn Any)
-    }
-
-    fn is_render_accessor(&self) -> bool {
-        true
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 

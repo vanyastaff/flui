@@ -1,6 +1,6 @@
 //! RenderPositionedBox - positions child with explicit coordinates
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{Offset, Size};
@@ -86,7 +86,10 @@ impl Default for RenderPositionedBox {
 }
 
 impl RenderBox<Single> for RenderPositionedBox {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         let child_id = ctx.children.single();
         let constraints = ctx.constraints;
 
@@ -119,7 +122,10 @@ impl RenderBox<Single> for RenderPositionedBox {
         ctx.layout_child(child_id, child_constraints)
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         let child_id = ctx.children.single();
 
         // Calculate paint offset based on positioning

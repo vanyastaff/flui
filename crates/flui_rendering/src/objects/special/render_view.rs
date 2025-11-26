@@ -4,7 +4,7 @@
 //! compositor/window. It handles the initial frame setup and coordinates
 //! the output surface configuration.
 
-use flui_core::render::{
+use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
 use flui_types::{BoxConstraints, Size};
@@ -130,7 +130,10 @@ impl RenderView {
 }
 
 impl RenderBox<Single> for RenderView {
-    fn layout(&mut self, ctx: LayoutContext<'_, Single, BoxProtocol>) -> Size {
+    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Single, BoxProtocol>) -> Size
+    where
+        T: crate::core::LayoutTree,
+    {
         // Get the single child
         let child_id = ctx.children.single();
 
@@ -150,7 +153,10 @@ impl RenderBox<Single> for RenderView {
         self.configuration.size
     }
 
-    fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
+    fn paint<T>(&self, ctx: &mut PaintContext<'_, T, Single>)
+    where
+        T: crate::core::PaintTree,
+    {
         // Simply paint the child at origin (0, 0)
         // RenderView doesn't apply any transformations or effects
         let child_id = ctx.children.single();
