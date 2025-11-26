@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn test_register_annotation() {
         let tracker = MouseTracker::new(); // Create local instance for testing
-        let annotation = MouseTrackerAnnotation::new(1);
+        let annotation = MouseTrackerAnnotation::new(ElementId::new(1));
 
         tracker.register_annotation(annotation);
 
@@ -432,7 +432,7 @@ mod tests {
         let entered_clone = entered.clone();
         let exited_clone = exited.clone();
 
-        let annotation = MouseTrackerAnnotation::new(1)
+        let annotation = MouseTrackerAnnotation::new(ElementId::new(1))
             .with_enter(move |_, _| {
                 entered_clone.store(true, Ordering::Relaxed);
             })
@@ -457,7 +457,7 @@ mod tests {
         // Move into region (simulate hit test finding region 1)
         let mut hit_result = HitTestResult::new();
         hit_result.add(HitTestEntry::new(
-            1, // element_id
+            ElementId::new(1), // element_id
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         ));

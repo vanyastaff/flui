@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_paint_offset_vertical() {
-        let mut scroll_view = RenderScrollView::new(Axis::Vertical, false);
+        let scroll_view = RenderScrollView::new(Axis::Vertical, false);
 
         *scroll_view.scroll_offset.lock() = 100.0;
 
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_paint_offset_horizontal() {
-        let mut scroll_view = RenderScrollView::new(Axis::Horizontal, false);
+        let scroll_view = RenderScrollView::new(Axis::Horizontal, false);
 
         *scroll_view.scroll_offset.lock() = 50.0;
 
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_paint_offset_reversed() {
-        let mut scroll_view = RenderScrollView::new(Axis::Vertical, true);
+        let scroll_view = RenderScrollView::new(Axis::Vertical, true);
 
         *scroll_view.scroll_offset.lock() = 100.0;
 

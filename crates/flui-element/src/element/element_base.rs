@@ -305,7 +305,7 @@ mod tests {
         let parent_id = ElementId::new(42);
         let slot = Some(Slot::new(1));
 
-        base.mount(Some(parent_id), slot);
+        base.mount(Some(parent_id), slot, 0);
 
         assert_eq!(base.lifecycle(), ElementLifecycle::Active);
         assert!(base.is_dirty());
@@ -319,7 +319,7 @@ mod tests {
         let mut base = ElementBase::new();
 
         // Mount
-        base.mount(Some(ElementId::new(1)), Some(Slot::new(0)));
+        base.mount(Some(ElementId::new(1)), Some(Slot::new(0)), 0);
         assert_eq!(base.lifecycle(), ElementLifecycle::Active);
 
         // Deactivate

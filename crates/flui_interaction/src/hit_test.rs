@@ -430,7 +430,7 @@ mod tests {
         let mut result = HitTestResult::new();
 
         let entry1 = HitTestEntry::new(
-            1,
+            ElementId::new(1),
             Offset::new(10.0, 10.0),
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         );
@@ -446,12 +446,12 @@ mod tests {
 
         // Add back to front (as tree traversal would)
         result.add(HitTestEntry::new(
-            1,
+            ElementId::new(1),
             Offset::new(1.0, 1.0),
             Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
         ));
         result.add(HitTestEntry::new(
-            2,
+            ElementId::new(2),
             Offset::new(2.0, 2.0),
             Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
         ));
@@ -476,7 +476,7 @@ mod tests {
         });
 
         let entry = HitTestEntry::with_handler(
-            1,
+            ElementId::new(1),
             Offset::new(10.0, 10.0),
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             handler,
@@ -519,13 +519,13 @@ mod tests {
 
         // Add in reverse order (last added = first dispatched due to insert(0))
         result.add(HitTestEntry::with_handler(
-            2,
+            ElementId::new(2),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             handler2,
         ));
         result.add(HitTestEntry::with_handler(
-            1,
+            ElementId::new(1),
             Offset::ZERO,
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             handler1,
@@ -549,7 +549,7 @@ mod tests {
         // Push transform
         result.push_offset(Offset::new(10.0, 20.0));
 
-        let entry = HitTestEntry::new(1, Offset::ZERO, Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+        let entry = HitTestEntry::new(ElementId::new(1), Offset::ZERO, Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
         result.add(entry);
 
         result.pop_transform();

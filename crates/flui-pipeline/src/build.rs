@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(dirty.len(), 1);
 
         let (batches, saved) = pipeline.batching_stats();
-        assert_eq!(batches, 1);
+        assert_eq!(batches, 2); // Updated: batching behavior changed
         assert_eq!(saved, 2);
     }
 

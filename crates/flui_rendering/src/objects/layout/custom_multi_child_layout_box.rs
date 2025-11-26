@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn test_render_custom_multi_child_layout_box_new() {
         let delegate = SimpleGridDelegate::new(2, 5.0);
-        let layout = RenderCustomMultiChildLayoutBox::new(Box::new(delegate));
+        let layout = RenderCustomMultiChildLayoutBox::new(delegate);
 
         assert_eq!(layout.child_offsets.len(), 0);
     }

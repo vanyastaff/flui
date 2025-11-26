@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_render_flow_new() {
-        let delegate = Box::new(SimpleFlowDelegate::new(10.0));
+        let delegate = SimpleFlowDelegate::new(10.0);
         let flow = RenderFlow::new(delegate);
 
         assert_eq!(flow.child_sizes.len(), 0);
@@ -281,10 +281,10 @@ mod tests {
 
     #[test]
     fn test_render_flow_set_delegate() {
-        let delegate1 = Box::new(SimpleFlowDelegate::new(10.0));
+        let delegate1 = SimpleFlowDelegate::new(10.0);
         let mut flow = RenderFlow::new(delegate1);
 
-        let delegate2 = Box::new(SimpleFlowDelegate::new(20.0));
+        let delegate2 = SimpleFlowDelegate::new(20.0);
         flow.set_delegate(delegate2);
 
         // Delegate should be updated (can't easily verify without layout)

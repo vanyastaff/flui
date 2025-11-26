@@ -182,6 +182,7 @@ impl RenderViewObject for RenderObjectWrapper {
 mod tests {
     use super::*;
     use crate::core::geometry::Geometry;
+    use std::any::Any;
 
     #[derive(Debug)]
     struct TestRenderBox {

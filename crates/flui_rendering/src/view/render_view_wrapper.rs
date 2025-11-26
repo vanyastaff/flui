@@ -335,30 +335,21 @@ mod tests {
     }
 
     impl crate::core::RenderBox<Leaf> for TestRenderBox {
-        fn layout(
+        fn layout<T>(
             &mut self,
-            constraints: crate::core::protocol::BoxConstraints,
-            _children: &[ElementId],
-            _layout_child: &mut dyn FnMut(ElementId, crate::core::protocol::BoxConstraints) -> Size,
-        ) -> Size {
-            constraints.constrain(self.size)
+            ctx: crate::core::LayoutContext<'_, T, Leaf, BoxProtocol>,
+        ) -> Size
+        where
+            T: crate::core::LayoutTree,
+        {
+            ctx.constraints.constrain(self.size)
         }
 
-        fn paint(
-            &self,
-            _offset: Offset,
-            _children: &[ElementId],
-            _paint_child: &mut dyn FnMut(ElementId, Offset) -> Canvas,
-        ) -> Canvas {
-            Canvas::new()
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
+        fn paint<T>(&self, _ctx: &mut crate::core::PaintContext<'_, T, Leaf>)
+        where
+            T: crate::core::PaintTree,
+        {
+            // No painting needed for test
         }
     }
 

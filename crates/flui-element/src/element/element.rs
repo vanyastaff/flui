@@ -647,6 +647,7 @@ impl Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BuildContext;
 
     // Test view object type for testing
     #[derive(Debug)]
@@ -655,6 +656,14 @@ mod tests {
     }
 
     impl ViewObject for TestViewObject {
+        fn mode(&self) -> ViewMode {
+            ViewMode::Stateless
+        }
+
+        fn build(&mut self, _ctx: &dyn BuildContext) -> Element {
+            Element::empty()
+        }
+
         fn as_any(&self) -> &dyn Any {
             self
         }
@@ -712,7 +721,7 @@ mod tests {
         assert_eq!(element.lifecycle(), ElementLifecycle::Initial);
 
         // Mount
-        element.mount(Some(ElementId::new(1)), Some(Slot::new(0)));
+        element.mount(Some(ElementId::new(1)), Some(Slot::new(0)), 0);
         assert_eq!(element.lifecycle(), ElementLifecycle::Active);
         assert!(element.is_mounted());
 

@@ -183,6 +183,10 @@ mod tests {
 
         fn schedule_rebuild(&self, _element_id: ElementId) {}
 
+        fn depend_on_raw(&self, _type_id: std::any::TypeId) -> Option<std::sync::Arc<dyn Any + Send + Sync>> {
+            None
+        }
+
         fn as_any(&self) -> &dyn Any {
             self
         }

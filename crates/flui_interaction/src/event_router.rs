@@ -225,6 +225,7 @@ impl PointerEventExt for PointerEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::ElementId;
     use flui_types::geometry::{Offset, Rect};
 
     /// Mock layer for testing
@@ -235,7 +236,7 @@ mod tests {
     impl HitTestable for MockLayer {
         fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
             if self.bounds.contains(position) {
-                result.add(crate::hit_test::HitTestEntry::new(1, position, self.bounds));
+                result.add(crate::hit_test::HitTestEntry::new(ElementId::new(1), position, self.bounds));
                 true
             } else {
                 false
