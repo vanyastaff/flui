@@ -1494,10 +1494,10 @@ name = "flui_types"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "flui_log",
  "serde",
  "smallvec",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

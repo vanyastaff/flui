@@ -77,7 +77,7 @@ impl Asset for ImageAsset {
 
     async fn load(&self) -> Result<Self::Data, Self::Error> {
         // Get bytes either from memory or file
-        let _bytes = if let Some(ref bytes) = self.bytes {
+        let bytes = if let Some(ref bytes) = self.bytes {
             bytes.clone()
         } else {
             // Load from file

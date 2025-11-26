@@ -8,7 +8,7 @@ description = "Core types for Flui framework - geometry, layout, styling"
 repository.workspace = true
 
 [dependencies]
-flui_log ={ path="../flui_log", optional = true}
+tracing = { workspace = true }
 
 # Serialization support (optional)
 serde = { workspace = true, optional = true }
@@ -28,11 +28,6 @@ default = []
 # Serde support for all types (Color, Size, Rect, etc.)
 serde = ["dep:serde"]
 
-# === Logging ===
-# Tracing/logging support (optional, for type validation and debugging)
-log = ["dep:flui_log"]
-pretty_log = ["log", "flui_log/pretty"]
-
 # === Performance ===
 # SIMD acceleration for math operations
 # Auto-detects SSE/AVX (x86_64) or NEON (ARM)
@@ -40,7 +35,7 @@ simd = []
 
 # === Convenience ===
 # Enable all features
-full = ["serde", "log", "simd"]
+full = ["serde", "simd"]
 
 # NOTE: Image and font loading moved to flui_assets crate.
 # flui_types only provides type definitions!
