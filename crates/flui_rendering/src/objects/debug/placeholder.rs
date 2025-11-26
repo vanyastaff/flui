@@ -116,7 +116,7 @@ impl Default for RenderPlaceholder {
 }
 
 impl RenderBox<Leaf> for RenderPlaceholder {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: LayoutTree,
     {

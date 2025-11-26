@@ -1,10 +1,10 @@
-//! ViewObject wrappers module
+//! `ViewObject` wrappers module
 //!
-//! Contains wrapper types that implement ViewObject for each view trait.
+//! Contains wrapper types that implement `ViewObject` for each view trait.
 //!
 //! # Wrapper Types
 //!
-//! | View Trait | Wrapper | IntoElement Helper |
+//! | View Trait | Wrapper | `IntoElement` Helper |
 //! |------------|---------|-------------------|
 //! | `StatelessView` | `StatelessViewWrapper` | `Stateless(view)` |
 //! | `StatefulView` | `StatefulViewWrapper` | `Stateful(view)` |

@@ -1,6 +1,6 @@
-//! StatelessViewWrapper - Wrapper that holds a StatelessView
+//! `StatelessViewWrapper` - Wrapper that holds a `StatelessView`
 //!
-//! Implements ViewObject for StatelessView types.
+//! Implements `ViewObject` for `StatelessView` types.
 
 use std::any::Any;
 use std::marker::PhantomData;
@@ -9,9 +9,9 @@ use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 
 use crate::traits::StatelessView;
 
-/// Wrapper for StatelessView that implements ViewObject
+/// Wrapper for `StatelessView` that implements `ViewObject`
 ///
-/// Stored inside Element as the view_object.
+/// Stored inside Element as the `view_object`.
 pub struct StatelessViewWrapper<V: StatelessView> {
     /// The view (consumed on first build)
     view: Option<V>,
@@ -78,9 +78,10 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
 // 2. Use StatelessViewWrapper directly: Element::new(StatelessViewWrapper::new(view))
 // 3. Use the Stateless helper (below)
 
-/// Helper struct to convert StatelessView into Element
+/// Helper struct to convert `StatelessView` into Element
 ///
 /// Use `Stateless(my_view)` to create an element from a stateless view.
+#[derive(Debug)]
 pub struct Stateless<V: StatelessView>(pub V);
 
 impl<V: StatelessView> IntoElement for Stateless<V> {

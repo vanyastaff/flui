@@ -44,7 +44,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// # Design Rationale
 ///
 /// Dirty tracking is separated from other tree operations because:
-/// 1. Flags are typically stored in RenderState, not the node itself
+/// 1. Flags are typically stored in `RenderState`, not the node itself
 /// 2. Marking can happen from callbacks without mutable access
 /// 3. Different implementations may use atomic vs. locked flags
 ///
@@ -459,7 +459,7 @@ impl<T: DirtyTracking + ?Sized> DirtyTrackingExt for T {}
 /// Compact atomic dirty flags for render elements.
 ///
 /// This type provides lock-free dirty flag management using a single
-/// atomic byte. It's designed to be embedded in RenderState.
+/// atomic byte. It's designed to be embedded in `RenderState`.
 ///
 /// # Flags
 ///

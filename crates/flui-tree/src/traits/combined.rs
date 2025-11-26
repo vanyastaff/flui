@@ -75,9 +75,9 @@ impl<T: TreeMut + RenderTreeAccess + DirtyTracking> FullTreeAccess for T {}
 // OBJECT-SAFE VARIANTS
 // ============================================================================
 
-/// Object-safe version of TreeRead.
+/// Object-safe version of `TreeRead`.
 ///
-/// This trait provides a subset of TreeRead that can be used as
+/// This trait provides a subset of `TreeRead` that can be used as
 /// a trait object (`dyn TreeReadDyn`).
 pub trait TreeReadDyn: Send + Sync {
     /// Returns `true` if the tree contains a node with the given ID.
@@ -92,9 +92,9 @@ pub trait TreeReadDyn: Send + Sync {
     }
 }
 
-/// Object-safe version of TreeNav.
+/// Object-safe version of `TreeNav`.
 ///
-/// This trait provides a subset of TreeNav that can be used as
+/// This trait provides a subset of `TreeNav` that can be used as
 /// a trait object (`dyn TreeNavDyn`).
 pub trait TreeNavDyn: TreeReadDyn {
     /// Returns the parent of the given node.

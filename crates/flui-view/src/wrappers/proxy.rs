@@ -1,6 +1,6 @@
-//! ProxyViewWrapper - Wrapper that holds a ProxyView
+//! `ProxyViewWrapper` - Wrapper that holds a `ProxyView`
 //!
-//! Implements ViewObject for ProxyView types.
+//! Implements `ViewObject` for `ProxyView` types.
 
 use std::any::Any;
 
@@ -9,7 +9,7 @@ use flui_types::Event;
 
 use crate::traits::ProxyView;
 
-/// Wrapper for ProxyView that implements ViewObject
+/// Wrapper for `ProxyView` that implements `ViewObject`
 ///
 /// Proxy views wrap a single child without affecting layout.
 /// They add behavior, metadata, or event handling.
@@ -89,9 +89,10 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
 // IntoElement IMPLEMENTATION
 // ============================================================================
 
-/// Helper struct to disambiguate ProxyView from other view types
+/// Helper struct to disambiguate `ProxyView` from other view types
 ///
 /// Use `Proxy(my_view)` to create a proxy element.
+#[derive(Debug)]
 pub struct Proxy<V: ProxyView>(pub V);
 
 impl<V: ProxyView> IntoElement for Proxy<V> {

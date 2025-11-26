@@ -1,15 +1,15 @@
-//! StatefulView - Views with internal mutable state
+//! `StatefulView` - Views with internal mutable state
 //!
-//! StatefulView is for views that need to maintain state between rebuilds.
+//! `StatefulView` is for views that need to maintain state between rebuilds.
 
 use flui_element::IntoElement;
 
 use flui_element::BuildContext;
 use crate::state::ViewState;
 
-/// StatefulView - A view with internal mutable state
+/// `StatefulView` - A view with internal mutable state
 ///
-/// Use StatefulView when your view:
+/// Use `StatefulView` when your view:
 /// - Needs to maintain state that persists across rebuilds
 /// - Has interactive behavior (buttons, forms, etc.)
 /// - Needs to trigger rebuilds via `setState`

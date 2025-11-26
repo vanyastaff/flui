@@ -36,6 +36,7 @@ impl RenderErrorBox {
     /// # TODO
     ///
     /// This is a placeholder - actual rendering not yet implemented.
+    #[allow(dead_code)]
     pub fn new(message: String, details: Option<String>, show_details: bool) -> Self {
         Self {
             _message: message,

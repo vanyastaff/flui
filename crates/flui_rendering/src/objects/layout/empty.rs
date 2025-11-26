@@ -11,7 +11,7 @@ use flui_types::Size;
 pub struct RenderEmpty;
 
 impl RenderBox<Leaf> for RenderEmpty {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: LayoutTree,
     {

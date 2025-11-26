@@ -1,6 +1,6 @@
-//! StatefulViewWrapper - Wrapper that holds a StatefulView and its state
+//! `StatefulViewWrapper` - Wrapper that holds a `StatefulView` and its state
 //!
-//! Implements ViewObject for StatefulView types.
+//! Implements `ViewObject` for `StatefulView` types.
 
 use std::any::Any;
 
@@ -8,7 +8,7 @@ use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 
 use crate::traits::StatefulView;
 
-/// Wrapper for StatefulView that implements ViewObject
+/// Wrapper for `StatefulView` that implements `ViewObject`
 ///
 /// Stores both the view configuration and the mutable state.
 pub struct StatefulViewWrapper<V: StatefulView> {
@@ -103,9 +103,10 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
 // IntoElement IMPLEMENTATION
 // ============================================================================
 
-/// Helper struct to disambiguate StatefulView from StatelessView
+/// Helper struct to disambiguate `StatefulView` from `StatelessView`
 ///
 /// Use `Stateful(my_view)` to create a stateful element.
+#[derive(Debug)]
 pub struct Stateful<V: StatefulView>(pub V);
 
 impl<V: StatefulView> IntoElement for Stateful<V> {

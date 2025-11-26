@@ -1,7 +1,7 @@
 //! Render tree access traits.
 //!
 //! This module provides traits for accessing render-specific data
-//! (RenderObject, RenderState) from tree nodes, plus ergonomic
+//! (`RenderObject`, `RenderState`) from tree nodes, plus ergonomic
 //! extension traits for common operations.
 //!
 //! # Design Rationale
@@ -35,13 +35,13 @@ use super::TreeNav;
 
 /// Access to render-specific data in tree nodes.
 ///
-/// This trait extends [`TreeNav`] with methods to access RenderObject
-/// and RenderState. It uses `dyn Any` for type erasure, allowing
+/// This trait extends [`TreeNav`] with methods to access `RenderObject`
+/// and `RenderState`. It uses `dyn Any` for type erasure, allowing
 /// the trait to be defined without depending on concrete render types.
 ///
 /// # Type Erasure Strategy
 ///
-/// RenderObject and RenderState are accessed as `dyn Any` because:
+/// `RenderObject` and `RenderState` are accessed as `dyn Any` because:
 /// 1. Keeps `flui-tree` independent of `flui-rendering` types
 /// 2. Implementations downcast to concrete types as needed
 /// 3. Enables generic algorithms over any render tree
@@ -62,7 +62,7 @@ use super::TreeNav;
 /// }
 /// ```
 pub trait RenderTreeAccess: TreeNav {
-    /// Returns the RenderObject for an element, if it's a render element.
+    /// Returns the `RenderObject` for an element, if it's a render element.
     ///
     /// # Arguments
     ///
@@ -70,7 +70,7 @@ pub trait RenderTreeAccess: TreeNav {
     ///
     /// # Returns
     ///
-    /// Reference to the RenderObject as `dyn Any`, or `None` if the
+    /// Reference to the `RenderObject` as `dyn Any`, or `None` if the
     /// element is not a render element.
     ///
     /// # Type Safety
@@ -78,7 +78,7 @@ pub trait RenderTreeAccess: TreeNav {
     /// Callers should downcast using `downcast_ref::<ConcreteType>()`.
     fn render_object(&self, id: ElementId) -> Option<&dyn Any>;
 
-    /// Returns a mutable reference to the RenderObject.
+    /// Returns a mutable reference to the `RenderObject`.
     ///
     /// # Arguments
     ///
@@ -86,11 +86,11 @@ pub trait RenderTreeAccess: TreeNav {
     ///
     /// # Returns
     ///
-    /// Mutable reference to the RenderObject as `dyn Any`, or `None`
+    /// Mutable reference to the `RenderObject` as `dyn Any`, or `None`
     /// if the element is not a render element.
     fn render_object_mut(&mut self, id: ElementId) -> Option<&mut dyn Any>;
 
-    /// Returns the RenderState for an element, if it's a render element.
+    /// Returns the `RenderState` for an element, if it's a render element.
     ///
     /// # Arguments
     ///
@@ -98,11 +98,11 @@ pub trait RenderTreeAccess: TreeNav {
     ///
     /// # Returns
     ///
-    /// Reference to the RenderState as `dyn Any`, or `None` if the
+    /// Reference to the `RenderState` as `dyn Any`, or `None` if the
     /// element is not a render element.
     fn render_state(&self, id: ElementId) -> Option<&dyn Any>;
 
-    /// Returns a mutable reference to the RenderState.
+    /// Returns a mutable reference to the `RenderState`.
     ///
     /// # Arguments
     ///
@@ -112,7 +112,7 @@ pub trait RenderTreeAccess: TreeNav {
     /// Returns `true` if the element is a render element.
     ///
     /// A render element is one that participates in layout and paint.
-    /// Non-render elements (like StatelessView) just compose other elements.
+    /// Non-render elements (like `StatelessView`) just compose other elements.
     ///
     /// # Arguments
     ///
@@ -122,10 +122,10 @@ pub trait RenderTreeAccess: TreeNav {
         self.render_object(id).is_some()
     }
 
-    /// Gets the size from RenderState, if available.
+    /// Gets the size from `RenderState`, if available.
     ///
     /// This is a convenience method that accesses the cached size
-    /// from the RenderState. Returns `None` if:
+    /// from the `RenderState`. Returns `None` if:
     /// - Element doesn't exist
     /// - Element is not a render element
     /// - Size hasn't been computed yet
@@ -137,14 +137,14 @@ pub trait RenderTreeAccess: TreeNav {
     /// # Note
     ///
     /// Default implementation returns `None`. Concrete implementations
-    /// should override to extract size from RenderState.
+    /// should override to extract size from `RenderState`.
     #[inline]
     fn get_size(&self, id: ElementId) -> Option<(f32, f32)> {
         let _ = id;
         None
     }
 
-    /// Gets the cached constraints from RenderState, if available.
+    /// Gets the cached constraints from `RenderState`, if available.
     ///
     /// # Arguments
     ///
@@ -153,14 +153,14 @@ pub trait RenderTreeAccess: TreeNav {
     /// # Note
     ///
     /// Default implementation returns `None`. Concrete implementations
-    /// should override to extract constraints from RenderState.
+    /// should override to extract constraints from `RenderState`.
     #[inline]
     fn get_constraints(&self, id: ElementId) -> Option<&dyn Any> {
         let _ = id;
         None
     }
 
-    /// Gets the offset from RenderState, if available.
+    /// Gets the offset from `RenderState`, if available.
     ///
     /// The offset is the position relative to the parent.
     ///
@@ -183,33 +183,33 @@ pub trait RenderTreeAccess: TreeNav {
 /// This trait provides type-safe access when the caller knows the
 /// concrete types. Automatically implemented for all `RenderTreeAccess`.
 pub trait RenderTreeAccessExt: RenderTreeAccess {
-    /// Gets the RenderObject with a specific type.
+    /// Gets the `RenderObject` with a specific type.
     ///
     /// # Type Parameters
     ///
-    /// * `R` - The expected RenderObject type
+    /// * `R` - The expected `RenderObject` type
     ///
     /// # Returns
     ///
-    /// Reference to the RenderObject if it exists and has the correct type.
+    /// Reference to the `RenderObject` if it exists and has the correct type.
     #[inline]
     fn render_object_typed<R: 'static>(&self, id: ElementId) -> Option<&R> {
         self.render_object(id)?.downcast_ref::<R>()
     }
 
-    /// Gets the RenderObject mutably with a specific type.
+    /// Gets the `RenderObject` mutably with a specific type.
     #[inline]
     fn render_object_typed_mut<R: 'static>(&mut self, id: ElementId) -> Option<&mut R> {
         self.render_object_mut(id)?.downcast_mut::<R>()
     }
 
-    /// Gets the RenderState with a specific type.
+    /// Gets the `RenderState` with a specific type.
     #[inline]
     fn render_state_typed<S: 'static>(&self, id: ElementId) -> Option<&S> {
         self.render_state(id)?.downcast_ref::<S>()
     }
 
-    /// Gets the RenderState mutably with a specific type.
+    /// Gets the `RenderState` mutably with a specific type.
     #[inline]
     fn render_state_typed_mut<S: 'static>(&mut self, id: ElementId) -> Option<&mut S> {
         self.render_state_mut(id)?.downcast_mut::<S>()

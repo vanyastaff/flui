@@ -1,6 +1,6 @@
-//! ProviderViewWrapper - Wrapper that holds a ProviderView
+//! `ProviderViewWrapper` - Wrapper that holds a `ProviderView`
 //!
-//! Implements ViewObject for ProviderView types.
+//! Implements `ViewObject` for `ProviderView` types.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use flui_element::{
 
 use crate::traits::ProviderView;
 
-/// Wrapper for ProviderView that implements ViewObject
+/// Wrapper for `ProviderView` that implements `ViewObject`
 ///
 /// Provider views provide data to descendants via dependency injection.
 /// Descendants register as dependents and get rebuilt when value changes.
@@ -19,7 +19,7 @@ use crate::traits::ProviderView;
 /// # Value Storage
 ///
 /// The provided value is wrapped in Arc<T> for efficient sharing across dependents.
-/// The ProviderView trait returns Arc<T> directly.
+/// The `ProviderView` trait returns Arc<T> directly.
 pub struct ProviderViewWrapper<V, T>
 where
     V: ProviderView<T>,
@@ -177,9 +177,10 @@ where
 // IntoElement IMPLEMENTATION
 // ============================================================================
 
-/// Helper struct to disambiguate ProviderView from other view types
+/// Helper struct to disambiguate `ProviderView` from other view types
 ///
 /// Use `Provider::new(my_view)` to create a provider element.
+#[derive(Debug)]
 pub struct Provider<V, T>(pub V, std::marker::PhantomData<T>)
 where
     V: ProviderView<T>,

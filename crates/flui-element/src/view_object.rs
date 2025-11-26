@@ -178,10 +178,10 @@ impl dyn ViewObject {
 /// }
 /// ```
 pub trait ElementViewObjectExt {
-    /// Try to downcast view_object to a specific ViewObject implementation.
+    /// Try to downcast `view_object` to a specific `ViewObject` implementation.
     fn view_object_downcast<V: ViewObject + Sync>(&self) -> Option<&V>;
 
-    /// Try to downcast view_object to a specific ViewObject implementation (mutable).
+    /// Try to downcast `view_object` to a specific `ViewObject` implementation (mutable).
     fn view_object_downcast_mut<V: ViewObject + Sync>(&mut self) -> Option<&mut V>;
 }
 

@@ -92,7 +92,7 @@ impl Default for RenderErrorBox {
 }
 
 impl RenderBox<Leaf> for RenderErrorBox {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,
     {

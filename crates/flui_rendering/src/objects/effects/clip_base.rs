@@ -199,7 +199,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
 
         // If no clipping is applied, use default behavior
         if !self.clip_behavior.clips() {
-            return self.hit_test_children(&ctx, result);
+            return self.hit_test_children(ctx, result);
         }
 
         // Check if position is inside the clip shape
@@ -209,7 +209,7 @@ impl<S: ClipShape + 'static> RenderBox<Single> for RenderClip<S> {
         }
 
         // Position is inside clip region - test children normally
-        self.hit_test_children(&ctx, result)
+        self.hit_test_children(ctx, result)
     }
 }
 

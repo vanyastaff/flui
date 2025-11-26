@@ -1,4 +1,4 @@
-//! AnimatedView - Views that rebuild when animation values change
+//! `AnimatedView` - Views that rebuild when animation values change
 //!
 //! For views that subscribe to animation changes and rebuild automatically.
 
@@ -17,7 +17,7 @@ pub trait Listenable: Send + Sync + 'static {
     fn remove_listener(&self);
 }
 
-/// AnimatedView - Views that subscribe to animation changes.
+/// `AnimatedView` - Views that subscribe to animation changes.
 ///
 /// Similar to Flutter's `AnimatedWidget`. Automatically rebuilds when
 /// the listenable (animation, controller, stream) notifies.

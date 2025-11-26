@@ -46,9 +46,10 @@ use flui_foundation::ElementId;
 /// Result of visiting a node.
 ///
 /// Controls traversal flow after visiting each node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum VisitorResult {
     /// Continue normal traversal.
+    #[default]
     Continue,
 
     /// Skip this node's children (but continue to siblings).
@@ -56,12 +57,6 @@ pub enum VisitorResult {
 
     /// Stop traversal completely.
     Stop,
-}
-
-impl Default for VisitorResult {
-    fn default() -> Self {
-        Self::Continue
-    }
 }
 
 impl VisitorResult {

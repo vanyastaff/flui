@@ -157,7 +157,7 @@ impl LayoutPipeline {
 
         // Cache statistics tracking
         #[allow(unused_assignments)]
-        let mut cache_hits = 0usize;
+        let cache_hits = 0usize;
         #[allow(unused_assignments)]
         let mut cache_misses = 0usize;
 
@@ -340,8 +340,7 @@ impl flui_pipeline::LayoutPhase for LayoutPipeline {
         tree: &mut Self::Tree,
         constraints: Self::Constraints,
     ) -> flui_pipeline::PipelineResult<Vec<ElementId>> {
-        LayoutPipeline::compute_layout(self, tree, constraints).map_err(Into::into)
-    }
+        LayoutPipeline::compute_layout(self, tree, constraints)}
 }
 
 impl flui_pipeline::ParallelExecution for LayoutPipeline {

@@ -1,4 +1,4 @@
-//! EmptyView - A view that renders nothing
+//! `EmptyView` - A view that renders nothing
 //!
 //! Useful for conditional rendering and placeholder cases.
 
@@ -26,7 +26,7 @@ use crate::traits::StatelessView;
 pub struct EmptyView;
 
 impl EmptyView {
-    /// Create a new EmptyView
+    /// Create a new `EmptyView`
     #[inline]
     pub const fn new() -> Self {
         EmptyView
@@ -35,7 +35,7 @@ impl EmptyView {
 
 impl StatelessView for EmptyView {
     fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
-        () // Unit type converts to empty element
+        (); // Unit type converts to empty element
     }
 }
 

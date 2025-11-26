@@ -1,4 +1,4 @@
-//! ProxyView - Views that wrap single child without changing layout
+//! `ProxyView` - Views that wrap single child without changing layout
 //!
 //! For views that add behavior, metadata, or event handling without
 //! affecting layout.
@@ -8,7 +8,7 @@ use flui_types::Event;
 
 use flui_element::BuildContext;
 
-/// ProxyView - Views that wrap a single child.
+/// `ProxyView` - Views that wrap a single child.
 ///
 /// Similar to `RenderProxyBox` in render system. Delegates layout to child
 /// while adding behavior, metadata, or event handling.
@@ -50,10 +50,10 @@ use flui_element::BuildContext;
 ///
 /// # When to Use
 ///
-/// - Event interception (IgnorePointer, GestureDetector)
-/// - Accessibility (Semantics, ExcludeSemantics)
-/// - Focus management (Focus, FocusScope)
-/// - Optimization hints (RepaintBoundary)
+/// - Event interception (`IgnorePointer`, `GestureDetector`)
+/// - Accessibility (Semantics, `ExcludeSemantics`)
+/// - Focus management (Focus, `FocusScope`)
+/// - Optimization hints (`RepaintBoundary`)
 /// - Metadata (Tooltip, Hero)
 ///
 /// # When NOT to Use

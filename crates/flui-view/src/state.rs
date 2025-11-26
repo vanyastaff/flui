@@ -1,8 +1,8 @@
-//! ViewState - State for stateful views
+//! `ViewState` - State for stateful views
 //!
 //! Defines the trait that all view states must implement.
 
-/// ViewState - Marker trait for view state types
+/// `ViewState` - Marker trait for view state types
 ///
 /// State types used with `StatefulView` must implement this trait.
 ///

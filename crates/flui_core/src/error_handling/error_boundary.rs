@@ -44,6 +44,9 @@ impl ErrorBoundaryState {
     }
 }
 
+/// Type alias for error handler callback
+type ErrorHandler = Arc<dyn Fn(&ErrorInfo) + Send + Sync>;
+
 /// ErrorBoundary - Catches and displays errors from child widgets
 ///
 /// This widget wraps a child and displays an ErrorWidget if the child
@@ -70,7 +73,7 @@ pub struct ErrorBoundary {
 
     /// Error handler callback (optional)
     /// Called when an error occurs
-    on_error: Option<Arc<dyn Fn(&ErrorInfo) + Send + Sync>>,
+    on_error: Option<ErrorHandler>,
 }
 
 impl ErrorBoundary {

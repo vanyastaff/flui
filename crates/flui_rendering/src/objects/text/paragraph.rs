@@ -179,7 +179,7 @@ impl RenderParagraph {
 // ===== RenderObject Implementation =====
 
 impl RenderBox<Leaf> for RenderParagraph {
-    fn layout<T>(&mut self, mut ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
+    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Leaf, BoxProtocol>) -> Size
     where
         T: crate::core::LayoutTree,
     {

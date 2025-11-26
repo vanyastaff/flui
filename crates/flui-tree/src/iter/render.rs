@@ -28,7 +28,7 @@ use flui_foundation::ElementId;
 /// Iterator over render ancestors.
 ///
 /// Like [`Ancestors`](super::Ancestors) but only yields elements that
-/// are render elements (have a RenderObject).
+/// are render elements (have a `RenderObject`).
 ///
 /// # Use Case
 ///
@@ -68,7 +68,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderAncestors<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderAncestors<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderAncestors<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -143,7 +143,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderDescendants<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderDescendants<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderDescendants<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -226,7 +226,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildren<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderChildren<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderChildren<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -286,7 +286,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderChildrenWithIndex<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderChildrenWithIndex<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderChildrenWithIndex<'_, T> {
     type Item = (usize, ElementId);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -392,7 +392,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderSiblings<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderSiblings<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderSiblings<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -463,7 +463,7 @@ impl<T: RenderTreeAccess + ?Sized> std::iter::FusedIterator for RenderSiblings<'
 // RENDER SUBTREE ITERATOR (BFS with depth)
 // ============================================================================
 
-/// Item yielded by RenderSubtree iterator.
+/// Item yielded by `RenderSubtree` iterator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenderSubtreeItem {
     /// The element ID.
@@ -500,7 +500,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderSubtree<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderSubtree<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderSubtree<'_, T> {
     type Item = RenderSubtreeItem;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -553,7 +553,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderLeaves<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderLeaves<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderLeaves<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -628,7 +628,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderPath<'a, T> {
     }
 }
 
-impl<'a, T: RenderTreeAccess + ?Sized> Iterator for RenderPath<'a, T> {
+impl<T: RenderTreeAccess + ?Sized> Iterator for RenderPath<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {

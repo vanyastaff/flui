@@ -4,8 +4,10 @@
 ///
 /// Returned by `RenderView::update()` to indicate what changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum UpdateResult {
     /// Nothing changed - skip work
+    #[default]
     Unchanged,
 
     /// Layout-affecting properties changed - needs relayout
@@ -35,8 +37,3 @@ impl UpdateResult {
     }
 }
 
-impl Default for UpdateResult {
-    fn default() -> Self {
-        Self::Unchanged
-    }
-}

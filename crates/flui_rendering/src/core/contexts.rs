@@ -471,7 +471,7 @@ where
     pub fn add_to_result(&self, result: &mut HitTestResult) {
         use flui_types::Rect;
         let entry = flui_interaction::HitTestEntry {
-            element_id: self.element_id.into(),
+            element_id: self.element_id,
             local_position: self.position,
             bounds: Rect::from_xywh(0.0, 0.0, self.geometry.width, self.geometry.height),
             handler: None,
@@ -505,7 +505,7 @@ where
     pub fn add_to_result(&self, result: &mut HitTestResult) {
         use flui_types::Rect;
         let entry = flui_interaction::HitTestEntry {
-            element_id: self.element_id.into(),
+            element_id: self.element_id,
             local_position: self.position,
             bounds: Rect::from_xywh(
                 0.0,

@@ -83,6 +83,10 @@ pub trait TreeOperation {
     type Error;
 
     /// Apply the operation to a single element.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the operation fails for this element.
     fn apply(&mut self, id: ElementId, input: Self::Input) -> Result<Self::Output, Self::Error>;
 
     /// Apply to children and collect results.
@@ -110,9 +114,9 @@ pub trait TreeOperation {
 /// This trait is implemented by tree types that support layout operations.
 /// The concrete constraint and size types are specified by the implementor.
 pub trait LayoutVisitable {
-    /// Constraint type (e.g., BoxConstraints, SliverConstraints).
+    /// Constraint type (e.g., `BoxConstraints`, `SliverConstraints`).
     type Constraints;
-    /// Geometry result type (e.g., Size, SliverGeometry).
+    /// Geometry result type (e.g., Size, `SliverGeometry`).
     type Geometry;
     /// Position type (e.g., Offset).
     type Position;

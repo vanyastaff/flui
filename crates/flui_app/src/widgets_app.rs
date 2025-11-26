@@ -67,18 +67,15 @@ where
 
 /// Text direction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum TextDirection {
     /// Left-to-right (English, Spanish, etc.)
+    #[default]
     Ltr,
     /// Right-to-left (Arabic, Hebrew, etc.)
     Rtl,
 }
 
-impl Default for TextDirection {
-    fn default() -> Self {
-        Self::Ltr
-    }
-}
 
 impl<V> WidgetsApp<V>
 where

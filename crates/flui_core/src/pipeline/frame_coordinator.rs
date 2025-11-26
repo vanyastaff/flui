@@ -162,10 +162,7 @@ impl FrameCoordinator {
         root_id: Option<ElementId>,
     ) -> Option<flui_painting::Canvas> {
         // Stub: paint_render_object returns Canvas
-        match root_id {
-            Some(_) => Some(flui_painting::Canvas::new()),
-            None => None,
-        }
+        root_id.map(|_| flui_painting::Canvas::new())
     }
 
     /// Internal implementation of frame building logic.
@@ -580,8 +577,7 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
             tree_guard.root_id()
         };
 
-        FrameCoordinator::flush_layout(self, tree, root_id, constraints).map_err(Into::into)
-    }
+        FrameCoordinator::flush_layout(self, tree, root_id, constraints)}
 
     fn flush_paint(
         &mut self,
@@ -593,8 +589,7 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
             tree_guard.root_id()
         };
 
-        FrameCoordinator::flush_paint(self, tree, root_id).map_err(Into::into)
-    }
+        FrameCoordinator::flush_paint(self, tree, root_id)}
 
     fn execute_frame(
         &mut self,
@@ -613,8 +608,7 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
 
         // Execute frame using existing method
         let layer = self
-            .build_frame(tree, root_id, constraints)
-            .map_err(|e| -> flui_pipeline::PipelineError { e.into() })?;
+            .build_frame(tree, root_id, constraints)?;
 
         let frame_time = start.elapsed();
         let budget = self.budget.lock();

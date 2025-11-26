@@ -29,7 +29,7 @@
 //!
 //! For render operations, additional traits are provided:
 //!
-//! - [`RenderTreeAccess`] - Access RenderObject and RenderState
+//! - [`RenderTreeAccess`] - Access `RenderObject` and `RenderState`
 //! - [`RenderTreeExt`] - Extended render tree operations with iterators
 //! - [`DirtyTracking`] - Manage layout/paint dirty flags
 //!

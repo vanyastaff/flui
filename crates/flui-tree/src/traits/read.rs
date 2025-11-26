@@ -114,7 +114,7 @@ pub trait TreeRead: Send + Sync {
 // BLANKET IMPLEMENTATIONS
 // ============================================================================
 
-/// Blanket implementation for references to TreeRead.
+/// Blanket implementation for references to `TreeRead`.
 impl<T: TreeRead + ?Sized> TreeRead for &T {
     type Node = T::Node;
 
@@ -139,7 +139,7 @@ impl<T: TreeRead + ?Sized> TreeRead for &T {
     }
 }
 
-/// Blanket implementation for mutable references to TreeRead.
+/// Blanket implementation for mutable references to `TreeRead`.
 impl<T: TreeRead + ?Sized> TreeRead for &mut T {
     type Node = T::Node;
 

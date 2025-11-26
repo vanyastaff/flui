@@ -300,12 +300,12 @@ impl<T: TreeWrite + ?Sized> TreeWrite for &mut T {
 
     #[inline]
     fn clear(&mut self) {
-        (**self).clear()
+        (**self).clear();
     }
 
     #[inline]
     fn reserve(&mut self, additional: usize) {
-        (**self).reserve(additional)
+        (**self).reserve(additional);
     }
 }
 
@@ -327,12 +327,12 @@ impl<T: TreeWrite + ?Sized> TreeWrite for Box<T> {
 
     #[inline]
     fn clear(&mut self) {
-        (**self).clear()
+        (**self).clear();
     }
 
     #[inline]
     fn reserve(&mut self, additional: usize) {
-        (**self).reserve(additional)
+        (**self).reserve(additional);
     }
 }
 

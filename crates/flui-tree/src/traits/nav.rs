@@ -20,7 +20,7 @@ use crate::iter::{
 ///
 /// Navigation is separated from read access because:
 /// 1. Some trees may not store parent references
-/// 2. Children storage may vary (Vec, SmallVec, etc.)
+/// 2. Children storage may vary (Vec, `SmallVec`, etc.)
 /// 3. Allows simpler implementations when navigation isn't needed
 ///
 /// # Thread Safety
@@ -375,13 +375,7 @@ pub trait TreeNav: TreeRead {
         let ancestors_a: Vec<_> = self.ancestors(a).collect();
 
         // Find first ancestor of 'b' that's in ancestors_a
-        for ancestor in self.ancestors(b) {
-            if ancestors_a.contains(&ancestor) {
-                return Some(ancestor);
-            }
-        }
-
-        None
+        self.ancestors(b).find(|&ancestor| ancestors_a.contains(&ancestor))
     }
 
     /// Returns the root of the tree containing the given node.

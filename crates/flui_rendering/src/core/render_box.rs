@@ -20,15 +20,13 @@
 //! The trait uses context-based API where `LayoutContext` and `PaintContext`
 //! provide access to children and tree operations.
 
-use flui_foundation::ElementId;
 use flui_interaction::HitTestResult;
-use flui_painting::Canvas;
 use flui_types::{Offset, Size};
 use std::fmt::Debug;
 
 use super::arity::{Arity, Leaf};
 use super::contexts::{HitTestContext, LayoutContext, PaintContext};
-use super::protocol::{BoxConstraints, BoxProtocol};
+use super::protocol::BoxProtocol;
 
 // ============================================================================
 // RENDER BOX TRAIT

@@ -1,6 +1,6 @@
-//! AnimatedViewWrapper - Wrapper that holds an AnimatedView
+//! `AnimatedViewWrapper` - Wrapper that holds an `AnimatedView`
 //!
-//! Implements ViewObject for AnimatedView types.
+//! Implements `ViewObject` for `AnimatedView` types.
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +10,7 @@ use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 
 use crate::traits::{AnimatedView, Listenable};
 
-/// Wrapper for AnimatedView that implements ViewObject
+/// Wrapper for `AnimatedView` that implements `ViewObject`
 ///
 /// Animated views subscribe to a Listenable and rebuild automatically
 /// when the listenable notifies (e.g., animation tick).
@@ -162,9 +162,10 @@ where
 // IntoElement IMPLEMENTATION
 // ============================================================================
 
-/// Helper struct to disambiguate AnimatedView from other view types
+/// Helper struct to disambiguate `AnimatedView` from other view types
 ///
 /// Use `Animated(my_view)` to create an animated element.
+#[derive(Debug)]
 pub struct Animated<V, L>(pub V, std::marker::PhantomData<L>)
 where
     V: AnimatedView<L>,

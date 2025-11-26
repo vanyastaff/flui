@@ -1,6 +1,6 @@
-//! ProviderView - Views that provide data to descendants
+//! `ProviderView` - Views that provide data to descendants
 //!
-//! Similar to Flutter's InheritedWidget. Provides typed data that
+//! Similar to Flutter's `InheritedWidget`. Provides typed data that
 //! descendant widgets can access.
 
 use std::sync::Arc;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use flui_element::IntoElement;
 use flui_element::BuildContext;
 
-/// ProviderView - Views that provide data to descendants.
+/// `ProviderView` - Views that provide data to descendants.
 ///
 /// Similar to Flutter's `InheritedWidget`. Provides typed data that
 /// descendant widgets can access via `ctx.depend_on<T>()`.
@@ -65,7 +65,7 @@ use flui_element::BuildContext;
 ///
 /// - Local state → Use `StatefulView`
 /// - One-off props → Pass directly
-/// - Global singletons → Use static or lazy_static
+/// - Global singletons → Use static or `lazy_static`
 pub trait ProviderView<T: Send + Sync + 'static>: Send + Sync + 'static {
     /// Build the child subtree.
     ///
