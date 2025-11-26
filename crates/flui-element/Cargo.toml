@@ -10,13 +10,13 @@ keywords = ["ui", "element", "tree", "flui", "framework"]
 categories = ["gui", "data-structures"]
 
 [dependencies]
-# FLUI internal - minimal dependencies
-# Note: flui_engine and flui_interaction removed to break circular dependencies
+# FLUI internal dependencies (minimal - no flui-view to avoid circular deps)
 flui-foundation = { path = "../flui-foundation" }
 flui-tree = { path = "../flui-tree" }
 flui_types = { path = "../flui_types" }
 
 # Core dependencies
+bitflags.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
 

@@ -53,7 +53,7 @@ impl<'a, T: TreeNav> Descendants<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> Iterator for Descendants<'a, T> {
+impl<T: TreeNav> Iterator for Descendants<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -80,7 +80,7 @@ impl<'a, T: TreeNav> Iterator for Descendants<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> std::iter::FusedIterator for Descendants<'a, T> {}
+impl<T: TreeNav> std::iter::FusedIterator for Descendants<'_, T> {}
 
 /// Iterator over descendants with their depths.
 ///
@@ -103,7 +103,7 @@ impl<'a, T: TreeNav> DescendantsWithDepth<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> Iterator for DescendantsWithDepth<'a, T> {
+impl<T: TreeNav> Iterator for DescendantsWithDepth<'_, T> {
     type Item = (ElementId, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -127,7 +127,7 @@ impl<'a, T: TreeNav> Iterator for DescendantsWithDepth<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> std::iter::FusedIterator for DescendantsWithDepth<'a, T> {}
+impl<T: TreeNav> std::iter::FusedIterator for DescendantsWithDepth<'_, T> {}
 
 // ============================================================================
 // STACK IMPLEMENTATION

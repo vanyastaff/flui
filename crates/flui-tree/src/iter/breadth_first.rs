@@ -53,7 +53,7 @@ impl<'a, T: TreeNav> BreadthFirstIter<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> Iterator for BreadthFirstIter<'a, T> {
+impl<T: TreeNav> Iterator for BreadthFirstIter<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {

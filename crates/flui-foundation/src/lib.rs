@@ -144,9 +144,6 @@ pub mod change_notifier;
 pub mod diagnostics;
 pub mod error;
 
-// Atomic utilities for lock-free operations
-pub mod atomic_flags;
-
 // Notification system - base abstractions for event bubbling
 pub mod notification;
 
@@ -187,9 +184,6 @@ pub use diagnostics::{
 // Error handling
 pub use error::{FoundationError, Result};
 
-// Atomic utilities
-pub use atomic_flags::{AtomicElementFlags, ElementFlags};
-
 // Async utilities (feature gated)
 #[cfg(feature = "async")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
@@ -209,8 +203,8 @@ pub use async_utils::{AsyncChangeNotifier, AsyncValueNotifier};
 /// ```
 pub mod prelude {
     pub use crate::{
-        AtomicElementFlags, ChangeNotifier, DiagnosticLevel, Diagnosticable, DynNotification,
-        ElementFlags, ElementId, Key, KeyRef, Listenable, ListenerCallback, ListenerId,
+        ChangeNotifier, DiagnosticLevel, Diagnosticable, DynNotification,
+        ElementId, Key, KeyRef, Listenable, ListenerCallback, ListenerId,
         Notification, Slot, ValueNotifier,
     };
 

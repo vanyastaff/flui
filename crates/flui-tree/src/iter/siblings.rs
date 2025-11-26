@@ -4,18 +4,13 @@ use crate::traits::TreeNav;
 use flui_foundation::ElementId;
 
 /// Direction for sibling iteration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SiblingsDirection {
     /// Iterate forward (increasing index).
+    #[default]
     Forward,
     /// Iterate backward (decreasing index).
     Backward,
-}
-
-impl Default for SiblingsDirection {
-    fn default() -> Self {
-        Self::Forward
-    }
 }
 
 /// Iterator over siblings of a node.
@@ -37,9 +32,9 @@ impl Default for SiblingsDirection {
 /// ```
 #[derive(Debug)]
 pub struct Siblings<'a, T: TreeNav> {
-    tree: &'a T,
+    _tree: &'a T,
     /// Parent's children list
-    siblings: &'a [ElementId],
+    children: &'a [ElementId],
     /// Current index in siblings list
     current_index: Option<usize>,
     /// Direction of iteration
@@ -66,7 +61,7 @@ impl<'a, T: TreeNav> Siblings<'a, T> {
         include_self: bool,
     ) -> Self {
         // Get parent and find index
-        let (siblings, current_index) = if let Some(parent) = tree.parent(start) {
+        let (children, current_index) = if let Some(parent) = tree.parent(start) {
             let sibs = tree.children(parent);
             let idx = sibs.iter().position(|&id| id == start);
             (sibs, idx)
@@ -76,8 +71,8 @@ impl<'a, T: TreeNav> Siblings<'a, T> {
         };
 
         Self {
-            tree,
-            siblings,
+            _tree: tree,
+            children,
             current_index,
             direction,
             started: false,
@@ -98,7 +93,7 @@ impl<'a, T: TreeNav> Siblings<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> Iterator for Siblings<'a, T> {
+impl<T: TreeNav> Iterator for Siblings<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -108,15 +103,15 @@ impl<'a, T: TreeNav> Iterator for Siblings<'a, T> {
             self.started = true;
 
             if self.include_self {
-                return Some(self.siblings[idx]);
+                return Some(self.children[idx]);
             }
 
             // Move to first sibling
             match self.direction {
                 SiblingsDirection::Forward => {
-                    if idx + 1 < self.siblings.len() {
+                    if idx + 1 < self.children.len() {
                         self.current_index = Some(idx + 1);
-                        return Some(self.siblings[idx + 1]);
+                        return Some(self.children[idx + 1]);
                     }
                     self.current_index = None;
                     return None;
@@ -124,7 +119,7 @@ impl<'a, T: TreeNav> Iterator for Siblings<'a, T> {
                 SiblingsDirection::Backward => {
                     if idx > 0 {
                         self.current_index = Some(idx - 1);
-                        return Some(self.siblings[idx - 1]);
+                        return Some(self.children[idx - 1]);
                     }
                     self.current_index = None;
                     return None;
@@ -135,9 +130,9 @@ impl<'a, T: TreeNav> Iterator for Siblings<'a, T> {
         // Continue iteration
         match self.direction {
             SiblingsDirection::Forward => {
-                if idx + 1 < self.siblings.len() {
+                if idx + 1 < self.children.len() {
                     self.current_index = Some(idx + 1);
-                    Some(self.siblings[idx + 1])
+                    Some(self.children[idx + 1])
                 } else {
                     self.current_index = None;
                     None
@@ -146,7 +141,7 @@ impl<'a, T: TreeNav> Iterator for Siblings<'a, T> {
             SiblingsDirection::Backward => {
                 if idx > 0 {
                     self.current_index = Some(idx - 1);
-                    Some(self.siblings[idx - 1])
+                    Some(self.children[idx - 1])
                 } else {
                     self.current_index = None;
                     None
@@ -159,14 +154,10 @@ impl<'a, T: TreeNav> Iterator for Siblings<'a, T> {
         match self.current_index {
             Some(idx) => {
                 let remaining = match self.direction {
-                    SiblingsDirection::Forward => self.siblings.len().saturating_sub(idx + 1),
+                    SiblingsDirection::Forward => self.children.len().saturating_sub(idx + 1),
                     SiblingsDirection::Backward => idx,
                 };
-                let extra = if self.include_self && !self.started {
-                    1
-                } else {
-                    0
-                };
+                let extra = usize::from(self.include_self && !self.started);
                 (remaining + extra, Some(remaining + extra))
             }
             None => (0, Some(0)),
@@ -174,8 +165,8 @@ impl<'a, T: TreeNav> Iterator for Siblings<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> std::iter::FusedIterator for Siblings<'a, T> {}
-impl<'a, T: TreeNav> std::iter::ExactSizeIterator for Siblings<'a, T> {}
+impl<T: TreeNav> std::iter::FusedIterator for Siblings<'_, T> {}
+impl<T: TreeNav> std::iter::ExactSizeIterator for Siblings<'_, T> {}
 
 // ============================================================================
 // TESTS

@@ -18,7 +18,7 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use flui_view::BuildContext;
+use flui_element::BuildContext;
 
 // Thread-local storage for current build context
 thread_local! {

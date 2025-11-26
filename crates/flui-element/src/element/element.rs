@@ -1,7 +1,7 @@
 //! Element struct - Unified element with type-erased view object
 //!
 //! This module provides the unified `Element` struct that can hold any view type
-//! through type erasure using `Box<dyn RenderStateAccessor>`.
+//! through type erasure using `Box<dyn ViewObject>`.
 //!
 //! # Architecture
 //!
@@ -10,33 +10,31 @@
 //!   ↓ wrap in ViewObject
 //! Element (Lifecycle + type-erased ViewObject)
 //!   ├─ base: ElementBase (lifecycle, flags, parent/slot)
-//!   ├─ view_object: Box<dyn RenderStateAccessor> (type-erased!)
+//!   ├─ view_object: Box<dyn ViewObject> (type-erased!)
 //!   └─ children: Vec<ElementId>
 //! ```
 //!
 //! # Type Erasure
 //!
-//! Element stores `Box<dyn RenderStateAccessor>` which provides:
+//! Element stores `Box<dyn ViewObject>` which provides:
 //! - `as_any()` for downcasting to concrete wrapper types
-//! - `render_state_any()` for render state access (render views only)
-//! - `render_object_any()` for render object access (render views only)
-//!
-//! This breaks the dependency on ViewObject trait, allowing flui-element
-//! to be independent of flui-view while still supporting render state access.
+//! - `as_any_mut()` for mutable downcasting
+//! - `build()`, `init()`, `dispose()` lifecycle methods
 //!
 //! The actual ViewObject is stored inside and can be accessed via downcasting:
 //!
 //! ```rust,ignore
 //! // In flui-view, after downcasting:
-//! let view_object: &dyn ViewObject = element.view_object_as::<StatelessViewWrapper<MyView>>()?;
+//! let wrapper = element.view_object_as::<StatelessViewWrapper<MyView>>()?;
 //! ```
 
 use std::any::Any;
 use std::fmt;
 
-use flui_foundation::{ElementId, RenderStateAccessor, Slot, ViewMode};
+use flui_foundation::{ElementId, Key, Slot, ViewMode};
 
 use super::{ElementBase, ElementLifecycle};
+use crate::ViewObject;
 
 /// Element - Unified element struct with type-erased view object
 ///
@@ -59,16 +57,19 @@ pub struct Element {
     /// Type-erased view object storage
     ///
     /// Contains the actual ViewObject wrapper (StatelessViewWrapper, etc.)
-    /// stored as `dyn RenderStateAccessor` which provides:
-    /// - `as_any()` for downcasting to concrete types
-    /// - `render_state_any()` for render state access (render views only)
-    /// - `render_object_any()` for render object access (render views only)
-    view_object: Option<Box<dyn RenderStateAccessor>>,
+    /// stored as `dyn ViewObject` for type erasure.
+    view_object: Option<Box<dyn ViewObject>>,
 
     /// View mode - categorizes the view type (Stateless, Stateful, RenderBox, etc.)
     ///
     /// Stored separately to allow querying without downcasting.
     view_mode: ViewMode,
+
+    /// Optional key for element identity and reconciliation
+    ///
+    /// Used during reconciliation to determine if an element can be reused.
+    /// Elements with matching ViewMode and Key can be reused instead of recreated.
+    key: Option<Key>,
 
     /// Child element IDs
     children: Vec<ElementId>,
@@ -77,12 +78,8 @@ pub struct Element {
     debug_name: Option<&'static str>,
 }
 
-// Element is Send + Sync because:
-// - ElementBase is Send + Sync (contains only Send + Sync types)
-// - Box<dyn RenderStateAccessor> is Send + Sync (trait requires Send + Sync)
-// - Vec<ElementId> is Send + Sync (ElementId is Copy)
-unsafe impl Send for Element {}
-unsafe impl Sync for Element {}
+// Element is Send because ViewObject requires Send
+// Sync is not implemented - use Arc<RwLock<Element>> for shared access
 
 impl fmt::Debug for Element {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -101,7 +98,7 @@ impl Element {
     ///
     /// # Arguments
     ///
-    /// * `view_object` - Any type that implements `Any + Send + Sync + 'static`
+    /// * `view_object` - Any type that implements `ViewObject`
     /// * `mode` - The ViewMode categorizing this element
     ///
     /// # Example
@@ -110,11 +107,12 @@ impl Element {
     /// let wrapper = StatelessViewWrapper::new(my_view);
     /// let element = Element::with_mode(wrapper, ViewMode::Stateless);
     /// ```
-    pub fn with_mode<V: RenderStateAccessor>(view_object: V, mode: ViewMode) -> Self {
+    pub fn with_mode<V: ViewObject>(view_object: V, mode: ViewMode) -> Self {
         Self {
             base: ElementBase::new(),
             view_object: Some(Box::new(view_object)),
             view_mode: mode,
+            key: None,
             children: Vec::new(),
             debug_name: None,
         }
@@ -126,7 +124,7 @@ impl Element {
     ///
     /// # Arguments
     ///
-    /// * `view_object` - Any type that implements `RenderStateAccessor`
+    /// * `view_object` - Any type that implements `ViewObject`
     ///
     /// # Example
     ///
@@ -134,11 +132,12 @@ impl Element {
     /// let wrapper = StatelessViewWrapper::new(my_view);
     /// let element = Element::new(wrapper);
     /// ```
-    pub fn new<V: RenderStateAccessor>(view_object: V) -> Self {
+    pub fn new<V: ViewObject>(view_object: V) -> Self {
         Self {
             base: ElementBase::new(),
             view_object: Some(Box::new(view_object)),
             view_mode: ViewMode::Empty,
+            key: None,
             children: Vec::new(),
             debug_name: None,
         }
@@ -152,6 +151,7 @@ impl Element {
             base: ElementBase::new(),
             view_object: None,
             view_mode: ViewMode::Empty,
+            key: None,
             children: Vec::new(),
             debug_name: Some("Empty"),
         }
@@ -168,6 +168,7 @@ impl Element {
             base: ElementBase::new(),
             view_object: None,
             view_mode: ViewMode::Empty,
+            key: None,
             children: Vec::with_capacity(child_count),
             debug_name: Some("Container"),
         }
@@ -214,6 +215,38 @@ impl Element {
         self.view_mode.is_provider()
     }
 
+    // ========== Key Access ==========
+
+    /// Get the key of this element (if any).
+    ///
+    /// Keys are used during reconciliation to determine if elements can be reused.
+    #[inline]
+    #[must_use]
+    pub fn key(&self) -> Option<Key> {
+        self.key
+    }
+
+    /// Set the key of this element.
+    ///
+    /// Used during element construction or updates.
+    #[inline]
+    pub fn set_key(&mut self, key: Option<Key>) {
+        self.key = key;
+    }
+
+    /// Create element with a key (builder pattern).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let element = Element::with_mode(view_object, ViewMode::Stateless)
+    ///     .with_key(Key::from_str("my_element"));
+    /// ```
+    pub fn with_key(mut self, key: Key) -> Self {
+        self.key = Some(key);
+        self
+    }
+
     // ========== View Object Access ==========
 
     /// Returns true if this element has a view object.
@@ -223,14 +256,28 @@ impl Element {
         self.view_object.is_some()
     }
 
-    /// Get the view object as a reference to Any (via RenderStateAccessor::as_any).
+    /// Get the view object as a reference to ViewObject.
+    #[inline]
+    #[must_use]
+    pub fn view_object(&self) -> Option<&dyn ViewObject> {
+        self.view_object.as_ref().map(|b| b.as_ref())
+    }
+
+    /// Get the view object as a mutable reference to ViewObject.
+    #[inline]
+    #[must_use]
+    pub fn view_object_mut(&mut self) -> Option<&mut dyn ViewObject> {
+        self.view_object.as_mut().map(|b| b.as_mut())
+    }
+
+    /// Get the view object as a reference to Any (via ViewObject::as_any).
     #[inline]
     #[must_use]
     pub fn view_object_any(&self) -> Option<&dyn Any> {
         self.view_object.as_ref().map(|b| b.as_any())
     }
 
-    /// Get the view object as a mutable reference to Any (via RenderStateAccessor::as_any_mut).
+    /// Get the view object as a mutable reference to Any (via ViewObject::as_any_mut).
     #[inline]
     #[must_use]
     pub fn view_object_any_mut(&mut self) -> Option<&mut dyn Any> {
@@ -261,30 +308,36 @@ impl Element {
     ///
     /// Returns the boxed view object, leaving None in its place.
     #[inline]
-    pub fn take_view_object(&mut self) -> Option<Box<dyn RenderStateAccessor>> {
+    pub fn take_view_object(&mut self) -> Option<Box<dyn ViewObject>> {
         self.view_object.take()
     }
 
     /// Set a new view object.
     ///
-    /// The view object must implement `RenderStateAccessor`.
+    /// The view object must implement `ViewObject`.
     #[inline]
-    pub fn set_view_object<V: RenderStateAccessor>(&mut self, view_object: V) {
+    pub fn set_view_object<V: ViewObject>(&mut self, view_object: V) {
         self.view_object = Some(Box::new(view_object));
     }
 
-    /// Set view object from boxed RenderStateAccessor.
+    /// Set view object from boxed ViewObject.
     #[inline]
-    pub fn set_view_object_boxed(&mut self, view_object: Box<dyn RenderStateAccessor>) {
+    pub fn set_view_object_boxed(&mut self, view_object: Box<dyn ViewObject>) {
         self.view_object = Some(view_object);
     }
 
     // ========== Lifecycle Delegation ==========
 
     /// Mount element to tree.
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Parent element ID (None for root)
+    /// - `slot`: Slot position in parent
+    /// - `depth`: Depth in tree (0 for root, parent.depth() + 1 for children)
     #[inline]
-    pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>) {
-        self.base.mount(parent, slot);
+    pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>, depth: usize) {
+        self.base.mount(parent, slot, depth);
     }
 
     /// Unmount element from tree.
@@ -310,6 +363,25 @@ impl Element {
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
         self.base.lifecycle()
+    }
+
+    /// Get cached depth in tree (0 = root).
+    ///
+    /// **Lock-free and thread-safe!** O(1) lookup.
+    #[inline]
+    #[must_use]
+    pub fn depth(&self) -> usize {
+        self.base.depth()
+    }
+
+    /// Set cached depth in tree.
+    ///
+    /// **Lock-free and thread-safe!**
+    ///
+    /// Called when element is mounted or reparented.
+    #[inline]
+    pub fn set_depth(&self, depth: usize) {
+        self.base.set_depth(depth);
     }
 
     // ========== Parent/Slot Accessors ==========
@@ -478,46 +550,6 @@ impl Element {
         &mut self.base
     }
 
-    // ========== Render State Access ==========
-    // These methods delegate to RenderStateAccessor trait on the view_object.
-    // Render view wrappers (RenderViewWrapper) return actual render state,
-    // while non-render wrappers return None.
-
-    /// Get render state (via RenderStateAccessor::render_state_any).
-    ///
-    /// Returns `Some` for render elements, `None` for non-render elements.
-    /// The returned `&dyn Any` can be downcast to `&RenderState` in flui_rendering.
-    #[inline]
-    #[must_use]
-    pub fn render_state(&self) -> Option<&dyn std::any::Any> {
-        self.view_object.as_ref()?.render_state_any()
-    }
-
-    /// Get mutable render state (via RenderStateAccessor::render_state_any_mut).
-    ///
-    /// Returns `Some` for render elements, `None` for non-render elements.
-    #[inline]
-    #[must_use]
-    pub fn render_state_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        self.view_object.as_mut()?.render_state_any_mut()
-    }
-
-    /// Get render object (via RenderStateAccessor::render_object_any).
-    ///
-    /// Returns `Some` for render elements, `None` for non-render elements.
-    /// The returned `&dyn Any` can be downcast to the concrete RenderObject type.
-    #[inline]
-    #[must_use]
-    pub fn render_object(&self) -> Option<&dyn std::any::Any> {
-        self.view_object.as_ref()?.render_object_any()
-    }
-
-    /// Get mutable render object (via RenderStateAccessor::render_object_any_mut).
-    #[inline]
-    #[must_use]
-    pub fn render_object_mut(&mut self) -> Option<&mut dyn std::any::Any> {
-        self.view_object.as_mut()?.render_object_any_mut()
-    }
 
     // ========== Compatibility Stubs ==========
     // These methods provide API compatibility with the old element module.
@@ -575,6 +607,38 @@ impl Element {
     pub fn handle_event(&mut self, _event: &dyn std::any::Any) -> bool {
         false
     }
+
+    // ========== Render State Access (for RenderTreeAccess trait) ==========
+
+    /// Returns the render state for this element, if it's a render element.
+    ///
+    /// # Returns
+    ///
+    /// Reference to the RenderState as `dyn Any`, or `None` if not a render element.
+    ///
+    /// # Note
+    ///
+    /// This is a stub implementation. Full render state management is in progress.
+    #[inline]
+    pub fn render_state(&self) -> Option<&dyn std::any::Any> {
+        // TODO: Implement render state access via ViewObject
+        None
+    }
+
+    /// Returns a mutable reference to the render state, if it's a render element.
+    ///
+    /// # Returns
+    ///
+    /// Mutable reference to the RenderState as `dyn Any`, or `None` if not a render element.
+    ///
+    /// # Note
+    ///
+    /// This is a stub implementation. Full render state management is in progress.
+    #[inline]
+    pub fn render_state_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        // TODO: Implement render state access via ViewObject
+        None
+    }
 }
 
 // ============================================================================
@@ -589,6 +653,16 @@ mod tests {
     #[derive(Debug)]
     struct TestViewObject {
         value: i32,
+    }
+
+    impl ViewObject for TestViewObject {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 
     #[test]
@@ -690,10 +764,10 @@ mod tests {
         assert!(taken.is_some());
         assert!(!element.has_view_object());
 
-        // Can downcast the taken value
+        // Can downcast the taken value via as_any()
         let boxed = taken.unwrap();
-        let downcasted = boxed.downcast::<TestViewObject>();
-        assert!(downcasted.is_ok());
+        let downcasted = boxed.as_any().downcast_ref::<TestViewObject>();
+        assert!(downcasted.is_some());
         assert_eq!(downcasted.unwrap().value, 42);
     }
 }

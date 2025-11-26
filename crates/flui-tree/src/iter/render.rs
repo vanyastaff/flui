@@ -1,14 +1,14 @@
 //! Render-specific iterators.
 //!
 //! These iterators filter to only render elements, skipping
-//! non-render elements like StatelessView wrappers.
+//! non-render elements like `StatelessView` wrappers.
 //!
 //! # Iterator Types
 //!
 //! - [`RenderAncestors`] - Walk up the tree through render elements
 //! - [`RenderDescendants`] - Walk down the tree through all render elements
 //! - [`RenderChildren`] - Find immediate render children (stops at render boundaries)
-//! - [`RenderChildrenWithIndex`] - Like RenderChildren but with indices
+//! - [`RenderChildrenWithIndex`] - Like `RenderChildren` but with indices
 //! - [`RenderSiblings`] - Iterate over render siblings
 //! - [`RenderSubtree`] - BFS traversal of render subtree with depth info
 //! - [`RenderLeaves`] - Find leaf render elements (no render children)
@@ -328,7 +328,7 @@ pub enum SiblingDirection {
 /// may need to query adjacent elements.
 #[derive(Debug)]
 pub struct RenderSiblings<'a, T: RenderTreeAccess + ?Sized> {
-    tree: &'a T,
+    _tree: &'a T,
     siblings: Vec<ElementId>,
     self_id: ElementId,
     current_idx: usize,
@@ -364,7 +364,7 @@ impl<'a, T: RenderTreeAccess + ?Sized> RenderSiblings<'a, T> {
         };
 
         Self {
-            tree,
+            _tree: tree,
             siblings,
             self_id: id,
             current_idx,

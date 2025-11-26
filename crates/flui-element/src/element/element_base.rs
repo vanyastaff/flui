@@ -10,8 +10,9 @@
 //! ElementBase contains ONLY common fields:
 //! - parent: Parent element reference
 //! - slot: Position in parent
-//! - lifecycle: Element lifecycle state  
+//! - lifecycle: Element lifecycle state
 //! - flags: Atomic flags for lock-free dirty tracking
+//! - depth: Cached depth in tree (0 = root, atomic for thread-safety)
 //!
 //! # Thread Safety
 //!
@@ -21,8 +22,11 @@
 //! - Zero memory overhead (same size as bool)
 //! - Zero contention (lock-free atomic operations)
 
-use flui_foundation::{AtomicElementFlags, ElementFlags, ElementId, Slot};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::{ElementId, Slot};
+
+use super::element_flags::{AtomicElementFlags, ElementFlags};
 use super::ElementLifecycle;
 
 /// ElementBase - Common fields for all element types
@@ -33,7 +37,8 @@ use super::ElementLifecycle;
 /// # Thread Safety
 ///
 /// - `flags` field uses `AtomicElementFlags` for lock-free operations
-/// - `mark_dirty()` can be called from any thread safely
+/// - `depth` field uses `AtomicUsize` for lock-free operations
+/// - `mark_dirty()` and `set_depth()` can be called from any thread safely
 /// - No locks, no contention, scales to N threads
 #[derive(Debug)]
 pub struct ElementBase {
@@ -48,6 +53,12 @@ pub struct ElementBase {
 
     /// Atomic flags for lock-free dirty tracking
     flags: AtomicElementFlags,
+
+    /// Cached depth in tree (0 = root, atomic for thread-safety)
+    ///
+    /// This is cached to avoid O(depth) tree walks during build scheduling.
+    /// Updated when element is mounted or reparented.
+    depth: AtomicUsize,
 }
 
 impl ElementBase {
@@ -59,6 +70,7 @@ impl ElementBase {
     /// - `flags`: DIRTY set (needs initial build)
     /// - `parent`: None
     /// - `slot`: None
+    /// - `depth`: 0 (will be updated on mount)
     #[inline]
     pub fn new() -> Self {
         let flags = AtomicElementFlags::new();
@@ -69,6 +81,7 @@ impl ElementBase {
             slot: None,
             lifecycle: ElementLifecycle::Initial,
             flags,
+            depth: AtomicUsize::new(0),
         }
     }
 
@@ -99,6 +112,27 @@ impl ElementBase {
     #[must_use]
     pub fn lifecycle(&self) -> ElementLifecycle {
         self.lifecycle
+    }
+
+    /// Get cached depth in tree (0 = root)
+    ///
+    /// **Lock-free and thread-safe!**
+    ///
+    /// This is O(1) as depth is cached. Updated on mount/reparent.
+    #[inline]
+    #[must_use]
+    pub fn depth(&self) -> usize {
+        self.depth.load(Ordering::Relaxed)
+    }
+
+    /// Set cached depth
+    ///
+    /// **Lock-free and thread-safe!**
+    ///
+    /// Called when element is mounted or reparented to update cached depth.
+    #[inline]
+    pub fn set_depth(&self, depth: usize) {
+        self.depth.store(depth, Ordering::Relaxed);
     }
 
     /// Check if element needs rebuild (DIRTY flag)
@@ -136,11 +170,18 @@ impl ElementBase {
     /// # Lifecycle Transition
     ///
     /// Initial/Inactive → Active
+    ///
+    /// # Parameters
+    ///
+    /// - `parent`: Parent element ID (None for root)
+    /// - `slot`: Slot position in parent
+    /// - `depth`: Depth in tree (0 for root, parent.depth() + 1 for children)
     #[inline]
-    pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>) {
+    pub fn mount(&mut self, parent: Option<ElementId>, slot: Option<Slot>, depth: usize) {
         self.parent = parent;
         self.slot = slot;
         self.lifecycle = ElementLifecycle::Active;
+        self.depth.store(depth, Ordering::Relaxed);
         self.flags
             .insert(ElementFlags::DIRTY | ElementFlags::MOUNTED | ElementFlags::ACTIVE);
     }

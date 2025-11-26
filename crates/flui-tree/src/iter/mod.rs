@@ -42,7 +42,7 @@
 //! # Utility Functions
 //!
 //! - [`find_render_ancestor`] - Find nearest render ancestor
-//! - [`render_parent`] - Alias for find_render_ancestor
+//! - [`render_parent`] - Alias for `find_render_ancestor`
 //! - [`collect_render_children`] - Collect all render children
 //! - [`count_render_elements`] - Count render elements in subtree
 //! - [`count_render_children`] - Count render children

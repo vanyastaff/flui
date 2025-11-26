@@ -41,7 +41,7 @@
 //!
 //! ### Render Operations
 //!
-//! - [`RenderTreeAccess`] - Access to RenderObject and RenderState
+//! - [`RenderTreeAccess`] - Access to `RenderObject` and `RenderState`
 //! - [`DirtyTracking`] - Layout/paint dirty flag management
 //!
 //! ## Iterators

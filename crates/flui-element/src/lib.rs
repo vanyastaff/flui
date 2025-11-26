@@ -96,16 +96,26 @@
 // MODULES
 // ============================================================================
 
+pub mod context;
 pub mod element;
 pub mod into_element;
+pub mod provider_view_object;
 pub mod tree;
+pub mod view_object;
 
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================
 
+// Context trait
+pub use context::BuildContext;
+
+// ViewObject traits
+pub use provider_view_object::ProviderViewObject;
+pub use view_object::{ElementViewObjectExt, ViewObject};
+
 // Element types
-pub use element::{Element, ElementBase, ElementLifecycle};
+pub use element::{AtomicElementFlags, Element, ElementBase, ElementFlags, ElementLifecycle};
 
 // Tree types
 pub use tree::ElementTree;

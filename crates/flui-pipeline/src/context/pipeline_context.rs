@@ -2,13 +2,13 @@
 //!
 //! This is the runtime context passed to views during the build phase.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::sync::Arc;
 
+use flui_element::BuildContext;
 use flui_element::ElementTree;
 use flui_foundation::ElementId;
-use flui_view::BuildContext;
 use parking_lot::RwLock;
 
 use crate::dirty::DirtySet;
@@ -140,15 +140,92 @@ impl BuildContext for PipelineBuildContext {
     }
 
     fn mark_dirty(&self) {
-        let mut dirty = self.dirty_set.write();
+        let dirty = self.dirty_set.write();
         dirty.mark(self.element_id);
         tracing::trace!(element_id = ?self.element_id, "Element marked dirty");
     }
 
     fn schedule_rebuild(&self, element_id: ElementId) {
-        let mut dirty = self.dirty_set.write();
+        let dirty = self.dirty_set.write();
         dirty.mark(element_id);
         tracing::trace!(element_id = ?element_id, "Rebuild scheduled");
+    }
+
+    fn depend_on_raw(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        // Walk up the parent chain to find a provider
+        // Start from parent (not current element itself)
+        let mut current_id = {
+            let tree = self.tree.read();
+            let element = tree.get(self.element_id)?;
+            element.parent()?
+        };
+
+        loop {
+            // Check if this element is a provider and get the value
+            let provided_arc = {
+                let tree = self.tree.read();
+                let element = tree.get(current_id)?;
+
+                if !element.is_provider() {
+                    // Not a provider, move to parent
+                    current_id = element.parent()?;
+                    continue;
+                }
+
+                // Get the view object and check if it provides the right type
+                let view_object = element.view_object()?;
+
+                // Downcast to ProviderViewObject to get provided_value()
+                // We can't directly downcast trait objects, so we use a workaround:
+                // Call as_any() and then try to call provided_value via the concrete type
+                //
+                // Since we know the element is a provider (ViewMode::Provider),
+                // we know it must implement ProviderViewObject.
+                // We can use the fact that provided_value is exposed through the concrete wrapper.
+                //
+                // For now, use unsafe transmute as a workaround
+                // TODO: Find a better way to access ProviderViewObject methods
+                use std::mem::transmute;
+
+                // SAFETY: We know this is a ProviderViewObject because is_provider() returned true
+                let provider: &dyn flui_element::ProviderViewObject =
+                    unsafe { transmute(view_object) };
+
+                let provided = provider.provided_value();
+
+                // Check if type matches
+                if (*provided).type_id() != type_id {
+                    // Type mismatch, try next ancestor
+                    current_id = element.parent()?;
+                    continue;
+                }
+
+                // Found matching provider!
+                provided
+            };
+
+            // Register dependency (need mutable access)
+            {
+                let mut tree_mut = self.tree.write();
+                if let Some(provider_elem) = tree_mut.get_mut(current_id) {
+                    if let Some(provider_vo) = provider_elem.view_object_mut() {
+                        use std::mem::transmute;
+                        // SAFETY: We know this is a ProviderViewObject
+                        let provider_mut: &mut dyn flui_element::ProviderViewObject =
+                            unsafe { transmute(provider_vo) };
+                        provider_mut.add_dependent(self.element_id);
+                    }
+                }
+            }
+
+            tracing::debug!(
+                provider_id = ?current_id,
+                dependent_id = ?self.element_id,
+                "Dependency registered"
+            );
+
+            return Some(provided_arc);
+        }
     }
 
     fn as_any(&self) -> &dyn Any {

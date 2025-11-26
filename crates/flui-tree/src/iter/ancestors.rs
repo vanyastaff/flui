@@ -38,7 +38,7 @@ impl<'a, T: TreeNav> Ancestors<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> Iterator for Ancestors<'a, T> {
+impl<T: TreeNav> Iterator for Ancestors<'_, T> {
     type Item = ElementId;
 
     #[inline]
@@ -65,7 +65,7 @@ impl<'a, T: TreeNav> Iterator for Ancestors<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> std::iter::FusedIterator for Ancestors<'a, T> {}
+impl<T: TreeNav> std::iter::FusedIterator for Ancestors<'_, T> {}
 
 /// Iterator over ancestors with their depths.
 ///
@@ -100,7 +100,7 @@ impl<'a, T: TreeNav> AncestorsWithDepth<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> Iterator for AncestorsWithDepth<'a, T> {
+impl<T: TreeNav> Iterator for AncestorsWithDepth<'_, T> {
     type Item = (ElementId, usize);
 
     #[inline]
@@ -117,7 +117,7 @@ impl<'a, T: TreeNav> Iterator for AncestorsWithDepth<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> std::iter::FusedIterator for AncestorsWithDepth<'a, T> {}
+impl<T: TreeNav> std::iter::FusedIterator for AncestorsWithDepth<'_, T> {}
 
 // ============================================================================
 // TESTS

@@ -4,7 +4,7 @@ use crate::traits::TreeNav;
 use flui_foundation::ElementId;
 
 /// Depth-first traversal order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DepthFirstOrder {
     /// Pre-order: visit parent before children.
     ///
@@ -16,6 +16,7 @@ pub enum DepthFirstOrder {
     ///  / \   \
     /// D   E   F
     /// ```
+    #[default]
     PreOrder,
 
     /// Post-order: visit children before parent.
@@ -29,12 +30,6 @@ pub enum DepthFirstOrder {
     /// D   E   F
     /// ```
     PostOrder,
-}
-
-impl Default for DepthFirstOrder {
-    fn default() -> Self {
-        Self::PreOrder
-    }
 }
 
 /// Configurable depth-first iterator.
@@ -64,8 +59,6 @@ struct StackEntry {
     id: ElementId,
     /// For post-order: index of next child to process
     child_index: usize,
-    /// For post-order: whether we've visited this node yet
-    visited: bool,
 }
 
 impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
@@ -78,7 +71,6 @@ impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
             stack.push(StackEntry {
                 id: root,
                 child_index: 0,
-                visited: false,
             });
         }
 
@@ -98,7 +90,7 @@ impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> Iterator for DepthFirstIter<'a, T> {
+impl<T: TreeNav> Iterator for DepthFirstIter<'_, T> {
     type Item = ElementId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -113,7 +105,7 @@ impl<'a, T: TreeNav> Iterator for DepthFirstIter<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
+impl<T: TreeNav> DepthFirstIter<'_, T> {
     fn next_pre_order(&mut self) -> Option<ElementId> {
         let entry = self.stack.pop()?;
         let current = entry.id;
@@ -124,7 +116,6 @@ impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
             self.stack.push(StackEntry {
                 id: child,
                 child_index: 0,
-                visited: false,
             });
         }
 
@@ -144,7 +135,6 @@ impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
                 self.stack.push(StackEntry {
                     id: child,
                     child_index: 0,
-                    visited: false,
                 });
             } else {
                 // All children processed, return this node
@@ -155,7 +145,7 @@ impl<'a, T: TreeNav> DepthFirstIter<'a, T> {
     }
 }
 
-impl<'a, T: TreeNav> std::iter::FusedIterator for DepthFirstIter<'a, T> {}
+impl<T: TreeNav> std::iter::FusedIterator for DepthFirstIter<'_, T> {}
 
 // ============================================================================
 // TESTS

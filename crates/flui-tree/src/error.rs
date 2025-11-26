@@ -4,7 +4,6 @@
 //! such as accessing non-existent nodes or detecting cycles.
 
 use flui_foundation::ElementId;
-use std::fmt;
 use thiserror::Error;
 
 /// Result type for tree operations.
@@ -153,9 +152,9 @@ impl TreeError {
             | Self::NotSupported(id, _) => Some(*id),
 
             Self::InvalidParent { child, .. } => Some(*child),
-            Self::MaxDepthExceeded { element, .. } => Some(*element),
-            Self::LayoutError { element, .. } => Some(*element),
-            Self::PaintError { element, .. } => Some(*element),
+            Self::MaxDepthExceeded { element, .. }
+            | Self::LayoutError { element, .. }
+            | Self::PaintError { element, .. } => Some(*element),
 
             Self::EmptyTree | Self::ConcurrentModification | Self::Internal(_) => None,
         }
