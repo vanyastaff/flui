@@ -3,19 +3,23 @@
 //! Implements ViewObject for ProviderView types.
 
 use std::any::Any;
+use std::sync::Arc;
 
-use flui_element::{Element, ElementId, IntoElement};
-use flui_foundation::RenderStateAccessor;
+use flui_element::{
+    BuildContext, Element, ElementId, IntoElement, ProviderViewObject, ViewMode, ViewObject,
+};
 
-use crate::context::BuildContext;
-use crate::object::{ProviderViewObject, ViewObject};
-use crate::protocol::ViewMode;
 use crate::traits::ProviderView;
 
 /// Wrapper for ProviderView that implements ViewObject
 ///
 /// Provider views provide data to descendants via dependency injection.
 /// Descendants register as dependents and get rebuilt when value changes.
+///
+/// # Value Storage
+///
+/// The provided value is wrapped in Arc<T> for efficient sharing across dependents.
+/// The ProviderView trait returns Arc<T> directly.
 pub struct ProviderViewWrapper<V, T>
 where
     V: ProviderView<T>,
@@ -55,8 +59,8 @@ where
         &mut self.view
     }
 
-    /// Get the provided value
-    pub fn value(&self) -> &T {
+    /// Get the provided value (as Arc)
+    pub fn value(&self) -> Arc<T> {
         self.view.value()
     }
 
@@ -106,7 +110,8 @@ where
     fn did_update(&mut self, old_view: &dyn Any, _ctx: &dyn BuildContext) {
         // Check if we should notify dependents
         if let Some(old) = old_view.downcast_ref::<ProviderViewWrapper<V, T>>() {
-            if self.view.should_notify(old.view.value()) {
+            let old_value = old.view.value();
+            if self.view.should_notify(&*old_value) {
                 // Dependents will be rebuilt by the framework
                 // Just mark that notification is needed
                 tracing::debug!(
@@ -136,21 +141,6 @@ where
     }
 }
 
-// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
-impl<V, T> RenderStateAccessor for ProviderViewWrapper<V, T>
-where
-    V: ProviderView<T>,
-    T: Send + Sync + 'static,
-{
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
 // ============================================================================
 // ProviderViewObject IMPLEMENTATION
 // ============================================================================
@@ -160,8 +150,10 @@ where
     V: ProviderView<T>,
     T: Send + Sync + 'static,
 {
-    fn provided_value(&self) -> &(dyn Any + Send + Sync) {
-        self.view.value()
+    fn provided_value(&self) -> Arc<dyn Any + Send + Sync> {
+        // Get Arc<T> from view and upcast to Arc<dyn Any>
+        let arc_t = self.view.value();
+        arc_t as Arc<dyn Any + Send + Sync>
     }
 
     fn dependents(&self) -> &[ElementId] {
@@ -223,12 +215,13 @@ where
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
     struct TestTheme {
         primary_color: u32,
     }
 
     struct TestThemeProvider {
-        theme: TestTheme,
+        theme: Arc<TestTheme>,
         child: Element,
     }
 
@@ -237,8 +230,8 @@ mod tests {
             std::mem::replace(&mut self.child, Element::empty())
         }
 
-        fn value(&self) -> &TestTheme {
-            &self.theme
+        fn value(&self) -> Arc<TestTheme> {
+            self.theme.clone()
         }
 
         fn should_notify(&self, old: &TestTheme) -> bool {
@@ -249,9 +242,9 @@ mod tests {
     #[test]
     fn test_wrapper_creation() {
         let wrapper = ProviderViewWrapper::new(TestThemeProvider {
-            theme: TestTheme {
+            theme: Arc::new(TestTheme {
                 primary_color: 0xFF0000,
-            },
+            }),
             child: Element::empty(),
         });
         assert_eq!(wrapper.mode(), ViewMode::Provider);
@@ -261,9 +254,9 @@ mod tests {
     #[test]
     fn test_dependents() {
         let mut wrapper = ProviderViewWrapper::new(TestThemeProvider {
-            theme: TestTheme {
+            theme: Arc::new(TestTheme {
                 primary_color: 0xFF0000,
-            },
+            }),
             child: Element::empty(),
         });
 
@@ -278,12 +271,13 @@ mod tests {
     #[test]
     fn test_into_element() {
         let view = TestThemeProvider {
-            theme: TestTheme {
+            theme: Arc::new(TestTheme {
                 primary_color: 0xFF0000,
-            },
+            }),
             child: Element::empty(),
         };
         let element = Provider::new(view).into_element();
         assert!(element.has_view_object());
     }
 }
+

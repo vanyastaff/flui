@@ -6,7 +6,7 @@
 use flui_element::IntoElement;
 use flui_types::Event;
 
-use crate::context::BuildContext;
+use flui_element::BuildContext;
 
 /// ProxyView - Views that wrap a single child.
 ///

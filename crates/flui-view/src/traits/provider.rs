@@ -3,9 +3,10 @@
 //! Similar to Flutter's InheritedWidget. Provides typed data that
 //! descendant widgets can access.
 
-use flui_element::IntoElement;
+use std::sync::Arc;
 
-use crate::context::BuildContext;
+use flui_element::IntoElement;
+use flui_element::BuildContext;
 
 /// ProviderView - Views that provide data to descendants.
 ///
@@ -72,10 +73,29 @@ pub trait ProviderView<T: Send + Sync + 'static>: Send + Sync + 'static {
     /// doesn't modify layout - it only provides data.
     fn build(&mut self, ctx: &dyn BuildContext) -> impl IntoElement;
 
-    /// Get the value to provide.
+    /// Get the value to provide (as Arc for sharing).
     ///
     /// Descendants access this via `ctx.depend_on<T>()`.
-    fn value(&self) -> &T;
+    ///
+    /// The value should be wrapped in Arc for efficient sharing across dependents.
+    /// Cloning an Arc is cheap (just increments the reference count).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    ///
+    /// struct MyProvider {
+    ///     data: Arc<MyData>,
+    /// }
+    ///
+    /// impl ProviderView<MyData> for MyProvider {
+    ///     fn value(&self) -> Arc<MyData> {
+    ///         self.data.clone()  // Cheap Arc clone
+    ///     }
+    /// }
+    /// ```
+    fn value(&self) -> Arc<T>;
 
     /// Should notify dependents when updating?
     ///

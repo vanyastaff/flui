@@ -5,12 +5,8 @@
 use std::any::Any;
 use std::marker::PhantomData;
 
-use flui_element::{Element, IntoElement};
-use flui_foundation::RenderStateAccessor;
+use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 
-use crate::context::BuildContext;
-use crate::object::ViewObject;
-use crate::protocol::ViewMode;
 use crate::traits::StatelessView;
 
 /// Wrapper for StatelessView that implements ViewObject
@@ -69,16 +65,6 @@ impl<V: StatelessView> ViewObject for StatelessViewWrapper<V> {
     }
 }
 
-// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
-impl<V: StatelessView> RenderStateAccessor for StatelessViewWrapper<V> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
 
 // ============================================================================
 // IntoElement IMPLEMENTATION

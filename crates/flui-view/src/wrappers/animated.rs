@@ -6,12 +6,8 @@ use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use flui_element::{Element, IntoElement};
-use flui_foundation::RenderStateAccessor;
+use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 
-use crate::context::BuildContext;
-use crate::object::ViewObject;
-use crate::protocol::ViewMode;
 use crate::traits::{AnimatedView, Listenable};
 
 /// Wrapper for AnimatedView that implements ViewObject
@@ -151,20 +147,6 @@ where
     }
 }
 
-// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
-impl<V, L> RenderStateAccessor for AnimatedViewWrapper<V, L>
-where
-    V: AnimatedView<L>,
-    L: Listenable,
-{
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
 
 impl<V, L> Drop for AnimatedViewWrapper<V, L>
 where

@@ -4,13 +4,9 @@
 
 use std::any::Any;
 
-use flui_element::{Element, IntoElement};
-use flui_foundation::RenderStateAccessor;
+use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 use flui_types::Event;
 
-use crate::context::BuildContext;
-use crate::object::ViewObject;
-use crate::protocol::ViewMode;
 use crate::traits::ProxyView;
 
 /// Wrapper for ProxyView that implements ViewObject
@@ -80,17 +76,6 @@ impl<V: ProxyView> ViewObject for ProxyViewWrapper<V> {
         std::any::type_name::<V>()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
-// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
-impl<V: ProxyView> RenderStateAccessor for ProxyViewWrapper<V> {
     fn as_any(&self) -> &dyn Any {
         self
     }

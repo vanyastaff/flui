@@ -5,7 +5,7 @@
 
 use flui_element::IntoElement;
 
-use crate::context::BuildContext;
+use flui_element::BuildContext;
 
 /// StatelessView - A view without internal state
 ///

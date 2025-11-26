@@ -2,9 +2,8 @@
 //!
 //! Useful for conditional rendering and placeholder cases.
 
-use flui_element::IntoElement;
+use flui_element::{BuildContext, IntoElement};
 
-use crate::context::BuildContext;
 use crate::traits::StatelessView;
 
 /// A view that renders nothing

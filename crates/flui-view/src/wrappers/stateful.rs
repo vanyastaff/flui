@@ -4,12 +4,8 @@
 
 use std::any::Any;
 
-use flui_element::{Element, IntoElement};
-use flui_foundation::RenderStateAccessor;
+use flui_element::{BuildContext, Element, IntoElement, ViewMode, ViewObject};
 
-use crate::context::BuildContext;
-use crate::object::ViewObject;
-use crate::protocol::ViewMode;
 use crate::traits::StatefulView;
 
 /// Wrapper for StatefulView that implements ViewObject
@@ -103,17 +99,6 @@ impl<V: StatefulView> ViewObject for StatefulViewWrapper<V> {
     }
 }
 
-// RenderStateAccessor - Non-render wrapper uses defaults (returns None)
-impl<V: StatefulView> RenderStateAccessor for StatefulViewWrapper<V> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
-
 // ============================================================================
 // IntoElement IMPLEMENTATION
 // ============================================================================
@@ -175,3 +160,4 @@ mod tests {
         assert!(element.has_view_object());
     }
 }
+

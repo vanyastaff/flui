@@ -4,7 +4,7 @@
 
 use flui_element::IntoElement;
 
-use crate::context::BuildContext;
+use flui_element::BuildContext;
 
 /// Listenable - Types that can notify listeners of changes
 ///

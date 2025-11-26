@@ -65,8 +65,6 @@
 // ============================================================================
 
 pub mod children;
-pub mod context;
-pub mod object;
 pub mod protocol;
 pub mod state;
 pub mod traits;
@@ -78,8 +76,8 @@ mod empty;
 // RE-EXPORTS
 // ============================================================================
 
-// Context
-pub use context::BuildContext;
+// Context (re-exported from flui-element)
+pub use flui_element::BuildContext;
 
 // Protocol
 pub use protocol::ViewMode;
@@ -90,8 +88,8 @@ pub use state::ViewState;
 // View traits
 pub use traits::{AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView};
 
-// ViewObject
-pub use object::{ElementViewObjectExt, ViewObject};
+// ViewObject (re-exported from flui-element)
+pub use flui_element::{ElementViewObjectExt, ProviderViewObject, ViewObject};
 
 // Wrappers
 pub use wrappers::{
@@ -119,12 +117,11 @@ pub use flui_foundation::ElementId;
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
-    pub use crate::context::BuildContext;
     pub use crate::empty::EmptyView;
     pub use crate::protocol::ViewMode;
     pub use crate::traits::{
         AnimatedView, Listenable, ProviderView, ProxyView, StatefulView, StatelessView,
     };
     pub use crate::wrappers::{Animated, Provider, Proxy, Stateful, Stateless};
-    pub use flui_element::{Element, IntoElement};
+    pub use flui_element::{BuildContext, Element, IntoElement};
 }
