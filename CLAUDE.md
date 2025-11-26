@@ -45,14 +45,22 @@ Assistant: [Automatically calls Context7 to get serde docs, then provides implem
 
 ## Project Overview
 
-FLUI is a production-ready, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built with wgpu for high-performance GPU-accelerated rendering.
+FLUI is a modular, Flutter-inspired declarative UI framework for Rust, featuring the proven three-tree architecture (View → Element → Render) with modern Rust idioms. Built with wgpu for high-performance GPU-accelerated rendering and structured as a collection of focused, composable crates.
 
 **Key Architecture:**
 ```
 View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 ```
 
-**Thread-Safety:** FLUI is fully thread-safe and supports multi-threaded UI. All hooks use `Arc`/`Mutex` (parking_lot) instead of `Rc`/`RefCell`.
+**Modular Design:** FLUI is organized into 20+ specialized crates:
+- **Foundation Layer:** `flui_types`, `flui-foundation`, `flui-tree`
+- **Framework Layer:** `flui-view`, `flui-pipeline`, `flui-reactivity`, `flui-scheduler`, `flui_core`
+- **Rendering Layer:** `flui_painting`, `flui_engine`, `flui_rendering`
+- **Widget Layer:** `flui_widgets`, `flui_animation`, `flui_interaction`
+- **Application Layer:** `flui_app`, `flui_assets`
+- **Development Tools:** `flui_devtools`, `flui_cli`, `flui_build`
+
+**Thread-Safety:** FLUI is fully thread-safe with reactive state management using Copy-based signals and parking_lot synchronization.
 
 ## Build Commands
 
@@ -61,14 +69,34 @@ View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
 Always build crates in dependency order when making structural changes:
 
 ```bash
-# Build in dependency order
+# Foundation Layer
 cargo build -p flui_types
+cargo build -p flui-foundation
+cargo build -p flui-tree
+
+# Framework Layer
+cargo build -p flui-view
+cargo build -p flui-pipeline
+cargo build -p flui-reactivity
+cargo build -p flui-scheduler
+cargo build -p flui_core
+
+# Rendering Layer
 cargo build -p flui_painting
 cargo build -p flui_engine
-cargo build -p flui_core
 cargo build -p flui_rendering
+
+# Widget & Application Layer
 cargo build -p flui_widgets
+cargo build -p flui_animation
+cargo build -p flui_interaction
 cargo build -p flui_app
+cargo build -p flui_assets
+
+# Development Tools
+cargo build -p flui_devtools
+cargo build -p flui_cli
+cargo build -p flui_build
 
 # Build all
 cargo build --workspace
@@ -80,8 +108,17 @@ cargo build --workspace
 # Run all tests
 cargo test --workspace
 
-# Test specific crate
+# Test foundation layer
+cargo test -p flui-foundation
+cargo test -p flui-tree
+cargo test -p flui-reactivity
+
+# Test framework layer
 cargo test -p flui_core
+cargo test -p flui-pipeline
+
+# Test specific crate
+cargo test -p flui_widgets
 
 # Run with logging
 RUST_LOG=debug cargo test -p flui_core
@@ -90,22 +127,29 @@ RUST_LOG=debug cargo test -p flui_core
 ### Running Examples
 
 ```bash
-# Run simplified view example
-cargo run --example simplified_view
+# Run basic examples
+cargo run --example hello_world_view
 
-# Run thread-safe hooks example
-cargo run --example thread_safe_hooks
+# Run reactive examples
+cargo run --example counter_reactive
+cargo run --example todo_app
+
+# Run pipeline examples
+cargo run --example custom_pipeline
+cargo run --example parallel_builds
 
 # Run with tracing enabled
-RUST_LOG=debug cargo run --example simplified_view
+RUST_LOG=debug cargo run --example hello_world_view
 ```
 
 ### Benchmarks
 
 ```bash
-# Run benchmarks for specific crate
-cargo bench -p flui_core
-cargo bench -p flui_types
+# Run benchmarks for specific layers
+cargo bench -p flui-reactivity   # Signal performance
+cargo bench -p flui-pipeline     # Pipeline coordination
+cargo bench -p flui_core         # Core framework
+cargo bench -p flui_types        # Basic types
 ```
 
 ### Cross-Platform Builds
@@ -167,26 +211,22 @@ cargo fmt --all
 ### Three-Tree System
 
 **View Tree (Immutable):**
-- Views implement the unified `View` trait
+- Views implement traits from `flui-view` crate
 - Single `build()` method returns `impl IntoElement`
-- **NO GATs** - State/Element types removed in v0.6.0 migration
-- **NO rebuild() method** - Framework handles this automatically
 - Views must be `'static` but NOT necessarily `Clone`
-- Located in: `crates/flui_core/src/view/`
+- Located in: `crates/flui-view/src/`
 
 **Element Tree (Mutable):**
-- Stored in `Slab` arena at `crates/flui_core/src/element/element_tree.rs`
-- **Unified Element struct** - single type for all element variants (v0.7.0 migration completed)
-- All type-specific behavior delegated to `Box<dyn ViewObject>`
-- ViewObject variants: `StatelessViewWrapper`, `StatefulViewWrapper`, `AnimatedViewWrapper`, `ProviderViewWrapper`, `ProxyViewWrapper`, `RenderViewWrapper`
+- Stored using tree abstractions from `flui-tree` crate
+- Element identification and lifecycle managed by `flui-foundation`
 - ElementId uses `NonZeroUsize` for niche optimization (Option<ElementId> = 8 bytes)
-- **CRITICAL:** Slab indices are 0-based but ElementId is 1-based (+1 offset in insert, -1 in get)
-- Lifecycle: Initial → Active → Inactive → Defunct
+- Tree traversal uses visitor patterns from `flui-tree`
+- Located in: `crates/flui_core/src/element/`
 
 **Render Tree (Layout/Paint):**
 - Three render traits based on child count: `LeafRender` (0), `SingleRender` (1), `MultiRender` (N)
 - Uses GAT (Generic Associated Types) for type-safe metadata
-- `RenderNode` enum at `crates/flui_core/src/render/render_node.rs`
+- Pipeline coordination handled by `flui-pipeline` crate
 - Located in: `crates/flui_rendering/src/objects/`
 
 ### Element Architecture (v0.7.0)
@@ -259,100 +299,109 @@ element.remove_child(child_id)
 
 ### Pipeline Architecture
 
-The rendering pipeline has three phases coordinated by `PipelineOwner`:
+The rendering pipeline has three phases coordinated by abstract traits from `flui-pipeline`:
 
-1. **Build Phase:** Rebuilds dirty components via `flush_build()`
-2. **Layout Phase:** Computes sizes via `flush_layout(constraints)`
-3. **Paint Phase:** Generates layers via `flush_paint()`
+1. **Build Phase:** Implements `BuildPhase` trait for widget rebuilds
+2. **Layout Phase:** Implements `LayoutPhase` trait for size computation  
+3. **Paint Phase:** Implements `PaintPhase` trait for layer generation
 
 **Key files:**
-- `crates/flui_core/src/pipeline/pipeline_owner.rs` - Main coordinator
-- `crates/flui_core/src/pipeline/frame_coordinator.rs` - Phase management
-- `crates/flui_core/src/pipeline/build_pipeline.rs` - Build phase
-- `crates/flui_core/src/pipeline/layout_pipeline.rs` - Layout phase
-- `crates/flui_core/src/pipeline/paint_pipeline.rs` - Paint phase
+- `crates/flui-pipeline/src/traits/` - Abstract phase traits
+- `crates/flui-pipeline/src/coordinator/` - Pipeline coordination
+- `crates/flui_core/src/pipeline/` - Concrete implementations
+- `crates/flui-scheduler/src/` - Frame scheduling and prioritization
 
-**CRITICAL BUG PATTERN:** When calling `request_layout()`, you must set BOTH:
-1. Mark in dirty set via `coordinator.layout_mut().mark_dirty(node_id)`
-2. Set RenderState flag via `render_state.mark_needs_layout()`
+**Architecture Benefits:**
+- **Extensible:** Implement custom pipeline phases
+- **Testable:** Abstract traits enable easy mocking
+- **Flexible:** Different coordinators for different use cases
+- **Thread-safe:** Built-in support for parallel processing
 
-Failing to set both will cause layout to skip elements.
+### Modern View API (v0.1.0+)
 
-### Modern View API (v0.6.0+)
-
-The View API has been unified and simplified. **The old Component trait no longer exists.**
+Views are defined using traits from the `flui-view` crate with reactive state from `flui-reactivity`:
 
 ```rust
-// Modern View trait (unified)
+use flui_view::View;
+use flui_reactivity::{Signal, use_signal};
+
+// Modern View trait
 pub trait View: 'static {
     fn build(self, ctx: &BuildContext) -> impl IntoElement;
 }
 
-// Example usage
+// Example with reactive state
 #[derive(Debug)]
-pub struct Padding {
-    pub padding: EdgeInsets,
-    pub child: Option<AnyElement>,
-}
+pub struct Counter;
 
-impl View for Padding {
+impl View for Counter {
     fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        // Returns tuple of (RenderObject, Option<child>)
-        (RenderPadding::new(self.padding), self.child)
+        let count = use_signal(ctx, 0);
+        
+        // Returns element structure
+        column![
+            text(format!("Count: {}", count.get(ctx))),
+            button("Increment").on_press(move || count.update(|n| *n + 1))
+        ]
     }
 }
 ```
 
-**Key Changes:**
-- ✅ Single unified `View` trait (no separate Component)
-- ✅ No GAT State/Element types
-- ✅ No rebuild() or teardown() methods
-- ✅ Returns `impl IntoElement` (automatic tree insertion)
-- ✅ Thread-local BuildContext for automatic setup
-- ✅ 75% less boilerplate per widget
+**Key Features:**
+- ✅ Reactive state with `flui-reactivity` hooks
+- ✅ Abstract tree operations via `flui-tree` 
+- ✅ Foundation types from `flui-foundation`
+- ✅ Pipeline integration with `flui-pipeline`
+- ✅ Thread-safe Copy-based signals
+- ✅ Automatic change tracking and updates
 
-**IntoElement Types:**
-- `(LeafRender, ())` → LeafRenderBuilder
-- `(SingleRender, Option<child>)` → SingleRenderBuilder
-- `(MultiRender, Vec<child>)` → MultiRenderBuilder
-- `AnyElement` → For heterogeneous view storage
+**Element Creation:**
+- Views create elements using tree abstractions
+- Pipeline handles build/layout/paint coordination
+- Reactive system manages state updates
 
-### State Management with Hooks
+### Reactive State Management
 
-**CRITICAL:** FLUI is thread-safe. All hooks use `Arc`/`Mutex` (parking_lot).
+**CRITICAL:** FLUI uses `flui-reactivity` for thread-safe reactive state. All signals are Copy-based and use DashMap for lock-free access.
 
-Hooks provide React-like state management with automatic rebuild scheduling:
+The reactive system provides automatic change tracking and updates:
 
 ```rust
-// Signal - reactive state
-let count = use_signal(ctx, 0);
+use flui_reactivity::{Signal, use_signal, use_effect, batch};
 
-// Memo - derived state
-let doubled = use_memo(ctx, |_| count.get() * 2);
+// Signal - reactive state (Copy-based)
+let count = Signal::new(0);
+let count_copy = count; // Copy, not clone!
 
-// Effect - side effects
-use_effect(ctx, move || {
-    println!("Count changed: {}", count.get());
-    None  // No cleanup
+// Computed values
+let doubled = count.derive(|&n| n * 2);
+
+// Effects with cleanup
+let cleanup = count.watch(|value| {
+    println!("Count changed: {}", value);
 });
+
+// Batch updates for performance
+batch(|| {
+    count.set(1);
+    count.set(2); 
+    count.set(3);
+}); // Only one update notification
 ```
 
-**Hook Rules (MUST follow):**
-1. ✅ Always call hooks in the same order every build
-2. ❌ Never call hooks conditionally
-3. ❌ Never call hooks in loops with variable iterations
-4. ✅ Only call hooks at component top level
-5. ✅ Clone signals before moving into closures
+**Key Features:**
+- ✅ **Copy-based signals** - No cloning needed
+- ✅ **Lock-free storage** - DashMap for concurrent access  
+- ✅ **Automatic cleanup** - Weak references prevent leaks
+- ✅ **Thread-safe** - All operations work across threads
+- ✅ **Performance optimized** - Batching and atomic operations
 
-**Breaking these rules causes PANICS!** See `crates/flui_core/src/hooks/RULES.md` for detailed explanation.
+**Thread-Safety:**
+- All signal values must implement `Send + Sync`
+- Uses DashMap for lock-free concurrent HashMap
+- parking_lot for synchronization (2-3x faster than std)
 
-**Thread-Safety Requirements:**
-- All signal values must implement `Send`
-- All callbacks must be `Send + Sync`
-- Uses `Arc<Mutex<T>>` instead of `Rc<RefCell<T>>`
-- Uses `parking_lot::Mutex` (2-3x faster than std, no poisoning)
-
-Located in: `crates/flui_core/src/hooks/`
+Located in: `crates/flui-reactivity/src/`
 
 ## Logging and Debugging
 
@@ -702,52 +751,76 @@ self.nodes.get(element_id.get() - 1).map(|node| &node.element)  // -1 to access 
 
 ## Feature Flags
 
-### Parallel Processing (Stable)
+### Reactive System
 
 ```toml
-features = ["parallel"]
+flui-reactivity = { version = "0.1", features = ["hooks", "async"] }
 ```
 
-**Status:** ✅ Stable - Thread-safe parallel processing enabled
+**Features:**
+- `hooks` - Enable React-style hooks (use_signal, use_effect, etc.)
+- `async` - Enable async utilities and resources
 
-Enables rayon-based parallel processing for build pipeline. All thread-safety issues have been resolved through comprehensive Arc/Mutex refactoring.
+### Pipeline System
+
+```toml
+flui-pipeline = { version = "0.1", features = ["parallel"] }
+```
+
+**Features:**
+- `parallel` - Enable rayon-based parallel processing
+
+### Foundation
+
+```toml
+flui-foundation = { version = "0.1", features = ["serde", "async"] }
+```
+
+**Features:**
+- `serde` - Enable serialization support
+- `async` - Enable async change notification
 
 ### Rendering Backend
 
 FLUI uses **wgpu** as its only rendering backend for GPU-accelerated graphics:
 
 ```toml
-# wgpu backend (GPU-accelerated, production-ready)
-flui = "0.1"
+flui = { version = "0.1", features = ["devtools"] }
 ```
 
-The previous dual-backend system (egui/wgpu) has been replaced with a unified wgpu-only architecture for better performance and maintainability.
+**Features:**
+- `devtools` - Enable development and debugging tools
+- `full` - Enable all stable features
 
 ## Documentation
 
-Comprehensive documentation is available in:
+Comprehensive documentation is available in each crate:
 
-**Recent Refactorings:**
-- `THREAD_SAFE_HOOKS_REFACTORING.md` - Thread-safety migration (Arc/Mutex)
-- `VIEW_API_MIGRATION_COMPLETE.md` - View API unification
-- `VIEW_API_LOGIC_REVIEW.md` - View API design review
+**Foundation Layer:**
+- `crates/flui-foundation/README.md` - Core types and change notification
+- `crates/flui-tree/README.md` - Tree abstractions and visitor patterns
+- `crates/flui_types/README.md` - Basic geometry and math
+
+**Framework Layer:**
+- `crates/flui-view/README.md` - View traits and abstractions  
+- `crates/flui-pipeline/README.md` - Pipeline coordination system
+- `crates/flui-reactivity/README.md` - Reactive state management
+- `crates/flui-scheduler/README.md` - Frame scheduling
+- `crates/flui_core/README.md` - Core framework implementation
 
 **Architecture:**
-- `docs/PIPELINE_ARCHITECTURE.md` - Pipeline design and multi-threading
-- `docs/FINAL_ARCHITECTURE_V2.md` - Overall architecture
-- `docs/API_GUIDE.md` - Comprehensive API guide
+- `docs/arch/README.md` - Overall architecture overview
+- `docs/arch/CORE_ARCHITECTURE.md` - Core framework design
+- `docs/arch/RENDERING_ARCHITECTURE.md` - Rendering system
 
-**Hooks:**
-- `crates/flui_core/src/hooks/RULES.md` - **MUST READ** - Hook usage rules
-- `crates/flui_core/src/hooks/HOOK_REFACTORING.md` - Hook internals
-
-**Widgets:**
-- `crates/flui_widgets/flutter_widgets_full_guide.md` - Flutter widget reference
-- `crates/flui_rendering/RENDER_OBJECT_GUIDE.md` - RenderObject guide
+**Development:**
+- `crates/flui_cli/README.md` - CLI tool documentation
+- `crates/flui_devtools/README.md` - Development tools
+- `crates/flui_build/README.md` - Build system
 
 **Examples:**
-- `crates/flui_core/examples/simplified_view.rs` - Modern View API example
-- `crates/flui_core/examples/thread_safe_hooks.rs` - Thread-safety demonstration
+- `examples/` - Application examples
+- `demos/` - Demo applications
 
 ## Asset Management (flui-assets)
 
