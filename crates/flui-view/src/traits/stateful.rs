@@ -4,8 +4,8 @@
 
 use flui_element::IntoElement;
 
-use flui_element::BuildContext;
 use crate::state::ViewState;
+use flui_element::BuildContext;
 
 /// `StatefulView` - A view with internal mutable state
 ///

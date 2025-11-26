@@ -577,7 +577,8 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
             tree_guard.root_id()
         };
 
-        FrameCoordinator::flush_layout(self, tree, root_id, constraints)}
+        FrameCoordinator::flush_layout(self, tree, root_id, constraints)
+    }
 
     fn flush_paint(
         &mut self,
@@ -589,7 +590,8 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
             tree_guard.root_id()
         };
 
-        FrameCoordinator::flush_paint(self, tree, root_id)}
+        FrameCoordinator::flush_paint(self, tree, root_id)
+    }
 
     fn execute_frame(
         &mut self,
@@ -607,8 +609,7 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
         };
 
         // Execute frame using existing method
-        let layer = self
-            .build_frame(tree, root_id, constraints)?;
+        let layer = self.build_frame(tree, root_id, constraints)?;
 
         let frame_time = start.elapsed();
         let budget = self.budget.lock();

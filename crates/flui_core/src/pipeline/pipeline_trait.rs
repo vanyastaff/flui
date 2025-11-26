@@ -179,10 +179,7 @@ pub trait Pipeline: Send + Sync {
     ///     }
     /// }
     /// ```
-    fn build_frame(
-        &self,
-        constraints: BoxConstraints,
-    ) -> Result<Option<Canvas>, PipelineError>;
+    fn build_frame(&self, constraints: BoxConstraints) -> Result<Option<Canvas>, PipelineError>;
 
     // =========================================================================
     // Dirty Tracking
@@ -256,10 +253,7 @@ impl Pipeline for Arc<RwLock<PipelineOwner>> {
         self.write().flush_paint()
     }
 
-    fn build_frame(
-        &self,
-        constraints: BoxConstraints,
-    ) -> Result<Option<Canvas>, PipelineError> {
+    fn build_frame(&self, constraints: BoxConstraints) -> Result<Option<Canvas>, PipelineError> {
         self.write().build_frame(constraints)
     }
 

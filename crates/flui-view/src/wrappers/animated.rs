@@ -147,7 +147,6 @@ where
     }
 }
 
-
 impl<V, L> Drop for AnimatedViewWrapper<V, L>
 where
     V: AnimatedView<L>,

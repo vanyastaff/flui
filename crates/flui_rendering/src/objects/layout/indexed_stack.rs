@@ -1,8 +1,6 @@
 //! RenderIndexedStack - shows only one child by index
 
-use crate::core::{
-    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
-};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::{Alignment, Size};
 
 /// RenderObject that shows only one child from a list

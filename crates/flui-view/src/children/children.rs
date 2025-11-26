@@ -119,7 +119,10 @@ impl From<Children> for Vec<Element> {
 impl<V: IntoElement> From<Vec<V>> for Children {
     fn from(views: Vec<V>) -> Self {
         Children {
-            inner: views.into_iter().map(flui_element::IntoElement::into_element).collect(),
+            inner: views
+                .into_iter()
+                .map(flui_element::IntoElement::into_element)
+                .collect(),
         }
     }
 }

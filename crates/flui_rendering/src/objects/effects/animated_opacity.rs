@@ -1,9 +1,9 @@
 //! RenderAnimatedOpacity - animated opacity transitions
 
+use crate::core::ElementId;
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
-use crate::core::ElementId;
 use flui_types::Size;
 
 /// RenderObject that applies animated opacity to its child

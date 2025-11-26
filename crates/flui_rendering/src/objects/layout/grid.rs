@@ -1,8 +1,6 @@
 //! RenderGrid - CSS Grid-inspired layout
 
-use crate::core::{
-    BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable,
-};
+use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -340,8 +338,12 @@ impl RenderBox<Variable> for RenderGrid {
 
         // Compute track sizes
         self.computed_column_widths = self.compute_column_widths(&child_ids, &mut ctx, constraints);
-        self.computed_row_heights =
-            self.compute_row_heights(&child_ids, &mut ctx, &self.computed_column_widths, constraints);
+        self.computed_row_heights = self.compute_row_heights(
+            &child_ids,
+            &mut ctx,
+            &self.computed_column_widths,
+            constraints,
+        );
 
         // Layout each child in its grid cell
         for (idx, &child_id) in child_ids.iter().enumerate() {

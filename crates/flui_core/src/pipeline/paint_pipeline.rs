@@ -274,5 +274,6 @@ impl flui_pipeline::PaintPhase for PaintPipeline {
     }
 
     fn generate_layers(&mut self, tree: &mut Self::Tree) -> flui_pipeline::PipelineResult<usize> {
-        PaintPipeline::generate_layers(self, tree)}
+        PaintPipeline::generate_layers(self, tree)
+    }
 }

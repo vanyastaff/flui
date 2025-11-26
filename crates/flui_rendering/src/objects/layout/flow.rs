@@ -192,8 +192,7 @@ impl<D: FlowDelegate> RenderBox<Variable> for RenderFlow<D> {
         self.child_sizes.clear();
         for (i, child_id) in children.iter().enumerate() {
             let child_constraints = self.delegate.get_constraints_for_child(i, constraints);
-            let child_size = ctx.layout_child(child_id, child_constraints)
-                ;
+            let child_size = ctx.layout_child(child_id, child_constraints);
             self.child_sizes.push(child_size);
         }
 

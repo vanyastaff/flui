@@ -139,13 +139,10 @@ impl StatefulView for ErrorBoundary {
 
         // No error - show child
         // Take child from Arc<RwLock<Option<Element>>>
-        self.child
-            .write()
-            .take()
-            .unwrap_or_else(|| {
-                tracing::warn!("ErrorBoundary: child already taken, returning empty");
-                Element::empty()
-            })
+        self.child.write().take().unwrap_or_else(|| {
+            tracing::warn!("ErrorBoundary: child already taken, returning empty");
+            Element::empty()
+        })
     }
 }
 
@@ -242,10 +239,9 @@ mod tests {
 
     #[test]
     fn test_error_boundary_with_handler() {
-        let boundary = ErrorBoundary::new(Element::empty())
-            .on_error(|error| {
-                println!("Error: {}", error.message);
-            });
+        let boundary = ErrorBoundary::new(Element::empty()).on_error(|error| {
+            println!("Error: {}", error.message);
+        });
         assert!(boundary.on_error.is_some());
     }
 }

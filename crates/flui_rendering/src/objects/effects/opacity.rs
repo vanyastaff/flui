@@ -1,9 +1,9 @@
 //! RenderOpacity - applies opacity to a child using OpacityLayer
 
+use crate::core::ElementId;
 use crate::core::{
     RenderBox, Single, {BoxProtocol, LayoutContext, PaintContext},
 };
-use crate::core::ElementId;
 use flui_types::Size;
 
 /// RenderObject that applies opacity to its child

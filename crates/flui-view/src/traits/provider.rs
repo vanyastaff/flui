@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use flui_element::IntoElement;
 use flui_element::BuildContext;
+use flui_element::IntoElement;
 
 /// `ProviderView` - Views that provide data to descendants.
 ///

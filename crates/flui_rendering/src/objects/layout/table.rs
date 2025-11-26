@@ -1,8 +1,6 @@
 //! RenderTable - Table layout with configurable column widths
 
-use crate::core::{
-    BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable,
-};
+use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -249,8 +247,12 @@ impl RenderBox<Variable> for RenderTable {
         self.computed_column_widths = self.compute_column_widths(&child_ids, &mut ctx, constraints);
 
         // Compute row heights
-        self.computed_row_heights =
-            self.compute_row_heights(&child_ids, &mut ctx, &self.computed_column_widths, constraints);
+        self.computed_row_heights = self.compute_row_heights(
+            &child_ids,
+            &mut ctx,
+            &self.computed_column_widths,
+            constraints,
+        );
 
         // Calculate total size
         let total_width: f32 = self.computed_column_widths.iter().sum();

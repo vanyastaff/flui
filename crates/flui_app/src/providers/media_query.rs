@@ -188,8 +188,7 @@ mod tests {
 
     #[test]
     fn test_text_scale_factor() {
-        let data = MediaQueryData::new(Size::new(800.0, 600.0), 1.0)
-            .with_text_scale_factor(1.5);
+        let data = MediaQueryData::new(Size::new(800.0, 600.0), 1.0).with_text_scale_factor(1.5);
         assert_eq!(data.text_scale_factor, 1.5);
     }
 

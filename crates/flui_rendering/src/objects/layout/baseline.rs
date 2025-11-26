@@ -68,8 +68,7 @@ impl RenderBox<Single> for RenderBaseline {
         let constraints = ctx.constraints;
 
         // Layout child with same constraints
-        let child_size = ctx.layout_child(child_id, constraints)
-            ;
+        let child_size = ctx.layout_child(child_id, constraints);
 
         // Our height includes space above baseline and child height
         // For simplicity, we use child height + baseline offset

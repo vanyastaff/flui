@@ -544,11 +544,7 @@ impl BuildPipeline {
     ///
     /// - `true` if old element should be updated with new data
     /// - `false` if old element should be removed and new one inserted
-    fn can_reuse(
-        tree_guard: &ElementTree,
-        old_id: ElementId,
-        new_element: &Element,
-    ) -> bool {
+    fn can_reuse(tree_guard: &ElementTree, old_id: ElementId, new_element: &Element) -> bool {
         let old_element = match tree_guard.get(old_id) {
             Some(elem) => elem,
             None => return false, // Old element doesn't exist
@@ -571,11 +567,7 @@ impl BuildPipeline {
             (Some(old_key), Some(new_key)) => {
                 if old_key != new_key {
                     #[cfg(debug_assertions)]
-                    tracing::trace!(
-                        ?old_key,
-                        ?new_key,
-                        "Cannot reuse: Key mismatch"
-                    );
+                    tracing::trace!(?old_key, ?new_key, "Cannot reuse: Key mismatch");
                     return false;
                 }
             }
@@ -680,7 +672,8 @@ impl BuildPipeline {
                     );
 
                     // Create context for did_update() lifecycle hook
-                    let ctx = PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+                    let ctx =
+                        PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
 
                     Self::update_element(tree_guard, old_id, new_element, &ctx);
                     // Element ID stays the same, no parent reference update needed
@@ -696,8 +689,11 @@ impl BuildPipeline {
                     // Lifecycle: Call dispose() on old element before removing
                     if let Some(old_elem) = tree_guard.get_mut(old_id) {
                         if let Some(vo) = old_elem.view_object_mut() {
-                            let ctx =
-                                PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+                            let ctx = PipelineBuildContext::new(
+                                old_id,
+                                tree_arc.clone(),
+                                dirty_set.clone(),
+                            );
                             vo.dispose(&ctx);
                         }
                     }
@@ -708,8 +704,11 @@ impl BuildPipeline {
                     // Lifecycle: Call init() on new element
                     if let Some(new_elem) = tree_guard.get_mut(new_id) {
                         if let Some(vo) = new_elem.view_object_mut() {
-                            let ctx =
-                                PipelineBuildContext::new(new_id, tree_arc.clone(), dirty_set.clone());
+                            let ctx = PipelineBuildContext::new(
+                                new_id,
+                                tree_arc.clone(),
+                                dirty_set.clone(),
+                            );
                             vo.init(&ctx);
                         }
                     }
@@ -726,7 +725,8 @@ impl BuildPipeline {
                 // Lifecycle: Call init() on new element
                 if let Some(new_elem) = tree_guard.get_mut(new_id) {
                     if let Some(vo) = new_elem.view_object_mut() {
-                        let ctx = PipelineBuildContext::new(new_id, tree_arc.clone(), dirty_set.clone());
+                        let ctx =
+                            PipelineBuildContext::new(new_id, tree_arc.clone(), dirty_set.clone());
                         vo.init(&ctx);
                     }
                 }
@@ -739,7 +739,8 @@ impl BuildPipeline {
                 // Lifecycle: Call dispose() on old element before removing
                 if let Some(old_elem) = tree_guard.get_mut(old_id) {
                     if let Some(vo) = old_elem.view_object_mut() {
-                        let ctx = PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+                        let ctx =
+                            PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
                         vo.dispose(&ctx);
                     }
                 }

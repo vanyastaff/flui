@@ -1,6 +1,8 @@
 //! RenderEmpty - a render object that does nothing
 
-use crate::core::{BoxProtocol, LayoutContext, LayoutTree, Leaf, PaintContext, PaintTree, RenderBox};
+use crate::core::{
+    BoxProtocol, LayoutContext, LayoutTree, Leaf, PaintContext, PaintTree, RenderBox,
+};
 use flui_types::Size;
 
 /// A render object that renders nothing

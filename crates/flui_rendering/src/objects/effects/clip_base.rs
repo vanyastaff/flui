@@ -27,10 +27,8 @@
 //! pub type RenderClipRect = RenderClip<RectShape>;
 //! ```
 
-
 use crate::core::{
-    HitTestTree, RenderBox, Single,
-    {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
+    HitTestTree, RenderBox, Single, {BoxProtocol, HitTestContext, LayoutContext, PaintContext},
 };
 use flui_interaction::HitTestResult;
 use flui_painting::Canvas;

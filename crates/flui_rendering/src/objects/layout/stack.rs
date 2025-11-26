@@ -1,8 +1,6 @@
 //! RenderStack - layering container
 
-use crate::core::{
-    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
-};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
 use flui_types::layout::StackFit;
 use flui_types::{Alignment, Offset, Size};

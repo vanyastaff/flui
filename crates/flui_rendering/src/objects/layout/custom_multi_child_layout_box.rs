@@ -1,6 +1,8 @@
 //! RenderCustomMultiChildLayoutBox - Custom multi-child layout with delegate
 
-use crate::core::{BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree, RenderBox, Variable};
+use crate::core::{
+    BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree, RenderBox, Variable,
+};
 use flui_types::{BoxConstraints, Offset, Size};
 use std::any::Any;
 use std::fmt::Debug;
@@ -28,7 +30,6 @@ impl<'a, 'b, T: LayoutTree> MultiChildLayoutContext<'a, 'b, T> {
             return Size::ZERO;
         }
         self.ctx.layout_child(self.children[index], constraints)
-            
     }
 
     /// Get the number of children

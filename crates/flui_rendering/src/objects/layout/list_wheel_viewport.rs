@@ -1,8 +1,6 @@
 //! RenderListWheelViewport - 3D wheel picker viewport
 
-use crate::core::{
-    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
-};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
 use flui_types::prelude::*;
 use std::f32::consts::PI;

@@ -188,10 +188,7 @@ pub trait RenderSliverProxy: Debug + Send + Sync + 'static {
 
 /// Blanket implementation: any RenderSliverProxy automatically implements SliverRender<Single>
 impl<P: RenderSliverProxy> SliverRender<Single> for P {
-    fn layout<T>(
-        &mut self,
-        ctx: LayoutContext<'_, T, Single, SliverProtocol>,
-    ) -> SliverGeometry
+    fn layout<T>(&mut self, ctx: LayoutContext<'_, T, Single, SliverProtocol>) -> SliverGeometry
     where
         T: LayoutTree,
     {

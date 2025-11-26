@@ -299,11 +299,7 @@ where
     /// # Panics
     /// Panics if paint fails (indicates a framework bug).
     #[inline]
-    pub fn paint_child(
-        &mut self,
-        child_id: std::num::NonZeroUsize,
-        offset: Offset,
-    ) {
+    pub fn paint_child(&mut self, child_id: std::num::NonZeroUsize, offset: Offset) {
         let child_canvas = self
             .tree
             .perform_paint(ElementId::new(child_id.get()), offset)

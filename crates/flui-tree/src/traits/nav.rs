@@ -375,7 +375,8 @@ pub trait TreeNav: TreeRead {
         let ancestors_a: Vec<_> = self.ancestors(a).collect();
 
         // Find first ancestor of 'b' that's in ancestors_a
-        self.ancestors(b).find(|&ancestor| ancestors_a.contains(&ancestor))
+        self.ancestors(b)
+            .find(|&ancestor| ancestors_a.contains(&ancestor))
     }
 
     /// Returns the root of the tree containing the given node.

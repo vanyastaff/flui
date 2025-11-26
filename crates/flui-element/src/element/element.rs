@@ -550,7 +550,6 @@ impl Element {
         &mut self.base
     }
 
-
     // ========== Compatibility Stubs ==========
     // These methods provide API compatibility with the old element module.
 

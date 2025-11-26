@@ -340,7 +340,8 @@ impl flui_pipeline::LayoutPhase for LayoutPipeline {
         tree: &mut Self::Tree,
         constraints: Self::Constraints,
     ) -> flui_pipeline::PipelineResult<Vec<ElementId>> {
-        LayoutPipeline::compute_layout(self, tree, constraints)}
+        LayoutPipeline::compute_layout(self, tree, constraints)
+    }
 }
 
 impl flui_pipeline::ParallelExecution for LayoutPipeline {

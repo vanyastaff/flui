@@ -1,8 +1,6 @@
 //! RenderWrap - arranges children with wrapping (like flexbox wrap)
 
-use crate::core::{
-    BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable,
-};
+use crate::core::{BoxProtocol, ChildrenAccess, LayoutContext, PaintContext, RenderBox, Variable};
 use flui_types::constraints::BoxConstraints;
 use flui_types::{Axis, Offset, Size};
 

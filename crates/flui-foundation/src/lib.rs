@@ -203,9 +203,8 @@ pub use async_utils::{AsyncChangeNotifier, AsyncValueNotifier};
 /// ```
 pub mod prelude {
     pub use crate::{
-        ChangeNotifier, DiagnosticLevel, Diagnosticable, DynNotification,
-        ElementId, Key, KeyRef, Listenable, ListenerCallback, ListenerId,
-        Notification, Slot, ValueNotifier,
+        ChangeNotifier, DiagnosticLevel, Diagnosticable, DynNotification, ElementId, Key, KeyRef,
+        Listenable, ListenerCallback, ListenerId, Notification, Slot, ValueNotifier,
     };
 
     #[cfg(feature = "async")]

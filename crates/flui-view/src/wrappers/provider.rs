@@ -281,4 +281,3 @@ mod tests {
         assert!(element.has_view_object());
     }
 }
-

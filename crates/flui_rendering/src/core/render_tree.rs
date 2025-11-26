@@ -360,7 +360,10 @@ pub trait HitTestTreeExt: HitTestTree {
     ) -> Option<ElementId> {
         // Collect children and iterate in reverse for proper z-ordering
         let children: Vec<_> = RenderChildren::new(self, parent).collect();
-        children.into_iter().rev().find(|&child| self.hit_test(child, position, result))
+        children
+            .into_iter()
+            .rev()
+            .find(|&child| self.hit_test(child, position, result))
     }
 
     /// Hit test all render children with position transform.
