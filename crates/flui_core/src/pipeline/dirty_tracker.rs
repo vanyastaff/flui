@@ -48,6 +48,7 @@ impl DirtyTracker {
 
     /// Returns true if there are no dirty elements.
     #[inline]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.dirty.len() == 0
     }

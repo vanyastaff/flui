@@ -1,63 +1,48 @@
 use flui_app::run_app;
 use flui_core::prelude::*;
-use flui_types::layout::{CrossAxisAlignment, MainAxisAlignment};
-use flui_types::{Color, EdgeInsets};
-use flui_widgets::*;
+use flui_view::{IntoElement, Stateful, StatefulView, StatelessView};
 
 fn main() {
-    run_app(CounterApp);
+    run_app(CounterAppWrapper);
 }
 
+// Wrapper to make StatefulView work with run_app
 #[derive(Debug, Clone)]
+struct CounterAppWrapper;
+
+impl StatelessView for CounterAppWrapper {
+    fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
+        Stateful(CounterApp)
+    }
+}
+
+#[derive(Debug)]
 struct CounterApp;
 
-impl View for CounterApp {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        // Use hooks for reactive state management
-        let count = use_signal(ctx, 0);
+impl StatefulView for CounterApp {
+    type State = CounterState;
 
-        // Read current value for display
-        let current_value = count.get();
-        tracing::info!("Building UI with current count: {}", current_value);
+    fn create_state(&self) -> Self::State {
+        CounterState { count: 0 }
+    }
 
-        Container::builder()
-            .color(Color::rgb(240, 240, 240))
-            .padding(EdgeInsets::all(40.0))
-            .child(
-                Column::builder()
-                    .main_axis_alignment(MainAxisAlignment::Center)
-                    .cross_axis_alignment(CrossAxisAlignment::Center)
-                    .children(vec![
-                        Text::builder()
-                            .data("FLUI Counter Demo")
-                            .size(32.0)
-                            .color(Color::rgb(50, 50, 50))
-                            .build()
-                            .into_element(),
-                        Container::builder()
-                            .padding(EdgeInsets::all(20.0))
-                            .child(
-                                Text::builder()
-                                    .data(format!("Count: {}", current_value))
-                                    .size(48.0)
-                                    .color(Color::rgb(0, 120, 200))
-                                    .build(),
-                            )
-                            .build()
-                            .into_element(),
-                        Button::builder("Increment")
-                            .on_tap(move || {
-                                tracing::debug!("Button clicked, updating count");
-                                count.update_mut(|c| {
-                                    *c += 1;
-                                    tracing::debug!(count = *c, "Count updated");
-                                });
-                            })
-                            .build()
-                            .into_element(),
-                    ])
-                    .build(),
-            )
-            .build()
+    fn build(&self, state: &mut Self::State, _ctx: &dyn BuildContext) -> impl IntoElement {
+        tracing::info!("Building UI with current count: {}", state.count);
+
+        // TODO: Add Text widget once flui_widgets is refactored
+        // For now just return empty element
+        Element::empty()
+    }
+}
+
+#[derive(Debug)]
+pub struct CounterState {
+    count: i32,
+}
+
+impl CounterState {
+    pub fn increment(&mut self) {
+        self.count += 1;
+        tracing::debug!(count = self.count, "Count incremented");
     }
 }

@@ -156,7 +156,9 @@ impl LayoutPipeline {
         let mut laid_out_ids = Vec::with_capacity(count);
 
         // Cache statistics tracking
+        #[allow(unused_assignments)]
         let mut cache_hits = 0usize;
+        #[allow(unused_assignments)]
         let mut cache_misses = 0usize;
 
         // Process each dirty render object

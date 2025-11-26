@@ -43,8 +43,11 @@
 //! ```
 
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use parking_lot::RwLock;
 
 use flui_element::{Element, ElementTree};
 use flui_foundation::ElementId;
@@ -496,8 +499,14 @@ impl BuildPipeline {
     ) -> ElementId {
         let new_id = tree_guard.insert(element);
 
+        // Calculate depth: parent.depth() + 1
+        let depth = tree_guard
+            .get(parent_id)
+            .map(|p| p.depth() + 1)
+            .unwrap_or(0);
+
         if let Some(child) = tree_guard.get_mut(new_id) {
-            child.mount(Some(parent_id), None);
+            child.mount(Some(parent_id), None, depth);
         }
 
         new_id
@@ -524,45 +533,217 @@ impl BuildPipeline {
         }
     }
 
-    /// Reconcile child element: replace old with new, handling Slab ID reuse
+    /// Check if an existing element can be reused for a new element
     ///
-    /// **CRITICAL**: Inserts new element BEFORE removing old to prevent Slab ID reuse.
-    /// This ensures new_element's children (already inserted during build) remain valid.
+    /// Elements can be reused if:
+    /// 1. ViewMode matches (Stateless <-> Stateless, RenderBox <-> RenderBox, etc.)
+    /// 2. If both have keys, keys must match
+    /// 3. If only one has a key, cannot reuse (different identity)
+    ///
+    /// # Returns
+    ///
+    /// - `true` if old element should be updated with new data
+    /// - `false` if old element should be removed and new one inserted
+    fn can_reuse(
+        tree_guard: &ElementTree,
+        old_id: ElementId,
+        new_element: &Element,
+    ) -> bool {
+        let old_element = match tree_guard.get(old_id) {
+            Some(elem) => elem,
+            None => return false, // Old element doesn't exist
+        };
+
+        // Check 1: ViewMode must match
+        if old_element.view_mode() != new_element.view_mode() {
+            #[cfg(debug_assertions)]
+            tracing::trace!(
+                old_mode = ?old_element.view_mode(),
+                new_mode = ?new_element.view_mode(),
+                "Cannot reuse: ViewMode mismatch"
+            );
+            return false;
+        }
+
+        // Check 2: Key matching
+        match (old_element.key(), new_element.key()) {
+            // Both have keys - must match
+            (Some(old_key), Some(new_key)) => {
+                if old_key != new_key {
+                    #[cfg(debug_assertions)]
+                    tracing::trace!(
+                        ?old_key,
+                        ?new_key,
+                        "Cannot reuse: Key mismatch"
+                    );
+                    return false;
+                }
+            }
+            // Only one has a key - different identity
+            (Some(_), None) | (None, Some(_)) => {
+                #[cfg(debug_assertions)]
+                tracing::trace!("Cannot reuse: Key presence mismatch");
+                return false;
+            }
+            // Neither has a key - OK (rely on position)
+            (None, None) => {}
+        }
+
+        // All checks passed - can reuse
+        true
+    }
+
+    /// Update an existing element with new view data (in-place reuse)
+    ///
+    /// This is called when `can_reuse()` returns true.
+    ///
+    /// # Steps
+    ///
+    /// 1. Call did_update() lifecycle hook on new view with old view as argument
+    /// 2. Replace old element's view_object with new one
+    /// 3. Mark element dirty for rebuild
+    ///
+    /// # Why replace view_object?
+    ///
+    /// Even though ViewMode matches, the view data (props) may have changed.
+    /// Example: `Text { text: "old" }` -> `Text { text: "new" }`
+    ///
+    /// We replace the view_object entirely because we can't compare old vs new props
+    /// (no PartialEq requirement).
+    fn update_element(
+        tree_guard: &mut ElementTree,
+        element_id: ElementId,
+        mut new_element: Element,
+        ctx: &PipelineBuildContext,
+    ) {
+        let old_element = match tree_guard.get_mut(element_id) {
+            Some(elem) => elem,
+            None => {
+                tracing::error!(?element_id, "Cannot update: element not found");
+                return;
+            }
+        };
+
+        #[cfg(debug_assertions)]
+        tracing::trace!(?element_id, "Updating element in-place (reuse)");
+
+        // Lifecycle: Call did_update() on new view_object with old view as argument
+        if let (Some(new_vo), Some(old_vo)) =
+            (new_element.view_object_mut(), old_element.view_object())
+        {
+            new_vo.did_update(old_vo.as_any(), ctx);
+        }
+
+        // Take new view_object and swap it in
+        if let Some(new_view_object) = new_element.take_view_object() {
+            old_element.set_view_object_boxed(new_view_object);
+        }
+
+        // Update key if changed
+        old_element.set_key(new_element.key());
+
+        // Mark dirty to trigger rebuild with new view data
+        old_element.mark_dirty();
+    }
+
+    /// Reconcile child element with element reuse support
+    ///
+    /// **Element Reuse**: If ViewMode and Key match, reuses existing element.
+    /// **Replacement**: If type/key mismatch, inserts new BEFORE removing old (prevents Slab ID reuse).
     ///
     /// # Cases
     ///
-    /// 1. `(Some, Some)` - Replace existing child with new one
-    /// 2. `(None, Some)` - Add new child (no previous child)
-    /// 3. `(Some, None)` - Remove old child (no new child)
-    /// 4. `(None, None)` - No child before or after - nothing to do
+    /// 1. `(Some, Some)` - Check can_reuse:
+    ///    - If yes: Update old element in-place, reuse ElementId
+    ///    - If no: Insert new, remove old (Slab ID reuse prevention)
+    /// 2. `(None, Some)` - Insert new child
+    /// 3. `(Some, None)` - Remove old child
+    /// 4. `(None, None)` - No-op
     fn reconcile_child(
         tree_guard: &mut ElementTree,
         parent_id: ElementId,
         old_child_id: Option<ElementId>,
         new_element: Option<Element>,
+        tree_arc: &Arc<RwLock<ElementTree>>,
+        dirty_set: &Arc<RwLock<DirtySet>>,
     ) {
         match (old_child_id, new_element) {
-            // Replace existing child with new one
+            // Both old and new exist - check if we can reuse
             (Some(old_id), Some(new_element)) => {
-                // Insert-before-remove pattern prevents Slab ID reuse
-                let new_id = Self::insert_and_mount_child(tree_guard, new_element, parent_id);
-                Self::update_component_child_reference(tree_guard, parent_id, Some(new_id));
-                let _ = tree_guard.remove(old_id);
+                if Self::can_reuse(tree_guard, old_id, &new_element) {
+                    // REUSE PATH: Update existing element
+                    #[cfg(debug_assertions)]
+                    tracing::trace!(
+                        ?old_id,
+                        ?parent_id,
+                        "Reconcile: Reusing element (same type/key)"
+                    );
 
-                // NOTE: We don't schedule new_id for rebuild because:
-                // - It was just created and is already "fresh"
-                // - RenderElements don't rebuild (only layout/paint)
-                // - ComponentElements will be scheduled when they become dirty
+                    // Create context for did_update() lifecycle hook
+                    let ctx = PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+
+                    Self::update_element(tree_guard, old_id, new_element, &ctx);
+                    // Element ID stays the same, no parent reference update needed
+                } else {
+                    // REPLACE PATH: Insert new, remove old
+                    #[cfg(debug_assertions)]
+                    tracing::trace!(
+                        ?old_id,
+                        ?parent_id,
+                        "Reconcile: Replacing element (type/key mismatch)"
+                    );
+
+                    // Lifecycle: Call dispose() on old element before removing
+                    if let Some(old_elem) = tree_guard.get_mut(old_id) {
+                        if let Some(vo) = old_elem.view_object_mut() {
+                            let ctx =
+                                PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+                            vo.dispose(&ctx);
+                        }
+                    }
+
+                    // Insert-before-remove pattern prevents Slab ID reuse
+                    let new_id = Self::insert_and_mount_child(tree_guard, new_element, parent_id);
+
+                    // Lifecycle: Call init() on new element
+                    if let Some(new_elem) = tree_guard.get_mut(new_id) {
+                        if let Some(vo) = new_elem.view_object_mut() {
+                            let ctx =
+                                PipelineBuildContext::new(new_id, tree_arc.clone(), dirty_set.clone());
+                            vo.init(&ctx);
+                        }
+                    }
+
+                    Self::update_component_child_reference(tree_guard, parent_id, Some(new_id));
+                    let _ = tree_guard.remove(old_id);
+                }
             }
 
             // Add new child (no previous child)
             (None, Some(new_element)) => {
                 let new_id = Self::insert_and_mount_child(tree_guard, new_element, parent_id);
+
+                // Lifecycle: Call init() on new element
+                if let Some(new_elem) = tree_guard.get_mut(new_id) {
+                    if let Some(vo) = new_elem.view_object_mut() {
+                        let ctx = PipelineBuildContext::new(new_id, tree_arc.clone(), dirty_set.clone());
+                        vo.init(&ctx);
+                    }
+                }
+
                 Self::update_component_child_reference(tree_guard, parent_id, Some(new_id));
             }
 
             // Remove old child (no new child)
             (Some(old_id), None) => {
+                // Lifecycle: Call dispose() on old element before removing
+                if let Some(old_elem) = tree_guard.get_mut(old_id) {
+                    if let Some(vo) = old_elem.view_object_mut() {
+                        let ctx = PipelineBuildContext::new(old_id, tree_arc.clone(), dirty_set.clone());
+                        vo.dispose(&ctx);
+                    }
+                }
+
                 let _ = tree_guard.remove(old_id);
                 Self::update_component_child_reference(tree_guard, parent_id, None);
             }
@@ -609,30 +790,80 @@ impl BuildPipeline {
             element.first_child()
         };
 
-        // TODO: Build phase temporarily disabled during Element type migration.
-        // The crate::element::Element and flui_element::Element types need to be unified.
-        // For now, just clear the dirty flag without actually rebuilding.
-        //
         // Stage 2: Create context and build new child element
-        // let ctx = PipelineBuildContext::new(element_id, tree.clone(), self.dirty_set.clone());
-        // let new_element = { ... element.view_object_mut().build(&ctx) ... };
-        // Stage 3: Reconcile old/new children
+        let ctx = PipelineBuildContext::new(element_id, tree.clone(), self.dirty_set.clone());
 
-        // For now, just clear dirty flag
-        {
+        let new_element = {
             let mut tree_guard = tree.write();
+            let element = match tree_guard.get_mut(element_id) {
+                Some(e) => e,
+                None => return false,
+            };
 
-            // Clear dirty flag after "rebuild"
-            if let Some(element) = tree_guard.get_mut(element_id) {
-                if element.is_component() {
-                    element.clear_dirty();
+            // Clear dirty flag before build (in case build() marks dirty)
+            element.clear_dirty();
+
+            // Check if view object exists
+            if element.view_object().is_none() {
+                // No view object
+                return true;
+            }
+
+            // Release the lock before calling build
+            drop(tree_guard);
+
+            // Re-acquire lock and build with panic catching
+            let build_result = catch_unwind(AssertUnwindSafe(|| {
+                let mut tree_guard = tree.write();
+                let element = match tree_guard.get_mut(element_id) {
+                    Some(e) => e,
+                    None => return None,
+                };
+
+                // Call view_object.build() to get new child
+                Some(element.view_object_mut().unwrap().build(&ctx))
+            }));
+
+            match build_result {
+                Ok(Some(element)) => element,
+                Ok(None) => return false,
+                Err(panic_info) => {
+                    // Panic occurred during build - handle it
+                    use crate::error_handling::{handle_build_panic, ErrorWidget};
+                    use flui_view::{IntoElement, StatelessView};
+
+                    let error = handle_build_panic(&*panic_info);
+
+                    tracing::error!(
+                        element_id = ?element_id,
+                        message = %error.message,
+                        "Panic caught during widget build"
+                    );
+
+                    // Try to find ErrorBoundary and set error
+                    if let Some(boundary_id) = self.find_error_boundary(tree, element_id) {
+                        self.set_boundary_error(tree, boundary_id, error.clone());
+                    }
+
+                    // Return ErrorWidget as child
+                    ErrorWidget::new(error).build(&ctx).into_element()
                 }
             }
+        };
+
+        // Stage 3: Reconcile old child with new child
+        {
+            let mut tree_guard = tree.write();
+            Self::reconcile_child(
+                &mut tree_guard,
+                element_id,
+                old_child_id,
+                Some(new_element),
+                tree,
+                &self.dirty_set,
+            );
         }
 
-        // Return true to indicate we processed this element
-        // (actual rebuild is disabled during migration)
-        let _ = old_child_id; // suppress unused warning
         true
     }
 
@@ -718,6 +949,95 @@ impl BuildPipeline {
         }
 
         depth
+    }
+
+    /// Find the nearest ErrorBoundary ancestor
+    ///
+    /// Walks up the element tree looking for an element that is a StatefulView
+    /// with ErrorBoundary type.
+    ///
+    /// Returns the ElementId of the ErrorBoundary, or None if not found.
+    fn find_error_boundary(
+        &self,
+        tree: &Arc<parking_lot::RwLock<ElementTree>>,
+        element_id: ElementId,
+    ) -> Option<ElementId> {
+        use crate::error_handling::ErrorBoundary;
+        use flui_view::StatefulViewWrapper;
+
+        let tree_guard = tree.read();
+        let mut current = element_id;
+
+        loop {
+            // Check if current element is an ErrorBoundary
+            if let Some(element) = tree_guard.get(current) {
+                // Try to downcast view_object to check if it's ErrorBoundary
+                if let Some(view_obj) = element.view_object() {
+                    // Check if the view object is a StatefulViewWrapper<ErrorBoundary>
+                    if view_obj
+                        .as_any()
+                        .downcast_ref::<StatefulViewWrapper<ErrorBoundary>>()
+                        .is_some()
+                    {
+                        return Some(current);
+                    }
+                }
+
+                // Move to parent
+                if let Some(parent_id) = element.parent() {
+                    current = parent_id;
+                } else {
+                    // Reached root, no ErrorBoundary found
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+    }
+
+    /// Set error in ErrorBoundary state and mark for rebuild
+    ///
+    /// This accesses the ErrorBoundaryState and sets the error,
+    /// then marks the boundary element dirty for rebuild.
+    fn set_boundary_error(
+        &mut self,
+        tree: &Arc<parking_lot::RwLock<ElementTree>>,
+        boundary_id: ElementId,
+        error: crate::error_handling::ErrorInfo,
+    ) {
+        use crate::error_handling::ErrorBoundary;
+        use flui_view::StatefulViewWrapper;
+
+        let mut tree_guard = tree.write();
+
+        if let Some(element) = tree_guard.get_mut(boundary_id) {
+            if let Some(view_obj) = element.view_object_mut() {
+                // Downcast to StatefulViewWrapper<ErrorBoundary>
+                if let Some(wrapper) = view_obj
+                    .as_any_mut()
+                    .downcast_mut::<StatefulViewWrapper<ErrorBoundary>>()
+                {
+                    // Get state and set error
+                    if let Some(state) = wrapper.state_mut() {
+                        state.set_error(error);
+
+                        // Mark element dirty for rebuild
+                        element.mark_dirty();
+
+                        // Calculate depth for scheduling
+                        drop(tree_guard);
+                        let depth = self.calculate_depth(tree, boundary_id);
+                        self.schedule(boundary_id, depth);
+
+                        tracing::debug!(
+                            boundary_id = ?boundary_id,
+                            "Error set in ErrorBoundary, scheduled for rebuild"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Rebuilds all dirty elements using parallel execution (when feature enabled)

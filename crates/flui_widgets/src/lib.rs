@@ -64,12 +64,8 @@
 // pub mod visual_effects;
 
 // // Re-exports for convenient top-level access
-// // Essential widgets for Container and Flex layout
-// pub use basic::{
-//     Align, AppBar, AspectRatio, Builder, Button, Card, Center, ColoredBox, ConstrainedBox,
-//     Container, CustomPaint, DecoratedBox, Divider, FittedBox, LayoutBuilder, LimitedBox, Padding,
-//     SafeArea, SizedBox, Text, VerticalDivider,
-// };
+// // Just Text for now
+// pub use basic::Text;
 // pub use gestures::GestureDetector;
 // pub use interaction::{AbsorbPointer, IgnorePointer, MouseRegion};
 // pub use layout::{

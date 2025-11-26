@@ -12,6 +12,8 @@ flui_app = { path = "../../crates/flui_app", features = ["pretty-logs"] }
 flui_widgets = { path = "../../crates/flui_widgets" }
 flui_core = { path = "../../crates/flui_core" }
 flui_types = { path = "../../crates/flui_types" }
+flui-view = { path = "../../crates/flui-view" }
+flui_rendering = { path = "../../crates/flui_rendering" }
 
 # Logging
 tracing = "0.1"

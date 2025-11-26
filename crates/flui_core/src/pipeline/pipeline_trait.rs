@@ -32,8 +32,8 @@
 
 use super::RebuildQueue;
 use flui_element::{Element, ElementTree};
-use flui_engine::CanvasLayer;
 use flui_foundation::ElementId;
+use flui_painting::Canvas;
 use flui_pipeline::PipelineError;
 use flui_types::{constraints::BoxConstraints, Size};
 use parking_lot::RwLock;
@@ -129,14 +129,14 @@ pub trait Pipeline: Send + Sync {
 
     /// Flush the paint phase
     ///
-    /// Generates layer tree for all dirty RenderElements.
+    /// Generates canvas with drawing commands for all dirty RenderElements.
     ///
     /// # Returns
     ///
-    /// - `Ok(Some(layer))`: Paint succeeded, returns root layer
+    /// - `Ok(Some(canvas))`: Paint succeeded, returns root canvas
     /// - `Ok(None)`: No root element or tree is empty
     /// - `Err(e)`: Paint error occurred
-    fn flush_paint(&self) -> Result<Option<Box<CanvasLayer>>, PipelineError>;
+    fn flush_paint(&self) -> Result<Option<Canvas>, PipelineError>;
 
     // =========================================================================
     // Complete Frame (All Phases)
@@ -166,8 +166,9 @@ pub trait Pipeline: Send + Sync {
     /// ```rust,ignore
     /// let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
     /// match pipeline.build_frame(constraints) {
-    ///     Ok(Some(layer)) => {
-    ///         // Render layer to GPU
+    ///     Ok(Some(canvas)) => {
+    ///         // Wrap in CanvasLayer and render to GPU
+    ///         let layer = CanvasLayer::from_canvas(canvas);
     ///         renderer.render(&layer);
     ///     }
     ///     Ok(None) => {
@@ -181,7 +182,7 @@ pub trait Pipeline: Send + Sync {
     fn build_frame(
         &self,
         constraints: BoxConstraints,
-    ) -> Result<Option<Box<CanvasLayer>>, PipelineError>;
+    ) -> Result<Option<Canvas>, PipelineError>;
 
     // =========================================================================
     // Dirty Tracking
@@ -251,14 +252,14 @@ impl Pipeline for Arc<RwLock<PipelineOwner>> {
         self.write().flush_layout(constraints)
     }
 
-    fn flush_paint(&self) -> Result<Option<Box<CanvasLayer>>, PipelineError> {
+    fn flush_paint(&self) -> Result<Option<Canvas>, PipelineError> {
         self.write().flush_paint()
     }
 
     fn build_frame(
         &self,
         constraints: BoxConstraints,
-    ) -> Result<Option<Box<CanvasLayer>>, PipelineError> {
+    ) -> Result<Option<Canvas>, PipelineError> {
         self.write().build_frame(constraints)
     }
 

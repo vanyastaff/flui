@@ -153,17 +153,17 @@ impl FrameCoordinator {
 
     /// Extract root element's layer after paint
     ///
-    /// Helper method to retrieve the painted layer from a RenderElement.
+    /// Helper method to retrieve the painted canvas from a RenderElement.
     /// Walks down through ComponentElements to find the first RenderElement child.
     ///
     /// TODO: Re-implement when paint_render_object returns proper Canvas type
-    fn extract_root_layer(
+    fn extract_root_canvas(
         _tree_guard: &ElementTree,
         root_id: Option<ElementId>,
-    ) -> Option<Box<flui_engine::CanvasLayer>> {
-        // Stub: paint_render_object returns CanvasLayer, not Canvas
+    ) -> Option<flui_painting::Canvas> {
+        // Stub: paint_render_object returns Canvas
         match root_id {
-            Some(_) => Some(Box::new(flui_engine::CanvasLayer::new())),
+            Some(_) => Some(flui_painting::Canvas::new()),
             None => None,
         }
     }
@@ -177,7 +177,7 @@ impl FrameCoordinator {
         tree: &Arc<RwLock<ElementTree>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+    ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         // Start frame and reset budget
         self.budget.lock().reset();
 
@@ -311,8 +311,8 @@ impl FrameCoordinator {
                 tracing::debug!(count, "Paint complete");
             }
 
-            // Get root element's layer
-            Self::extract_root_layer(&tree_guard, root_id)
+            // Get root element's canvas
+            Self::extract_root_canvas(&tree_guard, root_id)
         };
 
         // Finish frame and update metrics
@@ -375,7 +375,7 @@ impl FrameCoordinator {
         tree: &Arc<RwLock<ElementTree>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+    ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         // Create frame span for hierarchical logging
         let frame_span = tracing::info_span!("frame", ?constraints);
         let _frame_guard = frame_span.enter();
@@ -392,7 +392,7 @@ impl FrameCoordinator {
         tree: &Arc<RwLock<ElementTree>>,
         root_id: Option<ElementId>,
         constraints: BoxConstraints,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+    ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         self.build_frame_impl(tree, root_id, constraints)
     }
 
@@ -474,27 +474,27 @@ impl FrameCoordinator {
         &mut self,
         tree: &Arc<RwLock<ElementTree>>,
         root_id: Option<ElementId>,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+    ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         let mut tree_guard = tree.write();
 
         // Process all dirty render objects
         let _count = self.paint.generate_layers(&mut tree_guard)?;
 
-        // Get root element's layer
+        // Get root element's canvas
         // TODO: Phase 5 - Re-implement once Element properly supports RenderViewObject
-        // Currently paint_render_object is a stub that returns false, so we return an empty layer.
-        let layer = match root_id {
+        // Currently paint_render_object is a stub that returns false, so we return an empty canvas.
+        let canvas = match root_id {
             Some(id) => {
                 let offset = flui_types::Offset::ZERO;
                 // paint_render_object returns bool (stub: always false)
-                // Future: This should return the actual painted layer
+                // Future: This should return the actual painted canvas
                 let _painted = tree_guard.paint_render_object(id, offset);
-                Some(Box::new(flui_engine::CanvasLayer::new()))
+                Some(flui_painting::Canvas::new())
             }
             None => None,
         };
 
-        Ok(layer)
+        Ok(canvas)
     }
 }
 
@@ -515,7 +515,7 @@ impl flui_pipeline::PipelineCoordinator for FrameCoordinator {
     type Tree = Arc<RwLock<ElementTree>>;
     type Constraints = BoxConstraints;
     type Size = flui_types::Size;
-    type Layer = Box<flui_engine::CanvasLayer>;
+    type Layer = flui_painting::Canvas;
 
     fn config(&self) -> &flui_pipeline::CoordinatorConfig {
         // Return a static default config - real config is in FrameBudget

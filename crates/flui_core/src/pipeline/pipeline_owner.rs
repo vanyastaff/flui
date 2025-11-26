@@ -401,7 +401,7 @@ impl PipelineOwner {
     }
 
     /// Flush the paint phase
-    pub fn flush_paint(&mut self) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+    pub fn flush_paint(&mut self) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         let root_id = self.root_mgr.root_id();
         self.coordinator.flush_paint(&self.tree, root_id)
     }
@@ -410,7 +410,7 @@ impl PipelineOwner {
     pub fn build_frame(
         &mut self,
         constraints: flui_types::constraints::BoxConstraints,
-    ) -> Result<Option<Box<flui_engine::CanvasLayer>>, PipelineError> {
+    ) -> Result<Option<flui_painting::Canvas>, PipelineError> {
         self.frame_counter += 1;
         let root_id = self.root_mgr.root_id();
         self.coordinator

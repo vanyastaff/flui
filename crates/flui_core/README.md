@@ -1,51 +1,70 @@
 # flui_core
 
-Core reactive UI framework for FLUI - implements the three-tree architecture (View → Element → Render) with Flutter-inspired lifecycle management.
+Core framework implementation for FLUI - provides concrete implementations of abstract traits from the foundation and framework layers.
 
 ## Overview
 
-`flui_core` is the heart of FLUI, providing:
+`flui_core` serves as the integration hub for FLUI's modular architecture:
 
-- **View System** - Declarative UI descriptions with specialized traits
-- **Element Tree** - Mutable element lifecycle management with unified architecture
-- **Render Protocol** - Layout and paint abstraction layer
-- **Pipeline** - Coordinated build/layout/paint phases
-- **Hooks** - React-like state management (thread-safe)
+- **Pipeline Implementation** - Concrete implementations of `flui-pipeline` traits
+- **Element Tree** - Element lifecycle management using `flui-tree` abstractions
+- **Hook Integration** - Bridges `flui-reactivity` with the view system
+- **Build Coordination** - Orchestrates build/layout/paint phases
+- **Performance Optimization** - Production-ready implementations with metrics
 
 ## Architecture
 
-### Three-Tree System
+### Modular Integration
+
+`flui_core` integrates multiple specialized crates:
 
 ```
-View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
-     └─ Views                 └─ Elements              └─ RenderObjects
-        StatelessView            ViewObject              LeafRender
-        StatefulView             RenderViewWrapper       SingleRender
-        RenderView               ProviderViewWrapper     MultiRender
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   flui-view     │    │ flui-pipeline   │    │ flui-reactivity │
+│  (abstractions) │    │   (traits)      │    │   (signals)     │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 │
+                    ┌─────────────▼─────────────┐
+                    │        flui_core          │
+                    │   (concrete impls)        │
+                    └───────────────────────────┘
 ```
 
-### Unified Element (v0.7.0)
+### Pipeline Implementation
 
-FLUI uses a **unified Element struct** where all type-specific behavior is delegated to `ViewObject`:
+Concrete implementations of abstract pipeline traits:
 
 ```rust
-pub struct Element {
-    parent: Option<ElementId>,
-    children: Vec<ElementId>,
-    lifecycle: ElementLifecycle,
-    view_object: Box<dyn ViewObject>,
+use flui_pipeline::{BuildPhase, LayoutPhase, PaintPhase};
+use flui_core::pipeline::{BuildPipeline, LayoutPipeline, PaintPipeline};
+
+// Abstract trait → Concrete implementation
+impl BuildPhase for BuildPipeline {
+    type Tree = ElementTree;
+    
+    fn schedule(&mut self, element_id: ElementId) {
+        self.dirty_elements.insert(element_id);
+    }
 }
 ```
 
-**Benefits:**
-- Single struct instead of enum - no dispatch overhead
-- Extensible - add new view types without changing Element
-- Flutter-like architecture with Rust idioms
-- Clean separation of concerns
+### Element Tree Management
 
-### ViewObject Trait
+Uses `flui-tree` abstractions with concrete storage:
 
-The `ViewObject` trait provides dynamic dispatch for view lifecycle:
+```rust
+use flui_tree::TreeVisitor;
+use flui_core::element::ElementTree;
+
+let mut tree = ElementTree::new();
+tree.visit_depth_first(&mut visitor);
+```
+
+### Reactive Integration
+
+Bridges `flui-reactivity` with the UI system:
 
 ```rust
 pub trait ViewObject: Send {

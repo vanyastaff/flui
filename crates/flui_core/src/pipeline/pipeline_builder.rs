@@ -222,12 +222,10 @@ impl PipelineBuilder {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use flui_engine::ContainerLayer;
-    /// use std::sync::Arc;
+    /// use flui_painting::Canvas;
     ///
-    /// let initial = Arc::new(Box::new(ContainerLayer::new()) as crate::BoxedLayer);
     /// let owner = PipelineBuilder::new()
-    ///     .with_frame_buffer(initial)
+    ///     .with_frame_buffer()
     ///     .build();
     /// ```
     #[must_use]

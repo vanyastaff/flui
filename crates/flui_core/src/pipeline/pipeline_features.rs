@@ -26,8 +26,8 @@
 //! owner.set_features(features);
 //! ```
 
-use flui_engine::CanvasLayer;
 use flui_interaction::HitTestResult;
+use flui_painting::Canvas;
 use flui_pipeline::{
     CancellationToken, ErrorRecovery, PipelineMetrics, RecoveryPolicy, TripleBuffer,
 };
@@ -162,8 +162,8 @@ pub struct PipelineFeatures {
     ///
     /// Enables producer (pipeline) and consumer (renderer) to exchange frames
     /// without locks. Useful for multi-threaded rendering.
-    #[allow(clippy::redundant_allocation)]
-    frame_buffer: Option<TripleBuffer<Arc<Box<CanvasLayer>>>>,
+    /// The renderer can wrap Canvas in CanvasLayer as needed.
+    frame_buffer: Option<TripleBuffer<Arc<Canvas>>>,
 
     /// Hit test cache (optional)
     ///
@@ -293,10 +293,10 @@ impl PipelineFeatures {
     /// to exchange frames without blocking. The producer writes to a back buffer
     /// while the consumer reads from a front buffer.
     pub fn enable_frame_buffer(&mut self) {
-        // Create empty initial layers for triple buffer (requires 3)
-        let a = Arc::new(Box::new(CanvasLayer::new()));
-        let b = Arc::new(Box::new(CanvasLayer::new()));
-        let c = Arc::new(Box::new(CanvasLayer::new()));
+        // Create empty initial canvases for triple buffer (requires 3)
+        let a = Arc::new(Canvas::new());
+        let b = Arc::new(Canvas::new());
+        let c = Arc::new(Canvas::new());
         self.frame_buffer = Some(TripleBuffer::new(a, b, c));
     }
 
@@ -311,12 +311,12 @@ impl PipelineFeatures {
     }
 
     /// Get reference to frame buffer (if enabled)
-    pub fn frame_buffer(&self) -> Option<&TripleBuffer<Arc<Box<CanvasLayer>>>> {
+    pub fn frame_buffer(&self) -> Option<&TripleBuffer<Arc<Canvas>>> {
         self.frame_buffer.as_ref()
     }
 
     /// Get mutable reference to frame buffer (if enabled)
-    pub fn frame_buffer_mut(&mut self) -> Option<&mut TripleBuffer<Arc<Box<CanvasLayer>>>> {
+    pub fn frame_buffer_mut(&mut self) -> Option<&mut TripleBuffer<Arc<Canvas>>> {
         self.frame_buffer.as_mut()
     }
 

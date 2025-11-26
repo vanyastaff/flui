@@ -121,8 +121,8 @@ impl RootManager {
     ) -> ElementId {
         let mut tree_guard = tree.write();
 
-        // Mount the element (no parent, slot 0)
-        root_element.mount(None, Some(Slot::new(0)));
+        // Mount the element (no parent, slot 0, depth 0 for root)
+        root_element.mount(None, Some(Slot::new(0)), 0);
 
         // Insert into tree
         let id = tree_guard.insert(root_element);
