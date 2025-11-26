@@ -89,7 +89,14 @@
 #![allow(
     clippy::module_name_repetitions,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use
+    clippy::return_self_not_must_use,
+    clippy::doc_markdown, // TODO: Add backticks around type names in documentation
+    clippy::redundant_closure_for_method_calls,
+    clippy::map_unwrap_or,
+    clippy::missing_fields_in_debug,
+    clippy::needless_pass_by_value,
+    clippy::explicit_iter_loop,
+    clippy::module_inception
 )]
 
 // ============================================================================

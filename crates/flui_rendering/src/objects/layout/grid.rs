@@ -1,7 +1,7 @@
 //! RenderGrid - CSS Grid-inspired layout
 
 use crate::core::{
-    BoxProtocol, LayoutContext, LayoutTree, PaintContext, PaintTree, RenderBox, Variable,
+    BoxProtocol, LayoutContext, LayoutTree, PaintContext, RenderBox, Variable,
 };
 use flui_types::{BoxConstraints, Offset, Size};
 use std::collections::HashMap;
