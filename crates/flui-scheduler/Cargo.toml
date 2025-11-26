@@ -10,8 +10,8 @@ description = "Frame scheduling, task prioritization, and animation coordination
 keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
 
 [dependencies]
-# Cross-platform time
-instant = "0.1"
+# Cross-platform time (web-time is the maintained replacement for instant)
+web-time = "1.1"
 
 # Thread-safe synchronization
 parking_lot.workspace = true

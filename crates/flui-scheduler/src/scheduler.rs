@@ -13,7 +13,7 @@ use crate::frame::{
 };
 use crate::task::{Priority, TaskQueue};
 use crate::ticker::TickerProvider;
-use instant::Instant;
+use web_time::Instant;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

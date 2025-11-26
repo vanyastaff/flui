@@ -3,7 +3,7 @@
 //! Tracks time spent in each phase and enforces budget limits to maintain
 //! target framerate (e.g., 16.67ms for 60fps).
 
-use instant::Instant;
+use web_time::Instant;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

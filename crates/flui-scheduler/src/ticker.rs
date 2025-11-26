@@ -4,7 +4,7 @@
 //! They coordinate with the scheduler to ensure animations stay synchronized with
 //! the display refresh rate.
 
-use instant::Instant;
+use web_time::Instant;
 use parking_lot::Mutex;
 use std::sync::Arc;
 

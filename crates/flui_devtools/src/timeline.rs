@@ -33,7 +33,7 @@
 //! // Load trace.json in chrome://tracing
 //! ```
 
-use instant::{Duration, Instant};
+use web_time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

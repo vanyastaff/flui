@@ -10,8 +10,8 @@ description = "Developer tools for FLUI - profiling, debugging, hot reload, and 
 
 [dependencies]
 
-# Timing and performance
-instant = "0.1"
+# Timing and performance (web-time is the maintained replacement for instant)
+web-time = "1.1"
 
 # Serialization (for devtools protocol)
 serde = { workspace = true }

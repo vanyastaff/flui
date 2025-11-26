@@ -47,7 +47,7 @@
 //! ```
 
 use crate::common::DevToolsConfig;
-use instant::{Duration, Instant};
+use web_time::{Duration, Instant};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;

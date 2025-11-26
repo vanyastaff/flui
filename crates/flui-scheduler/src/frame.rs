@@ -5,7 +5,7 @@
 //! VSync → BeginFrame → Build → Layout → Paint → EndFrame → Present
 //! ```
 
-use instant::Instant;
+use web_time::Instant;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

@@ -3,7 +3,7 @@
 //! Ensures frames are presented at the right time to avoid tearing and
 //! maintain smooth animation.
 
-use instant::Instant;
+use web_time::Instant;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
