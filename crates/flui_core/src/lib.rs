@@ -26,6 +26,7 @@
 // Internal Modules
 // =============================================================================
 
+pub mod error_handling;
 pub mod pipeline;
 pub mod prelude;
 
