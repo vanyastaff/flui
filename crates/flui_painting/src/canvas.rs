@@ -160,21 +160,6 @@ impl Canvas {
         self.transform *= scaling;
     }
 
-    /// Scales the coordinate system.
-    ///
-    /// # Arguments
-    ///
-    /// * `sx` - Horizontal scale factor
-    /// * `sy` - Vertical scale factor (defaults to sx if None)
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use `scale_uniform()` or `scale_xy()` instead"
-    )]
-    pub fn scale(&mut self, sx: f32, sy: Option<f32>) {
-        let sy = sy.unwrap_or(sx);
-        self.scale_xy(sx, sy);
-    }
-
     /// Rotates the coordinate system around the origin.
     ///
     /// # Arguments
@@ -315,14 +300,6 @@ impl Canvas {
     #[must_use]
     pub fn transform_matrix(&self) -> Matrix4 {
         self.transform
-    }
-
-    /// Returns the current transform matrix.
-    #[deprecated(since = "0.2.0", note = "Use `transform_matrix()` instead")]
-    #[inline]
-    #[must_use]
-    pub fn get_transform(&self) -> Matrix4 {
-        self.transform_matrix()
     }
 
     // ===== Save/Restore =====
@@ -650,14 +627,6 @@ impl Canvas {
         })
     }
 
-    /// Returns the local-space bounds of the current clip, if available.
-    #[deprecated(since = "0.2.0", note = "Use `local_clip_bounds()` instead")]
-    #[inline]
-    #[must_use]
-    pub fn get_local_clip_bounds(&self) -> Option<Rect> {
-        self.local_clip_bounds()
-    }
-
     /// Returns the device-space (transformed) bounds of the current clip, if available.
     ///
     /// This applies the current transformation matrix to the clip bounds.
@@ -679,14 +648,6 @@ impl Canvas {
     pub fn device_clip_bounds(&self) -> Option<Rect> {
         self.local_clip_bounds()
             .map(|local_bounds| self.transform.transform_rect(&local_bounds))
-    }
-
-    /// Returns the device-space (transformed) bounds of the current clip, if available.
-    #[deprecated(since = "0.2.0", note = "Use `device_clip_bounds()` instead")]
-    #[inline]
-    #[must_use]
-    pub fn get_device_clip_bounds(&self) -> Option<Rect> {
-        self.device_clip_bounds()
     }
 
     /// Checks if the given rectangle is completely outside the current clip bounds.
