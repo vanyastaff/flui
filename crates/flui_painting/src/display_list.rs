@@ -20,7 +20,10 @@ use flui_types::{
 use std::sync::Arc;
 
 // Re-export types that are part of the public API
-pub use flui_types::painting::{BlendMode, Paint, PointMode, Shader};
+pub use flui_types::painting::{
+    effects::ImageFilter, image::ColorFilter, image::ImageRepeat, BlendMode, FilterQuality, Paint,
+    PointMode, Shader, TextureId,
+};
 
 /// Handler for pointer events in a hit region
 ///
@@ -180,6 +183,157 @@ impl DisplayList {
         self.commands.is_empty()
     }
 
+    /// Returns an iterator over mutable command references.
+    pub fn commands_mut(&mut self) -> impl Iterator<Item = &mut DrawCommand> {
+        self.commands.iter_mut()
+    }
+
+    /// Returns only drawing commands (excludes clips, layers, effects).
+    pub fn draw_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands.iter().filter(|cmd| cmd.is_draw())
+    }
+
+    /// Returns only clipping commands.
+    pub fn clip_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands.iter().filter(|cmd| cmd.is_clip())
+    }
+
+    /// Returns only shape commands (rect, circle, path, etc).
+    pub fn shape_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands.iter().filter(|cmd| cmd.is_shape())
+    }
+
+    /// Returns only image/texture commands.
+    pub fn image_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands.iter().filter(|cmd| cmd.is_image())
+    }
+
+    /// Returns only text commands.
+    pub fn text_commands(&self) -> impl Iterator<Item = &DrawCommand> {
+        self.commands.iter().filter(|cmd| cmd.is_text())
+    }
+
+    /// Counts commands by kind.
+    ///
+    /// Returns a tuple of (draw, clip, effect, layer) counts.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let (draws, clips, effects, layers) = display_list.count_by_kind();
+    /// println!("Draw commands: {}", draws);
+    /// ```
+    pub fn count_by_kind(&self) -> (usize, usize, usize, usize) {
+        let mut draw = 0;
+        let mut clip = 0;
+        let mut effect = 0;
+        let mut layer = 0;
+
+        for cmd in &self.commands {
+            match cmd.kind() {
+                CommandKind::Draw => draw += 1,
+                CommandKind::Clip => clip += 1,
+                CommandKind::Effect => effect += 1,
+                CommandKind::Layer => layer += 1,
+            }
+        }
+
+        (draw, clip, effect, layer)
+    }
+
+    /// Returns statistics about this display list.
+    pub fn stats(&self) -> DisplayListStats {
+        let (draw, clip, effect, layer) = self.count_by_kind();
+        let shapes = self.commands.iter().filter(|c| c.is_shape()).count();
+        let images = self.commands.iter().filter(|c| c.is_image()).count();
+        let text = self.commands.iter().filter(|c| c.is_text()).count();
+
+        DisplayListStats {
+            total: self.commands.len(),
+            draw,
+            clip,
+            effect,
+            layer,
+            shapes,
+            images,
+            text,
+            hit_regions: self.hit_regions.len(),
+        }
+    }
+
+    /// Applies a transform to all commands in this display list.
+    ///
+    /// Modifies commands in-place. Useful for positioning cached display lists.
+    pub fn apply_transform(&mut self, transform: Matrix4) {
+        for cmd in &mut self.commands {
+            cmd.apply_transform(transform);
+        }
+        // Recalculate bounds
+        self.recalculate_bounds();
+    }
+
+    /// Recalculates the bounds from all commands.
+    fn recalculate_bounds(&mut self) {
+        self.bounds = Rect::ZERO;
+        for cmd in &self.commands {
+            if let Some(cmd_bounds) = cmd.bounds() {
+                if self.bounds == Rect::ZERO {
+                    self.bounds = cmd_bounds;
+                } else {
+                    self.bounds = self.bounds.union(&cmd_bounds);
+                }
+            }
+        }
+    }
+
+    /// Filters commands, keeping only those that satisfy the predicate.
+    ///
+    /// Returns a new DisplayList with filtered commands.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Keep only shape commands
+    /// let shapes_only = display_list.filter(|cmd| cmd.is_shape());
+    /// ```
+    pub fn filter<F>(&self, predicate: F) -> Self
+    where
+        F: Fn(&DrawCommand) -> bool,
+    {
+        let commands: Vec<_> = self
+            .commands
+            .iter()
+            .filter(|cmd| predicate(cmd))
+            .cloned()
+            .collect();
+
+        let mut result = Self {
+            commands,
+            bounds: Rect::ZERO,
+            hit_regions: self.hit_regions.clone(),
+        };
+        result.recalculate_bounds();
+        result
+    }
+
+    /// Maps each command through a function.
+    ///
+    /// Returns a new DisplayList with transformed commands.
+    pub fn map<F>(&self, f: F) -> Self
+    where
+        F: Fn(&DrawCommand) -> DrawCommand,
+    {
+        let commands: Vec<_> = self.commands.iter().map(f).collect();
+
+        let mut result = Self {
+            commands,
+            bounds: Rect::ZERO,
+            hit_regions: self.hit_regions.clone(),
+        };
+        result.recalculate_bounds();
+        result
+    }
+
     /// Clears all commands and hit regions (for pooling/reuse)
     pub fn clear(&mut self) {
         self.commands.clear();
@@ -271,6 +425,41 @@ impl DisplayList {
 impl Default for DisplayList {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Statistics about a DisplayList's contents.
+///
+/// Returned by `DisplayList::stats()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DisplayListStats {
+    /// Total number of commands
+    pub total: usize,
+    /// Number of drawing commands
+    pub draw: usize,
+    /// Number of clipping commands
+    pub clip: usize,
+    /// Number of effect commands
+    pub effect: usize,
+    /// Number of layer commands
+    pub layer: usize,
+    /// Number of shape commands (subset of draw)
+    pub shapes: usize,
+    /// Number of image/texture commands (subset of draw)
+    pub images: usize,
+    /// Number of text commands (subset of draw)
+    pub text: usize,
+    /// Number of hit regions
+    pub hit_regions: usize,
+}
+
+impl std::fmt::Display for DisplayListStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "DisplayList: {} commands ({} shapes, {} images, {} text, {} clips, {} effects, {} layers), {} hit regions",
+            self.total, self.shapes, self.images, self.text, self.clip, self.effect, self.layer, self.hit_regions
+        )
     }
 }
 
@@ -423,6 +612,85 @@ pub enum DrawCommand {
         transform: Matrix4,
     },
 
+    /// Draw an image with repeat (tiling)
+    ///
+    /// Tiles the image to fill the destination rectangle based on repeat mode.
+    DrawImageRepeat {
+        /// Image to tile
+        image: Image,
+        /// Destination rectangle to fill
+        dst: Rect,
+        /// How to repeat the image
+        repeat: ImageRepeat,
+        /// Optional paint (for tinting, opacity, etc.)
+        paint: Option<Paint>,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Draw an image with 9-slice/9-patch scaling
+    ///
+    /// Draws the image with a center slice that scales while corners and edges
+    /// are drawn at their natural size. This is useful for resizable UI elements
+    /// like buttons, panels, and chat bubbles.
+    DrawImageNineSlice {
+        /// Image to draw
+        image: Image,
+        /// Center slice rectangle within the image (in image coordinates)
+        /// This area will be scaled; areas outside will maintain their size
+        center_slice: Rect,
+        /// Destination rectangle
+        dst: Rect,
+        /// Optional paint (for tinting, opacity, etc.)
+        paint: Option<Paint>,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Draw an image with a color filter
+    ///
+    /// Applies a color filter (tint, grayscale, sepia, etc.) when drawing.
+    DrawImageFiltered {
+        /// Image to draw
+        image: Image,
+        /// Destination rectangle
+        dst: Rect,
+        /// Color filter to apply
+        filter: ColorFilter,
+        /// Optional paint (for additional effects)
+        paint: Option<Paint>,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    // === Texture ===
+    /// Draw a GPU texture referenced by ID
+    ///
+    /// This command renders an external GPU texture (e.g., video frame,
+    /// camera preview, platform view) to the destination rectangle.
+    /// The texture must be registered with the rendering engine before use.
+    ///
+    /// # Use Cases
+    ///
+    /// - Video playback (decoder output)
+    /// - Camera preview streams
+    /// - External rendering contexts
+    /// - Platform views (native UI embedded in FLUI)
+    DrawTexture {
+        /// GPU texture identifier
+        texture_id: TextureId,
+        /// Destination rectangle
+        dst: Rect,
+        /// Source rectangle within the texture (None = entire texture)
+        src: Option<Rect>,
+        /// Filter quality for texture sampling
+        filter_quality: FilterQuality,
+        /// Opacity (0.0 = transparent, 1.0 = opaque)
+        opacity: f32,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
     // === Effects ===
     /// Draw a shadow
     DrawShadow {
@@ -432,6 +700,102 @@ pub enum DrawCommand {
         color: Color,
         /// Elevation (blur amount)
         elevation: f32,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    // === Gradient Drawing Commands ===
+    /// Draw a gradient-filled rectangle
+    ///
+    /// This command renders a rectangle filled with the specified gradient shader.
+    /// Supports linear, radial, and sweep gradients.
+    DrawGradient {
+        /// Rectangle to fill
+        rect: Rect,
+        /// Gradient shader
+        shader: Shader,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Draw a gradient-filled rounded rectangle
+    ///
+    /// This command renders a rounded rectangle filled with the specified gradient.
+    DrawGradientRRect {
+        /// Rounded rectangle to fill
+        rrect: RRect,
+        /// Gradient shader
+        shader: Shader,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Apply a shader as a mask to child content
+    ///
+    /// This command wraps a sub-DisplayList (child content) and applies a shader
+    /// as an alpha mask. The shader determines the opacity at each pixel.
+    ///
+    /// # Shader Types
+    ///
+    /// - **Linear Gradient**: Fade along a line (e.g., fade-out edges)
+    /// - **Radial Gradient**: Circular fade (e.g., vignette effect)
+    /// - **Solid Color**: Uniform opacity mask
+    ///
+    /// # Example Use Cases
+    ///
+    /// - Image fade-out at edges
+    /// - Vignette effects
+    /// - Gradient overlays
+    /// - Custom masking effects
+    ///
+    /// # Architecture
+    ///
+    /// ```text
+    /// Canvas::draw_shader_mask() → DisplayList::push(ShaderMask)
+    ///     ↓
+    /// CommandRenderer → OffscreenRenderer.render_masked()
+    ///     ↓
+    /// GPU shader execution
+    /// ```
+    ShaderMask {
+        /// Child content to be masked (recorded commands)
+        child: Box<DisplayList>,
+        /// Shader specification (gradient type, colors, etc.)
+        shader: Shader,
+        /// Bounds of the masked region
+        bounds: Rect,
+        /// Blend mode for final compositing
+        blend_mode: BlendMode,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Backdrop filter effect (frosted glass, blur)
+    ///
+    /// Applies an image filter to the backdrop content behind this layer.
+    /// Common use cases:
+    /// - Frosted glass effect (blur + transparency)
+    /// - Background blur for modals
+    /// - Color adjustments to backdrop
+    ///
+    /// # Architecture
+    ///
+    /// ```text
+    /// Canvas::draw_backdrop_filter() → DisplayList::push(BackdropFilter)
+    ///     ↓
+    /// CommandRenderer → capture framebuffer → apply filter → composite
+    ///     ↓
+    /// GPU filter execution (compute shader for blur)
+    /// ```
+    BackdropFilter {
+        /// Child content to render on top of filtered backdrop (optional)
+        child: Option<Box<DisplayList>>,
+        /// Image filter to apply (blur, color adjustments, etc.)
+        filter: ImageFilter,
+        /// Bounds for backdrop capture
+        bounds: Rect,
+        /// Blend mode for final compositing
+        blend_mode: BlendMode,
         /// Transform at recording time
         transform: Matrix4,
     },
@@ -518,6 +882,55 @@ pub enum DrawCommand {
         /// Optional paint for additional effects
         paint: Option<Paint>,
         /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    // === Layer Commands ===
+    /// Save the current canvas state and create a new compositing layer
+    ///
+    /// This is similar to `save()` but creates an offscreen buffer for the
+    /// subsequent drawing commands. When `RestoreLayer` is called, the layer
+    /// is composited back with the specified paint settings (opacity, blend mode, etc.).
+    ///
+    /// # Use Cases
+    ///
+    /// - **Opacity effects**: Apply uniform transparency to a group of drawings
+    /// - **Blend modes**: Apply complex blending to multiple overlapping elements
+    /// - **Anti-aliasing**: Get clean edges when clipping overlapping content
+    ///
+    /// # Performance
+    ///
+    /// `SaveLayer` is relatively expensive because it:
+    /// 1. Forces GPU to switch render targets
+    /// 2. Allocates an offscreen buffer
+    /// 3. Requires copying framebuffer contents
+    ///
+    /// Use sparingly, especially on lower-end hardware.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Draw a group of shapes at 50% opacity
+    /// canvas.save_layer(bounds, Paint::new().with_opacity(0.5));
+    /// canvas.draw_rect(rect1, &red_paint);
+    /// canvas.draw_rect(rect2, &blue_paint);
+    /// canvas.restore(); // Composites the layer at 50% opacity
+    /// ```
+    SaveLayer {
+        /// Bounds of the layer (None = unbounded, clips to current clip)
+        bounds: Option<Rect>,
+        /// Paint to apply when compositing the layer (opacity, blend mode, etc.)
+        paint: Paint,
+        /// Transform at recording time
+        transform: Matrix4,
+    },
+
+    /// Restore the canvas state and composite the saved layer
+    ///
+    /// This pops the save stack and composites the layer created by `SaveLayer`
+    /// using the paint settings specified when the layer was saved.
+    RestoreLayer {
+        /// Transform at recording time (for consistency)
         transform: Matrix4,
     },
 }
@@ -692,6 +1105,60 @@ impl DrawCommand {
                 paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
                 transform: *transform,
             },
+            DrawCommand::DrawImageRepeat {
+                image,
+                dst,
+                repeat,
+                paint,
+                transform,
+            } => DrawCommand::DrawImageRepeat {
+                image: image.clone(),
+                dst: *dst,
+                repeat: *repeat,
+                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                transform: *transform,
+            },
+            DrawCommand::DrawImageNineSlice {
+                image,
+                center_slice,
+                dst,
+                paint,
+                transform,
+            } => DrawCommand::DrawImageNineSlice {
+                image: image.clone(),
+                center_slice: *center_slice,
+                dst: *dst,
+                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                transform: *transform,
+            },
+            DrawCommand::DrawImageFiltered {
+                image,
+                dst,
+                filter,
+                paint,
+                transform,
+            } => DrawCommand::DrawImageFiltered {
+                image: image.clone(),
+                dst: *dst,
+                filter: *filter,
+                paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
+                transform: *transform,
+            },
+            DrawCommand::DrawTexture {
+                texture_id,
+                dst,
+                src,
+                filter_quality,
+                opacity: tex_opacity,
+                transform,
+            } => DrawCommand::DrawTexture {
+                texture_id: *texture_id,
+                dst: *dst,
+                src: *src,
+                filter_quality: *filter_quality,
+                opacity: *tex_opacity * opacity,
+                transform: *transform,
+            },
             DrawCommand::DrawAtlas {
                 image,
                 sprites,
@@ -709,10 +1176,68 @@ impl DrawCommand {
                 paint: paint.as_ref().map(|p| p.clone().with_opacity(opacity)),
                 transform: *transform,
             },
+            DrawCommand::DrawGradient {
+                rect,
+                shader,
+                transform,
+            } => DrawCommand::DrawGradient {
+                rect: *rect,
+                shader: shader.clone(),
+                transform: *transform,
+            },
+            DrawCommand::DrawGradientRRect {
+                rrect,
+                shader,
+                transform,
+            } => DrawCommand::DrawGradientRRect {
+                rrect: *rrect,
+                shader: shader.clone(),
+                transform: *transform,
+            },
+            DrawCommand::ShaderMask {
+                child,
+                shader,
+                bounds,
+                blend_mode,
+                transform,
+            } => DrawCommand::ShaderMask {
+                child: Box::new(child.with_opacity(opacity)),
+                shader: shader.clone(),
+                bounds: *bounds,
+                blend_mode: *blend_mode,
+                transform: *transform,
+            },
+            DrawCommand::BackdropFilter {
+                child,
+                filter,
+                bounds,
+                blend_mode,
+                transform,
+            } => DrawCommand::BackdropFilter {
+                child: child.as_ref().map(|c| Box::new(c.with_opacity(opacity))),
+                filter: filter.clone(),
+                bounds: *bounds,
+                blend_mode: *blend_mode,
+                transform: *transform,
+            },
             // Clipping commands don't have paint, return unchanged
             DrawCommand::ClipRect { .. }
             | DrawCommand::ClipRRect { .. }
             | DrawCommand::ClipPath { .. } => self.clone(),
+
+            // Layer commands
+            DrawCommand::SaveLayer {
+                bounds,
+                paint,
+                transform,
+            } => DrawCommand::SaveLayer {
+                bounds: *bounds,
+                paint: paint.clone().with_opacity(opacity),
+                transform: *transform,
+            },
+            DrawCommand::RestoreLayer { transform } => DrawCommand::RestoreLayer {
+                transform: *transform,
+            },
         }
     }
 
@@ -764,6 +1289,16 @@ impl DrawCommand {
                 Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawImage { dst, transform, .. } => Some(transform.transform_rect(dst)),
+            DrawCommand::DrawImageRepeat { dst, transform, .. } => {
+                Some(transform.transform_rect(dst))
+            }
+            DrawCommand::DrawImageNineSlice { dst, transform, .. } => {
+                Some(transform.transform_rect(dst))
+            }
+            DrawCommand::DrawImageFiltered { dst, transform, .. } => {
+                Some(transform.transform_rect(dst))
+            }
+            DrawCommand::DrawTexture { dst, transform, .. } => Some(transform.transform_rect(dst)),
             DrawCommand::DrawLine {
                 p1,
                 p2,
@@ -779,19 +1314,25 @@ impl DrawCommand {
                 let local_bounds = Rect::from_ltrb(min_x, min_y, max_x, max_y);
                 Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawPath { .. } => {
-                // Path bounds calculation requires mutable access
-                // We'll compute DisplayList bounds without Path bounds for now
-                None
+            DrawCommand::DrawPath {
+                path,
+                paint,
+                transform,
+            } => {
+                // Use compute_bounds() which works with &self
+                let outset = paint.effective_stroke_width() * 0.5;
+                let local_bounds = path.compute_bounds().expand(outset);
+                Some(transform.transform_rect(&local_bounds))
             }
-            DrawCommand::DrawShadow { .. } => {
-                // Shadow bounds calculation requires path.bounds() which needs &mut Path
-                // (for caching), but we only have &Path in this method.
-                // Could be solved by:
-                // 1. Pre-computing and storing bounds in DrawCommand
-                // 2. Using interior mutability (Cell/RefCell) in Path
-                // 3. Making bounds() work with &self (recompute each time)
-                None
+            DrawCommand::DrawShadow {
+                path,
+                elevation,
+                transform,
+                ..
+            } => {
+                // Shadow extends beyond path by elevation amount
+                let local_bounds = path.compute_bounds().expand(*elevation);
+                Some(transform.transform_rect(&local_bounds))
             }
             DrawCommand::DrawArc {
                 rect,
@@ -905,13 +1446,275 @@ impl DrawCommand {
                 // DrawColor fills entire canvas, no specific bounds
                 None
             }
+            DrawCommand::DrawGradient {
+                rect, transform, ..
+            } => {
+                // Gradient fills rect exactly
+                Some(transform.transform_rect(rect))
+            }
+            DrawCommand::DrawGradientRRect {
+                rrect, transform, ..
+            } => {
+                // Gradient fills rrect bounds
+                Some(transform.transform_rect(&rrect.bounding_rect()))
+            }
+            DrawCommand::ShaderMask {
+                bounds, transform, ..
+            } => {
+                // Return transformed bounds
+                Some(transform.transform_rect(bounds))
+            }
+            DrawCommand::BackdropFilter {
+                bounds, transform, ..
+            } => {
+                // Return transformed bounds
+                Some(transform.transform_rect(bounds))
+            }
             // Clipping and text don't contribute to bounds directly
             DrawCommand::ClipRect { .. }
             | DrawCommand::ClipRRect { .. }
             | DrawCommand::ClipPath { .. }
             | DrawCommand::DrawText { .. } => None,
+
+            // Layer commands - SaveLayer bounds if specified, RestoreLayer has no bounds
+            DrawCommand::SaveLayer {
+                bounds, transform, ..
+            } => bounds.map(|b| transform.transform_rect(&b)),
+            DrawCommand::RestoreLayer { .. } => None,
         }
     }
+
+    // ===== Type Discrimination =====
+
+    /// Returns the kind/category of this command.
+    ///
+    /// Useful for filtering, statistics, or debugging.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// for cmd in display_list.commands() {
+    ///     match cmd.kind() {
+    ///         CommandKind::Draw => println!("Drawing command"),
+    ///         CommandKind::Clip => println!("Clipping command"),
+    ///         CommandKind::Effect => println!("Effect command"),
+    ///         CommandKind::Layer => println!("Layer command"),
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn kind(&self) -> CommandKind {
+        match self {
+            DrawCommand::ClipRect { .. }
+            | DrawCommand::ClipRRect { .. }
+            | DrawCommand::ClipPath { .. } => CommandKind::Clip,
+
+            DrawCommand::SaveLayer { .. } | DrawCommand::RestoreLayer { .. } => CommandKind::Layer,
+
+            DrawCommand::ShaderMask { .. } | DrawCommand::BackdropFilter { .. } => {
+                CommandKind::Effect
+            }
+
+            _ => CommandKind::Draw,
+        }
+    }
+
+    // ===== Type Checking Methods =====
+
+    /// Returns `true` if this is a clipping command.
+    #[inline]
+    pub fn is_clip(&self) -> bool {
+        matches!(self.kind(), CommandKind::Clip)
+    }
+
+    /// Returns `true` if this is a drawing command (shapes, text, images).
+    #[inline]
+    pub fn is_draw(&self) -> bool {
+        matches!(self.kind(), CommandKind::Draw)
+    }
+
+    /// Returns `true` if this is an effect command (shader mask, backdrop filter).
+    #[inline]
+    pub fn is_effect(&self) -> bool {
+        matches!(self.kind(), CommandKind::Effect)
+    }
+
+    /// Returns `true` if this is a layer command (save/restore layer).
+    #[inline]
+    pub fn is_layer(&self) -> bool {
+        matches!(self.kind(), CommandKind::Layer)
+    }
+
+    /// Returns `true` if this command draws a shape (rect, circle, path, etc).
+    #[inline]
+    pub fn is_shape(&self) -> bool {
+        matches!(
+            self,
+            DrawCommand::DrawRect { .. }
+                | DrawCommand::DrawRRect { .. }
+                | DrawCommand::DrawCircle { .. }
+                | DrawCommand::DrawOval { .. }
+                | DrawCommand::DrawPath { .. }
+                | DrawCommand::DrawArc { .. }
+                | DrawCommand::DrawDRRect { .. }
+                | DrawCommand::DrawLine { .. }
+                | DrawCommand::DrawPoints { .. }
+        )
+    }
+
+    /// Returns `true` if this command draws an image or texture.
+    #[inline]
+    pub fn is_image(&self) -> bool {
+        matches!(
+            self,
+            DrawCommand::DrawImage { .. }
+                | DrawCommand::DrawImageRepeat { .. }
+                | DrawCommand::DrawImageNineSlice { .. }
+                | DrawCommand::DrawImageFiltered { .. }
+                | DrawCommand::DrawTexture { .. }
+                | DrawCommand::DrawAtlas { .. }
+        )
+    }
+
+    /// Returns `true` if this command draws text.
+    #[inline]
+    pub fn is_text(&self) -> bool {
+        matches!(self, DrawCommand::DrawText { .. })
+    }
+
+    // ===== Accessor Methods =====
+
+    /// Returns the transform matrix for this command.
+    ///
+    /// Every command stores the transform that was active when it was recorded.
+    #[inline]
+    pub fn transform(&self) -> Matrix4 {
+        match self {
+            DrawCommand::ClipRect { transform, .. }
+            | DrawCommand::ClipRRect { transform, .. }
+            | DrawCommand::ClipPath { transform, .. }
+            | DrawCommand::DrawLine { transform, .. }
+            | DrawCommand::DrawRect { transform, .. }
+            | DrawCommand::DrawRRect { transform, .. }
+            | DrawCommand::DrawCircle { transform, .. }
+            | DrawCommand::DrawOval { transform, .. }
+            | DrawCommand::DrawPath { transform, .. }
+            | DrawCommand::DrawText { transform, .. }
+            | DrawCommand::DrawImage { transform, .. }
+            | DrawCommand::DrawImageRepeat { transform, .. }
+            | DrawCommand::DrawImageNineSlice { transform, .. }
+            | DrawCommand::DrawImageFiltered { transform, .. }
+            | DrawCommand::DrawTexture { transform, .. }
+            | DrawCommand::DrawShadow { transform, .. }
+            | DrawCommand::DrawGradient { transform, .. }
+            | DrawCommand::DrawGradientRRect { transform, .. }
+            | DrawCommand::ShaderMask { transform, .. }
+            | DrawCommand::BackdropFilter { transform, .. }
+            | DrawCommand::DrawArc { transform, .. }
+            | DrawCommand::DrawDRRect { transform, .. }
+            | DrawCommand::DrawPoints { transform, .. }
+            | DrawCommand::DrawVertices { transform, .. }
+            | DrawCommand::DrawColor { transform, .. }
+            | DrawCommand::DrawAtlas { transform, .. }
+            | DrawCommand::SaveLayer { transform, .. }
+            | DrawCommand::RestoreLayer { transform, .. } => *transform,
+        }
+    }
+
+    /// Returns a reference to the Paint for this command, if it has one.
+    ///
+    /// Clipping commands and some special commands don't have Paint.
+    #[inline]
+    pub fn paint(&self) -> Option<&Paint> {
+        match self {
+            DrawCommand::DrawLine { paint, .. }
+            | DrawCommand::DrawRect { paint, .. }
+            | DrawCommand::DrawRRect { paint, .. }
+            | DrawCommand::DrawCircle { paint, .. }
+            | DrawCommand::DrawOval { paint, .. }
+            | DrawCommand::DrawPath { paint, .. }
+            | DrawCommand::DrawText { paint, .. }
+            | DrawCommand::DrawArc { paint, .. }
+            | DrawCommand::DrawDRRect { paint, .. }
+            | DrawCommand::DrawPoints { paint, .. }
+            | DrawCommand::DrawVertices { paint, .. }
+            | DrawCommand::SaveLayer { paint, .. } => Some(paint),
+
+            DrawCommand::DrawImage { paint, .. }
+            | DrawCommand::DrawImageRepeat { paint, .. }
+            | DrawCommand::DrawImageNineSlice { paint, .. }
+            | DrawCommand::DrawImageFiltered { paint, .. }
+            | DrawCommand::DrawAtlas { paint, .. } => paint.as_ref(),
+
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this command has a Paint that can be modified.
+    #[inline]
+    pub fn has_paint(&self) -> bool {
+        self.paint().is_some()
+    }
+
+    /// Returns a mutable reference to the transform matrix.
+    ///
+    /// Useful for transforming commands after recording.
+    #[inline]
+    pub fn transform_mut(&mut self) -> &mut Matrix4 {
+        match self {
+            DrawCommand::ClipRect { transform, .. }
+            | DrawCommand::ClipRRect { transform, .. }
+            | DrawCommand::ClipPath { transform, .. }
+            | DrawCommand::DrawLine { transform, .. }
+            | DrawCommand::DrawRect { transform, .. }
+            | DrawCommand::DrawRRect { transform, .. }
+            | DrawCommand::DrawCircle { transform, .. }
+            | DrawCommand::DrawOval { transform, .. }
+            | DrawCommand::DrawPath { transform, .. }
+            | DrawCommand::DrawText { transform, .. }
+            | DrawCommand::DrawImage { transform, .. }
+            | DrawCommand::DrawImageRepeat { transform, .. }
+            | DrawCommand::DrawImageNineSlice { transform, .. }
+            | DrawCommand::DrawImageFiltered { transform, .. }
+            | DrawCommand::DrawTexture { transform, .. }
+            | DrawCommand::DrawShadow { transform, .. }
+            | DrawCommand::DrawGradient { transform, .. }
+            | DrawCommand::DrawGradientRRect { transform, .. }
+            | DrawCommand::ShaderMask { transform, .. }
+            | DrawCommand::BackdropFilter { transform, .. }
+            | DrawCommand::DrawArc { transform, .. }
+            | DrawCommand::DrawDRRect { transform, .. }
+            | DrawCommand::DrawPoints { transform, .. }
+            | DrawCommand::DrawVertices { transform, .. }
+            | DrawCommand::DrawColor { transform, .. }
+            | DrawCommand::DrawAtlas { transform, .. }
+            | DrawCommand::SaveLayer { transform, .. }
+            | DrawCommand::RestoreLayer { transform, .. } => transform,
+        }
+    }
+
+    /// Applies an additional transform to this command.
+    ///
+    /// The new transform is multiplied with the existing one.
+    #[inline]
+    pub fn apply_transform(&mut self, additional: Matrix4) {
+        *self.transform_mut() = additional * self.transform();
+    }
+}
+
+/// Categories of drawing commands.
+///
+/// Used by `DrawCommand::kind()` for classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommandKind {
+    /// Drawing commands (shapes, text, images)
+    Draw,
+    /// Clipping commands
+    Clip,
+    /// Effect commands (shader mask, backdrop filter)
+    Effect,
+    /// Layer commands (save/restore layer)
+    Layer,
 }
 
 #[cfg(test)]

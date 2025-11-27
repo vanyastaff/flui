@@ -4,45 +4,36 @@
 [![Documentation](https://docs.rs/flui_painting/badge.svg)](https://docs.rs/flui_painting)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/flui-org/flui)
 
-**2D graphics primitives and canvas API for FLUI framework - Record drawing commands into optimized display lists for GPU rendering.**
+**Canvas-based painting abstraction for FLUI - Records drawing commands into optimized display lists for GPU rendering.**
 
-FLUI Painting provides a high-level 2D graphics API that records drawing operations into efficient display lists. It serves as the bridge between FLUI's layout system and the GPU rendering engine, offering both immediate-mode and retained-mode painting patterns.
+FLUI Painting provides a high-level Canvas API that records drawing operations into efficient DisplayLists. It serves as the bridge between FLUI's rendering layer and the GPU engine, following the Command Pattern for deferred execution.
 
 ## Features
 
-- 🎨 **Canvas API** - Familiar HTML5 Canvas-like drawing interface
-- 📝 **Display Lists** - Efficient command recording and playback
-- 🔧 **Paint Objects** - Configurable styling (colors, gradients, shadows)
-- 📐 **Path Operations** - Complex shapes with Bézier curves and arcs
-- 🖌️ **Text Rendering** - Rich text layout with font styling
-- 🖼️ **Image Drawing** - Optimized image compositing with transformations
-- ⚡ **GPU Optimized** - Commands designed for efficient GPU execution
-- 🔄 **Transform Stack** - Hierarchical coordinate transformations
-- 🎭 **Clipping** - Rectangle, rounded rectangle, and path clipping
-- 🌈 **Gradients** - Linear and radial gradient support
+- **Canvas API** - Flutter-compatible drawing interface with state management
+- **Display Lists** - Immutable command sequences for efficient GPU execution
+- **Paint Objects** - Configurable styling (colors, strokes, blend modes)
+- **Path Operations** - Complex shapes with Bezier curves and arcs
+- **Image Drawing** - Images, textures, 9-slice, tiling, and filtering
+- **Zero-Copy Composition** - Efficient parent-child canvas merging
+- **Transform Stack** - Hierarchical coordinate transformations (translate, rotate, scale, skew)
+- **Clipping** - Rectangle, rounded rectangle, and path clipping with ClipOp support
+- **Advanced Effects** - Gradients, shadows, shader masks, backdrop filters
+- **Thread-Safe** - Canvas is `Send`, DisplayList is `Send + Clone`
+- **Chaining API** - Fluent builder-style methods for concise code
+- **Batch Drawing** - Draw multiple shapes in a single call
+- **Debug Helpers** - Visual debugging tools for development
 
 ## Architecture
 
-FLUI Painting sits between the layout and rendering layers:
-
 ```text
-┌─────────────────────────────────────────────────────────┐
-│                flui_widgets                             │
-│            (High-level UI widgets)                     │
-└─────────────────┬───────────────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────────────┐
-│               flui_painting                             │
-│        (2D graphics primitives & Canvas)               │
-│                                                         │
-│  Canvas API  │  Display Lists  │  Paint Objects        │
-│  Path Ops    │  Text Layout    │  Transformations      │
-└─────────────────┬───────────────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────────────┐
-│                flui_engine                              │
-│           (GPU rendering & rasterization)              │
-└─────────────────────────────────────────────────────────┘
+RenderObject (flui_rendering)
+    | calls paint()
+Canvas API (flui_painting - this crate)
+    | records commands
+DisplayList (immutable)
+    | sent to GPU thread
+WgpuPainter (flui_engine - executes commands)
 ```
 
 ## Quick Start
@@ -58,659 +49,694 @@ flui_types = "0.1"
 ### Basic Canvas Usage
 
 ```rust
-use flui_painting::{Canvas, Paint, Path};
-use flui_types::{Color, Rect, Point, Size};
+use flui_painting::{Canvas, Paint};
+use flui_types::{geometry::Rect, styling::Color};
 
 // Create a canvas
-let mut canvas = Canvas::new(Size::new(800.0, 600.0));
-
-// Create paint objects
-let red_paint = Paint::new()
-    .color(Color::RED)
-    .stroke_width(2.0);
-
-let blue_fill = Paint::new()
-    .color(Color::BLUE)
-    .style(PaintStyle::Fill);
+let mut canvas = Canvas::new();
 
 // Draw shapes
-canvas.draw_rect(
-    Rect::new(10.0, 10.0, 100.0, 50.0),
-    &red_paint
-);
+let rect = Rect::from_ltrb(10.0, 10.0, 100.0, 50.0);
+let paint = Paint::fill(Color::BLUE);
+canvas.draw_rect(rect, &paint);
 
-canvas.draw_circle(
-    Point::new(200.0, 100.0),
-    25.0,
-    &blue_fill
-);
-
-// Generate display list for GPU rendering
-let display_list = canvas.finalize();
+// Finish and get display list for GPU
+let display_list = canvas.finish();
 ```
 
-### Path Drawing
+## Transform Operations
 
-```rust
-use flui_painting::{Canvas, Paint, Path};
-
-let mut canvas = Canvas::new(Size::new(400.0, 400.0));
-let paint = Paint::new().color(Color::GREEN).stroke_width(3.0);
-
-// Create a custom path
-let mut path = Path::new();
-path.move_to(Point::new(50.0, 50.0));
-path.line_to(Point::new(150.0, 50.0));
-path.quadratic_to(
-    Point::new(200.0, 100.0),  // Control point
-    Point::new(150.0, 150.0)   // End point
-);
-path.close();
-
-canvas.draw_path(&path, &paint);
-```
-
-### Text Rendering
-
-```rust
-use flui_painting::{Canvas, Paint, TextStyle};
-use flui_types::{FontWeight, Point};
-
-let mut canvas = Canvas::new(Size::new(300.0, 200.0));
-
-let text_paint = Paint::new().color(Color::BLACK);
-let text_style = TextStyle::new()
-    .font_family("Arial")
-    .font_size(24.0)
-    .font_weight(FontWeight::Bold);
-
-canvas.draw_text(
-    "Hello, FLUI!",
-    Point::new(50.0, 100.0),
-    &text_paint,
-    &text_style
-);
-```
-
-## Core Components
-
-### Canvas
-
-The main drawing surface that records all drawing operations:
+### Basic Transforms
 
 ```rust
 use flui_painting::Canvas;
-use flui_types::Size;
+use flui_types::geometry::Transform;
+use std::f32::consts::PI;
 
-// Create canvas with specific size
-let mut canvas = Canvas::new(Size::new(1920.0, 1080.0));
+let mut canvas = Canvas::new();
 
-// Drawing operations
-canvas.save();  // Save current state
-canvas.translate(100.0, 100.0);
-canvas.rotate(std::f32::consts::PI / 4.0);  // 45 degrees
-// ... draw operations with transforms applied
-canvas.restore();  // Restore previous state
+// Translation
+canvas.translate(100.0, 50.0);
 
-// Clipping
-canvas.clip_rect(Rect::new(0.0, 0.0, 200.0, 200.0));
-// ... subsequent draws are clipped to rectangle
+// Rotation (radians, counter-clockwise)
+canvas.rotate(PI / 4.0);  // 45 degrees
 
-// Get final display list
-let display_list = canvas.finalize();
+// Rotation around pivot point
+canvas.rotate_around(PI / 2.0, center_x, center_y);
+
+// Uniform scaling
+canvas.scale_uniform(2.0);
+
+// Non-uniform scaling
+canvas.scale_xy(2.0, 0.5);  // Stretch horizontally, compress vertically
+
+// Skew transform (horizontal and vertical shear)
+canvas.skew(0.2, 0.0);  // Horizontal shear (~11.3 degrees)
+canvas.skew(0.0, 0.3);  // Vertical shear
+canvas.skew(0.2, 0.1);  // Combined shear
+
+// Using high-level Transform API
+canvas.transform(Transform::rotate_around(PI / 2.0, 50.0, 50.0));
 ```
 
-### Paint Objects
-
-Configure how shapes and text are rendered:
+### Save/Restore Pattern
 
 ```rust
-use flui_painting::{Paint, PaintStyle, BlendMode};
-use flui_types::{Color, Gradient};
+let mut canvas = Canvas::new();
 
-// Solid color fill
-let fill_paint = Paint::new()
-    .color(Color::BLUE)
-    .style(PaintStyle::Fill);
+// Flutter-compatible save count (initial = 1)
+assert_eq!(canvas.save_count(), 1);
 
-// Stroked outline
-let stroke_paint = Paint::new()
-    .color(Color::RED)
-    .style(PaintStyle::Stroke)
-    .stroke_width(2.0)
-    .stroke_cap(StrokeCap::Round)
-    .stroke_join(StrokeJoin::Miter);
-
-// Gradient fill
-let gradient = Gradient::linear(
-    Point::new(0.0, 0.0),
-    Point::new(100.0, 100.0),
-    vec![
-        (0.0, Color::RED),
-        (0.5, Color::GREEN),
-        (1.0, Color::BLUE),
-    ]
-);
-
-let gradient_paint = Paint::new()
-    .gradient(gradient)
-    .style(PaintStyle::Fill);
-
-// Shadow effect
-let shadow_paint = Paint::new()
-    .color(Color::BLACK.with_alpha(0.3))
-    .blur_radius(5.0)
-    .offset(Point::new(2.0, 2.0));
-```
-
-### Display Lists
-
-Efficient command recording and playback:
-
-```rust
-use flui_painting::{DisplayList, DisplayListBuilder};
-
-// Manual display list creation
-let mut builder = DisplayListBuilder::new();
-builder.push_transform(Matrix4::scale(2.0));
-builder.push_rect(rect, &paint);
-builder.push_text("Hello", point, &paint, &style);
-let display_list = builder.build();
-
-// Display list operations
-println!("Command count: {}", display_list.len());
-println!("Estimated GPU memory: {} bytes", display_list.gpu_memory_size());
-
-// Iterate through commands
-for command in display_list.commands() {
-    match command {
-        DrawCommand::Rect { rect, paint } => {
-            println!("Drawing rectangle: {:?}", rect);
-        }
-        DrawCommand::Text { text, position, .. } => {
-            println!("Drawing text '{}' at {:?}", text, position);
-        }
-        _ => {}
-    }
-}
-
-// Optimize display list
-let optimized = display_list.optimize();
-```
-
-## Advanced Drawing
-
-### Complex Paths
-
-```rust
-use flui_painting::{Path, PathEffect};
-
-let mut path = Path::new();
-
-// Move and line operations
-path.move_to(Point::new(10.0, 10.0));
-path.line_to(Point::new(100.0, 10.0));
-path.line_to(Point::new(100.0, 100.0));
-
-// Curves
-path.quadratic_to(
-    Point::new(150.0, 100.0),  // Control point
-    Point::new(150.0, 50.0)    // End point
-);
-
-path.cubic_to(
-    Point::new(200.0, 50.0),   // Control point 1
-    Point::new(200.0, 150.0),  // Control point 2
-    Point::new(150.0, 150.0)   // End point
-);
-
-// Arcs
-path.arc_to(
-    Point::new(100.0, 150.0),  // End point
-    Point::new(75.0, 125.0),   // Center through point
-    25.0                        // Radius
-);
-
-path.close();
-
-// Path effects
-let dashed_paint = Paint::new()
-    .color(Color::BLACK)
-    .path_effect(PathEffect::dash(&[10.0, 5.0], 0.0));
-
-canvas.draw_path(&path, &dashed_paint);
-```
-
-### Image Drawing
-
-```rust
-use flui_painting::Canvas;
-use flui_types::{Rect, Matrix4};
-
-// Draw image at original size
-canvas.draw_image(&image, Point::new(100.0, 100.0));
-
-// Draw image scaled to fit rectangle
-canvas.draw_image_rect(
-    &image,
-    None,  // Use entire source image
-    Rect::new(0.0, 0.0, 200.0, 150.0),  // Destination
-    &Paint::new()
-);
-
-// Draw with transformation
 canvas.save();
-canvas.transform(&Matrix4::rotation_z(0.5));
-canvas.draw_image(&image, Point::ZERO);
+assert_eq!(canvas.save_count(), 2);
+
+canvas.translate(100.0, 50.0);
+canvas.rotate(PI / 4.0);
+canvas.draw_rect(rect, &paint);
+
 canvas.restore();
+assert_eq!(canvas.save_count(), 1);
 
-// Draw with custom paint (tinting, blending)
-let tinted_paint = Paint::new()
-    .color(Color::RED.with_alpha(0.5))
-    .blend_mode(BlendMode::Multiply);
-
-canvas.draw_image_rect(
-    &image,
-    None,
-    dest_rect,
-    &tinted_paint
-);
-```
-
-### Text Layout
-
-```rust
-use flui_painting::{TextLayout, TextStyle, Paragraph};
-
-// Simple text
-let style = TextStyle::new()
-    .font_family("Helvetica")
-    .font_size(16.0)
-    .color(Color::BLACK);
-
-canvas.draw_text("Simple text", point, &Paint::new(), &style);
-
-// Rich text paragraph
-let mut paragraph = Paragraph::new();
-paragraph.add_text("Hello ", &TextStyle::new().color(Color::BLACK));
-paragraph.add_text("World", &TextStyle::new()
-    .color(Color::RED)
-    .font_weight(FontWeight::Bold));
-
-let layout = paragraph.layout(300.0); // Max width
-canvas.draw_paragraph(&layout, Point::new(50.0, 50.0));
-
-// Text with custom baseline
-canvas.draw_text_on_path(
-    "Text following path",
-    &path,
-    0.0,  // Distance along path
-    &Paint::new(),
-    &style
-);
-```
-
-### Gradients and Effects
-
-```rust
-use flui_painting::{Gradient, Shadow, MaskFilter};
-use flui_types::{Point, Color};
-
-// Linear gradient
-let linear = Gradient::linear(
-    Point::new(0.0, 0.0),
-    Point::new(100.0, 0.0),
-    vec![
-        (0.0, Color::RED),
-        (1.0, Color::BLUE),
-    ]
-);
-
-// Radial gradient
-let radial = Gradient::radial(
-    Point::new(50.0, 50.0),  // Center
-    50.0,                     // Radius
-    vec![
-        (0.0, Color::WHITE),
-        (1.0, Color::BLACK),
-    ]
-);
-
-// Conical gradient (sweep)
-let conical = Gradient::conical(
-    Point::new(100.0, 100.0),  // Center
-    0.0,                        // Start angle
-    vec![
-        (0.0, Color::RED),
-        (0.33, Color::GREEN),
-        (0.66, Color::BLUE),
-        (1.0, Color::RED),
-    ]
-);
-
-// Apply gradients
-let gradient_paint = Paint::new()
-    .gradient(linear)
-    .style(PaintStyle::Fill);
-
-canvas.draw_rect(rect, &gradient_paint);
-
-// Shadows
-let shadow = Shadow::new()
-    .color(Color::BLACK.with_alpha(0.5))
-    .offset(Point::new(3.0, 3.0))
-    .blur_radius(5.0);
-
-let shadow_paint = Paint::new()
-    .color(Color::BLUE)
-    .shadow(shadow);
-
-canvas.draw_circle(center, radius, &shadow_paint);
-
-// Blur effects
-let blur_paint = Paint::new()
-    .color(Color::GREEN)
-    .mask_filter(MaskFilter::blur(3.0));
-
-canvas.draw_rect(rect, &blur_paint);
-```
-
-## Coordinate Systems and Transformations
-
-### Transform Stack
-
-```rust
-// Save/restore pattern
-canvas.save();
-    canvas.translate(100.0, 50.0);
-    canvas.rotate(0.785); // 45 degrees
-    canvas.scale(1.5, 1.0);
-    // Draw operations use combined transform
-    canvas.draw_rect(rect, &paint);
-canvas.restore(); // Restore previous transform
-
-// Manual transform manipulation
-let transform = Matrix4::translation(50.0, 50.0) 
-    * Matrix4::rotation_z(0.5)
-    * Matrix4::scale(2.0);
-
-canvas.save();
-canvas.transform(&transform);
-canvas.draw_circle(Point::ZERO, 20.0, &paint);
-canvas.restore();
-```
-
-### Coordinate Conversion
-
-```rust
-use flui_types::{Point, Matrix4};
-
-// Get current transform
-let current_transform = canvas.transform();
-
-// Transform points between coordinate systems
-let local_point = Point::new(10.0, 20.0);
-let global_point = current_transform.transform_point(local_point);
-
-// Inverse transform
-let inverse = current_transform.inverse().unwrap();
-let back_to_local = inverse.transform_point(global_point);
+// Restore to specific save count
+canvas.save();  // count = 2
+canvas.save();  // count = 3
+canvas.save();  // count = 4
+canvas.restore_to_count(2);  // Restores back to count = 2
 ```
 
 ## Clipping
 
-### Rectangle Clipping
+### Basic Clipping
 
 ```rust
-// Simple rectangle clip
-canvas.clip_rect(Rect::new(50.0, 50.0, 200.0, 150.0));
+canvas.clip_rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+canvas.clip_rrect(RRect::from_rect_circular(rect, 10.0));
+canvas.clip_path(&path);
+```
 
-// Rounded rectangle clip
-canvas.clip_rounded_rect(
-    Rect::new(50.0, 50.0, 200.0, 150.0),
-    10.0  // Corner radius
+### Extended Clipping with ClipOp
+
+```rust
+use flui_types::painting::{Clip, ClipOp};
+
+// Intersect (default) - new clip intersects with existing
+canvas.clip_rect_ext(rect, ClipOp::Intersect, Clip::AntiAlias);
+
+// Difference - subtract from existing clip region
+canvas.clip_rect_ext(hole_rect, ClipOp::Difference, Clip::AntiAlias);
+
+// Same for rounded rectangles and paths
+canvas.clip_rrect_ext(rrect, ClipOp::Intersect, Clip::HardEdge);
+canvas.clip_path_ext(&path, ClipOp::Difference, Clip::AntiAliasWithSaveLayer);
+```
+
+### Query Clip State
+
+```rust
+let local_bounds = canvas.local_clip_bounds();
+let device_bounds = canvas.device_clip_bounds();
+
+// Culling optimization
+if canvas.would_be_clipped(&rect) == Some(true) {
+    // Skip drawing - rect is outside clip
+}
+```
+
+## Drawing Primitives
+
+### Basic Shapes
+
+```rust
+canvas.draw_line(p1, p2, &paint);
+canvas.draw_rect(rect, &paint);
+canvas.draw_rrect(rrect, &paint);
+canvas.draw_circle(center, radius, &paint);
+canvas.draw_oval(rect, &paint);
+canvas.draw_path(&path, &paint);
+
+// Advanced primitives
+canvas.draw_arc(rect, start_angle, sweep_angle, use_center, &paint);
+canvas.draw_drrect(outer, inner, &paint);  // Ring/border
+canvas.draw_points_with_mode(PointMode::Polygon, points, &paint);
+```
+
+### Convenience Shapes
+
+```rust
+// Rounded rectangle with uniform radius
+canvas.draw_rounded_rect(rect, 10.0, &paint);
+
+// Rounded rectangle with per-corner radii
+canvas.draw_rounded_rect_corners(rect, 5.0, 10.0, 15.0, 20.0, &paint);
+
+// Pill shape (fully rounded ends)
+canvas.draw_pill(rect, &paint);
+
+// Ring (circle with hole)
+canvas.draw_ring(center, outer_radius, inner_radius, &paint);
+```
+
+### Batch Drawing
+
+```rust
+// Draw multiple rectangles
+let rects = [rect1, rect2, rect3];
+canvas.draw_rects(&rects, &paint);
+
+// Draw multiple circles
+let circles = [(center1, radius1), (center2, radius2)];
+canvas.draw_circles(&circles, &paint);
+
+// Draw multiple lines
+let lines = [(p1, p2), (p3, p4)];
+canvas.draw_lines(&lines, &paint);
+```
+
+### Fill Entire Canvas
+
+```rust
+// Fill with solid color or gradient
+let background = Paint::fill(Color::from_rgb(30, 30, 30));
+canvas.draw_paint(&background);
+```
+
+## Text and Images
+
+### Text
+
+```rust
+canvas.draw_text("Hello", offset, &text_style, &paint);
+```
+
+### Images
+
+```rust
+canvas.draw_image(image, dst_rect, Some(&paint));
+canvas.draw_image_repeat(image, dst, ImageRepeat::Repeat, None);
+canvas.draw_image_nine_slice(image, center_slice, dst, None);
+canvas.draw_image_filtered(image, dst, ColorFilter::grayscale(), None);
+
+// External textures (video, camera)
+canvas.draw_texture(texture_id, dst, src, FilterQuality::Medium, 1.0);
+```
+
+### Replay DisplayList
+
+```rust
+// Record once, replay many times
+let icon = Canvas::record(|c| {
+    c.draw_circle(Point::new(16.0, 16.0), 14.0, &outline);
+    c.draw_path(&checkmark, &fill);
+});
+
+// Replay the recorded picture
+canvas.draw_picture(&icon);
+
+// Or replay with offset
+canvas.with_translate(50.0, 0.0, |c| {
+    c.draw_picture(&icon);
+});
+```
+
+## Layers and Effects
+
+### Save Layer
+
+```rust
+// Group drawings with opacity
+canvas.save_layer(Some(bounds), &Paint::new().with_opacity(0.5));
+canvas.draw_rect(rect1, &red_paint);
+canvas.draw_rect(rect2, &blue_paint);
+canvas.restore(); // Composites at 50% opacity
+
+// Convenience methods
+canvas.save_layer_opacity(Some(bounds), 0.5);
+canvas.save_layer_blend(Some(bounds), BlendMode::Multiply);
+```
+
+### Gradients
+
+```rust
+use flui_types::painting::Shader;
+
+let gradient = Shader::linear_gradient(
+    Offset::new(0.0, 0.0),
+    Offset::new(200.0, 0.0),
+    vec![Color::RED, Color::BLUE],
+    None,
 );
-
-// With anti-aliasing
-canvas.clip_rect_with_aa(rect, true);
+canvas.draw_gradient(rect, gradient);
+canvas.draw_gradient_rrect(rrect, gradient);
 ```
 
-### Path Clipping
+### Shader Mask
 
 ```rust
-// Create clipping path
-let mut clip_path = Path::new();
-clip_path.add_oval(Rect::new(0.0, 0.0, 100.0, 100.0));
-
-// Apply clip
-canvas.clip_path(&clip_path, ClipOp::Intersect);
-
-// Multiple clips combine
-canvas.clip_rect(Rect::new(25.0, 25.0, 75.0, 75.0));
-// Effective clip is intersection of circle and rectangle
+canvas.draw_shader_mask(bounds, shader, BlendMode::SrcOver, |child| {
+    child.draw_rect(rect, &paint);
+});
 ```
 
-## Performance Optimization
-
-### Display List Optimization
+### Backdrop Filter
 
 ```rust
-use flui_painting::{DisplayList, OptimizationFlags};
-
-let display_list = canvas.finalize();
-
-// Optimize for GPU performance
-let optimized = display_list.optimize_with_flags(
-    OptimizationFlags::MERGE_ADJACENT_RECTS
-        | OptimizationFlags::CULL_OFFSCREEN_COMMANDS
-        | OptimizationFlags::BATCH_SIMILAR_PAINTS
-);
-
-// Analyze performance characteristics
-let stats = display_list.analyze();
-println!("Draw calls: {}", stats.draw_call_count);
-println!("GPU memory: {} KB", stats.gpu_memory_kb);
-println!("CPU time estimate: {:?}", stats.cpu_time_estimate);
+canvas.draw_backdrop_filter(bounds, ImageFilter::blur(10.0), BlendMode::SrcOver, Some(|child| {
+    child.draw_rect(panel_rect, &semi_transparent_paint);
+}));
 ```
 
-### Batch Operations
+## Scoped Operations (Closure-based API)
+
+The `with_*` methods provide safe, ergonomic alternatives to manual save/restore:
 
 ```rust
-// Batch similar operations
-canvas.begin_batch();
-for i in 0..100 {
-    let rect = Rect::new(i as f32 * 10.0, 0.0, 8.0, 8.0);
-    canvas.draw_rect(rect, &paint); // Batched automatically
-}
-canvas.end_batch();
+// Automatic save/restore - state is always restored
+canvas.with_save(|c| {
+    c.translate(100.0, 100.0);
+    c.rotate(PI / 4.0);
+    c.draw_rect(rect, &paint);
+});
+// Transform is back to original here
 
-// Manual command batching
-let rects = vec![/* many rectangles */];
-canvas.draw_rects(&rects, &paint); // Single draw call
+// Transform shortcuts
+canvas.with_translate(100.0, 50.0, |c| { /* ... */ });
+canvas.with_rotate(PI / 4.0, |c| { /* ... */ });
+canvas.with_rotate_around(PI / 2.0, 50.0, 50.0, |c| { /* ... */ });
+canvas.with_scale(2.0, |c| { /* ... */ });
+canvas.with_scale_xy(2.0, 0.5, |c| { /* ... */ });
+canvas.with_transform(Transform::rotate(PI / 4.0), |c| { /* ... */ });
+
+// Clipping
+canvas.with_clip_rect(clip_rect, |c| { /* ... */ });
+canvas.with_clip_rrect(rounded_rect, |c| { /* ... */ });
+canvas.with_clip_path(&path, |c| { /* ... */ });
+
+// Layers with effects
+canvas.with_opacity(0.5, Some(bounds), |c| { /* ... */ });
+canvas.with_blend_mode(BlendMode::Multiply, Some(bounds), |c| { /* ... */ });
+
+// Nested operations
+canvas.with_translate(100.0, 100.0, |c| {
+    c.with_rotate(PI / 4.0, |c| {
+        c.with_scale(2.0, |c| {
+            c.draw_rect(rect, &paint);
+        });
+    });
+});
+
+// Return values from closures
+let bounds = canvas.with_save(|c| {
+    c.translate(50.0, 50.0);
+    c.draw_rect(rect, &paint);
+    c.bounds()
+});
 ```
 
-### Memory Management
+## Chaining API
+
+Fluent builder-style methods that return `&mut Self`:
 
 ```rust
-// Reuse canvas to avoid allocations
-let mut canvas = Canvas::new(size);
+canvas
+    .translated(100.0, 50.0)
+    .rotated(PI / 4.0)
+    .scaled(2.0)
+    .rect(rect, &paint)
+    .circle(center, radius, &paint)
+    .restored();
 
-for frame in 0..1000 {
-    canvas.clear(Color::WHITE);
-    
-    // Draw frame content
-    draw_frame_content(&mut canvas, frame);
-    
-    let display_list = canvas.finalize_and_reset();
-    // Canvas is ready for reuse
-    
-    render_display_list(display_list);
-}
-```
+// With transforms
+canvas
+    .saved()
+    .translated(50.0, 50.0)
+    .rotated_around(PI / 2.0, 25.0, 25.0)
+    .scaled_xy(2.0, 0.5)
+    .transformed(Transform::skew(0.1, 0.0))
+    .rect(rect, &paint)
+    .restored();
 
-## Integration with FLUI
+// With clipping
+canvas
+    .saved()
+    .clipped_rect(viewport)
+    .clipped_rrect(inner_rounded)
+    .clipped_path(&custom_path)
+    .rect(rect, &paint)
+    .restored();
 
-### Widget Painting
+// Drawing shapes
+canvas
+    .rect(rect1, &paint1)
+    .rrect(rrect, &paint2)
+    .circle(center, radius, &paint3)
+    .oval(oval_rect, &paint4)
+    .line(p1, p2, &stroke)
+    .path(&custom_path, &fill)
+    .text("Hello", offset, &style, &paint);
 
-```rust
-use flui_painting::Canvas;
-use flui_core::{RenderObject, PaintContext};
-
-struct MyRenderObject {
-    color: Color,
-    border_width: f32,
-}
-
-impl RenderObject for MyRenderObject {
-    fn paint(&self, context: &PaintContext) {
-        let canvas = context.canvas();
-        let size = context.size();
-        
-        // Background
-        let bg_paint = Paint::new()
-            .color(self.color)
-            .style(PaintStyle::Fill);
-        
-        canvas.draw_rect(
-            Rect::from_size(size),
-            &bg_paint
-        );
-        
-        // Border
-        if self.border_width > 0.0 {
-            let border_paint = Paint::new()
-                .color(Color::BLACK)
-                .style(PaintStyle::Stroke)
-                .stroke_width(self.border_width);
-            
-            canvas.draw_rect(
-                Rect::from_size(size),
-                &border_paint
-            );
-        }
-    }
-}
-```
-
-### Custom Painters
-
-```rust
-use flui_painting::{CustomPainter, Canvas};
-
-struct ChartPainter {
-    data: Vec<f32>,
-    line_color: Color,
-}
-
-impl CustomPainter for ChartPainter {
-    fn paint(&self, canvas: &mut Canvas, size: Size) {
-        let width = size.width;
-        let height = size.height;
-        
-        let paint = Paint::new()
-            .color(self.line_color)
-            .stroke_width(2.0)
-            .style(PaintStyle::Stroke);
-        
-        let mut path = Path::new();
-        
-        for (i, &value) in self.data.iter().enumerate() {
-            let x = (i as f32) * width / (self.data.len() as f32 - 1.0);
-            let y = height - (value * height);
-            
-            if i == 0 {
-                path.move_to(Point::new(x, y));
-            } else {
-                path.line_to(Point::new(x, y));
-            }
-        }
-        
-        canvas.draw_path(&path, &paint);
-    }
-}
-
-// Use in widget
-CustomPaint::new()
-    .painter(ChartPainter {
-        data: vec![0.1, 0.3, 0.8, 0.4, 0.6],
-        line_color: Color::BLUE,
+// Conditional drawing
+canvas
+    .also(|c| {
+        // Execute arbitrary code
+        c.draw_rect(rect, &paint);
     })
-    .size(Size::new(300.0, 200.0))
+    .when(show_border, |c| {
+        c.draw_rect(border_rect, &border_paint);
+    })
+    .when_else(is_selected,
+        |c| c.draw_rect(rect, &selected_paint),
+        |c| c.draw_rect(rect, &normal_paint),
+    );
 ```
 
-## Testing
+## Conditional and Grid Drawing
 
-Test your painting code with visual regression testing:
+### Conditional Drawing
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui_painting::testing::*;
+// Draw only if condition is true
+canvas.draw_if(is_visible, |c| {
+    c.draw_rect(rect, &paint);
+});
 
-    #[test]
-    fn test_rect_drawing() {
-        let mut canvas = Canvas::new(Size::new(100.0, 100.0));
-        let paint = Paint::new().color(Color::RED);
-        
-        canvas.draw_rect(
-            Rect::new(10.0, 10.0, 50.0, 30.0),
-            &paint
-        );
-        
-        let display_list = canvas.finalize();
-        
-        // Check command count
-        assert_eq!(display_list.len(), 1);
-        
-        // Check command type
-        match &display_list.commands()[0] {
-            DrawCommand::Rect { rect, paint } => {
-                assert_eq!(rect.width(), 50.0);
-                assert_eq!(rect.height(), 30.0);
-                assert_eq!(paint.color(), Color::RED);
-            }
-            _ => panic!("Expected rect command"),
+// Draw only if option is Some
+canvas.draw_if_some(maybe_image, |c, image| {
+    c.draw_image(image, rect, None);
+});
+
+// Draw only if rect is not clipped
+canvas.draw_rect_if(rect, &paint, |r| !r.is_empty());
+```
+
+### Grid and Repeat Patterns
+
+```rust
+// Draw grid of items
+canvas.draw_grid(4, 3, 50.0, 50.0, |c, row, col| {
+    let color = if (row + col) % 2 == 0 { Color::WHITE } else { Color::BLACK };
+    c.draw_rect(Rect::from_xywh(0.0, 0.0, 45.0, 45.0), &Paint::fill(color));
+});
+
+// Repeat horizontally
+canvas.repeat_x(5, 60.0, |c, i| {
+    c.draw_circle(Point::new(25.0, 25.0), 20.0, &paint);
+});
+
+// Repeat vertically
+canvas.repeat_y(5, 60.0, |c, i| {
+    c.draw_circle(Point::new(25.0, 25.0), 20.0, &paint);
+});
+
+// Repeat radially (around a circle)
+canvas.repeat_radial(8, 100.0, |c, i| {
+    c.draw_circle(Point::ZERO, 15.0, &paint);
+});
+```
+
+## Debug Helpers
+
+Visual debugging tools for development:
+
+```rust
+// Debug rectangle with 1px stroke
+canvas.debug_rect(rect, Color::RED);
+
+// Debug point marker
+canvas.debug_point(point, 5.0, Color::GREEN);
+
+// Debug coordinate axes
+canvas.debug_axes(100.0);  // Draws X (red) and Y (green) axes
+
+// Debug grid overlay
+canvas.debug_grid(bounds, 50.0, Color::from_rgba(128, 128, 128, 128));
+```
+
+## Factory Methods
+
+```rust
+// Create and record in one call
+let icon = Canvas::record(|c| {
+    c.draw_circle(Point::new(16.0, 16.0), 14.0, &outline);
+    c.draw_path(&checkmark, &fill);
+});
+
+// Build canvas with initial setup
+let mut canvas = Canvas::build(|c| {
+    c.translate(100.0, 100.0);
+    c.clip_rect(viewport);
+});
+canvas.draw_rect(rect, &paint);
+```
+
+## Canvas Composition
+
+```rust
+// Zero-copy append (efficient for parent-child)
+let mut parent = Canvas::new();
+parent.draw_rect(background, &bg_paint);
+
+let child = render_child();
+parent.append_canvas(child);  // Zero-copy move
+
+// With opacity
+parent.append_canvas_with_opacity(child, 0.5);
+
+// From cached display list
+parent.append_display_list(cached);
+parent.append_display_list_at_offset(&cached, offset);
+```
+
+## Canvas Query Methods
+
+```rust
+let mut canvas = Canvas::new();
+canvas.draw_rect(rect, &paint);
+
+// Query state
+assert!(!canvas.is_empty());
+assert_eq!(canvas.len(), 1);
+
+// Save count (Flutter-compatible, initial = 1)
+assert_eq!(canvas.save_count(), 1);
+
+// Get bounds of all recorded commands
+let bounds = canvas.bounds();
+
+// Get current transform matrix
+let matrix = canvas.transform_matrix();
+
+// Reset canvas for reuse (preserves allocations)
+canvas.reset();
+```
+
+## Display List
+
+The DisplayList is an immutable sequence of drawing commands with powerful querying capabilities:
+
+### Basic Usage
+
+```rust
+let display_list = canvas.finish();
+
+// Query
+assert!(!display_list.is_empty());
+println!("Commands: {}", display_list.len());
+println!("Bounds: {:?}", display_list.bounds());
+
+// Iterate all commands
+for cmd in display_list.commands() {
+    match cmd {
+        DrawCommand::DrawRect { rect, paint, transform } => {
+            // Process rect command
         }
-    }
-
-    #[test]
-    fn test_visual_output() {
-        let mut canvas = Canvas::new(Size::new(200.0, 200.0));
-        
-        // Draw test pattern
-        draw_test_pattern(&mut canvas);
-        
-        let display_list = canvas.finalize();
-        
-        // Render to pixel buffer for comparison
-        let pixels = render_to_pixels(&display_list, Size::new(200.0, 200.0));
-        
-        // Compare with reference image
-        assert_visual_match!("test_pattern", pixels);
+        _ => {}
     }
 }
 ```
 
-## Contributing
+### Command Type Discrimination
 
-We welcome contributions to FLUI Painting! See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
+```rust
+use flui_painting::CommandKind;
 
-### Development
-
-```bash
-# Run tests
-cargo test -p flui_painting
-
-# Run with visual tests
-cargo test -p flui_painting --features visual-tests
-
-# Run benchmarks
-cargo bench -p flui_painting
-
-# Check documentation
-cargo doc -p flui_painting --open
+// Check command kind
+for cmd in display_list.commands() {
+    match cmd.kind() {
+        CommandKind::Draw => println!("Drawing command"),
+        CommandKind::Clip => println!("Clipping command"),
+        CommandKind::Effect => println!("Effect command"),
+        CommandKind::Layer => println!("Layer command"),
+    }
+    
+    // Type-specific checks
+    if cmd.is_shape() { /* rect, circle, path, etc. */ }
+    if cmd.is_image() { /* image, texture */ }
+    if cmd.is_text() { /* text command */ }
+    if cmd.is_clip() { /* clipping command */ }
+}
 ```
+
+### Filtered Iterators
+
+```rust
+// Iterate only drawing commands
+for cmd in display_list.draw_commands() { /* ... */ }
+
+// Iterate only clipping commands
+for cmd in display_list.clip_commands() { /* ... */ }
+
+// Iterate only shape commands (rects, circles, paths, etc.)
+for cmd in display_list.shape_commands() { /* ... */ }
+
+// Iterate only image commands
+for cmd in display_list.image_commands() { /* ... */ }
+
+// Iterate only text commands
+for cmd in display_list.text_commands() { /* ... */ }
+```
+
+### Statistics
+
+```rust
+// Quick count by kind
+let (draw, clip, effect, layer) = display_list.count_by_kind();
+
+// Detailed statistics
+let stats = display_list.stats();
+println!("{}", stats);
+// Output: DisplayList: 15 commands (draw: 10, clip: 2, effect: 1, layer: 2) | shapes: 8, images: 1, text: 1, hits: 0
+
+// Access individual stats
+println!("Total: {}", stats.total);
+println!("Shapes: {}", stats.shapes);
+println!("Hit regions: {}", stats.hit_regions);
+```
+
+### Transform Operations
+
+```rust
+// Apply transform to all commands
+let mut display_list = canvas.finish();
+display_list.apply_transform(Matrix4::translation(50.0, 50.0, 0.0));
+
+// Transform individual command
+let cmd = &mut display_list.commands_mut().next().unwrap();
+cmd.apply_transform(Matrix4::rotation_z(PI / 4.0));
+
+// Access command transform
+if let Some(transform) = cmd.transform() {
+    println!("Transform: {:?}", transform);
+}
+```
+
+### Filter and Map
+
+```rust
+// Filter commands
+let shapes_only = display_list.filter(|cmd| cmd.is_shape());
+
+// Map/transform commands
+let translated = display_list.map(|mut cmd| {
+    cmd.apply_transform(Matrix4::translation(10.0, 10.0, 0.0));
+    cmd
+});
+```
+
+### Effects
+
+```rust
+// Apply opacity to all commands
+let faded = display_list.with_opacity(0.5);
+```
+
+### Hit Regions
+
+```rust
+// Hit regions for event handling
+for region in display_list.hit_regions() {
+    if region.contains(pointer_pos) {
+        (region.handler)(&event);
+    }
+}
+```
+
+## Thread Safety
+
+```rust
+// Canvas is Send (can be moved to another thread)
+let canvas = Canvas::new();
+std::thread::spawn(move || {
+    let display_list = canvas.finish();
+});
+
+// DisplayList is Send + Clone
+let display_list = canvas.finish();
+let dl_clone = display_list.clone();
+std::thread::spawn(move || {
+    render(display_list);
+});
+```
+
+## Performance Tips
+
+1. **Use `append_canvas`** for parent-child composition - it's zero-copy
+2. **Query `would_be_clipped`** before expensive drawing operations
+3. **Use `reset()`** to reuse canvas allocations across frames
+4. **Batch similar operations** - use `draw_rects`, `draw_circles`, `draw_lines`
+5. **Cache DisplayLists** for static content (use `draw_picture` to replay)
+6. **Use chaining API** - reduces method call overhead
+7. **Use `draw_if`** - skip drawing logic when condition is false
+8. **Query `stats()`** - profile command distribution
+
+## API Reference
+
+### Transform Methods
+
+| Method | Description |
+|--------|-------------|
+| `translate(dx, dy)` | Translate coordinate system |
+| `rotate(radians)` | Rotate around origin |
+| `rotate_around(radians, px, py)` | Rotate around pivot point |
+| `scale_uniform(factor)` | Uniform scaling |
+| `scale_xy(sx, sy)` | Non-uniform scaling |
+| `skew(sx, sy)` | Horizontal and vertical shear |
+| `transform(transform)` | Apply Transform enum |
+| `set_transform(transform)` | Replace current transform |
+
+### State Management
+
+| Method | Description |
+|--------|-------------|
+| `save()` | Push state to stack |
+| `restore()` | Pop state from stack |
+| `save_count()` | Get current save count (initial = 1) |
+| `restore_to_count(count)` | Restore to specific save count |
+| `save_layer(bounds, paint)` | Save with layer effects |
+| `save_layer_opacity(bounds, opacity)` | Save with opacity |
+| `save_layer_blend(bounds, mode)` | Save with blend mode |
+
+### Clipping Methods
+
+| Method | Description |
+|--------|-------------|
+| `clip_rect(rect)` | Clip to rectangle |
+| `clip_rrect(rrect)` | Clip to rounded rectangle |
+| `clip_path(path)` | Clip to path |
+| `clip_rect_ext(rect, op, behavior)` | Clip with ClipOp and anti-alias |
+| `clip_rrect_ext(rrect, op, behavior)` | Clip with ClipOp and anti-alias |
+| `clip_path_ext(path, op, behavior)` | Clip with ClipOp and anti-alias |
+
+### Query Methods
+
+| Method | Description |
+|--------|-------------|
+| `is_empty()` | Check if no commands recorded |
+| `len()` | Number of commands |
+| `bounds()` | Bounding box of all commands |
+| `transform_matrix()` | Current transform matrix |
+| `local_clip_bounds()` | Clip bounds in local coordinates |
+| `device_clip_bounds()` | Clip bounds in device coordinates |
+| `would_be_clipped(rect)` | Check if rect would be clipped |
 
 ## License
 
@@ -723,10 +749,9 @@ at your option.
 
 ## Related Crates
 
-- [`flui_types`](../flui_types) - Basic geometry and math types used throughout
-- [`flui_engine`](../flui_engine) - GPU rendering engine that consumes display lists
-- [`flui_widgets`](../flui_widgets) - High-level widgets that use painting operations
-- [`flui_core`](../flui_core) - Core framework providing the RenderObject system
+- [`flui_types`](../flui_types) - Geometry, colors, and painting types
+- [`flui_engine`](../flui_engine) - GPU rendering engine (executes DisplayLists)
+- [`flui_rendering`](../flui_rendering) - RenderObject system that uses Canvas
 
 ---
 

@@ -3,6 +3,21 @@
 use crate::geometry::{Offset, Rect, Size};
 use std::f32::consts::PI;
 
+/// Specifies how a new clip region combines with existing clips.
+///
+/// Equivalent to Flutter's `ClipOp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ClipOp {
+    /// The new region is intersected with the current clip.
+    /// Only pixels inside both regions are visible. (Default)
+    #[default]
+    Intersect,
+    /// The new region is subtracted from the current clip.
+    /// Pixels inside the new region become invisible (creates a "hole").
+    Difference,
+}
+
 /// Different ways to clip a widget's content.
 ///
 /// Similar to Flutter's `Clip`.

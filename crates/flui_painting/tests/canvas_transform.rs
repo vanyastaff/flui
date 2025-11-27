@@ -160,8 +160,8 @@ fn test_transform_mixed_with_legacy_methods() {
     // New Transform API
     canvas.transform(Transform::rotate(PI / 4.0));
 
-    // Legacy API again
-    canvas.scale(2.0, None);
+    // New scale API
+    canvas.scale_uniform(2.0);
 
     let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
@@ -198,7 +198,7 @@ fn test_transform_get_current_matrix() {
     let transform = Transform::translate(50.0, 100.0);
     canvas.transform(transform);
 
-    let current = canvas.get_transform();
+    let current = canvas.transform_matrix();
 
     // Verify translation was applied
     let expected = Matrix4::translation(50.0, 100.0, 0.0);

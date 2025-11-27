@@ -16,10 +16,10 @@ pub mod shader;
 pub use blend_mode::BlendMode;
 pub use canvas::{
     BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, PointMode, StrokeCap,
-    StrokeJoin, TileMode, VertexMode,
+    StrokeJoin, TextureId, TileMode, VertexMode,
 };
 pub use clipping::{
-    AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, NotchedShape,
+    AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, ClipOp, NotchedShape,
 };
 pub use effects::{
     BlurMode,
@@ -33,4 +33,4 @@ pub use effects::{
 pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
 pub use paint::{Paint, PaintBuilder, PaintStyle};
 pub use path::{Path, PathCommand};
-pub use shader::{ImageShader, MaskFilter, Shader};
+pub use shader::{ImageShader, MaskFilter, Shader, ShaderSpec};
