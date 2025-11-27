@@ -273,7 +273,8 @@ macro_rules! padding {
 // Implement View for Padding
 impl StatelessView for Padding {
     fn build(self, _ctx: &dyn BuildContext) -> impl IntoElement {
-        RenderPadding::new(self.padding).child_opt(self.child)
+        // Child converts to Option<Element> via From trait
+        RenderPadding::new(self.padding).with_child(self.child)
     }
 }
 
